@@ -387,6 +387,7 @@ const DATA_PATH  = path.join(__dirname, 'sanki_data.json');
 const META_PATH  = path.join(__dirname, 'sanki_order_meta.json');
 
 let ordersCache = { orders: [], lastSync: null, syncing: false };
+let productsCache = { products: null, lastSync: null };
 
 function loadCache() {
   try {
@@ -463,7 +464,15 @@ async function backgroundSync(days = 180) {
     );
     ordersCache.orders   = all.map(cleanOrder);
     ordersCache.lastSync = new Date().toISOString();
-    saveCache();
+    // Cache products during background sync
+  try {
+    const pf = require('node-fetch');
+    const prods = await shopifyFetchAll(pf,
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,status,variants,image,images,vendor,tags,product_type`,
+      SHOPIFY_TOKEN);
+    if (prods && prods.length > 0) { productsCache.products = prods; productsCache.lastSync = new Date().toISOString(); }
+  } catch(pe) { console.error('[sync] Product cache error:', pe.message); }
+  saveCache();
     console.log(`[sync] ✅ ${ordersCache.orders.length} orders at ${ordersCache.lastSync}`);
   } catch(e) {
     console.error('[sync] ❌ Background sync failed:', e.message);
@@ -1021,26 +1030,19 @@ app.patch('/api/orders/meta/:orderId', (req, res) => {
 //  SHOPIFY — PRODUCTS
 // ════════════════════════════════════════════════════════════════
 app.get('/api/products', async (req, res) => {
+  if (productsCache.products && productsCache.lastSync &&
+      (Date.now() - new Date(productsCache.lastSync).getTime()) < 30*60*1000) {
+    return res.json({ success: true, products: productsCache.products, total: productsCache.products.length, fromCache: true });
+  }
   try {
     const fetch = require('node-fetch');
     const all = await shopifyFetchAll(fetch,
-      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,status,variants,image,images,vendor,tags,product_type,created_at,updated_at`
-    );
-    const products = all.map(p => {
-      const vim = {};
-      (p.images || []).forEach(img => (img.variant_ids || []).forEach(vid => { vim[String(vid)] = img.src; }));
-      const mainImg = p.image ? p.image.src : null;
-      return {
-        id: p.id, name: p.title, status: p.status, image: mainImg,
-        vendor: p.vendor || '', tags: p.tags || '', product_type: p.product_type || '',
-        created_at: p.created_at,
-        variants: (p.variants || []).map(v => ({
-          id: v.id, sku: v.sku || '', price: v.price, compare_at_price: v.compare_at_price,
-          inventory: v.inventory_quantity, inventoryItemId: v.inventory_item_id,
-          title: v.title, image: vim[String(v.id)] || mainImg
-        }))
-      };
-    });
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,status,variants,image,images,vendor,tags,product_type`,
+      SHOPIFY_TOKEN);
+    productsCache.products = all; productsCache.lastSync = new Date().toISOString();
+    res.json({ success: true, products: all, total: all.length });
+  } catch(e) { res.json({ success: false, error: e.message }); }
+});
     res.json({ success: true, products, total: products.length });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
