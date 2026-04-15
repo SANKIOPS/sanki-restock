@@ -577,7 +577,7 @@ app.get('/api/orders', async (req, res) => {
   try {
     let orders = ordersCache.orders;
     if (!orders.length && SHOPIFY_STORE && SHOPIFY_TOKEN) {
-      await backgroundSync(180);
+      backgroundSync(180).catch(e => console.error('[sync] Startup error:', e)); // non-blocking
       orders = ordersCache.orders;
     }
     const days = parseInt(req.query.days) || 180;
