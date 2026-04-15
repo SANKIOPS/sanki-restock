@@ -1,0 +1,19 @@
+{
+  "name": "sanki-business-os",
+  "version": "2.0.0",
+  "description": "SANKI Business OS â Full Shopify + Operations Dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^2.7.0",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
