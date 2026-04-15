@@ -2304,7 +2304,8 @@ window.addEventListener('load',()=>{
   donutChartInst=new Chart(document.getElementById('stockDonut'),{type:'doughnut',data:{labels:['Loading'],datasets:[{data:[1],backgroundColor:['#e0e0e0'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:false}},cutout:'72%'}});
   renderPOPage();
   updateActivePOList();
-  syncShopify();
+  // Load cached data on page load (no Shopify API call)
+  checkConnection().then(() => { if(typeof loadInitialData === 'function') loadInitialData(); });
 });
 </script>
 
