@@ -851,12 +851,12 @@ async function checkConnection() {
     const dot = document.getElementById('connDot'), txt = document.getElementById('connText');
     if (d.connected) {
       dot.className = 'conn-dot'; txt.textContent = 'Connected to Shopify · ' + d.store;
-      document.getElementById('settingsConnStatus').innerHTML = '<div style="width:9px;height:9px;border-radius:50%;background:var(--success)"></div><span style="font-size:13px;font-weight:600;color:var(--success)">Connected</span>';
-      document.getElementById('settingsStore').textContent = 'Store: ' + d.store;
+      (document.getElementById('settingsConnStatus')||{}).innerHTML = '<div style="width:9px;height:9px;border-radius:50%;background:var(--success)"></div><span style="font-size:13px;font-weight:600;color:var(--success)">Connected</span>';
+      (document.getElementById('settingsStore')||{}).textContent = 'Store: ' + d.store;
     } else {
       dot.className = 'conn-dot off'; txt.textContent = '⚠️ Not connected — set SHOPIFY_STORE and SHOPIFY_ACCESS_TOKEN in Render Environment';
-      document.getElementById('settingsConnStatus').innerHTML = '<div style="width:9px;height:9px;border-radius:50%;background:var(--danger)"></div><span style="font-size:13px;font-weight:600;color:var(--danger)">Not Connected</span>';
-      document.getElementById('settingsStore').textContent = 'No store configured';
+      (document.getElementById('settingsConnStatus')||{}).innerHTML = '<div style="width:9px;height:9px;border-radius:50%;background:var(--danger)"></div><span style="font-size:13px;font-weight:600;color:var(--danger)">Not Connected</span>';
+      (document.getElementById('settingsStore')||{}).textContent = 'No store configured';
     }
     return d.connected;
   } catch { document.getElementById('connDot').className='conn-dot off'; document.getElementById('connText').textContent='Cannot reach server'; return false; }
