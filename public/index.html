@@ -956,7 +956,7 @@ function buildProducts(shopifyProducts, shopifyOrders, dayCount) {
       const cost = compareAt > price ? price * 0.6 : price * 0.4;
 
       // Improved SPD: use actual days sold (not just fixed window) for accuracy
-      const spd = dayCount > 0 ? parseFloat((sold.count / dayCount).toFixed(3)) : 0;
+      const spd = parseFloat(((sold30BySku[skuKey]||0) / 30).toFixed(3));
 
       let status = 'ok';
       if (stock <= THRESHOLD_CRITICAL) status = 'critical';
