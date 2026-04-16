@@ -1584,7 +1584,7 @@ function calcRow(p) {
   const leadBuffer = Math.round(p.spd * p.lead); // stock needed during lead time
   const ai = Math.round(baseQty * 0.08);
   const gUnits = Math.round(baseQty * growth);
-  const qty = baseQty + leadBuffer + ai + gUnits;
+  const qty = Math.max(0, baseQty + leadBuffer + ai + gUnits - (p.stock||0) - (p.onOrder||0));
 
   const cost = qty * p.cost;
   const erev = qty * p.price;
