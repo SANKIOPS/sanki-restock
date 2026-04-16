@@ -1461,7 +1461,8 @@ function applyRP() {
   // SKU is primary key, variant_id is fallback
   const soldBySku = {};
   const soldByVid = {};
-  velocityOrders.forEach(order=>{
+  // FIX: build sold counts from filteredOrders (30d cutoff) so avg/day matches the "Units Sold" column
+  filteredOrders.forEach(order=>{
     (order.line_items||[]).forEach(item=>{
       const qty = Number(item.quantity);
       if(qty<=0) return;
@@ -1497,9 +1498,10 @@ function applyRP() {
     const sold = (skuMatch && vidMatch)
       ? (vidMatch.count >= skuMatch.count ? vidMatch : skuMatch)
       : (skuMatch || vidMatch || {count:0,revenue:0,lastDate:null});
-    const liveDate = p.createdAt ? new Date(p.createdAt) : new Date('2026-02-01');
-    const endDate = (p.stock <= 0 && sold.lastDate) ? new Date(sold.lastDate) : new Date();
-    const velocityDayCount = Math.max(1, Math.ceil((endDate - liveDate) / 86400000));
+    // FIX: velocity must match the column window (dayCount). For newly launched products, cap by product age so we don't penalize them.
+    const liveDate = p.createdAt ? new Date(p.createdAt) : null;
+    const daysSinceLaunch = liveDate ? Math.max(1, Math.ceil((new Date() - liveDate) / 86400000)) : dayCount;
+    const velocityDayCount = Math.max(1, Math.min(dayCount, daysSinceLaunch));
     const spd = parseFloat((sold.count/velocityDayCount).toFixed(3));
     return {...p, spd, unitsSold30:sold.count, rev30:sold.revenue, lastOrderDate:sold.lastDate};
   });
