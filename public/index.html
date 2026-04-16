@@ -1501,7 +1501,7 @@ function applyRP() {
     // FIX: velocity must match the column window (dayCount). For newly launched products, cap by product age so we don't penalize them.
     const liveDate = p.createdAt ? new Date(p.createdAt) : null;
     const daysSinceLaunch = liveDate ? Math.max(1, Math.ceil((new Date() - liveDate) / 86400000)) : dayCount;
-    const velocityDayCount = Math.max(1, Math.min(dayCount, daysSinceLaunch));
+    const velocityDayCount = Math.max(1, dayCount);
     const spd = parseFloat((sold.count/velocityDayCount).toFixed(3));
     return {...p, spd, unitsSold30:sold.count, rev30:sold.revenue, lastOrderDate:sold.lastDate};
   });
