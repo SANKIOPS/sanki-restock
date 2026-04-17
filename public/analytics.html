@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sanki · Analytics · Vendor & Category Performance</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .num { font-variant-numeric: tabular-nums; }
+  th.sort-btn { cursor: pointer; user-select: none; }
+  th.sort-btn:hover { background-color: #f3f4f6; }
+  .chip { display:inline-block; padding:2px 8px; border-radius:9999px; font-size:11px; font-weight:600; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+<div class="max-w-[1400px] mx-auto p-6">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between mb-6">
+    <div>
+      <div class="flex items-center gap-2 text-sm text-gray-500">
+        <a href="/" class="hover:text-blue-600">⚡ Sanki Dashboard</a>
+        <span>/</span>
+        <span>Analytics</span>
+      </div>
+      <h1 class="text-2xl font-bold mt-1">Vendor &amp; Category Performance</h1>
+      <p class="text-sm text-gray-500">Who is performing well in the selected window? · <span id="data-age" class="text-gray-400"></span></p>
+    </div>
+    <div class="flex gap-2">
+      <button id="refresh-btn" class="px-3 py-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-sm">↻ Refresh</button>
+      <button id="export-btn" class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">⬇ Export CSV</button>
+    </div>
+  </header>
+
+  <!-- Tab switcher -->
+  <div class="flex gap-2 mb-4 border-b border-gray-200">
+    <button data-tab="vendors"    class="tab-btn px-4 py-2 -mb-px border-b-2 border-blue-600 text-blue-600 font-medium">Vendors</button>
+    <button data-tab="categories" class="tab-btn px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700">Categories</button>
+    <button data-tab="crosstab"   class="tab-btn px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700">Vendor × Category</button>
+  </div>
+
+  <!-- Filter bar -->
+  <section class="bg-white rounded-lg border border-gray-200 p-4 mb-4 shadow-sm">
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">From</label>
+        <input type="date" id="from-date" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">To</label>
+        <input type="date" id="to-date" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Vendor</label>
+        <select id="vendor-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          <option value="">All vendors</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Category</label>
+        <select id="category-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          <option value="">All categories</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Velocity</label>
+        <select id="velocity-filter" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          <option value="">All velocities</option>
+          <option value="hot">🔥 Hot (top 10%)</option>
+          <option value="warm">Warm</option>
+          <option value="cold">Cold</option>
+          <option value="dead">Dead (no sales)</option>
+        </select>
+      </div>
+      <div class="flex gap-2">
+        <button id="apply-btn" class="flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">Apply</button>
+        <button id="clear-btn" class="px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-sm">Clear</button>
+      </div>
+    </div>
+    <div class="flex gap-4 mt-3 text-sm text-gray-600">
+      <label class="inline-flex items-center gap-2">
+        <input type="checkbox" id="only-with-sales" class="rounded" />
+        <span>Only with sales in range</span>
+      </label>
+      <label class="inline-flex items-center gap-2">
+        <input type="checkbox" id="hide-zero-stock" class="rounded" />
+        <span>Hide zero-stock</span>
+      </label>
+    </div>
+  </section>
+
+  <!-- Summary cards -->
+  <section id="summary" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></section>
+
+  <!-- Loading state -->
+  <div id="loading" class="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-500 hidden">
+    <div class="animate-pulse">Loading products &amp; orders…</div>
+  </div>
+
+  <!-- Empty state -->
+  <div id="empty" class="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-500 hidden">
+    No data for the selected filters.
+  </div>
+
+  <!-- Results table -->
+  <div id="table-wrap" class="bg-white rounded-lg border border-gray-200 overflow-x-auto shadow-sm">
+    <table id="results" class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs text-gray-600 uppercase"></thead>
+      <tbody class="divide-y divide-gray-100"></tbody>
+    </table>
+  </div>
+
+  <footer class="mt-6 text-center text-xs text-gray-400">
+    Sanki Analytics · aggregates computed client-side from <code>/api/products</code> and <code>/api/orders</code>
+  </footer>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------------- State ----------------
+  const state = {
+    products: [],
+    orders: [],
+    lastSync: null,
+    tab: 'vendors',
+    sortKey: 'revenue',
+    sortDir: 'desc',
+    filters: {
+      from: '', to: '', vendor: '', category: '', velocity: '',
+      onlyWithSales: false, hideZeroStock: false,
+    },
+  };
+
+  // ---------------- URL state sync ----------------
+  function readURL() {
+    const q = new URLSearchParams(location.search);
+    state.tab = q.get('tab') || 'vendors';
+    state.filters.from = q.get('from') || defaultFrom();
+    state.filters.to = q.get('to') || defaultTo();
+    state.filters.vendor = q.get('vendor') || '';
+    state.filters.category = q.get('category') || '';
+    state.filters.velocity = q.get('velocity') || '';
+    state.filters.onlyWithSales = q.get('onlyWithSales') === '1';
+    state.filters.hideZeroStock = q.get('hideZeroStock') === '1';
+    state.sortKey = q.get('sortKey') || 'revenue';
+    state.sortDir = q.get('sortDir') || 'desc';
+  }
+  function writeURL() {
+    const q = new URLSearchParams();
+    q.set('tab', state.tab);
+    q.set('from', state.filters.from);
+    q.set('to', state.filters.to);
+    if (state.filters.vendor) q.set('vendor', state.filters.vendor);
+    if (state.filters.category) q.set('category', state.filters.category);
+    if (state.filters.velocity) q.set('velocity', state.filters.velocity);
+    if (state.filters.onlyWithSales) q.set('onlyWithSales', '1');
+    if (state.filters.hideZeroStock) q.set('hideZeroStock', '1');
+    q.set('sortKey', state.sortKey);
+    q.set('sortDir', state.sortDir);
+    history.replaceState(null, '', location.pathname + '?' + q.toString());
+  }
+
+  // ---------------- Defaults ----------------
+  function defaultTo()   { return new Date().toISOString().slice(0,10); }
+  function defaultFrom() { const d = new Date(); d.setDate(d.getDate()-30); return d.toISOString().slice(0,10); }
+
+  // ---------------- Format helpers ----------------
+  const fmtINR = v => '₹' + (v >= 1e7 ? (v/1e7).toFixed(2)+'Cr' : v >= 1e5 ? (v/1e5).toFixed(2)+'L' : v >= 1e3 ? (v/1e3).toFixed(1)+'k' : v.toFixed(0));
+  const fmtNum = v => v.toLocaleString('en-IN');
+  const fmtPct = v => (v*100).toFixed(1)+'%';
+  const fmtDate = s => s ? new Date(s).toLocaleDateString('en-IN', {day:'2-digit', month:'short'}) : '';
+
+  function rangeLabel() { return fmtDate(state.filters.from) + '–' + fmtDate(state.filters.to); }
+  function daysInRange() {
+    const d1 = new Date(state.filters.from), d2 = new Date(state.filters.to);
+    return Math.max(1, Math.round((d2 - d1) / 86400000) + 1);
+  }
+
+  // ---------------- Data fetch ----------------
+  async function loadData() {
+    show('loading', true); show('table-wrap', false); show('empty', false);
+    try {
+      const [pRes, oRes] = await Promise.all([
+        fetch('/api/products', {cache:'no-store'}),
+        fetch('/api/orders',   {cache:'no-store'})
+      ]);
+      const p = await pRes.json();
+      const o = await oRes.json();
+      state.products = p.products || [];
+      state.orders = o.orders || [];
+      state.lastSync = o.lastSync || p.lastSync || null;
+      populateFilterOptions();
+      document.getElementById('data-age').textContent =
+        'Showing ' + rangeLabel() + ' · ' + state.products.length + ' products · ' + state.orders.length + ' orders' +
+        (state.lastSync ? ' · last sync ' + new Date(state.lastSync).toLocaleString() : '');
+    } catch (e) {
+      document.getElementById('data-age').textContent = 'Error loading data: ' + e.message;
+    }
+    show('loading', false);
+    render();
+  }
+
+  function populateFilterOptions() {
+    const vendors = [...new Set(state.products.map(p => p.vendor).filter(Boolean))].sort();
+    const cats = [...new Set(state.products.map(p => p.product_type).filter(Boolean))].sort();
+    const vSel = document.getElementById('vendor-filter');
+    const cSel = document.getElementById('category-filter');
+    vSel.innerHTML = '<option value="">All vendors</option>' + vendors.map(v => `<option value="${v}">${v}</option>`).join('');
+    cSel.innerHTML = '<option value="">All categories</option>' + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+    vSel.value = state.filters.vendor;
+    cSel.value = state.filters.category;
+  }
+
+  // ---------------- Aggregation ----------------
+  // Build a product lookup keyed by variant SKU and by product_id
+  function buildLookups() {
+    const bySku = new Map();
+    const byProductId = new Map();
+    for (const p of state.products) {
+      byProductId.set(p.id, p);
+      for (const v of (p.variants || [])) {
+        if (v.sku) bySku.set(v.sku, { product: p, variant: v });
+      }
+    }
+    return { bySku, byProductId };
+  }
+
+  // Aggregate by a key function over the product. Returns { key -> row }
+  function aggregateBy(keyFn, opts = {}) {
+    const { bySku, byProductId } = buildLookups();
+    const from = new Date(state.filters.from + 'T00:00:00');
+    const to = new Date(state.filters.to + 'T23:59:59');
+    const days = daysInRange();
+    const rows = new Map();
+
+    // Initialize rows from products (so groups with zero sales still show)
+    for (const p of state.products) {
+      const k = keyFn(p) || '—';
+      if (!rows.has(k)) {
+        rows.set(k, {
+          key: k, skus: 0, products: 0, unitsSold: 0, revenue: 0,
+          stockRemaining: 0, avgPerDay: 0, daysOfCover: 0,
+          firstSaleAt: null, lastSaleAt: null,
+        });
+      }
+      const r = rows.get(k);
+      r.products++;
+      for (const v of (p.variants || [])) {
+        r.skus++;
+        r.stockRemaining += (v.inventory || 0);
+      }
+    }
+
+    // Apply orders in window
+    for (const o of state.orders) {
+      const ts = new Date(o.created_at);
+      if (ts < from || ts > to) continue;
+      for (const li of (o.line_items || [])) {
+        let prod = null;
+        if (li.product_id) prod = byProductId.get(li.product_id);
+        if (!prod && li.sku) prod = bySku.get(li.sku)?.product;
+        if (!prod) continue;
+        const k = keyFn(prod) || '—';
+        if (!rows.has(k)) continue;
+        const r = rows.get(k);
+        const qty = li.quantity || 0;
+        const price = parseFloat(li.price || '0');
+        r.unitsSold += qty;
+        r.revenue += qty * price;
+        if (!r.firstSaleAt || ts < r.firstSaleAt) r.firstSaleAt = ts;
+        if (!r.lastSaleAt  || ts > r.lastSaleAt)  r.lastSaleAt = ts;
+      }
+    }
+
+    // Post-compute velocity + filtering
+    const list = [...rows.values()];
+    for (const r of list) {
+      r.avgPerDay = r.unitsSold / days;
+      r.daysOfCover = r.avgPerDay > 0 ? r.stockRemaining / r.avgPerDay : Infinity;
+    }
+
+    // Velocity buckets: top 10% of unitsSold = hot, next 30% = warm, rest with sales = cold, 0 sales = dead
+    const sorted = [...list].sort((a,b) => b.unitsSold - a.unitsSold);
+    const withSales = sorted.filter(r => r.unitsSold > 0);
+    const hotCut  = Math.ceil(withSales.length * 0.1);
+    const warmCut = Math.ceil(withSales.length * 0.4);
+    const hotSet = new Set(withSales.slice(0, hotCut).map(r => r.key));
+    const warmSet = new Set(withSales.slice(hotCut, warmCut).map(r => r.key));
+    for (const r of list) {
+      r.velocity = r.unitsSold === 0 ? 'dead' : hotSet.has(r.key) ? 'hot' : warmSet.has(r.key) ? 'warm' : 'cold';
+    }
+
+    // Apply filters
+    let filtered = list;
+    if (state.filters.onlyWithSales) filtered = filtered.filter(r => r.unitsSold > 0);
+    if (state.filters.hideZeroStock) filtered = filtered.filter(r => r.stockRemaining > 0);
+    if (state.filters.velocity)      filtered = filtered.filter(r => r.velocity === state.filters.velocity);
+    return filtered;
+  }
+
+  // Cross-tab vendor × category
+  function aggregateCrosstab() {
+    const from = new Date(state.filters.from + 'T00:00:00');
+    const to = new Date(state.filters.to + 'T23:59:59');
+    const { bySku, byProductId } = buildLookups();
+    // Build cell map: vendor|category -> revenue
+    const cells = new Map();
+    const vendors = new Set();
+    const cats = new Set();
+    for (const o of state.orders) {
+      const ts = new Date(o.created_at);
+      if (ts < from || ts > to) continue;
+      for (const li of (o.line_items || [])) {
+        let prod = null;
+        if (li.product_id) prod = byProductId.get(li.product_id);
+        if (!prod && li.sku) prod = bySku.get(li.sku)?.product;
+        if (!prod) continue;
+        const v = prod.vendor || '—';
+        const c = prod.product_type || '—';
+        vendors.add(v); cats.add(c);
+        const k = v + '|||' + c;
+        const qty = li.quantity || 0;
+        const price = parseFloat(li.price || '0');
+        cells.set(k, (cells.get(k) || 0) + qty * price);
+      }
+    }
+    return { vendors: [...vendors].sort(), cats: [...cats].sort(), cells };
+  }
+
+  // ---------------- Render ----------------
+  function show(id, yes) { document.getElementById(id).classList.toggle('hidden', !yes); }
+
+  function renderSummary(rows) {
+    const totalRevenue = rows.reduce((s,r) => s + r.revenue, 0);
+    const totalUnits = rows.reduce((s,r) => s + r.unitsSold, 0);
+    const totalStock = rows.reduce((s,r) => s + r.stockRemaining, 0);
+    const groupsWithSales = rows.filter(r => r.unitsSold > 0).length;
+    const perDay = totalUnits / daysInRange();
+    const cards = [
+      { label: 'Groups',        value: rows.length,               sub: groupsWithSales + ' with sales' },
+      { label: 'Units Sold',    value: fmtNum(totalUnits),        sub: perDay.toFixed(1) + '/day' },
+      { label: 'Revenue',       value: fmtINR(totalRevenue),      sub: rangeLabel() },
+      { label: 'Stock on Hand', value: fmtNum(totalStock),        sub: 'units remaining' },
+      { label: 'Window',        value: daysInRange() + 'd',       sub: rangeLabel() },
+    ];
+    document.getElementById('summary').innerHTML = cards.map(c => `
+      <div class="bg-white rounded-lg border border-gray-200 p-3 shadow-sm">
+        <div class="text-xs uppercase font-semibold text-gray-500">${c.label}</div>
+        <div class="text-xl font-bold text-gray-900 num mt-1">${c.value}</div>
+        <div class="text-xs text-gray-500 mt-0.5">${c.sub}</div>
+      </div>
+    `).join('');
+  }
+
+  function renderTable(rows, headerLabel) {
+    if (!rows.length) { show('empty', true); show('table-wrap', false); return; }
+    show('empty', false); show('table-wrap', true);
+
+    // Sort
+    const { sortKey, sortDir } = state;
+    rows = [...rows].sort((a,b) => {
+      let av = a[sortKey], bv = b[sortKey];
+      if (sortKey === 'key') return sortDir === 'asc' ? String(av).localeCompare(bv) : String(bv).localeCompare(av);
+      if (av === Infinity) av = Number.MAX_VALUE;
+      if (bv === Infinity) bv = Number.MAX_VALUE;
+      return sortDir === 'asc' ? (av - bv) : (bv - av);
+    });
+
+    const cols = [
+      { key: 'key',            label: headerLabel,     align: 'left',  fmt: v => v },
+      { key: 'products',       label: '# Products',    align: 'right', fmt: fmtNum },
+      { key: 'skus',           label: '# SKUs',        align: 'right', fmt: fmtNum },
+      { key: 'unitsSold',      label: 'Units Sold',    align: 'right', fmt: fmtNum },
+      { key: 'revenue',        label: 'Revenue',       align: 'right', fmt: fmtINR },
+      { key: 'avgPerDay',      label: 'Avg/day',       align: 'right', fmt: v => v.toFixed(1) },
+      { key: 'stockRemaining', label: 'Stock Left',    align: 'right', fmt: fmtNum },
+      { key: 'daysOfCover',    label: 'Days Cover',    align: 'right', fmt: v => v === Infinity ? '∞' : v.toFixed(0) },
+      { key: 'velocity',       label: 'Velocity',      align: 'left',  fmt: v => velocityChip(v) },
+    ];
+
+    const thead = document.querySelector('#results thead');
+    thead.innerHTML = '<tr>' + cols.map(c => {
+      const arrow = state.sortKey === c.key ? (state.sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+      return `<th class="sort-btn px-3 py-2 text-${c.align}" data-key="${c.key}">${c.label}${arrow}</th>`;
+    }).join('') + '</tr>';
+
+    const tbody = document.querySelector('#results tbody');
+    tbody.innerHTML = rows.map(r => '<tr class="hover:bg-blue-50">' + cols.map(c => {
+      const v = r[c.key];
+      return `<td class="px-3 py-2 text-${c.align} num">${c.fmt(v)}</td>`;
+    }).join('') + '</tr>').join('');
+
+    // Bind sort clicks
+    thead.querySelectorAll('th[data-key]').forEach(th => {
+      th.addEventListener('click', () => {
+        const k = th.dataset.key;
+        if (state.sortKey === k) state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        else { state.sortKey = k; state.sortDir = k === 'key' ? 'asc' : 'desc'; }
+        writeURL(); render();
+      });
+    });
+  }
+
+  function velocityChip(v) {
+    const m = { hot: 'bg-orange-100 text-orange-700', warm: 'bg-yellow-100 text-yellow-700', cold: 'bg-blue-100 text-blue-700', dead: 'bg-gray-100 text-gray-500' };
+    const label = { hot: '🔥 Hot', warm: 'Warm', cold: 'Cold', dead: 'Dead' };
+    return `<span class="chip ${m[v]}">${label[v] || v}</span>`;
+  }
+
+  function renderCrosstab() {
+    const { vendors, cats, cells } = aggregateCrosstab();
+    if (!vendors.length || !cats.length) { show('empty', true); show('table-wrap', false); return; }
+    show('empty', false); show('table-wrap', true);
+    const thead = document.querySelector('#results thead');
+    const tbody = document.querySelector('#results tbody');
+    thead.innerHTML = '<tr><th class="px-3 py-2 text-left">Vendor \\\\ Category</th>' +
+      cats.map(c => `<th class="px-3 py-2 text-right">${c}</th>`).join('') +
+      '<th class="px-3 py-2 text-right bg-blue-50">Total</th></tr>';
+    tbody.innerHTML = vendors.map(v => {
+      const rowTotal = cats.reduce((s,c) => s + (cells.get(v+'|||'+c) || 0), 0);
+      return '<tr class="hover:bg-blue-50"><td class="px-3 py-2 font-medium">'+v+'</td>' +
+        cats.map(c => {
+          const val = cells.get(v+'|||'+c) || 0;
+          const cls = val > 0 ? 'text-gray-900' : 'text-gray-300';
+          return `<td class="px-3 py-2 text-right num ${cls}">${val > 0 ? fmtINR(val) : '—'}</td>`;
+        }).join('') +
+        `<td class="px-3 py-2 text-right num font-semibold bg-blue-50">${fmtINR(rowTotal)}</td></tr>`;
+    }).join('');
+    document.getElementById('summary').innerHTML = `
+      <div class="bg-white rounded-lg border border-gray-200 p-3 shadow-sm col-span-5">
+        <div class="text-xs uppercase font-semibold text-gray-500">Vendor × Category Revenue</div>
+        <div class="text-sm text-gray-600 mt-1">${vendors.length} vendors · ${cats.length} categories · ${rangeLabel()}</div>
+      </div>`;
+  }
+
+  function render() {
+    // Active tab styling
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      const active = b.dataset.tab === state.tab;
+      b.classList.toggle('border-blue-600', active);
+      b.classList.toggle('text-blue-600', active);
+      b.classList.toggle('font-medium', active);
+      b.classList.toggle('border-transparent', !active);
+      b.classList.toggle('text-gray-500', !active);
+    });
+
+    let rows = [];
+    if (state.tab === 'vendors') {
+      rows = aggregateBy(p => p.vendor);
+      if (state.filters.category) rows = rows.filter(r => {
+        // Apply category filter by re-aggregating only products matching category
+        return true; // (already filtered upstream via filter dropdowns below when re-running)
+      });
+      // Secondary filter: if category filter is set, recompute only products whose product_type matches
+      if (state.filters.category) {
+        rows = aggregateByWithProductFilter(p => p.vendor, p => p.product_type === state.filters.category);
+      }
+      if (state.filters.vendor) rows = rows.filter(r => r.key === state.filters.vendor);
+      renderSummary(rows);
+      renderTable(rows, 'Vendor');
+    } else if (state.tab === 'categories') {
+      rows = aggregateBy(p => p.product_type);
+      if (state.filters.vendor) {
+        rows = aggregateByWithProductFilter(p => p.product_type, p => p.vendor === state.filters.vendor);
+      }
+      if (state.filters.category) rows = rows.filter(r => r.key === state.filters.category);
+      renderSummary(rows);
+      renderTable(rows, 'Category');
+    } else if (state.tab === 'crosstab') {
+      renderCrosstab();
+    }
+    writeURL();
+  }
+
+  // Re-run aggregation with a product pre-filter
+  function aggregateByWithProductFilter(keyFn, productFilter) {
+    const original = state.products;
+    state.products = original.filter(productFilter);
+    const rows = aggregateBy(keyFn);
+    state.products = original;
+    return rows;
+  }
+
+  // ---------------- Export ----------------
+  function exportCSV() {
+    const rows = state.tab === 'vendors'
+      ? aggregateBy(p => p.vendor)
+      : state.tab === 'categories'
+      ? aggregateBy(p => p.product_type)
+      : [];
+    if (!rows.length) return;
+    const header = ['Name','# Products','# SKUs','Units Sold','Revenue','Avg/day','Stock Left','Days Cover','Velocity'];
+    const lines = [header.join(',')];
+    for (const r of rows) {
+      lines.push([
+        '"'+String(r.key).replace(/"/g,'""')+'"',
+        r.products, r.skus, r.unitsSold, r.revenue.toFixed(2),
+        r.avgPerDay.toFixed(2), r.stockRemaining,
+        r.daysOfCover === Infinity ? 'Inf' : r.daysOfCover.toFixed(0),
+        r.velocity,
+      ].join(','));
+    }
+    const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `sanki-${state.tab}-${state.filters.from}-to-${state.filters.to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ---------------- Wire up ----------------
+  function bind() {
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.addEventListener('click', () => { state.tab = b.dataset.tab; render(); });
+    });
+    document.getElementById('apply-btn').addEventListener('click', () => {
+      state.filters.from = document.getElementById('from-date').value || defaultFrom();
+      state.filters.to = document.getElementById('to-date').value || defaultTo();
+      state.filters.vendor = document.getElementById('vendor-filter').value;
+      state.filters.category = document.getElementById('category-filter').value;
+      state.filters.velocity = document.getElementById('velocity-filter').value;
+      state.filters.onlyWithSales = document.getElementById('only-with-sales').checked;
+      state.filters.hideZeroStock = document.getElementById('hide-zero-stock').checked;
+      render();
+    });
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      state.filters = { from: defaultFrom(), to: defaultTo(), vendor: '', category: '', velocity: '', onlyWithSales: false, hideZeroStock: false };
+      syncInputsFromState(); render();
+    });
+    document.getElementById('refresh-btn').addEventListener('click', loadData);
+    document.getElementById('export-btn').addEventListener('click', exportCSV);
+  }
+
+  function syncInputsFromState() {
+    document.getElementById('from-date').value = state.filters.from;
+    document.getElementById('to-date').value = state.filters.to;
+    document.getElementById('vendor-filter').value = state.filters.vendor;
+    document.getElementById('category-filter').value = state.filters.category;
+    document.getElementById('velocity-filter').value = state.filters.velocity;
+    document.getElementById('only-with-sales').checked = state.filters.onlyWithSales;
+    document.getElementById('hide-zero-stock').checked = state.filters.hideZeroStock;
+  }
+
+  // ---------------- Boot ----------------
+  readURL();
+  syncInputsFromState();
+  bind();
+  loadData();
+})();
+</script>
+</body>
+</html>
