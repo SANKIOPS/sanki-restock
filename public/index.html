@@ -824,7 +824,16 @@ function showPage(p) {
       if (el.getAttribute('onclick') && el.getAttribute('onclick').indexOf("'"+p+"'") >= 0) el.classList.add('active');
     });
   }
-  if (p === 'restock') applyRP();
+  if (p === 'restock') {
+      if (typeof PRODUCTS !== 'undefined' && PRODUCTS.length) {
+        applyRP();
+      } else if (typeof syncShopify === 'function') {
+        const __sb = document.getElementById('syncBtn');
+        if (!__sb || !__sb.disabled) {
+          syncShopify().then(() => { if (typeof PRODUCTS !== 'undefined' && PRODUCTS.length) applyRP(); });
+        }
+      }
+    }
       if (p === 'search') renderSearch('');
   if (p === 'hot') renderHotSellers();
   if (p === 'po') renderPOPage();
