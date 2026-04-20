@@ -1185,13 +1185,43 @@ app.post('/api/data/save', (req, res) => {
 // ════════════════════════════════════════════════════════════════
 //  HEALTH CHECK
 // ════════════════════════════════════════════════════════════════
-app.get('/api/health', (req, res) => {
+let __shopifyHealthCache = { ok: null, checkedAt: 0, error: null, lastStatus: null };
+app.get('/api/health', async (req, res) => {
+  let shopifyAuthed = false;
+  let shopifyAuthError = null;
+  let shopifyAuthStatus = null;
+  try {
+    if (SHOPIFY_STORE && SHOPIFY_TOKEN) {
+      const CACHE_TTL_MS = 60 * 1000;
+      if (Date.now() - __shopifyHealthCache.checkedAt < CACHE_TTL_MS && __shopifyHealthCache.checkedAt > 0) {
+        shopifyAuthed    = __shopifyHealthCache.ok === true;
+        shopifyAuthError = __shopifyHealthCache.error;
+        shopifyAuthStatus = __shopifyHealthCache.lastStatus;
+      } else {
+        const fetch = require('node-fetch');
+        const r = await shopifyFetch(fetch, `https://${SHOPIFY_STORE}/admin/api/2024-01/shop.json`);
+        shopifyAuthStatus = r.status;
+        shopifyAuthed = r.ok;
+        if (!r.ok) {
+          const body = await r.text().catch(() => '');
+          shopifyAuthError = 'Shopify ' + r.status + ' ' + r.statusText + ': ' + body.slice(0, 200);
+        }
+        __shopifyHealthCache = { ok: shopifyAuthed, checkedAt: Date.now(), error: shopifyAuthError, lastStatus: shopifyAuthStatus };
+      }
+    } else {
+      shopifyAuthError = 'SHOPIFY_STORE or SHOPIFY_ACCESS_TOKEN not set';
+    }
+  } catch (e) {
+    shopifyAuthError = e.message;
+  }
   res.json({
     status:        'ok',
     version:       '4.0',
     store:         SHOPIFY_STORE || 'not configured',
-    connected:     !!(SHOPIFY_STORE && SHOPIFY_TOKEN),   // ← what frontend checks
-    shopify:       !!(SHOPIFY_STORE && SHOPIFY_TOKEN),
+    connected:     shopifyAuthed,                 // real auth status (Shopify /shop.json ping, cached 60s)
+    shopify:       shopifyAuthed,
+    shopifyAuthError:  shopifyAuthError,
+    shopifyAuthStatus: shopifyAuthStatus,
     velocity:      !!(VELOCITY_API_KEY || VELOCITY_USERNAME),
     bitespeed:     !!BITESPEED_API_KEY,
     cachedOrders:  ordersCache.orders.length,
