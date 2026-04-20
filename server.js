@@ -418,6 +418,13 @@ async function shopifyFetchAll(fetch, startUrl) {
   let all = [], url = startUrl;
   while (url) {
     const r = await shopifyFetch(fetch, url);
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      const err = new Error('Shopify ' + r.status + ' ' + r.statusText + ': ' + body.slice(0, 500));
+      err.status = r.status;
+      console.error('[shopify] fetchAll error on', url, '->', err.message);
+      throw err;
+    }
     const d = await r.json();
     const key = Object.keys(d).find(k => Array.isArray(d[k]));
     if (key) all = all.concat(d[key]);
@@ -1043,8 +1050,9 @@ app.get('/api/products', async (req, res) => {
           title: v.title, image: vim[String(v.id)] || mainImg
         }))
       };
-    productsCache.products = all; productsCache.lastSync = new Date().toISOString();
     });
+    productsCache.products = products;
+    productsCache.lastSync = new Date().toISOString();
     res.json({ success: true, products, total: products.length });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
@@ -1193,6 +1201,32 @@ app.get('/api/health', (req, res) => {
     velocityWebhookUrl: `${SELF_URL}/api/webhooks/velocity`,
     ts: new Date().toISOString()
   });
+});
+
+app.get('/api/debug/shopify-probe', async (req, res) => {
+  try {
+    if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) {
+      return res.json({ success: false, error: 'SHOPIFY_STORE or SHOPIFY_TOKEN not set', storeSet: !!SHOPIFY_STORE, tokenSet: !!SHOPIFY_TOKEN });
+    }
+    const fetch = require('node-fetch');
+    const target = (req.query.path || '/admin/api/2024-01/products.json?limit=5');
+    const url = 'https://' + SHOPIFY_STORE + target;
+    const r = await shopifyFetch(fetch, url);
+    const body = await r.text();
+    let parsed = null;
+    try { parsed = JSON.parse(body); } catch(_) {}
+    res.json({
+      success: true,
+      url,
+      status: r.status,
+      statusText: r.statusText,
+      ok: r.ok,
+      headers: { link: r.headers.get('Link') || null, contentType: r.headers.get('Content-Type') || null },
+      bodyPreview: body.slice(0, 1200),
+      arrayKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed).filter(k => Array.isArray(parsed[k])) : null,
+      firstArrayLength: parsed && typeof parsed === 'object' ? (Object.keys(parsed).filter(k => Array.isArray(parsed[k])).map(k => parsed[k].length)[0] ?? null) : null
+    });
+  } catch(e) { res.json({ success: false, error: e.message, stack: (e.stack||'').split('\n').slice(0,4) }); }
 });
 
 app.get('/api/debug/orders', (req, res) => {
