@@ -116,6 +116,27 @@
   </footer>
 </div>
 
+<!-- SKU Detail Drawer -->
+<div id="sku-drawer" class="hidden fixed inset-0 z-50">
+  <div id="drawer-overlay" class="absolute inset-0 bg-black bg-opacity-40"></div>
+  <div class="absolute top-0 right-0 bottom-0 w-full max-w-4xl bg-white shadow-xl flex flex-col">
+    <div class="flex items-start justify-between p-4 border-b border-gray-200">
+      <div>
+        <div class="text-xs uppercase font-semibold text-gray-500" id="drawer-kind">Vendor</div>
+        <div class="text-xl font-bold text-gray-900" id="drawer-title">—</div>
+        <div class="text-xs text-gray-500 mt-1" id="drawer-sub">—</div>
+      </div>
+      <button id="drawer-close-btn" class="px-3 py-1.5 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Close ✕</button>
+    </div>
+    <div class="flex-1 overflow-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-xs text-gray-600 uppercase sticky top-0" id="drawer-thead"></thead>
+        <tbody class="divide-y divide-gray-100" id="drawer-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <script>
 (() => {
   'use strict';
@@ -388,10 +409,20 @@
     }).join('') + '</tr>';
 
     const tbody = document.querySelector('#results tbody');
-    tbody.innerHTML = rows.map(r => '<tr class="hover:bg-blue-50">' + cols.map(c => {
-      const v = r[c.key];
-      return `<td class="px-3 py-2 text-${c.align} num">${c.fmt(v)}</td>`;
-    }).join('') + '</tr>').join('');
+    tbody.innerHTML = rows.map(r => {
+      const _k = String(r.key).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return '<tr class="hover:bg-blue-50 cursor-pointer" data-group-key="' + _k + '">' + cols.map(c => {
+        const v = r[c.key];
+        return `<td class="px-3 py-2 text-${c.align} num">${c.fmt(v)}</td>`;
+      }).join('') + '</tr>';
+    }).join('');
+
+    // Bind row click → SKU drawer
+    tbody.querySelectorAll('tr[data-group-key]').forEach(tr => {
+      tr.addEventListener('click', () => {
+        openSkuDrawer(tr.dataset.groupKey, state.tab === 'vendors' ? 'vendor' : 'category');
+      });
+    });
 
     // Bind sort clicks
     thead.querySelectorAll('th[data-key]').forEach(th => {
@@ -511,8 +542,120 @@
     URL.revokeObjectURL(url);
   }
 
+  // ---------------- SKU detail drawer ----------------
+  function openSkuDrawer(groupKey, groupType) {
+    const lookups = buildLookups();
+    const bySku = lookups.bySku, byProductId = lookups.byProductId;
+    const from = new Date(state.filters.from + 'T00:00:00');
+    const to = new Date(state.filters.to + 'T23:59:59');
+    const days = daysInRange();
+
+    const matchFn = groupType === 'vendor'
+      ? function(p) { return (p.vendor || '—') === groupKey; }
+      : function(p) { return (p.product_type || '—') === groupKey; };
+    const matching = state.products.filter(matchFn);
+
+    const skuMap = new Map();
+    for (const p of matching) {
+      for (const v of (p.variants || [])) {
+        const k = v.sku || ('vid:' + v.id);
+        if (!skuMap.has(k)) {
+          skuMap.set(k, {
+            sku: v.sku || '—',
+            productName: p.name || p.title || '—',
+            variantTitle: v.title || '',
+            productId: p.id,
+            variantId: v.id,
+            unitsSold: 0,
+            revenue: 0,
+            stockRemaining: 0,
+            avgPerDay: 0,
+            daysOfCover: 0
+          });
+        }
+        skuMap.get(k).stockRemaining += (v.inventory || 0);
+      }
+    }
+
+    for (const o of state.orders) {
+      const ts = new Date(o.created_at);
+      if (ts < from || ts > to) continue;
+      for (const li of (o.line_items || [])) {
+        let prod = null;
+        if (li.product_id) prod = byProductId.get(li.product_id);
+        if (!prod && li.sku) { const hit = bySku.get(li.sku); prod = hit ? hit.product : null; }
+        if (!prod || !matchFn(prod)) continue;
+        let k = li.sku;
+        if (!k && li.variant_id) {
+          const found = (prod.variants || []).find(v => v.id === li.variant_id);
+          k = (found && found.sku) ? found.sku : ('vid:' + li.variant_id);
+        }
+        if (!k || !skuMap.has(k)) continue;
+        const row = skuMap.get(k);
+        row.unitsSold += (li.quantity || 0);
+        row.revenue += (li.quantity || 0) * parseFloat(li.price || '0');
+      }
+    }
+
+    const rows = Array.from(skuMap.values());
+    for (const row of rows) {
+      row.avgPerDay = row.unitsSold / days;
+      row.daysOfCover = row.avgPerDay > 0 ? row.stockRemaining / row.avgPerDay : Infinity;
+    }
+    rows.sort((a, b) => b.revenue - a.revenue);
+
+    let totalUnits = 0, totalRev = 0, totalStock = 0;
+    for (const row of rows) { totalUnits += row.unitsSold; totalRev += row.revenue; totalStock += row.stockRemaining; }
+
+    const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+    document.getElementById('drawer-kind').textContent = groupType === 'vendor' ? 'Vendor' : 'Category';
+    document.getElementById('drawer-title').textContent = groupKey;
+    document.getElementById('drawer-sub').textContent = rows.length + ' SKUs · ' + fmtNum(totalUnits) + ' units · ' + fmtINR(totalRev) + ' · ' + fmtNum(totalStock) + ' in stock · ' + rangeLabel();
+
+    document.getElementById('drawer-thead').innerHTML =
+      '<tr>' +
+      '<th class="px-3 py-2 text-left">Product / Variant</th>' +
+      '<th class="px-3 py-2 text-left">SKU</th>' +
+      '<th class="px-3 py-2 text-right">Units Sold</th>' +
+      '<th class="px-3 py-2 text-right">Revenue</th>' +
+      '<th class="px-3 py-2 text-right">Avg/Day</th>' +
+      '<th class="px-3 py-2 text-right">Stock Left</th>' +
+      '<th class="px-3 py-2 text-right">Days Cover</th>' +
+      '</tr>';
+
+    let html = '';
+    for (const row of rows) {
+      html += '<tr class="border-t hover:bg-blue-50">' +
+        '<td class="px-3 py-2">' +
+          '<div class="font-medium text-gray-900">' + esc(row.productName) + '</div>' +
+          (row.variantTitle ? '<div class="text-xs text-gray-500">' + esc(row.variantTitle) + '</div>' : '') +
+        '</td>' +
+        '<td class="px-3 py-2 font-mono text-xs text-gray-600">' + esc(row.sku) + '</td>' +
+        '<td class="px-3 py-2 text-right num">' + fmtNum(row.unitsSold) + '</td>' +
+        '<td class="px-3 py-2 text-right num">' + fmtINR(row.revenue) + '</td>' +
+        '<td class="px-3 py-2 text-right num">' + row.avgPerDay.toFixed(2) + '</td>' +
+        '<td class="px-3 py-2 text-right num">' + fmtNum(row.stockRemaining) + '</td>' +
+        '<td class="px-3 py-2 text-right num">' + (row.daysOfCover === Infinity ? '∞' : row.daysOfCover.toFixed(0)) + '</td>' +
+      '</tr>';
+    }
+    document.getElementById('drawer-tbody').innerHTML = html;
+
+    document.getElementById('sku-drawer').classList.remove('hidden');
+    document.body.classList.add('overflow-hidden');
+  }
+
+  function closeSkuDrawer() {
+    const el = document.getElementById('sku-drawer');
+    if (el) el.classList.add('hidden');
+    document.body.classList.remove('overflow-hidden');
+  }
+
   // ---------------- Wire up ----------------
   function bind() {
+    document.getElementById('drawer-overlay').addEventListener('click', closeSkuDrawer);
+    document.getElementById('drawer-close-btn').addEventListener('click', closeSkuDrawer);
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSkuDrawer(); });
     document.querySelectorAll('.tab-btn').forEach(b => {
       b.addEventListener('click', () => { state.tab = b.dataset.tab; render(); });
     });
