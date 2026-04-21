@@ -416,6 +416,8 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
     <div class="total-item">Reorder Cost: <b id="tot-cost">₹0</b></div>
     <div class="total-item">Est. Revenue: <b id="tot-erev">₹0</b></div>
     <div class="total-item">Est. Profit: <b id="tot-profit">₹0</b></div>
+        <div class="total-item">Bought: <b id="tot-bought">0</b></div>
+        <div class="total-item">Sold: <b id="tot-sold">0</b></div>
   </div>
 
   <!-- Selection bar (#6) -->
@@ -3964,5 +3966,55 @@ function o2ExportCSV(){
 </script>
 <script>
 (function(){if(window.__sankiPatched)return;window.__sankiPatched=true;var SL='\uD83D\uDD04 Sync Shopify',SR=/syncing/i;function fb(){var b=document.querySelectorAll('button');for(var i=0;i<b.length;i++){var t=(b[i].innerText||b[i].textContent||'').trim();if(/sync\s*shopify/i.test(t)||SR.test(t))return b[i]}return null}function rs(){var b=fb();if(b&&SR.test(b.innerText||'')){b.innerText=SL;b.disabled=false}}function ws(){if(typeof window.syncShopify!=='function')return false;if(window.syncShopify.__w)return true;var o=window.syncShopify;function w(){var a=arguments,t=setTimeout(rs,90000);try{var r=o.apply(this,a);if(r&&typeof r.then==='function')return r.catch(function(e){console.error('[sanki]',e);throw e}).finally(function(){clearTimeout(t);rs()});clearTimeout(t);rs();return r}catch(e){clearTimeout(t);rs();console.error('[sanki]',e);throw e}}w.__w=true;window.syncShopify=w;return true}function wsr(){if(ws())return;var n=0,iv=setInterval(function(){n++;if(ws()||n>60)clearInterval(iv)},50)}function al(){try{var dp=document.getElementById('page-dashboard')||document.querySelector('[data-page="dashboard"]');var v=true;if(dp){var s=getComputedStyle(dp);v=s.display!=='none'&&s.visibility!=='hidden'}if(!v)return;var f=document.getElementById('m-lowstock');if(f&&f.innerText&&f.innerText.trim()!=='\u2014'&&f.innerText.trim()!=='-')return;if(typeof window.syncShopify==='function'){ws();window.syncShopify()}}catch(e){console.error('[sanki]',e);rs()}}function bt(){wsr();setTimeout(al,150)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bt);else bt()})();
+</script>
+
+<script>
+(function(){
+  function recompute(){
+    try {
+      var elB = document.getElementById("tot-bought");
+      var elS = document.getElementById("tot-sold");
+      if (!elB || !elS) return;
+      var pos = JSON.parse(localStorage.getItem("sanki_pos") || "[]");
+      var vFilter = document.getElementById("rpSupplierFilter") ? document.getElementById("rpSupplierFilter").value : "";
+      var dates = document.querySelectorAll('#page-restock input[type="date"]');
+      var from = dates[0] ? dates[0].value : "";
+      var to = dates[1] ? dates[1].value : "";
+      var ok = {ordered:1,in_transit:1,received:1,fulfilled:1};
+      var bought = 0;
+      (pos||[]).forEach(function(po){
+        if (!ok[po.status]) return;
+        if (from && po.date && po.date < from) return;
+        if (to && po.date && po.date > to) return;
+        if (vFilter && po.supplier !== vFilter) return;
+        (po.products||[]).forEach(function(p){ bought += Number(p.qty)||0; });
+      });
+      elB.textContent = bought.toLocaleString("en-IN");
+      var tbl = document.getElementById("rpTable");
+      var sold = 0;
+      if (tbl) {
+        var rows = tbl.querySelectorAll("tbody tr");
+        rows.forEach(function(tr){
+          var cells = tr.querySelectorAll("td");
+          if (cells.length > 7) {
+            var n = parseInt((cells[7].textContent||"").replace(/[^0-9-]/g,""),10);
+            if (!isNaN(n)) sold += n;
+          }
+        });
+      }
+      elS.textContent = sold.toLocaleString("en-IN");
+    } catch(e) {}
+  }
+  var mo = new MutationObserver(function(){ recompute(); });
+  function hook(){
+    var a = document.getElementById("tot-profit");
+    if (!a) { setTimeout(hook, 500); return; }
+    mo.observe(a, {characterData:true, childList:true, subtree:true});
+    var tbl = document.getElementById("rpTable");
+    if (tbl) mo.observe(tbl, {childList:true, subtree:true, characterData:true});
+    recompute();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hook); else hook();
+})();
 </script>
 </body>
