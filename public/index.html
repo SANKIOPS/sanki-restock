@@ -412,6 +412,8 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
     <div class="total-item">Reorder Cost: <b id="tot-cost">₹0</b></div>
     <div class="total-item">Est. Revenue: <b id="tot-erev">₹0</b></div>
     <div class="total-item">Est. Profit: <b id="tot-profit">₹0</b></div>
+        <div class="total-item">Bought: <b id="tot-bought">0</b></div>
+        <div class="total-item">Sold: <b id="tot-sold">0</b></div>
   </div>
 
   <!-- Selection bar (#6) -->
@@ -4134,6 +4136,56 @@ function o2ExportCSV(){
       return r;
     };
   }
+})();
+</script>
+
+<script>
+(function(){
+  function recompute(){
+    try {
+      var elB = document.getElementById("tot-bought");
+      var elS = document.getElementById("tot-sold");
+      if (!elB || !elS) return;
+      var pos = JSON.parse(localStorage.getItem("sanki_pos") || "[]");
+      var vFilter = document.getElementById("rpSupplierFilter") ? document.getElementById("rpSupplierFilter").value : "";
+      var dates = document.querySelectorAll('#page-restock input[type="date"]');
+      var from = dates[0] ? dates[0].value : "";
+      var to = dates[1] ? dates[1].value : "";
+      var ok = {ordered:1,in_transit:1,received:1,fulfilled:1};
+      var bought = 0;
+      (pos||[]).forEach(function(po){
+        if (!ok[po.status]) return;
+        if (from && po.date && po.date < from) return;
+        if (to && po.date && po.date > to) return;
+        if (vFilter && po.supplier !== vFilter) return;
+        (po.products||[]).forEach(function(p){ bought += Number(p.qty)||0; });
+      });
+      elB.textContent = bought.toLocaleString("en-IN");
+      var tbl = document.getElementById("rpTable");
+      var sold = 0;
+      if (tbl) {
+        var rows = tbl.querySelectorAll("tbody tr");
+        rows.forEach(function(tr){
+          var cells = tr.querySelectorAll("td");
+          if (cells.length > 7) {
+            var n = parseInt((cells[7].textContent||"").replace(/[^0-9-]/g,""),10);
+            if (!isNaN(n)) sold += n;
+          }
+        });
+      }
+      elS.textContent = sold.toLocaleString("en-IN");
+    } catch(e) {}
+  }
+  var mo = new MutationObserver(function(){ recompute(); });
+  function hook(){
+    var a = document.getElementById("tot-profit");
+    if (!a) { setTimeout(hook, 500); return; }
+    mo.observe(a, {characterData:true, childList:true, subtree:true});
+    var tbl = document.getElementById("rpTable");
+    if (tbl) mo.observe(tbl, {childList:true, subtree:true, characterData:true});
+    recompute();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hook); else hook();
 })();
 </script>
 </body>

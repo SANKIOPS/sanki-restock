@@ -1270,6 +1270,47 @@ app.get('/api/debug/orders', (req, res) => {
 });
 
 // ── Catch-all SPA ─────────────────────────────────────────────
+// === Feature 1: Shopify Collections ===
+let collectionsCache = { data: null, lastSync: 0 };
+app.get('/api/collections', async (req, res) => {
+  try {
+    const TTL = 30 * 60 * 1000;
+    if (collectionsCache.data && (Date.now() - collectionsCache.lastSync) < TTL) {
+      return res.json({ success: true, collections: collectionsCache.data, cached: true });
+    }
+    const domain = process.env.SHOPIFY_DOMAIN;
+    const [smart, custom] = await Promise.all([
+      shopifyFetchAll(fetch, `https://${domain}/admin/api/2024-07/smart_collections.json?limit=250`).catch(() => []),
+      shopifyFetchAll(fetch, `https://${domain}/admin/api/2024-07/custom_collections.json?limit=250`).catch(() => [])
+    ]);
+    const all = [
+      ...((smart || []).map(c => ({ ...c, type: 'smart' }))),
+      ...((custom || []).map(c => ({ ...c, type: 'custom' })))
+    ];
+    const results = [];
+    for (const col of all) {
+      let productIds = [];
+      try {
+        if (col.type === 'custom') {
+          const collects = await shopifyFetchAll(fetch, `https://${domain}/admin/api/2024-07/collects.json?collection_id=${col.id}&limit=250`);
+          productIds = (collects || []).map(c => c.product_id);
+        } else {
+          const prods = await shopifyFetchAll(fetch, `https://${domain}/admin/api/2024-07/products.json?collection_id=${col.id}&limit=250&fields=id`);
+          productIds = (prods || []).map(p => p.id);
+        }
+      } catch (e) {
+        console.error('[collections]', col.id, e.message);
+      }
+      results.push({ id: col.id, title: col.title, handle: col.handle, type: col.type, productIds });
+    }
+    collectionsCache = { data: results, lastSync: Date.now() };
+    res.json({ success: true, collections: results, cached: false });
+  } catch (err) {
+    console.error('[/api/collections]', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

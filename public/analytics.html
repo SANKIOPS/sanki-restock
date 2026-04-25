@@ -38,6 +38,7 @@
     <button data-tab="vendors"    class="tab-btn px-4 py-2 -mb-px border-b-2 border-blue-600 text-blue-600 font-medium">Vendors</button>
     <button data-tab="categories" class="tab-btn px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700">Categories</button>
     <button data-tab="crosstab"   class="tab-btn px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700">Vendor × Category</button>
+    <button data-tab="collections" class="tab-btn px-4 py-2 -mb-px border-b-2 border-transparent text-gray-500 hover:text-gray-700">Collections</button>
   </div>
 
   <!-- Filter bar -->
@@ -692,6 +693,116 @@
   syncInputsFromState();
   bind();
   loadData();
+})();
+</script>
+
+<section id="tab-collections" style="display:none; padding:16px;">
+  <div style="margin-bottom:12px; color:#64748b;">Collections performance for the selected date range. Available = on-hand inventory; Bought = PO units ordered in range; Sold = units sold in range.</div>
+  <div style="overflow-x:auto; background:#fff; border:1px solid #e5e7eb; border-radius:8px;">
+    <table style="width:100%; font-size:13px; border-collapse:collapse;">
+      <thead style="background:#f8fafc; font-weight:600; text-align:left;">
+        <tr>
+          <th style="padding:10px; cursor:pointer;" data-colsort="title">COLLECTION</th>
+          <th style="padding:10px; cursor:pointer;" data-colsort="products">PRODUCTS</th>
+          <th style="padding:10px; cursor:pointer;" data-colsort="skus">SKUS</th>
+          <th style="padding:10px; cursor:pointer;" data-colsort="available">AVAILABLE</th>
+          <th style="padding:10px; cursor:pointer;" data-colsort="bought">BOUGHT</th>
+          <th style="padding:10px; cursor:pointer;" data-colsort="sold">SOLD</th>
+          <th style="padding:10px; cursor:pointer;" data-colsort="revenue">REVENUE</th>
+        </tr>
+      </thead>
+      <tbody id="collectionsRows">
+        <tr><td colspan="7" style="padding:24px; text-align:center; color:#64748b;">Click the Collections tab to load…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<script>
+(function(){
+  var cache = null;
+  var sort = { key: "revenue", dir: "desc" };
+  function fromVal(){ var ds = document.querySelectorAll('input[type="date"]'); return ds[0] ? ds[0].value : ""; }
+  function toVal(){ var ds = document.querySelectorAll('input[type="date"]'); return ds[1] ? ds[1].value : ""; }
+  async function loadCollections(){
+    if (cache) return cache;
+    try { var r = await fetch("/api/collections"); var j = await r.json(); cache = j.collections || j || []; }
+    catch(e) { cache = []; }
+    return cache;
+  }
+  async function render(){
+    var tbody = document.getElementById("collectionsRows");
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:24px; text-align:center; color:#64748b;">Loading\u2026</td></tr>';
+    var cols, prods, orders;
+    try {
+      var res = await Promise.all([
+        loadCollections(),
+        fetch("/api/products").then(function(r){return r.json();}).then(function(j){return j.products||j||[];}),
+        fetch("/api/orders").then(function(r){return r.json();}).then(function(j){return j.orders||j||[];})
+      ]);
+      cols = res[0]; prods = res[1]; orders = res[2];
+    } catch(e) {
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:24px; text-align:center; color:#b91c1c;">Error loading data: '+e.message+'</td></tr>';
+      return;
+    }
+    var pos = JSON.parse(localStorage.getItem("sanki_pos") || "[]");
+    var from = fromVal(), to = toVal();
+    var ok = {ordered:1, in_transit:1, received:1, fulfilled:1};
+    var pById = {}, vIdToPId = {};
+    prods.forEach(function(p){ pById[p.id] = p; (p.variants||[]).forEach(function(v){ vIdToPId[v.id] = p.id; }); });
+    var rows = cols.map(function(col){
+      var pids = new Set((col.productIds||[]).map(Number));
+      var skus = 0, available = 0, sold = 0, revenue = 0, bought = 0;
+      pids.forEach(function(pid){ var p = pById[pid]; if (!p) return; (p.variants||[]).forEach(function(v){ skus++; available += Number(v.inventory_quantity)||0; }); });
+      orders.forEach(function(o){
+        var d = (o.created_at||"").slice(0,10);
+        if (from && d < from) return;
+        if (to && d > to) return;
+        (o.line_items||[]).forEach(function(li){
+          var pid = vIdToPId[li.variant_id];
+          if (pid && pids.has(Number(pid))) { sold += Number(li.quantity)||0; revenue += (Number(li.price)||0) * (Number(li.quantity)||0); }
+        });
+      });
+      pos.forEach(function(po){
+        if (!ok[po.status]) return;
+        if (from && po.date && po.date < from) return;
+        if (to && po.date && po.date > to) return;
+        (po.products||[]).forEach(function(pp){ var pid = vIdToPId[pp.variantId]; if (pid && pids.has(Number(pid))) bought += Number(pp.qty)||0; });
+      });
+      return { id: col.id, title: col.title, products: pids.size, skus: skus, available: available, bought: bought, sold: sold, revenue: revenue };
+    });
+    var dir = sort.dir === "asc" ? 1 : -1;
+    rows.sort(function(a, b){ var k = sort.key; if (typeof a[k] === "string") return dir * String(a[k]).localeCompare(String(b[k])); return dir * ((a[k]||0) - (b[k]||0)); });
+    tbody.innerHTML = rows.length
+      ? rows.map(function(r){ return '<tr style="border-top:1px solid #f1f5f9;"><td style="padding:10px; font-weight:500;">'+(r.title||"")+'</td><td style="padding:10px;">'+r.products+'</td><td style="padding:10px;">'+r.skus+'</td><td style="padding:10px;">'+r.available.toLocaleString("en-IN")+'</td><td style="padding:10px;">'+r.bought.toLocaleString("en-IN")+'</td><td style="padding:10px;">'+r.sold.toLocaleString("en-IN")+'</td><td style="padding:10px;">\u20b9'+Math.round(r.revenue).toLocaleString("en-IN")+'</td></tr>'; }).join("")
+      : '<tr><td colspan="7" style="padding:24px; text-align:center; color:#64748b;">No collections found</td></tr>';
+  }
+  function showCollections(){
+    var tables = document.querySelectorAll("table");
+    tables.forEach(function(t){ if (!t.closest("#tab-collections")) t.style.display = "none"; });
+    document.getElementById("tab-collections").style.display = "";
+    document.querySelectorAll(".tab-btn").forEach(function(b){ b.classList.remove("border-blue-600"); b.classList.remove("text-blue-600"); b.classList.add("border-transparent"); b.classList.add("text-gray-500"); });
+    var me = document.querySelector('[data-tab="collections"]'); if (me){ me.classList.add("border-blue-600"); me.classList.add("text-blue-600"); me.classList.remove("border-transparent"); me.classList.remove("text-gray-500"); }
+    render();
+  }
+  function hideCollections(){
+    var tables = document.querySelectorAll("table");
+    tables.forEach(function(t){ if (!t.closest("#tab-collections")) t.style.display = ""; });
+    var sec = document.getElementById("tab-collections"); if (sec) sec.style.display = "none";
+  }
+  function bind(){
+    document.querySelectorAll(".tab-btn").forEach(function(b){
+      b.addEventListener("click", function(ev){
+        var t = b.getAttribute("data-tab");
+        if (t === "collections") { showCollections(); ev.stopPropagation(); }
+        else { hideCollections(); }
+      }, true);
+    });
+    document.querySelectorAll("th[data-colsort]").forEach(function(th){
+      th.addEventListener("click", function(){ var k = th.getAttribute("data-colsort"); if (sort.key === k) sort.dir = sort.dir === "desc" ? "asc" : "desc"; else { sort.key = k; sort.dir = "desc"; } render(); });
+    });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bind); else setTimeout(bind, 0);
 })();
 </script>
 </body>
