@@ -4380,9 +4380,20 @@ function o2ExportCSV(){
     wrapVendorSplit();
     var tbl = document.getElementById('rpTable');
     if (tbl) {
-      var mo = new MutationObserver(function(){ recolorAndAdjust(); });
-      mo.observe(tbl, { childList:true, subtree:true });
-      recolorAndAdjust();
+      var _busy = false, _scheduled = false, _mo = null;
+      function safeRun(){
+        if (_busy) { _scheduled = true; return; }
+        _busy = true;
+        if (_mo) try { _mo.disconnect(); } catch(_){}
+        try { recolorAndAdjust(); } catch(e) { console.warn('recolor err', e); }
+        if (_mo) try { _mo.observe(tbl, { childList:true, subtree:false }); } catch(_){}
+        _busy = false;
+        if (_scheduled) { _scheduled = false; setTimeout(safeRun, 250); }
+      }
+      var _scheduleTimer = null;
+      _mo = new MutationObserver(function(){ clearTimeout(_scheduleTimer); _scheduleTimer = setTimeout(safeRun, 200); });
+      _mo.observe(tbl, { childList:true, subtree:false });
+      safeRun();
     }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
