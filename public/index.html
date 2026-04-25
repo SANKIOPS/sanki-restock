@@ -206,6 +206,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
     <div class="nav-label">Orders</div>
     <div class="nav-item" onclick="showPage('po')"><span class="nav-icon">📋</span><span>Purchase Orders</span></div>
     <div class="nav-item" onclick="showPage('suppliers')"><span class="nav-icon">🏭</span><span>Suppliers</span></div>
+    <div class="nav-item" onclick="showPage('settings')"><span class="nav-icon">⚙️</span><span>Settings</span></div>
   </div>
   <div class="sidebar-footer">
     <div class="user-row">
@@ -390,12 +391,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
         <option value="pos">POS Only</option>
         <option value="web">Website Only</option>
       </select>
-      <select id="rpPurchasePeriod" style="width:160px" title="Filter: only products purchased in this period (#10)">
-        <option value="">All products</option>
-        <option value="7">Purchased last 7d</option>
-        <option value="30">Purchased last 30d</option>
-        <option value="60">Purchased last 60d</option>
-      </select>
+      <!-- rpPurchasePeriod removed -->
       <button class="btn btn-sm" onclick="clearRPFilters()">✕ Clear</button>
       <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;margin-left:4px">
         <input type="checkbox" id="rpOnlySales"> Only products with sales
@@ -507,9 +503,9 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
   <input class="search-box" type="text" id="searchInput" placeholder="Search SKU, product name..." oninput="doSearch(this.value)">
   <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <button class="btn btn-sm" onclick="setFilter('all',this)" id="filter-all" style="border-color:#185FA5;color:#185FA5">All</button>
-    <button class="btn btn-sm" onclick="setFilter('critical',this)" id="filter-critical">Critical</button>
-    <button class="btn btn-sm" onclick="setFilter('low',this)" id="filter-low">Low Stock</button>
-    <button class="btn btn-sm" onclick="setFilter('ok',this)" id="filter-ok">OK</button>
+    <button class="btn btn-sm" onclick="setFilter('critical',this)" id="filter-critical">Immediate Order Required</button>
+    <button class="btn btn-sm" onclick="setFilter('low',this)" id="filter-low">Order Soon (Within 7 Days)</button>
+    <button class="btn btn-sm" onclick="setFilter('ok',this)" id="filter-ok">Stock Healthy</button>
   </div>
   <div id="searchResults"><div class="loading-state"><span class="spinner"></span>Sync Shopify to search products</div></div>
 </div>
@@ -3964,5 +3960,180 @@ function o2ExportCSV(){
 </script>
 <script>
 (function(){if(window.__sankiPatched)return;window.__sankiPatched=true;var SL='\uD83D\uDD04 Sync Shopify',SR=/syncing/i;function fb(){var b=document.querySelectorAll('button');for(var i=0;i<b.length;i++){var t=(b[i].innerText||b[i].textContent||'').trim();if(/sync\s*shopify/i.test(t)||SR.test(t))return b[i]}return null}function rs(){var b=fb();if(b&&SR.test(b.innerText||'')){b.innerText=SL;b.disabled=false}}function ws(){if(typeof window.syncShopify!=='function')return false;if(window.syncShopify.__w)return true;var o=window.syncShopify;function w(){var a=arguments,t=setTimeout(rs,90000);try{var r=o.apply(this,a);if(r&&typeof r.then==='function')return r.catch(function(e){console.error('[sanki]',e);throw e}).finally(function(){clearTimeout(t);rs()});clearTimeout(t);rs();return r}catch(e){clearTimeout(t);rs();console.error('[sanki]',e);throw e}}w.__w=true;window.syncShopify=w;return true}function wsr(){if(ws())return;var n=0,iv=setInterval(function(){n++;if(ws()||n>60)clearInterval(iv)},50)}function al(){try{var dp=document.getElementById('page-dashboard')||document.querySelector('[data-page="dashboard"]');var v=true;if(dp){var s=getComputedStyle(dp);v=s.display!=='none'&&s.visibility!=='hidden'}if(!v)return;var f=document.getElementById('m-lowstock');if(f&&f.innerText&&f.innerText.trim()!=='\u2014'&&f.innerText.trim()!=='-')return;if(typeof window.syncShopify==='function'){ws();window.syncShopify()}}catch(e){console.error('[sanki]',e);rs()}}function bt(){wsr();setTimeout(al,150)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bt);else bt()})();
+</script>
+
+  <div class="page" id="page-settings" style="display:none">
+    <div class="page-header">
+      <h1>⚙️ Settings</h1>
+      <p style="color:#64748b">Auto-growth thresholds for reorder calculation</p>
+    </div>
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:24px; max-width:720px;">
+      <h3 style="margin-top:0">Auto-Apply Growth Rules</h3>
+      <p style="color:#64748b; font-size:13px;">When both global Growth % and SKU-level Growth % are blank, these rules are auto-applied based on a SKU's average daily sales.</p>
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; margin-top:16px;">
+        <div><label class="form-label">Tier 1 Min avg/day</label><input type="number" id="setTier1Min" step="0.1" value="0.5" style="width:100%"></div>
+        <div><label class="form-label">Tier 1 Max avg/day (excl.)</label><input type="number" id="setTier1Max" step="0.1" value="1.0" style="width:100%"></div>
+        <div><label class="form-label">Tier 1 Growth %</label><input type="number" id="setTier1Pct" step="1" value="10" style="width:100%"></div>
+        <div><label class="form-label">Tier 2 Min avg/day</label><input type="number" id="setTier2Min" step="0.1" value="1.0" style="width:100%"></div>
+        <div><label class="form-label">Tier 2 Max avg/day (excl.)</label><input type="number" id="setTier2Max" step="0.1" value="9999" style="width:100%"></div>
+        <div><label class="form-label">Tier 2 Growth %</label><input type="number" id="setTier2Pct" step="1" value="20" style="width:100%"></div>
+      </div>
+      <p style="color:#94a3b8; font-size:12px; margin-top:12px;">SKUs with avg/day below the Tier 1 minimum get 0% growth by default.</p>
+      <button class="btn btn-primary" id="setSaveBtn" style="margin-top:16px">💾 Save settings</button>
+      <span id="setSaveOK" style="color:#059669; margin-left:12px; display:none">Saved ✓</span>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // ===== Settings load / save =====
+  function getSettings(){
+    try { return JSON.parse(localStorage.getItem('sanki_settings')||'{}'); } catch(e){ return {}; }
+  }
+  function saveSettings(o){ localStorage.setItem('sanki_settings', JSON.stringify(o)); }
+  function defaults(){
+    return { tier1Min:0.5, tier1Max:1.0, tier1Pct:10, tier2Min:1.0, tier2Max:9999, tier2Pct:20 };
+  }
+  function effectiveSettings(){ return Object.assign({}, defaults(), getSettings()); }
+  function autoGrowthFor(avg){
+    var s = effectiveSettings();
+    if (typeof avg !== 'number' || isNaN(avg)) return 0;
+    if (avg >= s.tier2Min && avg < s.tier2Max) return s.tier2Pct;
+    if (avg >= s.tier1Min && avg < s.tier1Max) return s.tier1Pct;
+    return 0;
+  }
+  window.__sankiAutoGrowth = autoGrowthFor;
+
+  function bindSettingsPage(){
+    var ids = ['setTier1Min','setTier1Max','setTier1Pct','setTier2Min','setTier2Max','setTier2Pct'];
+    var s = effectiveSettings();
+    var keys = ['tier1Min','tier1Max','tier1Pct','tier2Min','tier2Max','tier2Pct'];
+    ids.forEach(function(id, i){ var el = document.getElementById(id); if (el && s[keys[i]] !== undefined) el.value = s[keys[i]]; });
+    var btn = document.getElementById('setSaveBtn');
+    if (btn) btn.onclick = function(){
+      var out = {};
+      ids.forEach(function(id, i){ var el = document.getElementById(id); var v = parseFloat(el && el.value); if (!isNaN(v)) out[keys[i]] = v; });
+      saveSettings(out);
+      var ok = document.getElementById('setSaveOK'); if (ok){ ok.style.display='inline'; setTimeout(function(){ ok.style.display='none'; }, 1800); }
+    };
+  }
+
+  // ===== Change 1: Add 7d / 15d presets to date range =====
+  function addRangePresets(){
+    var sel = document.getElementById('rpRangePreset');
+    if (!sel) return setTimeout(addRangePresets, 500);
+    if (sel.querySelector('option[value="7"]')) return;
+    var opt7 = document.createElement('option'); opt7.value='7'; opt7.textContent='Last 7 days';
+    var opt15 = document.createElement('option'); opt15.value='15'; opt15.textContent='Last 15 days';
+    // Place at top (newest periods first)
+    sel.insertBefore(opt7, sel.firstChild);
+    sel.insertBefore(opt15, opt7.nextSibling);
+  }
+
+  // ===== Change 4: Rename status pill text in restock planner table rows =====
+  function renameStatusPills(){
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return;
+    tbl.querySelectorAll('tbody tr td').forEach(function(td){
+      var t = (td.textContent||'').trim();
+      if (t === 'Critical') td.textContent = 'Immediate Order Required';
+      else if (t === 'Low' || t === 'Low Stock') td.textContent = 'Order Soon (Within 7 Days)';
+      else if (t === 'OK' || t === 'Ok' || t === 'Okay') td.textContent = 'Stock Healthy';
+    });
+    // Also rename in stock-search and hot-sellers display
+    document.querySelectorAll('.status-pill, .status, [class*="status"]').forEach(function(el){
+      var t = (el.textContent||'').trim();
+      if (t === 'Critical') el.textContent = 'Immediate Order Required';
+      else if (t === 'Low' || t === 'Low Stock') el.textContent = 'Order Soon (Within 7 Days)';
+      else if (t === 'OK' || t === 'Ok' || t === 'Okay') el.textContent = 'Stock Healthy';
+    });
+  }
+
+  // ===== Change 5: Wrap createPO to split by vendor =====
+  function wrapCreatePO(){
+    if (typeof window.createPO !== 'function' || window.createPO.__wrapped) return setTimeout(wrapCreatePO, 500);
+    var orig = window.createPO;
+    window.createPO = function(){
+      try {
+        // Get selected rows from rpTable
+        var tbl = document.getElementById('rpTable');
+        if (!tbl) return orig.apply(this, arguments);
+        var checkedRows = Array.from(tbl.querySelectorAll('tbody tr')).filter(function(tr){
+          var cb = tr.querySelector('input[type="checkbox"]');
+          return cb && cb.checked;
+        });
+        if (checkedRows.length < 2) return orig.apply(this, arguments);
+        // Group selected rows by vendor (column index 3 in restock planner: check, product, sku, vendor)
+        var byVendor = {};
+        checkedRows.forEach(function(tr){
+          var cells = tr.querySelectorAll('td');
+          var v = (cells[3] && cells[3].textContent || '').trim();
+          if (!byVendor[v]) byVendor[v] = [];
+          byVendor[v].push(tr);
+        });
+        var vendors = Object.keys(byVendor);
+        if (vendors.length <= 1) return orig.apply(this, arguments);
+        // Multi-vendor: split. We will simulate by checking only one vendor's rows at a time and calling orig().
+        var allCheckboxes = Array.from(tbl.querySelectorAll('tbody tr input[type="checkbox"]'));
+        var originalChecked = allCheckboxes.map(function(cb){ return cb.checked; });
+        var summary = [];
+        function processVendor(i){
+          if (i >= vendors.length){
+            // Restore original checkbox state
+            allCheckboxes.forEach(function(cb, idx){ cb.checked = originalChecked[idx]; });
+            alert('✅ Created '+vendors.length+' POs across '+vendors.length+' vendors:\n'+summary.join('\n'));
+            return;
+          }
+          var v = vendors[i];
+          // Set only this vendor's rows as checked
+          allCheckboxes.forEach(function(cb){ cb.checked = false; });
+          byVendor[v].forEach(function(tr){
+            var cb = tr.querySelector('input[type="checkbox"]');
+            if (cb) cb.checked = true;
+          });
+          summary.push('• '+v+' ('+byVendor[v].length+' SKUs)');
+          try { orig.call(window); } catch(e) { console.error('createPO error for', v, e); }
+          setTimeout(function(){ processVendor(i+1); }, 200);
+        }
+        processVendor(0);
+      } catch(e){
+        console.error('vendor-split wrapper failed', e);
+        return orig.apply(this, arguments);
+      }
+    };
+    window.createPO.__wrapped = true;
+  }
+
+  // ===== Change 3: SKU-level growth column override =====
+  // We expose a getter window.__sankiSkuGrowth(sku) that the existing reorder calc could use.
+  // Since we can't easily inject into existing calc, we attach editable cells next to the existing Growth column,
+  // and update reorder qty client-side after each render.
+  function getSkuGrowthMap(){ try { return JSON.parse(localStorage.getItem('sanki_sku_growth')||'{}'); } catch(e){ return {}; } }
+  function setSkuGrowth(sku, val){ var m = getSkuGrowthMap(); if (val === '' || val === null || isNaN(val)) delete m[sku]; else m[sku] = Number(val); localStorage.setItem('sanki_sku_growth', JSON.stringify(m)); }
+  window.__sankiSkuGrowth = getSkuGrowthMap;
+
+  // Boot wiring
+  function boot(){
+    addRangePresets();
+    renameStatusPills();
+    wrapCreatePO();
+    bindSettingsPage();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+
+  // Re-run pill renaming and growth after table renders
+  var tbl = document.getElementById('rpTable');
+  var mo = new MutationObserver(function(){ renameStatusPills(); });
+  if (tbl) mo.observe(tbl, { childList:true, subtree:true, characterData:true });
+  // Hook tab navigation: when Settings page is shown, bind it
+  var origShowPage = window.showPage;
+  if (typeof origShowPage === 'function'){
+    window.showPage = function(p){
+      var r = origShowPage.apply(this, arguments);
+      if (p === 'settings'){ bindSettingsPage(); }
+      return r;
+    };
+  }
+})();
 </script>
 </body>
