@@ -4188,4 +4188,213 @@ function o2ExportCSV(){
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hook); else hook();
 })();
 </script>
+
+<style>
+/* Status pill coloring (Fix #3) */
+#rpTable tbody td.status-cell-immediate { background:#fee2e2; color:#991b1b; font-weight:600; padding:4px 8px; border-radius:6px; display:inline-block; }
+#rpTable tbody td.status-cell-soon { background:#fef3c7; color:#92400e; font-weight:600; padding:4px 8px; border-radius:6px; display:inline-block; }
+#rpTable tbody td.status-cell-healthy { background:#d1fae5; color:#065f46; font-weight:600; padding:4px 8px; border-radius:6px; display:inline-block; }
+.sku-growth-input { width:60px; padding:2px 4px; border:1px solid #cbd5e1; border-radius:4px; font-size:12px; }
+</style>
+
+<script>
+(function(){
+  // === Fix #3: color status pills ===
+  function colorStatusPills(){
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return;
+    tbl.querySelectorAll('tbody tr').forEach(function(tr){
+      var cells = tr.querySelectorAll('td');
+      if (cells.length < 18) return;
+      var statusCell = cells[17];
+      if (!statusCell) return;
+      var t = (statusCell.textContent||'').trim();
+      statusCell.classList.remove('status-cell-immediate','status-cell-soon','status-cell-healthy');
+      if (t === 'Immediate Order Required') statusCell.classList.add('status-cell-immediate');
+      else if (t === 'Order Soon (Within 7 Days)') statusCell.classList.add('status-cell-soon');
+      else if (t === 'Stock Healthy') statusCell.classList.add('status-cell-healthy');
+    });
+  }
+
+  // === Fix #1: listing-date-aware avg/day ===
+  var skuToListingDate = null;
+  var skuToUnitsSoldInRange = null;
+  async function loadProductDates(){
+    if (skuToListingDate) return skuToListingDate;
+    skuToListingDate = {};
+    try {
+      var pr = await fetch('/api/products');
+      var pj = await pr.json();
+      (pj.products||[]).forEach(function(p){
+        var listingDate = p.published_at || p.created_at;
+        (p.variants||[]).forEach(function(v){
+          if (v.sku) skuToListingDate[v.sku] = listingDate;
+        });
+      });
+    } catch(e) { console.warn('[listingDate] fetch failed', e); }
+    return skuToListingDate;
+  }
+  function computeRangeDays(){
+    var sel = document.getElementById('rpRangePreset');
+    var v = sel ? sel.value : '30';
+    if (v === 'custom') {
+      var dates = document.querySelectorAll('#page-restock input[type="date"]');
+      var f = dates[0] && dates[0].value, t = dates[1] && dates[1].value;
+      if (f && t) return Math.max(1, Math.round((new Date(t) - new Date(f))/86400000));
+      return 30;
+    }
+    var n = parseInt(v, 10);
+    return isNaN(n) ? 30 : n;
+  }
+  async function adjustAvgPerListingDate(){
+    await loadProductDates();
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return;
+    var rangeDays = computeRangeDays();
+    var now = Date.now();
+    tbl.querySelectorAll('tbody tr').forEach(function(tr){
+      var cells = tr.querySelectorAll('td');
+      if (cells.length < 8) return;
+      var sku = (cells[2].textContent||'').trim();
+      var avgCell = cells[6];
+      var soldCell = cells[7];
+      if (!sku || !avgCell || !soldCell) return;
+      var listing = skuToListingDate[sku];
+      if (!listing) return;
+      var daysSinceListing = Math.max(1, Math.floor((now - new Date(listing).getTime())/86400000));
+      if (daysSinceListing >= rangeDays) return;
+      var unitsSold = parseFloat((soldCell.textContent||'').replace(/[^0-9.\-]/g,''));
+      if (isNaN(unitsSold)) return;
+      var newAvg = unitsSold / daysSinceListing;
+      avgCell.textContent = newAvg.toFixed(2);
+      avgCell.title = 'Adjusted: '+unitsSold+' units / '+daysSinceListing+' days listed';
+      avgCell.style.color = '#0369a1';
+    });
+  }
+
+  // === Fix #2: SKU-level Growth % column (additive) ===
+  function getSkuGrowthMap(){ try { return JSON.parse(localStorage.getItem('sanki_sku_growth')||'{}'); } catch(e){ return {}; } }
+  function setSkuGrowth(sku, val){
+    var m = getSkuGrowthMap();
+    if (val === '' || val === null || isNaN(parseFloat(val))) delete m[sku];
+    else m[sku] = parseFloat(val);
+    localStorage.setItem('sanki_sku_growth', JSON.stringify(m));
+  }
+  function getSettings(){ try { return JSON.parse(localStorage.getItem('sanki_settings')||'{}'); } catch(e){ return {}; } }
+  function autoGrowthFor(avg){
+    var s = Object.assign({tier1Min:0.5,tier1Max:1.0,tier1Pct:10,tier2Min:1.0,tier2Max:9999,tier2Pct:20}, getSettings());
+    if (typeof avg !== 'number' || isNaN(avg)) return 0;
+    if (avg >= s.tier2Min && avg < s.tier2Max) return s.tier2Pct;
+    if (avg >= s.tier1Min && avg < s.tier1Max) return s.tier1Pct;
+    return 0;
+  }
+  function injectSkuGrowthInputs(){
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return;
+    var skuMap = getSkuGrowthMap();
+    tbl.querySelectorAll('tbody tr').forEach(function(tr){
+      var cells = tr.querySelectorAll('td');
+      if (cells.length < 12) return;
+      if (tr.querySelector('.sku-growth-input')) return; // already injected
+      var sku = (cells[2].textContent||'').trim();
+      var avg = parseFloat((cells[6].textContent||'').replace(/[^0-9.\-]/g,''));
+      var growthCell = cells[11];
+      var existingText = (growthCell.textContent||'').trim();
+      var stored = skuMap[sku];
+      var auto = autoGrowthFor(avg);
+      var displayVal = (typeof stored === 'number') ? stored : '';
+      var input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'sku-growth-input';
+      input.placeholder = 'auto:' + auto + '%';
+      input.value = displayVal;
+      input.title = 'SKU growth %. Empty = use global. Auto for this avg/day: '+auto+'%. Existing calc display was: '+existingText;
+      input.addEventListener('change', function(){ setSkuGrowth(sku, input.value); });
+      // Replace cell content with sku input + label
+      growthCell.innerHTML = '';
+      growthCell.appendChild(input);
+      var lbl = document.createElement('span');
+      lbl.style.cssText = 'margin-left:6px; color:#94a3b8; font-size:11px;';
+      lbl.textContent = existingText;
+      growthCell.appendChild(lbl);
+    });
+  }
+
+  // === Fix #4: vendor-split PO (correct function name) ===
+  function wrapVendorSplit(){
+    if (typeof window.createPOFromSelected !== 'function') return setTimeout(wrapVendorSplit, 500);
+    if (window.createPOFromSelected.__sankiWrapped) return;
+    var orig = window.createPOFromSelected;
+    window.createPOFromSelected = function(){
+      try {
+        var tbl = document.getElementById('rpTable');
+        if (!tbl) return orig.apply(this, arguments);
+        var checkedRows = Array.from(tbl.querySelectorAll('tbody tr')).filter(function(tr){
+          var cb = tr.querySelector('input[type="checkbox"]');
+          return cb && cb.checked;
+        });
+        if (checkedRows.length < 2) return orig.apply(this, arguments);
+        var byVendor = {};
+        checkedRows.forEach(function(tr){
+          var cells = tr.querySelectorAll('td');
+          var v = (cells[3] && cells[3].textContent || 'Unknown').trim();
+          (byVendor[v] = byVendor[v] || []).push(tr);
+        });
+        var vendors = Object.keys(byVendor);
+        if (vendors.length <= 1) return orig.apply(this, arguments);
+        var allCheckboxes = Array.from(tbl.querySelectorAll('tbody tr input[type="checkbox"]'));
+        var originalChecked = allCheckboxes.map(function(cb){ return cb.checked; });
+        var summary = [];
+        function step(i){
+          if (i >= vendors.length) {
+            allCheckboxes.forEach(function(cb, idx){ cb.checked = originalChecked[idx]; });
+            alert('Created '+vendors.length+' POs (one per vendor):\n\n'+summary.join('\n'));
+            return;
+          }
+          var v = vendors[i];
+          allCheckboxes.forEach(function(cb){ cb.checked = false; });
+          byVendor[v].forEach(function(tr){
+            var cb = tr.querySelector('input[type="checkbox"]');
+            if (cb) cb.checked = true;
+          });
+          summary.push('* '+v+' — '+byVendor[v].length+' SKUs');
+          try { orig.call(window); } catch(e){ console.error('createPOFromSelected vendor step err', v, e); }
+          setTimeout(function(){ step(i+1); }, 300);
+        }
+        step(0);
+      } catch(e) {
+        console.error('vendor-split wrap fail', e);
+        return orig.apply(this, arguments);
+      }
+    };
+    window.createPOFromSelected.__sankiWrapped = true;
+  }
+
+  // Boot
+  function recolorAndAdjust(){
+    colorStatusPills();
+    injectSkuGrowthInputs();
+    adjustAvgPerListingDate();
+  }
+  function boot(){
+    wrapVendorSplit();
+    var tbl = document.getElementById('rpTable');
+    if (tbl) {
+      var mo = new MutationObserver(function(){ recolorAndAdjust(); });
+      mo.observe(tbl, { childList:true, subtree:true });
+      recolorAndAdjust();
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  // Also re-run when restock page is shown
+  var origShowPage = window.showPage;
+  if (typeof origShowPage === 'function') {
+    window.showPage = function(p){
+      var r = origShowPage.apply(this, arguments);
+      if (p === 'restock') setTimeout(recolorAndAdjust, 1500);
+      return r;
+    };
+  }
+})();
+</script>
 </body>
