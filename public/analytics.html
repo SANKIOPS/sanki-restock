@@ -24,6 +24,15 @@
     .breadcrumb { color:#64748b; font-size:14px; }
     .breadcrumb a { color:#2563eb; cursor:pointer; }
     .breadcrumb a:hover { text-decoration:underline; }
+    img.thumb { cursor:zoom-in; transition:transform 0.1s; }
+    img.thumb:hover { transform:scale(1.1); border-color:#3b82f6; }
+    .lightbox { position:fixed; inset:0; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; }
+    .lightbox img { max-width:90vw; max-height:90vh; object-fit:contain; box-shadow:0 20px 60px rgba(0,0,0,0.5); border-radius:6px; }
+    .lightbox .close-x { position:absolute; top:20px; right:30px; color:#fff; font-size:32px; cursor:pointer; opacity:0.8; }
+    .lightbox .close-x:hover { opacity:1; }
+    .colorpanel { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:14px 16px; margin-bottom:16px; }
+    .colorchip { display:inline-flex; align-items:center; gap:6px; background:#f8fafc; padding:6px 10px; border-radius:6px; font-size:12px; margin:4px; }
+    .colorchip .swatch { width:14px; height:14px; border-radius:50%; border:1px solid #cbd5e1; }
     td.cell { padding:10px 12px; border-bottom:1px solid #f1f5f9; font-size:13px; }
     .summary { background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:12px 16px; margin-bottom:16px; display:flex; gap:24px; flex-wrap:wrap; font-size:13px; }
     .summary b { color:#1e3a8a; }
@@ -145,6 +154,66 @@
     const f = fromVal(), t = toVal();
     if (!f || !t) return 30;
     return Math.max(1, Math.round((new Date(t) - new Date(f))/86400000));
+  }
+
+  // ===== Color extraction & panel =====
+  const COLOR_SWATCHES = { BLACK:'#000', WHITE:'#fff', BLUE:'#3b82f6', RED:'#ef4444', PINK:'#ec4899', GREEN:'#10b981', YELLOW:'#facc15', CREAM:'#fef3c7', FUCHSIA:'#d946ef', NAVY:'#1e3a8a', GREY:'#9ca3af', GRAY:'#9ca3af', BROWN:'#92400e', BEIGE:'#fde68a', ORANGE:'#fb923c', PURPLE:'#a855f7', MAROON:'#7f1d1d', OLIVE:'#65a30d', MUSTARD:'#eab308', TEAL:'#14b8a6', LAVENDER:'#c084fc', PEACH:'#fed7aa', RUST:'#b45309', WINE:'#7c2d12', SKYBLUE:'#7dd3fc' };
+  function extractColor(variantTitle, productTitle){
+    // Try variant title first: "BLACK / Universal Size" -> "BLACK"
+    let s = (variantTitle||'').trim();
+    if (s) {
+      const first = s.split(/\s*[\\/·,]\s*/)[0].trim().toUpperCase();
+      if (first && first.length < 30 && !/^DEFAULT/i.test(first)) return first;
+    }
+    // Fallback: scan product title for known colors
+    const ptu = (productTitle||'').toUpperCase();
+    for (const c of Object.keys(COLOR_SWATCHES)) {
+      const re = new RegExp('\\b' + c + '\\b');
+      if (re.test(ptu)) return c;
+    }
+    return '(?)';
+  }
+  function colorSwatch(c){ return COLOR_SWATCHES[c.toUpperCase()] || '#a3a3a3'; }
+  async function colorBreakdown(filter){
+    const [products, orders] = await Promise.all([loadProducts(), loadOrders()]);
+    const f = fromVal(), t = toVal();
+    const pById = {}, vIdToColor = {};
+    products.forEach(p => {
+      pById[p.id] = p;
+      (p.variants||[]).forEach(v => {
+        vIdToColor[v.id] = { color: extractColor(v.title, p.title), pid: p.id };
+      });
+    });
+    const byColor = {};
+    let total = 0;
+    orders.forEach(o => {
+      const d = (o.created_at||'').slice(0,10);
+      if (f && d < f) return;
+      if (t && d > t) return;
+      (o.line_items||[]).forEach(li => {
+        const info = vIdToColor[li.variant_id]; if (!info) return;
+        const p = pById[info.pid]; if (!p) return;
+        if (filter.category && (p.product_type||'').trim() !== filter.category) return;
+        if (filter.vendor && (p.vendor||'').trim() !== filter.vendor) return;
+        const qty = Number(li.quantity)||0;
+        byColor[info.color] = (byColor[info.color]||0) + qty;
+        total += qty;
+      });
+    });
+    return { breakdown: byColor, total };
+  }
+  async function renderColorPanel(filter){
+    const panel = document.getElementById('contextPanel');
+    if (!filter.vendor || !filter.category) { panel.classList.add('hidden'); return; }
+    const { breakdown, total } = await colorBreakdown(filter);
+    if (total === 0) { panel.classList.add('hidden'); return; }
+    const sorted = Object.entries(breakdown).sort((a,b) => b[1]-a[1]);
+    const pct = (n) => ((n/total)*100).toFixed(1);
+    panel.innerHTML = '<div class="colorpanel">' +
+      '<div style="font-weight:600; margin-bottom:8px;">Color-wise Sales · ' + filter.vendor + ' · ' + filter.category + ' · ' + total + ' units</div>' +
+      sorted.map(([c, n]) => '<div class="colorchip"><div class="swatch" style="background:' + colorSwatch(c) + ';"></div><b>' + c + '</b> · ' + n + ' (' + pct(n) + '%)</div>').join('') +
+    '</div>';
+    panel.classList.remove('hidden');
   }
 
   // ===== State =====
@@ -295,6 +364,8 @@
       else if (state.level === 'l3') { crumbs = ['<a data-up="top">Vendors</a>', '<a data-up="l2">'+state.context.vendor+'</a>', '<b>'+state.context.category+'</b> · SKUs']; rows = await aggregate('sku', { category: state.context.category, vendor: state.context.vendor }); }
     }
     bc.innerHTML = crumbs.join(' &rsaquo; ');
+    // Color-wise sales panel for SKU-level views with vendor+category context
+    if (state.level === 'l3') { renderColorPanel({ vendor: state.context.vendor, category: state.context.category }); } else { document.getElementById('contextPanel').classList.add('hidden'); }
     // Summary
     const totRows = rows.length, totUnits = rows.reduce((a,r)=>a+r.unitsSold,0), totRev = rows.reduce((a,r)=>a+r.revenue,0), totStock = rows.reduce((a,r)=>a+r.stockLeft,0), totQto = rows.reduce((a,r)=>a+r.qtyToOrder,0);
     sb.innerHTML = 'Groups: <b>'+totRows+'</b>  ·  Units Sold: <b>'+fmtInt(totUnits)+'</b>  ·  Revenue: <b>'+fmtCurrency(totRev)+'</b>  ·  Stock Left: <b>'+fmtInt(totStock)+'</b>  ·  Qty to Order: <b>'+fmtInt(totQto)+'</b>';
@@ -353,6 +424,19 @@
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
+
+  // ===== Image lightbox =====
+  document.addEventListener('click', function(ev){
+    const img = ev.target.closest && ev.target.closest('img.thumb');
+    if (img && img.src) {
+      ev.stopPropagation();
+      const lb = document.createElement('div');
+      lb.className = 'lightbox';
+      lb.innerHTML = '<span class="close-x">&times;</span><img src="' + img.src + '">';
+      lb.addEventListener('click', function(){ lb.remove(); });
+      document.body.appendChild(lb);
+    }
+  }, true);
 </script>
 </body>
 </html>
