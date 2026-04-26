@@ -118,6 +118,36 @@
     if (!isNaN(g)) return g;
     return autoGrowth(avg);
   }
+  // Last Purchase Date helper (Fix 2)
+  function lastPOByVendor(){
+    let pos = []; try { pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]'); } catch(e){}
+    const map = {};
+    pos.forEach(po => {
+      const v = (po.supplier||'').trim(); if (!v) return;
+      const d = po.date || po.delivery || (po.createdAt||'').slice(0,10);
+      if (!d) return;
+      if (!map[v] || d > map[v]) map[v] = d;
+    });
+    return map;
+  }
+  // Stock at range start helper (Fix 3): currentStock + unitsSold - unitsBoughtInRange
+  function unitsBoughtInRange(filter){
+    let pos = []; try { pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]'); } catch(e){}
+    const f = fromVal(), t = toVal();
+    const ok = {ordered:1, in_transit:1, received:1, fulfilled:1};
+    const bySku = {};
+    pos.forEach(po => {
+      if (!ok[po.status]) return;
+      if (f && po.date && po.date < f) return;
+      if (t && po.date && po.date > t) return;
+      if (filter && filter.vendor && po.supplier !== filter.vendor) return;
+      (po.products||[]).forEach(pp => {
+        const sku = pp.sku || ('vid:'+pp.variantId);
+        bySku[sku] = (bySku[sku] || 0) + (Number(pp.qty)||0);
+      });
+    });
+    return bySku;
+  }
   // QtyToOrder formula:
   function qtyToOrder(avg, stockLeft, sku, leadDays){
     const stockoutPeriod = parseInt(document.getElementById('stockoutPeriod')?.value || '30', 10);
@@ -200,13 +230,13 @@
   }
   async function renderColorPanel(filter){
     const panel = document.getElementById('contextPanel');
-    if (!filter.vendor || !filter.category) { panel.classList.add('hidden'); return; }
+    if (!filter.vendor && !filter.category) { panel.classList.add('hidden'); return; }
     const { breakdown, total } = await colorBreakdown(filter);
     if (total === 0) { panel.classList.add('hidden'); return; }
     const sorted = Object.entries(breakdown).sort((a,b) => b[1]-a[1]);
     const pct = (n) => ((n/total)*100).toFixed(1);
     panel.innerHTML = '<div class="colorpanel">' +
-      '<div style="font-weight:600; margin-bottom:8px;">Color-wise Sales · ' + filter.vendor + ' · ' + filter.category + ' · ' + total + ' units</div>' +
+      '<div style="font-weight:600; margin-bottom:8px;">Color-wise Sales · ' + [filter.vendor, filter.category].filter(Boolean).join(' · ') + ' · ' + total + ' units</div>' +
       sorted.map(([c, n]) => '<div class="colorchip"><div class="swatch" style="background:' + colorSwatch(c) + ';"></div><b>' + c + '</b> · ' + n + ' (' + pct(n) + '%)</div>').join('') +
     '</div>';
     panel.classList.remove('hidden');
@@ -280,15 +310,27 @@
     });
     // Compute derived
     const tagKind = (groupBy === 'category' || groupBy === 'vendor') ? groupBy : null;
+    const _lastPOs = lastPOByVendor();
+    // Compute units bought in range per group
+    const _boughtBySku = unitsBoughtInRange({});
+    function boughtForGroup(g){
+      let total = 0;
+      (g.skuList||[]).forEach(s => { if (s.sku && _boughtBySku[s.sku]) total += _boughtBySku[s.sku]; });
+      return total;
+    }
     const result = Object.values(groups).map(g => {
       const avgDay = g.unitsSold / days;
       const daysCovered = avgDay > 0 ? (g.stockLeft / avgDay) : (g.stockLeft > 0 ? 9999 : 0);
       const qto = qtyToOrder(avgDay, g.stockLeft, groupBy === 'sku' ? g.key : null, 15);
       const velocity = tagKind ? tagFor(avgDay, tagKind) : null;
+      const boughtInRange = boughtForGroup(g);
+      const stockAtStart = g.stockLeft + g.unitsSold - boughtInRange;
+      const lastPO = (groupBy === 'vendor') ? (_lastPOs[g.key] || null) : null;
       return { key:g.key, title:g.title, productsCount:g.products.size, skus:g.skus,
                unitsSold:g.unitsSold, revenue:g.revenue, avgDay, stockLeft:g.stockLeft,
                daysCovered, velocity, qtyToOrder:qto, sampleImage:g.sampleImage,
-               sampleVendor:g.sampleVendor, skuList:g.skuList };
+               sampleVendor:g.sampleVendor, skuList:g.skuList,
+               stockAtStart, lastPO };
     });
     return result;
   }
@@ -310,26 +352,30 @@
       if (typeof a[k] === 'string') return dir * String(a[k]).localeCompare(String(b[k]));
       return dir * ((a[k]||0) - (b[k]||0));
     });
+    const isVendorTable = (opts.titleHeader === 'Vendor');
     const cols = [
       thBtn(opts.titleHeader || 'Name', 'title'),
       thBtn('Products', 'productsCount'),
       thBtn('SKUs', 'skus'),
+      thBtn('Stock @ Start', 'stockAtStart'),
       thBtn('Units Sold', 'unitsSold'),
       thBtn('Revenue', 'revenue'),
       thBtn('Avg/Day', 'avgDay'),
       thBtn('Stock Left', 'stockLeft'),
       thBtn('Days Covered', 'daysCovered'),
       thBtn('Velocity', 'velocity'),
-      thBtn('Qty to Order', 'qtyToOrder')
+      thBtn('Qty to Order', 'qtyToOrder'),
+      isVendorTable ? thBtn('Last PO', 'lastPO') : ''
     ].join('');
     const rowsHTML = rows.length === 0
-      ? '<tr><td colspan="10" class="cell" style="text-align:center;color:#94a3b8;padding:32px;">No data for this filter</td></tr>'
+      ? '<tr><td colspan="' + (isVendorTable ? 12 : 11) + '" class="cell" style="text-align:center;color:#94a3b8;padding:32px;">No data for this filter</td></tr>'
       : rows.map(r => {
           const img = r.sampleImage ? '<img class="thumb" src="'+r.sampleImage+'" loading="lazy" onerror="this.style.display=\'none\'">' : '<div style="width:36px;height:36px;background:#f1f5f9;border-radius:6px;"></div>';
           return '<tr class="row-link" data-key="'+(r.key||'').replace(/"/g,'&quot;')+'">' +
             '<td class="cell"><div style="display:flex;align-items:center;gap:10px;"><div>'+img+'</div><div><div style="font-weight:500;">'+((r.title||'').trim() || '<span style="color:#cbd5e1">(no title)</span>')+'</div>'+(opts.subtitle ? '<div style="color:#94a3b8;font-size:11px;">'+opts.subtitle(r)+'</div>' : '')+'</div></div></td>' +
             '<td class="cell num">'+fmtInt(r.productsCount)+'</td>' +
             '<td class="cell num">'+fmtInt(r.skus)+'</td>' +
+            '<td class="cell num">'+fmtInt(r.stockAtStart||0)+'</td>' +
             '<td class="cell num">'+fmtInt(r.unitsSold)+'</td>' +
             '<td class="cell num">'+fmtCurrency(r.revenue)+'</td>' +
             '<td class="cell num">'+(r.avgDay||0).toFixed(2)+'</td>' +
@@ -337,6 +383,7 @@
             '<td class="cell num">'+fmtDays(r.daysCovered)+'</td>' +
             '<td class="cell">'+(r.velocity ? chip(r.velocity) : '<span style="color:#cbd5e1;">—</span>')+'</td>' +
             '<td class="cell num"><b>'+fmtInt(r.qtyToOrder)+'</b></td>' +
+            (isVendorTable ? ('<td class="cell num">'+(r.lastPO || '<span style="color:#cbd5e1;">never</span>')+'</td>') : '') +
           '</tr>';
         }).join('');
     return '<table class="w-full"><thead><tr>'+cols+'</tr></thead><tbody>'+rowsHTML+'</tbody></table>';
@@ -361,10 +408,11 @@
     }
     bc.innerHTML = crumbs.join(' &rsaquo; ');
     // Color-wise sales panel for SKU-level views with vendor+category context
-    if (state.level === 'l3') { renderColorPanel({ vendor: state.context.vendor, category: state.context.category }); } else { document.getElementById('contextPanel').classList.add('hidden'); }
+    if (state.level !== 'top') { renderColorPanel({ vendor: state.context.vendor, category: state.context.category }); } else { document.getElementById('contextPanel').classList.add('hidden'); }
     // Summary
     const totRows = rows.length, totUnits = rows.reduce((a,r)=>a+r.unitsSold,0), totRev = rows.reduce((a,r)=>a+r.revenue,0), totStock = rows.reduce((a,r)=>a+r.stockLeft,0), totQto = rows.reduce((a,r)=>a+r.qtyToOrder,0);
-    sb.innerHTML = 'Groups: <b>'+totRows+'</b>  ·  Units Sold: <b>'+fmtInt(totUnits)+'</b>  ·  Revenue: <b>'+fmtCurrency(totRev)+'</b>  ·  Stock Left: <b>'+fmtInt(totStock)+'</b>  ·  Qty to Order: <b>'+fmtInt(totQto)+'</b>';
+    const totStart = rows.reduce((a,r)=>a+(r.stockAtStart||0),0);
+    sb.innerHTML = 'Groups: <b>'+totRows+'</b>  ·  Stock @ Start: <b>'+fmtInt(totStart)+'</b>  ·  Units Sold: <b>'+fmtInt(totUnits)+'</b>  ·  Revenue: <b>'+fmtCurrency(totRev)+'</b>  ·  Stock Left: <b>'+fmtInt(totStock)+'</b>  ·  Qty to Order: <b>'+fmtInt(totQto)+'</b>';
     sb.classList.remove('hidden');
     const titleHeader = (state.level === 'top' && state.flow === 'cat') ? 'Category' :
                         (state.level === 'top' && state.flow === 'vendor') ? 'Vendor' :
