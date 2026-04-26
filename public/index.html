@@ -4379,22 +4379,38 @@ function o2ExportCSV(){
   function boot(){
     wrapVendorSplit();
     var tbl = document.getElementById('rpTable');
-    if (tbl) {
-      var _busy = false, _scheduled = false, _mo = null;
-      function safeRun(){
-        if (_busy) { _scheduled = true; return; }
-        _busy = true;
-        if (_mo) try { _mo.disconnect(); } catch(_){}
-        try { recolorAndAdjust(); } catch(e) { console.warn('recolor err', e); }
-        if (_mo) try { _mo.observe(tbl, { childList:true, subtree:false }); } catch(_){}
-        _busy = false;
-        if (_scheduled) { _scheduled = false; setTimeout(safeRun, 250); }
-      }
-      var _scheduleTimer = null;
-      _mo = new MutationObserver(function(){ clearTimeout(_scheduleTimer); _scheduleTimer = setTimeout(safeRun, 200); });
-      _mo.observe(tbl, { childList:true, subtree:false });
-      safeRun();
+    if (!tbl) return setTimeout(boot, 500);
+    var tbody = tbl.querySelector('tbody');
+    if (!tbody) return setTimeout(boot, 500);
+    var _busy = false, _scheduled = false, _mo = null;
+    function safeRun(){
+      if (_busy) { _scheduled = true; return; }
+      _busy = true;
+      if (_mo) try { _mo.disconnect(); } catch(_){}
+      try { recolorAndAdjust(); } catch(e) { console.warn('recolor err', e); }
+      if (_mo) try { _mo.observe(tbody, { childList:true, subtree:false }); } catch(_){}
+      _busy = false;
+      if (_scheduled) { _scheduled = false; setTimeout(safeRun, 350); }
     }
+    // Observe tbody for row-level changes (existing renderer rebuilds tbody children)
+    var _t = null;
+    _mo = new MutationObserver(function(){ clearTimeout(_t); _t = setTimeout(safeRun, 250); });
+    _mo.observe(tbody, { childList:true, subtree:false });
+    // Also wrap applyRP so we deterministically re-apply after every render trigger (date change, vendor filter, etc.)
+    if (typeof window.applyRP === 'function' && !window.applyRP.__sankiWrapped) {
+      var origApply = window.applyRP;
+      window.applyRP = function(){
+        var ret;
+        try { ret = origApply.apply(this, arguments); } catch(e) { console.warn('applyRP threw', e); }
+        // Schedule recolor after the renderer settles
+        setTimeout(safeRun, 600);
+        setTimeout(safeRun, 1500);
+        setTimeout(safeRun, 3500);
+        return ret;
+      };
+      window.applyRP.__sankiWrapped = true;
+    }
+    safeRun();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
   // Also re-run when restock page is shown
