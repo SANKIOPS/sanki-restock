@@ -85,7 +85,8 @@
     };
   }
   function tagFor(avg, kind){
-    const t = settings()[kind+'Tags'];
+    const k = (kind === 'category') ? 'catTags' : 'vendorTags';
+    const t = settings()[k];
     if (avg <= 0.5 && kind === 'cat') return 'dead';
     if (avg <= 0.5 && kind === 'vendor') return 'dead';
     if (avg >= t.hot)  return 'hot';
