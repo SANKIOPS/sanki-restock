@@ -163,17 +163,14 @@
     collections.forEach(c => { (c.productIds||[]).forEach(pid => { (pidToCats[pid] = pidToCats[pid] || []).push(c.title || c.handle); }); });
     // Group products by groupBy key
     function keysFor(p){
-      if (groupBy === 'category') return pidToCats[p.id] || ['(Uncategorised)'];
+      if (groupBy === 'category') { const pt = (p.product_type||'').trim(); return pt ? [pt] : ['(Uncategorised)']; }
       if (groupBy === 'vendor') return [(p.vendor || '(No vendor)').trim()];
       if (groupBy === 'sku') return (p.variants||[]).map(v => v.sku || ('vid:'+v.id));
       return ['all'];
     }
     // Apply filter (filter context like {category:'X'} or {vendor:'X'})
     function passesFilter(p){
-      if (filter.category) {
-        const cats = pidToCats[p.id] || [];
-        if (!cats.includes(filter.category)) return false;
-      }
+      if (filter.category) { const pt = (p.product_type||'').trim() || '(Uncategorised)'; if (pt !== filter.category) return false; }
       if (filter.vendor) {
         if ((p.vendor||'').trim() !== filter.vendor) return false;
       }
@@ -185,12 +182,12 @@
       keysFor(p).forEach(k => {
         const g = groups[k] = groups[k] || { key:k, title:k, products: new Set(), skus:0, unitsSold:0, revenue:0, stockLeft:0, sampleImage:'', leadDays:15, sampleVendor:p.vendor||'', skuList:[] };
         g.products.add(p.id);
-        if (!g.sampleImage) g.sampleImage = (p.image && p.image.src) || (p.images && p.images[0] && p.images[0].src) || '';
+        if (!g.sampleImage) { const vimg = (p.variants||[]).map(v => v.image).find(Boolean); g.sampleImage = (p.image && p.image.src) || (p.images && p.images[0] && p.images[0].src) || vimg || ''; }
         (p.variants||[]).forEach(v => {
           // For SKU groupBy, only count this variant's matching key
           if (groupBy === 'sku' && (v.sku || ('vid:'+v.id)) !== k) return;
           g.skus++;
-          g.stockLeft += Number(v.inventory_quantity)||0;
+          g.stockLeft += Number(v.inventory != null ? v.inventory : v.inventory_quantity)||0;
           g.skuList.push({ sku: v.sku, vid: v.id, pid: p.id, title: p.title, image: g.sampleImage });
         });
       });
@@ -265,7 +262,7 @@
       : rows.map(r => {
           const img = r.sampleImage ? '<img class="thumb" src="'+r.sampleImage+'" loading="lazy" onerror="this.style.display=\'none\'">' : '<div style="width:36px;height:36px;background:#f1f5f9;border-radius:6px;"></div>';
           return '<tr class="row-link" data-key="'+(r.key||'').replace(/"/g,'&quot;')+'">' +
-            '<td class="cell"><div style="display:flex;align-items:center;gap:10px;"><div>'+img+'</div><div><div style="font-weight:500;">'+(r.title||'')+'</div>'+(opts.subtitle ? '<div style="color:#94a3b8;font-size:11px;">'+opts.subtitle(r)+'</div>' : '')+'</div></div></td>' +
+            '<td class="cell"><div style="display:flex;align-items:center;gap:10px;"><div>'+img+'</div><div><div style="font-weight:500;">'+((r.title||'').trim() || '<span style="color:#cbd5e1">(no title)</span>')+'</div>'+(opts.subtitle ? '<div style="color:#94a3b8;font-size:11px;">'+opts.subtitle(r)+'</div>' : '')+'</div></div></td>' +
             '<td class="cell num">'+fmtInt(r.productsCount)+'</td>' +
             '<td class="cell num">'+fmtInt(r.skus)+'</td>' +
             '<td class="cell num">'+fmtInt(r.unitsSold)+'</td>' +
