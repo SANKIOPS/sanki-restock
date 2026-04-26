@@ -3985,6 +3985,64 @@ function o2ExportCSV(){
       <span id="setSaveOK" style="color:#059669; margin-left:12px; display:none">Saved ✓</span>
     </div>
   </div>
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:24px; max-width:720px; margin-top:16px;">
+      <h3 style="margin-top:0">Category Performance Tags</h3>
+      <p style="color:#64748b; font-size:13px;">Thresholds (avg sales per day) used to colour Categories in Analytics. Below "Cold" → Dead.</p>
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; margin-top:12px;">
+        <div><label class="form-label">Hot ≥</label><input type="number" id="setCatHot"  step="0.1" value="5"   style="width:100%"></div>
+        <div><label class="form-label">Warm ≥</label><input type="number" id="setCatWarm" step="0.1" value="2"   style="width:100%"></div>
+        <div><label class="form-label">Cold ≥</label><input type="number" id="setCatCold" step="0.1" value="0.5" style="width:100%"></div>
+      </div>
+    </div>
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:24px; max-width:720px; margin-top:16px;">
+      <h3 style="margin-top:0">Vendor Performance Tags</h3>
+      <p style="color:#64748b; font-size:13px;">Thresholds (avg sales per day) used to colour Vendors in Analytics.</p>
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; margin-top:12px;">
+        <div><label class="form-label">Hot ≥</label><input type="number" id="setVendorHot"  step="0.1" value="7" style="width:100%"></div>
+        <div><label class="form-label">Warm ≥</label><input type="number" id="setVendorWarm" step="0.1" value="3" style="width:100%"></div>
+        <div><label class="form-label">Cold ≥</label><input type="number" id="setVendorCold" step="0.1" value="1" style="width:100%"></div>
+      </div>
+    </div>
+    <script>
+    (function(){
+      function loadTagSettings(){
+        try { var s = JSON.parse(localStorage.getItem('sanki_settings')||'{}'); var ct = s.catTags||{}, vt = s.vendorTags||{};
+          if (document.getElementById('setCatHot'))  document.getElementById('setCatHot').value = ct.hot   ?? 5;
+          if (document.getElementById('setCatWarm')) document.getElementById('setCatWarm').value = ct.warm ?? 2;
+          if (document.getElementById('setCatCold')) document.getElementById('setCatCold').value = ct.cold ?? 0.5;
+          if (document.getElementById('setVendorHot'))  document.getElementById('setVendorHot').value = vt.hot   ?? 7;
+          if (document.getElementById('setVendorWarm')) document.getElementById('setVendorWarm').value = vt.warm ?? 3;
+          if (document.getElementById('setVendorCold')) document.getElementById('setVendorCold').value = vt.cold ?? 1;
+        } catch(e) {}
+      }
+      function saveTagSettings(){
+        var s = {}; try { s = JSON.parse(localStorage.getItem('sanki_settings')||'{}'); } catch(e){}
+        s.catTags = { hot: parseFloat(document.getElementById('setCatHot').value),
+                      warm: parseFloat(document.getElementById('setCatWarm').value),
+                      cold: parseFloat(document.getElementById('setCatCold').value) };
+        s.vendorTags = { hot: parseFloat(document.getElementById('setVendorHot').value),
+                         warm: parseFloat(document.getElementById('setVendorWarm').value),
+                         cold: parseFloat(document.getElementById('setVendorCold').value) };
+        localStorage.setItem('sanki_settings', JSON.stringify(s));
+      }
+      // Hook into existing Save button
+      document.addEventListener('DOMContentLoaded', loadTagSettings);
+      var orig = document.getElementById('setSaveBtn');
+      if (orig) {
+        var prev = orig.onclick;
+        orig.onclick = function(){
+          if (typeof prev === 'function') try { prev(); } catch(e){}
+          saveTagSettings();
+        };
+      } else {
+        // Wait for it
+        var iv = setInterval(function(){
+          var btn = document.getElementById('setSaveBtn');
+          if (btn) { var p = btn.onclick; btn.onclick = function(){ if (typeof p === 'function') try { p(); } catch(e){} saveTagSettings(); }; loadTagSettings(); clearInterval(iv); }
+        }, 500);
+      }
+    })();
+    </script>
 
 <script>
 (function(){
