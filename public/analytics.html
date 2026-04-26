@@ -159,19 +159,15 @@
   // ===== Color extraction & panel =====
   const COLOR_SWATCHES = { BLACK:'#000', WHITE:'#fff', BLUE:'#3b82f6', RED:'#ef4444', PINK:'#ec4899', GREEN:'#10b981', YELLOW:'#facc15', CREAM:'#fef3c7', FUCHSIA:'#d946ef', NAVY:'#1e3a8a', GREY:'#9ca3af', GRAY:'#9ca3af', BROWN:'#92400e', BEIGE:'#fde68a', ORANGE:'#fb923c', PURPLE:'#a855f7', MAROON:'#7f1d1d', OLIVE:'#65a30d', MUSTARD:'#eab308', TEAL:'#14b8a6', LAVENDER:'#c084fc', PEACH:'#fed7aa', RUST:'#b45309', WINE:'#7c2d12', SKYBLUE:'#7dd3fc' };
   function extractColor(variantTitle, productTitle){
-    // Try variant title first: "BLACK / Universal Size" -> "BLACK"
-    let s = (variantTitle||'').trim();
-    if (s) {
-      const first = s.split(/\s*[\\/·,]\s*/)[0].trim().toUpperCase();
-      if (first && first.length < 30 && !/^DEFAULT/i.test(first)) return first;
-    }
-    // Fallback: scan product title for known colors
-    const ptu = (productTitle||'').toUpperCase();
-    for (const c of Object.keys(COLOR_SWATCHES)) {
+    // Search for any known color name in either variant or product title
+    const all = ((variantTitle||'') + ' ' + (productTitle||'')).toUpperCase();
+    // Sort by longest first so e.g. SKYBLUE matches before BLUE
+    const colors = Object.keys(COLOR_SWATCHES).sort((a,b) => b.length - a.length);
+    for (const c of colors) {
       const re = new RegExp('\\b' + c + '\\b');
-      if (re.test(ptu)) return c;
+      if (re.test(all)) return c;
     }
-    return '(?)';
+    return '(no color)';
   }
   function colorSwatch(c){ return COLOR_SWATCHES[c.toUpperCase()] || '#a3a3a3'; }
   async function colorBreakdown(filter){
