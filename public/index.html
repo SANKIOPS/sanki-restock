@@ -4593,7 +4593,7 @@ function o2ExportCSV(){
     if (!img || img.tagName !== 'IMG') return;
     var src = img.src || '';
     // Only target product images (Shopify CDN); ignore avatars/logos/icons
-    if (!/cdn\\.shopify\\.com/i.test(src)) return;
+    if (src.indexOf('cdn.shopify.com') === -1) return;
     // Don't intercept clicks that are inside an existing lightbox
     if (img.closest('.img-lightbox, #imgLightbox, .lightbox')) return;
     // Only inside main pages (don't break already-handled elements)
