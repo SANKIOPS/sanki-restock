@@ -4700,4 +4700,64 @@ function o2ExportCSV(){
   setTimeout(annotateAndSortNow, 1000);
 })();
 </script>
+
+<script>
+// __sankiSigmaFix: repair Restock Planner sigma row column shift (missing Stock total cell)
+(function(){
+  function fix(){
+    try {
+      var tbl = document.getElementById('rpTable');
+      if (!tbl) return;
+      var rows = Array.from(tbl.querySelectorAll('tr'));
+      var sigma = rows.find(function(tr){ return /^Σ/.test((tr.textContent||'').trim()); });
+      if (!sigma) return;
+      if (sigma.dataset.sankiSigmaFixed === '1') return;
+      var cells = Array.from(sigma.children);
+      if (cells.length < 6) return;
+      var c4 = (cells[4].textContent||'').trim();
+      var c5 = (cells[5].textContent||'').trim();
+      var c4Decimal = /^[\d.,]+$/.test(c4) && /\./.test(c4) && parseFloat(c4) < 200;
+      var c5BigInt = /^[\d,]+$/.test(c5) && parseInt(c5.replace(/,/g,''), 10) > 100;
+      if (!(c4Decimal && c5BigInt)) { sigma.dataset.sankiSigmaFixed = '1'; return; }
+      var bodyRows = Array.from(tbl.querySelectorAll('tbody tr')).filter(function(tr){ return !/Σ/.test((tr.textContent||'').trim().split('\n')[0]); });
+      var totalStock = 0;
+      bodyRows.forEach(function(tr){
+        var tds = tr.querySelectorAll('td');
+        if (tds.length < 6) return;
+        var v = parseInt((tds[5].textContent||'').replace(/[^\d-]/g,''), 10);
+        if (!isNaN(v)) totalStock += v;
+      });
+      var newTd = document.createElement('td');
+      newTd.style.fontWeight = '600';
+      newTd.style.color = '#1e40af';
+      newTd.textContent = totalStock.toLocaleString('en-IN');
+      sigma.insertBefore(newTd, cells[4]);
+      sigma.dataset.sankiSigmaFixed = '1';
+    } catch(e){ console.warn('sigma fix err', e); }
+  }
+  setInterval(function(){
+    var page = document.getElementById('page-restock');
+    if (!page || page.offsetParent === null) return;
+    fix();
+  }, 750);
+  function hookApplyRP(){
+    if (typeof window.applyRP === 'function' && !window.applyRP.__sankiSigmaWrapped) {
+      var orig = window.applyRP;
+      window.applyRP = function(){
+        var ret = orig.apply(this, arguments);
+        setTimeout(function(){
+          var sigma = Array.from(document.querySelectorAll('#rpTable tr')).find(function(tr){ return /^Σ/.test((tr.textContent||'').trim()); });
+          if (sigma) delete sigma.dataset.sankiSigmaFixed;
+          fix();
+        }, 600);
+        setTimeout(fix, 2000);
+        return ret;
+      };
+      window.applyRP.__sankiSigmaWrapped = true;
+    } else { setTimeout(hookApplyRP, 500); }
+  }
+  hookApplyRP();
+  setTimeout(fix, 1500);
+})();
+</script>
 </body>
