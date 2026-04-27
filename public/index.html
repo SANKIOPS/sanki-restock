@@ -4379,6 +4379,38 @@ function o2ExportCSV(){
   }
 
   // === Fix #4: vendor-split PO (correct function name) ===
+  // Retroactively split a PO already in localStorage by ID, using the current vendor map
+  window.__sankiResplitPO = function(poId){
+    try {
+      var pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]');
+      var idx = pos.findIndex(function(p){ return p.id === poId; });
+      if (idx === -1) return { err: 'PO not found' };
+      var po = pos[idx];
+      var globalMap = window.__sankiSkuVendorMap || {};
+      var supplierVendors = (po.supplier||'').split(/\s*\|\s*/).map(function(s){return s.trim();}).filter(Boolean);
+      function vFor(p){ return (p.sku && globalMap[p.sku]) || (supplierVendors.length === 1 ? supplierVendors[0] : null); }
+      var grouped = {};
+      (po.products||[]).forEach(function(p){ var v = vFor(p); if (!v) v = supplierVendors[0] || po.supplier; (grouped[v] = grouped[v] || []).push(p); });
+      var keys = Object.keys(grouped);
+      if (keys.length <= 1) return { msg: 'already single vendor' };
+      var splits = keys.map(function(v, i){
+        var items = grouped[v];
+        return Object.assign({}, po, {
+          id: po.id + '-' + (i+1),
+          supplier: v,
+          products: items,
+          itemCount: items.length,
+          value: items.reduce(function(a,p){ return a + (Number(p.qty)||0)*(Number(p.unitCost)||0); }, 0)
+        });
+      });
+      var updated = pos.filter(function(p){ return p.id !== po.id; }).concat(splits);
+      localStorage.setItem('sanki_pos', JSON.stringify(updated));
+      if (typeof window.renderPOPage === 'function') try { window.renderPOPage(); } catch(e){}
+      if (typeof window.updateActivePOList === 'function') try { window.updateActivePOList(); } catch(e){}
+      return { ok: true, count: splits.length, vendors: keys };
+    } catch(e){ return { err: e.message }; }
+  };
+
   function wrapVendorSplit(){
     // Capture sku→vendor map at click time of "Create PO from selected"
     if (typeof window.createPOFromSelected === 'function' && !window.createPOFromSelected.__sankiV2Wrapped) {
@@ -4415,14 +4447,33 @@ function o2ExportCSV(){
             var newOnes = pos.filter(function(p){ return !beforeIds.has(p.id); });
             if (newOnes.length !== 1) return;
             var newPO = newOnes[newOnes.length - 1];
-            var map = window.__sankiSelMap || {};
-            // Determine vendor per product
+            var selMap = window.__sankiSelMap || {};
+            var globalMap = window.__sankiSkuVendorMap || {};
+            // Vendor list parsed from supplier string "A | B | C"
+            var supplierVendors = (newPO.supplier||'').split(/\s*\|\s*/).map(function(s){ return s.trim(); }).filter(Boolean);
+            function vendorFor(p){
+              if (p.sku && selMap[p.sku]) return selMap[p.sku];
+              if (p.sku && globalMap[p.sku]) return globalMap[p.sku];
+              if (supplierVendors.length === 1) return supplierVendors[0];
+              return null; // unknown — will go in '_unmapped' bucket if needed
+            }
             var vSet = new Set();
-            (newPO.products||[]).forEach(function(p){ var v = (p.sku && map[p.sku]) || newPO.supplier; vSet.add(v); });
-            if (vSet.size <= 1) return; // single vendor, no split
-            // Group products by vendor
+            (newPO.products||[]).forEach(function(p){ var v = vendorFor(p); if (v) vSet.add(v); });
+            // If we couldn't resolve any vendor, fall back to supplierVendors
+            if (vSet.size === 0 && supplierVendors.length > 1) {
+              // Can't split because we don't know which SKU goes with which vendor. Try fetching from /api/products.
+              fetch('/api/products').then(function(rr){return rr.json();}).then(function(jj){
+                var prods = jj.products || jj || [];
+                prods.forEach(function(pp){ (pp.variants||[]).forEach(function(vv){ if (vv.sku) globalMap[vv.sku] = (pp.vendor||'').trim(); }); });
+                window.__sankiSkuVendorMap = globalMap;
+                // Re-trigger split
+                window.__sankiResplitPO && window.__sankiResplitPO(newPO.id);
+              }).catch(function(){});
+              return;
+            }
+            if (vSet.size <= 1) return;
             var grouped = {};
-            (newPO.products||[]).forEach(function(p){ var v = (p.sku && map[p.sku]) || newPO.supplier; (grouped[v] = grouped[v] || []).push(p); });
+            (newPO.products||[]).forEach(function(p){ var v = vendorFor(p) || supplierVendors[0] || newPO.supplier; (grouped[v] = grouped[v] || []).push(p); });
             // Build split PO objects
             var splitPOs = [];
             var baseId = newPO.id || ('PO-' + Date.now());
@@ -4462,6 +4513,21 @@ function o2ExportCSV(){
     colorStatusPills();
     injectSkuGrowthInputs();
     adjustAvgPerListingDate();
+    populateSkuVendorMap();
+  }
+  function populateSkuVendorMap(){
+    try {
+      var tbl = document.getElementById('rpTable');
+      if (!tbl) return;
+      window.__sankiSkuVendorMap = window.__sankiSkuVendorMap || {};
+      tbl.querySelectorAll('tbody tr').forEach(function(tr){
+        var cells = tr.querySelectorAll('td');
+        if (cells.length < 4) return;
+        var sku = (cells[2] ? cells[2].textContent || '' : '').trim();
+        var vendor = (cells[3] ? cells[3].textContent || '' : '').trim();
+        if (sku && vendor) window.__sankiSkuVendorMap[sku] = vendor;
+      });
+    } catch(e){}
   }
   function boot(){
     wrapVendorSplit();
