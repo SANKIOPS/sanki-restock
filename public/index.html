@@ -4407,7 +4407,7 @@ function o2ExportCSV(){
       localStorage.setItem('sanki_pos', JSON.stringify(updated));
       if (typeof window.renderPOPage === 'function') try { window.renderPOPage(); } catch(e){}
       if (typeof window.updateActivePOList === 'function') try { window.updateActivePOList(); } catch(e){}
-      return { ok: true, count: splits.length, vendors: keys };
+      setTimeout(function(){ location.reload(); }, 300); return { ok: true, count: splits.length, vendors: keys };
     } catch(e){ return { err: e.message }; }
   };
 
@@ -4497,6 +4497,8 @@ function o2ExportCSV(){
             if (typeof window.renderPOPage === 'function') { try { window.renderPOPage(); } catch(e){} }
             if (typeof window.updateActivePOList === 'function') { try { window.updateActivePOList(); } catch(e){} }
             alert('PO auto-split into ' + splitPOs.length + ' separate POs by vendor:\n\n' + Object.keys(grouped).map(function(v){ return '• ' + v + ' — ' + grouped[v].length + ' SKUs'; }).join('\n'));
+            // Force reload so the in-memory PO array refreshes from the new localStorage
+            setTimeout(function(){ location.reload(); }, 600);
           } catch(e){ console.warn('vendor-split err', e); }
         }, 200);
         return ret;
