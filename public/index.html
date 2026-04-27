@@ -4609,7 +4609,7 @@ function o2ExportCSV(){
 </script>
 
 <script>
-// __sankiPOTimeAndSort: show creation time on PO cards + sort cards DESC by createdAt
+// __sankiPOTimeAndSort: show creation time on PO cards + sort cards DESC by createdAt (poll-based + showPage hook for reliability)
 (function(){
   function fmtDateTime(iso){
     if (!iso) return '';
@@ -4626,68 +4626,78 @@ function o2ExportCSV(){
     var pos = []; try { pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]'); } catch(e){}
     var map = {}; pos.forEach(function(p){ map[p.id] = p; }); return map;
   }
-  var _busy = false, _t = null;
-  function reorderAndAnnotate(){
+  var _busy = false;
+  function annotateAndSortNow(){
     if (_busy) return;
     _busy = true;
     try {
       var page = document.getElementById('page-po');
       if (!page) return;
+      // Skip if not visible (avoid wasted work)
+      if (page.offsetParent === null) return;
       var cards = Array.from(page.querySelectorAll('.po-card'));
       if (cards.length === 0) return;
       var map = getPOMap();
       // Annotate Created spans with time
       cards.forEach(function(card){
-        var idMatch = (card.innerText || '').match(/PO-\d{4}-\d{3}(?:-\d)?/);
+        var idMatch = (card.innerText || '').match(/PO-[A-Z0-9_-]+/);
         if (!idMatch) return;
         var po = map[idMatch[0]];
         if (!po) return;
         var iso = po.createdAt || po.date;
         if (!iso) return;
-        // Find the Created <b> element
         var b = Array.from(card.querySelectorAll('span > b')).find(function(el){
           var p = el.parentElement; return p && /Created:/.test(p.textContent || '');
         });
-        if (b && !b.dataset.sankiTimeAdded) {
-          b.textContent = fmtDateTime(iso);
-          b.dataset.sankiTimeAdded = '1';
+        if (b) {
+          var newText = fmtDateTime(iso);
+          if (b.textContent.trim() !== newText) b.textContent = newText;
         }
       });
       // Sort cards DESC by createdAt
       var withTime = cards.map(function(card){
-        var idMatch = (card.innerText || '').match(/PO-\d{4}-\d{3}(?:-\d)?/);
+        var idMatch = (card.innerText || '').match(/PO-[A-Z0-9_-]+/);
         var po = idMatch ? map[idMatch[0]] : null;
         var t = po ? (po.createdAt || po.date || '') : '';
         return { card: card, t: t };
       });
-      var alreadySorted = withTime.every(function(x, i){
-        return i === 0 || x.t <= withTime[i-1].t;
-      });
-      if (!alreadySorted) {
-        withTime.sort(function(a, b){ return (b.t || '').localeCompare(a.t || ''); });
+      var sorted = withTime.slice().sort(function(a, b){ return (b.t || '').localeCompare(a.t || ''); });
+      var sameOrder = sorted.every(function(x, i){ return x.card === withTime[i].card; });
+      if (!sameOrder) {
         var parent = cards[0].parentElement;
-        if (parent) {
-          // Disconnect observer briefly while we move nodes
-          if (window.__sankiPOObs && window.__sankiPOObs.disconnect) window.__sankiPOObs.disconnect();
-          withTime.forEach(function(x){ parent.appendChild(x.card); });
-          if (window.__sankiPOObs && window.__sankiPOObs.observe) window.__sankiPOObs.observe(page, { childList:true, subtree:true });
-        }
+        if (parent) sorted.forEach(function(x){ parent.appendChild(x.card); });
       }
     } catch(e){ console.warn('PO time/sort err', e); }
     finally { _busy = false; }
   }
-  function setupObserver(){
-    var page = document.getElementById('page-po');
-    if (!page) { setTimeout(setupObserver, 800); return; }
-    var mo = new MutationObserver(function(){
-      clearTimeout(_t);
-      _t = setTimeout(reorderAndAnnotate, 250);
-    });
-    window.__sankiPOObs = mo;
-    mo.observe(page, { childList:true, subtree:true });
-    reorderAndAnnotate();
+  // Poll every 750ms (cheap when there are no cards or no changes)
+  setInterval(annotateAndSortNow, 750);
+  // Also wrap showPage so we run immediately when 'po' is shown
+  var origShowPage = window.showPage;
+  if (typeof origShowPage === 'function' && !origShowPage.__sankiPOWrapped) {
+    window.showPage = function(p){
+      var ret = origShowPage.apply(this, arguments);
+      if (p === 'po') { setTimeout(annotateAndSortNow, 200); setTimeout(annotateAndSortNow, 800); }
+      return ret;
+    };
+    window.showPage.__sankiPOWrapped = true;
+  } else {
+    // showPage may not exist yet at boot; retry
+    var t0 = setInterval(function(){
+      if (typeof window.showPage === 'function' && !window.showPage.__sankiPOWrapped) {
+        var orig2 = window.showPage;
+        window.showPage = function(p){
+          var ret = orig2.apply(this, arguments);
+          if (p === 'po') { setTimeout(annotateAndSortNow, 200); setTimeout(annotateAndSortNow, 800); }
+          return ret;
+        };
+        window.showPage.__sankiPOWrapped = true;
+        clearInterval(t0);
+      }
+    }, 500);
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupObserver); else setupObserver();
+  // Initial run
+  setTimeout(annotateAndSortNow, 1000);
 })();
 </script>
 </body>
