@@ -4607,4 +4607,87 @@ function o2ExportCSV(){
   }, true);
 })();
 </script>
+
+<script>
+// __sankiPOTimeAndSort: show creation time on PO cards + sort cards DESC by createdAt
+(function(){
+  function fmtDateTime(iso){
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    var dateStr = d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+    var hh = d.getHours(), mm = pad(d.getMinutes());
+    var ampm = hh >= 12 ? 'PM' : 'AM';
+    var hh12 = ((hh + 11) % 12) + 1;
+    return dateStr + ' ' + hh12 + ':' + mm + ' ' + ampm;
+  }
+  function getPOMap(){
+    var pos = []; try { pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]'); } catch(e){}
+    var map = {}; pos.forEach(function(p){ map[p.id] = p; }); return map;
+  }
+  var _busy = false, _t = null;
+  function reorderAndAnnotate(){
+    if (_busy) return;
+    _busy = true;
+    try {
+      var page = document.getElementById('page-po');
+      if (!page) return;
+      var cards = Array.from(page.querySelectorAll('.po-card'));
+      if (cards.length === 0) return;
+      var map = getPOMap();
+      // Annotate Created spans with time
+      cards.forEach(function(card){
+        var idMatch = (card.innerText || '').match(/PO-\d{4}-\d{3}(?:-\d)?/);
+        if (!idMatch) return;
+        var po = map[idMatch[0]];
+        if (!po) return;
+        var iso = po.createdAt || po.date;
+        if (!iso) return;
+        // Find the Created <b> element
+        var b = Array.from(card.querySelectorAll('span > b')).find(function(el){
+          var p = el.parentElement; return p && /Created:/.test(p.textContent || '');
+        });
+        if (b && !b.dataset.sankiTimeAdded) {
+          b.textContent = fmtDateTime(iso);
+          b.dataset.sankiTimeAdded = '1';
+        }
+      });
+      // Sort cards DESC by createdAt
+      var withTime = cards.map(function(card){
+        var idMatch = (card.innerText || '').match(/PO-\d{4}-\d{3}(?:-\d)?/);
+        var po = idMatch ? map[idMatch[0]] : null;
+        var t = po ? (po.createdAt || po.date || '') : '';
+        return { card: card, t: t };
+      });
+      var alreadySorted = withTime.every(function(x, i){
+        return i === 0 || x.t <= withTime[i-1].t;
+      });
+      if (!alreadySorted) {
+        withTime.sort(function(a, b){ return (b.t || '').localeCompare(a.t || ''); });
+        var parent = cards[0].parentElement;
+        if (parent) {
+          // Disconnect observer briefly while we move nodes
+          if (window.__sankiPOObs && window.__sankiPOObs.disconnect) window.__sankiPOObs.disconnect();
+          withTime.forEach(function(x){ parent.appendChild(x.card); });
+          if (window.__sankiPOObs && window.__sankiPOObs.observe) window.__sankiPOObs.observe(page, { childList:true, subtree:true });
+        }
+      }
+    } catch(e){ console.warn('PO time/sort err', e); }
+    finally { _busy = false; }
+  }
+  function setupObserver(){
+    var page = document.getElementById('page-po');
+    if (!page) { setTimeout(setupObserver, 800); return; }
+    var mo = new MutationObserver(function(){
+      clearTimeout(_t);
+      _t = setTimeout(reorderAndAnnotate, 250);
+    });
+    window.__sankiPOObs = mo;
+    mo.observe(page, { childList:true, subtree:true });
+    reorderAndAnnotate();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupObserver); else setupObserver();
+})();
+</script>
 </body>
