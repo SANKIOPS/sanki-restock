@@ -4579,4 +4579,32 @@ function o2ExportCSV(){
   }
 })();
 </script>
+
+<style>
+/* Zoomable product images across the app (PO, Restock Planner, Suppliers, Dashboard alerts) */
+#page-po img, #page-restock img, #page-search img, #page-dashboard img, #page-hot img, #page-suppliers img { cursor: zoom-in; transition: transform 0.1s; }
+#page-po img:hover, #page-restock img:hover, #page-search img:hover, #page-dashboard img:hover, #page-hot img:hover, #page-suppliers img:hover { transform: scale(1.1); }
+</style>
+<script>
+// __sankiImgZoomDelegation: delegate clicks on product images to existing openImgLightbox()
+(function(){
+  document.addEventListener('click', function(ev){
+    var img = ev.target;
+    if (!img || img.tagName !== 'IMG') return;
+    var src = img.src || '';
+    // Only target product images (Shopify CDN); ignore avatars/logos/icons
+    if (!/cdn\\.shopify\\.com/i.test(src)) return;
+    // Don't intercept clicks that are inside an existing lightbox
+    if (img.closest('.img-lightbox, #imgLightbox, .lightbox')) return;
+    // Only inside main pages (don't break already-handled elements)
+    var page = img.closest('#page-po, #page-restock, #page-search, #page-dashboard, #page-hot, #page-suppliers');
+    if (!page) return;
+    if (typeof window.openImgLightbox === 'function') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      try { window.openImgLightbox(src); } catch(e) { console.warn('openImgLightbox failed', e); }
+    }
+  }, true);
+})();
+</script>
 </body>
