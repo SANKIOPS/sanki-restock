@@ -4380,52 +4380,81 @@ function o2ExportCSV(){
 
   // === Fix #4: vendor-split PO (correct function name) ===
   function wrapVendorSplit(){
-    if (typeof window.createPOFromSelected !== 'function') return setTimeout(wrapVendorSplit, 500);
-    if (window.createPOFromSelected.__sankiWrapped) return;
-    var orig = window.createPOFromSelected;
-    window.createPOFromSelected = function(){
-      try {
-        var tbl = document.getElementById('rpTable');
-        if (!tbl) return orig.apply(this, arguments);
-        var checkedRows = Array.from(tbl.querySelectorAll('tbody tr')).filter(function(tr){
-          var cb = tr.querySelector('input[type="checkbox"]');
-          return cb && cb.checked;
-        });
-        if (checkedRows.length < 2) return orig.apply(this, arguments);
-        var byVendor = {};
-        checkedRows.forEach(function(tr){
-          var cells = tr.querySelectorAll('td');
-          var v = (cells[3] && cells[3].textContent || 'Unknown').trim();
-          (byVendor[v] = byVendor[v] || []).push(tr);
-        });
-        var vendors = Object.keys(byVendor);
-        if (vendors.length <= 1) return orig.apply(this, arguments);
-        var allCheckboxes = Array.from(tbl.querySelectorAll('tbody tr input[type="checkbox"]'));
-        var originalChecked = allCheckboxes.map(function(cb){ return cb.checked; });
-        var summary = [];
-        function step(i){
-          if (i >= vendors.length) {
-            allCheckboxes.forEach(function(cb, idx){ cb.checked = originalChecked[idx]; });
-            alert('Created '+vendors.length+' POs (one per vendor):\n\n'+summary.join('\n'));
-            return;
+    // Capture sku→vendor map at click time of "Create PO from selected"
+    if (typeof window.createPOFromSelected === 'function' && !window.createPOFromSelected.__sankiV2Wrapped) {
+      var origCreate = window.createPOFromSelected;
+      window.createPOFromSelected = function(){
+        try {
+          var tbl = document.getElementById('rpTable');
+          if (tbl) {
+            var checkedRows = Array.from(tbl.querySelectorAll('tbody tr')).filter(function(tr){ var cb = tr.querySelector('input[type="checkbox"]'); return cb && cb.checked; });
+            window.__sankiSelMap = {};
+            checkedRows.forEach(function(tr){
+              var cells = tr.querySelectorAll('td');
+              var sku = (cells[2] ? cells[2].textContent || '' : '').trim();
+              var vendor = (cells[3] ? cells[3].textContent || '' : '').trim();
+              if (sku) window.__sankiSelMap[sku] = vendor;
+            });
           }
-          var v = vendors[i];
-          allCheckboxes.forEach(function(cb){ cb.checked = false; });
-          byVendor[v].forEach(function(tr){
-            var cb = tr.querySelector('input[type="checkbox"]');
-            if (cb) cb.checked = true;
-          });
-          summary.push('* '+v+' — '+byVendor[v].length+' SKUs');
-          try { orig.call(window); } catch(e){ console.error('createPOFromSelected vendor step err', v, e); }
-          setTimeout(function(){ step(i+1); }, 300);
-        }
-        step(0);
-      } catch(e) {
-        console.error('vendor-split wrap fail', e);
-        return orig.apply(this, arguments);
-      }
-    };
-    window.createPOFromSelected.__sankiWrapped = true;
+        } catch(e){}
+        return origCreate.apply(this, arguments);
+      };
+      window.createPOFromSelected.__sankiV2Wrapped = true;
+      window.createPOFromSelected.__sankiWrapped = true;
+    }
+    // Wrap save: after a PO is saved, if its products span multiple vendors, split into N POs
+    if (typeof window.savePOWithStatus === 'function' && !window.savePOWithStatus.__sankiV2Wrapped) {
+      var origSave = window.savePOWithStatus;
+      window.savePOWithStatus = function(){
+        var beforeIds = new Set();
+        try { (JSON.parse(localStorage.getItem('sanki_pos')||'[]')).forEach(function(p){ beforeIds.add(p.id); }); } catch(e){}
+        var ret = origSave.apply(this, arguments);
+        setTimeout(function(){
+          try {
+            var pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]');
+            var newOnes = pos.filter(function(p){ return !beforeIds.has(p.id); });
+            if (newOnes.length !== 1) return;
+            var newPO = newOnes[newOnes.length - 1];
+            var map = window.__sankiSelMap || {};
+            // Determine vendor per product
+            var vSet = new Set();
+            (newPO.products||[]).forEach(function(p){ var v = (p.sku && map[p.sku]) || newPO.supplier; vSet.add(v); });
+            if (vSet.size <= 1) return; // single vendor, no split
+            // Group products by vendor
+            var grouped = {};
+            (newPO.products||[]).forEach(function(p){ var v = (p.sku && map[p.sku]) || newPO.supplier; (grouped[v] = grouped[v] || []).push(p); });
+            // Build split PO objects
+            var splitPOs = [];
+            var baseId = newPO.id || ('PO-' + Date.now());
+            var i = 0;
+            Object.keys(grouped).forEach(function(v){
+              i++;
+              var items = grouped[v];
+              var value = items.reduce(function(a, p){ return a + (Number(p.qty)||0) * (Number(p.unitCost)||0); }, 0);
+              splitPOs.push(Object.assign({}, newPO, {
+                id: baseId + '-' + i,
+                supplier: v,
+                products: items,
+                itemCount: items.length,
+                value: value
+              }));
+            });
+            // Replace the combined PO with the split ones
+            var updated = pos.filter(function(p){ return p.id !== newPO.id; }).concat(splitPOs);
+            localStorage.setItem('sanki_pos', JSON.stringify(updated));
+            // Re-render PO page if it's loaded
+            if (typeof window.renderPOPage === 'function') { try { window.renderPOPage(); } catch(e){} }
+            if (typeof window.updateActivePOList === 'function') { try { window.updateActivePOList(); } catch(e){} }
+            alert('PO auto-split into ' + splitPOs.length + ' separate POs by vendor:\n\n' + Object.keys(grouped).map(function(v){ return '• ' + v + ' — ' + grouped[v].length + ' SKUs'; }).join('\n'));
+          } catch(e){ console.warn('vendor-split err', e); }
+        }, 200);
+        return ret;
+      };
+      window.savePOWithStatus.__sankiV2Wrapped = true;
+    }
+    if (!window.createPOFromSelected || !window.createPOFromSelected.__sankiV2Wrapped || !window.savePOWithStatus || !window.savePOWithStatus.__sankiV2Wrapped) {
+      setTimeout(wrapVendorSplit, 500);
+    }
   }
 
   // Boot
