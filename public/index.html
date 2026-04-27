@@ -4702,62 +4702,100 @@ function o2ExportCSV(){
 </script>
 
 <script>
-// __sankiSigmaFix: repair Restock Planner sigma row column shift (missing Stock total cell)
+// __sankiSigmaFix v2: rebuild Restock Planner sigma row from per-row sums (correct values, correct columns)
 (function(){
-  function fix(){
+  function parseNum(s){
+    if (!s) return 0;
+    var clean = String(s).replace(/[^\d.\-]/g, '');
+    var n = parseFloat(clean);
+    return isNaN(n) ? 0 : n;
+  }
+  function fmtInt(n){ return Math.round(n).toLocaleString('en-IN'); }
+  function fmtCurrency(n){
+    if (Math.abs(n) >= 100000) return '\u20b9' + (n/1000).toFixed(0) + 'K';
+    return '\u20b9' + Math.round(n).toLocaleString('en-IN');
+  }
+  function rebuildSigma(){
     try {
       var tbl = document.getElementById('rpTable');
       if (!tbl) return;
-      var rows = Array.from(tbl.querySelectorAll('tr'));
-      var sigma = rows.find(function(tr){ return /^Σ/.test((tr.textContent||'').trim()); });
+      var headerCells = Array.from(tbl.querySelectorAll('thead th'));
+      var headerCount = headerCells.length;
+      if (headerCount < 18) return;
+      var allRows = Array.from(tbl.querySelectorAll('tbody tr'));
+      var sigma = allRows.find(function(tr){ return /^\u03a3/.test((tr.textContent||'').trim()); });
       if (!sigma) return;
-      if (sigma.dataset.sankiSigmaFixed === '1') return;
-      var cells = Array.from(sigma.children);
-      if (cells.length < 6) return;
-      var c4 = (cells[4].textContent||'').trim();
-      var c5 = (cells[5].textContent||'').trim();
-      var c4Decimal = /^[\d.,]+$/.test(c4) && /\./.test(c4) && parseFloat(c4) < 200;
-      var c5BigInt = /^[\d,]+$/.test(c5) && parseInt(c5.replace(/,/g,''), 10) > 100;
-      if (!(c4Decimal && c5BigInt)) { sigma.dataset.sankiSigmaFixed = '1'; return; }
-      var bodyRows = Array.from(tbl.querySelectorAll('tbody tr')).filter(function(tr){ return !/Σ/.test((tr.textContent||'').trim().split('\n')[0]); });
-      var totalStock = 0;
+      var bodyRows = allRows.filter(function(tr){ return !/^\u03a3/.test((tr.textContent||'').trim()); });
+      if (bodyRows.length === 0) return;
+      var totals = { reorderQty:0, stock:0, avgDay:0, soldUnits:0, revenue:0, reorderCost:0, estRev:0, estProfit:0 };
       bodyRows.forEach(function(tr){
         var tds = tr.querySelectorAll('td');
-        if (tds.length < 6) return;
-        var v = parseInt((tds[5].textContent||'').replace(/[^\d-]/g,''), 10);
-        if (!isNaN(v)) totalStock += v;
+        if (tds.length < 15) return;
+        totals.reorderQty  += parseNum(tds[4].textContent);
+        totals.stock       += parseNum(tds[5].textContent);
+        totals.avgDay      += parseNum(tds[6].textContent);
+        totals.soldUnits   += parseNum(tds[7].textContent);
+        totals.revenue     += parseNum(tds[8].textContent);
+        totals.reorderCost += parseNum(tds[12].textContent) * (/K\b/.test(tds[12].textContent) ? 1000 : 1);
+        totals.estRev      += parseNum(tds[13].textContent) * (/K\b/.test(tds[13].textContent) ? 1000 : 1);
+        totals.estProfit   += parseNum(tds[14].textContent) * (/K\b/.test(tds[14].textContent) ? 1000 : 1);
       });
-      var newTd = document.createElement('td');
-      newTd.style.fontWeight = '600';
-      newTd.style.color = '#1e40af';
-      newTd.textContent = totalStock.toLocaleString('en-IN');
-      sigma.insertBefore(newTd, cells[4]);
+      // Build the desired sigma row content as an array of cells:
+      // Each cell: { html, colspan }
+      var cells = [
+        { html: '<b>\u03a3</b>', colspan: 1 },
+        { html: '<b>'+bodyRows.length+' products</b>', colspan: 2 },
+        { html: '\u2014', colspan: 1 },
+        { html: '<b>'+fmtInt(totals.reorderQty)+'</b>', colspan: 1 },
+        { html: '<b>'+fmtInt(totals.stock)+'</b>', colspan: 1 },
+        { html: '<b>'+totals.avgDay.toFixed(1)+'</b>', colspan: 1 },
+        { html: '<b>'+fmtInt(totals.soldUnits)+'</b>', colspan: 1 },
+        { html: '<b>'+fmtCurrency(totals.revenue)+'</b>', colspan: 1 },
+        { html: '\u2014', colspan: 1 },
+        { html: '\u2014', colspan: 1 },
+        { html: '\u2014', colspan: 1 },
+        { html: '<b>'+fmtCurrency(totals.reorderCost)+'</b>', colspan: 1 },
+        { html: '<b>'+fmtCurrency(totals.estRev)+'</b>', colspan: 1 },
+        { html: '<b>'+fmtCurrency(totals.estProfit)+'</b>', colspan: 1 },
+        { html: '\u2014', colspan: 1 },
+        { html: '\u2014', colspan: 1 },
+        { html: '\u2014', colspan: 1 }
+      ];
+      // Total cols = 1+2+15 = 18 ✓
+      // Build new sigma row HTML, preserving any existing styling (color, bg)
+      var existingFirstCell = sigma.firstElementChild;
+      var existingStyle = existingFirstCell ? existingFirstCell.getAttribute('style') : null;
+      sigma.innerHTML = cells.map(function(c){
+        var cs = c.colspan > 1 ? ' colspan="'+c.colspan+'"' : '';
+        var style = existingStyle ? ' style="'+existingStyle.replace(/"/g,'&quot;')+'"' : '';
+        return '<td'+cs+style+'>'+c.html+'</td>';
+      }).join('');
       sigma.dataset.sankiSigmaFixed = '1';
-    } catch(e){ console.warn('sigma fix err', e); }
+    } catch(e){ console.warn('sigma rebuild err', e); }
   }
+  // Poll every 750ms while restock page visible
   setInterval(function(){
     var page = document.getElementById('page-restock');
     if (!page || page.offsetParent === null) return;
-    fix();
-  }, 750);
+    var sigma = document.querySelector('#rpTable tbody tr');
+    // Force re-run by clearing marker if existing values look wrong
+    rebuildSigma();
+  }, 1000);
+  // Hook applyRP
   function hookApplyRP(){
     if (typeof window.applyRP === 'function' && !window.applyRP.__sankiSigmaWrapped) {
       var orig = window.applyRP;
       window.applyRP = function(){
         var ret = orig.apply(this, arguments);
-        setTimeout(function(){
-          var sigma = Array.from(document.querySelectorAll('#rpTable tr')).find(function(tr){ return /^Σ/.test((tr.textContent||'').trim()); });
-          if (sigma) delete sigma.dataset.sankiSigmaFixed;
-          fix();
-        }, 600);
-        setTimeout(fix, 2000);
+        setTimeout(rebuildSigma, 600);
+        setTimeout(rebuildSigma, 2000);
         return ret;
       };
       window.applyRP.__sankiSigmaWrapped = true;
     } else { setTimeout(hookApplyRP, 500); }
   }
   hookApplyRP();
-  setTimeout(fix, 1500);
+  setTimeout(rebuildSigma, 1500);
 })();
 </script>
 </body>
