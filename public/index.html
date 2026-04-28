@@ -4799,16 +4799,16 @@ function o2ExportCSV(){
 </script>
 
 <script>
-// __sankiPlannerFix v4: avg/day = units/30 (raw), reorder = avg * (reorder_period + 15) * (1+growth/100) - stock
+// __sankiPlannerFix v5: avg/day = units/30 (raw), reorder = avg * (reorder_period + 15) * (1+growth/100) - stock
 (function(){
   function getReorderPeriod(){
-    var sel = document.getElementById('rpReorderPeriod');
+    var sel = document.getElementById('reorderPeriod');
     if (!sel) return 30;
     var v = parseInt(sel.value, 10);
     return v > 0 ? v : 30;
   }
   function getGrowth(){
-    var inp = document.getElementById('rpGrowth');
+    var inp = document.getElementById('growthPct');
     if (!inp) return 0;
     var v = parseFloat(inp.value);
     return isNaN(v) ? 0 : v;
