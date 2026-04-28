@@ -4848,7 +4848,7 @@ function o2ExportCSV(){
 </script>
 
 <script>
-// __sankiReorderFix v2: propagate new avg/day into Reorder Qty + cost/rev/profit columns
+// __sankiReorderFix v3: propagate new avg/day into Reorder Qty + cost/rev/profit (idempotent, originals stored in dataset)
 (function(){
   function buildSkuMap(){
     var map = {};
@@ -4883,29 +4883,37 @@ function o2ExportCSV(){
   }
   function fixRow(tr, skuMap){
     if ((tr.textContent||'').trim().charAt(0) === '\u03a3') return;
-    if (tr.dataset.sankiV2Done === '1') return;
+    if (tr.dataset.sankiV3Done === '1') return;
     var tds = tr.querySelectorAll('td');
     if (tds.length < 15) return;
     var sku = (tds[2].textContent||'').trim();
     var days = skuMap[sku];
     if (days == null) return;
     var unitsSold = parseFloat((tds[7].textContent||'').replace(/,/g,'')) || 0;
-    if (unitsSold === 0) { tr.dataset.sankiV2Done = '1'; return; }
+    if (unitsSold === 0) { tr.dataset.sankiV3Done = '1'; return; }
+    // Capture originals once per TR
+    if (tr.dataset.sankiOrigQty === undefined) {
+      tr.dataset.sankiOrigQty = (parseFloat((tds[4].textContent||'').replace(/,/g,'')) || 0).toString();
+      tr.dataset.sankiOrigCost = tds[12].textContent;
+      tr.dataset.sankiOrigRev = tds[13].textContent;
+      tr.dataset.sankiOrigProfit = tds[14].textContent;
+    }
+    var origReorderQty = parseFloat(tr.dataset.sankiOrigQty);
+    var origCost = parseAmt(tr.dataset.sankiOrigCost);
+    var origRev = parseAmt(tr.dataset.sankiOrigRev);
+    var origProfit = parseAmt(tr.dataset.sankiOrigProfit);
     var capped = Math.min(days, 30);
     var oldAvg = unitsSold / capped;
     var newAvg = unitsSold / (capped + 15);
     var ratio = newAvg / oldAvg;
-    var origReorderQty = parseFloat((tds[4].textContent||'').replace(/,/g,'')) || 0;
     var stock = parseFloat((tds[5].textContent||'').replace(/,/g,'')) || 0;
     var newReorderQty = Math.max(0, Math.ceil((origReorderQty + stock) * ratio - stock));
-    if (origReorderQty !== newReorderQty) {
-      tds[4].textContent = newReorderQty.toLocaleString('en-IN');
-      var qtyRatio = origReorderQty > 0 ? (newReorderQty / origReorderQty) : 0;
-      tds[12].textContent = fmtAmt(parseAmt(tds[12].textContent) * qtyRatio);
-      tds[13].textContent = fmtAmt(parseAmt(tds[13].textContent) * qtyRatio);
-      tds[14].textContent = fmtAmt(parseAmt(tds[14].textContent) * qtyRatio);
-    }
-    tr.dataset.sankiV2Done = '1';
+    tds[4].textContent = newReorderQty.toLocaleString('en-IN');
+    var qtyRatio = origReorderQty > 0 ? (newReorderQty / origReorderQty) : 0;
+    tds[12].textContent = fmtAmt(origCost * qtyRatio);
+    tds[13].textContent = fmtAmt(origRev * qtyRatio);
+    tds[14].textContent = fmtAmt(origProfit * qtyRatio);
+    tr.dataset.sankiV3Done = '1';
   }
   function fixAll(){
     var tbl = document.getElementById('rpTable');
@@ -4915,24 +4923,6 @@ function o2ExportCSV(){
     var rows = tbl.querySelectorAll('tbody tr');
     rows.forEach(function(tr){ fixRow(tr, skuMap); });
   }
-  function clearMarkers(){
-    document.querySelectorAll('#rpTable tbody tr').forEach(function(tr){
-      delete tr.dataset.sankiV2Done;
-    });
-  }
-  function hookApply(){
-    if (typeof window.applyRP === 'function' && !window.applyRP.__sankiV2Wrapped) {
-      var orig = window.applyRP;
-      window.applyRP = function(){
-        var ret = orig.apply(this, arguments);
-        setTimeout(clearMarkers, 100);
-        setTimeout(fixAll, 600);
-        return ret;
-      };
-      window.applyRP.__sankiV2Wrapped = true;
-    } else { setTimeout(hookApply, 800); }
-  }
-  hookApply();
   setInterval(function(){
     var page = document.getElementById('page-restock');
     if (!page || page.offsetParent === null) return;
