@@ -4881,28 +4881,54 @@ function o2ExportCSV(){
     tds[14].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigRev) * qtyRatio);
     tds[15].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigProfit) * qtyRatio);
   }
-  function updateSigmaAdvPur(advPurMap){
+  function rebuildSigma(advPurMap){
     var tbl = document.getElementById('rpTable');
     if (!tbl) return;
     var sigma = null;
     var trs = tbl.querySelectorAll('tr');
-    for (var k=0; k<trs.length; k++) {
-      if ((trs[k].textContent||'').trim().charAt(0) === '\u03a3') { sigma = trs[k]; break; }
+    for (var i=0; i<trs.length; i++) {
+      if ((trs[i].textContent||'').trim().charAt(0) === '\u03a3') { sigma = trs[i]; break; }
     }
     if (!sigma) return;
-    var advTd = sigma.querySelector('td.adv-pur-col');
-    if (!advTd) return;
-    var total = 0;
-    var rows = tbl.querySelectorAll('tbody tr');
-    rows.forEach(function(tr){
-      if (tr.cells.length >= 6) {
-        var sku = (tr.cells[2].textContent||'').trim();
-        total += (advPurMap[sku] || 0);
-      }
+    var bodyRows = tbl.querySelectorAll('tbody tr');
+    if (bodyRows.length === 0) return;
+    var totals = { reorderQty:0, advPur:0, stock:0, avgDay:0, unitsSold:0, revenue:0, reorderCost:0, estRev:0, estProfit:0 };
+    bodyRows.forEach(function(tr){
+      var c = tr.cells;
+      if (c.length < 16) return;
+      totals.reorderQty  += parseFloat((c[4].textContent||'').replace(/,/g,'')) || 0;
+      totals.advPur      += parseFloat((c[5].textContent||'').replace(/,/g,'')) || 0;
+      totals.stock       += parseFloat((c[6].textContent||'').replace(/,/g,'')) || 0;
+      totals.avgDay      += parseFloat((c[7].textContent||'').replace(/,/g,'')) || 0;
+      totals.unitsSold   += parseFloat((c[8].textContent||'').replace(/,/g,'')) || 0;
+      totals.revenue     += parseAmt(c[9].textContent);
+      totals.reorderCost += parseAmt(c[13].textContent);
+      totals.estRev      += parseAmt(c[14].textContent);
+      totals.estProfit   += parseAmt(c[15].textContent);
     });
-    advTd.textContent = total.toLocaleString('en-IN');
+    function fmtInt(n){ return Math.round(n).toLocaleString('en-IN'); }
+    sigma.innerHTML = [
+      '<td><b>\u03a3</b></td>',
+      '<td colspan="2"><b>' + bodyRows.length + ' products</b></td>',
+      '<td>\u2014</td>',
+      '<td><b>' + fmtInt(totals.reorderQty) + '</b></td>',
+      '<td class="adv-pur-col"><b>' + fmtInt(totals.advPur) + '</b></td>',
+      '<td><b>' + fmtInt(totals.stock) + '</b></td>',
+      '<td><b>' + totals.avgDay.toFixed(1) + '</b></td>',
+      '<td><b>' + fmtInt(totals.unitsSold) + '</b></td>',
+      '<td><b>' + fmtAmt(totals.revenue) + '</b></td>',
+      '<td>\u2014</td>',
+      '<td>\u2014</td>',
+      '<td>\u2014</td>',
+      '<td><b>' + fmtAmt(totals.reorderCost) + '</b></td>',
+      '<td><b>' + fmtAmt(totals.estRev) + '</b></td>',
+      '<td><b>' + fmtAmt(totals.estProfit) + '</b></td>',
+      '<td>\u2014</td>',
+      '<td>\u2014</td>',
+      '<td>\u2014</td>'
+    ].join('');
   }
-  function fixAll(){
+    function fixAll(){
     var tbl = document.getElementById('rpTable');
     if (!tbl) return;
     var skuMap = buildSkuMap();
@@ -4913,7 +4939,7 @@ function o2ExportCSV(){
     var subtract = getSubtractToggle();
     var rows = tbl.querySelectorAll('tbody tr');
     rows.forEach(function(tr){ fixRow(tr, skuMap, advPurMap, subtract); });
-    updateSigmaAdvPur(advPurMap);
+    rebuildSigma(advPurMap);
     injectToggle();
   }
   function injectToggle(){
