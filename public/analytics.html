@@ -120,10 +120,15 @@
   }
   // Last Purchase Date helper (Fix 2)
   function lastPOByVendor(){
-    let pos = []; try { pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]'); } catch(e){}
+    let pos = [];
+    try { pos = JSON.parse(localStorage.getItem('sanki_pos')||'[]'); } catch(e){}
+    const CLOSED = ['received','fulfilled','closed','cancelled'];
     const map = {};
     pos.forEach(po => {
-      const v = (po.supplier||'').trim(); if (!v) return;
+      const st = (po.status||'').toString().toLowerCase().replace(/[\s_-]/g,'');
+      // Include even closed/fulfilled POs for "last PO date" history
+      const v = (po.supplier||'').toString().trim().toLowerCase();
+      if (!v) return;
       const d = po.date || po.delivery || (po.createdAt||'').slice(0,10);
       if (!d) return;
       if (!map[v] || d > map[v]) map[v] = d;
@@ -153,8 +158,9 @@
     const stockoutPeriod = parseInt(document.getElementById('stockoutPeriod')?.value || '30', 10);
     const lead = (typeof leadDays === 'number' && !isNaN(leadDays)) ? leadDays : 15;
     const grw = effectiveGrowth(avg, sku);
-    const need = avg * (stockoutPeriod + lead) * (1 + grw/100);
-    return Math.max(0, Math.ceil(need - stockLeft));
+    const baseline = avg * (stockoutPeriod + lead) - stockLeft;
+    const adjusted = baseline * (1 + grw/100);
+    return Math.max(0, Math.ceil(adjusted));
   }
 
   // ===== Data loaders (cached) =====
@@ -283,7 +289,7 @@
           if (groupBy === 'sku' && (v.sku || ('vid:'+v.id)) !== k) return;
           g.skus++;
           g.stockLeft += Number(v.inventory != null ? v.inventory : v.inventory_quantity)||0;
-          g.skuList.push({ sku: v.sku, vid: v.id, pid: p.id, title: p.title, image: g.sampleImage });
+          g.skuList.push({ sku: v.sku, vid: v.id, pid: p.id, title: p.title, image: (v.image || g.sampleImage) });
         });
       });
     });
@@ -325,7 +331,7 @@
       const velocity = tagKind ? tagFor(avgDay, tagKind) : null;
       const boughtInRange = boughtForGroup(g);
       const stockAtStart = g.stockLeft + g.unitsSold - boughtInRange;
-      const lastPO = (groupBy === 'vendor') ? (_lastPOs[g.key] || null) : null;
+      const lastPO = (groupBy === 'vendor') ? (_lastPOs[(g.key||'').toString().trim().toLowerCase()] || null) : null;
       return { key:g.key, title:g.title, productsCount:g.products.size, skus:g.skus,
                unitsSold:g.unitsSold, revenue:g.revenue, avgDay, stockLeft:g.stockLeft,
                daysCovered, velocity, qtyToOrder:qto, sampleImage:g.sampleImage,
