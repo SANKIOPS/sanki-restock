@@ -5066,4 +5066,144 @@ function o2ExportCSV(){
   }, 1500);
 })();
 </script>
+
+<script>
+// __sankiCloudSync v1: sync POs + SKU growth across devices via /api/data/save and /api/data/load
+(function(){
+  var KEY_POS = 'sanki_pos';
+  var KEY_GROWTH = 'sanki_sku_growth';
+  var syncing = false;
+  var lastPushHash = null;
+  function getLocal(){
+    var pos = [], growth = {};
+    try { pos = JSON.parse(localStorage.getItem(KEY_POS) || '[]'); } catch(e) {}
+    try { growth = JSON.parse(localStorage.getItem(KEY_GROWTH) || '{}'); } catch(e) {}
+    return { pos: Array.isArray(pos) ? pos : [], growth: growth || {} };
+  }
+  function hashState(s){
+    return JSON.stringify(s.pos).length + ':' + s.pos.length + ':' + JSON.stringify(s.growth).length + ':' + Object.keys(s.growth).length;
+  }
+  function mergePOs(localList, serverList){
+    var map = {};
+    for (var i=0; i<serverList.length; i++) {
+      var p = serverList[i];
+      if (p && p.id) map[p.id] = p;
+    }
+    for (var j=0; j<localList.length; j++) {
+      var lp = localList[j];
+      if (!lp || !lp.id) continue;
+      if (!map[lp.id]) {
+        map[lp.id] = lp;
+      } else {
+        var lt = new Date(lp.createdAt || 0).getTime() || 0;
+        var st = new Date(map[lp.id].createdAt || 0).getTime() || 0;
+        if (lt > st) map[lp.id] = lp;
+      }
+    }
+    return Object.keys(map).map(function(k){ return map[k]; });
+  }
+  function fetchServer(){
+    return fetch('/api/data/load').then(function(r){ return r.json(); }).catch(function(){ return {success:false, data:null}; });
+  }
+  function pushServer(state, baseData){
+    var merged = Object.assign({}, baseData || {}, {
+      pos: state.pos,
+      skuGrowth: state.growth,
+      lastUpdated: new Date().toISOString()
+    });
+    return fetch('/api/data/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(merged)
+    }).then(function(r){ return r.json(); }).catch(function(e){ return {success:false, error: e.message}; });
+  }
+  function applyServerState(serverData){
+    if (!serverData) return false;
+    var changed = false;
+    if (Array.isArray(serverData.pos)) {
+      localStorage.setItem(KEY_POS, JSON.stringify(serverData.pos));
+      changed = true;
+    }
+    if (serverData.skuGrowth && typeof serverData.skuGrowth === 'object') {
+      localStorage.setItem(KEY_GROWTH, JSON.stringify(serverData.skuGrowth));
+      changed = true;
+    }
+    return changed;
+  }
+  function refreshUI(){
+    // Refresh PO list if on PO page
+    if (typeof window.renderPOList === 'function') { try { window.renderPOList(); } catch(e) {} }
+    if (typeof window.renderPOs === 'function') { try { window.renderPOs(); } catch(e) {} }
+    // Trigger planner re-fix to pick up Adv Pur changes
+    if (typeof window.fixAll === 'function') { try { window.fixAll(); } catch(e) {} }
+  }
+  function initialSync(){
+    return fetchServer().then(function(res){
+      var local = getLocal();
+      var serverData = (res.success && res.data) ? res.data : null;
+      var serverPOs = serverData && Array.isArray(serverData.pos) ? serverData.pos : [];
+      var serverGrowth = serverData && serverData.skuGrowth ? serverData.skuGrowth : {};
+      var mergedPOs = mergePOs(local.pos, serverPOs);
+      var mergedGrowth = Object.assign({}, serverGrowth, local.growth);
+      // Save merged back to both local and server
+      localStorage.setItem(KEY_POS, JSON.stringify(mergedPOs));
+      localStorage.setItem(KEY_GROWTH, JSON.stringify(mergedGrowth));
+      var mergedState = { pos: mergedPOs, growth: mergedGrowth };
+      lastPushHash = hashState(mergedState);
+      refreshUI();
+      return pushServer(mergedState, serverData);
+    });
+  }
+  function checkAndPush(){
+    if (syncing) return;
+    var state = getLocal();
+    var h = hashState(state);
+    if (h === lastPushHash) return;
+    syncing = true;
+    fetchServer().then(function(res){
+      var baseData = (res.success && res.data) ? res.data : {};
+      return pushServer(state, baseData);
+    }).then(function(){
+      lastPushHash = h;
+    }).catch(function(){}).finally(function(){ syncing = false; });
+  }
+  function periodicPull(){
+    if (syncing) return;
+    fetchServer().then(function(res){
+      if (res.success && res.data) {
+        var serverPOs = Array.isArray(res.data.pos) ? res.data.pos : [];
+        var local = getLocal();
+        var merged = mergePOs(local.pos, serverPOs);
+        var mergedGrowth = Object.assign({}, res.data.skuGrowth || {}, local.growth);
+        var localHash = hashState({pos: local.pos, growth: local.growth});
+        var newHash = hashState({pos: merged, growth: mergedGrowth});
+        if (localHash !== newHash) {
+          localStorage.setItem(KEY_POS, JSON.stringify(merged));
+          localStorage.setItem(KEY_GROWTH, JSON.stringify(mergedGrowth));
+          lastPushHash = newHash;
+          refreshUI();
+        }
+      }
+    });
+  }
+  // Run initial sync after a short delay so localStorage is populated
+  setTimeout(initialSync, 1500);
+  // Push local changes every 4s
+  setInterval(checkAndPush, 4000);
+  // Pull from server every 25s
+  setInterval(periodicPull, 25000);
+  // Push on page hide/unload (best-effort)
+  window.addEventListener('beforeunload', function(){
+    try {
+      var state = getLocal();
+      var h = hashState(state);
+      if (h !== lastPushHash) {
+        var blob = new Blob([JSON.stringify({pos: state.pos, skuGrowth: state.growth, lastUpdated: new Date().toISOString()})], {type:'application/json'});
+        navigator.sendBeacon('/api/data/save', blob);
+      }
+    } catch(e) {}
+  });
+  console.log('[sanki] cloud sync v1 active');
+})();
+</script>
 </body>
