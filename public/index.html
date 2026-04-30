@@ -4799,8 +4799,11 @@ function o2ExportCSV(){
 </script>
 
 <script>
-// __sankiPlannerFix v6: avg/day = units / min(date_range, days_since_listing); reorder = avg * (period+15) * (1+growth/100) - stock
+// __sankiPlannerFix v7: avg/day = units/min(range,daysListed); adds Adv Pur column + toggle; reorder = avg*(period+15)*(1+growth/100) - stock - (advPur if toggle on)
 (function(){
+  var LEAD = 15;
+  var TOGGLE_KEY = 'sanki_advpur_subtract';
+  var CLOSED = ['received','fulfilled','closed','cancelled'];
   function buildSkuMap(){
     var map = {};
     if (!window._shopifyProducts) return map;
@@ -4817,23 +4820,35 @@ function o2ExportCSV(){
     }
     return map;
   }
+  function buildAdvPurMap(){
+    var map = {};
+    var pos;
+    try { pos = JSON.parse(localStorage.getItem('sanki_pos') || '[]'); } catch(e) { return map; }
+    if (!Array.isArray(pos)) return map;
+    pos.forEach(function(po){
+      var st = (po.status || '').toString().toLowerCase().replace(/[\s_-]/g,'');
+      if (CLOSED.indexOf(st) !== -1) return;
+      var products = po.products || po.items || [];
+      products.forEach(function(prod){
+        if (!prod || !prod.sku) return;
+        var qty = parseInt(prod.qty, 10) || parseInt(prod.quantity, 10) || 0;
+        if (typeof prod.received === 'number') qty = Math.max(0, qty - prod.received);
+        if (qty > 0) map[prod.sku] = (map[prod.sku] || 0) + qty;
+      });
+    });
+    return map;
+  }
   function getRangeDays(){
     var sel = document.getElementById('rpRangePreset');
-    if (sel) {
-      var v = parseInt(sel.value, 10);
-      if (v > 0) return v;
-    }
+    if (sel) { var v = parseInt(sel.value, 10); if (v > 0) return v; }
     return 30;
   }
   function getReorderPeriod(){
     var sel = document.getElementById('reorderPeriod');
     if (!sel) return 30;
     if (sel.value === 'custom') {
-      var custom = document.getElementById('reorderCustomDays');
-      if (custom) {
-        var cv = parseInt(custom.value, 10);
-        if (cv > 0) return cv;
-      }
+      var c = document.getElementById('reorderCustomDays');
+      if (c) { var cv = parseInt(c.value, 10); if (cv > 0) return cv; }
     }
     var v = parseInt(sel.value, 10);
     return v > 0 ? v : 30;
@@ -4843,6 +4858,10 @@ function o2ExportCSV(){
     if (!inp) return 0;
     var v = parseFloat(inp.value);
     return isNaN(v) ? 0 : v;
+  }
+  function getSubtractToggle(){
+    var v = localStorage.getItem(TOGGLE_KEY);
+    return v === null ? true : v === 'true';
   }
   function parseAmt(s){
     if (!s) return 0;
@@ -4859,26 +4878,82 @@ function o2ExportCSV(){
     if (abs >= 1000) return '\u20b9' + Math.round(n).toLocaleString('en-IN');
     return '\u20b9' + Math.round(n);
   }
-  var LEAD = 15;
-  function fixRow(tr, skuMap){
+  function injectColumn(){
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return false;
+    var thead = tbl.querySelector('thead');
+    if (!thead) return false;
+    if (thead.querySelector('th.adv-pur-col')) return true;
+    // Find header row (TH cells, 18+ columns)
+    var headerRow = null;
+    var theadRows = thead.querySelectorAll('tr');
+    for (var i=0; i<theadRows.length; i++) {
+      var r = theadRows[i];
+      if (r.querySelector('th') && r.cells.length >= 18) { headerRow = r; break; }
+    }
+    if (!headerRow) return false;
+    var newTh = document.createElement('th');
+    newTh.className = 'adv-pur-col';
+    newTh.textContent = 'Adv Pur';
+    var refTh = headerRow.cells[5];
+    headerRow.insertBefore(newTh, refTh);
+    // Σ row insert after Reorder Qty cell (cell idx 3), before Stock (cell idx 4)
+    var sigma = null;
+    var allTrs = tbl.querySelectorAll('tr');
+    for (var k=0; k<allTrs.length; k++) {
+      if ((allTrs[k].textContent||'').trim().charAt(0) === '\u03a3') { sigma = allTrs[k]; break; }
+    }
+    if (sigma && !sigma.querySelector('td.adv-pur-col')) {
+      var newTd = document.createElement('td');
+      newTd.className = 'adv-pur-col';
+      newTd.style.fontWeight = 'bold';
+      newTd.textContent = '0';
+      // Stock cell is at sigma.cells[4] (after the colspan=2 products cell counts as 1 cell)
+      var refTd = sigma.cells[4];
+      sigma.insertBefore(newTd, refTd);
+    }
+    return true;
+  }
+  function injectRowCells(advPurMap){
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return;
+    var rows = tbl.querySelectorAll('tbody tr');
+    rows.forEach(function(tr){
+      if (tr.cells.length < 18) return;
+      if (tr.querySelector('td.adv-pur-col')) return;
+      var sku = (tr.cells[2].textContent||'').trim();
+      var advPur = advPurMap[sku] || 0;
+      var newTd = document.createElement('td');
+      newTd.className = 'adv-pur-col';
+      newTd.textContent = advPur.toLocaleString('en-IN');
+      var refTd = tr.cells[5];
+      tr.insertBefore(newTd, refTd);
+    });
+  }
+  function fixRow(tr, skuMap, advPurMap, subtract){
     if ((tr.textContent||'').trim().charAt(0) === '\u03a3') return;
-    var tds = tr.querySelectorAll('td');
-    if (tds.length < 15) return;
+    var tds = tr.cells;
+    if (tds.length < 19) return;
     var sku = (tds[2].textContent||'').trim();
-    var unitsSold = parseFloat((tds[7].textContent||'').replace(/,/g,'')) || 0;
+    var unitsSold = parseFloat((tds[8].textContent||'').replace(/,/g,'')) || 0;
     if (tr.dataset.sankiOrigQty === undefined) {
       tr.dataset.sankiOrigQty = (parseFloat((tds[4].textContent||'').replace(/,/g,'')) || 0).toString();
-      tr.dataset.sankiOrigCost = tds[12].textContent;
-      tr.dataset.sankiOrigRev = tds[13].textContent;
-      tr.dataset.sankiOrigProfit = tds[14].textContent;
+      tr.dataset.sankiOrigCost = tds[13].textContent;
+      tr.dataset.sankiOrigRev = tds[14].textContent;
+      tr.dataset.sankiOrigProfit = tds[15].textContent;
+    }
+    // Always update Adv Pur cell
+    var advPur = advPurMap[sku] || 0;
+    if (tds[5].textContent.replace(/,/g,'') !== String(advPur)) {
+      tds[5].textContent = advPur.toLocaleString('en-IN');
     }
     if (unitsSold === 0) {
-      if (tds[6].textContent.trim() !== '0.00') tds[6].textContent = '0.00';
+      if (tds[7].textContent.trim() !== '0.00') tds[7].textContent = '0.00';
       if (tds[4].textContent.trim() !== '0') {
         tds[4].textContent = '0';
-        tds[12].textContent = '\u20b90';
         tds[13].textContent = '\u20b90';
         tds[14].textContent = '\u20b90';
+        tds[15].textContent = '\u20b90';
       }
       return;
     }
@@ -4888,27 +4963,78 @@ function o2ExportCSV(){
     if (denom < 1) denom = 1;
     var newAvg = unitsSold / denom;
     var newAvgFmt = newAvg.toFixed(2);
-    var stock = parseFloat((tds[5].textContent||'').replace(/,/g,'')) || 0;
+    var stock = parseFloat((tds[6].textContent||'').replace(/,/g,'')) || 0;
     var period = getReorderPeriod();
     var growth = getGrowth();
-    var newReorderQty = Math.max(0, Math.ceil(newAvg * (period + LEAD) * (1 + growth/100) - stock));
-    if (tds[6].textContent.trim() !== newAvgFmt) tds[6].textContent = newAvgFmt;
+    var subtractAdv = subtract ? advPur : 0;
+    var newReorderQty = Math.max(0, Math.ceil(newAvg * (period + LEAD) * (1 + growth/100) - stock - subtractAdv));
+    if (tds[7].textContent.trim() !== newAvgFmt) tds[7].textContent = newAvgFmt;
     var origReorderQty = parseFloat(tr.dataset.sankiOrigQty);
-    var currentDisplayed = parseFloat((tds[4].textContent||'').replace(/,/g,'')) || 0;
-    if (currentDisplayed !== newReorderQty) {
-      tds[4].textContent = newReorderQty.toLocaleString('en-IN');
-      var qtyRatio = origReorderQty > 0 ? (newReorderQty / origReorderQty) : 0;
-      tds[12].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigCost) * qtyRatio);
-      tds[13].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigRev) * qtyRatio);
-      tds[14].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigProfit) * qtyRatio);
+    tds[4].textContent = newReorderQty.toLocaleString('en-IN');
+    var qtyRatio = origReorderQty > 0 ? (newReorderQty / origReorderQty) : 0;
+    tds[13].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigCost) * qtyRatio);
+    tds[14].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigRev) * qtyRatio);
+    tds[15].textContent = fmtAmt(parseAmt(tr.dataset.sankiOrigProfit) * qtyRatio);
+  }
+  function updateSigmaAdvPur(advPurMap){
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return;
+    var sigma = null;
+    var trs = tbl.querySelectorAll('tr');
+    for (var k=0; k<trs.length; k++) {
+      if ((trs[k].textContent||'').trim().charAt(0) === '\u03a3') { sigma = trs[k]; break; }
     }
+    if (!sigma) return;
+    var advTd = sigma.querySelector('td.adv-pur-col');
+    if (!advTd) return;
+    var total = 0;
+    var rows = tbl.querySelectorAll('tbody tr');
+    rows.forEach(function(tr){
+      if (tr.cells.length >= 6) {
+        var sku = (tr.cells[2].textContent||'').trim();
+        total += (advPurMap[sku] || 0);
+      }
+    });
+    advTd.textContent = total.toLocaleString('en-IN');
   }
   function fixAll(){
     var tbl = document.getElementById('rpTable');
     if (!tbl) return;
     var skuMap = buildSkuMap();
+    var advPurMap = buildAdvPurMap();
+    if (injectColumn()) {
+      injectRowCells(advPurMap);
+    }
+    var subtract = getSubtractToggle();
     var rows = tbl.querySelectorAll('tbody tr');
-    rows.forEach(function(tr){ fixRow(tr, skuMap); });
+    rows.forEach(function(tr){ fixRow(tr, skuMap, advPurMap, subtract); });
+    updateSigmaAdvPur(advPurMap);
+    injectToggle();
+  }
+  function injectToggle(){
+    if (document.getElementById('sankiAdvPurToggle')) return;
+    var growthEl = document.getElementById('growthPct');
+    if (!growthEl) return;
+    var anchor = growthEl.parentElement;
+    if (!anchor || !anchor.parentElement) return;
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin-left:14px;font-size:13px;';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = 'sankiAdvPurToggle';
+    cb.style.margin = '0';
+    cb.checked = getSubtractToggle();
+    var lbl = document.createElement('label');
+    lbl.htmlFor = 'sankiAdvPurToggle';
+    lbl.textContent = 'Subtract Adv Pur from Reorder Qty';
+    lbl.style.cursor = 'pointer';
+    wrap.appendChild(cb);
+    wrap.appendChild(lbl);
+    anchor.parentElement.appendChild(wrap);
+    cb.addEventListener('change', function(){
+      localStorage.setItem(TOGGLE_KEY, cb.checked.toString());
+      fixAll();
+    });
   }
   function clearOrigs(){
     document.querySelectorAll('#rpTable tbody tr').forEach(function(tr){
@@ -4919,7 +5045,7 @@ function o2ExportCSV(){
     });
   }
   function hookApply(){
-    if (typeof window.applyRP === 'function' && !window.applyRP.__sankiV6Wrapped) {
+    if (typeof window.applyRP === 'function' && !window.applyRP.__sankiV7Wrapped) {
       var orig = window.applyRP;
       window.applyRP = function(){
         var ret = orig.apply(this, arguments);
@@ -4928,7 +5054,7 @@ function o2ExportCSV(){
         setTimeout(fixAll, 1200);
         return ret;
       };
-      window.applyRP.__sankiV6Wrapped = true;
+      window.applyRP.__sankiV7Wrapped = true;
     } else { setTimeout(hookApply, 800); }
   }
   hookApply();
