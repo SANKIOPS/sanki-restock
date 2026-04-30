@@ -257,8 +257,8 @@
     const [products, orders, collections] = await Promise.all([loadProducts(), loadOrders(), loadCollections()]);
     const days = rangeDays();
     const f = fromVal(), t = toVal();
-    const pById = {}, vIdToPId = {};
-    products.forEach(p => { pById[p.id] = p; (p.variants||[]).forEach(v => vIdToPId[v.id] = p.id); });
+    const pById = {}, vIdToPId = {}, skuToPId = {}, skuToVid = {};
+    products.forEach(p => { pById[p.id] = p; (p.variants||[]).forEach(v => { vIdToPId[v.id] = p.id; if (v.sku) { skuToPId[v.sku] = p.id; skuToVid[v.sku] = v.id; } }); });
     // Build pid -> categories[] map (collections)
     const pidToCats = {};
     collections.forEach(c => { (c.productIds||[]).forEach(pid => { (pidToCats[pid] = pidToCats[pid] || []).push(c.title || c.handle); }); });
@@ -299,11 +299,11 @@
       if (f && d < f) return;
       if (t && d > t) return;
       (o.line_items||[]).forEach(li => {
-        const pid = vIdToPId[li.variant_id]; if (!pid) return;
+        const pid = vIdToPId[li.variant_id] || (li.sku && skuToPId[li.sku]); if (!pid) return;
         const p = pById[pid]; if (!p || !passesFilter(p)) return;
         keysFor(p).forEach(k => {
           if (groupBy === 'sku') {
-            const skuKey = (p.variants||[]).find(v => v.id === li.variant_id);
+            let skuKey = (p.variants||[]).find(v => v.id === li.variant_id); if (!skuKey && li.sku) skuKey = (p.variants||[]).find(v => v.sku === li.sku);
             const skuId = skuKey ? (skuKey.sku || ('vid:'+skuKey.id)) : null;
             if (skuId !== k) return;
           }
