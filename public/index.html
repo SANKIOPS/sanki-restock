@@ -356,7 +356,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
         </div>
       </div>
       <div>
-        <div class="form-label">Reorder Period</div>
+        <div class="form-label">Stockout Period</div>
         <select id="reorderPeriod" style="width:120px">
           <option value="30">30 days</option>
           <option value="60">60 days</option>
@@ -4758,7 +4758,18 @@ function o2ExportCSV(){
     var v = parseInt(sel.value, 10);
     return v > 0 ? v : 30;
   }
-  function getGrowth(){
+  function getGrowth(sku){
+    // Per-SKU override from localStorage takes precedence
+    if (sku) {
+      try {
+        var skuMap = JSON.parse(localStorage.getItem('sanki_sku_growth') || '{}');
+        var skuVal = skuMap[sku];
+        if (skuVal != null && skuVal !== '' && !isNaN(parseFloat(skuVal))) {
+          return parseFloat(skuVal);
+        }
+      } catch(e) {}
+    }
+    // Fallback to top-level Growth %
     var inp = document.getElementById('growthPct');
     if (!inp) return 0;
     var v = parseFloat(inp.value);
@@ -4870,7 +4881,7 @@ function o2ExportCSV(){
     var newAvgFmt = newAvg.toFixed(2);
     var stock = parseFloat((tds[6].textContent||'').replace(/,/g,'')) || 0;
     var period = getReorderPeriod();
-    var growth = getGrowth();
+    var growth = getGrowth(sku);
     var subtractAdv = subtract ? advPur : 0;
     var newReorderQty = Math.max(0, Math.ceil(newAvg * (period + LEAD) * (1 + growth/100) - stock - subtractAdv));
     if (tds[7].textContent.trim() !== newAvgFmt) tds[7].textContent = newAvgFmt;
