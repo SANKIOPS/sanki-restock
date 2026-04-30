@@ -317,6 +317,7 @@
     // Compute derived
     const tagKind = (groupBy === 'category' || groupBy === 'vendor') ? groupBy : null;
     const _lastPOs = lastPOByVendor();
+    const _firstProducts = (function(){ const m = {}; products.forEach(function(p){ const v = (p.vendor||'').toString().trim().toLowerCase(); if (!v) return; const d = (p.created_at||'').slice(0,10); if (!d) return; if (!m[v] || d < m[v]) m[v] = d; }); return m; })();
     // Compute units bought in range per group
     const _boughtBySku = unitsBoughtInRange({});
     function boughtForGroup(g){
@@ -331,7 +332,7 @@
       const velocity = tagKind ? tagFor(avgDay, tagKind) : null;
       const boughtInRange = boughtForGroup(g);
       const stockAtStart = g.stockLeft + g.unitsSold - boughtInRange;
-      const lastPO = (groupBy === 'vendor') ? (_lastPOs[(g.key||'').toString().trim().toLowerCase()] || null) : null;
+      const lastPO = (groupBy === 'vendor') ? (_lastPOs[(g.key||'').toString().trim().toLowerCase()] || _firstProducts[(g.key||'').toString().trim().toLowerCase()] || null) : null;
       return { key:g.key, title:g.title, productsCount:g.products.size, skus:g.skus,
                unitsSold:g.unitsSold, revenue:g.revenue, avgDay, stockLeft:g.stockLeft,
                daysCovered, velocity, qtyToOrder:qto, sampleImage:g.sampleImage,
