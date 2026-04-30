@@ -4713,6 +4713,27 @@ function o2ExportCSV(){
     var map = {};
     if (!window._shopifyProducts) return map;
     var now = Date.now();
+    // Lazy-load earliest order date per SKU (one-time fetch, cached on window)
+    if (window.__sankiSkuFirstOrder === undefined) {
+      window.__sankiSkuFirstOrder = {}; // mark loading
+      fetch('/api/orders').then(function(r){ return r.json(); }).then(function(j){
+        var orders = j.orders || j;
+        var fmap = {};
+        for (var oi=0; oi<orders.length; oi++){
+          var o = orders[oi];
+          var od = (o.created_at||'').slice(0,10);
+          if (!od) continue;
+          var ot = new Date(od).getTime();
+          var lis = o.line_items || [];
+          for (var li=0; li<lis.length; li++){
+            var s = lis[li].sku;
+            if (!s) continue;
+            if (!fmap[s] || ot < fmap[s]) fmap[s] = ot;
+          }
+        }
+        window.__sankiSkuFirstOrder = fmap;
+      }).catch(function(){ window.__sankiSkuFirstOrder = {}; });
+    }
     for (var i=0; i<window._shopifyProducts.length; i++){
       var p = window._shopifyProducts[i];
       if (!p.created_at) continue;
@@ -4722,6 +4743,15 @@ function o2ExportCSV(){
         var v = variants[j];
         if (v.sku) map[v.sku] = days;
       }
+    }
+    // Override with earliest order date if older (recovers re-added products)
+    var firstOrders = window.__sankiSkuFirstOrder || {};
+    for (var sku in firstOrders) {
+      var orderAge = Math.max(1, Math.floor((now - firstOrders[sku])/86400000));
+      if (!map[sku] || orderAge > map[sku]) map[sku] = orderAge;
+    }
+    return map;
+  }
     }
     return map;
   }
