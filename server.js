@@ -449,9 +449,9 @@ function cleanOrder(order) {
     })
   );
   const items = (order.line_items || [])
-    .filter(i => i.variant_id != null)
+    .filter(i => i.variant_id != null || (i.sku && String(i.sku).trim()))
     .map(i => {
-      const vid = String(i.variant_id);
+      const vid = i.variant_id != null ? String(i.variant_id) : null;
       return { ...i, quantity: Math.max(0, Number(i.quantity) - (rq[vid] || 0)) };
     })
     .filter(i => i.quantity > 0);
