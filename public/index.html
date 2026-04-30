@@ -5068,12 +5068,14 @@ function o2ExportCSV(){
 </script>
 
 <script>
-// __sankiCloudSync v1: sync POs + SKU growth across devices via /api/data/save and /api/data/load
+// __sankiCloudSync v2: defensive cross-device sync — no pushes until initialSync completes; refuses to push empty state when server has data
 (function(){
   var KEY_POS = 'sanki_pos';
   var KEY_GROWTH = 'sanki_sku_growth';
+  var initialized = false;
   var syncing = false;
   var lastPushHash = null;
+  var lastServerSig = null; // { posCount, growthCount } seen on last successful pull
   function getLocal(){
     var pos = [], growth = {};
     try { pos = JSON.parse(localStorage.getItem(KEY_POS) || '[]'); } catch(e) {}
@@ -5117,24 +5119,9 @@ function o2ExportCSV(){
       body: JSON.stringify(merged)
     }).then(function(r){ return r.json(); }).catch(function(e){ return {success:false, error: e.message}; });
   }
-  function applyServerState(serverData){
-    if (!serverData) return false;
-    var changed = false;
-    if (Array.isArray(serverData.pos)) {
-      localStorage.setItem(KEY_POS, JSON.stringify(serverData.pos));
-      changed = true;
-    }
-    if (serverData.skuGrowth && typeof serverData.skuGrowth === 'object') {
-      localStorage.setItem(KEY_GROWTH, JSON.stringify(serverData.skuGrowth));
-      changed = true;
-    }
-    return changed;
-  }
   function refreshUI(){
-    // Refresh PO list if on PO page
     if (typeof window.renderPOList === 'function') { try { window.renderPOList(); } catch(e) {} }
     if (typeof window.renderPOs === 'function') { try { window.renderPOs(); } catch(e) {} }
-    // Trigger planner re-fix to pick up Adv Pur changes
     if (typeof window.fixAll === 'function') { try { window.fixAll(); } catch(e) {} }
   }
   function initialSync(){
@@ -5145,57 +5132,76 @@ function o2ExportCSV(){
       var serverGrowth = serverData && serverData.skuGrowth ? serverData.skuGrowth : {};
       var mergedPOs = mergePOs(local.pos, serverPOs);
       var mergedGrowth = Object.assign({}, serverGrowth, local.growth);
-      // Save merged back to both local and server
       localStorage.setItem(KEY_POS, JSON.stringify(mergedPOs));
       localStorage.setItem(KEY_GROWTH, JSON.stringify(mergedGrowth));
       var mergedState = { pos: mergedPOs, growth: mergedGrowth };
       lastPushHash = hashState(mergedState);
+      lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length };
       refreshUI();
-      return pushServer(mergedState, serverData);
+      // Push back only if local merged in items the server didn't have
+      var needsPush = mergedPOs.length > serverPOs.length || Object.keys(mergedGrowth).length > Object.keys(serverGrowth).length;
+      var done = needsPush ? pushServer(mergedState, serverData) : Promise.resolve(null);
+      return done.then(function(){
+        initialized = true;
+        // Now that we're initialized, start periodic sync
+        setInterval(checkAndPush, 4000);
+        setInterval(periodicPull, 25000);
+        console.log('[sanki] cloud sync v2 ready (init), server had', serverPOs.length, 'POs');
+      });
+    }).catch(function(e){
+      console.warn('[sanki] initialSync failed', e);
+      initialized = false;
     });
   }
   function checkAndPush(){
-    if (syncing) return;
+    if (!initialized || syncing) return;
     var state = getLocal();
+    // Defensive: never push empty state when server had data (likely a clear/error, not legit)
+    if (lastServerSig && lastServerSig.posCount > 0 && state.pos.length === 0) {
+      console.warn('[sanki] Skipping push: local POs are empty but server had', lastServerSig.posCount, '— not overwriting');
+      return;
+    }
     var h = hashState(state);
     if (h === lastPushHash) return;
     syncing = true;
     fetchServer().then(function(res){
-      var baseData = (res.success && res.data) ? res.data : {};
-      return pushServer(state, baseData);
-    }).then(function(){
-      lastPushHash = h;
+      var base = (res.success && res.data) ? res.data : {};
+      return pushServer(state, base).then(function(){
+        lastPushHash = h;
+        lastServerSig = { posCount: state.pos.length, growthCount: Object.keys(state.growth).length };
+      });
     }).catch(function(){}).finally(function(){ syncing = false; });
   }
   function periodicPull(){
-    if (syncing) return;
+    if (!initialized || syncing) return;
     fetchServer().then(function(res){
-      if (res.success && res.data) {
-        var serverPOs = Array.isArray(res.data.pos) ? res.data.pos : [];
-        var local = getLocal();
-        var merged = mergePOs(local.pos, serverPOs);
-        var mergedGrowth = Object.assign({}, res.data.skuGrowth || {}, local.growth);
-        var localHash = hashState({pos: local.pos, growth: local.growth});
-        var newHash = hashState({pos: merged, growth: mergedGrowth});
-        if (localHash !== newHash) {
-          localStorage.setItem(KEY_POS, JSON.stringify(merged));
-          localStorage.setItem(KEY_GROWTH, JSON.stringify(mergedGrowth));
-          lastPushHash = newHash;
-          refreshUI();
-        }
+      if (!res.success || !res.data) return;
+      var serverPOs = Array.isArray(res.data.pos) ? res.data.pos : [];
+      var serverGrowth = res.data.skuGrowth || {};
+      var local = getLocal();
+      var merged = mergePOs(local.pos, serverPOs);
+      var mergedGrowth = Object.assign({}, serverGrowth, local.growth);
+      var localHash = hashState(local);
+      var newHash = hashState({pos: merged, growth: mergedGrowth});
+      if (localHash !== newHash) {
+        localStorage.setItem(KEY_POS, JSON.stringify(merged));
+        localStorage.setItem(KEY_GROWTH, JSON.stringify(mergedGrowth));
+        lastPushHash = newHash;
+        lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length };
+        refreshUI();
+      } else {
+        lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length };
       }
     });
   }
-  // Run initial sync after a short delay so localStorage is populated
+  // Kick off initial sync after a short delay so localStorage is populated
   setTimeout(initialSync, 1500);
-  // Push local changes every 4s
-  setInterval(checkAndPush, 4000);
-  // Pull from server every 25s
-  setInterval(periodicPull, 25000);
   // Push on page hide/unload (best-effort)
   window.addEventListener('beforeunload', function(){
+    if (!initialized) return;
     try {
       var state = getLocal();
+      if (lastServerSig && lastServerSig.posCount > 0 && state.pos.length === 0) return;
       var h = hashState(state);
       if (h !== lastPushHash) {
         var blob = new Blob([JSON.stringify({pos: state.pos, skuGrowth: state.growth, lastUpdated: new Date().toISOString()})], {type:'application/json'});
@@ -5203,7 +5209,7 @@ function o2ExportCSV(){
       }
     } catch(e) {}
   });
-  console.log('[sanki] cloud sync v1 active');
+  console.log('[sanki] cloud sync v2 active');
 })();
 </script>
 </body>
