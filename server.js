@@ -383,7 +383,7 @@ async function syncVelocityShipments() {
 //  SHOPIFY CACHE + BACKGROUND SYNC
 // ════════════════════════════════════════════════════════════════
 const CACHE_PATH = path.join(__dirname, 'sanki_cache.json');
-const DATA_PATH  = path.join(__dirname, 'sanki_data.json');
+const DATA_PATH  = process.env.DATA_PATH || path.join(__dirname, 'sanki_data.json');
 const META_PATH  = path.join(__dirname, 'sanki_order_meta.json');
 
 let ordersCache = { orders: [], lastSync: null, syncing: false };
@@ -1177,7 +1177,7 @@ app.get('/api/data/load', (req, res) => {
 
 app.post('/api/data/save', (req, res) => {
   try {
-    fs.writeFileSync(DATA_PATH, JSON.stringify(req.body, null, 2));
+    const dir = path.dirname(DATA_PATH); if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive:true}); fs.writeFileSync(DATA_PATH, JSON.stringify(req.body, null, 2));
     res.json({ success: true, savedAt: new Date().toISOString() });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
