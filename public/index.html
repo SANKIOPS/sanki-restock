@@ -4939,11 +4939,70 @@ function o2ExportCSV(){
       '<td>\u2014</td>'
     ].join('');
   }
-    function fixAll(){
+    function swapGrowthAIHeaders(){
+    var tbl = document.getElementById('rpTable');
+    if (!tbl) return;
+    var thead = tbl.querySelector('thead');
+    if (!thead) return;
+    var headerRow = null;
+    var rows = thead.querySelectorAll('tr');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].cells.length >= 19 && rows[i].querySelector('th')) { headerRow = rows[i]; break; }
+    }
+    if (!headerRow) return;
+    var th11 = headerRow.cells[11];
+    var th12 = headerRow.cells[12];
+    if (!th11 || !th12) return;
+    if (th11.dataset.sankiHdrSwapped === '1') return;
+    var t11 = th11.textContent.trim();
+    var t12 = th12.textContent.trim();
+    // Swap only if AI Pred. is at idx 11 and Growth at idx 12 (engine default)
+    if (t11.indexOf('AI Pred') !== -1 && t12.indexOf('Growth') !== -1) {
+      var html11 = th11.innerHTML;
+      var html12 = th12.innerHTML;
+      th11.innerHTML = html12;
+      th12.innerHTML = html11;
+      th11.dataset.sankiHdrSwapped = '1';
+      th12.dataset.sankiHdrSwapped = '1';
+    } else if (t11.indexOf('Growth') !== -1) {
+      th11.dataset.sankiHdrSwapped = '1';
+      th12.dataset.sankiHdrSwapped = '1';
+    }
+  }
+  function ensureGrowthListener(){
+    if (window.__sankiGrowthListenerAdded) return;
+    document.addEventListener('change', function(e){
+      if (!e.target || !e.target.classList || !e.target.classList.contains('sku-growth-input')) return;
+      var input = e.target;
+      var tr = input.closest('tr');
+      if (!tr) return;
+      var sku = (tr.cells[2] && tr.cells[2].textContent || '').trim();
+      if (!sku) return;
+      var map;
+      try { map = JSON.parse(localStorage.getItem('sanki_sku_growth') || '{}'); } catch(_e) { map = {}; }
+      var v = parseFloat(input.value);
+      if (isNaN(v) || input.value.toString().trim() === '') {
+        delete map[sku];
+      } else {
+        map[sku] = v;
+      }
+      localStorage.setItem('sanki_sku_growth', JSON.stringify(map));
+      // Clear orig markers so cost/rev/profit recomputes correctly
+      delete tr.dataset.sankiOrigQty;
+      delete tr.dataset.sankiOrigCost;
+      delete tr.dataset.sankiOrigRev;
+      delete tr.dataset.sankiOrigProfit;
+      setTimeout(function(){ if (typeof fixAll === 'function') fixAll(); }, 50);
+    }, true);
+    window.__sankiGrowthListenerAdded = true;
+  }
+  function fixAll(){
     var tbl = document.getElementById('rpTable');
     if (!tbl) return;
     var skuMap = buildSkuMap();
     var advPurMap = buildAdvPurMap();
+    swapGrowthAIHeaders();
+    ensureGrowthListener();
     if (injectColumn()) {
       injectRowCells(advPurMap);
     }
