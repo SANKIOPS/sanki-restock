@@ -283,7 +283,7 @@
       keysFor(p).forEach(k => {
         const g = groups[k] = groups[k] || { key:k, title:k, products: new Set(), skus:0, unitsSold:0, revenue:0, stockLeft:0, sampleImage:'', leadDays:15, sampleVendor:p.vendor||'', skuList:[] };
         g.products.add(p.id);
-        if (!g.sampleImage) { const vimg = (p.variants||[]).map(v => v.image).find(Boolean); g.sampleImage = (p.image && p.image.src) || (p.images && p.images[0] && p.images[0].src) || vimg || ''; }
+        if (!g.sampleImage) { const pickImg = (i) => (typeof i === 'string') ? i : (i && i.src) || ''; if (groupBy === 'sku') { const matching = (p.variants||[]).find(v => (v.sku || ('vid:'+v.id)) === k); g.sampleImage = pickImg(matching && matching.image) || pickImg(p.image) || pickImg((p.images||[])[0]) || ''; } else { const vimg = (p.variants||[]).map(v => pickImg(v.image)).find(Boolean); g.sampleImage = pickImg(p.image) || pickImg((p.images||[])[0]) || vimg || ''; } }
         (p.variants||[]).forEach(v => {
           // For SKU groupBy, only count this variant's matching key
           if (groupBy === 'sku' && (v.sku || ('vid:'+v.id)) !== k) return;
