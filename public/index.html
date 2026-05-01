@@ -4908,7 +4908,7 @@ function o2ExportCSV(){
     var newAvgFmt = newAvg.toFixed(2);
     var stock = parseFloat((tds[6].textContent||'').replace(/,/g,'')) || 0;
     var period = getReorderPeriod();
-    var growth = getGrowth(sku);
+    var growth = getGrowth();
     var subtractAdv = subtract ? advPur : 0;
     var newReorderQty = Math.max(0, Math.ceil(newAvg * (period + LEAD) * (1 + growth/100) - stock - subtractAdv));
     if (tds[7].textContent.trim() !== newAvgFmt) tds[7].textContent = newAvgFmt;
