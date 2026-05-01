@@ -4304,7 +4304,7 @@ function o2ExportCSV(){
     var n = parseInt(v, 10);
     return isNaN(n) ? 30 : n;
   }
-  async function adjustAvgPerListingDate(){
+  async function adjustAvgPerListingDate(){return;
     await loadProductDates();
     var tbl = document.getElementById('rpTable');
     if (!tbl) return;
