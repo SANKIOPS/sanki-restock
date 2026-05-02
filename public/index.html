@@ -5184,10 +5184,7 @@ function o2ExportCSV(){
     if (!initialized || syncing) return;
     var state = getLocal();
     // Defensive: never push empty state when server had data (likely a clear/error, not legit)
-    if (lastServerSig && lastServerSig.posCount > 0 && state.pos.length === 0) {
-      console.warn('[sanki] Skipping push: local POs are empty but server had', lastServerSig.posCount, '— not overwriting');
-      return;
-    }
+    // Empty-state guard removed: legitimate deletions must propagate to server
     var h = hashState(state);
     if (h === lastPushHash) return;
     syncing = true;
@@ -5228,7 +5225,7 @@ function o2ExportCSV(){
     if (!initialized) return;
     try {
       var state = getLocal();
-      if (lastServerSig && lastServerSig.posCount > 0 && state.pos.length === 0) return;
+      // guard removed: legitimate deletions propagate
       var h = hashState(state);
       if (h !== lastPushHash) {
         var blob = new Blob([JSON.stringify({pos: state.pos, skuGrowth: state.growth, lastUpdated: new Date().toISOString()})], {type:'application/json'});
