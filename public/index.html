@@ -5095,32 +5095,35 @@ function o2ExportCSV(){
 </script>
 
 <script>
-// __sankiCloudSync v2: defensive cross-device sync — no pushes until initialSync completes; refuses to push empty state when server has data
+// __sankiCloudSync v3: tombstone-aware deletion (deletions propagate even with multi-device conflicts)
 (function(){
   var KEY_POS = 'sanki_pos';
   var KEY_GROWTH = 'sanki_sku_growth';
+  var KEY_TOMB = 'sanki_pos_deleted';
   var initialized = false;
   var syncing = false;
   var lastPushHash = null;
-  var lastServerSig = null; // { posCount, growthCount } seen on last successful pull
+  var lastServerSig = null;
   function getLocal(){
-    var pos = [], growth = {};
+    var pos = [], growth = {}, tomb = [];
     try { pos = JSON.parse(localStorage.getItem(KEY_POS) || '[]'); } catch(e) {}
     try { growth = JSON.parse(localStorage.getItem(KEY_GROWTH) || '{}'); } catch(e) {}
-    return { pos: Array.isArray(pos) ? pos : [], growth: growth || {} };
+    try { tomb = JSON.parse(localStorage.getItem(KEY_TOMB) || '[]'); } catch(e) {}
+    return { pos: Array.isArray(pos)?pos:[], growth: growth||{}, tomb: Array.isArray(tomb)?tomb:[] };
   }
   function hashState(s){
-    return JSON.stringify(s.pos).length + ':' + s.pos.length + ':' + JSON.stringify(s.growth).length + ':' + Object.keys(s.growth).length;
+    return JSON.stringify(s.pos).length + ':' + s.pos.length + ':' + JSON.stringify(s.growth).length + ':' + Object.keys(s.growth).length + ':' + (s.tomb||[]).length;
   }
-  function mergePOs(localList, serverList){
+  function mergePOs(localList, serverList, deletedSet){
     var map = {};
     for (var i=0; i<serverList.length; i++) {
       var p = serverList[i];
-      if (p && p.id) map[p.id] = p;
+      if (p && p.id && !deletedSet[p.id]) map[p.id] = p;
     }
     for (var j=0; j<localList.length; j++) {
       var lp = localList[j];
       if (!lp || !lp.id) continue;
+      if (deletedSet[lp.id]) continue; // tombstone wins
       if (!map[lp.id]) {
         map[lp.id] = lp;
       } else {
@@ -5138,6 +5141,7 @@ function o2ExportCSV(){
     var merged = Object.assign({}, baseData || {}, {
       pos: state.pos,
       skuGrowth: state.growth,
+      deletedPOs: state.tomb || [],
       lastUpdated: new Date().toISOString()
     });
     return fetch('/api/data/save', {
@@ -5151,48 +5155,85 @@ function o2ExportCSV(){
     if (typeof window.renderPOs === 'function') { try { window.renderPOs(); } catch(e) {} }
     if (typeof window.fixAll === 'function') { try { window.fixAll(); } catch(e) {} }
   }
+  function buildDeletedSet(arr){
+    var s = {};
+    (arr||[]).forEach(function(id){ if (id) s[id] = true; });
+    return s;
+  }
   function initialSync(){
     return fetchServer().then(function(res){
       var local = getLocal();
       var serverData = (res.success && res.data) ? res.data : null;
       var serverPOs = serverData && Array.isArray(serverData.pos) ? serverData.pos : [];
       var serverGrowth = serverData && serverData.skuGrowth ? serverData.skuGrowth : {};
-      var mergedPOs = mergePOs(local.pos, serverPOs);
+      var serverTomb = serverData && Array.isArray(serverData.deletedPOs) ? serverData.deletedPOs : [];
+      // Merge tombstones (union of local + server)
+      var mergedTomb = Array.from(new Set([].concat(local.tomb || [], serverTomb)));
+      var deletedSet = buildDeletedSet(mergedTomb);
+      var mergedPOs = mergePOs(local.pos, serverPOs, deletedSet);
       var mergedGrowth = Object.assign({}, serverGrowth, local.growth);
       localStorage.setItem(KEY_POS, JSON.stringify(mergedPOs));
       localStorage.setItem(KEY_GROWTH, JSON.stringify(mergedGrowth));
-      var mergedState = { pos: mergedPOs, growth: mergedGrowth };
+      localStorage.setItem(KEY_TOMB, JSON.stringify(mergedTomb));
+      var mergedState = { pos: mergedPOs, growth: mergedGrowth, tomb: mergedTomb };
       lastPushHash = hashState(mergedState);
-      lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length };
+      lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length, tombCount: serverTomb.length };
       refreshUI();
-      // Push back only if local merged in items the server didn't have
-      var needsPush = mergedPOs.length > serverPOs.length || Object.keys(mergedGrowth).length > Object.keys(serverGrowth).length;
-      var done = needsPush ? pushServer(mergedState, serverData) : Promise.resolve(null);
+      // Always push back so server tombstone gets refreshed
+      var done = pushServer(mergedState, serverData);
       return done.then(function(){
         initialized = true;
-        // Now that we're initialized, start periodic sync
         setInterval(checkAndPush, 4000);
         setInterval(periodicPull, 25000);
-        console.log('[sanki] cloud sync v2 ready (init), server had', serverPOs.length, 'POs');
+        // Hook deletePO to add tombstone
+        hookDeletePO();
+        console.log('[sanki] cloud sync v3 ready (tombstone), server had', serverPOs.length, 'POs,', serverTomb.length, 'tombstones');
       });
-    }).catch(function(e){
-      console.warn('[sanki] initialSync failed', e);
-      initialized = false;
-    });
+    }).catch(function(e){ console.warn('[sanki] initialSync failed', e); initialized = false; });
+  }
+  function hookDeletePO(){
+    if (typeof window.deletePO !== 'function' || window.__sankiDeletePOHooked) return;
+    var original = window.deletePO;
+    window.deletePO = function(id){
+      var ret = original.apply(this, arguments);
+      // After original runs, check if PO is gone from localStorage; if so, add to tombstone
+      try {
+        var local = getLocal();
+        var stillThere = local.pos.some(function(p){ return p.id === id; });
+        if (!stillThere && id) {
+          var tomb = local.tomb;
+          if (tomb.indexOf(id) === -1) tomb.push(id);
+          localStorage.setItem(KEY_TOMB, JSON.stringify(tomb));
+        }
+      } catch(e) {}
+      return ret;
+    };
+    window.__sankiDeletePOHooked = true;
   }
   function checkAndPush(){
     if (!initialized || syncing) return;
     var state = getLocal();
-    // Defensive: never push empty state when server had data (likely a clear/error, not legit)
-    // Empty-state guard removed: legitimate deletions must propagate to server
     var h = hashState(state);
     if (h === lastPushHash) return;
     syncing = true;
     fetchServer().then(function(res){
       var base = (res.success && res.data) ? res.data : {};
+      // Detect deletions — IDs that disappeared from local since last push
+      var serverPOs = Array.isArray(base.pos) ? base.pos : [];
+      var serverIds = serverPOs.map(function(p){ return p.id; });
+      var localIds = state.pos.map(function(p){ return p.id; });
+      var disappeared = serverIds.filter(function(id){ return localIds.indexOf(id) === -1; });
+      // Add to tombstone
+      var tomb = (state.tomb || []).slice();
+      disappeared.forEach(function(id){ if (tomb.indexOf(id) === -1) tomb.push(id); });
+      // Also union with server tombstone
+      var serverTomb = Array.isArray(base.deletedPOs) ? base.deletedPOs : [];
+      tomb = Array.from(new Set([].concat(tomb, serverTomb)));
+      state.tomb = tomb;
+      localStorage.setItem(KEY_TOMB, JSON.stringify(tomb));
       return pushServer(state, base).then(function(){
-        lastPushHash = h;
-        lastServerSig = { posCount: state.pos.length, growthCount: Object.keys(state.growth).length };
+        lastPushHash = hashState(state);
+        lastServerSig = { posCount: state.pos.length, growthCount: Object.keys(state.growth).length, tombCount: tomb.length };
       });
     }).catch(function(){}).finally(function(){ syncing = false; });
   }
@@ -5202,38 +5243,39 @@ function o2ExportCSV(){
       if (!res.success || !res.data) return;
       var serverPOs = Array.isArray(res.data.pos) ? res.data.pos : [];
       var serverGrowth = res.data.skuGrowth || {};
+      var serverTomb = Array.isArray(res.data.deletedPOs) ? res.data.deletedPOs : [];
       var local = getLocal();
-      var merged = mergePOs(local.pos, serverPOs);
+      var mergedTomb = Array.from(new Set([].concat(local.tomb || [], serverTomb)));
+      var deletedSet = buildDeletedSet(mergedTomb);
+      var merged = mergePOs(local.pos, serverPOs, deletedSet);
       var mergedGrowth = Object.assign({}, serverGrowth, local.growth);
       var localHash = hashState(local);
-      var newHash = hashState({pos: merged, growth: mergedGrowth});
+      var newHash = hashState({pos: merged, growth: mergedGrowth, tomb: mergedTomb});
       if (localHash !== newHash) {
         localStorage.setItem(KEY_POS, JSON.stringify(merged));
         localStorage.setItem(KEY_GROWTH, JSON.stringify(mergedGrowth));
+        localStorage.setItem(KEY_TOMB, JSON.stringify(mergedTomb));
         lastPushHash = newHash;
-        lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length };
+        lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length, tombCount: serverTomb.length };
         refreshUI();
       } else {
-        lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length };
+        lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length, tombCount: serverTomb.length };
       }
     });
   }
-  // Kick off initial sync after a short delay so localStorage is populated
   setTimeout(initialSync, 1500);
-  // Push on page hide/unload (best-effort)
   window.addEventListener('beforeunload', function(){
     if (!initialized) return;
     try {
       var state = getLocal();
-      // guard removed: legitimate deletions propagate
       var h = hashState(state);
       if (h !== lastPushHash) {
-        var blob = new Blob([JSON.stringify({pos: state.pos, skuGrowth: state.growth, lastUpdated: new Date().toISOString()})], {type:'application/json'});
+        var blob = new Blob([JSON.stringify({pos: state.pos, skuGrowth: state.growth, deletedPOs: state.tomb || [], lastUpdated: new Date().toISOString()})], {type:'application/json'});
         navigator.sendBeacon('/api/data/save', blob);
       }
     } catch(e) {}
   });
-  console.log('[sanki] cloud sync v2 active');
+  console.log('[sanki] cloud sync v3 active (tombstone-aware)');
 })();
 </script>
 </body>
