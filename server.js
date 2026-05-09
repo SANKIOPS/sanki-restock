@@ -1041,9 +1041,9 @@ app.get('/api/products', async (req, res) => {
     for (const __p of all) for (const __v of (__p.variants||[])) if (__v.inventory_item_id) __iids.push(__v.inventory_item_id);
     const costMap = {};
     const __sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    for (let __i = 0; __i < __iids.length; __i += 250) {
-      const __chunk = __iids.slice(__i, __i + 250);
-      const __url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_items.json?ids=${__chunk.join(',')}`;
+    for (let __i = 0; __i < __iids.length; __i += 100) {
+      const __chunk = __iids.slice(__i, __i + 100);
+      const __url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_items.json?ids=${__chunk.join(',')}&limit=100`;
       let __ok = false;
       for (let __try = 0; __try < 4 && !__ok; __try++) {
         try {
