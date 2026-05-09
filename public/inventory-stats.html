@@ -91,15 +91,27 @@
     }
 
     function buildLandingCostMap() {
-      const sortedPOs = _pos.slice().sort((a,b) => new Date(b.createdAt||b.date||0) - new Date(a.createdAt||a.date||0));
       const m = {};
-      for (const po of sortedPOs) {
-        for (const item of (po.products || [])) {
-          if (item.sku && m[item.sku] === undefined) {
-            m[item.sku] = parseFloat(item.unitCost) || 0;
+      // Seed from Shopify InventoryItem.cost (variant.unitCost)
+      for (const p of _products) {
+        for (const v of (p.variants || [])) {
+          if (v.sku && v.unitCost != null && v.unitCost !== '' && m[v.sku] === undefined) {
+            const c = parseFloat(v.unitCost);
+            if (!isNaN(c) && c >= 0) m[v.sku] = c;
           }
         }
       }
+      // Override with most recent PO unitCost (POs reflect actual purchase cost)
+      const sortedPOs = _pos.slice().sort((a,b) => new Date(b.createdAt||b.date||0) - new Date(a.createdAt||a.date||0));
+      const fromPO = {};
+      for (const po of sortedPOs) {
+        for (const item of (po.products || [])) {
+          if (item.sku && fromPO[item.sku] === undefined) {
+            fromPO[item.sku] = parseFloat(item.unitCost) || 0;
+          }
+        }
+      }
+      for (const k in fromPO) if (fromPO[k] > 0) m[k] = fromPO[k];
       return m;
     }
 
