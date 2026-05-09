@@ -1036,6 +1036,23 @@ app.get('/api/products', async (req, res) => {
     const all = await shopifyFetchAll(fetch,
       `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,status,variants,image,images,vendor,tags,product_type,created_at,updated_at`
     );
+    // Fetch InventoryItem.cost from Shopify for landing-cost fallback
+    const __iids = [];
+    for (const __p of all) for (const __v of (__p.variants||[])) if (__v.inventory_item_id) __iids.push(__v.inventory_item_id);
+    const costMap = {};
+    for (let __i = 0; __i < __iids.length; __i += 100) {
+      const __chunk = __iids.slice(__i, __i + 100);
+      try {
+        const __url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_items.json?ids=${__chunk.join(',')}`;
+        const __r = await shopifyFetch(fetch, __url);
+        if (__r.ok) {
+          const __d = await __r.json();
+          for (const __it of (__d.inventory_items || [])) {
+            if (__it.cost != null) costMap[String(__it.id)] = parseFloat(__it.cost);
+          }
+        }
+      } catch(__e) { console.error('[shopify] inventory_items error', __e.message); }
+    }
     const products = all.map(p => {
       const vim = {};
       (p.images || []).forEach(img => (img.variant_ids || []).forEach(vid => { vim[String(vid)] = img.src; }));
@@ -1046,7 +1063,7 @@ app.get('/api/products', async (req, res) => {
         created_at: p.created_at,
         variants: (p.variants || []).map(v => ({
           id: v.id, sku: v.sku || '', price: v.price, compare_at_price: v.compare_at_price,
-          inventory: v.inventory_quantity, inventoryItemId: v.inventory_item_id,
+          inventory: v.inventory_quantity, inventoryItemId: v.inventory_item_id, unitCost: costMap[String(v.inventory_item_id)] != null ? costMap[String(v.inventory_item_id)] : null,
           title: v.title, image: vim[String(v.id)] || mainImg
         }))
       };
