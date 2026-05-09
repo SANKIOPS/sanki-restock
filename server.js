@@ -1036,22 +1036,34 @@ app.get('/api/products', async (req, res) => {
     const all = await shopifyFetchAll(fetch,
       `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,status,variants,image,images,vendor,tags,product_type,created_at,updated_at`
     );
-    // Fetch InventoryItem.cost from Shopify for landing-cost fallback
+    // Fetch InventoryItem.cost from Shopify for landing-cost fallback (throttled)
     const __iids = [];
     for (const __p of all) for (const __v of (__p.variants||[])) if (__v.inventory_item_id) __iids.push(__v.inventory_item_id);
     const costMap = {};
-    for (let __i = 0; __i < __iids.length; __i += 100) {
-      const __chunk = __iids.slice(__i, __i + 100);
-      try {
-        const __url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_items.json?ids=${__chunk.join(',')}`;
-        const __r = await shopifyFetch(fetch, __url);
-        if (__r.ok) {
-          const __d = await __r.json();
-          for (const __it of (__d.inventory_items || [])) {
-            if (__it.cost != null) costMap[String(__it.id)] = parseFloat(__it.cost);
+    const __sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let __i = 0; __i < __iids.length; __i += 250) {
+      const __chunk = __iids.slice(__i, __i + 250);
+      const __url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_items.json?ids=${__chunk.join(',')}`;
+      let __ok = false;
+      for (let __try = 0; __try < 4 && !__ok; __try++) {
+        try {
+          const __r = await shopifyFetch(fetch, __url);
+          if (__r.ok) {
+            const __d = await __r.json();
+            for (const __it of (__d.inventory_items || [])) {
+              if (__it.cost != null) costMap[String(__it.id)] = parseFloat(__it.cost);
+            }
+            __ok = true;
+          } else if (__r.status === 429) {
+            const __retry = parseFloat(__r.headers.get('Retry-After') || '2');
+            await __sleep(Math.max(__retry * 1000, 1500 * (__try + 1)));
+          } else {
+            console.error('[shopify] inventory_items', __r.status, __r.statusText);
+            break;
           }
-        }
-      } catch(__e) { console.error('[shopify] inventory_items error', __e.message); }
+        } catch(__e) { console.error('[shopify] inventory_items error', __e.message); break; }
+      }
+      await __sleep(250);
     }
     const products = all.map(p => {
       const vim = {};
