@@ -5261,6 +5261,10 @@ function o2ExportCSV(){
       } else {
         lastServerSig = { posCount: serverPOs.length, growthCount: Object.keys(serverGrowth).length, tombCount: serverTomb.length };
       }
+      // Cleanup push: if server has POs that should be tombstoned, push cleaned state back so other devices see correct state
+      if (serverPOs.length > merged.length) {
+        pushServer({pos: merged, growth: mergedGrowth, tomb: mergedTomb}, res.data);
+      }
     });
   }
   setTimeout(initialSync, 1500);
