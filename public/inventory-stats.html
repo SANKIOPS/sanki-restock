@@ -5,276 +5,700 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sanki · Inventory Statistics</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f8fafc; margin:0; }
     .num { font-variant-numeric: tabular-nums; }
+    table { border-collapse: collapse; width:100%; }
     th { padding:10px 12px; text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#64748b; background:#f8fafc; border-bottom:1px solid #e5e7eb; white-space:nowrap; }
+    th.sortable { cursor:pointer; user-select:none; }
+    th.sortable:hover { background:#eef2ff; color:#1e40af; }
+    th .sort-arrow { font-size:11px; margin-left:4px; opacity:0.5; }
+    th.sort-asc .sort-arrow, th.sort-desc .sort-arrow { opacity:1; color:#2563eb; }
+    th.right, td.right { text-align:right; }
     td { padding:10px 12px; font-size:14px; border-bottom:1px solid #f1f5f9; vertical-align:middle; }
     tbody tr:hover { background:#f8fafc; }
-    img.thumb { width:36px; height:36px; object-fit:cover; border-radius:6px; border:1px solid #e5e7eb; background:#fff; }
+    img.thumb { width:36px; height:36px; object-fit:cover; border-radius:6px; border:1px solid #e5e7eb; background:#fff; cursor:zoom-in; transition:transform 0.15s; }
+    img.thumb:hover { transform:scale(1.08); border-color:#94a3b8; }
     .totals-row td { font-weight:600; background:#eff6ff; color:#1e40af; border-top:2px solid #93c5fd; }
-    .tab-btn { padding:8px 16px; cursor:pointer; border-bottom:2px solid transparent; color:#64748b; font-size:14px; }
+    .tab-btn { padding:10px 18px; cursor:pointer; border-bottom:2px solid transparent; color:#64748b; font-size:14px; background:none; border-top:none; border-left:none; border-right:none; }
     .tab-btn:hover { color:#0f172a; }
-    .tab-btn.active { border-color:#2563eb; color:#2563eb; font-weight:600; }
+    .tab-btn.active { border-bottom-color:#2563eb; color:#2563eb; font-weight:600; }
     .stat-card { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:14px 16px; }
+    .breadcrumb { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:10px 16px; background:#f8fafc; border-bottom:1px solid #e5e7eb; }
+    .breadcrumb-chip { padding:4px 10px; background:#dbeafe; color:#1e40af; border-radius:14px; font-size:12px; cursor:pointer; border:1px solid #bfdbfe; }
+    .breadcrumb-chip:hover { background:#bfdbfe; }
+    .breadcrumb-chip.home { background:#fef3c7; color:#92400e; border-color:#fde68a; }
+    .breadcrumb-sep { color:#94a3b8; font-size:12px; }
+    .clickable { color:#2563eb; cursor:pointer; font-weight:500; }
+    .clickable:hover { text-decoration:underline; }
+    .lightbox-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.88); z-index:1000; display:none; align-items:center; justify-content:center; cursor:zoom-out; }
+    .lightbox-overlay.active { display:flex; }
+    .lightbox-img { max-width:90vw; max-height:90vh; user-select:none; cursor:zoom-in; transition:transform 0.2s ease; box-shadow:0 10px 40px rgba(0,0,0,0.5); border-radius:6px; background:#fff; }
+    .lightbox-img.zoomed { cursor:zoom-out; transform:scale(1.8); }
+    .lightbox-close { position:absolute; top:18px; right:18px; color:#fff; background:rgba(255,255,255,0.15); border-radius:50%; width:38px; height:38px; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:22px; }
+    .lightbox-close:hover { background:rgba(255,255,255,0.25); }
+    .toggle { display:inline-flex; align-items:center; gap:8px; cursor:pointer; user-select:none; font-size:13px; color:#475569; }
+    .toggle input { display:none; }
+    .toggle-track { width:34px; height:18px; background:#cbd5e1; border-radius:9px; position:relative; transition:.2s; }
+    .toggle-thumb { position:absolute; top:2px; left:2px; width:14px; height:14px; background:#fff; border-radius:50%; transition:.2s; box-shadow:0 1px 2px rgba(0,0,0,0.15); }
+    .toggle input:checked + .toggle-track { background:#2563eb; }
+    .toggle input:checked + .toggle-track .toggle-track { transform:translateX(16px); }
+    .empty-row td { text-align:center; padding:48px; color:#94a3b8; font-size:14px; }
   </style>
 </head>
-<body class="text-gray-900">
-  <header class="bg-white border-b">
-    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-3">
-      <div class="flex items-center gap-3">
-        <a href="/" class="text-blue-600 font-bold no-underline">⚡ Sanki Dashboard</a>
-        <span class="text-gray-400">/</span>
-        <span class="font-medium">Inventory Statistics</span>
-      </div>
-      <div class="flex items-center gap-2 flex-wrap text-sm">
-        <label class="text-gray-600">Category</label>
-        <select id="filterCategory" class="border rounded px-2 py-1"><option value="">All Categories</option></select>
-        <label class="text-gray-600">Vendor</label>
-        <select id="filterVendor" class="border rounded px-2 py-1"><option value="">All Vendors</option></select>
-        <input id="searchBox" type="text" placeholder="Search SKU / product..." class="border rounded px-2 py-1" style="width:220px">
-        <button id="refreshBtn" class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">↻ Refresh</button>
-      </div>
+<body>
+  <header class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-3">
+    <div class="flex items-center gap-3">
+      <a href="/" class="text-blue-600 font-bold text-lg">⚡ Sanki Dashboard</a>
+      <span class="text-gray-400">/</span>
+      <h1 class="text-lg font-semibold">Inventory Statistics</h1>
+    </div>
+    <div class="flex items-center gap-3 flex-wrap">
+      <label class="text-sm text-gray-600">Category</label>
+      <select id="filterCategory" class="border rounded px-3 py-1.5 text-sm bg-white"><option value="">All Categories</option></select>
+      <label class="text-sm text-gray-600">Vendor</label>
+      <select id="filterVendor" class="border rounded px-3 py-1.5 text-sm bg-white"><option value="">All Vendors</option></select>
+      <input id="filterSearch" type="search" placeholder="Search SKU / product..." class="border rounded px-3 py-1.5 text-sm w-56">
+      <label class="toggle">
+        <input id="filterOOS" type="checkbox">
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        <span>Hide Out of Stock</span>
+      </label>
+      <button id="btnExport" class="bg-emerald-600 text-white text-sm px-3 py-1.5 rounded hover:bg-emerald-700">⬇ Export .xlsx</button>
+      <button id="btnRefresh" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">↻ Refresh</button>
     </div>
   </header>
 
-  <main class="max-w-7xl mx-auto px-4 py-6">
-    <h2 class="text-lg font-semibold mb-3">Inventory</h2>
-
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-      <div class="stat-card"><div class="text-gray-600 text-xs">Total Products</div><div class="text-2xl font-semibold num" id="sumProducts">—</div></div>
-      <div class="stat-card"><div class="text-gray-600 text-xs">In-Hand Qty</div><div class="text-2xl font-semibold num" id="sumQty">—</div></div>
-      <div class="stat-card"><div class="text-gray-600 text-xs">Landing Value</div><div class="text-2xl font-semibold num text-amber-700" id="sumLanding">—</div></div>
-      <div class="stat-card"><div class="text-gray-600 text-xs">Sales Value (at MRP)</div><div class="text-2xl font-semibold num text-emerald-700" id="sumSales">—</div></div>
+  <main class="max-w-7xl mx-auto px-4 pb-8">
+    <!-- Summary cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+      <div class="stat-card">
+        <div class="text-xs text-gray-500">Total Products</div>
+        <div class="text-2xl font-bold num" id="sumProducts">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="text-xs text-gray-500">In-Hand Qty</div>
+        <div class="text-2xl font-bold num" id="sumQty">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="text-xs text-gray-500">Landing Value</div>
+        <div class="text-2xl font-bold num text-orange-600" id="sumLanding">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="text-xs text-gray-500">Sales Value (at MRP)</div>
+        <div class="text-2xl font-bold num text-green-600" id="sumSales">—</div>
+      </div>
     </div>
 
-    <div class="flex border-b mb-4 bg-white">
-      <div class="tab-btn active" data-view="sku">SKU-wise</div>
-      <div class="tab-btn" data-view="product">Product-wise</div>
+    <!-- View tabs -->
+    <div class="bg-white rounded-t-lg border border-b border-gray-200 px-4 flex gap-1">
+      <button class="tab-btn active" data-view="sku">SKU-wise</button>
+      <button class="tab-btn" data-view="product">Product-wise</button>
+      <button class="tab-btn" data-view="vendor">Vendor-wise</button>
+      <button class="tab-btn" data-view="category">Category-wise</button>
     </div>
 
-    <div class="bg-white rounded-lg shadow-sm overflow-x-auto" id="tableWrap">
-      <table class="w-full">
-        <thead><tr id="thRow"></tr></thead>
-        <tbody id="bodyRows"><tr><td colspan="10" class="text-center py-8 text-gray-500">Loading inventory...</td></tr></tbody>
+    <!-- Breadcrumb (drill-down trail) -->
+    <div id="breadcrumb" class="bg-white border-x border-gray-200" style="display:none;"></div>
+
+    <!-- Table -->
+    <div class="bg-white rounded-b-lg border border-gray-200 overflow-x-auto">
+      <table>
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"><tr class="empty-row"><td colspan="10">Loading inventory…</td></tr></tbody>
+        <tfoot id="tableFoot"></tfoot>
       </table>
     </div>
-
-    <p class="text-xs text-gray-500 mt-3">Landing Cost = unit cost from most recent PO containing that SKU. Sales Value = In-Hand Qty × variant.price (selling price).</p>
   </main>
 
-  <script>
-    let _products = [];
-    let _pos = [];
-    let _viewMode = 'sku';
+  <!-- Image Lightbox -->
+  <div id="lightbox" class="lightbox-overlay">
+    <div class="lightbox-close" id="lightboxClose">×</div>
+    <img id="lightboxImg" class="lightbox-img" src="" alt="">
+  </div>
 
-    async function loadAll() {
-      document.getElementById('bodyRows').innerHTML = '<tr><td colspan="10" class="text-center py-8 text-gray-500">Loading inventory...</td></tr>';
-      try {
-        const [pj, srv] = await Promise.all([
-          fetch('/api/products').then(r => r.json()),
-          fetch('/api/data/load').then(r => r.json()).catch(() => ({}))
-        ]);
-        _products = pj.products || pj || [];
-        const serverPOs = srv?.data?.pos || [];
-        const localPOs = JSON.parse(localStorage.getItem('sanki_pos') || '[]');
-        const map = {};
-        for (const p of serverPOs) if (p.id) map[p.id] = p;
-        for (const p of localPOs) if (p.id && !map[p.id]) map[p.id] = p;
-        const tomb = new Set(JSON.parse(localStorage.getItem('sanki_pos_deleted') || '[]'));
-        _pos = Object.values(map).filter(p => !tomb.has(p.id));
-        populateFilters();
-        render();
-      } catch(e) {
-        document.getElementById('bodyRows').innerHTML = '<tr><td colspan="10" class="text-center py-8 text-red-600">Error loading: '+escapeHtml(e.message)+'</td></tr>';
-      }
+<script>
+(() => {
+  // ============================================================
+  // STATE
+  // ============================================================
+  let _products = [], _pos = [];
+  let _landingMap = {};
+  const STATE_KEY = 'sanki_inv_stats_state_v2';
+
+  const _state = loadState();
+  function loadState() {
+    try {
+      const s = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
+      return Object.assign({
+        view: 'sku',
+        drillPath: [],
+        sort: { col: null, dir: 'asc' },
+        filters: { category: '', vendor: '', search: '', excludeOOS: false }
+      }, s, { drillPath: s.drillPath || [], filters: Object.assign({ category:'', vendor:'', search:'', excludeOOS:false }, s.filters || {}) });
+    } catch(e) {
+      return { view:'sku', drillPath:[], sort:{col:null,dir:'asc'}, filters:{category:'',vendor:'',search:'',excludeOOS:false} };
     }
+  }
+  function saveState() {
+    try { localStorage.setItem(STATE_KEY, JSON.stringify(_state)); } catch(e) {}
+  }
 
-    function buildLandingCostMap() {
-      const m = {};
-      // Seed from Shopify InventoryItem.cost (variant.unitCost)
-      for (const p of _products) {
-        for (const v of (p.variants || [])) {
-          if (v.sku && v.unitCost != null && v.unitCost !== '' && m[v.sku] === undefined) {
-            const c = parseFloat(v.unitCost);
-            if (!isNaN(c) && c >= 0) m[v.sku] = c;
-          }
-        }
-      }
-      // Override with most recent PO unitCost (POs reflect actual purchase cost)
-      const sortedPOs = _pos.slice().sort((a,b) => new Date(b.createdAt||b.date||0) - new Date(a.createdAt||a.date||0));
-      const fromPO = {};
-      for (const po of sortedPOs) {
-        for (const item of (po.products || [])) {
-          if (item.sku && fromPO[item.sku] === undefined) {
-            fromPO[item.sku] = parseFloat(item.unitCost) || 0;
-          }
-        }
-      }
-      for (const k in fromPO) if (fromPO[k] > 0) m[k] = fromPO[k];
-      return m;
-    }
+  // ============================================================
+  // FORMATTERS
+  // ============================================================
+  function escape(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function fmt(n) { return Number(n || 0).toLocaleString('en-IN'); }
+  function money(n) {
+    const v = Number(n || 0);
+    if (v === 0) return '₹0';
+    if (v >= 1e7) return '₹' + (v/1e7).toFixed(2) + 'Cr';
+    if (v >= 1e5) return '₹' + (v/1e5).toFixed(2) + 'L';
+    if (v >= 1e3) return '₹' + (v/1e3).toFixed(1) + 'K';
+    return '₹' + v.toFixed(0);
+  }
+  function moneyFull(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+  function imgCell(src, sku) {
+    if (!src) return '<div class="thumb" style="display:inline-block;background:#f1f5f9;"></div>';
+    return `<img class="thumb" src="${escape(src)}" alt="${escape(sku||'')}" data-full="${escape(src)}" loading="lazy">`;
+  }
 
-    function populateFilters() {
-      const cats = new Set(), vends = new Set();
-      for (const p of _products) {
-        if (p.product_type) cats.add(p.product_type);
-        if (p.vendor) vends.add(p.vendor);
-      }
-      const catSel = document.getElementById('filterCategory');
-      const venSel = document.getElementById('filterVendor');
-      const curCat = catSel.value, curVen = venSel.value;
-      catSel.innerHTML = '<option value="">All Categories</option>' + [...cats].sort().map(c => '<option value="'+escapeHtml(c)+'">'+escapeHtml(c)+'</option>').join('');
-      venSel.innerHTML = '<option value="">All Vendors</option>' + [...vends].sort().map(v => '<option value="'+escapeHtml(v)+'">'+escapeHtml(v)+'</option>').join('');
-      catSel.value = curCat; venSel.value = curVen;
-    }
-
-    function fmtMoney(n) {
-      if (!isFinite(n) || n === 0) return '₹0';
-      const abs = Math.abs(n);
-      if (abs >= 10000000) return '₹' + (n/10000000).toFixed(2) + 'Cr';
-      if (abs >= 100000) return '₹' + (n/100000).toFixed(2) + 'L';
-      if (abs >= 1000) return '₹' + (n/1000).toFixed(1) + 'K';
-      return '₹' + Math.round(n);
-    }
-    function fmtInt(n) { return Math.round(n||0).toLocaleString('en-IN'); }
-    function escapeHtml(s) { return (s||'').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
-
-    function passesFilters(p) {
-      const c = document.getElementById('filterCategory').value;
-      const v = document.getElementById('filterVendor').value;
-      const q = (document.getElementById('searchBox').value||'').trim().toLowerCase();
-      if (c && p.product_type !== c) return false;
-      if (v && p.vendor !== v) return false;
-      if (q) {
-        const matchProd = (p.name||p.title||'').toLowerCase().includes(q);
-        const matchSku = (p.variants||[]).some(va => (va.sku||'').toLowerCase().includes(q));
-        if (!matchProd && !matchSku) return false;
-      }
-      return true;
-    }
-
-    function buildSKURows() {
-      const landingMap = buildLandingCostMap();
-      const rows = [];
-      for (const p of _products) {
-        if (!passesFilters(p)) continue;
-        for (const v of (p.variants || [])) {
-          const qty = Number(v.inventory) || 0;
-          const sellingPrice = parseFloat(v.price) || 0;
-          const landingCost = landingMap[v.sku] || 0;
-          rows.push({
-            productName: p.name || p.title || '(no name)',
-            image: p.image || v.image || '',
-            sku: v.sku || '',
-            variantTitle: v.title || '',
-            category: p.product_type || '—',
-            vendor: p.vendor || '—',
-            qty,
-            landingCost,
-            landingValue: qty * landingCost,
-            sellingPrice,
-            salesValue: qty * sellingPrice
-          });
-        }
-      }
-      return rows;
-    }
-
-    function buildProductRows() {
-      const skuRows = buildSKURows();
+  // ============================================================
+  // DATA LOAD
+  // ============================================================
+  async function loadAll() {
+    document.getElementById('tableBody').innerHTML = '<tr class="empty-row"><td colspan="10">Loading inventory…</td></tr>';
+    try {
+      const [pj, srv] = await Promise.all([
+        fetch('/api/products').then(r => r.json()),
+        fetch('/api/data/load').then(r => r.json()).catch(() => ({}))
+      ]);
+      _products = pj.products || pj || [];
+      const serverPOs = (srv && srv.data && srv.data.pos) || [];
+      const localPOs = JSON.parse(localStorage.getItem('sanki_pos') || '[]');
       const map = {};
-      for (const r of skuRows) {
-        const key = r.productName + '||' + r.vendor + '||' + r.category;
-        if (!map[key]) {
-          map[key] = {
-            productName: r.productName, image: r.image,
-            skuCount: 0, category: r.category, vendor: r.vendor,
-            qty: 0, landingValue: 0, salesValue: 0,
-            sumLandingCostQty: 0, sumSellingPriceQty: 0
-          };
-        }
-        const g = map[key];
-        g.skuCount++;
-        g.qty += r.qty;
-        g.landingValue += r.landingValue;
-        g.salesValue += r.salesValue;
-        g.sumLandingCostQty += r.landingCost * r.qty;
-        g.sumSellingPriceQty += r.sellingPrice * r.qty;
-      }
-      return Object.values(map).map(g => Object.assign(g, {
-        avgLandingCost: g.qty > 0 ? g.sumLandingCostQty / g.qty : 0,
-        avgSellingPrice: g.qty > 0 ? g.sumSellingPriceQty / g.qty : 0
-      }));
-    }
-
-    function render() {
-      const isProd = _viewMode === 'product';
-      const rows = isProd ? buildProductRows() : buildSKURows();
-      const headers = isProd
-        ? ['', 'Product', 'SKUs', 'Category', 'Vendor', 'In-Hand Qty', 'Avg Landing Cost', 'Landing Value', 'Avg Selling Price', 'Sales Value']
-        : ['', 'Product', 'SKU', 'Category', 'Vendor', 'In-Hand Qty', 'Landing Cost', 'Landing Value', 'Selling Price', 'Sales Value'];
-      document.getElementById('thRow').innerHTML = headers.map(h => '<th>'+h+'</th>').join('');
-
-      let grandQty = 0, grandLanding = 0, grandSales = 0;
-      const sorted = rows.slice().sort((a,b) => b.salesValue - a.salesValue);
-      let html = '';
-      for (const r of sorted) {
-        grandQty += r.qty; grandLanding += r.landingValue; grandSales += r.salesValue;
-        const img = r.image ? '<img class="thumb" src="'+escapeHtml(r.image)+'" loading="lazy" onerror="this.style.display=\'none\'">' : '<div style="width:36px;height:36px"></div>';
-        if (isProd) {
-          html += '<tr><td>'+img+'</td>'
-            + '<td>'+escapeHtml(r.productName)+'</td>'
-            + '<td class="num">'+r.skuCount+'</td>'
-            + '<td>'+escapeHtml(r.category)+'</td>'
-            + '<td>'+escapeHtml(r.vendor)+'</td>'
-            + '<td class="num">'+fmtInt(r.qty)+'</td>'
-            + '<td class="num">'+fmtMoney(r.avgLandingCost)+'</td>'
-            + '<td class="num text-amber-700">'+fmtMoney(r.landingValue)+'</td>'
-            + '<td class="num">'+fmtMoney(r.avgSellingPrice)+'</td>'
-            + '<td class="num text-emerald-700">'+fmtMoney(r.salesValue)+'</td></tr>';
-        } else {
-          const skuLabel = escapeHtml(r.sku) + (r.variantTitle ? ' <span class="text-xs text-gray-500">'+escapeHtml(r.variantTitle)+'</span>' : '');
-          html += '<tr><td>'+img+'</td>'
-            + '<td>'+escapeHtml(r.productName)+'</td>'
-            + '<td>'+skuLabel+'</td>'
-            + '<td>'+escapeHtml(r.category)+'</td>'
-            + '<td>'+escapeHtml(r.vendor)+'</td>'
-            + '<td class="num">'+fmtInt(r.qty)+'</td>'
-            + '<td class="num">'+fmtMoney(r.landingCost)+'</td>'
-            + '<td class="num text-amber-700">'+fmtMoney(r.landingValue)+'</td>'
-            + '<td class="num">'+fmtMoney(r.sellingPrice)+'</td>'
-            + '<td class="num text-emerald-700">'+fmtMoney(r.salesValue)+'</td></tr>';
-        }
-      }
-      html += '<tr class="totals-row">'
-        + '<td colspan="5" style="text-align:right">Σ '+rows.length+' '+(isProd ? 'products' : 'SKUs')+'</td>'
-        + '<td class="num">'+fmtInt(grandQty)+'</td>'
-        + '<td>—</td>'
-        + '<td class="num">'+fmtMoney(grandLanding)+'</td>'
-        + '<td>—</td>'
-        + '<td class="num">'+fmtMoney(grandSales)+'</td></tr>';
-      document.getElementById('bodyRows').innerHTML = html || '<tr><td colspan="10" class="text-center py-8 text-gray-500">No items match the current filters.</td></tr>';
-
-      document.getElementById('sumProducts').textContent = fmtInt(rows.length);
-      document.getElementById('sumQty').textContent = fmtInt(grandQty);
-      document.getElementById('sumLanding').textContent = fmtMoney(grandLanding);
-      document.getElementById('sumSales').textContent = fmtMoney(grandSales);
-    }
-
-    document.getElementById('filterCategory').addEventListener('change', render);
-    document.getElementById('filterVendor').addEventListener('change', render);
-    let searchTimer;
-    document.getElementById('searchBox').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(render, 200); });
-    document.getElementById('refreshBtn').addEventListener('click', loadAll);
-    document.querySelectorAll('.tab-btn').forEach(t => t.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      _viewMode = t.dataset.view;
+      for (const p of serverPOs) if (p.id) map[p.id] = p;
+      for (const p of localPOs) if (p.id && !map[p.id]) map[p.id] = p;
+      const tomb = new Set(JSON.parse(localStorage.getItem('sanki_pos_deleted') || '[]'));
+      _pos = Object.values(map).filter(p => !tomb.has(p.id));
+      _landingMap = buildLandingCostMap();
+      populateFilters();
       render();
-    }));
+    } catch(e) {
+      document.getElementById('tableBody').innerHTML = `<tr class="empty-row"><td colspan="10" style="color:#dc2626;">Failed to load: ${escape(e.message)}</td></tr>`;
+    }
+  }
 
-    loadAll();
-  </script>
+  function buildLandingCostMap() {
+    const m = {};
+    for (const p of _products) {
+      for (const v of (p.variants || [])) {
+        if (v.sku && v.unitCost != null && v.unitCost !== '' && m[v.sku] === undefined) {
+          const c = parseFloat(v.unitCost);
+          if (!isNaN(c) && c >= 0) m[v.sku] = c;
+        }
+      }
+    }
+    const sortedPOs = _pos.slice().sort((a,b) => new Date(b.createdAt||b.date||0) - new Date(a.createdAt||a.date||0));
+    const fromPO = {};
+    for (const po of sortedPOs) {
+      for (const item of (po.products || [])) {
+        if (item.sku && fromPO[item.sku] === undefined) {
+          fromPO[item.sku] = parseFloat(item.unitCost) || 0;
+        }
+      }
+    }
+    for (const k in fromPO) if (fromPO[k] > 0) m[k] = fromPO[k];
+    return m;
+  }
+
+  function populateFilters() {
+    const cats = new Set(), vends = new Set();
+    for (const p of _products) {
+      if (p.product_type) cats.add(p.product_type);
+      if (p.vendor) vends.add(p.vendor);
+    }
+    const catSel = document.getElementById('filterCategory');
+    const venSel = document.getElementById('filterVendor');
+    catSel.innerHTML = '<option value="">All Categories</option>' + [...cats].sort().map(c => `<option>${escape(c)}</option>`).join('');
+    venSel.innerHTML = '<option value="">All Vendors</option>' + [...vends].sort().map(v => `<option>${escape(v)}</option>`).join('');
+    catSel.value = _state.filters.category || '';
+    venSel.value = _state.filters.vendor || '';
+    document.getElementById('filterSearch').value = _state.filters.search || '';
+    document.getElementById('filterOOS').checked = !!_state.filters.excludeOOS;
+  }
+
+  // ============================================================
+  // SKU WALK — applies filters + drill path
+  // ============================================================
+  function* walkSKUs() {
+    const f = _state.filters;
+    const search = (f.search || '').trim().toLowerCase();
+    const dp = _state.drillPath;
+    const findDP = (lvl) => { const d = dp.find(x => x.level === lvl); return d ? d.value : null; };
+    const dpVendor = findDP('vendor');
+    const dpCategory = findDP('category');
+    const dpProductId = findDP('product');
+
+    for (const p of _products) {
+      if (f.category && p.product_type !== f.category) continue;
+      if (f.vendor && p.vendor !== f.vendor) continue;
+      if (dpVendor && p.vendor !== dpVendor) continue;
+      if (dpCategory && p.product_type !== dpCategory) continue;
+      if (dpProductId && String(p.id) !== String(dpProductId)) continue;
+      for (const v of (p.variants || [])) {
+        const qty = Number(v.inventory) || 0;
+        if (f.excludeOOS && qty <= 0) continue;
+        if (search) {
+          const hay = ((v.sku||'') + ' ' + (p.name||'') + ' ' + (v.title||'')).toLowerCase();
+          if (!hay.includes(search)) continue;
+        }
+        const sku = v.sku || '';
+        const landingCost = _landingMap[sku] || 0;
+        const sellingPrice = parseFloat(v.price) || 0;
+        yield {
+          product: p,
+          variant: v,
+          productId: p.id,
+          sku,
+          name: p.name || '',
+          variantTitle: v.title || '',
+          category: p.product_type || '',
+          vendor: p.vendor || '',
+          qty,
+          landingCost,
+          sellingPrice,
+          landingValue: qty * landingCost,
+          salesValue: qty * sellingPrice,
+          image: v.image || p.image || ''
+        };
+      }
+    }
+  }
+
+  // ============================================================
+  // AGGREGATION
+  // ============================================================
+  function aggregateBy(keyFn, opts = {}) {
+    const groups = {};
+    for (const x of walkSKUs()) {
+      const k = keyFn(x);
+      if (k == null || k === '') continue;
+      if (!groups[k]) groups[k] = {
+        key: k,
+        qty: 0,
+        productIds: new Set(),
+        skuCount: 0,
+        landingCostSum: 0, landingCostN: 0,
+        sellingPriceSum: 0, sellingPriceN: 0,
+        landingValue: 0,
+        salesValue: 0,
+        sample: x
+      };
+      const g = groups[k];
+      g.qty += x.qty;
+      g.productIds.add(x.productId);
+      g.skuCount++;
+      if (x.landingCost > 0) { g.landingCostSum += x.landingCost; g.landingCostN++; }
+      if (x.sellingPrice > 0) { g.sellingPriceSum += x.sellingPrice; g.sellingPriceN++; }
+      g.landingValue += x.landingValue;
+      g.salesValue += x.salesValue;
+    }
+    return Object.values(groups).map(g => ({
+      ...g,
+      productCount: g.productIds.size,
+      avgLandingCost: g.landingCostN ? g.landingCostSum / g.landingCostN : 0,
+      avgSellingPrice: g.sellingPriceN ? g.sellingPriceSum / g.sellingPriceN : 0
+    }));
+  }
+
+  // ============================================================
+  // CURRENT LEVEL — derives what to display from view + drill state
+  // ============================================================
+  function currentLevel() {
+    const v = _state.view, dp = _state.drillPath;
+    const has = lvl => dp.some(x => x.level === lvl);
+    if (v === 'sku') return 'sku';
+    if (v === 'product') return has('product') ? 'sku' : 'product';
+    if (v === 'vendor') {
+      if (has('product')) return 'sku';
+      if (has('category')) return 'product';
+      if (has('vendor')) return 'category';
+      return 'vendor';
+    }
+    if (v === 'category') {
+      if (has('product')) return 'sku';
+      if (has('vendor')) return 'product';
+      if (has('category')) return 'vendor';
+      return 'category';
+    }
+  }
+
+  // ============================================================
+  // ROW BUILDERS PER LEVEL
+  // ============================================================
+  function buildRows() {
+    const lvl = currentLevel();
+    if (lvl === 'sku') {
+      const rows = [];
+      for (const x of walkSKUs()) rows.push(x);
+      return { level: 'sku', rows };
+    }
+    if (lvl === 'product') {
+      const rows = aggregateBy(x => x.productId).map(g => ({
+        ...g,
+        productId: g.key,
+        product: g.sample.product,
+        name: g.sample.name,
+        category: g.sample.category,
+        vendor: g.sample.vendor,
+        image: (g.sample.product && g.sample.product.image) || g.sample.image
+      }));
+      return { level: 'product', rows };
+    }
+    if (lvl === 'vendor') {
+      const rows = aggregateBy(x => x.vendor || '(no vendor)').map(g => ({...g, vendor: g.key, name: g.key }));
+      return { level: 'vendor', rows };
+    }
+    if (lvl === 'category') {
+      const rows = aggregateBy(x => x.category || '(no category)').map(g => ({...g, category: g.key, name: g.key }));
+      return { level: 'category', rows };
+    }
+  }
+
+  // ============================================================
+  // COLUMNS PER LEVEL
+  // ============================================================
+  function getColumns() {
+    const lvl = currentLevel();
+    if (lvl === 'sku') {
+      return [
+        { key: 'image', label: '', sortable: false, render: r => imgCell(r.image, r.sku) },
+        { key: 'name', label: 'Product', sortable: true, get: r => r.name, render: r => `<div>${escape(r.name)}</div><div class="text-xs text-gray-500">${escape(r.variantTitle||'')}</div>`, exp: r => r.name },
+        { key: 'sku', label: 'SKU', sortable: true, get: r => r.sku, render: r => `<span class="num">${escape(r.sku)}</span>`, exp: r => r.sku },
+        { key: 'category', label: 'Category', sortable: true, get: r => r.category, render: r => escape(r.category), exp: r => r.category },
+        { key: 'vendor', label: 'Vendor', sortable: true, get: r => r.vendor, render: r => escape(r.vendor), exp: r => r.vendor },
+        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'landingCost', label: 'Landing Cost', sortable: true, get: r => r.landingCost, render: r => `<span class="num">${money(r.landingCost)}</span>`, align: 'right', exp: r => r.landingCost },
+        { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
+        { key: 'sellingPrice', label: 'Selling Price', sortable: true, get: r => r.sellingPrice, render: r => `<span class="num">${money(r.sellingPrice)}</span>`, align: 'right', exp: r => r.sellingPrice },
+        { key: 'salesValue', label: 'Sales Value', sortable: true, get: r => r.salesValue, render: r => `<span class="num text-green-600">${money(r.salesValue)}</span>`, align: 'right', exp: r => r.salesValue, totalSum: 'salesValue' }
+      ];
+    }
+    if (lvl === 'product') {
+      return [
+        { key: 'image', label: '', sortable: false, render: r => imgCell(r.image, r.name) },
+        { key: 'name', label: 'Product', sortable: true, get: r => r.name, render: r => `<span class="clickable" data-drill="product" data-value="${escape(r.productId)}">${escape(r.name)}</span>`, exp: r => r.name },
+        { key: 'category', label: 'Category', sortable: true, get: r => r.category, render: r => escape(r.category), exp: r => r.category },
+        { key: 'vendor', label: 'Vendor', sortable: true, get: r => r.vendor, render: r => escape(r.vendor), exp: r => r.vendor },
+        { key: 'skuCount', label: 'SKUs', sortable: true, get: r => r.skuCount, render: r => `<span class="num">${fmt(r.skuCount)}</span>`, align: 'right', exp: r => r.skuCount, totalSum: 'skuCount' },
+        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'avgLandingCost', label: 'Avg Landing', sortable: true, get: r => r.avgLandingCost, render: r => `<span class="num">${money(r.avgLandingCost)}</span>`, align: 'right', exp: r => r.avgLandingCost },
+        { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
+        { key: 'avgSellingPrice', label: 'Avg Selling', sortable: true, get: r => r.avgSellingPrice, render: r => `<span class="num">${money(r.avgSellingPrice)}</span>`, align: 'right', exp: r => r.avgSellingPrice },
+        { key: 'salesValue', label: 'Sales Value', sortable: true, get: r => r.salesValue, render: r => `<span class="num text-green-600">${money(r.salesValue)}</span>`, align: 'right', exp: r => r.salesValue, totalSum: 'salesValue' }
+      ];
+    }
+    if (lvl === 'vendor') {
+      return [
+        { key: 'name', label: 'Vendor', sortable: true, get: r => r.vendor, render: r => `<span class="clickable" data-drill="vendor" data-value="${escape(r.vendor)}">${escape(r.vendor)}</span>`, exp: r => r.vendor },
+        { key: 'productCount', label: 'Products', sortable: true, get: r => r.productCount, render: r => `<span class="num">${fmt(r.productCount)}</span>`, align: 'right', exp: r => r.productCount, totalSum: 'productCount' },
+        { key: 'skuCount', label: 'SKUs', sortable: true, get: r => r.skuCount, render: r => `<span class="num">${fmt(r.skuCount)}</span>`, align: 'right', exp: r => r.skuCount, totalSum: 'skuCount' },
+        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'avgLandingCost', label: 'Avg Landing', sortable: true, get: r => r.avgLandingCost, render: r => `<span class="num">${money(r.avgLandingCost)}</span>`, align: 'right', exp: r => r.avgLandingCost },
+        { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
+        { key: 'avgSellingPrice', label: 'Avg Selling', sortable: true, get: r => r.avgSellingPrice, render: r => `<span class="num">${money(r.avgSellingPrice)}</span>`, align: 'right', exp: r => r.avgSellingPrice },
+        { key: 'salesValue', label: 'Sales Value', sortable: true, get: r => r.salesValue, render: r => `<span class="num text-green-600">${money(r.salesValue)}</span>`, align: 'right', exp: r => r.salesValue, totalSum: 'salesValue' }
+      ];
+    }
+    if (lvl === 'category') {
+      return [
+        { key: 'name', label: 'Category', sortable: true, get: r => r.category, render: r => `<span class="clickable" data-drill="category" data-value="${escape(r.category)}">${escape(r.category)}</span>`, exp: r => r.category },
+        { key: 'productCount', label: 'Products', sortable: true, get: r => r.productCount, render: r => `<span class="num">${fmt(r.productCount)}</span>`, align: 'right', exp: r => r.productCount, totalSum: 'productCount' },
+        { key: 'skuCount', label: 'SKUs', sortable: true, get: r => r.skuCount, render: r => `<span class="num">${fmt(r.skuCount)}</span>`, align: 'right', exp: r => r.skuCount, totalSum: 'skuCount' },
+        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'avgLandingCost', label: 'Avg Landing', sortable: true, get: r => r.avgLandingCost, render: r => `<span class="num">${money(r.avgLandingCost)}</span>`, align: 'right', exp: r => r.avgLandingCost },
+        { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
+        { key: 'avgSellingPrice', label: 'Avg Selling', sortable: true, get: r => r.avgSellingPrice, render: r => `<span class="num">${money(r.avgSellingPrice)}</span>`, align: 'right', exp: r => r.avgSellingPrice },
+        { key: 'salesValue', label: 'Sales Value', sortable: true, get: r => r.salesValue, render: r => `<span class="num text-green-600">${money(r.salesValue)}</span>`, align: 'right', exp: r => r.salesValue, totalSum: 'salesValue' }
+      ];
+    }
+  }
+
+  // ============================================================
+  // SORT
+  // ============================================================
+  function sortRows(rows, cols) {
+    const s = _state.sort;
+    if (!s.col) return rows;
+    const col = cols.find(c => c.key === s.col);
+    if (!col || !col.sortable) return rows;
+    const dir = s.dir === 'desc' ? -1 : 1;
+    const get = col.get;
+    return rows.slice().sort((a, b) => {
+      const va = get(a), vb = get(b);
+      if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+      return String(va||'').localeCompare(String(vb||'')) * dir;
+    });
+  }
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+  function renderHead(cols) {
+    const head = document.getElementById('tableHead');
+    const s = _state.sort;
+    head.innerHTML = '<tr>' + cols.map(c => {
+      const cls = [
+        c.sortable ? 'sortable' : '',
+        c.align === 'right' ? 'right' : '',
+        s.col === c.key ? (s.dir === 'desc' ? 'sort-desc' : 'sort-asc') : ''
+      ].filter(Boolean).join(' ');
+      const arrow = c.sortable ? '<span class="sort-arrow">▲▼</span>' : '';
+      return `<th class="${cls}" data-col="${escape(c.key)}">${escape(c.label)}${arrow}</th>`;
+    }).join('') + '</tr>';
+  }
+
+  function renderBody(rows, cols) {
+    const body = document.getElementById('tableBody');
+    if (!rows.length) {
+      body.innerHTML = `<tr class="empty-row"><td colspan="${cols.length}">No matching items</td></tr>`;
+      return;
+    }
+    const html = rows.map(r => '<tr>' + cols.map(c => {
+      const align = c.align === 'right' ? ' class="right"' : '';
+      return `<td${align}>${c.render(r)}</td>`;
+    }).join('') + '</tr>').join('');
+    body.innerHTML = html;
+  }
+
+  function renderFoot(rows, cols) {
+    const foot = document.getElementById('tableFoot');
+    const totals = {};
+    for (const c of cols) {
+      if (c.totalSum) {
+        totals[c.totalSum] = rows.reduce((s, r) => s + (Number(r[c.totalSum]) || 0), 0);
+      }
+    }
+    const html = '<tr class="totals-row">' + cols.map((c, i) => {
+      const align = c.align === 'right' ? ' class="right"' : '';
+      if (i === 0) return `<td${align}>Σ ${rows.length} rows</td>`;
+      if (c.totalSum) {
+        const v = totals[c.totalSum];
+        if (c.totalSum === 'qty' || c.totalSum === 'skuCount' || c.totalSum === 'productCount') {
+          return `<td${align}><span class="num">${fmt(v)}</span></td>`;
+        }
+        return `<td${align}><span class="num">${money(v)}</span></td>`;
+      }
+      return `<td${align}></td>`;
+    }).join('') + '</tr>';
+    foot.innerHTML = html;
+    return totals;
+  }
+
+  function renderSummary() {
+    let qty = 0, landing = 0, sales = 0;
+    const productSet = new Set();
+    let count = 0;
+    for (const x of walkSKUs()) {
+      qty += x.qty;
+      landing += x.landingValue;
+      sales += x.salesValue;
+      productSet.add(x.productId);
+      count++;
+    }
+    document.getElementById('sumProducts').textContent = fmt(count);
+    document.getElementById('sumQty').textContent = fmt(qty);
+    document.getElementById('sumLanding').textContent = money(landing);
+    document.getElementById('sumSales').textContent = money(sales);
+  }
+
+  function renderBreadcrumb() {
+    const bc = document.getElementById('breadcrumb');
+    const dp = _state.drillPath;
+    if (!dp.length) { bc.style.display = 'none'; bc.innerHTML = ''; return; }
+    bc.style.display = 'block';
+    let html = '<div class="breadcrumb"><span class="breadcrumb-chip home" data-drill-to="-1">↑ Top</span>';
+    dp.forEach((d, i) => {
+      const label = d.level === 'product' ? (d.label || d.value) : d.value;
+      html += `<span class="breadcrumb-sep">›</span><span class="breadcrumb-chip" data-drill-to="${i}">${escape(d.level)}: ${escape(label)}</span>`;
+    });
+    html += '</div>';
+    bc.innerHTML = html;
+  }
+
+  function renderTabs() {
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.view === _state.view);
+    });
+  }
+
+  let _lastRender = { rows: [], cols: [] };
+  function render() {
+    renderTabs();
+    renderBreadcrumb();
+    renderSummary();
+    const { rows: rawRows } = buildRows();
+    const cols = getColumns();
+    const rows = sortRows(rawRows, cols);
+    renderHead(cols);
+    renderBody(rows, cols);
+    renderFoot(rows, cols);
+    _lastRender = { rows, cols };
+  }
+
+  // ============================================================
+  // INTERACTIONS
+  // ============================================================
+  function setView(v) {
+    _state.view = v;
+    _state.drillPath = [];
+    _state.sort = { col: null, dir: 'asc' };
+    saveState();
+    render();
+  }
+
+  function drillInto(level, value, label) {
+    _state.drillPath.push({ level, value, label: label || value });
+    _state.sort = { col: null, dir: 'asc' };
+    saveState();
+    render();
+  }
+
+  function drillTo(idx) {
+    // idx === -1 means clear; otherwise keep first (idx+1) entries
+    if (idx < 0) _state.drillPath = [];
+    else _state.drillPath = _state.drillPath.slice(0, idx + 1);
+    _state.sort = { col: null, dir: 'asc' };
+    saveState();
+    render();
+  }
+
+  function toggleSort(colKey) {
+    const s = _state.sort;
+    if (s.col === colKey) {
+      s.dir = s.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      s.col = colKey;
+      s.dir = 'desc';  // numeric columns usually want desc first
+    }
+    saveState();
+    render();
+  }
+
+  // ============================================================
+  // LIGHTBOX
+  // ============================================================
+  const lightbox = document.getElementById('lightbox');
+  const lightboxImg = document.getElementById('lightboxImg');
+  function openLightbox(src) {
+    lightboxImg.src = src;
+    lightboxImg.classList.remove('zoomed');
+    lightbox.classList.add('active');
+  }
+  function closeLightbox() {
+    lightbox.classList.remove('active');
+    lightboxImg.src = '';
+  }
+  lightbox.addEventListener('click', e => {
+    if (e.target === lightboxImg) {
+      lightboxImg.classList.toggle('zoomed');
+    } else {
+      closeLightbox();
+    }
+  });
+  document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && lightbox.classList.contains('active')) closeLightbox();
+  });
+
+  // ============================================================
+  // EXPORT
+  // ============================================================
+  function exportXLSX() {
+    const { rows, cols } = _lastRender;
+    if (!rows.length) { alert('No rows to export'); return; }
+    const headers = cols.filter(c => c.key !== 'image').map(c => c.label || c.key);
+    const data = rows.map(r => cols.filter(c => c.key !== 'image').map(c => {
+      const fn = c.exp || c.get;
+      return fn ? fn(r) : '';
+    }));
+    // Totals
+    const totalsRow = cols.filter(c => c.key !== 'image').map((c, i) => {
+      if (i === 0) return `Σ ${rows.length} rows`;
+      if (c.totalSum) return rows.reduce((s, r) => s + (Number(r[c.totalSum]) || 0), 0);
+      return '';
+    });
+    const aoa = [headers, ...data, totalsRow];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // Auto column widths
+    ws['!cols'] = headers.map((h, i) => {
+      const maxLen = Math.max(h.length, ...aoa.slice(1).map(row => String(row[i] || '').length));
+      return { wch: Math.min(maxLen + 2, 40) };
+    });
+    const wb = XLSX.utils.book_new();
+    const lvl = currentLevel();
+    XLSX.utils.book_append_sheet(wb, ws, lvl.charAt(0).toUpperCase() + lvl.slice(1) + '-wise');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const dpStr = _state.drillPath.length ? '_' + _state.drillPath.map(d => `${d.level}-${String(d.value).slice(0,20)}`).join('_') : '';
+    const fname = `inventory-${_state.view}-wise${dpStr}_${dateStr}.xlsx`.replace(/[^\w.-]/g, '_');
+    XLSX.writeFile(wb, fname);
+  }
+
+  // ============================================================
+  // EVENTS
+  // ============================================================
+  // Tab clicks
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.addEventListener('click', () => setView(b.dataset.view));
+  });
+  // Header sort
+  document.getElementById('tableHead').addEventListener('click', e => {
+    const th = e.target.closest('th.sortable');
+    if (!th) return;
+    toggleSort(th.dataset.col);
+  });
+  // Body: drill clicks + image clicks
+  document.getElementById('tableBody').addEventListener('click', e => {
+    const drill = e.target.closest('[data-drill]');
+    if (drill) {
+      const level = drill.dataset.drill;
+      const value = drill.dataset.value;
+      const label = drill.textContent;
+      drillInto(level, value, label);
+      return;
+    }
+    const img = e.target.closest('img.thumb');
+    if (img) {
+      const src = img.dataset.full || img.src;
+      openLightbox(src);
+    }
+  });
+  // Breadcrumb clicks
+  document.getElementById('breadcrumb').addEventListener('click', e => {
+    const chip = e.target.closest('[data-drill-to]');
+    if (!chip) return;
+    drillTo(parseInt(chip.dataset.drillTo, 10));
+  });
+  // Filter changes
+  document.getElementById('filterCategory').addEventListener('change', e => { _state.filters.category = e.target.value; saveState(); render(); });
+  document.getElementById('filterVendor').addEventListener('change', e => { _state.filters.vendor = e.target.value; saveState(); render(); });
+  document.getElementById('filterOOS').addEventListener('change', e => { _state.filters.excludeOOS = e.target.checked; saveState(); render(); });
+  let _searchTimer = null;
+  document.getElementById('filterSearch').addEventListener('input', e => {
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(() => { _state.filters.search = e.target.value; saveState(); render(); }, 200);
+  });
+  // Export + refresh
+  document.getElementById('btnExport').addEventListener('click', exportXLSX);
+  document.getElementById('btnRefresh').addEventListener('click', loadAll);
+
+  // Boot
+  loadAll();
+})();
+</script>
 </body>
 </html>
