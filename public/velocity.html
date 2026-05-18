@@ -557,6 +557,7 @@ function renderSkuTab() {
   const h =
     thSort('SKU', 'sku') +
     thSort('Product', 'productName') +
+    thSort('Vendor', 'vendor') +
     thSort('Score', 'score', 'num') +
     `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Label</th>` +
     thSort('Stock', 'stock', 'num') +
@@ -572,7 +573,8 @@ function renderSkuTab() {
   const body = rows.slice(0, 1000).map(s => `
     <tr class="row-hover ${s.stock<0?'row-oversold':''} border-b border-slate-100">
       <td class="px-3 py-2 font-mono text-xs">${s.sku}</td>
-      <td class="px-3 py-2"><div class="font-medium text-slate-800 text-xs">${(s.productName||'').slice(0,40)}</div><div class="text-xs text-slate-500">${s.vendor} · ${s.category}</div></td>
+      <td class="px-3 py-2"><div class="flex items-center gap-2"><img src="${s.image||''}" onerror="this.style.display='none'" class="w-9 h-9 rounded object-cover bg-slate-100 flex-shrink-0" alt=""><div><div class="font-medium text-slate-800 text-xs">${(s.productName||'').slice(0,38)}</div><div class="text-xs text-slate-500">${s.category}</div></div></div></td>
+      <td class="px-3 py-2 text-xs"><span class="inline-block px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">${s.vendor}</span></td>
       <td class="px-3 py-2 num font-bold">${s.score}</td>
       <td class="px-3 py-2">${labelBadge(s.label)}</td>
       <td class="px-3 py-2 num ${s.stock<0?'text-red-600 font-bold':''}">${s.stock}</td>
@@ -608,7 +610,7 @@ function renderProductTab() {
     `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Flags</th>`;
   const body = rows.slice(0, 1000).map(p => `
     <tr class="row-hover border-b border-slate-100">
-      <td class="px-3 py-2"><div class="font-medium text-xs">${(p.productName||'').slice(0,60)}</div><div class="text-xs text-slate-500">${p.vendor} · ${p.category}</div></td>
+      <td class="px-3 py-2"><div class="flex items-center gap-2"><img src="${p.image||''}" onerror="this.style.display='none'" class="w-9 h-9 rounded object-cover bg-slate-100 flex-shrink-0" alt=""><div><div class="font-medium text-xs">${(p.productName||'').slice(0,55)}</div><div class="text-xs text-slate-500">${p.vendor} · ${p.category}</div></div></div></td>
       <td class="px-3 py-2 num">${p.skuCount}</td>
       <td class="px-3 py-2 num font-bold">${p.score}</td>
       <td class="px-3 py-2">${labelBadge(p.label)}</td>
@@ -698,7 +700,7 @@ function renderMomentumTab() {
   const body = rows.slice(0, 1000).map(s => `
     <tr class="row-hover border-b border-slate-100">
       <td class="px-3 py-2 font-mono text-xs">${s.sku}</td>
-      <td class="px-3 py-2"><div class="text-xs font-medium">${(s.productName||'').slice(0,40)}</div><div class="text-xs text-slate-500">${s.vendor}</div></td>
+      <td class="px-3 py-2"><div class="flex items-center gap-2"><img src="${s.image||''}" onerror="this.style.display='none'" class="w-8 h-8 rounded object-cover bg-slate-100 flex-shrink-0" alt=""><div><div class="text-xs font-medium">${(s.productName||'').slice(0,38)}</div><div class="text-xs text-slate-500">${s.vendor}</div></div></div></td>
       <td class="px-3 py-2 num font-bold">${s.score}</td>
       <td class="px-3 py-2 num font-bold ${momentumColor(s.momentumRaw)}">${fmtMom(s.momentumRaw)}</td>
       <td class="px-3 py-2 num">${s.cur}</td>
@@ -733,7 +735,7 @@ function renderPressureTab() {
     return `
     <tr class="row-hover border-b border-slate-100">
       <td class="px-3 py-2 font-mono text-xs">${s.sku}</td>
-      <td class="px-3 py-2"><div class="text-xs font-medium">${(s.productName||'').slice(0,40)}</div><div class="text-xs text-slate-500">${s.vendor}</div></td>
+      <td class="px-3 py-2"><div class="flex items-center gap-2"><img src="${s.image||''}" onerror="this.style.display='none'" class="w-8 h-8 rounded object-cover bg-slate-100 flex-shrink-0" alt=""><div><div class="text-xs font-medium">${(s.productName||'').slice(0,38)}</div><div class="text-xs text-slate-500">${s.vendor}</div></div></div></td>
       <td class="px-3 py-2 num font-bold">${(s.pressureScore*100).toFixed(0)}</td>
       <td class="px-3 py-2"><span class="badge ${riskCls}" style="background:none;border:none;padding:2px 6px;border-radius:4px">${risk}</span></td>
       <td class="px-3 py-2 num ${s.stock<0?'text-red-600 font-bold':''}">${s.stock}</td>
@@ -767,7 +769,7 @@ function renderRecommendTab() {
     if (!items.length) {
       return '<div class="bg-white rounded-lg border border-slate-200 p-4"><h3 class="font-bold text-' + color + '-700 mb-1">' + emoji + ' ' + title + '</h3><p class="text-xs text-slate-500">No SKUs in this bucket right now.</p></div>';
     }
-    const rows = items.map(s => '<tr class="border-b border-slate-100"><td class="px-2 py-2 font-mono text-xs">' + s.sku + '</td><td class="px-2 py-2 text-xs"><div class="font-medium">' + (s.productName||'').slice(0,35) + '</div><div class="text-slate-500">' + s.vendor + '</div></td><td class="px-2 py-2 num text-xs font-bold">' + s.score + '</td><td class="px-2 py-2 num text-xs">' + s.stock + '</td><td class="px-2 py-2 num text-xs">' + fmtNum(s.adjVelocity,2) + '</td><td class="px-2 py-2 text-xs font-medium text-' + color + '-700">' + fmtAction(s) + '</td></tr>').join('');
+    const rows = items.map(s => '<tr class="border-b border-slate-100"><td class="px-2 py-2 font-mono text-xs">' + s.sku + '</td><td class="px-2 py-2 text-xs"><div class="flex items-center gap-2"><img src="' + (s.image||'') + '" onerror="this.style.display=\'none\'" class="w-8 h-8 rounded object-cover bg-slate-100 flex-shrink-0" alt=""><div><div class="font-medium">' + (s.productName||'').slice(0,32) + '</div><div class="text-slate-500">' + s.vendor + '</div></div></div></td><td class="px-2 py-2 num text-xs font-bold">' + s.score + '</td><td class="px-2 py-2 num text-xs">' + s.stock + '</td><td class="px-2 py-2 num text-xs">' + fmtNum(s.adjVelocity,2) + '</td><td class="px-2 py-2 text-xs font-medium text-' + color + '-700">' + fmtAction(s) + '</td></tr>').join('');
     return '<div class="bg-white rounded-lg border border-slate-200 p-4"><h3 class="font-bold text-' + color + '-700 mb-2">' + emoji + ' ' + title + ' <span class="text-xs font-normal text-slate-500">(' + items.length + ')</span></h3><table class="w-full text-xs"><thead><tr class="text-slate-500 text-left border-b"><th class="px-2 py-1">SKU</th><th class="px-2 py-1">Product</th><th class="px-2 py-1 num">Score</th><th class="px-2 py-1 num">Stock</th><th class="px-2 py-1 num">Vel</th><th class="px-2 py-1">Action</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   };
 
