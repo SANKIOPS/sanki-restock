@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sanki · Velocity Intelligence</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; }
+  .nav-active { color: #2563eb; font-weight: 600; border-bottom: 2px solid #2563eb; }
+  .nav-tab { padding: 8px 16px; cursor: pointer; color: #64748b; font-size: 14px; border-bottom: 2px solid transparent; }
+  .nav-tab:hover { color: #334155; }
+  .kpi-card { background: #fff; border-radius: 10px; padding: 14px 16px; border: 1px solid #e5e7eb; }
+  .kpi-label { color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+  .kpi-value { font-size: 22px; font-weight: 700; margin-top: 4px; color: #0f172a; }
+  .kpi-sub { color: #94a3b8; font-size: 11px; margin-top: 2px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+  .badge-explosive { background: #fdf2f8; color: #be185d; border: 1px solid #fbcfe8; }
+  .badge-hot { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+  .badge-fast { background: #fefce8; color: #a16207; border: 1px solid #fde68a; }
+  .badge-healthy { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+  .badge-slow { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+  .badge-dead { background: #f8fafc; color: #94a3b8; border: 1px solid #e2e8f0; }
+  .flag-chip { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 9px; font-weight: 700; margin-right: 3px; margin-bottom: 2px; letter-spacing: .03em; }
+  .flag-STOCK_STARVED { background: #fef2f2; color: #b91c1c; }
+  .flag-FADING { background: #fef3c7; color: #92400e; }
+  .flag-OVERSOLD { background: #fee2e2; color: #991b1b; }
+  .flag-HEAVY_DISCOUNT { background: #ede9fe; color: #6d28d9; }
+  .flag-NEW_LAUNCH { background: #dbeafe; color: #1d4ed8; }
+  .flag-FREE_ITEM { background: #f3f4f6; color: #6b7280; }
+  th.sort { cursor: pointer; user-select: none; }
+  th.sort:hover { background: #e2e8f0; }
+  th.sort.active { color: #2563eb; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .row-oversold { background: #fef2f2; }
+  .row-hover:hover { background: #f1f5f9; }
+  .ribbon { background: linear-gradient(90deg, #fef2f2 0%, #fee2e2 100%); border-left: 4px solid #dc2626; padding: 10px 14px; border-radius: 6px; color: #7f1d1d; font-size: 13px; margin-bottom: 14px; }
+  .tooltip { position: relative; cursor: help; border-bottom: 1px dotted #94a3b8; }
+  .tooltip:hover::after {
+    content: attr(data-tip); position: absolute; bottom: 100%; left: 0; transform: translateY(-4px);
+    background: #0f172a; color: white; padding: 6px 10px; border-radius: 4px; font-size: 11px;
+    white-space: nowrap; z-index: 100; font-weight: normal;
+  }
+  .progress-bar { height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #3b82f6; transition: width .3s; }
+  .progress-fill.high { background: #dc2626; }
+  .progress-fill.med { background: #f59e0b; }
+  .progress-fill.low { background: #10b981; }
+</style>
+</head>
+<body class="text-slate-800">
+
+<!-- ────── Top bar ────── -->
+<div class="flex items-center justify-between px-6 py-3 bg-white border-b border-slate-200 sticky top-0 z-30">
+  <div class="flex items-center gap-4">
+    <a href="/" class="text-blue-600 font-bold text-lg">⚡ Sanki Dashboard</a>
+    <span class="text-slate-400">/</span>
+    <span class="font-semibold">Velocity Intelligence</span>
+  </div>
+  <div class="flex items-center gap-3 text-sm">
+    <label class="text-slate-600">Window</label>
+    <select id="windowDays" class="border border-slate-300 rounded px-2 py-1 text-sm">
+      <option value="14">14 days</option>
+      <option value="30" selected>30 days</option>
+      <option value="60">60 days</option>
+      <option value="90">90 days</option>
+    </select>
+    <label class="text-slate-600 ml-2">Vendor</label>
+    <select id="vendorFilter" class="border border-slate-300 rounded px-2 py-1 text-sm min-w-[140px]"><option value="">All vendors</option></select>
+    <label class="text-slate-600 ml-2">Category</label>
+    <select id="categoryFilter" class="border border-slate-300 rounded px-2 py-1 text-sm min-w-[140px]"><option value="">All categories</option></select>
+    <button id="applyBtn" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-4 py-1.5 rounded font-medium">Apply</button>
+    <button id="exportBtn" class="border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm px-3 py-1.5 rounded font-medium">📥 Export CSV</button>
+  </div>
+</div>
+
+<!-- ────── Body ────── -->
+<div class="px-6 py-5">
+
+  <!-- Loading state -->
+  <div id="loadingState" class="text-center py-20">
+    <div class="text-2xl text-slate-400 mb-2">Loading Velocity Intelligence…</div>
+    <div class="text-sm text-slate-500" id="loadingDetail">Fetching products and 180 days of orders…</div>
+  </div>
+
+  <!-- Main content (hidden while loading) -->
+  <div id="mainContent" class="hidden">
+
+    <!-- Oversold ribbon (conditional) -->
+    <div id="oversoldRibbon" class="ribbon hidden"></div>
+
+    <!-- KPI strip -->
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mb-5" id="kpiStrip"></div>
+
+    <!-- Tabs -->
+    <div class="border-b border-slate-200 mb-4 flex gap-1">
+      <div class="nav-tab nav-active" data-tab="sku">SKU</div>
+      <div class="nav-tab" data-tab="product">Product</div>
+      <div class="nav-tab" data-tab="category">Category</div>
+      <div class="nav-tab" data-tab="vendor">Vendor</div>
+      <div class="nav-tab" data-tab="momentum">Momentum</div>
+      <div class="nav-tab" data-tab="pressure">Inventory Pressure</div>
+    </div>
+
+    <!-- Tab content -->
+    <div id="tabContent" class="bg-white rounded-lg border border-slate-200 overflow-hidden"></div>
+
+    <!-- Footer note -->
+    <div class="text-xs text-slate-400 mt-4">
+      Velocity Intelligence v1 · Phase 1 (frontend-only). Stockout days are inferred — Phase 2 will add daily inventory snapshots for exact computation.
+      Score weights: 0.30 Adj.Velocity · 0.20 Sell-Through · 0.15 Momentum · 0.15 Stock Pressure · 0.10 Revenue · 0.05 Margin · 0.05 Consistency.
+    </div>
+  </div>
+
+</div>
+
+<!-- ───────────────────────── Engine ───────────────────────── -->
+<script>
+// ════════════════════════════════════════════════════════════
+// Velocity Intelligence Engine
+// ════════════════════════════════════════════════════════════
+const VI = {
+  // Tunable constants
+  weights: { adjV: 0.30, sellThru: 0.20, momentum: 0.15, pressure: 0.15, revenue: 0.10, margin: 0.05, consistency: 0.05 },
+  velCapPerDay: 2,          // adjVel >= this normalizes to 1.0
+  revenueCap: 50000,        // ₹ per window → 1.0
+  freeItemDiscountThreshold: 0.99, // avgDisc ≥ this → FREE_ITEM, auto-exclude
+  heavyDiscountThreshold: 0.30,    // avgDisc ≥ this → HEAVY_DISCOUNT flag
+  stockStarvedMaxStock: 2,
+  stockStarvedMinUnits: 3,
+  newLaunchMaxDays: 14,
+  fadingMomentumThreshold: -0.50,
+
+  // Classification thresholds
+  classify(score) {
+    if (score >= 90) return 'Explosive';
+    if (score >= 75) return 'Hot';
+    if (score >= 60) return 'Fast';
+    if (score >= 40) return 'Healthy';
+    if (score >= 20) return 'Slow';
+    return 'Dead';
+  },
+  downgrade(label) {
+    const order = ['Dead','Slow','Healthy','Fast','Hot','Explosive'];
+    const i = order.indexOf(label);
+    return i > 0 ? order[i-1] : label;
+  },
+
+  // Compute score for a single SKU
+  computeSku(sku, ctx) {
+    const { products, dailyByDate, discountsBySku, firstOrderTs, windowDays, now, day } = ctx;
+    const p = products[sku] || {};
+    const stock = p.stock || 0;
+    const price = p.price || 0;
+
+    // Build windowed sales
+    const cutoffCur = now - windowDays * day;
+    const cutoffPrev = now - 2 * windowDays * day;
+    const daily = dailyByDate[sku] || {};
+    let cur = 0, prev = 0;
+    const dailySalesCur = [];
+    let lastSaleTs = 0;
+    for (const [date, units] of Object.entries(daily)) {
+      const ts = new Date(date).getTime();
+      if (ts > lastSaleTs) lastSaleTs = ts;
+      if (ts >= cutoffCur) { cur += units; dailySalesCur.push(units); }
+      else if (ts >= cutoffPrev) prev += units;
+    }
+
+    // Exposure days (since first order, capped by window)
+    const fts = firstOrderTs[sku];
+    const exposureDays = fts ? Math.min(windowDays, Math.max(1, Math.floor((now - fts) / day))) : windowDays;
+
+    // Inferred stockout days (Phase 1)
+    const daysSinceLastSale = lastSaleTs ? Math.floor((now - lastSaleTs) / day) : 999;
+    let inferredStockoutDays = 0;
+    if (stock <= 0 && daysSinceLastSale <= 14) {
+      inferredStockoutDays = Math.min(daysSinceLastSale, 14);
+    }
+    const activeDays = Math.max(1, exposureDays - inferredStockoutDays);
+
+    // 1. Adjusted Velocity
+    const adjVelocity = cur / activeDays;
+    const adjVelNorm = Math.min(1, adjVelocity / VI.velCapPerDay);
+
+    // 2. Sell-Through (approx — uses current stock; Phase 2 will use opening+received)
+    const effStock = Math.max(0, stock);
+    const sellThru = (cur + effStock) > 0 ? Math.min(1, cur / (cur + effStock)) : 0;
+
+    // 3. Momentum
+    const momentumRaw = prev > 0 ? (cur - prev) / prev : (cur > 0 ? 0.5 : 0);
+    const momentumNorm = Math.max(0, Math.min(1, (momentumRaw + 0.5) / 1.5));
+
+    // 4. Stock Pressure
+    const coverageDays = adjVelocity > 0 ? effStock / adjVelocity : 999;
+    const stockPressure = coverageDays < 3 ? 1.0 : coverageDays < 7 ? 0.7 : coverageDays < 14 ? 0.4 : coverageDays < 30 ? 0.2 : 0;
+
+    // 5. Revenue contribution
+    const revenue = cur * price;
+    const revNorm = Math.min(1, revenue / VI.revenueCap);
+
+    // 6. Margin Quality
+    const discs = discountsBySku[sku] || [];
+    const avgDisc = discs.length ? discs.reduce((a,b)=>a+b,0) / discs.length : 0;
+    const marginQuality = Math.max(0, 1 - 2 * avgDisc);
+
+    // 7. Consistency
+    const mean = dailySalesCur.length ? dailySalesCur.reduce((a,b)=>a+b,0) / dailySalesCur.length : 0;
+    const variance = dailySalesCur.length ? dailySalesCur.reduce((a,b)=>a+(b-mean)**2,0) / dailySalesCur.length : 0;
+    const cv = mean > 0 ? Math.sqrt(variance) / mean : 1;
+    const consistency = Math.max(0, 1 - cv);
+
+    // Flags
+    const flags = [];
+    if (avgDisc >= VI.freeItemDiscountThreshold) flags.push('FREE_ITEM');
+    if (stock < 0) flags.push('OVERSOLD');
+    if (avgDisc >= VI.heavyDiscountThreshold && avgDisc < VI.freeItemDiscountThreshold) flags.push('HEAVY_DISCOUNT');
+    if (prev > 0 && momentumRaw <= VI.fadingMomentumThreshold) flags.push('FADING');
+    if (stock <= VI.stockStarvedMaxStock && cur >= VI.stockStarvedMinUnits) flags.push('STOCK_STARVED');
+    if (exposureDays < VI.newLaunchMaxDays && cur > 0) flags.push('NEW_LAUNCH');
+
+    // Auto-exclude FREE_ITEM from velocity score
+    if (flags.includes('FREE_ITEM')) {
+      return {
+        sku, ...p,
+        cur, prev, adjVelocity, activeDays, sellThru, momentumRaw, stockPressure, coverageDays,
+        revenue, avgDisc, consistency, score: 0, label: 'Excluded', flags
+      };
+    }
+
+    // Final weighted score
+    const w = VI.weights;
+    const score01 = w.adjV*adjVelNorm + w.sellThru*sellThru + w.momentum*momentumNorm
+                  + w.pressure*stockPressure + w.revenue*revNorm + w.margin*marginQuality
+                  + w.consistency*consistency;
+    let score = Math.round(score01 * 100);
+    let label = VI.classify(score);
+
+    // Combo-flag downgrade: HEAVY_DISCOUNT + FADING masquerades as Hot
+    if (flags.includes('HEAVY_DISCOUNT') && flags.includes('FADING')) {
+      label = VI.downgrade(label);
+    }
+
+    return {
+      sku, ...p,
+      cur, prev, adjVelocity, activeDays, sellThru, momentumRaw, stockPressure,
+      coverageDays, revenue, avgDisc, consistency, score, label, flags
+    };
+  },
+};
+
+// ════════════════════════════════════════════════════════════
+// Data layer
+// ════════════════════════════════════════════════════════════
+const State = {
+  rawProducts: [],        // /api/products response
+  rawOrders: [],          // /api/orders response
+  scoredSkus: [],         // computed array of per-SKU score rows
+  scoredProducts: [],
+  scoredCategories: [],
+  scoredVendors: [],
+  windowDays: 30,
+  vendorFilter: '',
+  categoryFilter: '',
+  activeTab: 'sku',
+  sortKey: 'score',
+  sortDir: 'desc',
+};
+
+async function loadAll() {
+  document.getElementById('loadingDetail').textContent = 'Fetching /api/products…';
+  const pResp = await fetch('/api/products').then(r=>r.json());
+  State.rawProducts = pResp.products || [];
+  document.getElementById('loadingDetail').textContent = `Got ${State.rawProducts.length} products. Fetching /api/orders?days=180…`;
+
+  const fetchDays = Math.max(180, State.windowDays * 6);
+  const oResp = await fetch('/api/orders?days='+fetchDays).then(r=>r.json());
+  State.rawOrders = oResp.orders || [];
+  document.getElementById('loadingDetail').textContent = `Got ${State.rawOrders.length} orders. Computing scores…`;
+  await new Promise(r=>setTimeout(r, 50));
+
+  computeAll();
+  populateFilters();
+  document.getElementById('loadingState').classList.add('hidden');
+  document.getElementById('mainContent').classList.remove('hidden');
+  renderKPIs();
+  renderRibbon();
+  renderTab();
+}
+
+function computeAll() {
+  // Build product index: sku → {name, vendor, type, productId, stock, price, cost}
+  const products = {};
+  for (const p of State.rawProducts) {
+    for (const v of (p.variants || [])) {
+      if (!v.sku) continue;
+      products[v.sku] = {
+        productId: p.id,
+        productName: p.name,
+        variantTitle: v.title || '',
+        vendor: p.vendor || '—',
+        category: p.product_type || '(Uncategorised)',
+        stock: typeof v.inventory === 'number' ? v.inventory : 0,
+        price: parseFloat(v.price || 0),
+        cost: parseFloat(v.unitCost || 0),
+        image: v.image || p.image || '',
+        createdAt: p.created_at ? new Date(p.created_at).getTime() : null,
+      };
+    }
+  }
+
+  // Build per-SKU per-day sales and discounts
+  const dailyByDate = {};   // sku → { 'YYYY-MM-DD': units }
+  const discountsBySku = {};// sku → [disc_fraction]
+  const firstOrderTs = {};
+  for (const o of State.rawOrders) {
+    const ts = new Date(o.created_at).getTime();
+    const dateKey = new Date(o.created_at).toISOString().slice(0, 10);
+    for (const li of (o.line_items || [])) {
+      if (!li.sku) continue;
+      const sku = li.sku;
+      const q = li.quantity || 0;
+      const price = parseFloat(li.price || 0);
+      const disc = parseFloat(li.total_discount || 0);
+      if (!dailyByDate[sku]) dailyByDate[sku] = {};
+      dailyByDate[sku][dateKey] = (dailyByDate[sku][dateKey] || 0) + q;
+      if (price > 0 && q > 0) {
+        if (!discountsBySku[sku]) discountsBySku[sku] = [];
+        discountsBySku[sku].push(disc / (price * q));
+      } else if (price === 0 && q > 0) {
+        if (!discountsBySku[sku]) discountsBySku[sku] = [];
+        discountsBySku[sku].push(1.0);  // free item — 100% discount
+      }
+      if (!firstOrderTs[sku] || ts < firstOrderTs[sku]) firstOrderTs[sku] = ts;
+    }
+  }
+
+  // Score every SKU known to either products or orders
+  const allSkus = new Set([...Object.keys(products), ...Object.keys(dailyByDate)]);
+  const now = Date.now();
+  const day = 86400000;
+  const ctx = { products, dailyByDate, discountsBySku, firstOrderTs, windowDays: State.windowDays, now, day };
+
+  State.scoredSkus = Array.from(allSkus).map(sku => VI.computeSku(sku, ctx));
+
+  // Roll up to product level
+  const byProd = {};
+  for (const s of State.scoredSkus) {
+    const pid = s.productId || s.sku;
+    if (!byProd[pid]) {
+      byProd[pid] = {
+        productId: pid, productName: s.productName, vendor: s.vendor, category: s.category, image: s.image,
+        skus: [], totalCur: 0, totalPrev: 0, totalStock: 0, totalRevenue: 0,
+      };
+    }
+    byProd[pid].skus.push(s);
+    byProd[pid].totalCur += s.cur || 0;
+    byProd[pid].totalPrev += s.prev || 0;
+    byProd[pid].totalStock += s.stock || 0;
+    byProd[pid].totalRevenue += s.revenue || 0;
+  }
+  State.scoredProducts = Object.values(byProd).map(p => {
+    // Weighted score by revenue (fall back to max if no revenue)
+    const totalRev = Math.max(1, p.skus.reduce((a,s)=>a+s.revenue,0));
+    const score = Math.round(p.skus.reduce((a,s)=>a + s.score * (s.revenue/totalRev || 0), 0)) || Math.max(...p.skus.map(s=>s.score));
+    const label = VI.classify(score);
+    const flagSet = new Set();
+    for (const s of p.skus) for (const f of s.flags) flagSet.add(f);
+    const momentum = p.totalPrev > 0 ? (p.totalCur - p.totalPrev) / p.totalPrev : (p.totalCur > 0 ? 0.5 : 0);
+    return { ...p, skuCount: p.skus.length, score, label, flags: [...flagSet], momentum };
+  });
+
+  // Roll up to category
+  State.scoredCategories = rollupBy(State.scoredSkus, s => s.category);
+  State.scoredVendors = rollupBy(State.scoredSkus, s => s.vendor);
+}
+
+function rollupBy(skus, keyFn) {
+  const groups = {};
+  for (const s of skus) {
+    const k = keyFn(s) || '(none)';
+    if (!groups[k]) {
+      groups[k] = { name: k, skus: [], totalCur: 0, totalPrev: 0, totalStock: 0, totalRevenue: 0 };
+    }
+    groups[k].skus.push(s);
+    groups[k].totalCur += s.cur;
+    groups[k].totalPrev += s.prev;
+    groups[k].totalStock += s.stock;
+    groups[k].totalRevenue += s.revenue;
+  }
+  return Object.values(groups).map(g => {
+    const totalRev = Math.max(1, g.totalRevenue);
+    const score = Math.round(g.skus.reduce((a,s)=>a + s.score * (s.revenue/totalRev || 0), 0)) || Math.round(g.skus.reduce((a,s)=>a+s.score,0)/g.skus.length || 0);
+    const momentum = g.totalPrev > 0 ? (g.totalCur - g.totalPrev) / g.totalPrev : (g.totalCur > 0 ? 0.5 : 0);
+    const starved = g.skus.filter(s => s.flags.includes('STOCK_STARVED')).length;
+    const oversold = g.skus.filter(s => s.flags.includes('OVERSOLD')).length;
+    return { ...g, skuCount: g.skus.length, score, label: VI.classify(score), momentum, starved, oversold };
+  });
+}
+
+function populateFilters() {
+  const vendors = new Set(), cats = new Set();
+  for (const s of State.scoredSkus) {
+    if (s.vendor) vendors.add(s.vendor);
+    if (s.category) cats.add(s.category);
+  }
+  const vSel = document.getElementById('vendorFilter');
+  const cSel = document.getElementById('categoryFilter');
+  [...vendors].sort().forEach(v => vSel.innerHTML += `<option>${v}</option>`);
+  [...cats].sort().forEach(c => cSel.innerHTML += `<option>${c}</option>`);
+}
+
+// Filtered view of scored SKUs (respects vendor/category filters)
+function filtered() {
+  return State.scoredSkus.filter(s => {
+    if (s.flags.includes('FREE_ITEM')) return false; // auto-excluded
+    if (State.vendorFilter && s.vendor !== State.vendorFilter) return false;
+    if (State.categoryFilter && s.category !== State.categoryFilter) return false;
+    return true;
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+// Rendering
+// ════════════════════════════════════════════════════════════
+function fmtINR(n) {
+  if (n == null || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 10000000) return '₹' + (n/10000000).toFixed(2) + 'Cr';
+  if (abs >= 100000) return '₹' + (n/100000).toFixed(2) + 'L';
+  if (abs >= 1000) return '₹' + (n/1000).toFixed(1) + 'K';
+  return '₹' + Math.round(n).toLocaleString('en-IN');
+}
+function fmtPct(x) { return (x*100).toFixed(0) + '%'; }
+function fmtMom(m) { const v = (m*100).toFixed(0); return (m >= 0 ? '+' : '') + v + '%'; }
+function fmtDays(d) { if (d >= 999) return '∞'; return Math.round(d) + 'd'; }
+function fmtNum(n, dp=2) { return (n||0).toFixed(dp); }
+function labelBadge(label) {
+  const cls = 'badge-' + label.toLowerCase().replace(/ /g,'-');
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+function flagChips(flags) {
+  return flags.map(f => `<span class="flag-chip flag-${f}">${f.replace(/_/g,' ')}</span>`).join('');
+}
+function momentumColor(m) {
+  if (m >= 0.5) return 'text-emerald-600';
+  if (m >= 0.1) return 'text-green-600';
+  if (m >= -0.1) return 'text-slate-500';
+  if (m >= -0.5) return 'text-orange-600';
+  return 'text-red-600';
+}
+function pressureBar(p) {
+  const cls = p >= 0.7 ? 'high' : p >= 0.4 ? 'med' : 'low';
+  return `<div class="progress-bar w-16"><div class="progress-fill ${cls}" style="width:${(p*100).toFixed(0)}%"></div></div>`;
+}
+
+function renderKPIs() {
+  const all = filtered();
+  const explosive = all.filter(s => s.label === 'Explosive').length;
+  const fastMovers = all.filter(s => s.score >= 60 && s.score < 90).length;
+  const starved = all.filter(s => s.flags.includes('STOCK_STARVED')).length;
+  const dead = all.filter(s => s.label === 'Dead').length;
+  const atRisk = all.filter(s => s.coverageDays < 7 && s.adjVelocity > 0)
+                    .reduce((a,s)=>a + (s.stock>0?s.stock:0)*s.price, 0);
+  const overstock = all.filter(s => s.coverageDays > 180 && s.adjVelocity > 0)
+                       .reduce((a,s)=>a + (s.stock>0?s.stock:0)*s.cost, 0);
+
+  // Momentum categories: positive momentum
+  const momCats = State.scoredCategories.filter(c => c.momentum > 0.2).length;
+  // Top vendor by score
+  const topVendor = [...State.scoredVendors].sort((a,b)=>b.score-a.score)[0];
+
+  const cards = [
+    { label: 'Explosive SKUs', value: explosive, sub: 'Score ≥ 90' },
+    { label: 'Fast Movers', value: fastMovers, sub: 'Score 60–89' },
+    { label: 'Stock-Starved', value: starved, sub: 'Need restock NOW' },
+    { label: 'Dead SKUs', value: dead, sub: 'Score < 20' },
+    { label: 'Inventory at Risk', value: fmtINR(atRisk), sub: 'Coverage < 7d' },
+    { label: 'Overstock Value', value: fmtINR(overstock), sub: 'Coverage > 180d' },
+    { label: 'Momentum Categories', value: momCats, sub: '+20% MoM' },
+    { label: 'Top Vendor', value: topVendor ? topVendor.name : '—', sub: topVendor ? 'Score '+topVendor.score : '' },
+  ];
+  document.getElementById('kpiStrip').innerHTML = cards.map(c =>
+    `<div class="kpi-card">
+       <div class="kpi-label">${c.label}</div>
+       <div class="kpi-value">${c.value}</div>
+       <div class="kpi-sub">${c.sub}</div>
+     </div>`
+  ).join('');
+}
+
+function renderRibbon() {
+  const oversold = filtered().filter(s => s.flags.includes('OVERSOLD'));
+  const ribbon = document.getElementById('oversoldRibbon');
+  if (!oversold.length) { ribbon.classList.add('hidden'); return; }
+  const totalDeficit = oversold.reduce((a,s)=>a + Math.abs(s.stock), 0);
+  ribbon.innerHTML = `⚠️ <strong>${oversold.length} SKU${oversold.length>1?'s':''} oversold</strong> · total deficit ${totalDeficit} units. These are showing negative inventory in Shopify — fix upstream count or restock immediately. <a href="#" id="ribbonJump" class="underline ml-2">View list →</a>`;
+  ribbon.classList.remove('hidden');
+  document.getElementById('ribbonJump').onclick = (e) => {
+    e.preventDefault();
+    State.activeTab = 'sku';
+    State.sortKey = 'stock';
+    State.sortDir = 'asc';
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('nav-active'));
+    document.querySelector('[data-tab=sku]').classList.add('nav-active');
+    renderTab();
+  };
+}
+
+function sortRows(rows) {
+  const k = State.sortKey, dir = State.sortDir === 'asc' ? 1 : -1;
+  return [...rows].sort((a,b) => {
+    const av = a[k] ?? -Infinity, bv = b[k] ?? -Infinity;
+    if (typeof av === 'string' || typeof bv === 'string') return (''+av).localeCompare(''+bv) * dir;
+    return (av - bv) * dir;
+  });
+}
+function thSort(label, key, extraClass='') {
+  const isActive = State.sortKey === key;
+  const arrow = isActive ? (State.sortDir === 'asc' ? '↑' : '↓') : '';
+  return `<th class="sort px-3 py-2 text-left text-xs font-semibold text-slate-600 ${extraClass} ${isActive?'active':''}" data-sort="${key}">${label} <span class="text-slate-400">${arrow}</span></th>`;
+}
+
+function renderTab() {
+  const tab = State.activeTab;
+  if (tab === 'sku') renderSkuTab();
+  else if (tab === 'product') renderProductTab();
+  else if (tab === 'category') renderCategoryTab();
+  else if (tab === 'vendor') renderVendorTab();
+  else if (tab === 'momentum') renderMomentumTab();
+  else if (tab === 'pressure') renderPressureTab();
+
+  // Wire sortable headers
+  document.querySelectorAll('th.sort').forEach(th => {
+    th.onclick = () => {
+      const k = th.dataset.sort;
+      if (State.sortKey === k) State.sortDir = State.sortDir === 'asc' ? 'desc' : 'asc';
+      else { State.sortKey = k; State.sortDir = 'desc'; }
+      renderTab();
+    };
+  });
+}
+
+function tableHTML(headersHtml, bodyHtml, footer='') {
+  return `<div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200"><tr>${headersHtml}</tr></thead>
+      <tbody>${bodyHtml}</tbody>
+    </table>
+  </div>${footer}`;
+}
+
+function renderSkuTab() {
+  const rows = sortRows(filtered());
+  const h =
+    thSort('SKU', 'sku') +
+    thSort('Product', 'productName') +
+    thSort('Score', 'score', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Label</th>` +
+    thSort('Stock', 'stock', 'num') +
+    thSort('Units '+State.windowDays+'d', 'cur', 'num') +
+    thSort('Adj.Vel /d', 'adjVelocity', 'num') +
+    thSort('Active Days', 'activeDays', 'num') +
+    thSort('Sell-Thru', 'sellThru', 'num') +
+    thSort('Momentum', 'momentumRaw', 'num') +
+    thSort('Pressure', 'stockPressure', 'num') +
+    thSort('Coverage', 'coverageDays', 'num') +
+    thSort('Revenue', 'revenue', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Flags</th>`;
+  const body = rows.slice(0, 1000).map(s => `
+    <tr class="row-hover ${s.stock<0?'row-oversold':''} border-b border-slate-100">
+      <td class="px-3 py-2 font-mono text-xs">${s.sku}</td>
+      <td class="px-3 py-2"><div class="font-medium text-slate-800 text-xs">${(s.productName||'').slice(0,40)}</div><div class="text-xs text-slate-500">${s.vendor} · ${s.category}</div></td>
+      <td class="px-3 py-2 num font-bold">${s.score}</td>
+      <td class="px-3 py-2">${labelBadge(s.label)}</td>
+      <td class="px-3 py-2 num ${s.stock<0?'text-red-600 font-bold':''}">${s.stock}</td>
+      <td class="px-3 py-2 num">${s.cur}</td>
+      <td class="px-3 py-2 num">${fmtNum(s.adjVelocity, 2)}</td>
+      <td class="px-3 py-2 num">${s.activeDays}</td>
+      <td class="px-3 py-2 num">${fmtPct(s.sellThru)}</td>
+      <td class="px-3 py-2 num ${momentumColor(s.momentumRaw)}">${fmtMom(s.momentumRaw)}</td>
+      <td class="px-3 py-2">${pressureBar(s.stockPressure)}</td>
+      <td class="px-3 py-2 num text-xs">${fmtDays(s.coverageDays)}</td>
+      <td class="px-3 py-2 num text-xs">${fmtINR(s.revenue)}</td>
+      <td class="px-3 py-2">${flagChips(s.flags)}</td>
+    </tr>`).join('');
+  document.getElementById('tabContent').innerHTML = tableHTML(h, body,
+    `<div class="px-3 py-2 text-xs text-slate-500 border-t bg-slate-50">${rows.length} SKUs · ${rows.length>1000?'showing first 1000':'all shown'}</div>`);
+}
+
+function renderProductTab() {
+  const filteredSkus = new Set(filtered().map(s=>s.sku));
+  const prods = State.scoredProducts
+    .filter(p => p.skus.some(s => filteredSkus.has(s.sku)))
+    .filter(p => !p.skus.every(s => s.flags.includes('FREE_ITEM')));
+  const rows = sortRows(prods);
+  const h =
+    thSort('Product', 'productName') +
+    thSort('SKUs', 'skuCount', 'num') +
+    thSort('Score', 'score', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Label</th>` +
+    thSort('Stock', 'totalStock', 'num') +
+    thSort('Units '+State.windowDays+'d', 'totalCur', 'num') +
+    thSort('Momentum', 'momentum', 'num') +
+    thSort('Revenue', 'totalRevenue', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Flags</th>`;
+  const body = rows.slice(0, 1000).map(p => `
+    <tr class="row-hover border-b border-slate-100">
+      <td class="px-3 py-2"><div class="font-medium text-xs">${(p.productName||'').slice(0,60)}</div><div class="text-xs text-slate-500">${p.vendor} · ${p.category}</div></td>
+      <td class="px-3 py-2 num">${p.skuCount}</td>
+      <td class="px-3 py-2 num font-bold">${p.score}</td>
+      <td class="px-3 py-2">${labelBadge(p.label)}</td>
+      <td class="px-3 py-2 num ${p.totalStock<0?'text-red-600 font-bold':''}">${p.totalStock}</td>
+      <td class="px-3 py-2 num">${p.totalCur}</td>
+      <td class="px-3 py-2 num ${momentumColor(p.momentum)}">${fmtMom(p.momentum)}</td>
+      <td class="px-3 py-2 num text-xs">${fmtINR(p.totalRevenue)}</td>
+      <td class="px-3 py-2">${flagChips(p.flags)}</td>
+    </tr>`).join('');
+  document.getElementById('tabContent').innerHTML = tableHTML(h, body,
+    `<div class="px-3 py-2 text-xs text-slate-500 border-t bg-slate-50">${rows.length} products</div>`);
+}
+
+function renderCategoryTab() {
+  const rows = sortRows(State.scoredCategories);
+  const h =
+    thSort('Category', 'name') +
+    thSort('SKUs', 'skuCount', 'num') +
+    thSort('Score', 'score', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Label</th>` +
+    thSort('Stock', 'totalStock', 'num') +
+    thSort('Units '+State.windowDays+'d', 'totalCur', 'num') +
+    thSort('Momentum', 'momentum', 'num') +
+    thSort('Revenue', 'totalRevenue', 'num') +
+    thSort('Starved', 'starved', 'num') +
+    thSort('Oversold', 'oversold', 'num');
+  const body = rows.map(c => `
+    <tr class="row-hover border-b border-slate-100">
+      <td class="px-3 py-2 font-medium">${c.name}</td>
+      <td class="px-3 py-2 num">${c.skuCount}</td>
+      <td class="px-3 py-2 num font-bold">${c.score}</td>
+      <td class="px-3 py-2">${labelBadge(c.label)}</td>
+      <td class="px-3 py-2 num">${c.totalStock}</td>
+      <td class="px-3 py-2 num">${c.totalCur}</td>
+      <td class="px-3 py-2 num ${momentumColor(c.momentum)}">${fmtMom(c.momentum)}</td>
+      <td class="px-3 py-2 num text-xs">${fmtINR(c.totalRevenue)}</td>
+      <td class="px-3 py-2 num ${c.starved>0?'text-red-600 font-semibold':''}">${c.starved}</td>
+      <td class="px-3 py-2 num ${c.oversold>0?'text-red-600 font-semibold':''}">${c.oversold}</td>
+    </tr>`).join('');
+  document.getElementById('tabContent').innerHTML = tableHTML(h, body);
+}
+
+function renderVendorTab() {
+  const rows = sortRows(State.scoredVendors);
+  const h =
+    thSort('Vendor', 'name') +
+    thSort('SKUs', 'skuCount', 'num') +
+    thSort('Score', 'score', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Label</th>` +
+    thSort('Stock', 'totalStock', 'num') +
+    thSort('Units '+State.windowDays+'d', 'totalCur', 'num') +
+    thSort('Momentum', 'momentum', 'num') +
+    thSort('Revenue', 'totalRevenue', 'num') +
+    thSort('Starved', 'starved', 'num') +
+    thSort('Oversold', 'oversold', 'num');
+  const body = rows.map(v => `
+    <tr class="row-hover border-b border-slate-100">
+      <td class="px-3 py-2 font-medium">${v.name}</td>
+      <td class="px-3 py-2 num">${v.skuCount}</td>
+      <td class="px-3 py-2 num font-bold">${v.score}</td>
+      <td class="px-3 py-2">${labelBadge(v.label)}</td>
+      <td class="px-3 py-2 num">${v.totalStock}</td>
+      <td class="px-3 py-2 num">${v.totalCur}</td>
+      <td class="px-3 py-2 num ${momentumColor(v.momentum)}">${fmtMom(v.momentum)}</td>
+      <td class="px-3 py-2 num text-xs">${fmtINR(v.totalRevenue)}</td>
+      <td class="px-3 py-2 num ${v.starved>0?'text-red-600 font-semibold':''}">${v.starved}</td>
+      <td class="px-3 py-2 num ${v.oversold>0?'text-red-600 font-semibold':''}">${v.oversold}</td>
+    </tr>`).join('');
+  document.getElementById('tabContent').innerHTML = tableHTML(h, body);
+}
+
+function renderMomentumTab() {
+  // Sorted by raw momentum desc, filtered to score >= 40 (excludes dead from "trending")
+  if (!['momentumRaw','score','cur','revenue'].includes(State.sortKey)) State.sortKey = 'momentumRaw';
+  const all = filtered().filter(s => s.score >= 40);
+  const rows = sortRows(all);
+  const h =
+    thSort('SKU', 'sku') +
+    thSort('Product', 'productName') +
+    thSort('Score', 'score', 'num') +
+    thSort('Momentum', 'momentumRaw', 'num') +
+    thSort('Units '+State.windowDays+'d', 'cur', 'num') +
+    thSort('Prev '+State.windowDays+'d', 'prev', 'num') +
+    thSort('Stock', 'stock', 'num') +
+    thSort('Adj.Vel /d', 'adjVelocity', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Flags</th>`;
+  const body = rows.slice(0, 1000).map(s => `
+    <tr class="row-hover border-b border-slate-100">
+      <td class="px-3 py-2 font-mono text-xs">${s.sku}</td>
+      <td class="px-3 py-2"><div class="text-xs font-medium">${(s.productName||'').slice(0,40)}</div><div class="text-xs text-slate-500">${s.vendor}</div></td>
+      <td class="px-3 py-2 num font-bold">${s.score}</td>
+      <td class="px-3 py-2 num font-bold ${momentumColor(s.momentumRaw)}">${fmtMom(s.momentumRaw)}</td>
+      <td class="px-3 py-2 num">${s.cur}</td>
+      <td class="px-3 py-2 num text-slate-500">${s.prev}</td>
+      <td class="px-3 py-2 num ${s.stock<0?'text-red-600 font-bold':''}">${s.stock}</td>
+      <td class="px-3 py-2 num">${fmtNum(s.adjVelocity,2)}</td>
+      <td class="px-3 py-2">${flagChips(s.flags)}</td>
+    </tr>`).join('');
+  document.getElementById('tabContent').innerHTML = tableHTML(h, body,
+    `<div class="px-3 py-2 text-xs text-slate-500 border-t bg-slate-50">Trending: ${rows.length} SKUs with score ≥ 40, sorted by momentum</div>`);
+}
+
+function renderPressureTab() {
+  // Sorted by pressure × adjVel — the procurement queue
+  if (State.sortKey === 'score') State.sortKey = 'pressureScore';
+  const all = filtered().map(s => ({ ...s, pressureScore: s.stockPressure * Math.min(1, s.adjVelocity/2) }));
+  const rows = sortRows(all);
+  const h =
+    thSort('SKU', 'sku') +
+    thSort('Product', 'productName') +
+    thSort('Urgency', 'pressureScore', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Risk</th>` +
+    thSort('Stock', 'stock', 'num') +
+    thSort('Adj.Vel /d', 'adjVelocity', 'num') +
+    thSort('Coverage', 'coverageDays', 'num') +
+    thSort('Pressure', 'stockPressure', 'num') +
+    thSort('Score', 'score', 'num') +
+    `<th class="px-3 py-2 text-left text-xs font-semibold text-slate-600">Flags</th>`;
+  const body = rows.slice(0, 1000).map(s => {
+    const risk = s.stockPressure >= 0.7 ? 'CRITICAL' : s.stockPressure >= 0.4 ? 'HIGH' : s.stockPressure >= 0.2 ? 'MEDIUM' : 'LOW';
+    const riskCls = s.stockPressure >= 0.7 ? 'bg-red-100 text-red-700' : s.stockPressure >= 0.4 ? 'bg-orange-100 text-orange-700' : s.stockPressure >= 0.2 ? 'bg-yellow-100 text-yellow-700' : 'bg-slate-100 text-slate-600';
+    return `
+    <tr class="row-hover border-b border-slate-100">
+      <td class="px-3 py-2 font-mono text-xs">${s.sku}</td>
+      <td class="px-3 py-2"><div class="text-xs font-medium">${(s.productName||'').slice(0,40)}</div><div class="text-xs text-slate-500">${s.vendor}</div></td>
+      <td class="px-3 py-2 num font-bold">${(s.pressureScore*100).toFixed(0)}</td>
+      <td class="px-3 py-2"><span class="badge ${riskCls}" style="background:none;border:none;padding:2px 6px;border-radius:4px">${risk}</span></td>
+      <td class="px-3 py-2 num ${s.stock<0?'text-red-600 font-bold':''}">${s.stock}</td>
+      <td class="px-3 py-2 num">${fmtNum(s.adjVelocity,2)}</td>
+      <td class="px-3 py-2 num">${fmtDays(s.coverageDays)}</td>
+      <td class="px-3 py-2">${pressureBar(s.stockPressure)}</td>
+      <td class="px-3 py-2 num">${s.score}</td>
+      <td class="px-3 py-2">${flagChips(s.flags)}</td>
+    </tr>`}).join('');
+  document.getElementById('tabContent').innerHTML = tableHTML(h, body,
+    `<div class="px-3 py-2 text-xs text-slate-500 border-t bg-slate-50">Procurement queue: top of list = restock first</div>`);
+}
+
+// ════════════════════════════════════════════════════════════
+// Export CSV
+// ═══════════════════════════════════════════════════════════
+function exportCSV() {
+  const rows = filtered();
+  const headers = ['SKU','Product','Vendor','Category','Stock','Units_'+State.windowDays+'d','Prev_'+State.windowDays+'d','AdjVelocity','ActiveDays','SellThruPct','MomentumPct','StockPressure','CoverageDays','Revenue','AvgDiscountPct','Consistency','Score','Label','Flags'];
+  const lines = [headers.join(',')];
+  for (const s of rows) {
+    const row = [
+      s.sku, JSON.stringify(s.productName||''), s.vendor, JSON.stringify(s.category||''),
+      s.stock, s.cur, s.prev,
+      s.adjVelocity.toFixed(3), s.activeDays, (s.sellThru*100).toFixed(1), (s.momentumRaw*100).toFixed(1),
+      s.stockPressure.toFixed(2), s.coverageDays >= 999 ? '' : s.coverageDays.toFixed(1),
+      s.revenue.toFixed(0), (s.avgDisc*100).toFixed(1), (s.consistency*100).toFixed(1),
+      s.score, s.label, '"'+s.flags.join(';')+'"'
+    ];
+    lines.push(row.join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'velocity_intelligence_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click(); URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════════════════
+// Wire up
+// ════════════════════════════════════════════════════════════
+document.querySelectorAll('.nav-tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.nav-tab').forEach(x => x.classList.remove('nav-active'));
+    t.classList.add('nav-active');
+    State.activeTab = t.dataset.tab;
+    State.sortKey = 'score'; State.sortDir = 'desc';
+    renderTab();
+  };
+});
+document.getElementById('applyBtn').onclick = () => {
+  State.windowDays = parseInt(document.getElementById('windowDays').value);
+  State.vendorFilter = document.getElementById('vendorFilter').value;
+  State.categoryFilter = document.getElementById('categoryFilter').value;
+  document.getElementById('loadingState').classList.remove('hidden');
+  document.getElementById('mainContent').classList.add('hidden');
+  document.getElementById('loadingDetail').textContent = 'Recomputing scores…';
+  setTimeout(() => {
+    computeAll();
+    document.getElementById('loadingState').classList.add('hidden');
+    document.getElementById('mainContent').classList.remove('hidden');
+    renderKPIs(); renderRibbon(); renderTab();
+  }, 30);
+};
+document.getElementById('exportBtn').onclick = exportCSV;
+
+loadAll().catch(e => {
+  document.getElementById('loadingDetail').textContent = '❌ Error: '+e.message+'. Check console.';
+  console.error(e);
+});
+</script>
+</body>
+</html>
