@@ -5186,7 +5186,7 @@ function o2ExportCSV(){
       return done.then(function(){
         initialized = true;
         setInterval(checkAndPush, 4000);
-        setInterval(periodicPull, 25000);
+        /* DISABLED-PO-SYNC (was deleting local POs on every 25s pull) */ // setInterval(periodicPull, 25000);
         // Hook deletePO to add tombstone
         hookDeletePO();
         console.log('[sanki] cloud sync v3 ready (tombstone), server had', serverPOs.length, 'POs,', serverTomb.length, 'tombstones');
@@ -5269,7 +5269,7 @@ function o2ExportCSV(){
       }
     });
   }
-  setTimeout(initialSync, 1500);
+  /* DISABLED-PO-SYNC (server not persisting POs, was wiping local) */ // setTimeout(initialSync, 1500);
   window.addEventListener('beforeunload', function(){
     if (!initialized) return;
     try {
