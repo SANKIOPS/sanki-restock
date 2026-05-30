@@ -57,6 +57,7 @@
   .lightbox-close { position: absolute; top: 18px; right: 18px; color: #fff; background: rgba(255,255,255,0.15); border-radius: 50%; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 22px; }
   .lightbox-close:hover { background: rgba(255,255,255,0.25); }
 </style>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <header class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-3">
@@ -76,6 +77,7 @@
       <button class="tab-btn" data-tab="audit">📜 Audit Log</button>
       <button class="tab-btn" data-tab="queue">🔔 Replenishment Queue <span id="queueBadge" class="ml-1 px-1.5 py-0.5 text-xs bg-rose-500 text-white rounded-full" style="display:none;">0</span></button>
       <button class="tab-btn" data-tab="inventory">📊 Inventory</button>
+      <button class="tab-btn" data-tab="reconcile">🎯 Reconcile from Floor</button>
     </div>
 
     <!-- Settings Tab -->
@@ -309,6 +311,84 @@
         <tbody id="invBody"><tr class="empty-row"><td colspan="10">Loading inventory… (this can take 30–60s on first load)</td></tr></tbody>
       </table>
     </div>
+  </div>
+</section>
+
+    <section id="tab-reconcile" class="panel rounded-b-lg hidden" style="border-top:none;">
+  <div class="panel-pad">
+    <h2 class="text-base font-semibold mb-1">Reconcile from Floor List</h2>
+    <p class="text-sm text-gray-600 mb-4">Upload an .xlsx or .csv file listing the SKUs currently hanging in the front showroom. The app will set those SKUs to <strong>1 unit at front, rest at back</strong> in Shopify, and put all other SKUs at the back. No physical movement required — this just makes Shopify match what's already on your floor.</p>
+
+    <div class="bg-amber-50 border border-amber-200 rounded p-3 mb-4 text-sm text-amber-900">
+      ⚠️ This will issue inventory adjustments to your live Shopify store. Always run the preview first and double-check the totals before clicking Apply.
+    </div>
+
+    <!-- File upload -->
+    <div class="flex items-center gap-3 mb-4 flex-wrap">
+      <label class="btn btn-secondary cursor-pointer">
+        📂 Choose file (.xlsx / .csv)
+        <input id="recFile" type="file" accept=".xlsx,.xls,.csv,.tsv" style="display:none;">
+      </label>
+      <span id="recFileStatus" class="text-sm text-gray-500"></span>
+      <button id="recPreview" class="btn btn-primary" disabled>↻ Calculate Preview</button>
+    </div>
+
+    <!-- Summary cards -->
+    <div id="recSummary" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4 hidden">
+      <div class="stat-card"><div class="text-xs text-gray-500">SKUs in your file</div><div class="text-xl font-bold num" id="recSkusInFile">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">Found in store</div><div class="text-xl font-bold num text-emerald-600" id="recSkusFound">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">Not in store</div><div class="text-xl font-bold num text-rose-600" id="recSkusNotFound">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">Variants to move</div><div class="text-xl font-bold num" id="recVariantsToMove">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">Total units moving</div><div class="text-xl font-bold num" id="recTotalUnits">—</div></div>
+    </div>
+
+    <!-- Direction breakdown -->
+    <div id="recDirection" class="text-sm text-gray-700 mb-3 hidden">
+      <span class="badge badge-blue">Back → Front: <span id="recToFront" class="num">0</span></span>
+      <span class="badge badge-amber ml-2">Front → Back: <span id="recToBack" class="num">0</span></span>
+    </div>
+
+    <!-- Not-found SKUs warning -->
+    <details id="recNotFoundWrap" class="hidden mb-3 bg-rose-50 border border-rose-200 rounded p-3">
+      <summary class="text-sm text-rose-800 cursor-pointer">⚠ <span id="recNotFoundCount">0</span> SKUs in your file weren't found in the Shopify store — click to view</summary>
+      <div id="recNotFoundList" class="text-xs text-rose-900 mt-2 font-mono whitespace-pre-wrap"></div>
+    </details>
+
+    <!-- Preview table -->
+    <div id="recPreviewWrap" class="bg-white border border-gray-200 rounded overflow-x-auto mb-4 hidden">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Product / Variant</th>
+            <th>SKU</th>
+            <th class="right">🏪 Front Now</th>
+            <th class="right">📦 Back Now</th>
+            <th class="right">🏪 Front After</th>
+            <th class="right">📦 Back After</th>
+            <th class="right">Move</th>
+            <th>Direction</th>
+          </tr>
+        </thead>
+        <tbody id="recPreviewBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Run + progress -->
+    <div class="flex items-center gap-3">
+      <button id="recRun" class="btn btn-emerald" disabled>▶ Apply Reconciliation</button>
+      <span id="recRunStatus" class="text-sm text-gray-500">Upload a file and calculate a preview first.</span>
+    </div>
+
+    <div id="recProgressWrap" class="mt-4 hidden">
+      <div class="flex items-center justify-between text-sm mb-1">
+        <span id="recProgressLabel">Processing…</span>
+        <span id="recProgressPct" class="num">0%</span>
+      </div>
+      <div class="progress"><div id="recProgressBar" class="progress-bar" style="width:0%"></div></div>
+    </div>
+
+    <div id="recLog" class="log mt-4 hidden"></div>
   </div>
 </section>
   </main>
@@ -872,6 +952,182 @@
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && _invLB.classList.contains('active')) { _invLB.classList.remove('active'); _invLBImg.src = ''; }
   });
+
+  // ============================================================
+  //  RECONCILE FROM FLOOR LIST (Phase 4)
+  // ============================================================
+  let _recSkus = [];
+  let _recPreviewRows = [];
+  let _recPreviewMeta = null;
+
+  function recLog(msg, cls) {
+    const el = document.getElementById('recLog');
+    el.classList.remove('hidden');
+    const ts = new Date().toLocaleTimeString();
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = `[${ts}] ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  document.getElementById('recFile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const status = document.getElementById('recFileStatus');
+    status.textContent = `Reading ${file.name}…`;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (!rows.length) throw new Error('File is empty');
+      // Detect SKU column
+      let skuColIdx = -1;
+      const firstRow = rows[0].map(c => String(c).trim().toLowerCase());
+      const hdrCandidates = ['sku', 'sku code', 'item sku', 'product sku', 'code', 'barcode'];
+      for (let i = 0; i < firstRow.length; i++) {
+        if (hdrCandidates.includes(firstRow[i])) { skuColIdx = i; break; }
+      }
+      let dataStart = 0;
+      if (skuColIdx >= 0) { dataStart = 1; }
+      else {
+        // No header detected — assume column A is the SKU
+        skuColIdx = 0;
+        dataStart = 0;
+      }
+      const skus = [];
+      const seen = new Set();
+      for (let i = dataStart; i < rows.length; i++) {
+        const v = String(rows[i][skuColIdx] || '').trim();
+        if (!v) continue;
+        const up = v.toUpperCase();
+        if (seen.has(up)) continue;
+        seen.add(up);
+        skus.push(v);
+      }
+      _recSkus = skus;
+      status.innerHTML = `<span class="text-emerald-600">✓</span> ${skus.length} unique SKUs loaded from <strong>${escape(file.name)}</strong> (column ${String.fromCharCode(65+skuColIdx)}${dataStart === 1 ? ', header detected' : ', no header — using column A'})`;
+      document.getElementById('recPreview').disabled = false;
+    } catch (err) {
+      status.innerHTML = `<span class="text-rose-600">✗ ${escape(err.message)}</span>`;
+      _recSkus = [];
+      document.getElementById('recPreview').disabled = true;
+    }
+  });
+
+  document.getElementById('recPreview').addEventListener('click', async () => {
+    if (!_recSkus.length) return;
+    const btn = document.getElementById('recPreview');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Calculating…';
+    try {
+      const r = await fetch('/api/showroom/reconcile/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skus: _recSkus })
+      });
+      const j = await r.json();
+      if (!j.success) throw new Error(j.error);
+      _recPreviewRows = j.moves || [];
+      _recPreviewMeta = j.meta || {};
+      renderRecPreview(j);
+      document.getElementById('recRun').disabled = !_recPreviewRows.length;
+      document.getElementById('recRunStatus').textContent = _recPreviewRows.length
+        ? `Ready — ${_recPreviewMeta.totalUnitsMoving} units will move across ${_recPreviewMeta.variantsToMove} variants.`
+        : 'Nothing to move — Shopify already matches your floor list.';
+    } catch (e) {
+      document.getElementById('recRunStatus').textContent = 'Preview failed: ' + e.message;
+    } finally { btn.disabled = false; btn.textContent = old; }
+  });
+
+  function renderRecPreview(j) {
+    document.getElementById('recSummary').classList.remove('hidden');
+    document.getElementById('recDirection').classList.remove('hidden');
+    document.getElementById('recSkusInFile').textContent = fmt(j.meta.skusInList);
+    document.getElementById('recSkusFound').textContent = fmt(j.meta.skusFoundInStore);
+    document.getElementById('recSkusNotFound').textContent = fmt(j.meta.skusNotFound);
+    document.getElementById('recVariantsToMove').textContent = fmt(j.meta.variantsToMove);
+    document.getElementById('recTotalUnits').textContent = fmt(j.meta.totalUnitsMoving);
+    document.getElementById('recToFront').textContent = fmt(j.meta.unitsToFront);
+    document.getElementById('recToBack').textContent = fmt(j.meta.unitsToBack);
+    // Not-found warning
+    if (j.notFoundSkus && j.notFoundSkus.length) {
+      document.getElementById('recNotFoundWrap').classList.remove('hidden');
+      document.getElementById('recNotFoundCount').textContent = j.meta.skusNotFound;
+      document.getElementById('recNotFoundList').textContent = j.notFoundSkus.join('\n');
+    } else {
+      document.getElementById('recNotFoundWrap').classList.add('hidden');
+    }
+    // Preview table (first 300 rows)
+    const body = document.getElementById('recPreviewBody');
+    document.getElementById('recPreviewWrap').classList.remove('hidden');
+    if (!_recPreviewRows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="9">Nothing to move — Shopify already matches your floor list.</td></tr>';
+      return;
+    }
+    const shown = _recPreviewRows.slice(0, 300);
+    body.innerHTML = shown.map(r => {
+      const img = r.image
+        ? `<img class="invThumb" src="${escape(r.image)}" loading="lazy">`
+        : '<div class="invThumb" style="background:#f1f5f9;display:inline-block;"></div>';
+      const direction = r.move > 0
+        ? `<span class="badge badge-blue">Back → Front +${r.move}</span>`
+        : `<span class="badge badge-amber">Front → Back ${r.move}</span>`;
+      return `<tr>
+        <td>${img}</td>
+        <td><div>${escape(r.name)}</div><div class="text-xs text-gray-500">${escape(r.variantTitle||'')}</div></td>
+        <td><span class="num">${escape(r.sku)}</span></td>
+        <td class="right num">${fmt(r.frontQty)}</td>
+        <td class="right num">${fmt(r.backQty)}</td>
+        <td class="right num font-semibold text-emerald-600">${fmt(r.desiredFront)}</td>
+        <td class="right num">${fmt(r.desiredBack)}</td>
+        <td class="right num font-semibold">${r.move > 0 ? '+' : ''}${fmt(r.move)}</td>
+        <td>${direction}</td>
+      </tr>`;
+    }).join('');
+    if (_recPreviewRows.length > 300) {
+      body.insertAdjacentHTML('beforeend', `<tr><td colspan="9" class="text-center text-xs text-gray-500 py-3">Showing first 300 of ${fmt(_recPreviewRows.length)} rows. All will be processed when you click Apply.</td></tr>`);
+    }
+  }
+
+  document.getElementById('recRun').addEventListener('click', async () => {
+    if (!_recPreviewRows.length) return;
+    if (!confirm(`Apply ${_recPreviewMeta.totalUnitsMoving} unit moves across ${_recPreviewMeta.variantsToMove} variants in your live Shopify store. Continue?`)) return;
+    document.getElementById('recRun').disabled = true;
+    document.getElementById('recPreview').disabled = true;
+    document.getElementById('recProgressWrap').classList.remove('hidden');
+    document.getElementById('recLog').innerHTML = '';
+    recLog('Starting reconciliation…', 'info');
+    const total = _recPreviewRows.length;
+    let done = 0, ok = 0, fail = 0;
+    const BATCH = 5;
+    for (let i = 0; i < total; i += BATCH) {
+      const chunk = _recPreviewRows.slice(i, i + BATCH);
+      try {
+        const r = await fetch('/api/showroom/seed/run', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ moves: chunk })
+        });
+        const j = await r.json();
+        (j.results || []).forEach(res => {
+          done++;
+          if (res.ok) { ok++; recLog(`✓ ${res.sku}  ${res.detail||''}`, 'ok'); }
+          else { fail++; recLog(`✗ ${res.sku}  ${(res.error||'').slice(0,120)}`, 'err'); }
+        });
+      } catch (e) {
+        for (const x of chunk) { done++; fail++; recLog(`✗ ${x.sku}  ${e.message}`, 'err'); }
+      }
+      const pct = Math.round((done / total) * 100);
+      document.getElementById('recProgressBar').style.width = pct + '%';
+      document.getElementById('recProgressPct').textContent = pct + '%';
+      document.getElementById('recProgressLabel').textContent = `${done}/${total} · ${ok} ok · ${fail} fail`;
+    }
+    recLog(`Done. ${ok}/${total} succeeded, ${fail} failed.`, fail ? 'err' : 'ok');
+    document.getElementById('recPreview').disabled = false;
+    document.getElementById('recRunStatus').textContent = fail === 0 ? '✓ All moves complete. Re-run Inventory tab to verify.' : `Finished with ${fail} failures — see log above.`;
+    if (fail > 0) document.getElementById('recRun').disabled = false;
+    if (typeof loadAudit === 'function') loadAudit();
+  });
+
 
   // Load on first tab open (lazy — avoids 30s spinner on page load)
   document.querySelectorAll('.tab-btn').forEach(b => {
