@@ -1826,6 +1826,110 @@ app.get('/api/showroom/webhook/status', async (req, res) => {
   } catch (e) { res.json({ success: false, error: e.message }); }
 });
 
+
+// ════════════════════════════════════════════════════════════════
+//  SHOWROOM REPLENISHMENT — Phase 3: Inventory Snapshot endpoint
+// ════════════════════════════════════════════════════════════════
+// GET /api/showroom/inventory — full per-variant breakdown with per-location qtys
+app.get('/api/showroom/inventory', async (req, res) => {
+  try {
+    const settings = loadShowroomSettings();
+    if (!settings.frontLocationId || !settings.backLocationId) {
+      return res.json({ success: false, error: 'Please configure Settings first' });
+    }
+    const fetch = require('node-fetch');
+
+    // Pull all products + variants + images + vendor + category
+    const all = await shopifyFetchAll(fetch,
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,variants,image,images,vendor,product_type`
+    );
+    const variants = [];
+    for (const p of all) {
+      const vim = {};
+      (p.images || []).forEach(img => (img.variant_ids || []).forEach(vid => { vim[String(vid)] = img.src; }));
+      const mainImg = p.image ? p.image.src : null;
+      for (const v of (p.variants || [])) {
+        if (!v.inventory_item_id) continue;
+        variants.push({
+          productId: p.id,
+          name: p.title,
+          variantTitle: v.title || '',
+          sku: v.sku || '',
+          variantId: v.id,
+          inventoryItemId: v.inventory_item_id,
+          vendor: p.vendor || '',
+          category: p.product_type || '',
+          price: parseFloat(v.price) || 0,
+          image: vim[String(v.id)] || mainImg
+        });
+      }
+    }
+
+    // Fetch inventory levels for both locations (50 IDs per batch, retry on 429)
+    const iids = variants.map(v => v.inventoryItemId);
+    const levels = {};
+    const __sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < iids.length; i += 50) {
+      const chunk = iids.slice(i, i + 50);
+      const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${chunk.join(',')}&location_ids=${settings.frontLocationId},${settings.backLocationId}&limit=250`;
+      let ok = false;
+      for (let t = 0; t < 4 && !ok; t++) {
+        try {
+          const lr = await shopifyFetch(fetch, url);
+          if (lr.ok) {
+            const ld = await lr.json();
+            for (const lvl of (ld.inventory_levels || [])) {
+              const k = String(lvl.inventory_item_id);
+              if (!levels[k]) levels[k] = {};
+              levels[k][String(lvl.location_id)] = Number(lvl.available) || 0;
+            }
+            ok = true;
+          } else if (lr.status === 429) {
+            const ra = parseFloat(lr.headers.get('Retry-After') || '2');
+            await __sleep(Math.max(ra * 1000, 1500 * (t + 1)));
+          } else { console.error('[showroom/inventory] levels', lr.status); break; }
+        } catch (e) { console.error('[showroom/inventory] fetch', e.message); break; }
+      }
+      await __sleep(200);
+    }
+
+    // Build per-variant rows + meta totals + status counts
+    const target = Number(settings.defaultTarget) || 1;
+    const rows = [];
+    let totalUnits = 0, totalFront = 0, totalBack = 0;
+    let countOK = 0, countOverstocked = 0, countUnderstocked = 0, countOOS = 0, countOnlyBack = 0;
+    for (const v of variants) {
+      const lvl = levels[String(v.inventoryItemId)] || {};
+      const frontQty = Number(lvl[String(settings.frontLocationId)]) || 0;
+      const backQty = Number(lvl[String(settings.backLocationId)]) || 0;
+      const total = frontQty + backQty;
+      let status = 'ok';
+      if (total <= 0) { status = 'oos'; countOOS++; }
+      else if (frontQty === 0 && backQty > 0) { status = 'only-back'; countOnlyBack++; }
+      else if (frontQty > target) { status = 'overstocked'; countOverstocked++; }
+      else if (frontQty < target && backQty > 0) { status = 'understocked'; countUnderstocked++; }
+      else countOK++;
+      totalUnits += total;
+      totalFront += frontQty;
+      totalBack += backQty;
+      rows.push({ ...v, frontQty, backQty, total, target, status, salesValue: total * v.price });
+    }
+
+    res.json({
+      success: true,
+      meta: {
+        totalVariants: variants.length,
+        totalUnits, totalFront, totalBack,
+        countOK, countOverstocked, countUnderstocked, countOOS, countOnlyBack,
+        frontLocationId: settings.frontLocationId,
+        backLocationId: settings.backLocationId,
+        target
+      },
+      rows
+    });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
