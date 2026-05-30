@@ -1554,7 +1554,7 @@ app.post('/api/showroom/seed/run', async (req, res) => {
         results.push({ sku: m.sku, ok: false, error: e.message });
         audit.entries.unshift({ at: Date.now(), sku: m.sku, name: m.name, fromId: fromLoc, toId: toLoc, qty, source: 'seed', ok: false, error: e.message });
       }
-      await __sleep(300); // throttle between variants
+      await __sleep(1200); // throttle between variants (Shopify 2 calls/sec sustained limit)
     }
     if (audit.entries.length > 5000) audit.entries = audit.entries.slice(0, 5000);
     saveShowroomAudit(audit);
@@ -1566,6 +1566,264 @@ app.post('/api/showroom/seed/run', async (req, res) => {
 app.get('/api/showroom/audit', (req, res) => {
   const a = loadShowroomAudit();
   res.json({ success: true, entries: (a.entries || []).slice(0, 200) });
+});
+
+
+// ════════════════════════════════════════════════════════════════
+//  SHOWROOM REPLENISHMENT — Phase 2: Live Queue + Webhook
+// ════════════════════════════════════════════════════════════════
+const SHOWROOM_QUEUE_PATH = __srPath.join(process.env.DATA_PATH ? __srPath.dirname(process.env.DATA_PATH) : __dirname, 'showroom-queue.json');
+
+function loadShowroomQueue() {
+  try { return JSON.parse(__srFs.readFileSync(SHOWROOM_QUEUE_PATH, 'utf8')); }
+  catch (e) { return { items: [] }; }
+}
+function saveShowroomQueue(q) {
+  try { __srFs.writeFileSync(SHOWROOM_QUEUE_PATH, JSON.stringify(q, null, 2)); }
+  catch (e) { console.error('[showroom] queue save error:', e.message); }
+}
+
+// Helper: enrich queue item with inventoryItemId + image by looking up variant
+async function enrichQueueItem(fetch, item) {
+  if (item.inventoryItemId && item.image) return item;
+  try {
+    if (item.variantId) {
+      const vr = await shopifyFetch(fetch, `https://${SHOPIFY_STORE}/admin/api/2024-01/variants/${item.variantId}.json`);
+      const vd = await vr.json();
+      if (vd.variant) {
+        item.inventoryItemId = item.inventoryItemId || vd.variant.inventory_item_id;
+        // Get image from parent product
+        if (!item.image && vd.variant.product_id) {
+          const pr = await shopifyFetch(fetch, `https://${SHOPIFY_STORE}/admin/api/2024-01/products/${vd.variant.product_id}.json?fields=image,images,variants`);
+          const pd = await pr.json();
+          if (pd.product) {
+            const vimg = (pd.product.images || []).find(img => (img.variant_ids || []).includes(Number(item.variantId)));
+            item.image = (vimg && vimg.src) || (pd.product.image && pd.product.image.src) || null;
+            const variant = (pd.product.variants || []).find(v => String(v.id) === String(item.variantId));
+            if (variant && !item.variantTitle) item.variantTitle = variant.title;
+            if (variant && !item.sku) item.sku = variant.sku;
+          }
+        }
+      }
+    }
+  } catch (e) { console.error('[showroom] enrich error', item.sku, e.message); }
+  return item;
+}
+
+// POST /api/webhooks/shopify/orders-paid — Shopify webhook for sales
+// Note: existing server.js already has express.raw on /api/webhooks/shopify base path
+app.post('/api/webhooks/shopify/orders-paid', async (req, res) => {
+  try {
+    // Body is raw Buffer due to existing express.raw config
+    const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+    const order = JSON.parse(raw);
+    res.status(200).json({ ok: true });  // Ack immediately to Shopify
+    // Process async after ack
+    setImmediate(async () => {
+      try {
+        const settings = loadShowroomSettings();
+        if (!settings.frontLocationId) { console.log('[showroom-wh] no settings, skip'); return; }
+        const queue = loadShowroomQueue();
+
+        // Determine the location each line item was deducted from
+        // POS orders set order.location_id; online orders use fulfillment location
+        const orderLocId = String(order.location_id || '');
+        const isFrontPOS = orderLocId === String(settings.frontLocationId);
+
+        // Build a map of variant_id -> location_id from fulfillments (for online orders)
+        const fulfillmentLocByVariant = {};
+        for (const f of (order.fulfillments || [])) {
+          for (const li of (f.line_items || [])) {
+            if (li.variant_id && f.location_id) fulfillmentLocByVariant[String(li.variant_id)] = String(f.location_id);
+          }
+        }
+
+        let addedCount = 0;
+        for (const item of (order.line_items || [])) {
+          if (!item.variant_id || !item.quantity) continue;
+          const deductLoc = fulfillmentLocByVariant[String(item.variant_id)] || orderLocId;
+          if (String(deductLoc) !== String(settings.frontLocationId)) continue;  // Only front deductions trigger replenishment
+
+          // Look for existing pending entry for same variant
+          const existing = queue.items.find(x => String(x.variantId) === String(item.variant_id) && !x.movedAt);
+          if (existing) {
+            existing.qty += item.quantity;
+          } else {
+            queue.items.push({
+              id: `q_${Date.now()}_${item.variant_id}_${Math.random().toString(36).slice(2,6)}`,
+              variantId: item.variant_id,
+              inventoryItemId: null,
+              sku: item.sku || '',
+              name: item.title || item.name || '',
+              variantTitle: item.variant_title || '',
+              image: null,  // will be enriched on first /api/showroom/queue fetch
+              qty: item.quantity,
+              addedAt: Date.now(),
+              source: 'webhook:orders/paid',
+              orderId: order.id,
+              orderName: order.name || ''
+            });
+            addedCount++;
+          }
+        }
+        if (queue.items.length > 1000) queue.items = queue.items.slice(-1000);
+        saveShowroomQueue(queue);
+        console.log(`[showroom-wh] order ${order.name || order.id} → added ${addedCount} queue items`);
+      } catch (e) { console.error('[showroom-wh] async process error:', e.message); }
+    });
+  } catch (e) {
+    console.error('[showroom] webhook parse error:', e.message);
+    res.status(200).json({ ok: false });  // Still ack to avoid Shopify retry storms
+  }
+});
+
+// GET /api/showroom/queue — list pending replenishments (auto-enriches first 50 items)
+app.get('/api/showroom/queue', async (req, res) => {
+  try {
+    const queue = loadShowroomQueue();
+    const pending = queue.items.filter(x => !x.movedAt);
+    if (!pending.length) return res.json({ success: true, items: [], total: 0 });
+    const fetch = require('node-fetch');
+    // Enrich up to 50 unenriched items to populate image+inventoryItemId
+    const toEnrich = pending.filter(x => !x.image || !x.inventoryItemId).slice(0, 50);
+    let changed = false;
+    for (const item of toEnrich) {
+      const before = JSON.stringify({i: item.inventoryItemId, img: item.image});
+      await enrichQueueItem(fetch, item);
+      const after = JSON.stringify({i: item.inventoryItemId, img: item.image});
+      if (before !== after) changed = true;
+    }
+    if (changed) saveShowroomQueue(queue);
+    res.json({ success: true, items: pending.slice(0, 200), total: pending.length });
+  } catch (e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
+// POST /api/showroom/queue/move — execute a queue item move (back → front)
+app.post('/api/showroom/queue/move', async (req, res) => {
+  try {
+    const { id, qty } = (req.body || {});
+    if (!id) return res.json({ success: false, error: 'Missing id' });
+    const queue = loadShowroomQueue();
+    const idx = queue.items.findIndex(x => x.id === id);
+    if (idx < 0) return res.json({ success: false, error: 'Queue item not found' });
+    const item = queue.items[idx];
+    const settings = loadShowroomSettings();
+    if (!settings.frontLocationId || !settings.backLocationId) return res.json({ success: false, error: 'Configure Settings first' });
+
+    const fetch = require('node-fetch');
+    const moveQty = Math.max(1, Number(qty || item.qty) || 1);
+
+    // Ensure we have inventoryItemId
+    if (!item.inventoryItemId) await enrichQueueItem(fetch, item);
+    if (!item.inventoryItemId) return res.json({ success: false, error: 'inventory_item_id unavailable' });
+
+    // Ensure front location is connected to this inventory item (idempotent)
+    try {
+      await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/connect.json`, {
+        method: 'POST',
+        headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: Number(settings.frontLocationId), inventory_item_id: Number(item.inventoryItemId) })
+      });
+    } catch (e) { /* 422 already connected is fine */ }
+
+    // 1) Decrement at back
+    const r1 = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+      method: 'POST',
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location_id: Number(settings.backLocationId), inventory_item_id: Number(item.inventoryItemId), available_adjustment: -moveQty })
+    });
+    if (!r1.ok) {
+      const eb = await r1.text().catch(() => '');
+      return res.json({ success: false, error: `back-decrement ${r1.status}: ${eb.slice(0,200)}` });
+    }
+    // 2) Increment at front
+    const r2 = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+      method: 'POST',
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location_id: Number(settings.frontLocationId), inventory_item_id: Number(item.inventoryItemId), available_adjustment: moveQty })
+    });
+    if (!r2.ok) {
+      // rollback back-decrement
+      await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+        method: 'POST',
+        headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: Number(settings.backLocationId), inventory_item_id: Number(item.inventoryItemId), available_adjustment: moveQty })
+      }).catch(() => null);
+      const eb = await r2.text().catch(() => '');
+      return res.json({ success: false, error: `front-increment ${r2.status}: ${eb.slice(0,200)}` });
+    }
+
+    // Remove from queue (or decrement qty if partial)
+    if (moveQty >= item.qty) queue.items.splice(idx, 1);
+    else item.qty -= moveQty;
+    saveShowroomQueue(queue);
+
+    // Audit log
+    const audit = loadShowroomAudit();
+    audit.entries.unshift({
+      at: Date.now(),
+      sku: item.sku, name: item.name,
+      fromId: settings.backLocationId, toId: settings.frontLocationId,
+      qty: moveQty,
+      source: 'queue:replenish',
+      orderId: item.orderId, orderName: item.orderName,
+      ok: true
+    });
+    if (audit.entries.length > 5000) audit.entries = audit.entries.slice(0, 5000);
+    saveShowroomAudit(audit);
+
+    res.json({ success: true, removed: moveQty >= item.qty });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
+// POST /api/showroom/queue/dismiss — remove from queue without moving inventory
+app.post('/api/showroom/queue/dismiss', (req, res) => {
+  const { id } = (req.body || {});
+  if (!id) return res.json({ success: false, error: 'Missing id' });
+  const queue = loadShowroomQueue();
+  const before = queue.items.length;
+  queue.items = queue.items.filter(x => x.id !== id);
+  saveShowroomQueue(queue);
+  res.json({ success: true, removed: before - queue.items.length });
+});
+
+// POST /api/showroom/webhook/setup — register the orders/paid webhook with Shopify
+app.post('/api/showroom/webhook/setup', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const webhookUrl = `${proto}://${host}/api/webhooks/shopify/orders-paid`;
+    // List existing
+    const lr = await shopifyFetch(fetch, `https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json?topic=orders/paid&limit=250`);
+    const ld = await lr.json();
+    const existing = (ld.webhooks || []).find(w => w.address === webhookUrl);
+    if (existing) return res.json({ success: true, webhookId: existing.id, status: 'already registered', address: webhookUrl });
+    const r = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
+      method: 'POST',
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhook: { topic: 'orders/paid', address: webhookUrl, format: 'json' } })
+    });
+    const j = await r.json();
+    if (!r.ok) return res.json({ success: false, error: `${r.status}: ${JSON.stringify(j).slice(0,300)}` });
+    res.json({ success: true, webhookId: j.webhook && j.webhook.id, address: webhookUrl, status: 'created' });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
+// GET /api/showroom/webhook/status — check whether webhook is registered
+app.get('/api/showroom/webhook/status', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const expected = `${proto}://${host}/api/webhooks/shopify/orders-paid`;
+    const lr = await shopifyFetch(fetch, `https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json?topic=orders/paid&limit=250`);
+    const ld = await lr.json();
+    const hook = (ld.webhooks || []).find(w => w.address === expected);
+    res.json({ success: true, registered: !!hook, webhook: hook || null, expectedAddress: expected, allOrdersPaidHooks: (ld.webhooks || []).map(w => ({id: w.id, address: w.address})) });
+  } catch (e) { res.json({ success: false, error: e.message }); }
 });
 
 app.get('*', (req, res) => {
