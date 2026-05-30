@@ -1930,6 +1930,131 @@ app.get('/api/showroom/inventory', async (req, res) => {
   } catch (e) { res.json({ success: false, error: e.message }); }
 });
 
+
+// ════════════════════════════════════════════════════════════════
+//  SHOWROOM REPLENISHMENT — Phase 4: Reconcile from Floor List
+// ════════════════════════════════════════════════════════════════
+// POST /api/showroom/reconcile/preview
+// Body: { skus: ["SKU1","SKU2",...] } — list of SKUs currently hanging at the front showroom
+// Returns: moves array (same shape as seed/run accepts) + meta
+app.post('/api/showroom/reconcile/preview', async (req, res) => {
+  try {
+    const settings = loadShowroomSettings();
+    if (!settings.frontLocationId || !settings.backLocationId) {
+      return res.json({ success: false, error: 'Configure Settings first' });
+    }
+    const inputSkus = (req.body && req.body.skus) || [];
+    if (!Array.isArray(inputSkus) || !inputSkus.length) {
+      return res.json({ success: false, error: 'No SKUs provided' });
+    }
+    const frontSet = new Set(inputSkus.map(s => String(s).trim().toUpperCase()).filter(Boolean));
+    if (!frontSet.size) return res.json({ success: false, error: 'No valid SKUs after cleaning' });
+
+    const fetch = require('node-fetch');
+    // Pull all products with variants and images
+    const all = await shopifyFetchAll(fetch,
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,variants,image,images`
+    );
+    const variants = [];
+    for (const p of all) {
+      const vim = {};
+      (p.images || []).forEach(img => (img.variant_ids || []).forEach(vid => { vim[String(vid)] = img.src; }));
+      const mainImg = p.image ? p.image.src : null;
+      for (const v of (p.variants || [])) {
+        if (!v.inventory_item_id) continue;
+        variants.push({
+          name: p.title,
+          variantTitle: v.title || '',
+          sku: v.sku || '',
+          variantId: v.id,
+          inventoryItemId: v.inventory_item_id,
+          image: vim[String(v.id)] || mainImg
+        });
+      }
+    }
+    // Fetch inventory_levels for both locations
+    const iids = variants.map(v => v.inventoryItemId);
+    const levels = {};
+    const __sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < iids.length; i += 50) {
+      const chunk = iids.slice(i, i + 50);
+      const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${chunk.join(',')}&location_ids=${settings.frontLocationId},${settings.backLocationId}&limit=250`;
+      let ok = false;
+      for (let t = 0; t < 4 && !ok; t++) {
+        try {
+          const lr = await shopifyFetch(fetch, url);
+          if (lr.ok) {
+            const ld = await lr.json();
+            for (const lvl of (ld.inventory_levels || [])) {
+              const k = String(lvl.inventory_item_id);
+              if (!levels[k]) levels[k] = {};
+              levels[k][String(lvl.location_id)] = Number(lvl.available) || 0;
+            }
+            ok = true;
+          } else if (lr.status === 429) {
+            const ra = parseFloat(lr.headers.get('Retry-After') || '2');
+            await __sleep(Math.max(ra * 1000, 1500 * (t + 1)));
+          } else break;
+        } catch (e) { break; }
+      }
+      await __sleep(200);
+    }
+
+    // Compute desired state and required moves
+    const moves = [];
+    let totalUnitsMoving = 0, unitsToFront = 0, unitsToBack = 0;
+    let variantsAlreadyOK = 0, variantsOOS = 0;
+    const foundSkus = new Set();
+    for (const v of variants) {
+      const skuUpper = (v.sku || '').toUpperCase();
+      const inList = frontSet.has(skuUpper);
+      if (inList) foundSkus.add(skuUpper);
+      const lvl = levels[String(v.inventoryItemId)] || {};
+      const frontQty = Number(lvl[String(settings.frontLocationId)]) || 0;
+      const backQty = Number(lvl[String(settings.backLocationId)]) || 0;
+      const total = frontQty + backQty;
+      if (total <= 0) { variantsOOS++; continue; }
+      // Desired front: 1 if SKU in list AND there's stock to display, else 0
+      const desiredFront = (inList && total > 0) ? 1 : 0;
+      let move = desiredFront - frontQty;  // positive: move from back→front; negative: move front→back
+      // Constrain by available stock
+      if (move > 0 && move > backQty) move = backQty;
+      if (move < 0 && (-move) > frontQty) move = -frontQty;
+      if (move === 0) { variantsAlreadyOK++; continue; }
+      moves.push({
+        sku: v.sku, name: v.name, variantTitle: v.variantTitle,
+        inventoryItemId: v.inventoryItemId,
+        frontQty, backQty, desiredFront, desiredBack: total - desiredFront,
+        move,
+        inList,
+        image: v.image
+      });
+      totalUnitsMoving += Math.abs(move);
+      if (move > 0) unitsToFront += move;
+      else unitsToBack += -move;
+    }
+
+    const notFoundSkus = Array.from(frontSet).filter(s => !foundSkus.has(s)).slice(0, 200);
+    res.json({
+      success: true,
+      meta: {
+        skusInList: frontSet.size,
+        skusFoundInStore: foundSkus.size,
+        skusNotFound: frontSet.size - foundSkus.size,
+        variantsToMove: moves.length,
+        variantsAlreadyOK,
+        variantsOOS,
+        totalUnitsMoving,
+        unitsToFront,
+        unitsToBack,
+        totalVariants: variants.length
+      },
+      moves,
+      notFoundSkus
+    });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
