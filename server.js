@@ -1340,6 +1340,234 @@ app.get('/api/collections', async (req, res) => {
   }
 });
 
+
+// ════════════════════════════════════════════════════════════════
+//  SHOWROOM REPLENISHMENT — Phase 1: Setup, Seeding, Audit
+// ════════════════════════════════════════════════════════════════
+const __srPath = require('path');
+const __srFs = require('fs');
+const __srDataDir = (typeof DATA_PATH !== 'undefined' && DATA_PATH) ? DATA_PATH : __dirname;
+const SHOWROOM_SETTINGS_PATH = __srPath.join(__srDataDir, 'showroom-settings.json');
+const SHOWROOM_AUDIT_PATH = __srPath.join(__srDataDir, 'showroom-audit.json');
+
+function loadShowroomSettings() {
+  try { return JSON.parse(__srFs.readFileSync(SHOWROOM_SETTINGS_PATH, 'utf8')); }
+  catch (e) { return { frontLocationId: '', backLocationId: '', defaultTarget: 1 }; }
+}
+function saveShowroomSettings(s) {
+  try { __srFs.writeFileSync(SHOWROOM_SETTINGS_PATH, JSON.stringify(s, null, 2)); }
+  catch (e) { console.error('[showroom] settings save error:', e.message); }
+}
+function loadShowroomAudit() {
+  try { return JSON.parse(__srFs.readFileSync(SHOWROOM_AUDIT_PATH, 'utf8')); }
+  catch (e) { return { entries: [] }; }
+}
+function saveShowroomAudit(a) {
+  try { __srFs.writeFileSync(SHOWROOM_AUDIT_PATH, JSON.stringify(a, null, 2)); }
+  catch (e) { console.error('[showroom] audit save error:', e.message); }
+}
+
+// GET /api/showroom/locations
+app.get('/api/showroom/locations', async (req, res) => {
+  try {
+    const fetch = require('node-fetch');
+    const r = await shopifyFetch(fetch, `https://${SHOPIFY_STORE}/admin/api/2024-01/locations.json`);
+    const d = await r.json();
+    res.json({ success: true, locations: (d.locations || []).map(l => ({ id: String(l.id), name: l.name, active: l.active !== false })) });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
+// GET /api/showroom/settings
+app.get('/api/showroom/settings', (req, res) => {
+  res.json({ success: true, settings: loadShowroomSettings() });
+});
+
+// POST /api/showroom/settings
+app.post('/api/showroom/settings', (req, res) => {
+  const { frontLocationId, backLocationId, defaultTarget } = req.body || {};
+  if (!frontLocationId || !backLocationId) return res.json({ success: false, error: 'Missing front or back location' });
+  if (String(frontLocationId) === String(backLocationId)) return res.json({ success: false, error: 'Front and back must be different locations' });
+  const t = Number(defaultTarget);
+  if (isNaN(t) || t < 0) return res.json({ success: false, error: 'Invalid default target' });
+  const s = { frontLocationId: String(frontLocationId), backLocationId: String(backLocationId), defaultTarget: t };
+  saveShowroomSettings(s);
+  res.json({ success: true, settings: s });
+});
+
+// POST /api/showroom/seed/preview — calculates moves without executing
+app.post('/api/showroom/seed/preview', async (req, res) => {
+  try {
+    const settings = loadShowroomSettings();
+    if (!settings.frontLocationId || !settings.backLocationId) {
+      return res.json({ success: false, error: 'Please configure Settings first' });
+    }
+    const fetch = require('node-fetch');
+    // 1) Pull all products with variants and images
+    const all = await shopifyFetchAll(fetch,
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,variants,image,images`
+    );
+    const variants = [];
+    for (const p of all) {
+      const vim = {};
+      (p.images || []).forEach(img => (img.variant_ids || []).forEach(vid => { vim[String(vid)] = img.src; }));
+      const mainImg = p.image ? p.image.src : null;
+      for (const v of (p.variants || [])) {
+        if (!v.inventory_item_id) continue;
+        variants.push({
+          name: p.title,
+          variantTitle: v.title || '',
+          sku: v.sku || '',
+          variantId: v.id,
+          inventoryItemId: v.inventory_item_id,
+          image: vim[String(v.id)] || mainImg
+        });
+      }
+    }
+    // 2) Fetch inventory_levels for both locations, in batches of 50 ids
+    const iids = variants.map(v => v.inventoryItemId);
+    const levels = {};
+    const __sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < iids.length; i += 50) {
+      const chunk = iids.slice(i, i + 50);
+      const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${chunk.join(',')}&location_ids=${settings.frontLocationId},${settings.backLocationId}&limit=250`;
+      let ok = false;
+      for (let t = 0; t < 4 && !ok; t++) {
+        try {
+          const lr = await shopifyFetch(fetch, url);
+          if (lr.ok) {
+            const ld = await lr.json();
+            for (const lvl of (ld.inventory_levels || [])) {
+              const k = String(lvl.inventory_item_id);
+              if (!levels[k]) levels[k] = {};
+              levels[k][String(lvl.location_id)] = Number(lvl.available) || 0;
+            }
+            ok = true;
+          } else if (lr.status === 429) {
+            const ra = parseFloat(lr.headers.get('Retry-After') || '2');
+            await __sleep(Math.max(ra * 1000, 1500 * (t + 1)));
+          } else { console.error('[showroom] levels', lr.status); break; }
+        } catch (e) { console.error('[showroom] level fetch', e.message); break; }
+      }
+      await __sleep(200);
+    }
+    // 3) Compute moves
+    const moves = [];
+    let alreadyOk = 0, outOfStock = 0, totalUnits = 0;
+    for (const v of variants) {
+      const lvl = levels[String(v.inventoryItemId)] || {};
+      const frontQty = Number(lvl[String(settings.frontLocationId)]) || 0;
+      const backQty = Number(lvl[String(settings.backLocationId)]) || 0;
+      const total = frontQty + backQty;
+      if (total <= 0) { outOfStock++; continue; }
+      const target = Math.min(settings.defaultTarget, total);
+      const needFront = target - frontQty;
+      let move = needFront;
+      if (move > 0 && move > backQty) move = backQty;
+      if (move < 0 && (-move) > frontQty) move = -frontQty;
+      if (move === 0) { alreadyOk++; continue; }
+      moves.push({
+        name: v.name, variantTitle: v.variantTitle, sku: v.sku,
+        inventoryItemId: v.inventoryItemId,
+        frontQty, backQty, target, move,
+        image: v.image
+      });
+      totalUnits += Math.abs(move);
+    }
+    res.json({
+      success: true,
+      meta: {
+        variantsToMove: moves.length,
+        totalUnits,
+        alreadyOk,
+        outOfStock,
+        totalVariants: variants.length,
+        frontLocationId: settings.frontLocationId,
+        backLocationId: settings.backLocationId
+      },
+      moves
+    });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
+// POST /api/showroom/seed/run — executes a batch of moves
+app.post('/api/showroom/seed/run', async (req, res) => {
+  try {
+    const settings = loadShowroomSettings();
+    if (!settings.frontLocationId || !settings.backLocationId) return res.json({ success: false, error: 'Please configure Settings first' });
+    const moves = (req.body && req.body.moves) || [];
+    if (!Array.isArray(moves) || !moves.length) return res.json({ success: false, error: 'No moves provided' });
+    const fetch = require('node-fetch');
+    const audit = loadShowroomAudit();
+    const results = [];
+    const __sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    async function adjust(locId, iid, delta) {
+      return fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+        method: 'POST',
+        headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: Number(locId), inventory_item_id: Number(iid), available_adjustment: delta })
+      });
+    }
+    async function connect(locId, iid) {
+      return fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/connect.json`, {
+        method: 'POST',
+        headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: Number(locId), inventory_item_id: Number(iid) })
+      });
+    }
+    for (const m of moves) {
+      const move = Number(m.move);
+      if (!m.inventoryItemId || !move) { results.push({ sku: m.sku, ok: false, error: 'invalid move' }); continue; }
+      const fromLoc = move > 0 ? settings.backLocationId : settings.frontLocationId;
+      const toLoc = move > 0 ? settings.frontLocationId : settings.backLocationId;
+      const qty = Math.abs(move);
+      try {
+        // 1) Try connect to destination first (idempotent) so adjust won't fail with "not connected"
+        const rConn = await connect(toLoc, m.inventoryItemId);
+        if (!rConn.ok && rConn.status !== 422) {
+          // 422 = already connected, that's fine. Other errors are concerning but try to proceed.
+          const eb = await rConn.text().catch(() => '');
+          console.error('[showroom] connect non-422 fail', rConn.status, eb.slice(0,120));
+        }
+        // 2) Decrement at source
+        const r1 = await adjust(fromLoc, m.inventoryItemId, -qty);
+        if (!r1.ok) {
+          const eb = await r1.text().catch(() => '');
+          results.push({ sku: m.sku, ok: false, error: `from-adjust ${r1.status}: ${eb.slice(0,120)}` });
+          audit.entries.unshift({ at: Date.now(), sku: m.sku, name: m.name, fromId: fromLoc, toId: toLoc, qty, source: 'seed', ok: false, error: eb.slice(0,120) });
+          await __sleep(250);
+          continue;
+        }
+        // 3) Increment at destination
+        const r2 = await adjust(toLoc, m.inventoryItemId, qty);
+        if (!r2.ok) {
+          const eb = await r2.text().catch(() => '');
+          // Rollback the source decrement
+          await adjust(fromLoc, m.inventoryItemId, qty).catch(() => null);
+          results.push({ sku: m.sku, ok: false, error: `to-adjust ${r2.status}: ${eb.slice(0,120)}` });
+          audit.entries.unshift({ at: Date.now(), sku: m.sku, name: m.name, fromId: fromLoc, toId: toLoc, qty, source: 'seed', ok: false, error: eb.slice(0,120) });
+          await __sleep(250);
+          continue;
+        }
+        results.push({ sku: m.sku, ok: true, detail: `${fromLoc} → ${toLoc}  qty ${qty}` });
+        audit.entries.unshift({ at: Date.now(), sku: m.sku, name: m.name, fromId: fromLoc, toId: toLoc, qty, source: 'seed', ok: true });
+      } catch (e) {
+        results.push({ sku: m.sku, ok: false, error: e.message });
+        audit.entries.unshift({ at: Date.now(), sku: m.sku, name: m.name, fromId: fromLoc, toId: toLoc, qty, source: 'seed', ok: false, error: e.message });
+      }
+      await __sleep(300); // throttle between variants
+    }
+    if (audit.entries.length > 5000) audit.entries = audit.entries.slice(0, 5000);
+    saveShowroomAudit(audit);
+    res.json({ success: true, results });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
+// GET /api/showroom/audit
+app.get('/api/showroom/audit', (req, res) => {
+  const a = loadShowroomAudit();
+  res.json({ success: true, entries: (a.entries || []).slice(0, 200) });
+});
+
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
