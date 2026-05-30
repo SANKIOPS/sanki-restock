@@ -1346,7 +1346,7 @@ app.get('/api/collections', async (req, res) => {
 // ════════════════════════════════════════════════════════════════
 const __srPath = require('path');
 const __srFs = require('fs');
-const __srDataDir = (typeof DATA_PATH !== 'undefined' && DATA_PATH) ? DATA_PATH : __dirname;
+const __srDataDir = process.env.DATA_PATH || __dirname;
 const SHOWROOM_SETTINGS_PATH = __srPath.join(__srDataDir, 'showroom-settings.json');
 const SHOWROOM_AUDIT_PATH = __srPath.join(__srDataDir, 'showroom-audit.json');
 
