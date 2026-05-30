@@ -41,7 +41,22 @@
     .log .err { color:#fca5a5; }
     .log .info { color:#93c5fd; }
     .empty-row td { text-align:center; padding:32px; color:#94a3b8; font-size:14px; }
-  </style>
+  
+ block -->
+<style>
+  .sortable { cursor: pointer; user-select: none; }
+  .sortable:hover { background: #eef2ff; color: #1e40af; }
+  .sort-arrow { font-size: 10px; margin-left: 4px; opacity: 0.5; }
+  th.sort-asc .sort-arrow, th.sort-desc .sort-arrow { opacity: 1; color: #2563eb; }
+  img.invThumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid #e5e7eb; background: #fff; cursor: zoom-in; transition: transform .15s; }
+  img.invThumb:hover { transform: scale(1.1); border-color: #94a3b8; }
+  .lightbox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.88); z-index: 1000; display: none; align-items: center; justify-content: center; cursor: zoom-out; }
+  .lightbox-overlay.active { display: flex; }
+  .lightbox-img { max-width: 90vw; max-height: 90vh; user-select: none; cursor: zoom-in; transition: transform .2s ease; box-shadow: 0 10px 40px rgba(0,0,0,0.5); border-radius: 6px; background: #fff; }
+  .lightbox-img.zoomed { cursor: zoom-out; transform: scale(1.8); }
+  .lightbox-close { position: absolute; top: 18px; right: 18px; color: #fff; background: rgba(255,255,255,0.15); border-radius: 50%; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 22px; }
+  .lightbox-close:hover { background: rgba(255,255,255,0.25); }
+</style>
 </head>
 <body>
   <header class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-3">
@@ -60,6 +75,7 @@
       <button class="tab-btn" data-tab="seed">📦 Seed Showroom</button>
       <button class="tab-btn" data-tab="audit">📜 Audit Log</button>
       <button class="tab-btn" data-tab="queue">🔔 Replenishment Queue <span id="queueBadge" class="ml-1 px-1.5 py-0.5 text-xs bg-rose-500 text-white rounded-full" style="display:none;">0</span></button>
+      <button class="tab-btn" data-tab="inventory">📊 Inventory</button>
     </div>
 
     <!-- Settings Tab -->
@@ -230,6 +246,67 @@
         <tbody id="queueBody">
           <tr class="empty-row"><td colspan="7">Loading…</td></tr>
         </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+    <section id="tab-inventory" class="panel rounded-b-lg hidden" style="border-top:none;">
+  <div class="panel-pad">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+      <div>
+        <h2 class="text-base font-semibold mb-1">Inventory Snapshot</h2>
+        <p class="text-sm text-gray-600">Live per-variant stock at front showroom vs back warehouse. Click any image to enlarge.</p>
+      </div>
+      <button id="invRefresh" class="btn btn-secondary text-sm">↻ Refresh</button>
+    </div>
+
+    <!-- Summary cards -->
+    <div id="invSummary" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      <div class="stat-card"><div class="text-xs text-gray-500">Total Variants</div><div class="text-xl font-bold num" id="invTotalVariants">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">Total Units</div><div class="text-xl font-bold num" id="invTotalUnits">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">🏪 Showroom Units</div><div class="text-xl font-bold num text-blue-600" id="invTotalFront">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">📦 Warehouse Units</div><div class="text-xl font-bold num text-amber-600" id="invTotalBack">—</div></div>
+      <div class="stat-card"><div class="text-xs text-gray-500">Out of Stock</div><div class="text-xl font-bold num text-gray-500" id="invTotalOOS">—</div></div>
+    </div>
+
+    <!-- Filter row -->
+    <div class="flex items-center gap-2 mb-3 flex-wrap">
+      <input id="invSearch" type="search" placeholder="Search SKU / product / vendor / category..." class="border rounded px-3 py-1.5 text-sm w-72">
+      <select id="invStatusFilter" class="border rounded px-3 py-1.5 text-sm bg-white">
+        <option value="">All statuses</option>
+        <option value="ok">✓ OK (correctly seeded)</option>
+        <option value="overstocked">⚠ Overstocked front</option>
+        <option value="understocked">⚠ Understocked front (back has stock)</option>
+        <option value="only-back">📦 Only at back (none in front)</option>
+        <option value="oos">○ Out of stock</option>
+      </select>
+      <label class="toggle text-sm">
+        <input id="invHideOOS" type="checkbox" checked>
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        <span>Hide out of stock</span>
+      </label>
+      <span class="text-xs text-gray-500 ml-auto" id="invRowCount"></span>
+    </div>
+
+    <!-- Table -->
+    <div class="bg-white border border-gray-200 rounded overflow-x-auto">
+      <table>
+        <thead id="invHead">
+          <tr>
+            <th></th>
+            <th class="sortable" data-col="name">Product / Variant</th>
+            <th class="sortable" data-col="sku">SKU</th>
+            <th class="sortable" data-col="category">Category</th>
+            <th class="sortable" data-col="vendor">Vendor</th>
+            <th class="right sortable" data-col="frontQty">🏪 Showroom</th>
+            <th class="right sortable" data-col="backQty">📦 Warehouse</th>
+            <th class="right sortable" data-col="total">Total</th>
+            <th class="right sortable" data-col="price">Price</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="invBody"><tr class="empty-row"><td colspan="10">Loading inventory… (this can take 30–60s on first load)</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -641,6 +718,169 @@
   // Restore notif toggle state
   if (localStorage.getItem('sanki_notif') === '1') document.getElementById('notifToggle').checked = true;
 
+  // ============================================================
+  //  INVENTORY SNAPSHOT TAB (Phase 3)
+  // ============================================================
+  let _invRows = [];
+  let _invMeta = null;
+  let _invSort = { col: 'frontQty', dir: 'desc' };
+  let _invLoaded = false;
+
+  async function loadInventory() {
+    const body = document.getElementById('invBody');
+    body.innerHTML = '<tr class="empty-row"><td colspan="10">Loading inventory from Shopify… (30–60s on first load)</td></tr>';
+    try {
+      const r = await fetch('/api/showroom/inventory');
+      const j = await r.json();
+      if (!j.success) throw new Error(j.error || 'inventory load failed');
+      _invRows = j.rows || [];
+      _invMeta = j.meta || {};
+      _invLoaded = true;
+      renderInvSummary();
+      renderInvTable();
+    } catch(e) {
+      body.innerHTML = `<tr class="empty-row"><td colspan="10" style="color:#dc2626;">${escape(e.message)}</td></tr>`;
+    }
+  }
+
+  function renderInvSummary() {
+    document.getElementById('invTotalVariants').textContent = fmt(_invMeta.totalVariants || 0);
+    document.getElementById('invTotalUnits').textContent = fmt(_invMeta.totalUnits || 0);
+    document.getElementById('invTotalFront').textContent = fmt(_invMeta.totalFront || 0);
+    document.getElementById('invTotalBack').textContent = fmt(_invMeta.totalBack || 0);
+    document.getElementById('invTotalOOS').textContent = fmt(_invMeta.countOOS || 0);
+  }
+
+  function filteredInvRows() {
+    const search = (document.getElementById('invSearch').value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById('invStatusFilter').value;
+    const hideOOS = document.getElementById('invHideOOS').checked;
+    let rows = _invRows;
+    if (hideOOS) rows = rows.filter(r => r.total > 0);
+    if (statusFilter) rows = rows.filter(r => r.status === statusFilter);
+    if (search) {
+      rows = rows.filter(r => {
+        const hay = (r.sku + ' ' + r.name + ' ' + r.variantTitle + ' ' + r.vendor + ' ' + r.category).toLowerCase();
+        return hay.includes(search);
+      });
+    }
+    // Sort
+    const col = _invSort.col, dir = _invSort.dir === 'desc' ? -1 : 1;
+    rows = rows.slice().sort((a, b) => {
+      const va = a[col], vb = b[col];
+      if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+      return String(va || '').localeCompare(String(vb || '')) * dir;
+    });
+    return rows;
+  }
+
+  function renderInvTable() {
+    const rows = filteredInvRows();
+    document.getElementById('invRowCount').textContent = `${fmt(rows.length)} of ${fmt(_invRows.length)} variants`;
+    // Sort arrows
+    document.querySelectorAll('#invHead th.sortable').forEach(th => {
+      th.classList.remove('sort-asc', 'sort-desc');
+      const arrow = th.querySelector('.sort-arrow');
+      if (arrow) arrow.remove();
+      if (th.dataset.col === _invSort.col) {
+        th.classList.add(_invSort.dir === 'desc' ? 'sort-desc' : 'sort-asc');
+        th.insertAdjacentHTML('beforeend', `<span class="sort-arrow">${_invSort.dir === 'desc' ? '▼' : '▲'}</span>`);
+      } else {
+        th.insertAdjacentHTML('beforeend', '<span class="sort-arrow">▲▼</span>');
+      }
+    });
+    const body = document.getElementById('invBody');
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="10">No variants match the current filters.</td></tr>';
+      return;
+    }
+    // Render at most 500 rows for perf
+    const shown = rows.slice(0, 500);
+    body.innerHTML = shown.map(r => {
+      const img = r.image
+        ? `<img class="invThumb" src="${escape(r.image)}" alt="${escape(r.sku)}" data-full="${escape(r.image)}" loading="lazy">`
+        : '<div class="invThumb" style="background:#f1f5f9;display:inline-block;"></div>';
+      const statusBadge = invStatusBadge(r.status);
+      const frontCls = r.frontQty === 0 ? 'text-red-600' : (r.frontQty > r.target ? 'text-amber-600' : 'text-emerald-600');
+      return `<tr>
+        <td>${img}</td>
+        <td><div>${escape(r.name)}</div><div class="text-xs text-gray-500">${escape(r.variantTitle||'')}</div></td>
+        <td><span class="num">${escape(r.sku)}</span></td>
+        <td>${escape(r.category)}</td>
+        <td>${escape(r.vendor)}</td>
+        <td class="right"><span class="num font-semibold ${frontCls}">${fmt(r.frontQty)}</span></td>
+        <td class="right"><span class="num">${fmt(r.backQty)}</span></td>
+        <td class="right"><span class="num font-semibold">${fmt(r.total)}</span></td>
+        <td class="right"><span class="num">₹${fmt(r.price)}</span></td>
+        <td>${statusBadge}</td>
+      </tr>`;
+    }).join('');
+    if (rows.length > 500) {
+      body.insertAdjacentHTML('beforeend', `<tr><td colspan="10" class="text-center text-xs text-gray-500 py-3">Showing first 500 of ${fmt(rows.length)}. Use filters to narrow down.</td></tr>`);
+    }
+  }
+
+  function invStatusBadge(status) {
+    switch(status) {
+      case 'ok': return '<span class="badge badge-green">✓ Correct</span>';
+      case 'overstocked': return '<span class="badge badge-amber">⚠ Overstocked front</span>';
+      case 'understocked': return '<span class="badge badge-amber">⚠ Understocked</span>';
+      case 'only-back': return '<span class="badge badge-blue">📦 Only at back</span>';
+      case 'oos': return '<span class="badge" style="background:#f1f5f9;color:#64748b;">○ Out of stock</span>';
+      default: return status;
+    }
+  }
+
+  // Sorting clicks
+  document.getElementById('invHead').addEventListener('click', e => {
+    const th = e.target.closest('th.sortable');
+    if (!th) return;
+    const col = th.dataset.col;
+    if (_invSort.col === col) _invSort.dir = _invSort.dir === 'asc' ? 'desc' : 'asc';
+    else { _invSort.col = col; _invSort.dir = (col === 'frontQty' || col === 'backQty' || col === 'total' || col === 'price') ? 'desc' : 'asc'; }
+    renderInvTable();
+  });
+
+  // Filter changes
+  let _invSearchTimer = null;
+  document.getElementById('invSearch').addEventListener('input', () => {
+    clearTimeout(_invSearchTimer);
+    _invSearchTimer = setTimeout(renderInvTable, 200);
+  });
+  document.getElementById('invStatusFilter').addEventListener('change', renderInvTable);
+  document.getElementById('invHideOOS').addEventListener('change', renderInvTable);
+
+  // Refresh button
+  document.getElementById('invRefresh').addEventListener('click', () => { _invLoaded = false; loadInventory(); });
+
+  // Image click → lightbox
+  document.getElementById('invBody').addEventListener('click', e => {
+    const img = e.target.closest('img.invThumb');
+    if (!img) return;
+    const src = img.dataset.full || img.src;
+    document.getElementById('invLightboxImg').src = src;
+    document.getElementById('invLightboxImg').classList.remove('zoomed');
+    document.getElementById('invLightbox').classList.add('active');
+  });
+  const _invLB = document.getElementById('invLightbox');
+  const _invLBImg = document.getElementById('invLightboxImg');
+  _invLB.addEventListener('click', e => {
+    if (e.target === _invLBImg) { _invLBImg.classList.toggle('zoomed'); }
+    else { _invLB.classList.remove('active'); _invLBImg.src = ''; }
+  });
+  document.getElementById('invLightboxClose').addEventListener('click', () => { _invLB.classList.remove('active'); _invLBImg.src = ''; });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && _invLB.classList.contains('active')) { _invLB.classList.remove('active'); _invLBImg.src = ''; }
+  });
+
+  // Load on first tab open (lazy — avoids 30s spinner on page load)
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      if (b.dataset.tab === 'inventory' && !_invLoaded) { loadInventory(); }
+    });
+  });
+
+
   // Boot additions: initial queue + webhook status + start poll
   (async () => {
     await loadQueue();
@@ -658,5 +898,9 @@
   })();
 })();
 </script>
+<div id="invLightbox" class="lightbox-overlay">
+  <div class="lightbox-close" id="invLightboxClose">×</div>
+  <img id="invLightboxImg" class="lightbox-img" src="" alt="">
+</div>
 </body>
 </html>
