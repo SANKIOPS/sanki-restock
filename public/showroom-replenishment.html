@@ -59,6 +59,7 @@
       <button class="tab-btn active" data-tab="settings">⚙️ Settings</button>
       <button class="tab-btn" data-tab="seed">📦 Seed Showroom</button>
       <button class="tab-btn" data-tab="audit">📜 Audit Log</button>
+      <button class="tab-btn" data-tab="queue">🔔 Replenishment Queue <span id="queueBadge" class="ml-1 px-1.5 py-0.5 text-xs bg-rose-500 text-white rounded-full" style="display:none;">0</span></button>
     </div>
 
     <!-- Settings Tab -->
@@ -192,6 +193,47 @@
         </div>
       </div>
     </section>
+
+    <section id="tab-queue" class="panel rounded-b-lg hidden" style="border-top:none;">
+  <div class="panel-pad">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+      <div>
+        <h2 class="text-base font-semibold mb-1">Replenishment Queue</h2>
+        <p class="text-sm text-gray-600">Items sold at the front showroom that need to be pulled from the back. Auto-refreshes every 30 s.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <label class="toggle text-sm">
+          <input id="notifToggle" type="checkbox">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span>Desktop alerts</span>
+        </label>
+        <button id="queueRefresh" class="btn btn-secondary text-sm">↻ Refresh</button>
+        <button id="webhookSetup" class="btn btn-primary text-sm">⚙ Connect Shopify Webhook</button>
+      </div>
+    </div>
+
+    <div id="webhookStatus" class="text-sm mb-3 text-gray-600"></div>
+
+    <div class="bg-white border border-gray-200 rounded overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Product / Variant</th>
+            <th>SKU</th>
+            <th>Order</th>
+            <th class="right">Qty to Pull</th>
+            <th>Added</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="queueBody">
+          <tr class="empty-row"><td colspan="7">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
   </main>
 
 <script>
@@ -438,6 +480,173 @@
       // silent
     }
   }
+
+  // ============================================================
+  //  REPLENISHMENT QUEUE (Phase 2)
+  // ============================================================
+  let _queuePoll = null;
+  let _lastQueueIds = new Set();
+
+  async function loadQueue(silentChimeCheck) {
+    try {
+      const r = await fetch('/api/showroom/queue');
+      const j = await r.json();
+      if (!j.success) throw new Error(j.error || 'queue load failed');
+      const items = j.items || [];
+      const badge = document.getElementById('queueBadge');
+      badge.textContent = j.total || items.length;
+      badge.style.display = items.length ? 'inline-block' : 'none';
+      // New items since last poll → chime
+      if (silentChimeCheck) {
+        const newOnes = items.filter(x => !_lastQueueIds.has(x.id));
+        if (newOnes.length) maybeNotify(newOnes);
+      }
+      _lastQueueIds = new Set(items.map(x => x.id));
+      renderQueue(items);
+    } catch(e) {
+      const body = document.getElementById('queueBody');
+      body.innerHTML = `<tr class="empty-row"><td colspan="7" style="color:#dc2626;">${escape(e.message)}</td></tr>`;
+    }
+  }
+
+  function renderQueue(items) {
+    const body = document.getElementById('queueBody');
+    if (!items.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="7">Queue is empty — showroom is fully stocked.</td></tr>';
+      return;
+    }
+    body.innerHTML = items.map(it => {
+      const img = it.image
+        ? `<img class="thumb" src="${escape(it.image)}" loading="lazy">`
+        : '<div class="thumb" style="background:#f1f5f9"></div>';
+      const ago = timeAgo(it.addedAt);
+      const orderTxt = it.orderName || (it.orderId ? `#${it.orderId}` : '—');
+      return `<tr data-id="${escape(it.id)}">
+        <td>${img}</td>
+        <td><div>${escape(it.name)}</div><div class="text-xs text-gray-500">${escape(it.variantTitle||'')}</div></td>
+        <td><span class="num">${escape(it.sku)}</span></td>
+        <td><span class="text-xs text-gray-500">${escape(orderTxt)}</span></td>
+        <td class="right"><span class="num font-semibold">${fmt(it.qty)}</span></td>
+        <td><span class="text-xs text-gray-500">${escape(ago)}</span></td>
+        <td>
+          <button class="btn btn-emerald text-sm queueMoveBtn">✓ Mark Moved</button>
+          <button class="btn btn-secondary text-sm queueDismissBtn" title="Remove from queue without moving inventory">✕</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function timeAgo(ms) {
+    const s = Math.floor((Date.now() - ms) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s/60) + 'm ago';
+    if (s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  }
+
+  document.getElementById('queueBody').addEventListener('click', async (e) => {
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    const id = tr.dataset.id;
+    if (e.target.classList.contains('queueMoveBtn')) {
+      e.target.disabled = true; e.target.textContent = '…';
+      try {
+        const r = await fetch('/api/showroom/queue/move', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        const j = await r.json();
+        if (!j.success) { alert('Move failed: ' + j.error); e.target.disabled = false; e.target.textContent = '✓ Mark Moved'; return; }
+        loadQueue();
+        loadAudit();
+      } catch(err) { alert(err.message); e.target.disabled = false; e.target.textContent = '✓ Mark Moved'; }
+    } else if (e.target.classList.contains('queueDismissBtn')) {
+      if (!confirm('Remove this from the queue WITHOUT moving any inventory?')) return;
+      const r = await fetch('/api/showroom/queue/dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      const j = await r.json();
+      if (j.success) loadQueue();
+    }
+  });
+
+  document.getElementById('queueRefresh').addEventListener('click', () => loadQueue());
+
+  // Webhook setup + status check
+  document.getElementById('webhookSetup').addEventListener('click', async () => {
+    const btn = document.getElementById('webhookSetup');
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Connecting…';
+    try {
+      const r = await fetch('/api/showroom/webhook/setup', { method: 'POST' });
+      const j = await r.json();
+      if (!j.success) throw new Error(j.error);
+      document.getElementById('webhookStatus').innerHTML = `<span class="badge badge-green">✓ Webhook registered</span> <span class="text-xs text-gray-500">${escape(j.status)} · address: ${escape(j.address)}</span>`;
+    } catch(e) {
+      document.getElementById('webhookStatus').innerHTML = `<span class="badge badge-rose">✗ ${escape(e.message)}</span>`;
+    } finally { btn.disabled = false; btn.textContent = old; }
+  });
+
+  async function checkWebhookStatus() {
+    try {
+      const r = await fetch('/api/showroom/webhook/status');
+      const j = await r.json();
+      if (j.success) {
+        if (j.registered) {
+          document.getElementById('webhookStatus').innerHTML = `<span class="badge badge-green">✓ Webhook connected</span> <span class="text-xs text-gray-500">Listening for orders/paid at ${escape(j.expectedAddress)}</span>`;
+        } else {
+          document.getElementById('webhookStatus').innerHTML = `<span class="badge badge-amber">⚠ Webhook not registered</span> <span class="text-xs text-gray-500">Click "Connect Shopify Webhook" to start receiving live sale events.</span>`;
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Desktop notifications
+  document.getElementById('notifToggle').addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      if ('Notification' in window) {
+        const p = await Notification.requestPermission();
+        if (p !== 'granted') { e.target.checked = false; alert('Notifications denied by browser.'); }
+        else localStorage.setItem('sanki_notif', '1');
+      } else { e.target.checked = false; alert('This browser does not support notifications.'); }
+    } else { localStorage.removeItem('sanki_notif'); }
+  });
+
+  function maybeNotify(newItems) {
+    if (localStorage.getItem('sanki_notif') !== '1') return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const n = newItems.length;
+    new Notification(`${n} item${n>1?'s':''} to replenish`, {
+      body: newItems.slice(0, 3).map(x => `• ${x.name} (${x.sku}) × ${x.qty}`).join('\n') + (n > 3 ? `\n…+${n-3} more` : ''),
+      icon: newItems[0].image || '/favicon.ico',
+      tag: 'showroom-queue'
+    });
+  }
+
+  // Auto-poll queue every 30 s when queue tab is active OR badge needs updating
+  function startQueuePoll() {
+    if (_queuePoll) return;
+    _queuePoll = setInterval(() => loadQueue(true), 30000);
+  }
+  function stopQueuePoll() {
+    if (_queuePoll) { clearInterval(_queuePoll); _queuePoll = null; }
+  }
+
+  // Hook into tab switches: load queue when queue tab opens; always keep badge fresh on init
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      if (b.dataset.tab === 'queue') { loadQueue(); }
+    });
+  });
+  // Restore notif toggle state
+  if (localStorage.getItem('sanki_notif') === '1') document.getElementById('notifToggle').checked = true;
+
+  // Boot additions: initial queue + webhook status + start poll
+  (async () => {
+    await loadQueue();
+    await checkWebhookStatus();
+    startQueuePoll();
+  })();
 
   // ============================================================
   // BOOT
