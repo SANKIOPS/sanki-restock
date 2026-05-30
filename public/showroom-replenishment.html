@@ -352,8 +352,8 @@
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
-      ['settings', 'seed', 'audit'].forEach(t => {
-        document.getElementById('tab-' + t).classList.toggle('hidden', btn.dataset.tab !== t);
+      document.querySelectorAll('section[id^="tab-"]').forEach(s => {
+        s.classList.toggle('hidden', s.id !== 'tab-' + btn.dataset.tab);
       });
     });
   });
