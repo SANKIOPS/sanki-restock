@@ -447,7 +447,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
             <th onclick="rpSort('unitsSold30')" id="thUnitsSold">Units Sold<span class="sort-icon"></span></th><!-- #1 sales data -->
             <th onclick="rpSort('rev30')">Revenue<span class="sort-icon"></span></th>
             <th onclick="rpSort('lead')">Lead(d)<span class="sort-icon"></span></th><!-- #13 -->
-            <th onclick="rpSort('ai')">AI Pred.<span class="sort-icon"></span></th>
+            <th onclick="rpSort('ai')" title="Flat +8% demand cushion on base qty (not a machine-learning prediction)">Trend +8%<span class="sort-icon"></span></th>
             <th onclick="rpSort('growth')">Growth<span class="sort-icon"></span></th>
             <th onclick="rpSort('cost')">Reorder Cost<span class="sort-icon"></span></th>
             <th onclick="rpSort('erev')">Est. Rev<span class="sort-icon"></span></th>
@@ -795,6 +795,12 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
 // ════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════
+// #10 Single source of truth for the earliest date we have reliable sales data.
+// Overridable via localStorage key "sanki_data_start" (YYYY-MM-DD) without code changes.
+const DATA_START_DATE = (function(){
+  try { const v = localStorage.getItem('sanki_data_start'); if (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v; } catch(e){}
+  return '2026-02-01';
+})();
 let PRODUCTS = [];
 let ORDERS = [];           // raw 30d orders from Shopify
 let ALL_ORDERS = [];       // all orders fetched (for custom ranges)
@@ -890,52 +896,63 @@ async function fetchOrders(days=90) {
 // ════════════════════════════════════════════════════════════
 // BUILD PRODUCTS  (improved logic for accuracy #14 #15)
 // ════════════════════════════════════════════════════════════
-function buildProducts(shopifyProducts, shopifyOrders, dayCount) {
-  // Index by BOTH sku and variant_id for maximum match coverage
-  // SKU is the primary key (works across POS, Gokwik, online channels)
-  // variant_id is fallback for orders that have no SKU set
-  const soldBySku = {};    // sku (lowercase) -> {count, revenue, lastDate}
-  const soldByVid = {};    // variant_id (string) -> {count, revenue, lastDate}
-  const dailySales = {};
-  const sold30BySku = {};
-  const cutoff30d = new Date(Date.now()-30*86400000).toISOString().substring(0,10);
+// ── Shared sales aggregation (fix #6) ──────────────────────────────
+// Each sku/variant entry keeps a per-line map keyed by Shopify line-item id,
+// so a physical line item is counted exactly once even though it is indexed
+// under BOTH its sku and its variant_id. Merging two entries = union of their
+// line maps (dedup by id), which correctly SUMS cross-channel sales instead of
+// taking the larger of the two (the old max() bug that undercounted velocity).
+function _addLine(map, key, item, qty, rev, date) {
+  if (!map[key]) map[key] = { lines: new Map() };
+  if (!map[key].lines.has(item.id)) map[key].lines.set(item.id, { qty, rev, date });
+}
+function _mergeSold(skuMatch, vidMatch) {
+  const lines = new Map();
+  if (skuMatch) for (const [id, v] of skuMatch.lines) lines.set(id, v);
+  if (vidMatch) for (const [id, v] of vidMatch.lines) if (!lines.has(id)) lines.set(id, v);
+  let count = 0, revenue = 0, lastDate = null;
+  for (const v of lines.values()) {
+    count += v.qty; revenue += v.rev;
+    if (v.date && (!lastDate || v.date > lastDate)) lastDate = v.date;
+  }
+  return { count, revenue, lastDate };
+}
 
-  // Track which (orderId+lineItemId) pairs we've already counted to avoid double-counting
+function buildProducts(shopifyProducts, shopifyOrders, dayCount) {
+  // Index by BOTH sku and variant_id (per-line maps; see _addLine/_mergeSold).
+  const soldBySku = {};
+  const soldByVid = {};
+  const dailySales = {};
+
   shopifyOrders.forEach(order => {
-    const dateKey = (order.created_at||'').substring(0,10);
-    dailySales[dateKey] = (dailySales[dateKey]||0) + parseFloat(order.total_price||0);
+    const d = (order.created_at||'').substring(0,10);
+    dailySales[d] = (dailySales[d]||0) + parseFloat(order.total_price||0);
     (order.line_items||[]).forEach(item => {
       const qty = Number(item.quantity);
       if (qty <= 0) return;
-      // Net revenue = price*qty minus any discounts (coupons, bulk deals etc)
+      // Net revenue = price*qty minus any line discounts (coupons, bulk deals etc.)
       const rev = Math.max(0, parseFloat(item.price) * qty - parseFloat(item.total_discount || 0));
-      const d = dateKey;
-      // Index by BOTH sku AND variant_id — use line item id to prevent double count
-      const hasSku = item.sku && item.sku.trim();
-      if (hasSku) {
-        const sk = item.sku.trim().toLowerCase();
-        if (!soldBySku[sk]) soldBySku[sk] = {count:0, revenue:0, lastDate:d, lineIds: new Set()};
-        if (!soldBySku[sk].lineIds.has(item.id)) {
-          soldBySku[sk].count += qty;
-          soldBySku[sk].revenue += rev;
-          soldBySku[sk].lineIds.add(item.id);
-          if (d > soldBySku[sk].lastDate) soldBySku[sk].lastDate = d;
-        }
-      }
-      if (item.variant_id) {
-        const vid = String(item.variant_id);
-        if (!soldByVid[vid]) soldByVid[vid] = {count:0, revenue:0, lastDate:d, lineIds: new Set()};
-        if (!soldByVid[vid].lineIds.has(item.id)) {
-          soldByVid[vid].count += qty;
-          soldByVid[vid].revenue += rev;
-          soldByVid[vid].lineIds.add(item.id);
-          if (d > soldByVid[vid].lastDate) soldByVid[vid].lastDate = d;
-        }
-      }
+      if (item.sku && item.sku.trim()) _addLine(soldBySku, item.sku.trim().toLowerCase(), item, qty, rev, d);
+      if (item.variant_id) _addLine(soldByVid, String(item.variant_id), item, qty, rev, d);
     });
   });
 
-  shopifyOrders.forEach(o=>{const dk=(o.created_at||'').substring(0,10);if(dk>=cutoff30d)(o.line_items||[]).forEach(i=>{const k=(i.sku||'').trim().toLowerCase();if(k)sold30BySku[k]=(sold30BySku[k]||0)+(Number(i.quantity)||0);});});
+  const _velDays = Math.max(1, dayCount || 30);
+
+  // #8 Sum already-ordered units from OPEN purchase orders (anything not yet Received),
+  // keyed by SKU, so the reorder qty subtracts inbound stock and we don't double-order.
+  const onOrderBySku = {};
+  try {
+    (PROCUREMENT_ORDERS || []).forEach(po => {
+      if (!po || String(po.status||'').toLowerCase() === 'received') return;
+      (po.lines || []).forEach(l => {
+        const sk = (l.sku || '').trim().toLowerCase();
+        if (!sk) return;
+        onOrderBySku[sk] = (onOrderBySku[sk] || 0) + (parseFloat(l.qty) || 0);
+      });
+    });
+  } catch (e) { /* procurement not loaded yet — onOrder stays 0 */ }
+
   const products = [];
   shopifyProducts.forEach(p => {
     // Use Shopify vendor field directly; fall back to tag or name inference
@@ -945,39 +962,27 @@ function buildProducts(shopifyProducts, shopifyOrders, dayCount) {
     (p.variants||[]).forEach(v => {
       const vid = String(v.id);
       const skuKey = v.sku ? v.sku.trim().toLowerCase() : '';
-      // Merge SKU and variant_id matches — some orders only have one or the other
-      // Use lineIds sets to ensure no double counting between the two maps
-      const skuMatch = (skuKey && soldBySku[skuKey]) ? soldBySku[skuKey] : null;
-      const vidMatch = soldByVid[vid] ? soldByVid[vid] : null;
-      let sold;
-      if (skuMatch && vidMatch) {
-        // Merge: count lines that are in vidMatch but NOT already in skuMatch (different channel orders)
-        const extraLines = [...vidMatch.lineIds].filter(id => !skuMatch.lineIds.has(id));
-        const extraCount = extraLines.reduce((s, lid) => {
-          // We can't recover per-line qty here, so use vidMatch totals minus overlap
-          return s;
-        }, 0);
-        // Simpler: take whichever is higher count (they should agree if SKU always set)
-        // But if SKU missing on some orders, vidMatch will be larger
-        sold = vidMatch.count >= skuMatch.count ? vidMatch : skuMatch;
-      } else {
-        sold = skuMatch || vidMatch || {count:0, revenue:0, lastDate:null};
-      }
+      // FIX #6: union sku + variant line items (dedup by line id) instead of max()
+      const sold = _mergeSold(skuKey ? soldBySku[skuKey] : null, soldByVid[vid]);
+
       const stock = Number(v.inventory) || 0;
       const price = parseFloat(v.price) || 0;
-      // Cost: use compare_at_price if available as rough cost proxy, else 40% of price
-      const compareAt = parseFloat(v.compare_at_price||0);
-      const cost = compareAt > price ? price * 0.6 : price * 0.4;
+      // FIX #5: prefer the REAL unit cost from Shopify InventoryItem. /api/products
+      // returns it as `unitCost` (from InventoryItem.cost). Only fall back to a margin
+      // estimate when no real cost exists.
+      const realCost = parseFloat(v.unitCost != null ? v.unitCost : (v.cost || 0)) || 0;
+      const costIsReal = realCost > 0;
+      const cost = costIsReal ? realCost : (parseFloat(v.compare_at_price||0) > price ? price * 0.6 : price * 0.4);
 
-      // Improved SPD: use actual days sold (not just fixed window) for accuracy
-      const spd = parseFloat(((sold30BySku[skuKey]||0) / 30).toFixed(3));
+      // FIX #7: velocity reflects the SELECTED period (dayCount); units, revenue & spd agree.
+      const spd = parseFloat(((sold.count||0) / _velDays).toFixed(3));
 
       let status = 'ok';
       if (stock <= THRESHOLD_CRITICAL) status = 'critical';
       else if (stock <= THRESHOLD_LOW) status = 'low';
 
-      // Default lead time: try to infer from supplier
-      const defaultLead = getSupplierLead(supplierName);
+      // #8 inbound units from open POs matched by SKU
+      const onOrder = skuKey ? (onOrderBySku[skuKey] || 0) : 0;
 
       products.push({
         id: p.id, variantId: v.id,
@@ -985,12 +990,12 @@ function buildProducts(shopifyProducts, shopifyOrders, dayCount) {
         name: p.name + (p.variants.length > 1 && v.title && v.title !== 'Default Title' ? ' · ' + v.title : ''),
         sku: v.sku || ('V-' + String(v.id).slice(-5)),
         image: v.image || p.image,
-        stock, spd, price, cost, createdAt: v.created_at || p.created_at || null,
+        stock, spd, price, cost, costIsReal, onOrder, createdAt: v.created_at || p.created_at || null,
         rev30: sold.revenue,
-        unitsSold30: sold30BySku[skuKey]||0,
+        unitsSold30: sold.count||0,
         lastOrderDate: sold.lastDate,
         supplier: supplierName,
-        lead: defaultLead,
+        lead: getSupplierLead(supplierName),
         status,
         emoji: getEmoji(p.name),
         tags: p.tags || ''
@@ -1062,8 +1067,8 @@ function renderSuppliersPage() {
         ${critCount>0?`<span class="badge badge-danger">${critCount} Critical</span>`:''}
       </div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-sm" onclick="openEditVendor('${v.replace(/'/g,"\'")}')">✏️ Edit</button>
-        <button class="btn btn-sm btn-primary" onclick="openNewPO(null,'${v.replace(/'/g,"\'")}')">+ New PO</button>
+        <button class="btn btn-sm" onclick="openEditVendor('${v.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')">✏️ Edit</button>
+        <button class="btn btn-sm btn-primary" onclick="openNewPO(null,'${v.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')">+ New PO</button>
       </div>
     </div>`;
   }).join('');
@@ -1131,7 +1136,7 @@ async function syncShopify() {
     // Fetch 90d of orders to cover all RP range options
     const [shopifyProducts, shopifyOrders] = await Promise.all([fetchProducts(), fetchOrders(180)]);
     window._shopifyProducts = shopifyProducts;
-    ALL_ORDERS = shopifyOrders.filter(o => new Date(o.created_at) >= new Date('2026-02-01'));
+    ALL_ORDERS = shopifyOrders.filter(o => new Date(o.created_at) >= new Date(DATA_START_DATE));
     // Build full daily sales map from ALL_ORDERS for custom date range filtering
     {const _fd={};ALL_ORDERS.forEach(o=>{const k=(o.created_at||'').substring(0,10);_fd[k]=(_fd[k]||0)+parseFloat(o.total_price||0);});window._dsAllFull=_fd;}
     ORDERS = shopifyOrders.filter(o => {
@@ -1223,7 +1228,7 @@ function refreshDashboard(){
   const today=new Date().toISOString().substring(0,10);
   const toEl=document.getElementById('dbTo');
   if(toEl&&!toEl.value)toEl.value=today;
-  const from=document.getElementById('dbFrom')?.value||'2026-02-01';
+  const from=document.getElementById('dbFrom')?.value||DATA_START_DATE;
   const to=(toEl&&toEl.value)||today;
   if(window._shopifyProducts&&ALL_ORDERS&&ALL_ORDERS.length){
     // Filter orders to selected purchase period
@@ -1476,42 +1481,23 @@ function applyRP() {
   const soldBySku = {};
   const soldByVid = {};
   // FIX: build sold counts from filteredOrders (30d cutoff) so avg/day matches the "Units Sold" column
+  // Uses shared _addLine/_mergeSold so cross-channel sales are UNIONed (dedup by line id), not max()'d.
   filteredOrders.forEach(order=>{
     (order.line_items||[]).forEach(item=>{
       const qty = Number(item.quantity);
       if(qty<=0) return;
       const rev = Math.max(0, parseFloat(item.price)*qty - parseFloat(item.total_discount||0));
       const d = (order.created_at||'').substring(0,10);
-      if (item.sku && item.sku.trim()) {
-        const sk = item.sku.trim().toLowerCase();
-        if (!soldBySku[sk]) soldBySku[sk]={count:0,revenue:0,lastDate:'',lineIds:new Set()};
-        if (!soldBySku[sk].lineIds.has(item.id)) {
-          soldBySku[sk].count += qty; soldBySku[sk].revenue += rev;
-          soldBySku[sk].lineIds.add(item.id);
-          if (d > soldBySku[sk].lastDate) soldBySku[sk].lastDate = d;
-        }
-      }
-      if (item.variant_id) {
-        const vid = String(item.variant_id);
-        if (!soldByVid[vid]) soldByVid[vid]={count:0,revenue:0,lastDate:'',lineIds:new Set()};
-        if (!soldByVid[vid].lineIds.has(item.id)) {
-          soldByVid[vid].count += qty; soldByVid[vid].revenue += rev;
-          soldByVid[vid].lineIds.add(item.id);
-          if (d > soldByVid[vid].lastDate) soldByVid[vid].lastDate = d;
-        }
-      }
+      if (item.sku && item.sku.trim()) _addLine(soldBySku, item.sku.trim().toLowerCase(), item, qty, rev, d);
+      if (item.variant_id) _addLine(soldByVid, String(item.variant_id), item, qty, rev, d);
     });
   });
 
-  // Rebuild with new spd — pick highest count between SKU and variant_id match
+  // Rebuild with new spd — UNION SKU and variant_id matches (dedup by line id)
   const rpBase = PRODUCTS.map(p=>{
     const skuKey = p.sku ? p.sku.trim().toLowerCase() : '';
     const vid = String(p.variantId);
-    const skuMatch = (skuKey && soldBySku[skuKey]) ? soldBySku[skuKey] : null;
-    const vidMatch = soldByVid[vid] ? soldByVid[vid] : null;
-    const sold = (skuMatch && vidMatch)
-      ? (vidMatch.count >= skuMatch.count ? vidMatch : skuMatch)
-      : (skuMatch || vidMatch || {count:0,revenue:0,lastDate:null});
+    const sold = _mergeSold(skuKey ? soldBySku[skuKey] : null, soldByVid[vid]);
     // FIX: velocity must match the column window (dayCount). For newly launched products, cap by product age so we don't penalize them.
     const liveDate = p.createdAt ? new Date(p.createdAt) : null;
     const daysSinceLaunch = liveDate ? Math.max(1, Math.ceil((new Date() - liveDate) / 86400000)) : dayCount;
@@ -1581,7 +1567,8 @@ function rpSort(col) {
   });
   // Find the right header and mark it
   const headers = document.querySelectorAll('#rpTable thead tr:first-child th');
-  const colMap = {name:1,sku:2,supplier:3,stock:4,spd:5,unitsSold30:6,rev30:7,lead:8,ai:9,growth:10,buffer:11,qty:12,cost:13,erev:14,profit:15,orderBy:16,stockout:17};
+  // #15 Indices match the actual <th> order (checkbox=0, then the columns below).
+  const colMap = {name:1,sku:2,supplier:3,qty:4,stock:5,spd:6,unitsSold30:7,rev30:8,lead:9,ai:10,growth:11,cost:12,erev:13,profit:14,orderBy:15,stockout:16};
   const idx = colMap[col];
   if (idx!==undefined && headers[idx]) {
     headers[idx].classList.add(rpSortDir===1?'sort-asc':'sort-desc');
@@ -1589,12 +1576,19 @@ function rpSort(col) {
   renderRPTable();
 }
 
-// Compute row calcs
-function calcRow(p) {
+// #17 Read the reorder period + growth inputs from the DOM ONCE per render pass.
+// calcRow is called O(n log n) times during sort; reading the DOM inside it was the hot path.
+function _rpParams() {
   const period = document.getElementById('reorderPeriod').value==='custom'
     ? parseInt(document.getElementById('reorderCustomDays').value||45)
     : parseInt(document.getElementById('reorderPeriod').value||30);
   const growth = parseFloat(document.getElementById('growthPct').value||15)/100;
+  return { period, growth };
+}
+
+// Compute row calcs. Pass a cached `params` (from _rpParams()) in hot loops to skip DOM reads.
+function calcRow(p, params) {
+  const { period, growth } = params || _rpParams();
     // #14 Improved reorder qty: base = spd × period, + lead time buffer, + AI (8% seasonality), + growth, + safety buffer
   const baseQty = Math.round(p.spd * period);
   const leadBuffer = Math.round(p.spd * p.lead); // stock needed during lead time
@@ -1623,13 +1617,16 @@ function renderRPTable() {
 
   let data = [...RP_DATA];
 
+  // #17 Read reorder period + growth from the DOM once for this whole render pass.
+  const rpParams = _rpParams();
+
   // Apply sort
   if (rpSortCol) {
     data.sort((a,b)=>{
       let va=a[rpSortCol], vb=b[rpSortCol];
       // For computed cols
       if (['ai','growth','buffer','qty','cost','erev','profit','orderBy','stockout'].includes(rpSortCol)) {
-        const ca=calcRow(a), cb=calcRow(b);
+        const ca=calcRow(a,rpParams), cb=calcRow(b,rpParams);
         const m={ai:'ai',growth:'gUnits',buffer:'safety',qty:'qty',cost:'cost',erev:'erev',profit:'profit',orderBy:'orderByDays',stockout:'stockoutDays'};
         va=ca[m[rpSortCol]||rpSortCol]; vb=cb[m[rpSortCol]||rpSortCol];
       }
@@ -1640,7 +1637,7 @@ function renderRPTable() {
   }
 
   body.innerHTML = data.map((p,idx)=>{
-    const c=calcRow(p);
+    const c=calcRow(p,rpParams);
     const bc=p.status==='critical'?'badge-danger':p.status==='low'?'badge-warning':'badge-success';
     const img=p.image?`<div class="product-img has-img" onclick="openImgLightbox('${p.image}')"><img src="${p.image}" alt=""></div>`:`<div class="product-img">${p.emoji}</div>`;
     const isSelected=RP_SELECTED.has(p.variantId);
@@ -1659,7 +1656,7 @@ function renderRPTable() {
       <td>+${c.ai}</td>
       <td>+${c.gUnits}</td>
       
-      <td>₹${Math.round(c.cost/1000)}K</td>
+      <td title="${p.costIsReal?'Based on real Shopify cost-per-item':'Estimated cost (no cost-per-item set in Shopify)'}">${p.costIsReal?'':'<span style="color:var(--warning)">~</span>'}₹${Math.round(c.cost/1000)}K</td>
       <td style="color:var(--success)">₹${Math.round(c.erev/1000)}K</td>
       <td style="color:var(--success)">₹${Math.round(c.profit/1000)}K</td>
       <td style="font-size:12px">${orderByStr(p.stock,p.spd,p.lead)}</td>
@@ -1689,7 +1686,8 @@ function updateTotalsRow(data) {
   const totRev=data.reduce((s,p)=>s+p.rev30,0);
   const totUnits=data.reduce((s,p)=>s+p.unitsSold30,0);
   let totQty=0,totCost=0,totErev=0,totProfit=0;
-  data.forEach(p=>{ const c=calcRow(p); totQty+=c.qty; totCost+=c.cost; totErev+=c.erev; totProfit+=c.profit; });
+  const _tp=_rpParams();
+  data.forEach(p=>{ const c=calcRow(p,_tp); totQty+=c.qty; totCost+=c.cost; totErev+=c.erev; totProfit+=c.profit; });
 
   document.getElementById('rpTotalsRow').innerHTML = `
     <td class="cb-col">Σ</td>
@@ -1714,7 +1712,8 @@ function updateTotalsRow(data) {
   document.getElementById('tot-spd').textContent = sel.reduce((s,p)=>s+p.spd,0).toFixed(1);
   document.getElementById('tot-rev').textContent = '₹'+fmtLakh(sel.reduce((s,p)=>s+p.rev30,0));
   let sq=0,sc=0,se=0,sp=0;
-  sel.forEach(p=>{ const c=calcRow(p); sq+=c.qty; sc+=c.cost; se+=c.erev; sp+=c.profit; });
+  const _sp=_rpParams();
+  sel.forEach(p=>{ const c=calcRow(p,_sp); sq+=c.qty; sc+=c.cost; se+=c.erev; sp+=c.profit; });
   document.getElementById('tot-qty').textContent = sq.toLocaleString('en-IN');
   document.getElementById('tot-cost').textContent = '₹'+fmtLakh(sc);
   document.getElementById('tot-erev').textContent = '₹'+fmtLakh(se);
@@ -1801,7 +1800,7 @@ function exportRP(type) {
     data=PRODUCTS;
   }
   const period=parseInt(document.getElementById('reorderPeriod').value||30);
-  const rows=[['Product','SKU','Vendor','Stock','Avg/day','Units Sold','Revenue','Lead(d)','AI Pred','Growth','Buffer','Reorder Qty','Reorder Cost','Est Rev','Est Profit','Status','Image URL']];
+  const rows=[['Product','SKU','Vendor','Stock','Avg/day','Units Sold','Revenue','Lead(d)','Trend+8%','Growth','Buffer','Reorder Qty','Reorder Cost','Est Rev','Est Profit','Status','Image URL']];
   data.forEach(p=>{
     const c=calcRow(p);
     rows.push([p.name,p.sku,p.supplier,p.stock,p.spd,p.unitsSold30,Math.round(p.rev30),p.lead,c.ai,c.gUnits,c.qty,Math.round(c.cost),Math.round(c.erev),Math.round(c.profit),p.status,p.image||'']);
@@ -1898,21 +1897,15 @@ function renderHotSellers() {
   }
 
   // --- Build sales maps for this period ---
+  // Uses shared _addLine/_mergeSold so cross-channel sales are UNIONed (dedup by line id), not max()'d.
   const soldBySku = {}, soldByVid = {};
   filteredOrders.forEach(order=>{
     (order.line_items||[]).forEach(item=>{
       const qty=Number(item.quantity); if(qty<=0) return;
       const rev=Math.max(0, parseFloat(item.price||0)*qty - parseFloat(item.total_discount||0));
-      if(item.sku && item.sku.trim()){
-        const sk=item.sku.trim().toLowerCase();
-        if(!soldBySku[sk]) soldBySku[sk]={count:0,revenue:0,lineIds:new Set()};
-        if(!soldBySku[sk].lineIds.has(item.id)){soldBySku[sk].count+=qty;soldBySku[sk].revenue+=rev;soldBySku[sk].lineIds.add(item.id);}
-      }
-      if(item.variant_id){
-        const vid=String(item.variant_id);
-        if(!soldByVid[vid]) soldByVid[vid]={count:0,revenue:0,lineIds:new Set()};
-        if(!soldByVid[vid].lineIds.has(item.id)){soldByVid[vid].count+=qty;soldByVid[vid].revenue+=rev;soldByVid[vid].lineIds.add(item.id);}
-      }
+      const d=(order.created_at||'').substring(0,10);
+      if(item.sku && item.sku.trim()) _addLine(soldBySku, item.sku.trim().toLowerCase(), item, qty, rev, d);
+      if(item.variant_id) _addLine(soldByVid, String(item.variant_id), item, qty, rev, d);
     });
   });
 
@@ -1920,8 +1913,7 @@ function renderHotSellers() {
   const hotProducts = PRODUCTS.map(p=>{
     const skuKey=p.sku?p.sku.trim().toLowerCase():'';
     const vid=String(p.variantId);
-    const skuM=skuKey?soldBySku[skuKey]:null; const vidM=soldByVid[vid]||null;
-    const sold=(skuM&&vidM)?(vidM.count>=skuM.count?vidM:skuM):(skuM||vidM||{count:0,revenue:0});
+    const sold=_mergeSold(skuKey?soldBySku[skuKey]:null, soldByVid[vid]);
     const spd=parseFloat((sold.count/dayCount).toFixed(3));
     return {...p, spd, hotUnits:sold.count, hotRev:sold.revenue};
   });
@@ -4009,6 +4001,56 @@ function o2ExportCSV(){
         <div><label class="form-label">Cold ≥</label><input type="number" id="setVendorCold" step="0.1" value="1" style="width:100%"></div>
       </div>
     </div>
+    <!-- #11 Data durability: export/import all locally-stored business data -->
+    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:24px; max-width:720px; margin-top:16px;">
+      <h3 style="margin-top:0">Data Backup &amp; Restore</h3>
+      <p style="color:#64748b; font-size:13px;">All POS, procurement, P&amp;L, expenses, customers, vendor &amp; settings data lives only in this browser's local storage. Export regularly so a cleared browser or new device doesn't lose it.</p>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-top:12px;">
+        <button class="btn btn-primary" onclick="sankiExportBackup()">⬇️ Export backup (.json)</button>
+        <button class="btn" onclick="document.getElementById('sankiImportFile').click()">⬆️ Import backup</button>
+        <input type="file" id="sankiImportFile" accept="application/json,.json" style="display:none" onchange="sankiImportBackup(this.files[0]); this.value='';">
+        <span id="sankiBackupMsg" style="font-size:13px;color:#64748b"></span>
+      </div>
+      <p style="color:#94a3b8; font-size:12px; margin-top:12px;">Import overwrites the matching keys in this browser, then reloads. It does not touch Shopify.</p>
+    </div>
+    <script>
+      // #11 Backup/restore of all sanki_* localStorage keys (plus threshold keys).
+      window.SANKI_BACKUP_KEYS = ['sanki_pos','sanki_procurement','sanki_pl','sanki_expenses','sanki_customers','sanki_vendor_meta','sanki_settings','sanki_sku_growth','sanki_data_start','t_critical','t_low'];
+      window.sankiExportBackup = function(){
+        try {
+          var dump = { _meta:{ app:'sanki-restock', exportedAt:new Date().toISOString(), version:1 }, data:{} };
+          // Include every sanki_* key plus the known threshold keys, so nothing is missed.
+          for (var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k && (k.indexOf('sanki')===0 || window.SANKI_BACKUP_KEYS.indexOf(k)!==-1)) dump.data[k]=localStorage.getItem(k); }
+          var blob = new Blob([JSON.stringify(dump,null,2)], {type:'application/json'});
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'sanki-backup-'+new Date().toISOString().slice(0,10)+'.json';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+          var m=document.getElementById('sankiBackupMsg'); if(m){ m.style.color='#059669'; m.textContent='Exported '+Object.keys(dump.data).length+' keys ✓'; }
+        } catch(e){ var m2=document.getElementById('sankiBackupMsg'); if(m2){ m2.style.color='#dc2626'; m2.textContent='Export failed: '+e.message; } }
+      };
+      window.sankiImportBackup = function(file){
+        var m=document.getElementById('sankiBackupMsg');
+        if(!file){ return; }
+        var reader = new FileReader();
+        reader.onload = function(ev){
+          try {
+            var parsed = JSON.parse(ev.target.result);
+            var data = parsed && parsed.data ? parsed.data : parsed; // accept raw {key:val} too
+            if (!data || typeof data !== 'object') throw new Error('Unrecognized backup format');
+            var keys = Object.keys(data);
+            if (!keys.length) throw new Error('Backup contains no data');
+            if (!confirm('Restore '+keys.length+' keys? This overwrites matching data in THIS browser, then reloads.')) return;
+            keys.forEach(function(k){ if (typeof data[k] === 'string') localStorage.setItem(k, data[k]); else localStorage.setItem(k, JSON.stringify(data[k])); });
+            if(m){ m.style.color='#059669'; m.textContent='Restored '+keys.length+' keys — reloading…'; }
+            setTimeout(function(){ location.reload(); }, 600);
+          } catch(e){ if(m){ m.style.color='#dc2626'; m.textContent='Import failed: '+e.message; } }
+        };
+        reader.onerror = function(){ if(m){ m.style.color='#dc2626'; m.textContent='Could not read file'; } };
+        reader.readAsText(file);
+      };
+    </script>
     <script>
     (function(){
       function loadTagSettings(){
@@ -4184,6 +4226,8 @@ function o2ExportCSV(){
     renameStatusPills();
     wrapCreatePO();
     bindSettingsPage();
+    // #10 Keep the date picker default in sync with DATA_START_DATE (localStorage-overridable)
+    try { var f = document.getElementById('dbFrom'); if (f && (!f.value || f.value === '2026-02-01')) f.value = DATA_START_DATE; } catch(e){}
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 

@@ -6,6 +6,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const multer  = require('multer');
+const { gate } = require('./auth');
 require('dotenv').config();
 
 // Multer — memory storage for remittance Excel upload (no disk needed)
@@ -18,6 +19,11 @@ const PORT = process.env.PORT || 3000;
 app.use('/api/webhooks/shopify',  express.raw({ type: 'application/json' }));
 app.use('/api/webhooks/velocity', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '10mb' }));
+
+// AUTH GATE (findings #1–#4) — protects all pages + /api/* except webhooks
+// and /api/health. Must come BEFORE static so HTML is not served unauthenticated.
+app.use(gate);
+
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: false,
   setHeaders: (res, fp) => {
