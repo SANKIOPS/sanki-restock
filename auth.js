@@ -27,6 +27,21 @@
 //     so the app can never ship wide-open again.
 // ═══════════════════════════════════════════════════════════════
 const crypto = require('crypto');
+const path   = require('path');
+
+// Normalize the request path before making any auth decision. Express does NOT
+// collapse `..` or decode `%2f` in req.path, so a request like
+// `/api/webhooks/..%2fproducts` would otherwise keep the `/api/webhooks/` prefix
+// (→ wrongly exempted) while routing/static resolves elsewhere. We percent-decode
+// and POSIX-normalize so exemption/blocking decisions match what actually gets served.
+function normalizedPath(req) {
+  let p = req.path || '/';
+  try { p = decodeURIComponent(p); } catch { /* malformed % — fall through; won't match exemptions */ }
+  p = p.replace(/\\/g, '/');                 // treat backslashes as separators
+  p = path.posix.normalize(p);               // collapse ../ and ./
+  if (!p.startsWith('/')) p = '/' + p;       // normalize() can drop leading slash on '..'
+  return p;
+}
 
 function safeEqual(a, b) {
   const ba = Buffer.from(String(a));
@@ -57,21 +72,24 @@ function checkApiKey(req) {
 }
 
 function gate(req, res, next) {
+  // Decide on the NORMALIZED path so encoded/`..` traversal can't bypass the gate.
+  const p = normalizedPath(req);
+
   // Always block debug endpoints in production (finding #3)
-  if (req.path.startsWith('/api/debug')) {
+  if (p.startsWith('/api/debug')) {
     return res.status(404).json({ success: false, error: 'Not found' });
   }
 
   // Exempt external webhooks (authenticated by signature) and health/keep-alive
-  if (req.path.startsWith('/api/webhooks/') ||
-      req.path === '/api/health' ||
-      req.path === '/healthz') {
+  if (p.startsWith('/api/webhooks/') ||
+      p === '/api/health' ||
+      p === '/healthz') {
     return next();
   }
 
   if (checkApiKey(req) || checkBasic(req)) return next();
 
-  if (req.path.startsWith('/api/')) {
+  if (p.startsWith('/api/')) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
   }
   res.set('WWW-Authenticate', 'Basic realm="SANKI Business OS", charset="UTF-8"');

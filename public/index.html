@@ -238,7 +238,7 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
 <div id="db-date-bar" style="display:flex;align-items:center;gap:8px;padding:8px 20px;background:var(--bg2,#f8f9fa);border-bottom:1px solid var(--border,#dee2e6)">
     <span style="font-size:11px;font-weight:600;color:var(--text2,#6c757d);white-space:nowrap">PURCHASE PERIOD:</span>
     <label style="font-size:11px;color:var(--text2,#6c757d)">From</label>
-    <input type="date" id="dbFrom" value="2026-02-01" style="padding:3px 6px;border:1px solid var(--border,#dee2e6);border-radius:5px;font-size:11px;background:var(--bg,#fff);color:var(--text,#212529)" onchange="refreshDashboard()">
+    <input type="date" id="dbFrom" style="padding:3px 6px;border:1px solid var(--border,#dee2e6);border-radius:5px;font-size:11px;background:var(--bg,#fff);color:var(--text,#212529)" onchange="refreshDashboard()">
     <label style="font-size:11px;color:var(--text2,#6c757d)">To</label>
     <input type="date" id="dbTo" style="padding:3px 6px;border:1px solid var(--border,#dee2e6);border-radius:5px;font-size:11px;background:var(--bg,#fff);color:var(--text,#212529)" onchange="refreshDashboard()">
     <button onclick="refreshDashboard()" style="padding:3px 10px;border:none;border-radius:5px;background:var(--accent,#0d6efd);color:#fff;font-size:11px;cursor:pointer;white-space:nowrap">Apply</button>
@@ -795,6 +795,27 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
 // ════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════
+// Safe localStorage JSON parse: a corrupt key must never brick the whole page.
+// Returns `fallback` (and clears the bad key) instead of throwing at load time.
+function safeParse(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null || raw === undefined) return fallback;
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn('[safeParse] corrupt localStorage key "' + key + '" — resetting.', e);
+    try { localStorage.removeItem(key); } catch (_) {}
+    return fallback;
+  }
+}
+// Escape Shopify-supplied strings (product name/SKU/vendor/image URL) before
+// interpolating into innerHTML so a stray quote/angle-bracket can't break the
+// markup or inject script. Use for ALL untrusted values placed in HTML/attributes.
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
 // #10 Single source of truth for the earliest date we have reliable sales data.
 // Overridable via localStorage key "sanki_data_start" (YYYY-MM-DD) without code changes.
 const DATA_START_DATE = (function(){
@@ -811,7 +832,7 @@ let rpSortDir = 1;
 let salesChartInst = null;
 let donutChartInst = null;
 let currentSearchFilter = 'all';
-let purchaseOrders = JSON.parse(localStorage.getItem('sanki_pos') || '[]');
+let purchaseOrders = safeParse('sanki_pos', []);
 let THRESHOLD_CRITICAL = parseInt(localStorage.getItem('t_critical') || '4');
 let THRESHOLD_LOW = parseInt(localStorage.getItem('t_low') || '10');
 let poTabFilter = 'all';
@@ -1020,7 +1041,7 @@ function inferSupplier(name) {
 // ════════════════════════════════════════════════════════════
 // VENDOR META — persisted in localStorage, keyed by vendor name
 // ════════════════════════════════════════════════════════════
-let VENDOR_META = JSON.parse(localStorage.getItem('sanki_vendor_meta') || '{}');
+let VENDOR_META = safeParse('sanki_vendor_meta', {});
 
 function saveVendorMetaStore() {
   localStorage.setItem('sanki_vendor_meta', JSON.stringify(VENDOR_META));
@@ -1639,14 +1660,14 @@ function renderRPTable() {
   body.innerHTML = data.map((p,idx)=>{
     const c=calcRow(p,rpParams);
     const bc=p.status==='critical'?'badge-danger':p.status==='low'?'badge-warning':'badge-success';
-    const img=p.image?`<div class="product-img has-img" onclick="openImgLightbox('${p.image}')"><img src="${p.image}" alt=""></div>`:`<div class="product-img">${p.emoji}</div>`;
+    const img=p.image?`<div class="product-img has-img" onclick="openImgLightbox(this)"><img src="${escapeHtml(p.image)}" alt=""></div>`:`<div class="product-img">${p.emoji}</div>`;
     const isSelected=RP_SELECTED.has(p.variantId);
     const uniqueId=`rp_${p.variantId}`;
     return `<tr class="${isSelected?'selected':''}" onclick="rpToggleRow(event,'${p.variantId}')">
       <td class="cb-col" onclick="event.stopPropagation()"><input type="checkbox" id="${uniqueId}" ${isSelected?'checked':''} onchange="rpCheckboxChange('${p.variantId}',this.checked)"></td>
-      <td><div class="product-cell">${img}<div><div class="product-name">${p.name}</div></div></div></td>
-      <td style="font-size:11px;color:var(--text3)">${p.sku}</td>
-      <td><span style="font-size:11px;background:var(--info-bg);color:var(--info);padding:2px 7px;border-radius:10px;white-space:nowrap">${p.supplier}</span></td>
+      <td><div class="product-cell">${img}<div><div class="product-name">${escapeHtml(p.name)}</div></div></div></td>
+      <td style="font-size:11px;color:var(--text3)">${escapeHtml(p.sku)}</td>
+      <td><span style="font-size:11px;background:var(--info-bg);color:var(--info);padding:2px 7px;border-radius:10px;white-space:nowrap">${escapeHtml(p.supplier)}</span></td>
       <td style="font-weight:700;color:var(--info)">${c.qty}</td>
       <td><span class="badge ${bc}">${p.stock}</span></td>
       <td><b>${p.spd.toFixed(2)}</b></td>
@@ -1803,7 +1824,7 @@ function exportRP(type) {
   const rows=[['Product','SKU','Vendor','Stock','Avg/day','Units Sold','Revenue','Lead(d)','Trend+8%','Growth','Buffer','Reorder Qty','Reorder Cost','Est Rev','Est Profit','Status','Image URL']];
   data.forEach(p=>{
     const c=calcRow(p);
-    rows.push([p.name,p.sku,p.supplier,p.stock,p.spd,p.unitsSold30,Math.round(p.rev30),p.lead,c.ai,c.gUnits,c.qty,Math.round(c.cost),Math.round(c.erev),Math.round(c.profit),p.status,p.image||'']);
+    rows.push([p.name,p.sku,p.supplier,p.stock,p.spd,p.unitsSold30,Math.round(p.rev30),p.lead,c.ai,c.gUnits,c.leadBuffer,c.qty,Math.round(c.cost),Math.round(c.erev),Math.round(c.profit),p.status,p.image||'']);
   });
   dlCSV(rows,`sanki-rp-${type}-${new Date().toISOString().split('T')[0]}.csv`);
 }
@@ -1929,15 +1950,15 @@ function renderHotSellers() {
   const labelDays = preset==='custom'?`${dayCount}d`:preset+'d';
   body.innerHTML=ranked.map((p,i)=>{
     const bc=p.status==='critical'?'badge-danger':p.status==='low'?'badge-warning':'badge-success';
-    const img=p.image?`<div class="product-img has-img" onclick="openImgLightbox('${p.image}')"><img src="${p.image}" alt=""></div>`:`<div class="product-img">${p.emoji}</div>`;
-    return `<tr><td><b style="color:${cols[i]};font-size:16px">${icons[i]}</b></td><td><div class="product-cell">${img}<div><div class="product-name">${p.name}</div><div class="product-sku">${p.sku}</div></div></div></td><td>${p.hotUnits}</td><td>&#8377;${Math.round(p.hotRev).toLocaleString('en-IN')}</td><td><b>${p.spd}/day</b></td><td><span class="badge ${bc}">${p.stock}</span></td><td>${stockoutStr(p.stock,p.spd)}</td><td><span class="badge ${bc}">${p.status.charAt(0).toUpperCase()+p.status.slice(1)}</span></td><td><button class="btn btn-sm ${p.status==='critical'?'btn-danger':'btn-primary'}" onclick="openNewPO([PRODUCTS.find(x=>x.variantId==${p.variantId})])">PO</button></td></tr>`;
+    const img=p.image?`<div class="product-img has-img" onclick="openImgLightbox(this)"><img src="${escapeHtml(p.image)}" alt=""></div>`:`<div class="product-img">${p.emoji}</div>`;
+    return `<tr><td><b style="color:${cols[i]};font-size:16px">${icons[i]}</b></td><td><div class="product-cell">${img}<div><div class="product-name">${escapeHtml(p.name)}</div><div class="product-sku">${escapeHtml(p.sku)}</div></div></div></td><td>${p.hotUnits}</td><td>&#8377;${Math.round(p.hotRev).toLocaleString('en-IN')}</td><td><b>${p.spd}/day</b></td><td><span class="badge ${bc}">${p.stock}</span></td><td>${stockoutStr(p.stock,p.spd)}</td><td><span class="badge ${bc}">${p.status.charAt(0).toUpperCase()+p.status.slice(1)}</span></td><td><button class="btn btn-sm ${p.status==='critical'?'btn-danger':'btn-primary'}" onclick="openNewPO([PRODUCTS.find(x=>x.variantId==${p.variantId})])">PO</button></td></tr>`;
   }).join('');
   const maxSpd=ranked[0]?.spd||1;
   barsEl.innerHTML=ranked.slice(0,8).map(p=>{
     const pct=maxSpd>0?Math.round(p.spd/maxSpd*100):0;
     const col=p.status==='critical'?'#E24B4A':p.status==='low'?'#BA7517':'#3B6D11';
     const short=p.name.length>22?p.name.substring(0,22)+'…':p.name;
-    return `<div class="chart-bar-row"><span class="chart-bar-label">${short}</span><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%;background:${col}"></div></div><span class="chart-bar-val" style="color:${col}">${p.spd}/day</span></div>`;
+    return `<div class="chart-bar-row"><span class="chart-bar-label">${escapeHtml(short)}</span><div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%;background:${col}"></div></div><span class="chart-bar-val" style="color:${col}">${p.spd}/day</span></div>`;
   }).join('');
 }
 
@@ -1968,8 +1989,8 @@ function renderSearch(q) {
     const days=p.spd>0?Math.floor(p.stock/p.spd):999;
     const d=new Date();d.setDate(d.getDate()+days);
     const dateStr=days<1?'<b style="color:#E24B4A">Today</b>':days<=3?'<b style="color:#E24B4A">'+d.toLocaleDateString('en-IN',{month:'short',day:'numeric'})+'</b>':d.toLocaleDateString('en-IN',{month:'short',day:'numeric'});
-    const imgEl=p.image?`<img src="${p.image}" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);cursor:zoom-in" alt="" onclick="openImgLightbox('${p.image}')">`:`<div style="font-size:28px">${p.emoji}</div>`;
-    return `<div class="search-result">${imgEl}<div style="flex:1"><div style="font-weight:700;font-size:14px">${p.name}</div><div style="font-size:12px;color:var(--text2);margin-top:2px">${p.sku} · Vendor: ${p.supplier} · Lead: ${p.lead}d</div><div style="font-size:12px;color:var(--text2);margin-top:2px">Velocity: ${p.spd}/day · Rev 30d: ₹${Math.round(p.rev30).toLocaleString('en-IN')}</div></div><div style="text-align:center;min-width:80px"><div style="font-size:22px;font-weight:700">${p.stock}</div><div style="font-size:11px;color:var(--text2)">units left</div><div class="stock-bar" style="width:70px;margin:4px auto 0"><div class="stock-bar-fill" style="width:${pct}%;background:${col}"></div></div></div><div style="text-align:center;min-width:100px"><div style="font-size:11px;color:var(--text2);margin-bottom:3px">Stockout</div><div style="font-size:13px">${dateStr}</div></div><span class="badge ${bc}" style="align-self:center">${p.status.charAt(0).toUpperCase()+p.status.slice(1)}</span></div>`;
+    const imgEl=p.image?`<img src="${escapeHtml(p.image)}" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);cursor:zoom-in" alt="" onclick="openImgLightbox(this)">`:`<div style="font-size:28px">${p.emoji}</div>`;
+    return `<div class="search-result">${imgEl}<div style="flex:1"><div style="font-weight:700;font-size:14px">${escapeHtml(p.name)}</div><div style="font-size:12px;color:var(--text2);margin-top:2px">${escapeHtml(p.sku)} · Vendor: ${escapeHtml(p.supplier)} · Lead: ${p.lead}d</div><div style="font-size:12px;color:var(--text2);margin-top:2px">Velocity: ${p.spd}/day · Rev 30d: ₹${Math.round(p.rev30).toLocaleString('en-IN')}</div></div><div style="text-align:center;min-width:80px"><div style="font-size:22px;font-weight:700">${p.stock}</div><div style="font-size:11px;color:var(--text2)">units left</div><div class="stock-bar" style="width:70px;margin:4px auto 0"><div class="stock-bar-fill" style="width:${pct}%;background:${col}"></div></div></div><div style="text-align:center;min-width:100px"><div style="font-size:11px;color:var(--text2);margin-bottom:3px">Stockout</div><div style="font-size:13px">${dateStr}</div></div><span class="badge ${bc}" style="align-self:center">${p.status.charAt(0).toUpperCase()+p.status.slice(1)}</span></div>`;
   }).join('');
 }
 
@@ -2323,7 +2344,15 @@ window.addEventListener('load',()=>{
   <img id="imgLightboxImg" src="" alt="">
 </div>
 <script>
-function openImgLightbox(src) {
+function openImgLightbox(srcOrEl) {
+  // Accept either a URL string (legacy) or the clicked element. Reading the src
+  // off the element avoids interpolating the URL into an inline onclick handler.
+  let src = srcOrEl;
+  if (srcOrEl && typeof srcOrEl === 'object') {
+    src = srcOrEl.tagName === 'IMG'
+      ? srcOrEl.src
+      : (srcOrEl.querySelector('img') ? srcOrEl.querySelector('img').src : '');
+  }
   if (!src) return;
   document.getElementById('imgLightboxImg').src = src;
   document.getElementById('imgLightbox').classList.add('open');
@@ -2337,14 +2366,14 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeImgLigh
 // ══════════════════════════════════════
 // EXTENDED STATE — New Modules
 // ══════════════════════════════════════
-var PROCUREMENT_ORDERS = JSON.parse(localStorage.getItem('sanki_procurement')||'[]');
-var PL_ENTRIES         = JSON.parse(localStorage.getItem('sanki_pl')||'[]');
-var EXPENSES           = JSON.parse(localStorage.getItem('sanki_expenses')||'[]');
-var CUSTOMERS_EXT      = JSON.parse(localStorage.getItem('sanki_customers')||'[]');
-var CONTENT_PIPE       = JSON.parse(localStorage.getItem('sanki_content')||'[]');
-var CAL_ITEMS          = JSON.parse(localStorage.getItem('sanki_calendar')||'[]');
-var CAMPAIGNS          = JSON.parse(localStorage.getItem('sanki_campaigns')||'[]');
-var WA_LOG             = JSON.parse(localStorage.getItem('sanki_wa_log')||'[]');
+var PROCUREMENT_ORDERS = safeParse('sanki_procurement', []);
+var PL_ENTRIES         = safeParse('sanki_pl', []);
+var EXPENSES           = safeParse('sanki_expenses', []);
+var CUSTOMERS_EXT      = safeParse('sanki_customers', []);
+var CONTENT_PIPE       = safeParse('sanki_content', []);
+var CAL_ITEMS          = safeParse('sanki_calendar', []);
+var CAMPAIGNS          = safeParse('sanki_campaigns', []);
+var WA_LOG             = safeParse('sanki_wa_log', []);
 var PROC_LINE_CNT      = 0;
 var EDIT_PROC_ID       = null;
 var EDIT_PL_ID         = null;
@@ -2667,7 +2696,7 @@ function renderCampaigns(){var fmt=function(v){return'\u20b9'+Math.round(v).toLo
 // ORDERS & DELIVERY MODULE
 // ════════════════════════════════════════════════════════════
 
-var ORDER_META = JSON.parse(localStorage.getItem('sanki_order_meta') || '{}');
+var ORDER_META = safeParse('sanki_order_meta', {});
 // ORDER_META[orderId] = { trackingId, deliveryStatus, customerPayment, settlementStatus,
 //   settlementDate, settlementAmount, callStatus, remarks, dispatchStatus, riskOverride }
 

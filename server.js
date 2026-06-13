@@ -5,12 +5,22 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
+const crypto  = require('crypto');
 const multer  = require('multer');
 const { gate } = require('./auth');
 require('dotenv').config();
 
 // Multer — memory storage for remittance Excel upload (no disk needed)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// Atomic JSON write: write to a temp file on the same volume, then rename.
+// rename() is atomic on a single filesystem, so a crash mid-write can never
+// leave a truncated/corrupt JSON file that bricks loading on next boot.
+function atomicWrite(filePath, data) {
+  const tmp = filePath + '.tmp-' + process.pid + '-' + Date.now();
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, filePath);
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +49,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 const SHOPIFY_STORE          = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN          = process.env.SHOPIFY_ACCESS_TOKEN;
 const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
+const VELOCITY_WEBHOOK_TOKEN = process.env.VELOCITY_WEBHOOK_TOKEN || ''; // shared secret for Velocity webhook (?token= or x-webhook-token)
 const BITESPEED_API_KEY      = process.env.BITESPEED_API_KEY;
 const BITESPEED_APP_ID       = process.env.BITESPEED_APP_ID;
 const VELOCITY_API_KEY       = process.env.VELOCITY_API_KEY;    // direct token (long-lived)
@@ -51,6 +62,44 @@ const SELF_URL               = process.env.SELF_URL
                              || process.env.RENDER_EXTERNAL_URL
                              || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null)
                              || `http://localhost:${PORT}`;
+
+// ── Webhook authentication ────────────────────────────────────────
+// Shopify signs every webhook with HMAC-SHA256(rawBody, secret) in the
+// X-Shopify-Hmac-Sha256 header. We verify it timing-safely over the RAW
+// request body (express.raw gives us the Buffer). If SHOPIFY_WEBHOOK_SECRET
+// is unset we log a loud warning and allow the request through so ingestion
+// doesn't break before the secret is configured — set it in Railway to enforce.
+let __webhookWarned = false;
+function verifyShopifyWebhook(req) {
+  if (!SHOPIFY_WEBHOOK_SECRET) {
+    if (!__webhookWarned) {
+      console.warn('[webhook] SHOPIFY_WEBHOOK_SECRET is NOT set — webhooks are UNVERIFIED. Set it in Railway to enforce HMAC.');
+      __webhookWarned = true;
+    }
+    return true; // fail-open ONLY when no secret configured (so we can ship without breaking ingestion)
+  }
+  const provided = req.get('X-Shopify-Hmac-Sha256') || '';
+  if (!provided) return false;
+  const raw = Buffer.isBuffer(req.body) ? req.body
+            : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || ''), 'utf8');
+  const digest = crypto.createHmac('sha256', SHOPIFY_WEBHOOK_SECRET).update(raw).digest('base64');
+  const a = Buffer.from(digest);
+  const b = Buffer.from(provided);
+  if (a.length !== b.length) return false;
+  try { return crypto.timingSafeEqual(a, b); } catch { return false; }
+}
+
+// Velocity has no documented HMAC scheme. If VELOCITY_WEBHOOK_TOKEN is set we
+// require it as ?token= or x-webhook-token; otherwise (unset) we allow through.
+function verifyVelocityWebhook(req) {
+  if (!VELOCITY_WEBHOOK_TOKEN) return true;
+  const provided = req.get('x-webhook-token') || req.query.token || '';
+  if (!provided) return false;
+  const a = Buffer.from(String(provided));
+  const b = Buffer.from(VELOCITY_WEBHOOK_TOKEN);
+  if (a.length !== b.length) return false;
+  try { return crypto.timingSafeEqual(a, b); } catch { return false; }
+}
 
 // ════════════════════════════════════════════════════════════════
 //  VELOCITY TOKEN MANAGEMENT  (24-hour tokens, auto-refresh)
@@ -171,7 +220,7 @@ function loadVelCache() {
 
 function saveVelCache() {
   try {
-    fs.writeFileSync(VEL_CACHE_PATH, JSON.stringify(
+    atomicWrite(VEL_CACHE_PATH, JSON.stringify(
       { shipments: velCache.shipments, lastSync: velCache.lastSync }, null, 2
     ));
   } catch(e) { console.error('[velocity] Cache save failed:', e.message); }
@@ -413,7 +462,7 @@ function loadCache() {
 
 function saveCache() {
   try {
-    fs.writeFileSync(CACHE_PATH, JSON.stringify(
+    atomicWrite(CACHE_PATH, JSON.stringify(
       { orders: ordersCache.orders, lastSync: ordersCache.lastSync }, null, 2
     ));
   } catch(e) { console.error('[cache] Save failed:', e.message); }
@@ -469,7 +518,11 @@ function cleanOrder(order) {
   return { ...order, line_items: items };
 }
 
-async function backgroundSync(days = 180) {
+// Single source of truth for how far back we cache Shopify orders. The periodic
+// sync and the /api/orders route both use this so a client can never request a
+// wider window than what's actually in the cache and silently get partial data.
+const SYNC_DAYS = 180;
+async function backgroundSync(days = SYNC_DAYS) {
   if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return;
   if (ordersCache.syncing) return;
   ordersCache.syncing = true;
@@ -495,6 +548,10 @@ async function backgroundSync(days = 180) {
 //  SHOPIFY WEBHOOKS  (instant real-time order updates)
 // ════════════════════════════════════════════════════════════════
 app.post('/api/webhooks/shopify', (req, res) => {
+  if (!verifyShopifyWebhook(req)) {
+    console.warn('[webhook/shopify] rejected: invalid HMAC');
+    return res.status(401).send('invalid signature');
+  }
   res.status(200).send('OK');
   try {
     const topic = req.headers['x-shopify-topic'] || '';
@@ -532,6 +589,10 @@ app.post('/api/webhooks/shopify', (req, res) => {
 //  URL: https://sanki-1.onrender.com/api/webhooks/velocity
 // ════════════════════════════════════════════════════════════════
 app.post('/api/webhooks/velocity', (req, res) => {
+  if (!verifyVelocityWebhook(req)) {
+    console.warn('[webhook/velocity] rejected: invalid token');
+    return res.status(401).send('invalid token');
+  }
   res.status(200).send('OK');
   try {
     const body    = req.body instanceof Buffer ? JSON.parse(req.body.toString('utf8')) : req.body;
@@ -596,19 +657,26 @@ app.get('/api/orders', async (req, res) => {
   try {
     let orders = ordersCache.orders;
     if (!orders.length && SHOPIFY_STORE && SHOPIFY_TOKEN) {
-      backgroundSync(180).catch(e => console.error("[sync] startup error:", e));
+      backgroundSync(SYNC_DAYS).catch(e => console.error("[sync] startup error:", e));
       orders = ordersCache.orders;
     }
-    const days = parseInt(req.query.days) || 180;
+    const requestedDays = parseInt(req.query.days) || SYNC_DAYS;
+    // Cache only holds SYNC_DAYS of orders; clamp so we never silently return a
+    // partial window. `capped` lets the client warn the user the range was limited.
+    const days = Math.min(requestedDays, SYNC_DAYS);
     const since = new Date(); since.setDate(since.getDate() - days);
     const filtered = orders.filter(o => new Date(o.created_at) >= since);
-    res.json({ success: true, orders: filtered, total: filtered.length, lastSync: ordersCache.lastSync });
+    res.json({
+      success: true, orders: filtered, total: filtered.length,
+      lastSync: ordersCache.lastSync,
+      coverageDays: days, requestedDays, capped: requestedDays > SYNC_DAYS
+    });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
 
 app.post('/api/orders/sync', async (req, res) => {
   try {
-    await backgroundSync(parseInt(req.body.days) || 180);
+    await backgroundSync(parseInt(req.body.days) || SYNC_DAYS);
     res.json({ success: true, total: ordersCache.orders.length, lastSync: ordersCache.lastSync });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
@@ -643,7 +711,7 @@ app.post('/api/velocity/sync', async (req, res) => {
     try {
       if (!ordersCache.orders.length && SHOPIFY_STORE && SHOPIFY_TOKEN) {
         console.log('[velocity/sync] ordersCache empty — running Shopify sync first');
-        await backgroundSync(180);
+        await backgroundSync(SYNC_DAYS);
       }
       await syncVelocityShipments();
     } catch(e) {
@@ -776,7 +844,7 @@ app.get('/api/velocity/debug/:awb', async (req, res) => {
       hint: 'Look at shipmentsAPI.attrsKeys and shipmentsAPI.fullAttrs to find the charge field name for your account'
     });
   } catch(e) {
-    res.json({ success: false, error: e.message, stack: e.stack });
+    res.json({ success: false, error: e.message });
   }
 });
 
@@ -900,7 +968,7 @@ function loadRemittance() {
   catch(e) { console.error('[remittance] Load error:', e.message); }
 }
 function saveRemittance() {
-  try { fs.writeFileSync(REMITTANCE_PATH, JSON.stringify(remittanceData, null, 2)); }
+  try { atomicWrite(REMITTANCE_PATH, JSON.stringify(remittanceData, null, 2)); }
   catch(e) { console.error('[remittance] Save error:', e.message); }
 }
 loadRemittance();
@@ -970,7 +1038,7 @@ app.post('/api/velocity/remittance/upload', upload.single('file'), (req, res) =>
     });
 
     // Persist updated meta back to disk
-    fs.writeFileSync(META_PATH, JSON.stringify(diskMeta, null, 2));
+    atomicWrite(META_PATH, JSON.stringify(diskMeta, null, 2));
     remittanceData.entries    = entries;
     remittanceData.lastImport = new Date().toISOString();
     saveRemittance();
@@ -1020,7 +1088,7 @@ app.get('/api/orders/meta', (req, res) => {
 
 app.post('/api/orders/meta/save', (req, res) => {
   try {
-    fs.writeFileSync(META_PATH, JSON.stringify(req.body.meta || req.body, null, 2));
+    atomicWrite(META_PATH, JSON.stringify(req.body.meta || req.body, null, 2));
     res.json({ success: true, savedAt: new Date().toISOString() });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
@@ -1031,7 +1099,7 @@ app.patch('/api/orders/meta/:orderId', (req, res) => {
     if (fs.existsSync(META_PATH)) meta = JSON.parse(fs.readFileSync(META_PATH, 'utf8'));
     const id = req.params.orderId;
     meta[id] = { ...(meta[id] || {}), ...req.body, updatedAt: new Date().toISOString() };
-    fs.writeFileSync(META_PATH, JSON.stringify(meta, null, 2));
+    atomicWrite(META_PATH, JSON.stringify(meta, null, 2));
     res.json({ success: true, meta: meta[id] });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
@@ -1217,7 +1285,7 @@ app.get('/api/data/load', (req, res) => {
 
 app.post('/api/data/save', (req, res) => {
   try {
-    const dir = path.dirname(DATA_PATH); if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive:true}); fs.writeFileSync(DATA_PATH, JSON.stringify(req.body, null, 2));
+    const dir = path.dirname(DATA_PATH); if (!fs.existsSync(dir)) fs.mkdirSync(dir, {recursive:true}); atomicWrite(DATA_PATH, JSON.stringify(req.body, null, 2));
     res.json({ success: true, savedAt: new Date().toISOString() });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
@@ -1314,7 +1382,7 @@ app.get('/api/debug/shopify-probe', async (req, res) => {
       arrayKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed).filter(k => Array.isArray(parsed[k])) : null,
       firstArrayLength: parsed && typeof parsed === 'object' ? (Object.keys(parsed).filter(k => Array.isArray(parsed[k])).map(k => parsed[k].length)[0] ?? null) : null
     });
-  } catch(e) { res.json({ success: false, error: e.message, stack: (e.stack||'').split('\n').slice(0,4) }); }
+  } catch(e) { res.json({ success: false, error: e.message }); }
 });
 
 app.get('/api/debug/orders', (req, res) => {
@@ -1336,7 +1404,11 @@ app.get('/api/collections', async (req, res) => {
     if (collectionsCache.data && (Date.now() - collectionsCache.lastSync) < TTL) {
       return res.json({ success: true, collections: collectionsCache.data, cached: true });
     }
-    const domain = process.env.SHOPIFY_DOMAIN;
+    const fetch = require('node-fetch');
+    const domain = SHOPIFY_STORE;
+    if (!domain) {
+      return res.status(500).json({ success: false, error: 'SHOPIFY_STORE not configured' });
+    }
     const [smart, custom] = await Promise.all([
       shopifyFetchAll(fetch, `https://${domain}/admin/api/2024-07/smart_collections.json?limit=250`).catch(() => []),
       shopifyFetchAll(fetch, `https://${domain}/admin/api/2024-07/custom_collections.json?limit=250`).catch(() => [])
@@ -1384,7 +1456,7 @@ function loadShowroomSettings() {
   catch (e) { return { frontLocationId: '', backLocationId: '', defaultTarget: 1 }; }
 }
 function saveShowroomSettings(s) {
-  try { __srFs.writeFileSync(SHOWROOM_SETTINGS_PATH, JSON.stringify(s, null, 2)); }
+  try { atomicWrite(SHOWROOM_SETTINGS_PATH, JSON.stringify(s, null, 2)); }
   catch (e) { console.error('[showroom] settings save error:', e.message); }
 }
 function loadShowroomAudit() {
@@ -1392,7 +1464,7 @@ function loadShowroomAudit() {
   catch (e) { return { entries: [] }; }
 }
 function saveShowroomAudit(a) {
-  try { __srFs.writeFileSync(SHOWROOM_AUDIT_PATH, JSON.stringify(a, null, 2)); }
+  try { atomicWrite(SHOWROOM_AUDIT_PATH, JSON.stringify(a, null, 2)); }
   catch (e) { console.error('[showroom] audit save error:', e.message); }
 }
 
@@ -1608,7 +1680,7 @@ function loadShowroomQueue() {
   catch (e) { return { items: [] }; }
 }
 function saveShowroomQueue(q) {
-  try { __srFs.writeFileSync(SHOWROOM_QUEUE_PATH, JSON.stringify(q, null, 2)); }
+  try { atomicWrite(SHOWROOM_QUEUE_PATH, JSON.stringify(q, null, 2)); }
   catch (e) { console.error('[showroom] queue save error:', e.message); }
 }
 
@@ -1642,6 +1714,10 @@ async function enrichQueueItem(fetch, item) {
 // POST /api/webhooks/shopify/orders-paid — Shopify webhook for sales
 // Note: existing server.js already has express.raw on /api/webhooks/shopify base path
 app.post('/api/webhooks/shopify/orders-paid', async (req, res) => {
+  if (!verifyShopifyWebhook(req)) {
+    console.warn('[showroom-wh] rejected: invalid HMAC');
+    return res.status(401).json({ ok: false, error: 'invalid signature' });
+  }
   try {
     // Body is raw Buffer due to existing express.raw config
     const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
@@ -1653,6 +1729,14 @@ app.post('/api/webhooks/shopify/orders-paid', async (req, res) => {
         const settings = loadShowroomSettings();
         if (!settings.frontLocationId) { console.log('[showroom-wh] no settings, skip'); return; }
         const queue = loadShowroomQueue();
+
+        // Idempotency: Shopify retries webhooks (and acks before processing), so the
+        // same order can arrive twice. Skip if we've already processed this order id.
+        if (!Array.isArray(queue.processedOrders)) queue.processedOrders = [];
+        if (order.id && queue.processedOrders.includes(order.id)) {
+          console.log(`[showroom-wh] order ${order.name || order.id} already processed, skipping`);
+          return;
+        }
 
         // Determine the location each line item was deducted from
         // POS orders set order.location_id; online orders use fulfillment location
@@ -1696,6 +1780,7 @@ app.post('/api/webhooks/shopify/orders-paid', async (req, res) => {
           }
         }
         if (queue.items.length > 1000) queue.items = queue.items.slice(-1000);
+        if (order.id) { queue.processedOrders.push(order.id); if (queue.processedOrders.length > 2000) queue.processedOrders = queue.processedOrders.slice(-2000); }
         saveShowroomQueue(queue);
         console.log(`[showroom-wh] order ${order.name || order.id} → added ${addedCount} queue items`);
       } catch (e) { console.error('[showroom-wh] async process error:', e.message); }
@@ -2107,7 +2192,7 @@ app.listen(PORT, async () => {
   // Initial syncs on startup
   if (SHOPIFY_STORE && SHOPIFY_TOKEN) {
     console.log('[sync] Starting initial Shopify sync...');
-    await backgroundSync(180);
+    await backgroundSync(SYNC_DAYS);
   }
   if (hasVelocity) {
     console.log('[velocity] Starting initial Velocity sync...');
@@ -2115,7 +2200,7 @@ app.listen(PORT, async () => {
   }
 
   // Shopify: sync every 15 min
-  setInterval(() => backgroundSync(180), 15 * 60 * 1000);
+  setInterval(() => backgroundSync(SYNC_DAYS), 15 * 60 * 1000);
 
   // Velocity: sync every 30 min
   setInterval(() => syncVelocityShipments(), 30 * 60 * 1000);
@@ -2160,7 +2245,7 @@ app.listen(PORT, async () => {
                 matched++;
               }
             });
-            if (matched) { fs.writeFileSync(META_PATH, JSON.stringify(diskMeta,null,2)); console.log(`[remittance] Auto-settled ${matched} orders`); }
+            if (matched) { atomicWrite(META_PATH, JSON.stringify(diskMeta,null,2)); console.log(`[remittance] Auto-settled ${matched} orders`); }
             saveRemittance();
             return; // found working endpoint, stop trying
           }
