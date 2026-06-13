@@ -45,7 +45,12 @@ const VELOCITY_API_KEY       = process.env.VELOCITY_API_KEY;    // direct token 
 const VELOCITY_USERNAME      = process.env.VELOCITY_USERNAME;   // mobile with country code e.g. +91XXXXXXXXXX
 const VELOCITY_PASSWORD      = process.env.VELOCITY_PASSWORD;   // Velocity portal password
 const VELOCITY_BASE          = 'https://shazam.velocity.in/custom/api/v1';
-const SELF_URL               = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+// Public origin for self-ping + webhook URLs. Prefer explicit SELF_URL, then the
+// platform-provided public domain (Railway/Render), then localhost for dev.
+const SELF_URL               = process.env.SELF_URL
+                             || process.env.RENDER_EXTERNAL_URL
+                             || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null)
+                             || `http://localhost:${PORT}`;
 
 // ════════════════════════════════════════════════════════════════
 //  VELOCITY TOKEN MANAGEMENT  (24-hour tokens, auto-refresh)
@@ -1249,11 +1254,29 @@ app.get('/api/health', async (req, res) => {
   } catch (e) {
     shopifyAuthError = e.message;
   }
+  // #4 This endpoint is auth-EXEMPT (keep-alive self-ping + uptime monitors hit it),
+  // so it must NOT leak business intel. Return only liveness + a boolean Shopify flag.
+  // Full diagnostics (store domain, order counts, sync times, webhook URLs, error bodies)
+  // are served from the authenticated /api/health/full below.
+  res.json({
+    status:    'ok',
+    version:   '4.0',
+    connected: shopifyAuthed,
+    ts: new Date().toISOString()
+  });
+});
+
+// Detailed diagnostics — behind the auth gate (NOT exempt). Same data the old
+// /api/health used to expose to the world.
+app.get('/api/health/full', async (req, res) => {
+  let shopifyAuthed = __shopifyHealthCache.ok === true;
+  let shopifyAuthError = __shopifyHealthCache.error;
+  let shopifyAuthStatus = __shopifyHealthCache.lastStatus;
   res.json({
     status:        'ok',
     version:       '4.0',
     store:         SHOPIFY_STORE || 'not configured',
-    connected:     shopifyAuthed,                 // real auth status (Shopify /shop.json ping, cached 60s)
+    connected:     shopifyAuthed,
     shopify:       shopifyAuthed,
     shopifyAuthError:  shopifyAuthError,
     shopifyAuthStatus: shopifyAuthStatus,
