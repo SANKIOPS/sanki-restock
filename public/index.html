@@ -509,12 +509,15 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
 <div class="page" id="page-search">
   <div class="page-header"><div><h1>Stock Search</h1><p>Search by SKU or product name</p></div></div>
   <input class="search-box" type="text" id="searchInput" placeholder="Search SKU, product name..." oninput="doSearch(this.value)">
-  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
     <button class="btn btn-sm" onclick="setFilter('all',this)" id="filter-all" style="border-color:#185FA5;color:#185FA5">All</button>
     <button class="btn btn-sm" onclick="setFilter('critical',this)" id="filter-critical">Immediate Order Required</button>
     <button class="btn btn-sm" onclick="setFilter('low',this)" id="filter-low">Order Soon (Within 7 Days)</button>
     <button class="btn btn-sm" onclick="setFilter('ok',this)" id="filter-ok">Stock Healthy</button>
+    <button class="btn btn-sm" id="identifyBtn" onclick="document.getElementById('identifyFile').click()" style="border-color:#7A3FA5;color:#7A3FA5;margin-left:auto">📷 Identify by Photo</button>
+    <input type="file" id="identifyFile" accept="image/*" capture="environment" style="display:none" onchange="identifyByPhoto(this.files[0]);this.value=''">
   </div>
+  <div id="identifyResults" style="margin-bottom:12px"></div>
   <div id="searchResults"><div class="loading-state"><span class="spinner"></span>Sync Shopify to search products</div></div>
 </div>
 
@@ -1992,6 +1995,105 @@ function renderSearch(q) {
     const imgEl=p.image?`<img src="${escapeHtml(p.image)}" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--border);cursor:zoom-in" alt="" onclick="openImgLightbox(this)">`:`<div style="font-size:28px">${p.emoji}</div>`;
     return `<div class="search-result">${imgEl}<div style="flex:1"><div style="font-weight:700;font-size:14px">${escapeHtml(p.name)}</div><div style="font-size:12px;color:var(--text2);margin-top:2px">${escapeHtml(p.sku)} · Vendor: ${escapeHtml(p.supplier)} · Lead: ${p.lead}d</div><div style="font-size:12px;color:var(--text2);margin-top:2px">Velocity: ${p.spd}/day · Rev 30d: ₹${Math.round(p.rev30).toLocaleString('en-IN')}</div></div><div style="text-align:center;min-width:80px"><div style="font-size:22px;font-weight:700">${p.stock}</div><div style="font-size:11px;color:var(--text2)">units left</div><div class="stock-bar" style="width:70px;margin:4px auto 0"><div class="stock-bar-fill" style="width:${pct}%;background:${col}"></div></div></div><div style="text-align:center;min-width:100px"><div style="font-size:11px;color:var(--text2);margin-bottom:3px">Stockout</div><div style="font-size:13px">${dateStr}</div></div><span class="badge ${bc}" style="align-self:center">${p.status.charAt(0).toUpperCase()+p.status.slice(1)}</span></div>`;
   }).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+// AI PHOTO IDENTIFICATION — snap/upload a garment → catalog matches
+// ════════════════════════════════════════════════════════════
+// Resize an image File to a max edge of ~1024px and return base64 (no data: prefix).
+function _resizeImageToBase64(file, maxEdge) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read the image file.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Could not decode the image.'));
+      img.onload = () => {
+        let { width, height } = img;
+        const scale = Math.min(1, maxEdge / Math.max(width, height));
+        width = Math.round(width * scale); height = Math.round(height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        resolve({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function identifyByPhoto(file) {
+  const box = document.getElementById('identifyResults');
+  const btn = document.getElementById('identifyBtn');
+  if (!file) return;
+  if (!box) return;
+  if (!PRODUCTS.length) { box.innerHTML = '<div class="empty-state">Sync Shopify first, then identify by photo.</div>'; return; }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Identifying...'; }
+  box.innerHTML = '<div class="loading-state"><span class="spinner"></span>Analysing photo…</div>';
+  try {
+    const { base64, mediaType } = await _resizeImageToBase64(file, 1024);
+    const resp = await fetch('/api/identify-product', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ image: base64, mediaType })
+    });
+    const data = await resp.json().catch(() => ({ success: false, error: 'Bad response from server.' }));
+    if (!resp.ok || !data.success) {
+      box.innerHTML = '<div class="empty-state">⚠️ ' + escapeHtml(data.error || ('Error ' + resp.status)) + '</div>';
+      return;
+    }
+    renderIdentifyResults(data.matches || []);
+  } catch (e) {
+    box.innerHTML = '<div class="empty-state">⚠️ ' + escapeHtml(e.message || 'Identification failed.') + '</div>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '📷 Identify by Photo'; }
+  }
+}
+
+function renderIdentifyResults(matches) {
+  const box = document.getElementById('identifyResults');
+  if (!box) return;
+  if (!matches.length) {
+    box.innerHTML = '<div class="empty-state">No close matches found in the catalog. Try a clearer, well-lit photo of the full garment.</div>';
+    return;
+  }
+  const cards = matches.map(mm => {
+    const sp = mm.product || {};
+    // Prefer the richer local PRODUCTS row (has SKU/stock) when available.
+    const local = PRODUCTS.find(x => String(x.id) === String(sp.id));
+    const name = (local && local.name) || sp.name || 'Unknown product';
+    const sku = (local && local.sku) || ((sp.variants && sp.variants[0] && sp.variants[0].sku) || '');
+    const img = (local && local.image) || sp.image || '';
+    const conf = Math.max(0, Math.min(100, parseInt(mm.confidence, 10) || 0));
+    const confCol = conf >= 75 ? '#3B6D11' : conf >= 50 ? '#BA7517' : '#E24B4A';
+    const imgEl = img
+      ? '<img src="' + escapeHtml(img) + '" style="width:48px;height:48px;border-radius:8px;object-fit:cover;border:1px solid var(--border);cursor:zoom-in" alt="" onclick="openImgLightbox(this)">'
+      : '<div style="font-size:28px">📦</div>';
+    return '<div class="search-result" style="cursor:pointer" onclick="useIdentifyMatch(' + JSON.stringify(String(name)).replace(/"/g, '&quot;') + ')">'
+      + imgEl
+      + '<div style="flex:1"><div style="font-weight:700;font-size:14px">' + escapeHtml(name) + '</div>'
+      + (sku ? '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + escapeHtml(sku) + '</div>' : '')
+      + (mm.reason ? '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + escapeHtml(mm.reason) + '</div>' : '')
+      + '</div>'
+      + '<div style="text-align:center;min-width:90px"><div style="font-size:20px;font-weight:700;color:' + confCol + '">' + conf + '%</div><div style="font-size:11px;color:var(--text2)">match</div></div>'
+      + '</div>';
+  }).join('');
+  box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+    + '<div style="font-weight:700;font-size:13px;color:#7A3FA5">📷 Photo matches (tap to search)</div>'
+    + '<button class="btn btn-sm" onclick="document.getElementById(\'identifyResults\').innerHTML=\'\'">✕ Clear</button></div>'
+    + cards;
+  // Auto-fill the search box with the top match's name.
+  const top = matches[0];
+  const topLocal = top && PRODUCTS.find(x => String(x.id) === String((top.product || {}).id));
+  const topName = (topLocal && topLocal.name) || (top && top.product && top.product.name) || '';
+  if (topName) { const si = document.getElementById('searchInput'); if (si) { si.value = topName; doSearch(topName); } }
+}
+
+function useIdentifyMatch(name) {
+  const si = document.getElementById('searchInput');
+  if (si) { si.value = name; si.focus(); doSearch(name); }
 }
 
 // ════════════════════════════════════════════════════════════

@@ -1166,6 +1166,131 @@ app.get('/api/products', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════
+//  AI PRODUCT IDENTIFICATION — photo → closest catalog matches
+//  POST /api/identify-product  body: { image: "<base64>", mediaType: "image/jpeg" }
+//  Sends the uploaded photo + a compact text catalog to Claude vision in one
+//  call and returns the top 3–5 matching products with confidence + reason.
+// ════════════════════════════════════════════════════════════════
+app.post('/api/identify-product', async (req, res) => {
+  const KEY = process.env.ANTHROPIC_API_KEY;
+  if (!KEY) {
+    return res.status(503).json({ success: false, error: 'Photo identification is not configured (ANTHROPIC_API_KEY missing).' });
+  }
+  const MODEL = process.env.IDENTIFY_MODEL || 'claude-sonnet-4-6';
+
+  let { image, mediaType } = req.body || {};
+  if (!image || typeof image !== 'string') {
+    return res.status(400).json({ success: false, error: 'No image provided.' });
+  }
+  // Accept a data: URL or a bare base64 string.
+  const m = image.match(/^data:([^;]+);base64,(.*)$/s);
+  if (m) { mediaType = m[1]; image = m[2]; }
+  mediaType = (mediaType || 'image/jpeg').toLowerCase();
+  if (!['image/jpeg','image/png','image/webp','image/gif'].includes(mediaType)) {
+    return res.status(400).json({ success: false, error: 'Unsupported image type: ' + mediaType });
+  }
+  // Guard against oversized payloads (base64 of ~7MB binary ≈ 9.3MB).
+  if (image.length > 9.5 * 1024 * 1024) {
+    return res.status(413).json({ success: false, error: 'Image too large — please use a smaller photo.' });
+  }
+
+  const products = (productsCache.products || []);
+  if (!products.length) {
+    return res.status(409).json({ success: false, error: 'Product catalog not loaded yet. Open Stock Search once, then retry.' });
+  }
+
+  // Build a compact text catalog. Keep it lean to control token cost.
+  const catalog = products.map(p => {
+    const skus = (p.variants || []).map(v => v.sku).filter(Boolean).slice(0, 6).join(', ');
+    return [
+      'id=' + p.id,
+      'name=' + (p.name || ''),
+      p.product_type ? 'type=' + p.product_type : '',
+      p.vendor ? 'vendor=' + p.vendor : '',
+      p.tags ? 'tags=' + p.tags : '',
+      skus ? 'skus=' + skus : ''
+    ].filter(Boolean).join(' | ');
+  }).join('\n');
+
+  const prompt =
+    'You are a product-matching assistant for a streetwear catalog. ' +
+    'Look at the attached photo of a garment and find the closest matches in the catalog below. ' +
+    'Match on garment type, color, pattern, print/graphic, cut and any visible branding. ' +
+    'Return ONLY a JSON object (no prose, no markdown fences) of the form: ' +
+    '{"matches":[{"id":<product id from catalog>,"confidence":<0-100 integer>,"reason":"<one short sentence>"}]}. ' +
+    'Include between 1 and 5 matches, best first. Use ONLY ids that appear in the catalog. ' +
+    'If nothing plausibly matches, return {"matches":[]}.\n\nCATALOG:\n' + catalog;
+
+  try {
+    const fetch = require('node-fetch');
+    const apiResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 1024,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },
+            { type: 'text', text: prompt }
+          ]
+        }]
+      })
+    });
+
+    if (!apiResp.ok) {
+      const errText = await apiResp.text().catch(() => '');
+      console.error('[identify] anthropic', apiResp.status, errText.slice(0, 500));
+      const msg = apiResp.status === 401 ? 'Invalid ANTHROPIC_API_KEY.'
+                : apiResp.status === 429 ? 'Rate limited by Claude — try again shortly.'
+                : 'Identification service error (' + apiResp.status + ').';
+      return res.status(502).json({ success: false, error: msg });
+    }
+
+    const data = await apiResp.json();
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+
+    // Extract the JSON object even if the model wrapped it in stray text.
+    let parsed = null;
+    const jsonStart = text.indexOf('{');
+    const jsonEnd = text.lastIndexOf('}');
+    if (jsonStart >= 0 && jsonEnd > jsonStart) {
+      try { parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1)); } catch { /* fall through */ }
+    }
+    if (!parsed || !Array.isArray(parsed.matches)) {
+      console.error('[identify] unparseable model output:', text.slice(0, 300));
+      return res.status(502).json({ success: false, error: 'Could not understand the identification result.' });
+    }
+
+    // Resolve ids back to full product records; drop anything unknown.
+    const byId = {};
+    for (const p of products) byId[String(p.id)] = p;
+    const matches = parsed.matches
+      .map(mm => {
+        const prod = byId[String(mm.id)];
+        if (!prod) return null;
+        return {
+          product: prod,
+          confidence: Math.max(0, Math.min(100, parseInt(mm.confidence, 10) || 0)),
+          reason: String(mm.reason || '').slice(0, 240)
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 5);
+
+    return res.json({ success: true, matches, model: MODEL });
+  } catch (e) {
+    console.error('[identify] error', e.message);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
 //  SHOPIFY — CUSTOMERS
 // ════════════════════════════════════════════════════════════════
 app.get('/api/shopify/customers', async (req, res) => {
