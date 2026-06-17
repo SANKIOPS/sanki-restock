@@ -514,10 +514,19 @@ input[type=checkbox]{cursor:pointer;width:14px;height:14px}
     <button class="btn btn-sm" onclick="setFilter('critical',this)" id="filter-critical">Immediate Order Required</button>
     <button class="btn btn-sm" onclick="setFilter('low',this)" id="filter-low">Order Soon (Within 7 Days)</button>
     <button class="btn btn-sm" onclick="setFilter('ok',this)" id="filter-ok">Stock Healthy</button>
-    <button class="btn btn-sm" id="identifyBtn" onclick="document.getElementById('identifyFile').click()" style="border-color:#7A3FA5;color:#7A3FA5;margin-left:auto">📷 Identify by Photo</button>
-    <input type="file" id="identifyFile" accept="image/*" capture="environment" style="display:none" onchange="identifyByPhoto(this.files[0]);this.value=''">
+    <button class="btn btn-sm" id="identifyPhotoBtn" onclick="openCameraModal()" style="border-color:#7A3FA5;color:#7A3FA5;margin-left:auto">📷 Take Photo</button>
+    <button class="btn btn-sm" id="identifyUploadBtn" onclick="document.getElementById('identifyFile').click()" style="border-color:#7A3FA5;color:#7A3FA5">🖼️ Upload Image</button>
+    <input type="file" id="identifyFile" accept="image/*" style="display:none" onchange="identifyByPhoto(this.files[0]);this.value=''">
   </div>
   <div id="identifyResults" style="margin-bottom:12px"></div>
+  <div id="cameraModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center;flex-direction:column;padding:20px">
+    <video id="cameraVideo" autoplay playsinline muted style="max-width:100%;max-height:68vh;border-radius:12px;background:#000"></video>
+    <div style="margin-top:16px;display:flex;gap:12px">
+      <button class="btn" onclick="captureCameraPhoto()" style="background:#7A3FA5;color:#fff;border-color:#7A3FA5">📸 Capture</button>
+      <button class="btn" onclick="closeCameraModal()" style="background:#fff">Cancel</button>
+    </div>
+    <div id="cameraError" style="color:#fff;margin-top:12px;font-size:13px;max-width:420px;text-align:center"></div>
+  </div>
   <div id="searchResults"><div class="loading-state"><span class="spinner"></span>Sync Shopify to search products</div></div>
 </div>
 
@@ -2026,14 +2035,23 @@ function _resizeImageToBase64(file, maxEdge) {
 
 async function identifyByPhoto(file) {
   const box = document.getElementById('identifyResults');
-  const btn = document.getElementById('identifyBtn');
-  if (!file) return;
-  if (!box) return;
+  if (!file || !box) return;
   if (!PRODUCTS.length) { box.innerHTML = '<div class="empty-state">Sync Shopify first, then identify by photo.</div>'; return; }
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Identifying...'; }
-  box.innerHTML = '<div class="loading-state"><span class="spinner"></span>Analysing photo…</div>';
   try {
     const { base64, mediaType } = await _resizeImageToBase64(file, 1024);
+    await _runIdentify(base64, mediaType);
+  } catch (e) {
+    box.innerHTML = '<div class="empty-state">⚠️ ' + escapeHtml(e.message || 'Could not read the image.') + '</div>';
+  }
+}
+
+// Shared core: POST a base64 image to the identify endpoint and render results.
+async function _runIdentify(base64, mediaType) {
+  const box = document.getElementById('identifyResults');
+  if (!box) return;
+  if (!PRODUCTS.length) { box.innerHTML = '<div class="empty-state">Sync Shopify first, then identify by photo.</div>'; return; }
+  box.innerHTML = '<div class="loading-state"><span class="spinner"></span>Analysing photo…</div>';
+  try {
     const resp = await fetch('/api/identify-product', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -2047,9 +2065,52 @@ async function identifyByPhoto(file) {
     renderIdentifyResults(data.matches || []);
   } catch (e) {
     box.innerHTML = '<div class="empty-state">⚠️ ' + escapeHtml(e.message || 'Identification failed.') + '</div>';
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '📷 Identify by Photo'; }
   }
+}
+
+// ── Live camera capture (works on laptop webcam + phone rear camera) ──
+let _cameraStream = null;
+async function openCameraModal() {
+  const box = document.getElementById('identifyResults');
+  if (!PRODUCTS.length) { if (box) box.innerHTML = '<div class="empty-state">Sync Shopify first, then identify by photo.</div>'; return; }
+  const modal = document.getElementById('cameraModal');
+  const video = document.getElementById('cameraVideo');
+  const err = document.getElementById('cameraError');
+  if (!modal || !video) return;
+  err.textContent = '';
+  modal.style.display = 'flex';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    err.textContent = 'Camera not supported on this browser. Use "Upload Image" instead.';
+    return;
+  }
+  try {
+    _cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    video.srcObject = _cameraStream;
+  } catch (e) {
+    err.textContent = 'Could not access the camera (' + (e.name || e.message) + '). Check browser permissions, or use "Upload Image".';
+  }
+}
+
+function closeCameraModal() {
+  const modal = document.getElementById('cameraModal');
+  const video = document.getElementById('cameraVideo');
+  if (_cameraStream) { try { _cameraStream.getTracks().forEach(t => t.stop()); } catch (_) {} _cameraStream = null; }
+  if (video) video.srcObject = null;
+  if (modal) modal.style.display = 'none';
+}
+
+function captureCameraPhoto() {
+  const video = document.getElementById('cameraVideo');
+  if (!video || !video.videoWidth) return;
+  let w = video.videoWidth, h = video.videoHeight;
+  const scale = Math.min(1, 1024 / Math.max(w, h));
+  w = Math.round(w * scale); h = Math.round(h * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  const base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+  closeCameraModal();
+  _runIdentify(base64, 'image/jpeg');
 }
 
 function renderIdentifyResults(matches) {
