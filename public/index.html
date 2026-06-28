@@ -4420,8 +4420,12 @@ function o2ExportCSV(){
     bindSettingsPage();
     // #10 Keep the date picker default in sync with DATA_START_DATE (localStorage-overridable)
     try { var f = document.getElementById('dbFrom'); if (f && (!f.value || f.value === '2026-02-01')) f.value = DATA_START_DATE; } catch(e){}
+    // Deep-link: open the in-page tab named in the URL hash (e.g. /index.html#restock),
+    // so the shared sidebar on other pages can link straight into a tab here.
+    try { var __h = (location.hash || '').replace('#','').trim(); if (__h && document.getElementById('page-' + __h)) showPage(__h); } catch(e){}
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  window.addEventListener('hashchange', function(){ try { var h = (location.hash||'').replace('#','').trim(); if (h && document.getElementById('page-'+h)) showPage(h); } catch(e){} });
 
   // Re-run pill renaming and growth after table renders
   var tbl = document.getElementById('rpTable');
