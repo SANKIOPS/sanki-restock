@@ -74,7 +74,6 @@
     <!-- Tabs -->
     <div class="bg-white rounded-t-lg border border-b border-gray-200 px-4 flex gap-1">
       <button class="tab-btn active" data-tab="settings">⚙️ Settings</button>
-      <button class="tab-btn" data-tab="seed">📦 Seed Showroom</button>
       <button class="tab-btn" data-tab="audit">📜 Audit Log</button>
       <button class="tab-btn" data-tab="queue">🔔 Replenishment Queue <span id="queueBadge" class="ml-1 px-1.5 py-0.5 text-xs bg-rose-500 text-white rounded-full" style="display:none;">0</span></button>
       <button class="tab-btn" data-tab="inventory">📊 Inventory</button>
@@ -110,79 +109,6 @@
           <button id="saveSettings" class="btn btn-primary">Save Settings</button>
           <span id="settingsStatus" class="text-sm text-gray-500"></span>
         </div>
-      </div>
-    </section>
-
-    <!-- Seed Tab -->
-    <section id="tab-seed" class="panel rounded-b-lg hidden" style="border-top:none;">
-      <div class="panel-pad">
-        <h2 class="text-base font-semibold mb-1">Initial Showroom Seeding</h2>
-        <p class="text-sm text-gray-600 mb-4">Move stock from your back stockroom to your front showroom so each variant has its target display quantity on the floor. This is a one-time setup. Use the preview to see what will move <strong>before</strong> running it.</p>
-
-        <div class="bg-amber-50 border border-amber-200 rounded p-3 mb-4 text-sm text-amber-900">
-          ⚠️ This will issue inventory adjustments to your live Shopify store. Always run the preview first and double-check the totals before clicking Run.
-        </div>
-
-        <div class="flex items-center gap-3 mb-4">
-          <button id="runPreview" class="btn btn-secondary">↻ Calculate Preview</button>
-          <span id="previewStatus" class="text-sm text-gray-500"></span>
-        </div>
-
-        <!-- Preview summary -->
-        <div id="previewSummary" class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4 hidden">
-          <div class="stat-card">
-            <div class="text-xs text-gray-500">Variants to Move</div>
-            <div class="text-2xl font-bold num" id="psVariants">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="text-xs text-gray-500">Total Units Moving</div>
-            <div class="text-2xl font-bold num" id="psUnits">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="text-xs text-gray-500">Already Correct</div>
-            <div class="text-2xl font-bold num text-emerald-600" id="psOK">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="text-xs text-gray-500">Out of Stock (skipped)</div>
-            <div class="text-2xl font-bold num text-gray-500" id="psOOS">—</div>
-          </div>
-        </div>
-
-        <!-- Preview table -->
-        <div id="previewWrap" class="bg-white border border-gray-200 rounded overflow-x-auto mb-4 hidden">
-          <table>
-            <thead>
-              <tr>
-                <th></th>
-                <th>Product / Variant</th>
-                <th>SKU</th>
-                <th class="right">Front Now</th>
-                <th class="right">Back Now</th>
-                <th class="right">Target</th>
-                <th class="right">Move</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="previewBody"></tbody>
-          </table>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <button id="runSeed" class="btn btn-emerald" disabled>▶ Run Seeding</button>
-          <span id="seedStatus" class="text-sm text-gray-500">Calculate a preview first to enable.</span>
-        </div>
-
-        <!-- Progress bar -->
-        <div id="seedProgressWrap" class="mt-4 hidden">
-          <div class="flex items-center justify-between text-sm mb-1">
-            <span id="progressLabel">Processing…</span>
-            <span id="progressPct" class="num">0%</span>
-          </div>
-          <div class="progress"><div id="progressBar" class="progress-bar" style="width:0%"></div></div>
-        </div>
-
-        <!-- Log -->
-        <div id="seedLog" class="log mt-4 hidden"></div>
       </div>
     </section>
 
@@ -401,8 +327,6 @@
   // ============================================================
   let _locations = [];
   let _settings = { frontLocationId: '', backLocationId: '', defaultTarget: 1 };
-  let _previewRows = [];   // rows from preview that need moves
-  let _previewMeta = null; // {variantsToMove, totalUnits, alreadyOk, outOfStock}
 
   // ============================================================
   // HELPERS
@@ -411,16 +335,6 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
   function fmt(n) { return Number(n || 0).toLocaleString('en-IN'); }
-  function log(msg, cls) {
-    const el = document.getElementById('seedLog');
-    el.classList.remove('hidden');
-    const ts = new Date().toLocaleTimeString();
-    const line = document.createElement('div');
-    if (cls) line.className = cls;
-    line.textContent = `[${ts}] ${msg}`;
-    el.appendChild(line);
-    el.scrollTop = el.scrollHeight;
-  }
   function setStatus(id, msg, color) {
     const el = document.getElementById(id);
     el.textContent = msg;
@@ -493,121 +407,6 @@
     } catch(e) {
       setStatus('settingsStatus', 'Save failed: ' + e.message, '#dc2626');
     }
-  });
-
-  // ============================================================
-  // SEED — PREVIEW
-  // ============================================================
-  document.getElementById('runPreview').addEventListener('click', async () => {
-    if (!_settings.frontLocationId || !_settings.backLocationId) {
-      setStatus('previewStatus', 'Please save Settings first (pick front + back locations).', '#dc2626');
-      return;
-    }
-    setStatus('previewStatus', 'Calculating… this can take 30-60 seconds.', '#64748b');
-    document.getElementById('runPreview').disabled = true;
-    try {
-      const r = await fetch('/api/showroom/seed/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      });
-      const j = await r.json();
-      if (!j.success) throw new Error(j.error || 'Preview failed');
-      _previewRows = j.moves || [];
-      _previewMeta = j.meta || {};
-      renderPreview();
-      setStatus('previewStatus', `✓ Preview ready · ${_previewRows.length} variants need moves`, '#059669');
-      document.getElementById('runSeed').disabled = _previewRows.length === 0;
-      document.getElementById('seedStatus').textContent = _previewRows.length === 0 ? 'Nothing to move — already correctly seeded.' : 'Ready. Click Run Seeding to execute.';
-    } catch(e) {
-      setStatus('previewStatus', 'Preview failed: ' + e.message, '#dc2626');
-    } finally {
-      document.getElementById('runPreview').disabled = false;
-    }
-  });
-
-  function renderPreview() {
-    document.getElementById('previewSummary').classList.remove('hidden');
-    document.getElementById('previewWrap').classList.remove('hidden');
-    document.getElementById('psVariants').textContent = fmt(_previewMeta.variantsToMove || 0);
-    document.getElementById('psUnits').textContent = fmt(_previewMeta.totalUnits || 0);
-    document.getElementById('psOK').textContent = fmt(_previewMeta.alreadyOk || 0);
-    document.getElementById('psOOS').textContent = fmt(_previewMeta.outOfStock || 0);
-
-    const body = document.getElementById('previewBody');
-    if (!_previewRows.length) {
-      body.innerHTML = '<tr class="empty-row"><td colspan="8">Everything looks correctly seeded — no moves required.</td></tr>';
-      return;
-    }
-    body.innerHTML = _previewRows.slice(0, 200).map(r => {
-      const img = r.image ? `<img class="thumb" src="${escape(r.image)}" loading="lazy">` : '<div class="thumb" style="background:#f1f5f9"></div>';
-      const direction = r.move > 0
-        ? `<span class="badge badge-blue">Back → Front +${r.move}</span>`
-        : `<span class="badge badge-amber">Front → Back ${r.move}</span>`;
-      return `<tr>
-        <td>${img}</td>
-        <td><div>${escape(r.name)}</div><div class="text-xs text-gray-500">${escape(r.variantTitle||'')}</div></td>
-        <td><span class="num">${escape(r.sku)}</span></td>
-        <td class="right num">${fmt(r.frontQty)}</td>
-        <td class="right num">${fmt(r.backQty)}</td>
-        <td class="right num">${fmt(r.target)}</td>
-        <td class="right num font-semibold">${r.move > 0 ? '+' : ''}${fmt(r.move)}</td>
-        <td>${direction}</td>
-      </tr>`;
-    }).join('');
-    if (_previewRows.length > 200) {
-      body.insertAdjacentHTML('beforeend', `<tr><td colspan="8" class="text-center text-gray-500 text-xs py-3">Showing first 200 of ${_previewRows.length} rows. All will be processed when you Run.</td></tr>`);
-    }
-  }
-
-  // ============================================================
-  // SEED — RUN
-  // ============================================================
-  document.getElementById('runSeed').addEventListener('click', async () => {
-    if (!_previewRows.length) return;
-    if (!confirm(`About to move ${_previewMeta.totalUnits} units across ${_previewMeta.variantsToMove} variants in your live Shopify store. Continue?`)) return;
-    document.getElementById('runSeed').disabled = true;
-    document.getElementById('runPreview').disabled = true;
-    document.getElementById('seedProgressWrap').classList.remove('hidden');
-    document.getElementById('seedLog').classList.remove('hidden');
-    document.getElementById('seedLog').innerHTML = '';
-    log('Starting seeding…', 'info');
-
-    const total = _previewRows.length;
-    let done = 0, ok = 0, fail = 0;
-    // Process in batches of 5 (server-side) for progress feedback
-    const BATCH = 5;
-    for (let i = 0; i < total; i += BATCH) {
-      const chunk = _previewRows.slice(i, i + BATCH);
-      try {
-        const r = await fetch('/api/showroom/seed/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ moves: chunk })
-        });
-        const j = await r.json();
-        (j.results || []).forEach(res => {
-          done++;
-          if (res.ok) { ok++; log(`✓ ${res.sku}  ${res.detail||''}`, 'ok'); }
-          else { fail++; log(`✗ ${res.sku}  ${res.error||'failed'}`, 'err'); }
-        });
-      } catch(e) {
-        for (const x of chunk) { done++; fail++; log(`✗ ${x.sku}  ${e.message}`, 'err'); }
-      }
-      const pct = Math.round((done / total) * 100);
-      document.getElementById('progressBar').style.width = pct + '%';
-      document.getElementById('progressPct').textContent = pct + '%';
-      document.getElementById('progressLabel').textContent = `Processed ${done}/${total} · ${ok} succeeded · ${fail} failed`;
-    }
-    log(`Done. ${ok}/${total} succeeded, ${fail} failed.`, fail ? 'err' : 'ok');
-    document.getElementById('runPreview').disabled = false;
-    if (fail === 0) {
-      document.getElementById('seedStatus').textContent = '✓ All moves complete.';
-    } else {
-      document.getElementById('seedStatus').textContent = `Finished with ${fail} failures — see log above.`;
-      document.getElementById('runSeed').disabled = false;
-    }
-    loadAudit();
   });
 
   // ============================================================
