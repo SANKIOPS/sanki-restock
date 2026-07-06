@@ -210,11 +210,27 @@
         <option value="only-back">📦 Only at back (none in front)</option>
         <option value="oos">○ Out of stock</option>
       </select>
+      <select id="invCategoryFilter" class="border rounded px-3 py-1.5 text-sm bg-white">
+        <option value="">All categories</option>
+      </select>
+      <select id="invVendorFilter" class="border rounded px-3 py-1.5 text-sm bg-white">
+        <option value="">All vendors</option>
+      </select>
+      <select id="invLocationFilter" class="border rounded px-3 py-1.5 text-sm bg-white">
+        <option value="">Any location</option>
+        <option value="front">🏪 In showroom (front &gt; 0)</option>
+        <option value="back">📦 In warehouse (back &gt; 0)</option>
+        <option value="both">In both</option>
+        <option value="front-only">🏪 Showroom only (no back)</option>
+        <option value="back-only">📦 Warehouse only (no front)</option>
+      </select>
       <label class="toggle text-sm">
         <input id="invHideOOS" type="checkbox" checked>
         <span class="toggle-track"><span class="toggle-thumb"></span></span>
         <span>Hide out of stock</span>
       </label>
+      <button id="invClearFilters" class="btn btn-secondary text-sm">✕ Clear</button>
+      <button id="invExport" class="btn btn-primary text-sm">⬇ Export CSV</button>
       <span class="text-xs text-gray-500 ml-auto" id="invRowCount"></span>
     </div>
 
@@ -621,11 +637,60 @@
       _invRows = j.rows || [];
       _invMeta = j.meta || {};
       _invLoaded = true;
+      populateInvFilterOptions();
       renderInvSummary();
       renderInvTable();
     } catch(e) {
       body.innerHTML = `<tr class="empty-row"><td colspan="10" style="color:#dc2626;">${escape(e.message)}</td></tr>`;
     }
+  }
+
+  function populateInvFilterOptions() {
+    const fill = (id, values) => {
+      const sel = document.getElementById(id);
+      const cur = sel.value;
+      const first = sel.querySelector('option'); // keep the "All ..." option
+      sel.innerHTML = '';
+      sel.appendChild(first);
+      values.forEach(v => {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        sel.appendChild(o);
+      });
+      if (values.includes(cur)) sel.value = cur; // preserve selection across refresh
+    };
+    const cats = [...new Set(_invRows.map(r => r.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    const vendors = [...new Set(_invRows.map(r => r.vendor).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    fill('invCategoryFilter', cats);
+    fill('invVendorFilter', vendors);
+  }
+
+  function exportInvCSV() {
+    const rows = filteredInvRows();
+    if (!rows.length) { alert('No rows to export with the current filters.'); return; }
+    const headers = ['SKU','Product','Variant','Category','Vendor','Showroom (Front)','Warehouse (Back)','Total','Price','Status'];
+    const csvCell = v => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [headers.join(',')];
+    rows.forEach(r => {
+      lines.push([
+        r.sku, r.name, r.variantTitle || '', r.category || '', r.vendor || '',
+        r.frontQty, r.backQty, r.total, r.price, r.status
+      ].map(csvCell).join(','));
+    });
+    const csv = '\uFEFF' + lines.join('\r\n'); // BOM for Excel
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
+    a.href = url;
+    a.download = `sanki-inventory-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function renderInvSummary() {
@@ -639,10 +704,26 @@
   function filteredInvRows() {
     const search = (document.getElementById('invSearch').value || '').trim().toLowerCase();
     const statusFilter = document.getElementById('invStatusFilter').value;
+    const categoryFilter = document.getElementById('invCategoryFilter').value;
+    const vendorFilter = document.getElementById('invVendorFilter').value;
+    const locationFilter = document.getElementById('invLocationFilter').value;
     const hideOOS = document.getElementById('invHideOOS').checked;
     let rows = _invRows;
     if (hideOOS) rows = rows.filter(r => r.total > 0);
     if (statusFilter) rows = rows.filter(r => r.status === statusFilter);
+    if (categoryFilter) rows = rows.filter(r => (r.category || '') === categoryFilter);
+    if (vendorFilter) rows = rows.filter(r => (r.vendor || '') === vendorFilter);
+    if (locationFilter) rows = rows.filter(r => {
+      const f = r.frontQty > 0, b = r.backQty > 0;
+      switch (locationFilter) {
+        case 'front': return f;
+        case 'back': return b;
+        case 'both': return f && b;
+        case 'front-only': return f && !b;
+        case 'back-only': return b && !f;
+        default: return true;
+      }
+    });
     if (search) {
       rows = rows.filter(r => {
         const hay = (r.sku + ' ' + r.name + ' ' + r.variantTitle + ' ' + r.vendor + ' ' + r.category).toLowerCase();
@@ -733,7 +814,24 @@
     _invSearchTimer = setTimeout(renderInvTable, 200);
   });
   document.getElementById('invStatusFilter').addEventListener('change', renderInvTable);
+  document.getElementById('invCategoryFilter').addEventListener('change', renderInvTable);
+  document.getElementById('invVendorFilter').addEventListener('change', renderInvTable);
+  document.getElementById('invLocationFilter').addEventListener('change', renderInvTable);
   document.getElementById('invHideOOS').addEventListener('change', renderInvTable);
+
+  // Clear all filters
+  document.getElementById('invClearFilters').addEventListener('click', () => {
+    document.getElementById('invSearch').value = '';
+    document.getElementById('invStatusFilter').value = '';
+    document.getElementById('invCategoryFilter').value = '';
+    document.getElementById('invVendorFilter').value = '';
+    document.getElementById('invLocationFilter').value = '';
+    document.getElementById('invHideOOS').checked = false;
+    renderInvTable();
+  });
+
+  // Export filtered rows to CSV
+  document.getElementById('invExport').addEventListener('click', exportInvCSV);
 
   // Refresh button
   document.getElementById('invRefresh').addEventListener('click', () => { _invLoaded = false; loadInventory(); });
