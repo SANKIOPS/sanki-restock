@@ -2241,9 +2241,9 @@ async function sendEmail(subject, html) {
       headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: NOTIFY_EMAIL_FROM, to: [NOTIFY_EMAIL_TO], subject, html })
     });
-    if (!r.ok) { console.error('[email] Resend error', r.status, (await r.text()).slice(0,200)); return { ok: false }; }
+    if (!r.ok) { const body = (await r.text()).slice(0,300); console.error('[email] Resend error', r.status, body); return { ok: false, status: r.status, error: body }; }
     return { ok: true };
-  } catch (e) { console.error('[email] send failed:', e.message); return { ok: false }; }
+  } catch (e) { console.error('[email] send failed:', e.message); return { ok: false, error: e.message }; }
 }
 
 function escapeHtml(s) {
@@ -2443,6 +2443,9 @@ app.get('/api/showroom/notify/test', async (req, res) => {
     to: NOTIFY_EMAIL_TO,
     sent: !!(r && r.ok),
     skipped: !!(r && r.skipped),
+    from: NOTIFY_EMAIL_FROM,
+    resendStatus: r && r.status,
+    resendError: r && r.error,
     note: RESEND_API_KEY ? 'Email dispatched via Resend — check the inbox.' : 'RESEND_API_KEY not set — logged only, no email sent.'
   });
 });
