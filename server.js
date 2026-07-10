@@ -2199,6 +2199,231 @@ app.post('/api/showroom/reconcile/preview', async (req, res) => {
   } catch (e) { res.json({ success: false, error: e.message }); }
 });
 
+// ════════════════════════════════════════════════════════════════
+//  SHOWROOM REPLENISHMENT — Phase 5: Auto-register webhook,
+//  reconcile catch-up scan, and email notifications (Resend)
+// ════════════════════════════════════════════════════════════════
+const RESEND_API_KEY   = process.env.RESEND_API_KEY || '';
+const NOTIFY_EMAIL_TO  = process.env.NOTIFY_EMAIL_TO || 'sankiinventory@gmail.com';
+const NOTIFY_EMAIL_FROM= process.env.NOTIFY_EMAIL_FROM || 'SANKI Inventory <onboarding@resend.dev>';
+const SHOWROOM_NOTIFY_PATH = __srPath.join(__srDataDir, 'showroom-notify.json');
+
+function loadNotifyState() {
+  try { return JSON.parse(__srFs.readFileSync(SHOWROOM_NOTIFY_PATH, 'utf8')); }
+  catch (e) { return { lastDigestDate: '', lastNudgeAt: 0, lastNudgeVariantKey: '' }; }
+}
+function saveNotifyState(s) {
+  try { atomicWrite(SHOWROOM_NOTIFY_PATH, JSON.stringify(s, null, 2)); }
+  catch (e) { console.error('[showroom-notify] save error:', e.message); }
+}
+
+// Return the current time in IST (UTC+5:30) as { hh, mm, dateStr }
+function istNow() {
+  const d = new Date(Date.now() + 5.5 * 3600 * 1000); // shift to IST
+  return {
+    hh: d.getUTCHours(),
+    mm: d.getUTCMinutes(),
+    dateStr: d.toISOString().slice(0, 10) // YYYY-MM-DD in IST
+  };
+}
+
+// Send an email via Resend HTTP API. If no key is set, log instead of sending
+// so the notification logic can be exercised safely before the key is configured.
+async function sendEmail(subject, html) {
+  if (!RESEND_API_KEY) {
+    console.log(`[email:log-only] would send to ${NOTIFY_EMAIL_TO} — "${subject}"`);
+    return { ok: false, skipped: true };
+  }
+  try {
+    const fetch = require('node-fetch');
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: NOTIFY_EMAIL_FROM, to: [NOTIFY_EMAIL_TO], subject, html })
+    });
+    if (!r.ok) { console.error('[email] Resend error', r.status, (await r.text()).slice(0,200)); return { ok: false }; }
+    return { ok: true };
+  } catch (e) { console.error('[email] send failed:', e.message); return { ok: false }; }
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// Build a refill digest email body from the current queue items.
+function buildRefillEmail(items, title) {
+  const appUrl = `${SELF_URL}/showroom-replenishment.html`;
+  const rowsHtml = items.map((it, i) => `
+    <tr>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;">${i + 1}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;">
+        ${it.image ? `<img src="${escapeHtml(it.image)}" width="40" height="40" style="border-radius:4px;object-fit:cover;vertical-align:middle;margin-right:6px;">` : ''}
+        ${escapeHtml(it.name)}${it.variantTitle ? `<span style="color:#6b7280;"> / ${escapeHtml(it.variantTitle)}</span>` : ''}
+      </td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;font-family:monospace;">${escapeHtml(it.sku || '')}</td>
+      <td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:center;font-weight:600;">${it.qty || 1}</td>
+    </tr>`).join('');
+  return `
+  <div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:640px;margin:0 auto;color:#111827;">
+    <h2 style="margin:0 0 4px;">🧥 SANKI — ${escapeHtml(title)}</h2>
+    <p style="color:#6b7280;margin:0 0 16px;">${items.length} item${items.length === 1 ? '' : 's'} need moving from the warehouse to the showroom floor.</p>
+    <table style="border-collapse:collapse;width:100%;font-size:14px;">
+      <thead>
+        <tr style="background:#1f2937;color:#fff;">
+          <th style="padding:8px;border:1px solid #1f2937;">#</th>
+          <th style="padding:8px;border:1px solid #1f2937;text-align:left;">Product / Variant</th>
+          <th style="padding:8px;border:1px solid #1f2937;text-align:left;">SKU</th>
+          <th style="padding:8px;border:1px solid #1f2937;">Move</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <p style="margin:16px 0;">
+      <a href="${appUrl}" style="background:#111827;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;">Open Replenishment app →</a>
+    </p>
+    <p style="color:#9ca3af;font-size:12px;">Open the Replenishment Queue tab and confirm each move (sets front = target, warehouse − moved). Sent automatically by SANKI Inventory.</p>
+  </div>`;
+}
+
+// Register the orders/paid webhook on startup if it isn't already registered.
+// Idempotent: checks for an existing hook at our address before creating.
+async function ensureOrdersPaidWebhook() {
+  if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return;
+  try {
+    const fetch = require('node-fetch');
+    const webhookUrl = `${SELF_URL}/api/webhooks/shopify/orders-paid`;
+    if (webhookUrl.startsWith('http://localhost')) {
+      console.log('[showroom-wh] skip auto-register on localhost (no public URL)');
+      return;
+    }
+    const lr = await shopifyFetch(fetch, `https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json?topic=orders/paid&limit=250`);
+    const ld = await lr.json();
+    const existing = (ld.webhooks || []).find(w => w.address === webhookUrl);
+    if (existing) { console.log(`[showroom-wh] orders/paid already registered → ${webhookUrl}`); return; }
+    const r = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
+      method: 'POST',
+      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhook: { topic: 'orders/paid', address: webhookUrl, format: 'json' } })
+    });
+    const j = await r.json();
+    if (!r.ok) { console.error('[showroom-wh] auto-register failed', r.status, JSON.stringify(j).slice(0,200)); return; }
+    console.log(`[showroom-wh] ✅ auto-registered orders/paid webhook id=${j.webhook && j.webhook.id} → ${webhookUrl}`);
+  } catch (e) { console.error('[showroom-wh] auto-register error:', e.message); }
+}
+
+// Reconcile catch-up scan: find variants where front < target and back > 0
+// (the webhook only catches sales AFTER registration; this catches everything
+// else — pre-existing deficits, POS quirks, manual stock edits) and tops up
+// the same queue the webhook feeds, deduped by variantId.
+async function reconcileFrontDeficits() {
+  if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return { added: 0 };
+  const settings = loadShowroomSettings();
+  if (!settings.frontLocationId || !settings.backLocationId) return { added: 0 };
+  const target = Number(settings.defaultTarget) || 1;
+  try {
+    const fetch = require('node-fetch');
+    const all = await shopifyFetchAll(fetch,
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,variants,image,images`);
+    const variants = [];
+    for (const p of all) {
+      const vim = {};
+      (p.images || []).forEach(img => (img.variant_ids || []).forEach(vid => { vim[String(vid)] = img.src; }));
+      const mainImg = p.image ? p.image.src : null;
+      for (const v of (p.variants || [])) {
+        if (!v.inventory_item_id) continue;
+        variants.push({
+          variantId: v.id, inventoryItemId: v.inventory_item_id,
+          sku: v.sku || '', name: p.title, variantTitle: v.title || '',
+          image: vim[String(v.id)] || mainImg
+        });
+      }
+    }
+    const iids = variants.map(v => v.inventoryItemId);
+    const levels = {};
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < iids.length; i += 50) {
+      const chunk = iids.slice(i, i + 50);
+      const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${chunk.join(',')}&location_ids=${settings.frontLocationId},${settings.backLocationId}&limit=250`;
+      try {
+        const lr = await shopifyFetch(fetch, url);
+        if (lr.ok) {
+          const ld = await lr.json();
+          for (const lvl of (ld.inventory_levels || [])) {
+            const k = String(lvl.inventory_item_id);
+            if (!levels[k]) levels[k] = {};
+            levels[k][String(lvl.location_id)] = Number(lvl.available) || 0;
+          }
+        }
+      } catch (e) { /* skip chunk on error */ }
+      await sleep(200);
+    }
+    const queue = loadShowroomQueue();
+    const pendingVariantIds = new Set(queue.items.filter(x => !x.movedAt).map(x => String(x.variantId)));
+    let added = 0;
+    for (const v of variants) {
+      const lvl = levels[String(v.inventoryItemId)] || {};
+      const frontQty = Number(lvl[String(settings.frontLocationId)]) || 0;
+      const backQty = Number(lvl[String(settings.backLocationId)]) || 0;
+      if (frontQty >= target || backQty <= 0) continue;      // no deficit or nothing to move
+      if (pendingVariantIds.has(String(v.variantId))) continue; // already queued
+      const moveQty = Math.min(target - frontQty, backQty);   // cap by what's in back
+      if (moveQty < 1) continue;
+      queue.items.push({
+        id: `q_scan_${Date.now()}_${v.variantId}_${Math.random().toString(36).slice(2,6)}`,
+        variantId: v.variantId, inventoryItemId: v.inventoryItemId,
+        sku: v.sku, name: v.name, variantTitle: v.variantTitle, image: v.image,
+        qty: moveQty, addedAt: Date.now(), source: 'scan:reconcile'
+      });
+      pendingVariantIds.add(String(v.variantId));
+      added++;
+    }
+    if (added) { if (queue.items.length > 1000) queue.items = queue.items.slice(-1000); saveShowroomQueue(queue); }
+    console.log(`[showroom-scan] reconcile complete — ${added} deficit item(s) added to queue`);
+    return { added };
+  } catch (e) { console.error('[showroom-scan] error:', e.message); return { added: 0 }; }
+}
+
+// Notification tick — runs frequently; decides when to send the daily digest
+// (09:30 IST) and the throttled 2-hourly nudge (11:00–22:00 IST, only on change).
+async function notificationTick() {
+  try {
+    const queue = loadShowroomQueue();
+    const pending = queue.items.filter(x => !x.movedAt);
+    const state = loadNotifyState();
+    const { hh, mm, dateStr } = istNow();
+
+    // Daily digest at 09:30 IST (fires within the 09:30–09:39 window, once/day)
+    if (hh === 9 && mm >= 30 && mm < 40 && state.lastDigestDate !== dateStr) {
+      if (pending.length > 0) {
+        const html = buildRefillEmail(pending, 'Daily floor refill list');
+        await sendEmail(`SANKI floor refill — ${pending.length} item${pending.length===1?'':'s'} to move today`, html);
+      } else {
+        console.log('[showroom-notify] daily digest: queue empty, nothing to send');
+      }
+      state.lastDigestDate = dateStr; // mark done even if empty, so we don't recheck all window
+      saveNotifyState(state);
+      return;
+    }
+
+    // Throttled nudge: only during 11:00–22:00 IST, at most every 2h, and only
+    // when the set of pending items has changed since the last nudge.
+    if (hh >= 11 && hh < 22 && pending.length > 0) {
+      const key = pending.map(x => `${x.variantId}:${x.qty}`).sort().join('|');
+      const twoHours = 2 * 3600 * 1000;
+      const dueByTime = (Date.now() - (state.lastNudgeAt || 0)) >= twoHours;
+      const changed = key !== state.lastNudgeVariantKey;
+      if (dueByTime && changed) {
+        const html = buildRefillEmail(pending, 'New items need restocking');
+        await sendEmail(`SANKI floor refill — ${pending.length} pending`, html);
+        state.lastNudgeAt = Date.now();
+        state.lastNudgeVariantKey = key;
+        saveNotifyState(state);
+      }
+    }
+  } catch (e) { console.error('[showroom-notify] tick error:', e.message); }
+}
+
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -2291,4 +2516,16 @@ app.listen(PORT, async () => {
     try { const fetch = require('node-fetch'); await fetch(`${SELF_URL}/api/health`); }
     catch(e) { /* silent */ }
   }, 14 * 60 * 1000);
+
+  // ── Showroom replenishment: webhook + reconcile scan + email notifications ──
+  if (SHOPIFY_STORE && SHOPIFY_TOKEN) {
+    // 1) Ensure the orders/paid webhook is registered (real-time sale → queue)
+    setTimeout(ensureOrdersPaidWebhook, 8 * 1000);
+    // 2) Reconcile catch-up scan: 60s after boot, then hourly
+    setTimeout(reconcileFrontDeficits, 60 * 1000);
+    setInterval(reconcileFrontDeficits, 60 * 60 * 1000);
+    // 3) Notification tick every 5 min (handles 09:30 IST digest + 2-hourly nudge)
+    setInterval(notificationTick, 5 * 60 * 1000);
+    console.log(`[showroom] notifications → ${NOTIFY_EMAIL_TO} ${RESEND_API_KEY ? '(Resend live)' : '(log-only, set RESEND_API_KEY)'}`);
+  }
 });
