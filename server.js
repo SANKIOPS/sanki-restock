@@ -2424,6 +2424,23 @@ async function notificationTick() {
   } catch (e) { console.error('[showroom-notify] tick error:', e.message); }
 }
 
+// GET /api/showroom/notify/test — send a test email to confirm Resend is wired up
+app.get('/api/showroom/notify/test', async (req, res) => {
+  const html = `<div style="font-family:sans-serif;">
+    <h2>✅ SANKI email test</h2>
+    <p>If you're reading this, the refill notification email pipeline is working.</p>
+    <p style="color:#6b7280;font-size:12px;">Sent ${new Date().toISOString()} from ${SELF_URL}</p></div>`;
+  const r = await sendEmail('SANKI email test — refill alerts are live', html);
+  res.json({
+    success: true,
+    keyConfigured: !!RESEND_API_KEY,
+    to: NOTIFY_EMAIL_TO,
+    sent: !!(r && r.ok),
+    skipped: !!(r && r.skipped),
+    note: RESEND_API_KEY ? 'Email dispatched via Resend — check the inbox.' : 'RESEND_API_KEY not set — logged only, no email sent.'
+  });
+});
+
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
