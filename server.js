@@ -1741,6 +1741,55 @@ async function enrichQueueItem(fetch, item) {
   return item;
 }
 
+// Self-healing prune: drop pending queue items whose FRONT quantity is already
+// at/above target. The queue is fed by sale EVENTS (webhook) which never re-check
+// live stock, so an item can be physically restocked (front=1 again) yet still
+// linger as a phantom "pull from back" task. This makes the queue a live deficit
+// view — an item only survives if the front is genuinely empty right now.
+// Conservative: if we can't get a live level for an item, we KEEP it (never drop
+// something we couldn't verify). Mutates queue.items; returns count removed.
+async function pruneRestockedQueue(fetch, queue) {
+  const settings = loadShowroomSettings();
+  if (!settings.frontLocationId) return 0;
+  const target = Number(settings.defaultTarget) || 1;
+  const pending = queue.items.filter(x => !x.movedAt);
+  if (!pending.length) return 0;
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // Ensure items have inventoryItemId so their front level is lookup-able.
+  // Bounded per call (gentle on rate limits); converges over a few loads.
+  const needIid = pending.filter(x => !x.inventoryItemId).slice(0, 40);
+  for (const it of needIid) { await enrichQueueItem(fetch, it); await sleep(120); }
+
+  // Batch-fetch live front levels for everything we can identify.
+  const iids = [...new Set(pending.filter(x => x.inventoryItemId).map(x => String(x.inventoryItemId)))];
+  const frontByIid = {};
+  for (let i = 0; i < iids.length; i += 50) {
+    const chunk = iids.slice(i, i + 50);
+    const url = `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${chunk.join(',')}&location_ids=${settings.frontLocationId}&limit=250`;
+    try {
+      const lr = await shopifyFetch(fetch, url);
+      if (lr.ok) {
+        const ld = await lr.json();
+        for (const lvl of (ld.inventory_levels || [])) frontByIid[String(lvl.inventory_item_id)] = Number(lvl.available) || 0;
+      }
+    } catch (e) { /* skip chunk; unverified items are kept below */ }
+    await sleep(150);
+  }
+
+  const keep = new Set();
+  for (const it of pending) {
+    const iid = String(it.inventoryItemId || '');
+    const stocked = iid && Object.prototype.hasOwnProperty.call(frontByIid, iid) && frontByIid[iid] >= target;
+    if (!stocked) keep.add(it.id); // keep deficits AND anything we couldn't verify
+  }
+  const before = queue.items.length;
+  queue.items = queue.items.filter(x => x.movedAt || keep.has(x.id));
+  const removed = before - queue.items.length;
+  if (removed) console.log(`[showroom-prune] dropped ${removed} already-restocked item(s) from queue`);
+  return removed;
+}
+
 // POST /api/webhooks/shopify/orders-paid — Shopify webhook for sales
 // Note: existing server.js already has express.raw on /api/webhooks/shopify base path
 app.post('/api/webhooks/shopify/orders-paid', async (req, res) => {
@@ -1825,9 +1874,11 @@ app.post('/api/webhooks/shopify/orders-paid', async (req, res) => {
 app.get('/api/showroom/queue', async (req, res) => {
   try {
     const queue = loadShowroomQueue();
-    const pending = queue.items.filter(x => !x.movedAt);
-    if (!pending.length) return res.json({ success: true, items: [], total: 0 });
     const fetch = require('node-fetch');
+    // Self-heal: drop items whose front is already restocked (see pruneRestockedQueue).
+    const pruned = await pruneRestockedQueue(fetch, queue);
+    const pending = queue.items.filter(x => !x.movedAt);
+    if (!pending.length) { if (pruned) saveShowroomQueue(queue); return res.json({ success: true, items: [], total: 0 }); }
     // Enrich up to 50 unenriched items to populate image+inventoryItemId
     const toEnrich = pending.filter(x => !x.image || !x.inventoryItemId).slice(0, 50);
     let changed = false;
@@ -1837,7 +1888,7 @@ app.get('/api/showroom/queue', async (req, res) => {
       const after = JSON.stringify({i: item.inventoryItemId, img: item.image});
       if (before !== after) changed = true;
     }
-    if (changed) saveShowroomQueue(queue);
+    if (changed || pruned) saveShowroomQueue(queue);
     res.json({ success: true, items: pending.slice(0, 200), total: pending.length });
   } catch (e) {
     res.json({ success: false, error: e.message });
@@ -2389,6 +2440,11 @@ async function reconcileFrontDeficits() {
 async function notificationTick() {
   try {
     const queue = loadShowroomQueue();
+    // Self-heal before deciding what to send, so alerts only list genuine deficits.
+    try {
+      const fetch = require('node-fetch');
+      if (await pruneRestockedQueue(fetch, queue)) saveShowroomQueue(queue);
+    } catch (e) { /* prune best-effort; fall through with whatever we have */ }
     const pending = queue.items.filter(x => !x.movedAt);
     const state = loadNotifyState();
     const { hh, mm, dateStr } = istNow();
