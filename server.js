@@ -2431,9 +2431,15 @@ app.get('/api/showroom/notify/test', async (req, res) => {
     <p>If you're reading this, the refill notification email pipeline is working.</p>
     <p style="color:#6b7280;font-size:12px;">Sent ${new Date().toISOString()} from ${SELF_URL}</p></div>`;
   const r = await sendEmail('SANKI email test — refill alerts are live', html);
+  // Diagnostic: which env var NAMES contain "RES"/"MAIL"/"NOTIFY" (names only, never values)
+  const relatedNames = Object.keys(process.env)
+    .filter(k => /RES|MAIL|NOTIFY|EMAIL/i.test(k))
+    .sort();
   res.json({
     success: true,
     keyConfigured: !!RESEND_API_KEY,
+    keyLen: RESEND_API_KEY ? RESEND_API_KEY.length : 0,
+    relatedEnvNames: relatedNames,
     to: NOTIFY_EMAIL_TO,
     sent: !!(r && r.ok),
     skipped: !!(r && r.skipped),
