@@ -153,6 +153,7 @@
           <span>Desktop alerts</span>
         </label>
         <button id="queueRefresh" class="btn btn-secondary text-sm">↻ Refresh</button>
+        <button id="queueExport" class="btn btn-primary text-sm">⬇ Export Pick-List</button>
         <button id="webhookSetup" class="btn btn-primary text-sm">⚙ Connect Shopify Webhook</button>
       </div>
     </div>
@@ -464,6 +465,7 @@
   // ============================================================
   let _queuePoll = null;
   let _lastQueueIds = new Set();
+  let _queueItems = [];
 
   async function loadQueue(silentChimeCheck) {
     try {
@@ -480,6 +482,7 @@
         if (newOnes.length) maybeNotify(newOnes);
       }
       _lastQueueIds = new Set(items.map(x => x.id));
+      _queueItems = items;
       renderQueue(items);
     } catch(e) {
       const body = document.getElementById('queueBody');
@@ -693,6 +696,31 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function exportQueueCSV() {
+    if (!_queueItems.length) { alert('Queue is empty — nothing to export.'); return; }
+    const headers = ['#','SKU','Product','Variant','Qty to Pull','Order','Placed? (\u2713)'];
+    const csvCell = v => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [headers.join(',')];
+    _queueItems.forEach((it, i) => {
+      const orderTxt = it.orderName || (it.orderId ? '#' + it.orderId : '');
+      lines.push([i + 1, it.sku, it.name, it.variantTitle || '', it.qty, orderTxt, ''].map(csvCell).join(','));
+    });
+    const csv = '\uFEFF' + lines.join('\r\n'); // BOM for Excel
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
+    a.href = url;
+    a.download = `sanki-restock-picklist-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function renderInvSummary() {
     document.getElementById('invTotalVariants').textContent = fmt(_invMeta.totalVariants || 0);
     document.getElementById('invTotalUnits').textContent = fmt(_invMeta.totalUnits || 0);
@@ -832,6 +860,7 @@
 
   // Export filtered rows to CSV
   document.getElementById('invExport').addEventListener('click', exportInvCSV);
+  document.getElementById('queueExport').addEventListener('click', exportQueueCSV);
 
   // Refresh button
   document.getElementById('invRefresh').addEventListener('click', () => { _invLoaded = false; loadInventory(); });
