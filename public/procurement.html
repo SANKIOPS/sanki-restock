@@ -203,7 +203,8 @@
     function optsArr(sel,arr,ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} arr.forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
     function exRate(){ return Number(el('exRate').value)||Number(settings.exRate)||0; }
     function chinaCost(l){ return (Number(l.perPcsYuan)||0) * exRate(); }
-    function lineCost(l){ return (Number(l.qty)||0) * (Number(l.perPcsYuan)||0) * exRate(); }
+    function lineYuan(l){ return (Number(l.qty)||0) * (Number(l.perPcsYuan)||0); }            // qty × ¥/pc (Yuan)
+    function lineCost(l){ return lineYuan(l) * exRate(); }                                    // × exchange rate (INR)
 
     // ── category-aware fits & sizes ──
     var UPPER_FITS=['Oversized','Drop Shoulder','Boxy Fit','Relaxed Fit','Regular Fit','Slim Fit','Muscle Fit'];
@@ -362,15 +363,16 @@
           '<td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
           '<td>'+esc(l.designName||'—')+'</td><td class="mono">'+esc(l.designCode||'—')+'</td>'+
           '<td>'+esc(l.productType)+'</td><td>'+esc(l.colour)+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
-          '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+money(lineCost(l))+'</td>'+
+          '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+yuan(lineYuan(l))+'</td><td class="money">'+money(lineCost(l))+'</td>'+
           '<td><button class="btn ghost sm" data-edit="'+i+'">Edit</button> <button class="x" data-del="'+i+'">✕</button></td></tr>';
       }).join('');
-      var totalPurchase = lines.reduce(function(s,l){ return s + lineCost(l); }, 0);
-      var totalQty = lines.reduce(function(s,l){ return s + (Number(l.qty)||0); }, 0);
-      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>¥/pc</th><th>Purchase cost</th><th></th></tr></thead><tbody>'+rows+
-        '<tr class="totalrow"><td colspan="7" style="text-align:right;font-weight:600">Total purchase cost</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+money(totalPurchase)+'</td><td></td></tr>'+
+      var totalYuan = lines.reduce(function(s,l){ return s + lineYuan(l); }, 0);
+      var totalInr  = lines.reduce(function(s,l){ return s + lineCost(l); }, 0);
+      var totalQty  = lines.reduce(function(s,l){ return s + (Number(l.qty)||0); }, 0);
+      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>¥/pc</th><th>Purchase cost (¥)</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
+        '<tr class="totalrow"><td colspan="7" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+yuan(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
         '</tbody></table>'+
-        '<p class="sub">Purchase cost = qty × ¥/pc × exchange rate (China purchase, converted to ₹). Freight &amp; final landed cost are added after the goods are received &amp; weighed.</p>';
+        '<p class="sub">Purchase cost (¥) = qty × ¥/pc. Total purchase cost (₹) = purchase cost × exchange rate ('+exRate()+'). Freight &amp; final landed cost are added after the goods are received &amp; weighed.</p>';
       Array.prototype.forEach.call(el('linesHost').querySelectorAll('[data-del]'),function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-del'),1); renderLines(); }; });
       Array.prototype.forEach.call(el('linesHost').querySelectorAll('[data-edit]'),function(b){ b.onclick=function(){ editLine(+b.getAttribute('data-edit')); }; });
     }
