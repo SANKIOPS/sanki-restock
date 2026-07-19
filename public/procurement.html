@@ -355,7 +355,8 @@
         qty:el('f_qty').value,
         perPcsYuan:el('f_perPcsYuan').value,
         sku:el('f_sku').value.trim(),
-        photoUrl:pendingPhotoUrl
+        photoUrl:pendingPhotoUrl,
+        photoApproved: !!pendingPhotoUrl   // a photo the user chose manually is approved
       };
       var miss=[];
       if(!l.designName) miss.push('design name');
@@ -371,25 +372,63 @@
       if(miss.length){ alert('Please fill: '+miss.join(', ')+'.'); return; }
       lines.push(l); resetLineForm(); renderLines();
     };
-    // Keep the "prefix" data (design, vendor code, product, fit, colour, size,
-    // audience, ¥/pc AND the photo) filled from the just-added line, so the next
-    // line only needs the colour/size changed. Only qty + explicit-SKU reset.
     function resetLineForm(){
       el('f_qty').value='1';
       el('f_sku').value='';
       el('photoNote').textContent = pendingPhotoUrl ? 'Photo kept from last line — replace it if the colour changed.' : '';
     }
-    el('clearLines').onclick=function(){ lines=[]; el('advanceResult').innerHTML=''; renderLines(); };
+    el('clearLines').onclick=function(){ lines=[]; editingLineIdx=-1; el('advanceResult').innerHTML=''; renderLines(); };
+
+    // ── option builders for the inline editor ──
+    function optList(arr,sel){ return (arr||[]).map(function(v){ return '<option'+(String(v)===String(sel)?' selected':'')+'>'+esc(v)+'</option>'; }).join(''); }
+    function objOpts(obj,sel){ return '<option value="">—</option>'+Object.keys(obj||{}).map(function(v){ return '<option'+(v===sel?' selected':'')+'>'+esc(v)+'</option>'; }).join(''); }
+    function fitsFor(p){ return categoryOf(p)==='lower'?LOWER_FITS:UPPER_FITS; }
+    function sizesFor(p){ return categoryOf(p)==='lower'?LOWER_SIZES_INDIA:UPPER_SIZES; }
+
+    var editingLineIdx=-1;     // which saved line is being edited inline (-1 = none)
+    var editorPhotoUrl='';     // working photo url for the inline editor
+
+    function photoBadge(l){
+      if(!l.photoUrl) return '<span class="pill" style="background:#b42318;color:#fff">no photo</span>';
+      return l.photoApproved
+        ? '<span class="pill exist">✓ approved</span>'
+        : '<span class="pill" style="background:#f59e0b;color:#fff">approve</span>';
+    }
+    function lineEditorRow(l,i){
+      var p=l.productType;
+      return '<tr class="editrow"><td colspan="12" style="background:var(--ivory2)">'+
+        '<div class="lineform">'+
+          '<div class="fld wide"><label>Design name</label><input data-e="designName" value="'+esc(l.designName||'')+'"></div>'+
+          '<div class="fld"><label>Vendor product code</label><input data-e="designCode" class="mono" value="'+esc(l.designCode||'')+'"></div>'+
+          '<div class="fld"><label>Product</label><select data-e="productType" data-refresh="1">'+objOpts(lookups.products,p)+'</select></div>'+
+          '<div class="fld"><label>Colour</label><select data-e="colour">'+objOpts(lookups.colours,l.colour)+'</select></div>'+
+          '<div class="fld"><label>Fit</label><select data-e="fit">'+optList(fitsFor(p),l.fit)+'</select></div>'+
+          '<div class="fld"><label>Size</label><select data-e="sizeLabel">'+optList(sizesFor(p),l.sizeLabel)+'</select></div>'+
+          '<div class="fld"><label>China size</label><select data-e="chinaSize">'+optList(CHINA_SIZES,l.chinaSize)+'</select></div>'+
+          '<div class="fld"><label>Audience</label><select data-e="audience">'+optList(['Men','Women','Unisex'],l.audience||'Men')+'</select></div>'+
+          '<div class="fld"><label>Qty</label><input data-e="qty" type="number" min="0" value="'+esc(l.qty)+'"></div>'+
+          '<div class="fld"><label>¥/pc</label><input data-e="perPcsYuan" type="number" step="0.01" value="'+esc(l.perPcsYuan)+'"></div>'+
+          '<div class="fld wide"><label>Product photo <span style="color:var(--err)">*</span></label>'+
+            '<div class="photocell"><input type="file" accept="image/*" data-photoinput style="font-size:12px"><img data-photothumb class="thumb'+(l.photoUrl?'':' hidden')+'" src="'+esc(l.photoUrl||'')+'" alt=""></div>'+
+            '<label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;text-transform:none;font-size:12px"><input type="checkbox" data-approve'+(l.photoApproved?' checked':'')+'> Photo is correct — approve it</label>'+
+            '<div class="muted" data-photonote style="font-size:12px"></div>'+
+          '</div>'+
+          '<div class="fld"><label>&nbsp;</label><div style="display:flex;gap:6px"><button class="btn sm" data-savline="'+i+'">Save</button><button class="btn ghost sm" data-cancelline="'+i+'">Cancel</button></div></div>'+
+        '</div>'+
+      '</td></tr>';
+    }
 
     function renderLines(){
       el('lineCount').textContent = lines.length ? '('+lines.length+')' : '';
-      if(!lines.length){ el('linesHost').innerHTML='<p class="muted" style="padding:8px 2px">No lines yet. Add intake lines above.</p>'; return; }
+      if(!lines.length){ el('linesHost').innerHTML='<p class="muted" style="padding:8px 2px">No lines yet. Add intake lines above, or upload an invoice to auto-fill.</p>'; return; }
       var rows=lines.map(function(l,i){
+        if(i===editingLineIdx) return lineEditorRow(l,i);
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
+        var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'')+'<div style="margin-top:3px">'+photoBadge(l)+'</div>';
         return '<tr>'+
-          '<td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
+          '<td>'+photoCell+'</td>'+
           '<td>'+esc(l.designName||'—')+'</td><td class="mono">'+esc(l.designCode||'—')+'</td>'+
-          '<td>'+esc(l.productType)+'</td><td>'+esc(l.colour)+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
+          '<td>'+esc(l.productType||'—')+'</td><td>'+esc(l.colour||'—')+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
           '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+yuan(lineYuan(l))+'</td><td class="money">'+money(lineCost(l))+'</td>'+
           '<td><button class="btn ghost sm" data-edit="'+i+'">Edit</button> <button class="x" data-del="'+i+'">✕</button></td></tr>';
       }).join('');
@@ -399,27 +438,59 @@
       el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>¥/pc</th><th>Purchase cost (¥)</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
         '<tr class="totalrow"><td colspan="7" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+yuan(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
         '</tbody></table>'+
-        '<p class="sub">Purchase cost (¥) = qty × ¥/pc. Total purchase cost (₹) = purchase cost × exchange rate ('+exRate()+'). Freight &amp; final landed cost are added after the goods are received &amp; weighed.</p>';
-      Array.prototype.forEach.call(el('linesHost').querySelectorAll('[data-del]'),function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-del'),1); renderLines(); }; });
-      Array.prototype.forEach.call(el('linesHost').querySelectorAll('[data-edit]'),function(b){ b.onclick=function(){ editLine(+b.getAttribute('data-edit')); }; });
+        '<p class="sub">Tap <b>Edit</b> on a line to change any field or its photo right here. Purchase cost (¥) = qty × ¥/pc; Total (₹) = × exchange rate ('+exRate()+').</p>';
+      wireLineHandlers();
     }
-    function editLine(i){
-      var l=lines[i];
-      el('f_designName').value=l.designName||''; el('f_designCode').value=l.designCode||'';
-      el('f_productType').value=l.productType; syncCategory();
-      el('f_colour').value=l.colour; el('f_fit').value=l.fit; el('f_sizeLabel').value=l.sizeLabel;
-      if(l.chinaSize){ el('f_chinaSize').value=l.chinaSize; }
-      el('f_audience').value=l.audience||'Men'; el('f_qty').value=l.qty; el('f_perPcsYuan').value=l.perPcsYuan;
-      el('f_sku').value=l.sku||''; pendingPhotoUrl=l.photoUrl||'';
-      if(l.photoUrl){ var t=el('f_photoThumb'); t.src=l.photoUrl; t.classList.remove('hidden'); el('photoNote').textContent='Existing photo kept (choose a file to replace).'; }
-      lines.splice(i,1); renderLines();
-      window.scrollTo({top:0,behavior:'smooth'});
+    function wireLineHandlers(){
+      var host=el('linesHost');
+      Array.prototype.forEach.call(host.querySelectorAll('[data-del]'),function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-del'),1); if(editingLineIdx>-1)editingLineIdx=-1; renderLines(); }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-edit]'),function(b){ b.onclick=function(){ editingLineIdx=+b.getAttribute('data-edit'); editorPhotoUrl=lines[editingLineIdx].photoUrl||''; renderLines(); }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-cancelline]'),function(b){ b.onclick=function(){ editingLineIdx=-1; renderLines(); }; });
+      // product change → refresh fit + size option lists in place
+      var prodSel=host.querySelector('[data-e="productType"][data-refresh]');
+      if(prodSel) prodSel.onchange=function(){
+        var p=prodSel.value;
+        var fitSel=host.querySelector('[data-e="fit"]'), sizeSel=host.querySelector('[data-e="sizeLabel"]');
+        if(fitSel) fitSel.innerHTML=optList(fitsFor(p), fitSel.value);
+        if(sizeSel) sizeSel.innerHTML=optList(sizesFor(p), sizeSel.value);
+      };
+      // inline photo upload
+      var fileIn=host.querySelector('[data-photoinput]');
+      if(fileIn) fileIn.onchange=function(){
+        var f=fileIn.files&&fileIn.files[0]; if(!f) return;
+        var note=host.querySelector('[data-photonote]'); if(note) note.textContent='Uploading photo…';
+        var fd=new FormData(); fd.append('photo',f);
+        fetch('/api/procurement/photo',{method:'POST',body:fd}).then(r=>r.json()).then(function(d){
+          if(!d.success){ if(note) note.textContent=d.error||'Upload failed.'; return; }
+          editorPhotoUrl=d.url;
+          var t=host.querySelector('[data-photothumb]'); if(t){ t.src=d.url; t.classList.remove('hidden'); }
+          var ap=host.querySelector('[data-approve]'); if(ap) ap.checked=true;   // a freshly chosen photo is approved
+          if(note) note.textContent='Photo ready — approved.';
+        }).catch(function(e){ if(note) note.textContent=e.message; });
+      };
+      // save inline edit
+      var saveBtn=host.querySelector('[data-savline]');
+      if(saveBtn) saveBtn.onclick=function(){
+        var i=+saveBtn.getAttribute('data-savline'), l=lines[i];
+        function g(f){ var e=host.querySelector('[data-e="'+f+'"]'); return e?e.value:''; }
+        l.designName=g('designName').trim(); l.designCode=g('designCode').trim();
+        l.productType=g('productType'); l.colour=g('colour'); l.fit=g('fit');
+        l.sizeLabel=g('sizeLabel'); l.chinaSize=g('chinaSize'); l.audience=g('audience');
+        l.qty=g('qty'); l.perPcsYuan=g('perPcsYuan');
+        l.photoUrl=editorPhotoUrl;
+        var ap=host.querySelector('[data-approve]'); l.photoApproved=!!(ap&&ap.checked)&&!!editorPhotoUrl;
+        editingLineIdx=-1; renderLines();
+      };
     }
     renderLines();
 
     // ── save advance purchase ──
     el('saveAdvanceBtn').onclick=function(){
       if(!lines.length){ alert('Add at least one line.'); return; }
+      var noPhoto=lines.filter(function(l){ return !(l.photoUrl||'').trim(); }).length;
+      if(noPhoto){ alert(noPhoto+' line(s) have no product photo. Add a photo to every line before saving.'); return; }
+      var unappr=lines.filter(function(l){ return (l.photoUrl||'').trim() && !l.photoApproved; }).length;
+      if(unappr){ if(!confirm(unappr+' line(s) have a photo that is NOT approved yet. Open each line’s Edit to approve it.\n\nSave anyway?')) return; }
       var btn=el('saveAdvanceBtn'); btn.disabled=true; btn.textContent='Saving…';
       fetch('/api/procurement/advance',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ lines:lines, exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
@@ -457,7 +528,7 @@
         return { designName:l.designName||'', designCode:l.designCode||'', productType:l.productType,
           colour:l.colour, fit:l.fit, sizeLabel:l.sizeLabel, chinaSize:l.chinaSize||'',
           audience:l.audience||'Men', qty:l.qty, perPcsYuan:l.perPcsYuan, sku:l.sku||'',
-          weightGrams:l.weightGrams||0, photoUrl:l.photoUrl||'' };
+          weightGrams:l.weightGrams||0, photoUrl:l.photoUrl||'', photoApproved:!!l.photoUrl };
       });
       renderLines();
       // UI mode
@@ -492,14 +563,42 @@
       }).catch(function(e){ btn.disabled=false; btn.textContent='Update PO →'; el('advanceResult').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     };
 
+    // Parse a fetch Response defensively: the platform proxy can return a
+    // plain-text body ("upstream error") on failure/timeout, which r.json()
+    // chokes on. Read text first, then try JSON; surface the raw text otherwise.
+    function readJson(r){
+      return r.text().then(function(t){
+        try { return JSON.parse(t); }
+        catch(e){ throw new Error((t||('HTTP '+r.status)).slice(0,180)); }
+      });
+    }
+    // Shrink a large photo client-side before upload so the vision call is fast
+    // enough not to hit the platform proxy timeout. PDFs/non-images pass through.
+    function downscaleImage(file, maxDim){
+      return new Promise(function(resolve){
+        if(!/^image\//.test(file.type)){ resolve(file); return; }
+        var url=URL.createObjectURL(file), img=new Image();
+        img.onload=function(){
+          var W=img.naturalWidth, H=img.naturalHeight, scale=Math.min(1, maxDim/Math.max(W,H));
+          if(scale>=1){ URL.revokeObjectURL(url); resolve(file); return; }
+          var c=document.createElement('canvas'); c.width=Math.round(W*scale); c.height=Math.round(H*scale);
+          c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+          c.toBlob(function(blob){ URL.revokeObjectURL(url); resolve(blob||file); },'image/jpeg',0.85);
+        };
+        img.onerror=function(){ URL.revokeObjectURL(url); resolve(file); };
+        img.src=url;
+      });
+    }
     // ── invoice auto-fill: read a (Chinese) invoice → prefill bill + lines ──
     el('parseInvoiceBtn').onclick=function(){
       var f=el('invoiceFile').files&&el('invoiceFile').files[0];
       if(!f){ el('invoiceNote').textContent='Choose an invoice image or PDF first.'; return; }
       var btn=el('parseInvoiceBtn'); btn.disabled=true; btn.textContent='Reading…';
       el('invoiceNote').textContent='Reading the invoice — this can take a few seconds…';
-      var fd=new FormData(); fd.append('invoice',f);
-      fetch('/api/procurement/parse-invoice',{method:'POST',body:fd}).then(r=>r.json()).then(function(d){
+      downscaleImage(f, 2200).then(function(up){
+        var fd=new FormData(); fd.append('invoice',up,/^image\//.test(f.type)?'invoice.jpg':(f.name||'invoice'));
+        return fetch('/api/procurement/parse-invoice',{method:'POST',body:fd}).then(readJson);
+      }).then(function(d){
         btn.disabled=false; btn.textContent='Read invoice & fill lines';
         if(!d.success){ el('invoiceNote').textContent=d.error||'Could not read the invoice.'; return; }
         // vendor bill
@@ -507,17 +606,61 @@
         if(d.billNo){ el('b_billNo').value=d.billNo; }
         if(d.datePurchase){ el('b_datePurchase').value=d.datePurchase; }
         updateEta();
-        // append parsed lines to the review table (photos added per line via Edit)
+        // append parsed lines to the review table
         var added=(d.lines||[]).map(function(l){
           return { designName:l.designName||'', designCode:l.designCode||'', productType:l.productType||'',
             colour:l.colour||'', fit:l.fit||'', sizeLabel:l.sizeLabel||'', chinaSize:l.chinaSize||'',
-            audience:l.audience||'Men', qty:(l.qty||1), perPcsYuan:(l.perPcsYuan||0), sku:'', photoUrl:'' };
+            audience:l.audience||'Men', qty:(l.qty||1), perPcsYuan:(l.perPcsYuan||0), sku:'',
+            photoUrl:'', photoApproved:false, _photoBox:(l.photoBox||null) };
         });
+        var startIdx=lines.length;
         lines=lines.concat(added); renderLines();
-        el('invoiceNote').textContent=added.length?('Filled '+added.length+' line(s). Review each, add its photo (Edit), then Save.'):'No line items found on the invoice.';
+        el('invoiceNote').textContent=added.length?('Filled '+added.length+' line(s). Cropping product photos…'):'No line items found on the invoice.';
         window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+        // Crop each line's product photo out of THIS invoice image (canvas), upload it,
+        // and attach it for approval. Only possible for image invoices, not PDFs.
+        var boxed=added.filter(function(l){ return l._photoBox; }).length;
+        if(d.canCropPhotos && boxed && /^image\//.test(f.type)){
+          cropInvoicePhotos(f, added, startIdx).then(function(n){
+            el('invoiceNote').textContent='Filled '+added.length+' line(s); auto-cropped '+n+' photo(s). Review each line — Edit to fix any field, replace/approve the photo, then Save.';
+            renderLines();
+          });
+        } else {
+          el('invoiceNote').textContent='Filled '+added.length+' line(s). '+(boxed&&!d.canCropPhotos?'(PDF — add each photo via Edit.) ':'')+'Review each line — Edit to add/approve its photo, then Save.';
+        }
       }).catch(function(e){ btn.disabled=false; btn.textContent='Read invoice & fill lines'; el('invoiceNote').textContent=e.message; });
     };
+    // Load the invoice image once, crop every line's bounding box, upload each crop.
+    function cropInvoicePhotos(file, added, startIdx){
+      return new Promise(function(resolve){
+        var url=URL.createObjectURL(file), img=new Image();
+        img.onload=function(){
+          var W=img.naturalWidth, H=img.naturalHeight, done=0, ok=0;
+          var jobs=added.map(function(l,k){
+            var box=l._photoBox; if(!box){ return Promise.resolve(); }
+            var x0=Math.max(0,Math.min(box[0],box[2]))*W, y0=Math.max(0,Math.min(box[1],box[3]))*H;
+            var x1=Math.min(1,Math.max(box[0],box[2]))*W, y1=Math.min(1,Math.max(box[1],box[3]))*H;
+            var w=Math.round(x1-x0), h=Math.round(y1-y0);
+            if(w<8||h<8){ return Promise.resolve(); }
+            var c=document.createElement('canvas'); c.width=w; c.height=h;
+            try{ c.getContext('2d').drawImage(img, x0,y0,w,h, 0,0,w,h); }catch(e){ return Promise.resolve(); }
+            return new Promise(function(res){
+              c.toBlob(function(blob){
+                if(!blob){ res(); return; }
+                var fd=new FormData(); fd.append('photo',blob,'invoice-crop.jpg');
+                fetch('/api/procurement/photo',{method:'POST',body:fd}).then(r=>r.json()).then(function(pd){
+                  if(pd.success){ lines[startIdx+k].photoUrl=pd.url; lines[startIdx+k].photoApproved=false; ok++; }
+                  res();
+                }).catch(function(){ res(); });
+              },'image/jpeg',0.9);
+            });
+          });
+          Promise.all(jobs).then(function(){ URL.revokeObjectURL(url); resolve(ok); });
+        };
+        img.onerror=function(){ URL.revokeObjectURL(url); resolve(0); };
+        img.src=url;
+      });
+    }
 
     // ══════════ RECEIVE & POST ══════════
     el('refreshPos').onclick=loadPos;

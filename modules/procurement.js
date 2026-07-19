@@ -657,7 +657,7 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
 `You are reading a garment supplier INVOICE (likely in Chinese) for an Indian streetwear brand. ` +
 `OCR it, translate Chinese to English, and extract EVERY line item.\n\n` +
 `Return STRICT JSON ONLY (no prose) in exactly this shape:\n` +
-`{"vendor":"","billNo":"","datePurchase":"YYYY-MM-DD","lines":[{"designName":"","designCode":"","productType":"","colour":"","fit":"","sizeLabel":"","chinaSize":"","qty":0,"perPcsYuan":0}]}\n\n` +
+`{"vendor":"","billNo":"","datePurchase":"YYYY-MM-DD","lines":[{"designName":"","designCode":"","productType":"","colour":"","fit":"","sizeLabel":"","chinaSize":"","qty":0,"perPcsYuan":0,"photoBox":null}]}\n\n` +
 `Rules:\n` +
 `- vendor = supplier/company name (romanise if Chinese). billNo = invoice/order number. datePurchase = the invoice date.\n` +
 `- designCode = the vendor's product/style code printed on the invoice (e.g. A611). designName = a short English working name for the garment.\n` +
@@ -667,12 +667,27 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
 `- sizeLabel = the Indian/global size, one of [${sizes.join(', ')}] ("FS" = free size). chinaSize = the size as printed on the invoice (M/L/XL… or "FS").\n` +
 `- If a row lists several sizes, output ONE line PER size with its own qty.\n` +
 `- qty = pieces (integer). perPcsYuan = unit price in RMB/¥ (number only).\n` +
-`- Never invent data — leave a field "" or 0 if the invoice does not show it.`;
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] })
-    });
+`- photoBox = if this line has a PRODUCT PHOTO/THUMBNAIL on the invoice, its bounding box as [x0,y0,x1,y1] normalised 0..1 (left,top,right,bottom of the whole page). Use null if there is no product image for the line. Lines sharing one photo may repeat the same box.\n` +
+`- Never invent data — leave a field "" or 0 (or null for photoBox) if the invoice does not show it.`;
+    // Guard the vision call with a hard timeout so a slow/hung upstream returns
+    // a clean JSON error to the browser instead of the platform's plain-text
+    // "upstream error" (which the frontend can't JSON.parse).
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90000);
+    let r;
+    try {
+      r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }),
+        signal: ctrl.signal
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err.name === 'AbortError') return res.status(504).json({ success: false, error: 'The invoice reader timed out. Try a smaller/clearer photo, or enter the lines manually.' });
+      return res.status(502).json({ success: false, error: 'Could not reach the invoice reader: ' + err.message });
+    }
+    clearTimeout(timer);
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return res.status(502).json({ success: false, error: 'AI error: ' + ((j.error && j.error.message) || ('HTTP ' + r.status)) });
     const text = (j.content || []).map(c => c.text || '').join('');
@@ -688,13 +703,18 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
       chinaSize: String(l.chinaSize || '').trim(),
       audience: 'Men',
       qty: Math.max(0, Math.round(num(l.qty))),
-      perPcsYuan: num(l.perPcsYuan)
+      perPcsYuan: num(l.perPcsYuan),
+      // Normalised [x0,y0,x1,y1] 0..1 of the product thumbnail on the invoice, if any.
+      photoBox: (Array.isArray(l.photoBox) && l.photoBox.length === 4 &&
+                 l.photoBox.every(n => typeof n === 'number' && n >= 0 && n <= 1)) ? l.photoBox : null
     }));
     res.json({
       success: true,
       vendor: String(parsed.vendor || '').toUpperCase().trim(),
       billNo: String(parsed.billNo || '').trim(),
       datePurchase: String(parsed.datePurchase || '').trim(),
+      // The frontend crops photoBoxes from THIS image (canvas), so tell it whether cropping is possible.
+      canCropPhotos: !isPdf,
       lines
     });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
