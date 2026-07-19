@@ -2527,6 +2527,7 @@ app.get('/api/showroom/notify/test', async (req, res) => {
 app.use(require('./modules/rack-locations').router);
 app.use(require('./modules/auth-users').router);
 app.use(require('./modules/sales').router);
+app.use(require('./modules/module-registry').router);
 
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');

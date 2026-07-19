@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sanki Business OS</title>
+  <style>
+    :root { --ink:#1a1a1a; --muted:#6b7280; --line:rgba(0,0,0,.09); --brand:#185FA5; --bg:#f6f7f9; }
+    * { box-sizing: border-box; }
+    body {
+      margin:0; background:var(--bg); color:var(--ink);
+      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    }
+    .wrap { max-width:1000px; margin:0 auto; padding:40px 28px 80px; }
+    .head { margin-bottom:28px; }
+    .head h1 { font-size:26px; font-weight:800; margin:0; letter-spacing:-.4px; }
+    .head p  { color:var(--muted); font-size:14px; margin:6px 0 0; }
+    .sec-label { font-size:11px; font-weight:700; color:#9aa0a6; letter-spacing:1px;
+      text-transform:uppercase; margin:26px 0 12px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+    .tile {
+      display:flex; flex-direction:column; gap:8px; text-decoration:none; color:inherit;
+      background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px;
+      transition:transform .12s, box-shadow .12s, border-color .12s;
+    }
+    .tile:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,.07); border-color:#d7deea; }
+    .tile .ic { font-size:26px; line-height:1; }
+    .tile .t  { font-size:15px; font-weight:700; }
+    .tile .d  { font-size:12.5px; color:var(--muted); line-height:1.4; }
+    .tile.coming { opacity:.6; pointer-events:none; }
+    .pill { align-self:flex-start; font-size:10px; font-weight:700; letter-spacing:.5px;
+      text-transform:uppercase; color:#8a6d00; background:#fff4d6; padding:2px 8px; border-radius:999px; }
+    .empty {
+      background:#fff; border:1px dashed #d7deea; border-radius:14px; padding:40px 28px;
+      text-align:center; color:var(--muted);
+    }
+    .empty .big { font-size:40px; margin-bottom:10px; }
+    .empty h3 { margin:0 0 6px; color:var(--ink); font-size:16px; }
+    .empty p { margin:0; font-size:13.5px; line-height:1.5; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <h1>⚡ Sanki Business OS</h1>
+      <p id="welcome">Loading your workspace…</p>
+    </div>
+    <div id="content"></div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script>
+    (function () {
+      var content = document.getElementById('content');
+      var welcome = document.getElementById('welcome');
+
+      function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+      function tile(m){
+        var coming = m.status === 'coming';
+        var a = document.createElement('a');
+        a.className = 'tile' + (coming ? ' coming' : '');
+        a.href = coming ? 'javascript:void 0' : m.href;
+        var ic = document.createElement('div'); ic.className='ic'; ic.textContent=m.icon||'▪'; a.appendChild(ic);
+        var t  = document.createElement('div'); t.className='t';  t.textContent=m.title;      a.appendChild(t);
+        if (m.desc){ var d=document.createElement('div'); d.className='d'; d.textContent=m.desc; a.appendChild(d); }
+        if (coming){ var p=document.createElement('span'); p.className='pill'; p.textContent='Coming soon'; a.appendChild(p); }
+        return a;
+      }
+
+      function renderEmpty(){
+        content.innerHTML =
+          '<div class="empty"><div class="big">🧭</div>' +
+          '<h3>Your workspace is ready</h3>' +
+          '<p>No tools have been switched on here yet. We\'ll add them to this dashboard' +
+          '<br>one at a time as we build them together.</p></div>';
+      }
+
+      function render(data){
+        var mods = (data && data.modules) || [];
+        if (!mods.length){ renderEmpty(); return; }
+        var order = (data.sectionOrder) || [];
+        var groups = {};
+        mods.forEach(function(m){ (groups[m.section] = groups[m.section] || []).push(m); });
+        var sections = Object.keys(groups).sort(function(a,b){
+          var ia=order.indexOf(a), ib=order.indexOf(b);
+          return (ia<0?99:ia)-(ib<0?99:ib);
+        });
+        content.innerHTML = '';
+        sections.forEach(function(sec){
+          var lbl = document.createElement('div'); lbl.className='sec-label'; lbl.textContent=sec;
+          content.appendChild(lbl);
+          var grid = document.createElement('div'); grid.className='grid';
+          groups[sec].forEach(function(m){ grid.appendChild(tile(m)); });
+          content.appendChild(grid);
+        });
+      }
+
+      fetch('/api/auth/me', { headers:{ 'Accept':'application/json' } })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(me){
+          if (me && me.username){
+            welcome.textContent = 'Welcome back, ' + me.username + ' · ' + (me.role||'');
+          } else { welcome.textContent = ''; }
+        }).catch(function(){ welcome.textContent=''; });
+
+      fetch('/api/modules', { headers:{ 'Accept':'application/json' } })
+        .then(function(r){ if(r.status===401){ location.href='/login.html'; return null; } return r.json(); })
+        .then(function(data){ if(data) render(data); })
+        .catch(function(){ renderEmpty(); });
+    })();
+  </script>
+</body>
+</html>

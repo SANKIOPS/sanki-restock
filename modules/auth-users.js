@@ -61,14 +61,17 @@ const ROLES = [
 ];
 const ROLE_IDS = ROLES.map(r => r.id);
 
+// Everyone now lands on the clean launcher; it self-filters the tiles a
+// role may see via /api/modules. (The old per-role landing pages are all
+// still reachable — they're just not the front door anymore.)
 const ROLE_HOME = {
-  admin:       '/index.html',
-  inventory:   '/showroom-replenishment.html',
-  sales:       '/sales.html',
-  procurement: '/coming-soon.html?m=Fresh%20Procurement',
-  revenue:     '/coming-soon.html?m=Revenue%20%2F%20Accounts',
-  warehouse:   '/rack-locations.html',
-  stocksearch: '/rack-locations.html'
+  admin:       '/dashboard.html',
+  inventory:   '/dashboard.html',
+  sales:       '/dashboard.html',
+  procurement: '/dashboard.html',
+  revenue:     '/dashboard.html',
+  warehouse:   '/dashboard.html',
+  stocksearch: '/dashboard.html'
 };
 // '*' = all pages. Otherwise an allow-list of exact page paths.
 const ROLE_PAGES = {
@@ -84,6 +87,9 @@ const ROLE_PAGES = {
 function landingFor(role) { return ROLE_HOME[role] || '/login.html'; }
 function allowedPagesFor(role) { return ROLE_PAGES[role] || []; }
 function roleCanAccessPath(role, p) {
+  // The launcher is the shared front door — every authenticated role may
+  // open it (it filters its own contents by role via /api/modules).
+  if (p === '/dashboard.html') return true;
   const a = ROLE_PAGES[role];
   if (a === '*') return true;
   if (!a) return false;

@@ -14,34 +14,32 @@
 (function () {
   if (document.getElementById('sanki-shared-sidebar')) return;
 
-  var NAV = [
-    { label: 'Main', items: [
-      { icon: '🏠', text: 'Dashboard',            href: '/index.html#dashboard' },
-      { icon: '🔄', text: 'Restock Planner',      href: '/index.html#restock' },
-      { icon: '⚡', text: 'Velocity Intelligence', href: '/velocity.html' },
-      { icon: '🔥', text: 'Hot Sellers',          href: '/index.html#hot' },
-      { icon: '🔍', text: 'Stock Search',         href: '/rack-locations.html' },
-      { icon: '📊', text: 'Analytics',            href: '/analytics.html' },
-      { icon: '📈', text: 'Inventory Statistics', href: '/inventory-stats.html' }
-    ] },
-    { label: 'Sales', items: [
-      { icon: '🧾', text: 'Record a Sale', href: '/sales.html' }
-    ] },
-    { label: 'Store Ops', items: [
-      { icon: '🛍️', text: 'Showroom Replenishment', href: '/showroom-replenishment.html' },
-      { icon: '🗄️', text: 'Rack Locations',         href: '/rack-locations.html' }
-    ] },
-    { label: 'Orders', items: [
-      { icon: '📋', text: 'Purchase Orders', href: '/index.html#po' },
-      { icon: '🏭', text: 'Suppliers',       href: '/index.html#suppliers' },
-      { icon: '⚙️', text: 'Settings',        href: '/index.html#settings' }
-    ] }
-  ];
+  // The menu is now driven by the module registry (GET /api/modules) so it
+  // always matches the launcher dashboard — no more hard-coded, drifting
+  // list. The only fixed item is the Dashboard home link. As modules are
+  // switched 'live' in the registry they appear here automatically.
+  var HOME_ITEM = { icon: '🏠', text: 'Dashboard', href: '/dashboard.html' };
 
-  // Admin-only section, appended when /api/auth/me says the user is admin.
-  var ADMIN_SECTION = { label: 'Admin', items: [
-    { icon: '👥', text: 'Users & Roles', href: '/admin-users.html' }
-  ] };
+  // Build the sidebar sections from the /api/modules payload.
+  function navFromModules(data) {
+    var mods = (data && data.modules) || [];
+    var order = (data && data.sectionOrder) || [];
+    var nav = [{ label: 'Main', items: [HOME_ITEM] }];
+    var groups = {};
+    mods.forEach(function (m) { (groups[m.section] = groups[m.section] || []).push(m); });
+    Object.keys(groups).sort(function (a, b) {
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    }).forEach(function (sec) {
+      var items = groups[sec].map(function (m) {
+        return { icon: m.icon || '▪', text: m.title, href: m.href };
+      });
+      // Fold "Main" modules into the existing Main section under Dashboard.
+      if (sec === 'Main') { nav[0].items = nav[0].items.concat(items); }
+      else { nav.push({ label: sec, items: items }); }
+    });
+    return nav;
+  }
 
   var current = (location.pathname.split('/').pop() || 'index.html').toLowerCase();
 
@@ -111,22 +109,11 @@
     return html;
   }
 
-  // Keep only the sections/items this role may open. Admins keep everything.
-  function pruneForRole(me) {
-    if (!me) return NAV;                 // unknown → leave full menu (gate still protects)
-    if (me.isAdmin) return NAV.concat([ADMIN_SECTION]);
-    var allow = me.allowedPages || [];
-    return NAV.map(function (sec) {
-      return { label: sec.label, items: sec.items.filter(function (it) {
-        var page = it.href.split('#')[0];      // '/index.html' etc.
-        return allow.indexOf(page) !== -1;
-      }) };
-    }).filter(function (sec) { return sec.items.length; });
-  }
-
   var aside = document.createElement('div');
   aside.id = 'sanki-shared-sidebar';
-  aside.innerHTML = render(NAV, null);   // optimistic full render first
+  // Optimistic first paint: just the Dashboard home link; real modules fill
+  // in once /api/modules responds, so the menu never looks broken.
+  aside.innerHTML = render([{ label: 'Main', items: [HOME_ITEM] }], null);
 
   function wireLogout() {
     var btn = document.getElementById('ss-logout-btn');
@@ -146,13 +133,14 @@
   if (document.body) mount();
   else document.addEventListener('DOMContentLoaded', mount);
 
-  // Learn who we are, then prune the menu + show the user footer.
-  fetch('/api/auth/me', { headers: { 'Accept': 'application/json' } })
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (me) {
-      if (!me || !me.success) return;
-      aside.innerHTML = render(pruneForRole(me), me);
-      wireLogout();
-    })
-    .catch(function () { /* keep optimistic full render */ });
+  // Learn who we are + which modules are live, then build the real menu.
+  Promise.all([
+    fetch('/api/auth/me',   { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+    fetch('/api/modules',   { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+  ]).then(function (out) {
+    var me = out[0], mods = out[1];
+    if (!me || !me.success) return;      // not logged in — leave optimistic render
+    aside.innerHTML = render(navFromModules(mods), me);
+    wireLogout();
+  });
 })();
