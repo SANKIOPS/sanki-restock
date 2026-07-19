@@ -653,7 +653,19 @@ router.post('/api/procurement/advance', async (req, res) => {
       billNo: b.billNo || '',
       datePurchase: b.datePurchase || '',
       dateReceive: '',
+      leadTimeDays: b.leadTimeDays != null && b.leadTimeDays !== '' ? Math.max(0, Math.round(num(b.leadTimeDays))) : null,
+      // Expected arrival = purchase date + lead time (China→India transit). Used
+      // in the Receive tab to show a live countdown to delivery.
+      expectedReceiveDate: (function(){
+        const lt = b.leadTimeDays != null && b.leadTimeDays !== '' ? Math.max(0, Math.round(num(b.leadTimeDays))) : null;
+        const base = b.datePurchase ? new Date(b.datePurchase) : new Date();
+        if (lt == null || isNaN(base.getTime())) return '';
+        base.setDate(base.getDate() + lt);
+        return base.toISOString().slice(0, 10);
+      })(),
       exRate: b.exRate != null && b.exRate !== '' ? num(b.exRate) : s.settings.exRate,
+      // Freight rate captured at advance time so it can be shown (and edited) at receive.
+      freightPerGram: b.freightPerGram != null && b.freightPerGram !== '' ? num(b.freightPerGram) : s.settings.freightPerGram,
       lines,                           // intake lines WITH generated SKUs
       // SEO drafts generated at SKU time (admin-only). Keyed by product group.
       // Placeholder text drafts for now — the AI image module will regenerate
@@ -688,6 +700,7 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     });
     if (b.dateReceive) po.dateReceive = b.dateReceive;
     if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = num(b.freightPerGram);
+    if (b.exRate != null && b.exRate !== '') po.exRate = num(b.exRate);
     if (po.status === 'advance') po.status = 'received';
     saveStore(s);
     const preview = await computePreview(s, {

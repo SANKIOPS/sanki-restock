@@ -113,7 +113,9 @@
           <div class="fld"><label>Vendor</label><select id="b_vendor"><option value="">Select vendor…</option><option value="__new__">+ Add new vendor…</option></select></div>
           <div class="fld"><label>Bill number</label><input id="b_billNo" placeholder="vendor invoice no." /></div>
           <div class="fld"><label>Date of purchase</label><input id="b_datePurchase" type="date" /></div>
+          <div class="fld"><label>Lead time (days) <span class="muted" style="font-weight:400;text-transform:none">China→India</span></label><input id="b_leadTime" type="number" min="0" step="1" placeholder="e.g. 10" /></div>
         </div>
+        <p class="sub" id="etaNote" style="margin:6px 2px 0"></p>
       </div>
 
       <div class="panel">
@@ -189,6 +191,12 @@
 
     function money(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
     function yuan(n){ return '¥' + (Number(n)||0).toLocaleString('en-IN',{maximumFractionDigits:2}); }
+    function fmtDate(iso){ if(!iso) return '—'; var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'}); }
+    // Whole-day difference between today (midnight) and an ISO date. +ve = future.
+    function daysUntil(iso){ if(!iso) return null; var d=new Date(iso); if(isNaN(d)) return null; d.setHours(0,0,0,0); var t=new Date(); t.setHours(0,0,0,0); return Math.round((d-t)/86400000); }
+    // Expected arrival = purchase date (or today) + lead-time days.
+    function expectedDate(dateStr, lead){ var lt=parseInt(lead,10); if(isNaN(lt)) return ''; var base=dateStr?new Date(dateStr):new Date(); if(isNaN(base)) return ''; base.setDate(base.getDate()+lt); return base.toISOString().slice(0,10); }
+    function etaLabel(iso){ var n=daysUntil(iso); if(n==null) return ''; if(n>1) return 'in '+n+' days'; if(n===1) return 'tomorrow'; if(n===0) return 'today'; return Math.abs(n)+' day'+(Math.abs(n)===1?'':'s')+' overdue'; }
     function el(id){ return document.getElementById(id); }
     function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
     function opts(sel,obj,ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} Object.keys(obj).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
@@ -253,6 +261,15 @@
       if(!settings.warehouseLocationId) el('settingsNote').textContent='Pick the warehouse location that receives incoming stock, then Save.';
       fillVendors((res[4]&&res[4].vendors)||[]);
     });
+
+    // ── live expected-arrival note (from lead time + purchase date) ──
+    function updateEta(){
+      var iso=expectedDate(el('b_datePurchase').value, el('b_leadTime').value);
+      if(!iso){ el('etaNote').textContent=''; return; }
+      el('etaNote').textContent='Expected arrival: '+fmtDate(iso)+' ('+etaLabel(iso)+').';
+    }
+    el('b_leadTime').oninput=updateEta;
+    el('b_datePurchase').onchange=updateEta;
 
     // ── vendor dropdown (+ add-new) ──
     function fillVendors(list, selectName){
@@ -376,7 +393,8 @@
       if(!lines.length){ alert('Add at least one line.'); return; }
       var btn=el('saveAdvanceBtn'); btn.disabled=true; btn.textContent='Saving…';
       fetch('/api/procurement/advance',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ lines:lines, exRate:el('exRate').value,
+        body:JSON.stringify({ lines:lines, exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
+          leadTimeDays:el('b_leadTime').value,
           vendor:el('b_vendor').value.trim(), billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save advance purchase →';
@@ -406,7 +424,12 @@
     function poRow(p){
       var m=STATUS_META[p.status]||['adv',p.status];
       var n=(p.lines||[]).length;
-      return '<div class="porow" data-po="'+esc(p.id)+'"><div><b>'+esc(p.id)+'</b> <span class="muted">· '+esc(p.vendor||'—')+(p.billNo?(' · bill '+esc(p.billNo)):'')+' · '+n+' line(s)</span></div>'+
+      var eta='';
+      if(p.status!=='posted' && p.expectedReceiveDate){
+        var lbl=etaLabel(p.expectedReceiveDate), overdue=(daysUntil(p.expectedReceiveDate)||0)<0;
+        eta='<div class="muted" style="font-size:12px;margin-top:3px">Expected: '+esc(fmtDate(p.expectedReceiveDate))+' <span style="color:'+(overdue?'var(--err)':'var(--emerald-d)')+';font-weight:600">('+esc(lbl)+')</span></div>';
+      }
+      return '<div class="porow" data-po="'+esc(p.id)+'"><div><b>'+esc(p.id)+'</b> <span class="muted">· '+esc(p.vendor||'—')+(p.billNo?(' · bill '+esc(p.billNo)):'')+' · '+n+' line(s)</span>'+eta+'</div>'+
         '<span class="pill '+m[0]+'">'+esc(m[1])+'</span></div>';
     }
 
@@ -420,20 +443,37 @@
     function renderPoDetail(po){
       lastReceive=null;
       var posted = po.status==='posted';
-      var h='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
-        '<h2 style="margin:0">'+esc(po.id)+' <span class="muted" style="font-size:12px;font-weight:400">· '+esc(po.vendor||'—')+(po.billNo?(' · bill '+esc(po.billNo)):'')+'</span></h2>'+
+      var etaHdr='';
+      if(!posted && po.expectedReceiveDate){
+        var ov=(daysUntil(po.expectedReceiveDate)||0)<0;
+        etaHdr='<div class="muted" style="font-size:12px;margin-top:2px">Expected arrival: <b>'+esc(fmtDate(po.expectedReceiveDate))+'</b> <span style="color:'+(ov?'var(--err)':'var(--emerald-d)')+';font-weight:600">('+esc(etaLabel(po.expectedReceiveDate))+')</span>'+(po.leadTimeDays!=null?(' · lead time '+esc(po.leadTimeDays)+' days'):'')+'</div>';
+      }
+      var h='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+        '<div><h2 style="margin:0">'+esc(po.id)+' <span class="muted" style="font-size:12px;font-weight:400">· '+esc(po.vendor||'—')+(po.billNo?(' · bill '+esc(po.billNo)):'')+'</span></h2>'+etaHdr+'</div>'+
         '<span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span></div>';
+      // rates carried from the advance purchase — editable here before final calc
+      if(!posted){
+        h+='<div class="settingsgrid" style="margin-top:12px">'+
+          '<div class="fld"><label>Exchange rate ₹/RMB <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_exRate" type="number" step="0.01" value="'+esc(po.exRate!=null?po.exRate:'')+'"></div>'+
+          '<div class="fld"><label>Freight ₹/gram <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_freight" type="number" step="0.001" value="'+esc(po.freightPerGram!=null?po.freightPerGram:'')+'"></div>'+
+        '</div>';
+      }
       // weight-entry table
-      h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">¥/pc</th><th>Weight g '+(posted?'':'<span style="color:var(--err)">*</span>')+'</th></tr></thead><tbody>';
+      h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">¥/pc</th><th>Weight g/pc '+(posted?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
       (po.lines||[]).forEach(function(l,i){
         var cls = l.classification==='EXISTING' ? '<span class="pill exist">restock</span>' : '<span class="pill new">new</span>';
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
+        var lw=(Number(l.weightGrams)||0)*(Number(l.qty)||0);
         h+='<tr><td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
           '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
           '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
           '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td>'+
-          '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" value="'+(l.weightGrams||'')+'" style="width:90px">')+'</td></tr>';
+          '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" data-qty="'+(Number(l.qty)||0)+'" value="'+(l.weightGrams||'')+'" style="width:90px">')+'</td>'+
+          '<td class="money" data-lw="'+i+'">'+(lw?(lw.toLocaleString('en-IN')+' g'):'—')+'</td></tr>';
       });
+      var tw=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.weightGrams)||0)*(Number(l.qty)||0); },0);
+      var tq=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.qty)||0); },0);
+      h+='<tr class="totalrow"><td colspan="4" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
       h+='</tbody></table>';
       if(!posted){
         h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'+
@@ -445,7 +485,18 @@
       h+='</div><div id="receiveHost"></div>';
       el('poDetailHost').innerHTML=h;
       el('poDetailHost').scrollIntoView({behavior:'smooth'});
-      if(!posted){ el('computeBtn').onclick=function(){ computeReceive(po.id); }; }
+      if(!posted){
+        el('computeBtn').onclick=function(){ computeReceive(po.id); };
+        // live total-weight + per-line weight as the user types
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(inp){
+          inp.oninput=function(){
+            var q=Number(inp.getAttribute('data-qty'))||0, g=Number(inp.value)||0, i=inp.getAttribute('data-w');
+            var cell=el('poDetailHost').querySelector('[data-lw="'+i+'"]'); if(cell) cell.textContent=(g*q)?((g*q).toLocaleString('en-IN')+' g'):'—';
+            var t=0; Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(x){ t+=(Number(x.value)||0)*(Number(x.getAttribute('data-qty'))||0); });
+            el('totWeight').textContent = t?(t.toLocaleString('en-IN')+' g / '+(t/1000).toFixed(2)+' kg'):'—';
+          };
+        });
+      }
     }
 
     function collectWeights(){
@@ -456,7 +507,10 @@
     function computeReceive(id){
       var btn=el('computeBtn'); btn.disabled=true; btn.textContent='Computing…';
       fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/receive',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ weights:collectWeights(), freightPerGram:el('freightPerGram').value, dateReceive:new Date().toISOString().slice(0,10) })
+        body:JSON.stringify({ weights:collectWeights(),
+          exRate:(el('r_exRate')?el('r_exRate').value:''),
+          freightPerGram:(el('r_freight')?el('r_freight').value:el('freightPerGram').value),
+          dateReceive:new Date().toISOString().slice(0,10) })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save weights & compute landed cost';
         if(!d.success){ el('receiveHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
