@@ -2527,6 +2527,7 @@ app.get('/api/showroom/notify/test', async (req, res) => {
 app.use(require('./modules/rack-locations').router);
 app.use(require('./modules/auth-users').router);
 app.use(require('./modules/sales').router);
+app.use(require('./modules/orders').router);
 app.use(require('./modules/module-registry').router);
 
 app.get('*', (req, res) => {
@@ -2550,6 +2551,12 @@ app.listen(PORT, async () => {
   // now via the login page). Safe to call every boot; it's a no-op once seeded.
   try { require('./modules/auth-users').seedAdminIfEmpty(); }
   catch (e) { console.error('[auth] seed error:', e.message); }
+
+  // Sales spine — keep the local Shopify-order ledger fresh. Backfills on
+  // first run, then incremental every few minutes. Read-only; never writes
+  // back to Shopify.
+  try { require('./modules/orders').startAutoSync(); }
+  catch (e) { console.error('[orders] auto-sync start error:', e.message); }
 
   // Load caches from disk
   loadCache();

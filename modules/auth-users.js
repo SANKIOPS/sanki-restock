@@ -77,10 +77,10 @@ const ROLE_HOME = {
 const ROLE_PAGES = {
   admin:       '*',
   inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html'],
-  sales:       ['/sales.html', '/analytics.html', '/velocity.html'],
+  sales:       ['/orders.html', '/sales.html', '/analytics.html', '/velocity.html'],
   procurement: ['/coming-soon.html'],
-  revenue:     ['/coming-soon.html'],
-  warehouse:   ['/rack-locations.html'],
+  revenue:     ['/orders.html', '/coming-soon.html'],
+  warehouse:   ['/orders.html', '/rack-locations.html'],
   stocksearch: ['/rack-locations.html']
 };
 

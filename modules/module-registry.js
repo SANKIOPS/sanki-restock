@@ -36,7 +36,9 @@ const MODULES = [
   { key: 'inv-stats',    title: 'Inventory Statistics',  desc: 'Stock levels & valuation',                           icon: '📈', href: '/inventory-stats.html',           section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
   { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'hidden', roles: ['admin', 'stocksearch', 'warehouse'] },
 
-  { key: 'sales',        title: 'Record a Sale',         desc: 'Log walk-in / IG / WhatsApp / phone sales',          icon: '🧾', href: '/sales.html',                     section: 'Sales',     status: 'hidden', roles: ['admin', 'sales'] },
+  { key: 'orders',       title: 'Orders',                desc: 'Every Shopify sale (POS + Website) + dispatch tracking', icon: '🧾', href: '/orders.html',                section: 'Sales',     status: 'live',   roles: ['admin', 'sales', 'revenue', 'warehouse'] },
+  // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.
+  { key: 'sales',        title: 'Record a Sale',         desc: 'Log walk-in / IG / WhatsApp / phone sales',          icon: '📝', href: '/sales.html',                     section: 'Sales',     status: 'hidden', roles: ['admin', 'sales'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
   { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orders · Sanki Business OS</title>
+  <style>
+    :root { --ink:#1a1a1a; --muted:#6b7280; --line:rgba(0,0,0,.09); --brand:#185FA5; --bg:#f6f7f9; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+    .wrap { max-width:1240px; margin:0 auto; padding:28px 24px 80px; }
+    h1 { font-size:23px; font-weight:800; margin:0; letter-spacing:-.3px; }
+    .sub { color:var(--muted); font-size:13px; margin:4px 0 0; }
+    .top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    .btn { font-size:13px; font-weight:600; padding:9px 14px; border-radius:9px; border:1px solid var(--brand);
+      background:var(--brand); color:#fff; cursor:pointer; }
+    .btn:hover { filter:brightness(1.05); }
+    .btn.ghost { background:#fff; color:var(--brand); }
+    .btn:disabled { opacity:.55; cursor:default; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:20px 0 16px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+    .card .k { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; font-weight:600; }
+    .card .v { font-size:22px; font-weight:800; margin-top:4px; }
+    .card .v small { font-size:12px; font-weight:600; color:var(--muted); }
+    .filters { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+    .filters input, .filters select { font-size:13px; padding:8px 10px; border:1px solid var(--line);
+      border-radius:8px; background:#fff; color:var(--ink); }
+    .filters input[type=search] { min-width:230px; }
+    table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
+      border-radius:12px; overflow:hidden; font-size:13px; }
+    th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9aa0a6; background:#fafbfc; }
+    tr:last-child td { border-bottom:none; }
+    tr:hover td { background:#fafcff; }
+    .pill { display:inline-block; font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; letter-spacing:.3px; }
+    .ch-POS { background:#eef6ff; color:#185FA5; }
+    .ch-Website { background:#f0fdf4; color:#15803d; }
+    .st { font-size:11px; font-weight:600; text-transform:capitalize; }
+    .st.pending { color:#b45309; } .st.packed,.st.confirmed { color:#2563eb; }
+    .st.booked,.st.dispatched { color:#7c3aed; } .st.delivered { color:#15803d; }
+    .st.rto,.st.cancelled,.st.unreachable { color:#b42318; }
+    .muted { color:var(--muted); }
+    .lnk { color:var(--brand); text-decoration:none; cursor:pointer; }
+    .lnk:hover { text-decoration:underline; }
+    .money { font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .empty { text-align:center; color:var(--muted); padding:44px; background:#fff; border:1px dashed #d7deea; border-radius:12px; }
+    /* modal */
+    .ov { position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; z-index:900; padding:20px; }
+    .ov.open { display:flex; }
+    .modal { background:#fff; border-radius:14px; width:520px; max-width:100%; max-height:90vh; overflow:auto; padding:22px 24px; }
+    .modal h3 { margin:0 0 2px; font-size:17px; }
+    .modal .oc { color:var(--muted); font-size:12.5px; margin-bottom:14px; }
+    .fld { margin-bottom:12px; }
+    .fld label { display:block; font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+    .fld input, .fld select, .fld textarea { width:100%; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; }
+    .fld textarea { resize:vertical; min-height:52px; }
+    .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .items { background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:12px; margin-bottom:12px; }
+    .items .it { display:flex; justify-content:space-between; gap:8px; padding:2px 0; }
+    .mactions { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>Orders</h1>
+        <p class="sub" id="sub">Every Shopify sale (POS + Website), tracked end-to-end.</p>
+      </div>
+      <button class="btn" id="syncBtn">↻ Sync now</button>
+    </div>
+
+    <div class="cards" id="cards"></div>
+
+    <div class="filters">
+      <input type="search" id="q" placeholder="Search order #, customer, phone, city, SKU…" />
+      <select id="channel"><option value="">All channels</option><option>POS</option><option>Website</option></select>
+      <select id="packing">
+        <option value="">All packing</option>
+        <option value="pending">Pending</option><option value="packed">Packed</option>
+        <option value="booked">Booked</option><option value="dispatched">Dispatched</option>
+        <option value="delivered">Delivered</option><option value="rto">RTO</option><option value="cancelled">Cancelled</option>
+      </select>
+      <input type="date" id="from" title="From date" />
+      <input type="date" id="to" title="To date" />
+    </div>
+
+    <div id="tableHost"></div>
+  </div>
+
+  <!-- Dispatch editor modal -->
+  <div class="ov" id="ov">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script>
+    (function () {
+      var cardsEl = document.getElementById('cards');
+      var host = document.getElementById('tableHost');
+      var syncBtn = document.getElementById('syncBtn');
+      var subEl = document.getElementById('sub');
+      var ov = document.getElementById('ov');
+      var modal = document.getElementById('modal');
+      var filters = { q:'', channel:'', packing:'', from:'', to:'' };
+      var lastOrders = [];
+
+      function money(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN', { maximumFractionDigits:0 }); }
+      function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+      function fmtDate(iso){ if(!iso) return ''; var d=new Date(iso);
+        return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) + ' ' +
+               d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}); }
+      function el(tag, cls, txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
+
+      function renderCards(sum, sync){
+        cardsEl.innerHTML='';
+        function card(k,v){ var c=el('div','card'); c.appendChild(el('div','k',k));
+          var vv=el('div','v'); vv.innerHTML=v; c.appendChild(vv); cardsEl.appendChild(c); }
+        card('Orders (filtered)', String(sum.count||0));
+        card('Revenue', money(sum.revenue));
+        card('Units', String(sum.units||0));
+        card('POS', money((sum.byChannel&&sum.byChannel.POS)||0));
+        card('Website', money((sum.byChannel&&sum.byChannel.Website)||0));
+        if (sync && sync.lastSyncedAt){
+          subEl.textContent = 'Every Shopify sale (POS + Website), tracked end-to-end · ' +
+            (sync.count||0) + ' orders in ledger · last synced ' + fmtDate(sync.lastSyncedAt);
+        }
+      }
+
+      function renderTable(orders){
+        lastOrders = orders;
+        if (!orders.length){ host.innerHTML=''; host.appendChild(el('div','empty','No orders match these filters.')); return; }
+        var t = el('table');
+        var thead = el('thead'); var htr = el('tr');
+        ['Order','Date','Channel','Customer','Items','Total','Payment','Packing','Dispatch',''].forEach(function(h){ htr.appendChild(el('th',null,h)); });
+        thead.appendChild(htr); t.appendChild(thead);
+        var tb = el('tbody');
+        orders.forEach(function(o){
+          var tr = el('tr');
+          // order
+          var c1=el('td'); c1.appendChild(el('strong',null,o.name||'')); if(o.cancelledAt){ c1.appendChild(el('div','st cancelled','cancelled')); } tr.appendChild(c1);
+          tr.appendChild(el('td','muted',fmtDate(o.createdAt)));
+          var c3=el('td'); var p=el('span','pill ch-'+o.channel,o.channel); c3.appendChild(p); tr.appendChild(c3);
+          var c4=el('td'); c4.appendChild(el('div',null,o.customer.name||'—'));
+            if(o.customer.phone) c4.appendChild(el('div','muted',o.customer.phone));
+            if(o.city) c4.appendChild(el('div','muted',o.city)); tr.appendChild(c4);
+          tr.appendChild(el('td',null,String(o.itemCount||0)));
+          tr.appendChild(el('td','money',money(o.total)));
+          var c7=el('td'); c7.appendChild(el('span','st '+(o.dispatch.paymentMode||'').toLowerCase(), o.dispatch.paymentMode||'—'));
+            if(o.dispatch.dueAmount) c7.appendChild(el('div','muted','due '+money(o.dispatch.dueAmount))); tr.appendChild(c7);
+          var c8=el('td'); c8.appendChild(el('span','st '+o.dispatch.packingStatus, o.dispatch.packingStatus)); tr.appendChild(c8);
+          var c9=el('td'); if(o.dispatch.courier) c9.appendChild(el('div',null,o.dispatch.courier));
+            if(o.dispatch.trackingUrl){ var a=el('a','lnk','track'); a.href=o.dispatch.trackingUrl; a.target='_blank'; a.rel='noopener'; c9.appendChild(a); }
+            if(!o.dispatch.courier && !o.dispatch.trackingUrl) c9.appendChild(el('span','muted','—')); tr.appendChild(c9);
+          var c10=el('td'); var eb=el('span','lnk','edit'); eb.onclick=function(){ openEditor(o); }; c10.appendChild(eb); tr.appendChild(c10);
+          tb.appendChild(tr);
+        });
+        t.appendChild(tb); host.innerHTML=''; host.appendChild(t);
+      }
+
+      function load(){
+        var qs = new URLSearchParams();
+        Object.keys(filters).forEach(function(k){ if(filters[k]) qs.set(k, filters[k]); });
+        qs.set('limit','500');
+        fetch('/api/orders?'+qs.toString(), { headers:{Accept:'application/json'} })
+          .then(function(r){ if(r.status===401){ location.href='/login.html'; return null; } return r.json(); })
+          .then(function(d){ if(!d) return; renderCards(d.summary||{}, null); renderTable(d.orders||[]); });
+        fetch('/api/orders/sync/status',{headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null;})
+          .then(function(s){ if(s&&s.sync) renderCards(currentSummary||{count:0,revenue:0,byChannel:{}}, s.sync); });
+      }
+      var currentSummary = null;
+      // keep last summary for sync-status card refresh
+      var _origRenderCards = renderCards;
+      renderCards = function(sum, sync){ if(sum && sum.count!=null) currentSummary=sum; _origRenderCards(currentSummary||sum, sync); };
+
+      // ── Dispatch editor ──
+      function field(label, inputHtml){ return '<div class="fld"><label>'+label+'</label>'+inputHtml+'</div>'; }
+      function opt(v,cur){ return '<option'+(v===cur?' selected':'')+'>'+v+'</option>'; }
+      function selOpts(list,cur){ return list.map(function(v){ return opt(v,cur); }).join(''); }
+      function openEditor(o){
+        var d=o.dispatch;
+        var items = o.lineItems.map(function(li){ return '<div class="it"><span>'+esc(li.title)+(li.variantTitle?' · '+esc(li.variantTitle):'')+' <span class="muted">'+esc(li.sku)+'</span></span><span>×'+li.qty+'</span></div>'; }).join('');
+        modal.innerHTML =
+          '<h3>'+esc(o.name)+' · '+esc(o.channel)+'</h3>'+
+          '<div class="oc">'+esc(o.customer.name||'—')+(o.customer.phone?' · '+esc(o.customer.phone):'')+(o.city?' · '+esc(o.city):'')+' · '+money(o.total)+'</div>'+
+          '<div class="items">'+(items||'<span class="muted">no line items</span>')+'</div>'+
+          field('Courier partner','<input id="f_courier" value="'+esc(d.courier)+'" placeholder="DTDC / BlueDart / Amazon…" />')+
+          field('Tracking URL','<input id="f_track" value="'+esc(d.trackingUrl)+'" placeholder="https://…" />')+
+          '<div class="row2">'+
+            field('Packing status','<select id="f_pack">'+selOpts(['pending','packed','booked','dispatched','delivered','rto','cancelled'], d.packingStatus)+'</select>')+
+            field('Order confirmation','<select id="f_conf">'+selOpts(['pending','confirmed','unreachable','cancelled'], d.orderConfirmation)+'</select>')+
+          '</div>'+
+          '<div class="row2">'+
+            field('Payment mode','<select id="f_pay">'+['','Prepaid','COD'].map(function(v){return opt(v,d.paymentMode);}).join('')+'</select>')+
+            field('Due amount (COD)','<input id="f_due" type="number" value="'+(d.dueAmount!=null?d.dueAmount:'')+'" placeholder="0" />')+
+          '</div>'+
+          field('Remarks','<textarea id="f_rem" placeholder="Notes…">'+esc(d.remarks)+'</textarea>')+
+          '<div class="mactions"><button class="btn ghost" id="f_cancel">Cancel</button><button class="btn" id="f_save">Save</button></div>';
+        ov.classList.add('open');
+        document.getElementById('f_cancel').onclick=closeEditor;
+        document.getElementById('f_save').onclick=function(){ saveDispatch(o.id); };
+      }
+      function closeEditor(){ ov.classList.remove('open'); }
+      ov.addEventListener('click', function(e){ if(e.target===ov) closeEditor(); });
+      function saveDispatch(id){
+        var body = {
+          courier: document.getElementById('f_courier').value,
+          trackingUrl: document.getElementById('f_track').value,
+          packingStatus: document.getElementById('f_pack').value,
+          orderConfirmation: document.getElementById('f_conf').value,
+          paymentMode: document.getElementById('f_pay').value,
+          dueAmount: document.getElementById('f_due').value,
+          remarks: document.getElementById('f_rem').value
+        };
+        var btn=document.getElementById('f_save'); btn.disabled=true; btn.textContent='Saving…';
+        fetch('/api/orders/'+id+'/dispatch',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+          .then(function(r){ return r.json(); })
+          .then(function(res){ if(res.success){ closeEditor(); load(); } else { btn.disabled=false; btn.textContent='Save'; alert(res.error||'Failed'); } })
+          .catch(function(){ btn.disabled=false; btn.textContent='Save'; alert('Network error'); });
+      }
+
+      // ── Sync ──
+      syncBtn.onclick=function(){
+        syncBtn.disabled=true; var t=syncBtn.textContent; syncBtn.textContent='Syncing…';
+        fetch('/api/orders/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+          .then(function(r){ return r.json(); })
+          .then(function(res){ syncBtn.disabled=false; syncBtn.textContent=t;
+            if(!res.success){ alert(res.error||'Sync failed'); return; } load(); })
+          .catch(function(){ syncBtn.disabled=false; syncBtn.textContent=t; alert('Sync error'); });
+      };
+
+      // filters wiring
+      var qEl=document.getElementById('q'); var deb;
+      qEl.oninput=function(){ clearTimeout(deb); deb=setTimeout(function(){ filters.q=qEl.value.trim(); load(); },300); };
+      document.getElementById('channel').onchange=function(){ filters.channel=this.value; load(); };
+      document.getElementById('packing').onchange=function(){ filters.packing=this.value; load(); };
+      document.getElementById('from').onchange=function(){ filters.from=this.value; load(); };
+      document.getElementById('to').onchange=function(){ filters.to=this.value; load(); };
+
+      load();
+    })();
+  </script>
+</body>
+</html>
