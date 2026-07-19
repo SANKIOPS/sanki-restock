@@ -84,7 +84,7 @@
     <div class="panel">
       <h2 style="margin-top:0">Add intake line</h2>
       <div class="lineform">
-        <div class="fld"><label>Design name <span class="muted" style="font-weight:400;text-transform:none">(optional)</span></label><input id="f_designName" placeholder="SEO name — e.g. Glowing" /></div>
+        <div class="fld"><label>Design name <span class="muted" style="font-weight:400;text-transform:none">(your name → we SEO it)</span></label><input id="f_designName" placeholder="your name — e.g. Glowing" /></div>
         <div class="fld"><label>Product</label><select id="f_productType"></select></div>
         <div class="fld"><label>Colour</label><select id="f_colour"></select></div>
         <div class="fld"><label>Size</label><select id="f_sizeLabel"></select></div>
@@ -234,8 +234,9 @@
         d.newProducts.forEach(function(np,idx){
           h += '<div class="npcard" data-np="'+idx+'">';
           h += '<h3>'+esc(np.productType)+' · '+esc(np.colour)+' <span class="muted mono">'+(np.vendor?('· '+esc(np.vendor)):'')+(np.designCode?(' · '+esc(np.designCode)):'')+'</span>'+(np.ambiguous?' <span class="pill err">no design code</span>':'')+'</h3>';
+          if(np.designName){ h += '<div class="muted" style="font-size:12px;margin-bottom:8px">Your design name: <b>'+esc(np.designName)+'</b> → generated SEO name below (editable)</div>'; }
           h += '<div class="row2">';
-          h += '<div class="fld"><label>Title (H1)</label><input data-f="title" value="'+esc(np.seo.title)+'" /></div>';
+          h += '<div class="fld"><label>SEO product name (Title / H1)</label><input data-f="title" value="'+esc(np.seo.title)+'" /></div>';
           h += '<div class="fld"><label>URL handle</label><input class="mono" data-f="handle" value="'+esc(np.seo.handle)+'" /></div>';
           h += '<div class="fld"><label>Meta title (SEO)</label><input data-f="metaTitle" value="'+esc(np.seo.metaTitle)+'" /></div>';
           h += '<div class="fld"><label>Image alt-text</label><input data-f="imageAlt" value="'+esc(np.seo.imageAlt)+'" /></div>';

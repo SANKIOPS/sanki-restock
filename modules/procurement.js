@@ -343,7 +343,7 @@ async function computePreview(store, body) {
     // different products could otherwise merge into one.
     const ambiguous = !((g.designCode || '').trim() || (g.designName || '').trim());
     return {
-      key: g.key, vendor: g.vendor, designCode: g.designCode,
+      key: g.key, vendor: g.vendor, designCode: g.designCode, designName: g.designName,
       colour: g.colour, productType: g.productType, ambiguous,
       seo,
       variants: g.lines.map(l => ({
