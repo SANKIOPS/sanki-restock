@@ -13,12 +13,13 @@
       { icon: '🔄', text: 'Restock Planner',      href: '/index.html#restock' },
       { icon: '⚡', text: 'Velocity Intelligence', href: '/velocity.html' },
       { icon: '🔥', text: 'Hot Sellers',          href: '/index.html#hot' },
-      { icon: '🔍', text: 'Stock Search',         href: '/index.html#search' },
+      { icon: '🔍', text: 'Stock Search',         href: '/rack-locations.html' },
       { icon: '📊', text: 'Analytics',            href: '/analytics.html' },
       { icon: '📈', text: 'Inventory Statistics', href: '/inventory-stats.html' }
     ] },
     { label: 'Store Ops', items: [
-      { icon: '🛍️', text: 'Showroom Replenishment', href: '/showroom-replenishment.html' }
+      { icon: '🛍️', text: 'Showroom Replenishment', href: '/showroom-replenishment.html' },
+      { icon: '🗄️', text: 'Rack Locations',         href: '/rack-locations.html' }
     ] },
     { label: 'Orders', items: [
       { icon: '📋', text: 'Purchase Orders', href: '/index.html#po' },

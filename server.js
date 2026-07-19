@@ -1908,11 +1908,35 @@ app.post('/api/showroom/queue/move', async (req, res) => {
     if (!settings.frontLocationId || !settings.backLocationId) return res.json({ success: false, error: 'Configure Settings first' });
 
     const fetch = require('node-fetch');
-    const moveQty = Math.max(1, Number(qty || item.qty) || 1);
+    // B2: the move qty must be a positive integer and can never exceed what's
+    // actually queued for this SKU. Number() alone would accept fractions
+    // (2.5) or oversized values and pass them straight into the adjust call.
+    const requested = Math.max(1, Math.floor(Number(qty || item.qty) || 1));
+    let moveQty = Math.min(requested, Math.max(1, Number(item.qty) || 1));
 
     // Ensure we have inventoryItemId
     if (!item.inventoryItemId) await enrichQueueItem(fetch, item);
     if (!item.inventoryItemId) return res.json({ success: false, error: 'inventory_item_id unavailable' });
+
+    // B1: never move more than physically exists at the back. reconcile/preview
+    // caps moves by live backQty; this handler historically did not, so a move
+    // against an empty/short back produced negative back + phantom front. The
+    // total stays net-zero either way, but the F/B split would silently diverge
+    // from reality and the audit log would record a move that didn't happen.
+    let backAvail = null;
+    try {
+      const bl = await shopifyFetch(fetch,
+        `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${Number(item.inventoryItemId)}&location_ids=${Number(settings.backLocationId)}&limit=250`);
+      if (bl.ok) {
+        const bd = await bl.json();
+        const lvl = (bd.inventory_levels || [])[0];
+        if (lvl && typeof lvl.available === 'number') backAvail = lvl.available;
+      }
+    } catch (e) { /* transient read failure — fall through; no worse than before */ }
+    if (backAvail !== null) {
+      if (backAvail <= 0) return res.json({ success: false, error: 'No stock at back to move' });
+      if (moveQty > backAvail) moveQty = backAvail;
+    }
 
     // Ensure front location is connected to this inventory item (idempotent)
     try {
@@ -2496,6 +2520,11 @@ app.get('/api/showroom/notify/test', async (req, res) => {
     note: RESEND_API_KEY ? 'Email dispatched via Resend — check the inbox.' : 'RESEND_API_KEY not set — logged only, no email sent.'
   });
 });
+
+// ── Business OS modules (self-contained routers, mounted before the
+//    catch-all so their /api/* routes resolve instead of falling
+//    through to index.html). Each module owns its own store + helpers.
+app.use(require('./modules/rack-locations').router);
 
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
