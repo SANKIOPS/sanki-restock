@@ -424,7 +424,11 @@
       var rows=lines.map(function(l,i){
         if(i===editingLineIdx) return lineEditorRow(l,i);
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
-        var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'')+'<div style="margin-top:3px">'+photoBadge(l)+'</div>';
+        // Approve the photo right here — no need to open Edit first.
+        var approveBtn = (l.photoUrl && !l.photoApproved)
+          ? ' <button class="btn sm" data-approveline="'+i+'" style="background:#059669;color:#fff;border-color:#059669">Approve</button>'
+          : (l.photoUrl && l.photoApproved ? ' <button class="btn ghost sm" data-unapproveline="'+i+'">Undo</button>' : '');
+        var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'')+'<div style="margin-top:3px">'+photoBadge(l)+approveBtn+'</div>';
         return '<tr>'+
           '<td>'+photoCell+'</td>'+
           '<td>'+esc(l.designName||'—')+'</td><td class="mono">'+esc(l.designCode||'—')+'</td>'+
@@ -445,6 +449,9 @@
       var host=el('linesHost');
       Array.prototype.forEach.call(host.querySelectorAll('[data-del]'),function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-del'),1); if(editingLineIdx>-1)editingLineIdx=-1; renderLines(); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-edit]'),function(b){ b.onclick=function(){ editingLineIdx=+b.getAttribute('data-edit'); editorPhotoUrl=lines[editingLineIdx].photoUrl||''; renderLines(); }; });
+      // one-click approve / undo of a line's photo, without opening Edit
+      Array.prototype.forEach.call(host.querySelectorAll('[data-approveline]'),function(b){ b.onclick=function(){ lines[+b.getAttribute('data-approveline')].photoApproved=true; renderLines(); }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-unapproveline]'),function(b){ b.onclick=function(){ lines[+b.getAttribute('data-unapproveline')].photoApproved=false; renderLines(); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-cancelline]'),function(b){ b.onclick=function(){ editingLineIdx=-1; renderLines(); }; });
       // product change → refresh fit + size option lists in place
       var prodSel=host.querySelector('[data-e="productType"][data-refresh]');
@@ -601,8 +608,7 @@
       }).then(function(d){
         btn.disabled=false; btn.textContent='Read invoice & fill lines';
         if(!d.success){ el('invoiceNote').textContent=d.error||'Could not read the invoice.'; return; }
-        // vendor bill
-        if(d.vendor){ ensureVendorOption(d.vendor); }
+        // vendor is NOT auto-filled — the user always picks it manually.
         if(d.billNo){ el('b_billNo').value=d.billNo; }
         if(d.datePurchase){ el('b_datePurchase').value=d.datePurchase; }
         updateEta();

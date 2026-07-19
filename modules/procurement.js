@@ -654,8 +654,10 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
       : { type: 'image', source: { type: 'base64', media_type: req.file.mimetype, data: b64 } };
     const prompt =
-`You are reading a garment supplier INVOICE (likely in Chinese) for an Indian streetwear brand. ` +
-`OCR it, translate Chinese to English, and extract EVERY line item.\n\n` +
+`You are reading a garment supplier INVOICE for an Indian streetwear brand. ` +
+`It may be PRINTED or HANDWRITTEN, and in Chinese, English, or a mix. ` +
+`Read handwriting carefully. OCR it, translate any Chinese to English, and extract EVERY line item. ` +
+`Do your best on messy or handwritten bills — infer product/colour/size/qty/price from whatever is legible rather than giving up.\n\n` +
 `Return STRICT JSON ONLY (no prose) in exactly this shape:\n` +
 `{"vendor":"","billNo":"","datePurchase":"YYYY-MM-DD","lines":[{"designName":"","designCode":"","productType":"","colour":"","fit":"","sizeLabel":"","chinaSize":"","qty":0,"perPcsYuan":0,"photoBox":null}]}\n\n` +
 `Rules:\n` +
