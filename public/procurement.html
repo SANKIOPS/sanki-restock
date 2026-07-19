@@ -100,6 +100,20 @@
 
     <!-- ══════════ VIEW 1: ADVANCE ══════════ -->
     <div id="viewAdvance">
+      <div id="editingBanner" class="banner info hidden" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <span>Editing <b id="editingPoLabel"></b> — change any detail below, then <b>Update PO</b>. SKUs already assigned stay the same.</span>
+        <button class="btn ghost sm" id="cancelEditPo">Cancel edit</button>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Auto-fill from invoice <span class="muted" style="font-size:12px;font-weight:400">— upload the vendor invoice (Chinese OK); we read it &amp; fill the lines for you to review</span></h2>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <input id="invoiceFile" type="file" accept="image/*,application/pdf" style="font-size:12px" />
+          <button class="btn" id="parseInvoiceBtn">Read invoice &amp; fill lines</button>
+          <span class="muted" id="invoiceNote" style="font-size:12px"></span>
+        </div>
+        <p class="sub">Extracted vendor, bill no., date &amp; every line drop into the form below — edit anything, add each product photo, then Save. Photos still need attaching per line (via each line's <b>Edit</b>).</p>
+      </div>
+
       <div class="panel">
         <h2 style="margin-top:0">Rates &amp; warehouse</h2>
         <div class="settingsgrid">
@@ -150,6 +164,7 @@
           <div>
             <button class="btn ghost" id="clearLines">Clear</button>
             <button class="btn" id="saveAdvanceBtn">Save advance purchase →</button>
+            <button class="btn warn hidden" id="updatePoBtn">Update PO →</button>
           </div>
         </div>
         <div id="linesHost" style="margin-top:10px"></div>
@@ -192,6 +207,7 @@
     var me = { isAdmin:false, role:'', username:'' };
     var pendingPhotoUrl = '';       // uploaded photo for the line being added
     var lastReceive = null;         // last receive preview (for admin commit)
+    var editingPoId = null;         // set when the advance form is editing an existing PO
 
     function money(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
     function yuan(n){ return '¥' + (Number(n)||0).toLocaleString('en-IN',{maximumFractionDigits:2}); }
@@ -419,20 +435,127 @@
       }).catch(function(e){ btn.disabled=false; btn.textContent='Save advance purchase →'; el('advanceResult').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     };
 
+    // ── full-PO edit: load an existing PO into the advance form ──
+    function ensureVendorOption(name){
+      if(!name) return; var sel=el('b_vendor');
+      var found=false; Array.prototype.forEach.call(sel.options,function(o){ if(o.value===name) found=true; });
+      if(!found){ var o=document.createElement('option'); o.value=name; o.textContent=name; sel.insertBefore(o, sel.options[sel.options.length-1]); }
+      sel.value=name;
+    }
+    function editPoFull(po){
+      editingPoId=po.id;
+      // header / rates
+      if(po.exRate!=null) el('exRate').value=po.exRate;
+      if(po.freightPerGram!=null) el('freightPerGram').value=po.freightPerGram;
+      ensureVendorOption(po.vendor||'');
+      el('b_billNo').value=po.billNo||'';
+      el('b_datePurchase').value=po.datePurchase||'';
+      el('b_leadTime').value=(po.leadTimeDays!=null?po.leadTimeDays:'');
+      updateEta();
+      // lines (carry sku + weight so SKUs stay frozen)
+      lines=(po.lines||[]).map(function(l){
+        return { designName:l.designName||'', designCode:l.designCode||'', productType:l.productType,
+          colour:l.colour, fit:l.fit, sizeLabel:l.sizeLabel, chinaSize:l.chinaSize||'',
+          audience:l.audience||'Men', qty:l.qty, perPcsYuan:l.perPcsYuan, sku:l.sku||'',
+          weightGrams:l.weightGrams||0, photoUrl:l.photoUrl||'' };
+      });
+      renderLines();
+      // UI mode
+      el('editingBanner').classList.remove('hidden');
+      el('editingPoLabel').textContent=po.id;
+      el('saveAdvanceBtn').classList.add('hidden');
+      el('updatePoBtn').classList.remove('hidden');
+      el('advanceResult').innerHTML='';
+      setTab('advance');
+      window.scrollTo({top:0,behavior:'smooth'});
+    }
+    function exitEditMode(){
+      editingPoId=null; lines=[]; renderLines();
+      el('editingBanner').classList.add('hidden');
+      el('saveAdvanceBtn').classList.remove('hidden');
+      el('updatePoBtn').classList.add('hidden');
+    }
+    el('cancelEditPo').onclick=function(){ exitEditMode(); setTab('receive'); loadPos(); };
+    el('updatePoBtn').onclick=function(){
+      if(!editingPoId) return;
+      if(!lines.length){ alert('A PO needs at least one line. Cancel edit to delete the PO instead.'); return; }
+      var id=editingPoId, btn=el('updatePoBtn'); btn.disabled=true; btn.textContent='Updating…';
+      fetch('/api/procurement/pos/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ vendor:el('b_vendor').value.trim().toUpperCase(), billNo:el('b_billNo').value.trim(),
+          datePurchase:el('b_datePurchase').value, leadTimeDays:el('b_leadTime').value,
+          exRate:el('exRate').value, freightPerGram:el('freightPerGram').value, lines:lines })
+      }).then(r=>r.json()).then(function(d){
+        btn.disabled=false; btn.textContent='Update PO →';
+        if(!d.success){ el('advanceResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
+        exitEditMode(); setTab('receive'); loadPos(); openPo(id);
+        fetch('/api/procurement/next-serial?refresh=1').then(r=>r.json()).then(function(s){ if(s.success){var n=s.next; el('serialTag').textContent='next serial '+n.alpha+n.num+' · '+(s.skuCount||0)+' SKUs';} });
+      }).catch(function(e){ btn.disabled=false; btn.textContent='Update PO →'; el('advanceResult').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+    };
+
+    // ── invoice auto-fill: read a (Chinese) invoice → prefill bill + lines ──
+    el('parseInvoiceBtn').onclick=function(){
+      var f=el('invoiceFile').files&&el('invoiceFile').files[0];
+      if(!f){ el('invoiceNote').textContent='Choose an invoice image or PDF first.'; return; }
+      var btn=el('parseInvoiceBtn'); btn.disabled=true; btn.textContent='Reading…';
+      el('invoiceNote').textContent='Reading the invoice — this can take a few seconds…';
+      var fd=new FormData(); fd.append('invoice',f);
+      fetch('/api/procurement/parse-invoice',{method:'POST',body:fd}).then(r=>r.json()).then(function(d){
+        btn.disabled=false; btn.textContent='Read invoice & fill lines';
+        if(!d.success){ el('invoiceNote').textContent=d.error||'Could not read the invoice.'; return; }
+        // vendor bill
+        if(d.vendor){ ensureVendorOption(d.vendor); }
+        if(d.billNo){ el('b_billNo').value=d.billNo; }
+        if(d.datePurchase){ el('b_datePurchase').value=d.datePurchase; }
+        updateEta();
+        // append parsed lines to the review table (photos added per line via Edit)
+        var added=(d.lines||[]).map(function(l){
+          return { designName:l.designName||'', designCode:l.designCode||'', productType:l.productType||'',
+            colour:l.colour||'', fit:l.fit||'', sizeLabel:l.sizeLabel||'', chinaSize:l.chinaSize||'',
+            audience:l.audience||'Men', qty:(l.qty||1), perPcsYuan:(l.perPcsYuan||0), sku:'', photoUrl:'' };
+        });
+        lines=lines.concat(added); renderLines();
+        el('invoiceNote').textContent=added.length?('Filled '+added.length+' line(s). Review each, add its photo (Edit), then Save.'):'No line items found on the invoice.';
+        window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+      }).catch(function(e){ btn.disabled=false; btn.textContent='Read invoice & fill lines'; el('invoiceNote').textContent=e.message; });
+    };
+
     // ══════════ RECEIVE & POST ══════════
     el('refreshPos').onclick=loadPos;
     var STATUS_META={ advance:['adv','Advance — awaiting goods'], received:['rec','Received — weighed'], awaiting_approval:['await','Awaiting admin approval'], posted:['posted','Posted to Shopify'] };
+    var poIndex={};   // id → full PO (from the last list load), used for list-level edit
     function loadPos(){
       el('poListHost').innerHTML='<p class="muted">Loading…</p>';
       fetch('/api/procurement/pos').then(r=>r.json()).then(function(d){
         if(!d.success){ el('poListHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
+        poIndex={}; (d.pos||[]).forEach(function(p){ poIndex[p.id]=p; });
         var pos=(d.pos||[]).filter(function(p){ return p.status!=='posted'; });
         var posted=(d.pos||[]).filter(function(p){ return p.status==='posted'; });
-        if(!pos.length){ el('poListHost').innerHTML='<p class="muted">No open purchases. Create one under “New advance purchase”.</p>'; }
-        else el('poListHost').innerHTML=pos.map(poRow).join('');
+        var html='';
+        if(!pos.length){ html='<p class="muted">No open purchases. Create one under “New advance purchase”.</p>'; }
+        else {
+          html='<div id="poBulkBar" style="display:none;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;padding:8px 10px;background:var(--ivory2);border:1px solid var(--line);border-radius:8px">'+
+            '<span class="muted" id="poSelCount" style="font-size:13px">0 selected</span>'+
+            '<div style="display:flex;gap:6px"><button class="btn ghost sm" id="poEditSel">Edit</button><button class="btn danger sm" id="poDelSel">Delete selected</button></div></div>'+
+            pos.map(poRow).join('');
+        }
+        el('poListHost').innerHTML=html;
         if(posted.length){ el('poListHost').innerHTML+='<h2>Posted history</h2>'+posted.map(poRow).join(''); }
-        Array.prototype.forEach.call(el('poListHost').querySelectorAll('[data-po]'),function(r){ r.onclick=function(){ openPo(r.getAttribute('data-po')); }; });
+        // open on row click (but not when clicking the checkbox)
+        Array.prototype.forEach.call(el('poListHost').querySelectorAll('.porow'),function(r){
+          r.onclick=function(e){ if(e.target && (e.target.classList.contains('poCheck')||e.target.tagName==='LABEL')) return; openPo(r.getAttribute('data-po')); };
+        });
+        Array.prototype.forEach.call(el('poListHost').querySelectorAll('.poCheck'),function(c){ c.onclick=function(e){ e.stopPropagation(); }; c.onchange=updateBulkBar; });
+        updateBulkBar();
       });
+    }
+    function selectedPoIds(){
+      var ids=[]; Array.prototype.forEach.call(document.querySelectorAll('.poCheck:checked'),function(c){ ids.push(c.getAttribute('data-po')); }); return ids;
+    }
+    function updateBulkBar(){
+      var bar=el('poBulkBar'); if(!bar) return; var ids=selectedPoIds();
+      bar.style.display = ids.length ? 'flex' : 'none';
+      var c=el('poSelCount'); if(c) c.textContent=ids.length+' selected';
+      var eb=el('poEditSel'); if(eb){ eb.disabled=ids.length!==1; eb.title=ids.length!==1?'Select exactly one PO to edit':''; }
     }
     function poRow(p){
       var m=STATUS_META[p.status]||['adv',p.status];
@@ -442,9 +565,21 @@
         var lbl=etaLabel(p.expectedReceiveDate), overdue=(daysUntil(p.expectedReceiveDate)||0)<0;
         eta='<div class="muted" style="font-size:12px;margin-top:3px">Expected: '+esc(fmtDate(p.expectedReceiveDate))+' <span style="color:'+(overdue?'var(--err)':'var(--emerald-d)')+';font-weight:600">('+esc(lbl)+')</span></div>';
       }
-      return '<div class="porow" data-po="'+esc(p.id)+'"><div><b>'+esc(p.id)+'</b> <span class="muted">· '+esc(p.vendor||'—')+(p.billNo?(' · bill '+esc(p.billNo)):'')+' · '+n+' line(s)</span>'+eta+'</div>'+
+      var chk = p.status!=='posted' ? '<input type="checkbox" class="poCheck" data-po="'+esc(p.id)+'" title="Select" style="margin-right:10px;transform:scale(1.15)">' : '';
+      return '<div class="porow" data-po="'+esc(p.id)+'"><div style="display:flex;align-items:center">'+chk+'<div><b>'+esc(p.id)+'</b> <span class="muted">· '+esc(p.vendor||'—')+(p.billNo?(' · bill '+esc(p.billNo)):'')+' · '+n+' line(s)</span>'+eta+'</div></div>'+
         '<span class="pill '+m[0]+'">'+esc(m[1])+'</span></div>';
     }
+    // bulk edit / delete (delegated — the buttons live inside poListHost)
+    el('poListHost').addEventListener('click',function(e){
+      var t=e.target;
+      if(t&&t.id==='poEditSel'){ var ids=selectedPoIds(); if(ids.length!==1){ alert('Select exactly one PO to edit.'); return; } var po=poIndex[ids[0]]; if(po) editPoFull(po); }
+      else if(t&&t.id==='poDelSel'){
+        var sel=selectedPoIds(); if(!sel.length) return;
+        if(!confirm('Delete '+sel.length+' PO(s) permanently? This removes their lines and SKUs. (Nothing on Shopify is affected.)')) return;
+        Promise.all(sel.map(function(id){ return fetch('/api/procurement/pos/'+encodeURIComponent(id),{method:'DELETE'}).then(r=>r.json()); }))
+          .then(function(){ loadPos(); }).catch(function(err){ alert(err.message); loadPos(); });
+      }
+    });
 
     function openPo(id){
       el('poDetailHost').innerHTML='<div class="panel"><p class="muted">Loading '+esc(id)+'…</p></div>';
@@ -467,34 +602,25 @@
       var h='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
         '<div><h2 style="margin:0">'+esc(po.id)+' <span class="muted" style="font-size:12px;font-weight:400">· '+esc(po.vendor||'—')+(po.billNo?(' · bill '+esc(po.billNo)):'')+'</span></h2>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
-      // editable PO header (hidden until Edit is clicked)
-      if(!posted){
-        h+='<div id="poEditPanel" class="hidden" style="margin-top:12px;border:1px dashed var(--line);border-radius:10px;padding:12px;background:var(--ivory2)">'+
-          '<div class="settingsgrid">'+
-          '<div class="fld"><label>Vendor</label><input id="e_vendor" value="'+esc(po.vendor||'')+'" style="text-transform:uppercase"></div>'+
-          '<div class="fld"><label>Bill number</label><input id="e_billNo" value="'+esc(po.billNo||'')+'"></div>'+
-          '<div class="fld"><label>Date of purchase</label><input id="e_datePurchase" type="date" value="'+esc(po.datePurchase||'')+'"></div>'+
-          '<div class="fld"><label>Lead time (days)</label><input id="e_leadTime" type="number" min="0" step="1" value="'+esc(po.leadTimeDays!=null?po.leadTimeDays:'')+'"></div>'+
-          '</div>'+
-          '<p class="sub" style="margin:4px 2px 8px">Tick a line below to remove it, then Save. Remaining lines keep their SKUs.</p>'+
-          '<div style="display:flex;gap:8px"><button class="btn sm" id="savePoEdit">Save changes</button><button class="btn ghost sm" id="cancelPoEdit">Cancel</button></div>'+
-        '</div>';
-      }
-      // rates carried from the advance purchase — editable here before final calc
+      // rates + date-of-receive carried from the advance purchase — editable here before final calc
       if(!posted){
         h+='<div class="settingsgrid" style="margin-top:12px">'+
+          '<div class="fld"><label>Date of receiving</label><input id="r_dateReceive" type="date" value="'+esc(po.dateReceive||new Date().toISOString().slice(0,10))+'"></div>'+
           '<div class="fld"><label>Exchange rate ₹/RMB <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_exRate" type="number" step="0.01" value="'+esc(po.exRate!=null?po.exRate:'')+'"></div>'+
           '<div class="fld"><label>Freight ₹/gram <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_freight" type="number" step="0.001" value="'+esc(po.freightPerGram!=null?po.freightPerGram:'')+'"></div>'+
         '</div>';
+      } else if(po.dateReceive){
+        h+='<div class="muted" style="font-size:12px;margin-top:8px">Received on <b>'+esc(fmtDate(po.dateReceive))+'</b></div>';
       }
       // weight-entry table
-      h+='<table style="margin-top:10px"><thead><tr><th class="editcol">✕</th><th>Photo</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">¥/pc</th><th>Weight g/pc '+(posted?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
+      h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">¥/pc</th><th>Weight g/pc '+(posted?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
       (po.lines||[]).forEach(function(l,i){
         var cls = l.classification==='EXISTING' ? '<span class="pill exist">restock</span>' : '<span class="pill new">new</span>';
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
         var lw=(Number(l.weightGrams)||0)*(Number(l.qty)||0);
-        h+='<tr><td class="editcol"><input type="checkbox" class="rmLine" data-idx="'+i+'" title="Remove this line"></td>'+
+        h+='<tr>'+
           '<td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
+          '<td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
           '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
           '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
           '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td>'+
@@ -503,13 +629,13 @@
       });
       var tw=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.weightGrams)||0)*(Number(l.qty)||0); },0);
       var tq=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.qty)||0); },0);
-      h+='<tr class="totalrow"><td class="editcol"></td><td colspan="4" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
+      h+='<tr class="totalrow"><td colspan="5" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
       h+='</tbody></table>';
       if(!posted){
         h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'+
           '<button class="btn" id="computeBtn">Save weights &amp; compute landed cost</button>';
-        if(me.isAdmin) h+='<span class="muted" style="align-self:center;font-size:12px">You are admin — you can review SEO and post directly.</span>';
-        else h+='<span class="muted" style="align-self:center;font-size:12px">SEO &amp; Shopify posting are done by the admin after your request.</span>';
+        if(me.isAdmin) h+='<span class="muted" style="align-self:center;font-size:12px">You are admin — you can post to Shopify directly.</span>';
+        else h+='<span class="muted" style="align-self:center;font-size:12px">Shopify posting is done by the admin after your request.</span>';
         h+='</div>';
       }
       h+='</div><div id="receiveHost"></div>';
@@ -526,24 +652,8 @@
             el('totWeight').textContent = t?(t.toLocaleString('en-IN')+' g / '+(t/1000).toFixed(2)+' kg'):'—';
           };
         });
-        // ── edit / delete PO ──
-        el('editPoBtn').onclick=function(){
-          var on=el('poDetailHost').classList.toggle('editing');
-          el('poEditPanel').classList.toggle('hidden', !on);
-          this.textContent = on ? 'Editing…' : 'Edit';
-        };
-        el('cancelPoEdit').onclick=function(){ renderPoDetail(currentPo); };
-        el('savePoEdit').onclick=function(){
-          var rm=[]; Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('.rmLine:checked'),function(c){ rm.push(Number(c.getAttribute('data-idx'))); });
-          if(rm.length && rm.length===(po.lines||[]).length){ alert('Cannot remove every line — delete the whole PO instead.'); return; }
-          var btn=el('savePoEdit'); btn.disabled=true; btn.textContent='Saving…';
-          fetch('/api/procurement/pos/'+encodeURIComponent(po.id),{method:'PATCH',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({ vendor:el('e_vendor').value, billNo:el('e_billNo').value, datePurchase:el('e_datePurchase').value, leadTimeDays:el('e_leadTime').value, removeLineIndexes:rm })
-          }).then(r=>r.json()).then(function(d){
-            if(!d.success){ btn.disabled=false; btn.textContent='Save changes'; alert(d.error||'Could not save'); return; }
-            renderPoDetail(d.po); loadPos();
-          }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; alert(e.message); });
-        };
+        // ── edit (full form) / delete PO ──
+        el('editPoBtn').onclick=function(){ editPoFull(currentPo); };
         el('delPoBtn').onclick=function(){
           if(!confirm('Delete '+po.id+' permanently? This removes all its lines and SKUs. (Nothing on Shopify is affected.)')) return;
           fetch('/api/procurement/pos/'+encodeURIComponent(po.id),{method:'DELETE'}).then(r=>r.json()).then(function(d){
@@ -565,7 +675,7 @@
         body:JSON.stringify({ weights:collectWeights(),
           exRate:(el('r_exRate')?el('r_exRate').value:''),
           freightPerGram:(el('r_freight')?el('r_freight').value:el('freightPerGram').value),
-          dateReceive:new Date().toISOString().slice(0,10) })
+          dateReceive:(el('r_dateReceive')&&el('r_dateReceive').value)?el('r_dateReceive').value:new Date().toISOString().slice(0,10) })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save weights & compute landed cost';
         if(!d.success){ el('receiveHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
@@ -574,32 +684,27 @@
     }
 
     function renderReceive(d, id){
-      var h='<div class="panel"><h2 style="margin-top:0">Final landed cost</h2><table><thead><tr><th>SKU</th><th>Product / Colour / Size</th><th class="money">¥/pc</th><th class="money">Freight</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
+      var h='<div class="panel"><h2 style="margin-top:0">Final landed cost</h2><table><thead><tr><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th class="money">¥/pc</th><th class="money">Freight</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
       (d.lines||[]).forEach(function(l){
-        h+='<tr><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+esc(l.sizeLabel)+'</td>'+
+        h+='<tr><td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
+          '<td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+esc(l.sizeLabel)+'</td>'+
           '<td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.suggestedMrp)+'</td><td>'+esc(l.qty)+'</td></tr>';
       });
       h+='</tbody></table></div>';
 
       if(me.isAdmin){
         if((d.newProducts||[]).length){
-          h+='<h2>New products to create (draft) — review the SEO before posting</h2>';
-          h+='<div class="banner info">These SEO drafts are text-generated placeholders. The AI image module (next) will regenerate them by judging the uploaded photos. Edit freely before posting.</div>';
-          d.newProducts.forEach(function(np,idx){
-            h+='<div class="npcard" data-np="'+idx+'">';
-            h+='<h3>'+esc(np.productType)+' · '+esc(np.colour)+' <span class="muted mono">'+(np.designCode?('· '+esc(np.designCode)):'')+'</span>'+(np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</h3>';
-            if(np.designName){ h+='<div class="muted" style="font-size:12px;margin-bottom:8px">Design name: <b>'+esc(np.designName)+'</b></div>'; }
-            h+='<div class="row2">';
-            h+='<div class="fld"><label>SEO product name (Title / H1)</label><input data-f="title" value="'+esc(np.seo.title)+'"></div>';
-            h+='<div class="fld"><label>URL handle</label><input class="mono" data-f="handle" value="'+esc(np.seo.handle)+'"></div>';
-            h+='<div class="fld"><label>Meta title</label><input data-f="metaTitle" value="'+esc(np.seo.metaTitle)+'"></div>';
-            h+='<div class="fld"><label>Image alt-text</label><input data-f="imageAlt" value="'+esc(np.seo.imageAlt)+'"></div>';
-            h+='</div>';
-            h+='<div class="fld"><label>Meta description</label><textarea data-f="metaDescription">'+esc(np.seo.metaDescription)+'</textarea></div>';
-            h+='<div class="fld"><label>Tags</label><input data-f="tags" value="'+esc((np.seo.tags||[]).join(', '))+'"></div>';
-            h+='<div class="muted" style="font-size:12px;margin-top:6px">Variants: '+np.variants.map(function(v){return '<span class="mono">'+esc(v.sku)+'</span> ('+esc(v.sizeCode)+' ×'+v.qty+' @ '+money(v.price)+')';}).join(' · ')+'</div>';
-            h+='</div>';
+          // SEO is NOT edited here — it is generated by the AI image module from the
+          // uploaded photos. This screen only confirms which products will be created.
+          h+='<div class="panel"><h2 style="margin-top:0">New products to create (draft)</h2>';
+          h+='<table><thead><tr><th>Design</th><th>Product / Colour</th><th>Variants</th></tr></thead><tbody>';
+          d.newProducts.forEach(function(np){
+            var vs=np.variants.map(function(v){return '<span class="mono">'+esc(v.sku)+'</span> ('+esc(v.sizeCode)+' ×'+v.qty+' @ '+money(v.price)+')';}).join(' · ');
+            h+='<tr><td>'+esc(np.designName||'—')+(np.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(np.designCode)+'</span>'):'')+(np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</td>'+
+               '<td>'+esc(np.productType)+' · '+esc(np.colour)+'</td><td class="muted" style="font-size:12px">'+vs+'</td></tr>';
           });
+          h+='</tbody></table>';
+          h+='<p class="sub">SEO titles, alt-text &amp; descriptions are generated by the AI image module from the product photos — you review them there before they go live.</p></div>';
         }
         if((d.existingAdds||[]).length){
           h+='<h2>Existing variants — add received stock</h2><div class="panel"><table><thead><tr><th>SKU</th><th>Add qty</th><th class="money">Landed</th></tr></thead><tbody>';
@@ -622,12 +727,9 @@
 
     function collectApproved(){
       var d=lastReceive;
-      var nps=(d.newProducts||[]).map(function(np,idx){
-        var card=document.querySelector('.npcard[data-np="'+idx+'"]');
-        var g=function(f){ var e=card&&card.querySelector('[data-f="'+f+'"]'); return e?e.value:''; };
-        return { colour:np.colour, productType:np.productType, vendor:np.vendor, designCode:np.designCode, variants:np.variants,
-          seo:{ title:g('title'), handle:g('handle'), metaTitle:g('metaTitle'), metaDescription:g('metaDescription'),
-                imageAlt:g('imageAlt'), tags:g('tags').split(',').map(function(t){return t.trim();}).filter(Boolean), bodyHtml:np.seo.bodyHtml } };
+      // SEO drafts pass through unchanged — they are refined later in the AI image module.
+      var nps=(d.newProducts||[]).map(function(np){
+        return { colour:np.colour, productType:np.productType, vendor:np.vendor, designCode:np.designCode, variants:np.variants, seo:np.seo };
       });
       return { newProducts:nps, existingAdds:d.existingAdds||[] };
     }

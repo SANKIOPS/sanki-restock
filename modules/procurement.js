@@ -65,6 +65,17 @@ const photoUpload = multer({
   fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
 });
 
+// ── Invoice auto-fill (Chinese vendor invoice → structured lines) ──
+// The invoice is held in memory (base64 → AI vision), never persisted. Accepts
+// an image OR a PDF. Requires ANTHROPIC_API_KEY; model is overridable.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const AI_MODEL = process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
+const invoiceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, /^image\/|application\/pdf/.test(file.mimetype))
+});
+
 // ── Seeds (decoded once from the sheet; editable in-app thereafter) ──
 const SEED = {
   brand: 'SA',
@@ -606,6 +617,89 @@ router.post('/api/procurement/vendors', (req, res) => {
   res.json({ success: true, vendors: s.vendors });
 });
 
+// ── Parse a (Chinese) vendor invoice into vendor-bill + intake lines ──
+// Vision-LLM OCR + translate + structured extraction. Returns a DRAFT the user
+// reviews/edits in the normal Lines table before saving the advance PO. Nothing
+// is written — this only pre-fills the form to save manual typing.
+function pickClosest(value, options) {
+  const v = String(value || '').trim().toLowerCase();
+  if (!v) return '';
+  const exact = options.find(o => o.toLowerCase() === v);
+  if (exact) return exact;
+  const part = options.find(o => o.toLowerCase().includes(v) || v.includes(o.toLowerCase()));
+  return part || '';
+}
+function extractJsonBlock(text) {
+  if (!text) return null;
+  // Prefer a fenced ```json block; else the first {...} span.
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const raw = fence ? fence[1] : text;
+  const start = raw.indexOf('{'); const end = raw.lastIndexOf('}');
+  if (start < 0 || end < 0 || end <= start) return null;
+  try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
+}
+router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), async (req, res) => {
+  try {
+    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'Invoice auto-fill is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
+    if (!req.file) return res.status(400).json({ success: false, error: 'No invoice received — attach a photo or PDF of the vendor invoice.' });
+    const s = loadStore();
+    const products = Object.keys(s.products);
+    const colours = Object.keys(s.colours);
+    const sizes = ['FS', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '28', '30', '32', '34', '36', '38', '40', '42', '44'];
+    const fits = ['Oversized', 'Drop Shoulder', 'Boxy Fit', 'Relaxed Fit', 'Regular Fit', 'Slim Fit', 'Muscle Fit',
+                  'Baggy Fit', 'Straight Fit', 'Tapered Fit', 'Skinny Fit', 'Narrow Fit', 'Wide Leg', 'Bootcut', 'Cargo Fit'];
+    const b64 = req.file.buffer.toString('base64');
+    const isPdf = /pdf/.test(req.file.mimetype);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: req.file.mimetype, data: b64 } };
+    const prompt =
+`You are reading a garment supplier INVOICE (likely in Chinese) for an Indian streetwear brand. ` +
+`OCR it, translate Chinese to English, and extract EVERY line item.\n\n` +
+`Return STRICT JSON ONLY (no prose) in exactly this shape:\n` +
+`{"vendor":"","billNo":"","datePurchase":"YYYY-MM-DD","lines":[{"designName":"","designCode":"","productType":"","colour":"","fit":"","sizeLabel":"","chinaSize":"","qty":0,"perPcsYuan":0}]}\n\n` +
+`Rules:\n` +
+`- vendor = supplier/company name (romanise if Chinese). billNo = invoice/order number. datePurchase = the invoice date.\n` +
+`- designCode = the vendor's product/style code printed on the invoice (e.g. A611). designName = a short English working name for the garment.\n` +
+`- productType: map to the CLOSEST of [${products.join(', ')}] or "" if unclear.\n` +
+`- colour: map to the CLOSEST of [${colours.join(', ')}] or "" if unclear.\n` +
+`- fit: map to the CLOSEST of [${fits.join(', ')}] or "" if not stated.\n` +
+`- sizeLabel = the Indian/global size, one of [${sizes.join(', ')}] ("FS" = free size). chinaSize = the size as printed on the invoice (M/L/XL… or "FS").\n` +
+`- If a row lists several sizes, output ONE line PER size with its own qty.\n` +
+`- qty = pieces (integer). perPcsYuan = unit price in RMB/¥ (number only).\n` +
+`- Never invent data — leave a field "" or 0 if the invoice does not show it.`;
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(502).json({ success: false, error: 'AI error: ' + ((j.error && j.error.message) || ('HTTP ' + r.status)) });
+    const text = (j.content || []).map(c => c.text || '').join('');
+    const parsed = extractJsonBlock(text);
+    if (!parsed) return res.status(502).json({ success: false, error: 'Could not read the invoice. Try a clearer photo, or enter the lines manually.' });
+    const lines = (parsed.lines || []).map(l => ({
+      designName: String(l.designName || '').trim(),
+      designCode: String(l.designCode || '').trim(),
+      productType: pickClosest(l.productType, products),
+      colour: pickClosest(l.colour, colours),
+      fit: pickClosest(l.fit, fits),
+      sizeLabel: pickClosest(l.sizeLabel, sizes) || String(l.sizeLabel || '').trim(),
+      chinaSize: String(l.chinaSize || '').trim(),
+      audience: 'Men',
+      qty: Math.max(0, Math.round(num(l.qty))),
+      perPcsYuan: num(l.perPcsYuan)
+    }));
+    res.json({
+      success: true,
+      vendor: String(parsed.vendor || '').toUpperCase().trim(),
+      billNo: String(parsed.billNo || '').trim(),
+      datePurchase: String(parsed.datePurchase || '').trim(),
+      lines
+    });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 router.get('/api/procurement/next-serial', async (req, res) => {
   try {
     const cat = await loadCatalogue(req.query.refresh === '1');
@@ -728,31 +822,51 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
 // Header fields (vendor / bill / dates / lead time) can be corrected any time
 // before the PO is posted. Individual lines may be removed. Remaining lines
 // keep their frozen SKUs. Recomputes the expected arrival from the new inputs.
-router.patch('/api/procurement/pos/:id', (req, res) => {
-  const s = loadStore();
-  const po = s.pos[req.params.id];
-  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be edited.' });
-  const b = req.body || {};
-  if (b.vendor != null)       po.vendor = String(b.vendor).toUpperCase().trim();
-  if (b.billNo != null)       po.billNo = String(b.billNo).trim();
-  if (b.datePurchase != null) po.datePurchase = String(b.datePurchase);
-  if (b.leadTimeDays != null && b.leadTimeDays !== '') po.leadTimeDays = Math.max(0, Math.round(num(b.leadTimeDays)));
-  // Recompute expected arrival = purchase date (or today) + lead time.
-  if (po.leadTimeDays != null) {
-    const base = po.datePurchase ? new Date(po.datePurchase) : new Date();
-    if (!isNaN(base.getTime())) { base.setDate(base.getDate() + po.leadTimeDays); po.expectedReceiveDate = base.toISOString().slice(0, 10); }
-  }
-  // Drop selected line indexes (from the ORIGINAL ordering).
-  if (Array.isArray(b.removeLineIndexes) && b.removeLineIndexes.length) {
-    const drop = new Set(b.removeLineIndexes.map(Number));
-    po.lines = (po.lines || []).filter((_, i) => !drop.has(i));
-    po.seoDraft = (po.seoDraft || []).filter(d => (po.lines || []).some(l => groupKey(l) === d.key));
-  }
-  if (b.vendor) { const vn = String(b.vendor).toUpperCase().trim(); if (vn && !s.vendors.includes(vn)) s.vendors.push(vn); }
-  saveStore(s);
-  const out = publicPo(po, req); delete out.seoDraft;
-  res.json({ success: true, poId: po.id, po: out });
+router.patch('/api/procurement/pos/:id', async (req, res) => {
+  try {
+    const s = loadStore();
+    const po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be edited.' });
+    const b = req.body || {};
+    if (b.vendor != null)       po.vendor = String(b.vendor).toUpperCase().trim();
+    if (b.billNo != null)       po.billNo = String(b.billNo).trim();
+    if (b.datePurchase != null) po.datePurchase = String(b.datePurchase);
+    if (b.leadTimeDays != null && b.leadTimeDays !== '') po.leadTimeDays = Math.max(0, Math.round(num(b.leadTimeDays)));
+    if (b.exRate != null && b.exRate !== '')         po.exRate = num(b.exRate);
+    if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = num(b.freightPerGram);
+    // Recompute expected arrival = purchase date (or today) + lead time.
+    if (po.leadTimeDays != null) {
+      const base = po.datePurchase ? new Date(po.datePurchase) : new Date();
+      if (!isNaN(base.getTime())) { base.setDate(base.getDate() + po.leadTimeDays); po.expectedReceiveDate = base.toISOString().slice(0, 10); }
+    }
+    // FULL line edit: caller sends the complete edited line set. Lines that keep
+    // their existing SKU keep it (frozen); brand-new lines (no sku) get the next
+    // serial. computePreview honours an explicit sku, so pre-filling each line's
+    // sku preserves it. Weight is carried through if the line already had one.
+    if (Array.isArray(b.lines)) {
+      const preview = await computePreview(s, { lines: b.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram });
+      po.lines = preview.lines.map(l => ({
+        designName: l.designName, productType: l.productType, colour: l.colour,
+        sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
+        vendor: l.vendor || po.vendor, designCode: l.designCode, photoUrl: l.photoUrl,
+        qty: l.qty, perPcsYuan: l.perPcsYuan,
+        weightGrams: num(l.weightGrams),
+        sku: l.sku, serialUsed: l.serialUsed || null, skuError: l.skuError || null,
+        classification: l.classification
+      }));
+      po.seoDraft = (preview.newProducts || []).map(np => ({ key: np.key, designCode: np.designCode, colour: np.colour, productType: np.productType, seo: np.seo }));
+    } else if (Array.isArray(b.removeLineIndexes) && b.removeLineIndexes.length) {
+      // Legacy path: just drop selected line indexes (from the ORIGINAL ordering).
+      const drop = new Set(b.removeLineIndexes.map(Number));
+      po.lines = (po.lines || []).filter((_, i) => !drop.has(i));
+      po.seoDraft = (po.seoDraft || []).filter(d => (po.lines || []).some(l => groupKey(l) === d.key));
+    }
+    if (b.vendor) { const vn = String(b.vendor).toUpperCase().trim(); if (vn && !s.vendors.includes(vn)) s.vendors.push(vn); }
+    saveStore(s);
+    const out = publicPo(po, req); delete out.seoDraft;
+    res.json({ success: true, poId: po.id, po: out });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ── Delete a PO entirely (not posted) ────────────────────────────
