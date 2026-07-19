@@ -24,7 +24,7 @@ let verifySession;
 try { verifySession = require('./auth-users').verifySession; } catch { verifySession = () => null; }
 
 // Section order controls how groups stack in the sidebar / dashboard.
-const SECTION_ORDER = ['Main', 'Sales', 'Store Ops', 'Procurement', 'Accounts', 'Marketing', 'Admin'];
+const SECTION_ORDER = ['Main', 'Sales', 'Store Ops', 'Purchases', 'Accounts', 'Marketing', 'Admin'];
 
 // ── The registry ────────────────────────────────────────────────
 // Everything starts 'hidden' (blank launcher). We turn modules 'live'
@@ -40,7 +40,7 @@ const MODULES = [
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.
   { key: 'sales',        title: 'Record a Sale',         desc: 'Log walk-in / IG / WhatsApp / phone sales',          icon: '📝', href: '/sales.html',                     section: 'Sales',     status: 'hidden', roles: ['admin', 'sales'] },
 
-  { key: 'procurement', title: 'Procurement',            desc: 'Generate SKUs, landed cost, create products / add stock', icon: '📦', href: '/procurement.html',           section: 'Procurement', status: 'hidden', roles: ['admin', 'procurement', 'inventory'] },
+  { key: 'procurement', title: 'Purchases',              desc: 'Generate SKUs, landed cost, create products / add stock', icon: '📦', href: '/procurement.html',           section: 'Purchases', status: 'hidden', roles: ['admin', 'procurement', 'inventory'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
   { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },
