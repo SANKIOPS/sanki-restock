@@ -85,8 +85,8 @@ const SEED = {
     'Waist 28': '28', 'Waist 30': '30', 'Waist 32': '32', 'Waist 34': '34',
     'Waist 36': '36', 'Waist 38': '38', 'Waist 40': '40', 'Waist 42': '42', 'Waist 44': '44'
   },
-  vendors: [ // known China vendors (from the sheet); editable/extendable in-app
-    'CHAOUFI', 'YOK', 'HK', 'NTVG', 'Amaze Variety', 'EU Fun2 TNC', 'TANG',
+  vendors: [ // known China vendors (from the sheet); ALWAYS stored UPPERCASE
+    'CHAOUFI', 'YOK', 'HK', 'NTVG', 'AMAZE VARIETY', 'EU FUN2 TNC', 'TANG',
     'WR+FUNK', 'HS1', 'FUNK', 'BM BAGS', 'TG'
   ],
   settings: {
@@ -124,6 +124,10 @@ function loadStore() {
   if (!s.colours)  s.colours = { ...SEED.colours };
   if (!s.sizes)    s.sizes = { ...SEED.sizes };
   if (!Array.isArray(s.vendors)) s.vendors = [ ...SEED.vendors ];
+  else { // normalize any older mixed-case entries to UPPERCASE + dedupe
+    const seen = {}; s.vendors = s.vendors.map(v => String(v).toUpperCase().trim())
+      .filter(v => v && !seen[v] && (seen[v] = 1));
+  }
   if (!s.settings) s.settings = { ...SEED.settings };
   else s.settings = { ...SEED.settings, ...s.settings };
   if (!s.pos)      s.pos = {};      // { [poId]: PO }
@@ -591,11 +595,11 @@ router.get('/api/procurement/vendors', (req, res) => {
 router.post('/api/procurement/vendors', (req, res) => {
   const s = loadStore();
   const b = req.body || {};
-  const name = String(b.name || '').trim();
+  const name = String(b.name || '').toUpperCase().trim();   // vendors are ALWAYS uppercase
   if (!name) return res.status(400).json({ success: false, error: 'Vendor name required.' });
   if (b.remove) {
-    s.vendors = s.vendors.filter(v => v.toLowerCase() !== name.toLowerCase());
-  } else if (!s.vendors.some(v => v.toLowerCase() === name.toLowerCase())) {
+    s.vendors = s.vendors.filter(v => v !== name);
+  } else if (!s.vendors.includes(name)) {
     s.vendors.push(name);
   }
   saveStore(s);
@@ -649,7 +653,7 @@ router.post('/api/procurement/advance', async (req, res) => {
       status: 'advance',               // advance → received → awaiting_approval → posted
       createdAt: new Date().toISOString(),
       createdBy: (req.user && req.user.username) || 'system',
-      vendor: b.vendor || '',
+      vendor: String(b.vendor || '').toUpperCase().trim(),
       billNo: b.billNo || '',
       datePurchase: b.datePurchase || '',
       dateReceive: '',
@@ -674,11 +678,13 @@ router.post('/api/procurement/advance', async (req, res) => {
       results: null
     };
     // Remember any newly-typed vendor so it appears in the dropdown next time.
-    const vn = String(b.vendor || '').trim();
-    if (vn && !s.vendors.some(v => v.toLowerCase() === vn.toLowerCase())) s.vendors.push(vn);
+    const vn = String(b.vendor || '').toUpperCase().trim();
+    if (vn && !s.vendors.includes(vn)) s.vendors.push(vn);
     saveStore(s);
-    // Never leak SEO to a non-admin caller.
+    // Stage 1 must NEVER expose SEO — those drafts are for the admin at stage 2
+    // only. Strip seoDraft from the advance-save response entirely.
     const out = publicPo(s.pos[poId], req);
+    delete out.seoDraft;
     res.json({ success: true, poId, po: out, lines: out.lines });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -716,6 +722,48 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     }
     res.json({ success: true, poId: po.id, po: publicPo(po, req), ...stripPreviewForRole(preview, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Edit a PO's header + drop lines (not posted) ─────────────────
+// Header fields (vendor / bill / dates / lead time) can be corrected any time
+// before the PO is posted. Individual lines may be removed. Remaining lines
+// keep their frozen SKUs. Recomputes the expected arrival from the new inputs.
+router.patch('/api/procurement/pos/:id', (req, res) => {
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be edited.' });
+  const b = req.body || {};
+  if (b.vendor != null)       po.vendor = String(b.vendor).toUpperCase().trim();
+  if (b.billNo != null)       po.billNo = String(b.billNo).trim();
+  if (b.datePurchase != null) po.datePurchase = String(b.datePurchase);
+  if (b.leadTimeDays != null && b.leadTimeDays !== '') po.leadTimeDays = Math.max(0, Math.round(num(b.leadTimeDays)));
+  // Recompute expected arrival = purchase date (or today) + lead time.
+  if (po.leadTimeDays != null) {
+    const base = po.datePurchase ? new Date(po.datePurchase) : new Date();
+    if (!isNaN(base.getTime())) { base.setDate(base.getDate() + po.leadTimeDays); po.expectedReceiveDate = base.toISOString().slice(0, 10); }
+  }
+  // Drop selected line indexes (from the ORIGINAL ordering).
+  if (Array.isArray(b.removeLineIndexes) && b.removeLineIndexes.length) {
+    const drop = new Set(b.removeLineIndexes.map(Number));
+    po.lines = (po.lines || []).filter((_, i) => !drop.has(i));
+    po.seoDraft = (po.seoDraft || []).filter(d => (po.lines || []).some(l => groupKey(l) === d.key));
+  }
+  if (b.vendor) { const vn = String(b.vendor).toUpperCase().trim(); if (vn && !s.vendors.includes(vn)) s.vendors.push(vn); }
+  saveStore(s);
+  const out = publicPo(po, req); delete out.seoDraft;
+  res.json({ success: true, poId: po.id, po: out });
+});
+
+// ── Delete a PO entirely (not posted) ────────────────────────────
+router.delete('/api/procurement/pos/:id', (req, res) => {
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be deleted.' });
+  delete s.pos[req.params.id];
+  saveStore(s);
+  res.json({ success: true, deleted: req.params.id });
 });
 
 // ── Stage 2b: inventory REQUESTS admin approval (no Shopify write) ──

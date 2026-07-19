@@ -53,6 +53,10 @@
     .thumb{ width:38px; height:38px; object-fit:cover; border-radius:7px; border:1px solid var(--line); background:#f4f4f2; display:block; cursor:zoom-in; transition:transform .08s ease; }
     .thumb:hover{ transform:scale(1.06); border-color:var(--emerald); }
     .totalrow td{ background:var(--ivory2); border-top:2px solid var(--line); }
+    .editcol{ display:none; text-align:center; }
+    .editing .editcol{ display:table-cell; }
+    .btn.danger{ background:var(--err,#b42318); border-color:transparent; color:#fff; }
+    .btn.sm{ padding:5px 10px; font-size:12px; }
     #imgZoom{ position:fixed; inset:0; background:rgba(12,20,16,.82); display:none; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; padding:24px; }
     #imgZoom.open{ display:flex; }
     #imgZoom img{ max-width:92vw; max-height:92vh; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.5); background:#fff; }
@@ -210,8 +214,8 @@
     var UPPER_FITS=['Oversized','Drop Shoulder','Boxy Fit','Relaxed Fit','Regular Fit','Slim Fit','Muscle Fit'];
     var LOWER_FITS=['Baggy Fit','Straight Fit','Relaxed Fit','Tapered Fit','Slim Fit','Skinny Fit','Narrow Fit','Wide Leg','Bootcut','Cargo Fit'];
     var UPPER_SIZES=['FS','M','L','XL','XXL','3XL','4XL'];
-    var LOWER_SIZES_INDIA=['28','30','32','34','36','38','40','42','44'];
-    var CHINA_SIZES=['M','L','XL','XXL','3XL','4XL'];
+    var LOWER_SIZES_INDIA=['FS','28','30','32','34','36','38','40','42','44'];
+    var CHINA_SIZES=['FS','M','L','XL','XXL','3XL','4XL'];
     function categoryOf(p){ p=String(p||'').toLowerCase();
       if(/jean|trouser|lower|short|jogger|jort|pant|cargo|denim|bottom/.test(p)) return 'lower';
       if(/shirt|tee|t-shirt|sweat|hoodie|hood|sando|top|jacket|tank|coord|set/.test(p)) return 'upper';
@@ -219,11 +223,15 @@
     }
     function syncCategory(){
       var isLower = categoryOf(el('f_productType').value)==='lower';
+      var keepFit=el('f_fit').value, keepCn=el('f_chinaSize').value;
       optsArr(el('f_fit'), isLower?LOWER_FITS:UPPER_FITS);
       optsArr(el('f_sizeLabel'), isLower?LOWER_SIZES_INDIA:UPPER_SIZES);
       el('sizeLabelTxt').textContent = isLower ? 'Indian size (waist)' : 'Size';
-      el('chinaWrap').style.display = isLower ? '' : 'none';
-      if(isLower && !el('f_chinaSize').options.length) optsArr(el('f_chinaSize'), CHINA_SIZES);
+      // China size applies to BOTH uppers and lowers now (FS included).
+      el('chinaWrap').style.display = '';
+      optsArr(el('f_chinaSize'), CHINA_SIZES);
+      if(keepFit){ el('f_fit').value=keepFit; }
+      if(keepCn){ el('f_chinaSize').value=keepCn; }
     }
 
     // ── tabs ──
@@ -274,17 +282,17 @@
 
     // ── vendor dropdown (+ add-new) ──
     function fillVendors(list, selectName){
-      var sel=el('b_vendor'); var cur=selectName||sel.value;
+      var sel=el('b_vendor'); var cur=(selectName||sel.value||'').toUpperCase();
       sel.innerHTML='';
       var ph=document.createElement('option'); ph.value=''; ph.textContent='Select vendor…'; sel.appendChild(ph);
-      (list||[]).slice().sort(function(a,b){return a.localeCompare(b);}).forEach(function(v){
+      (list||[]).map(function(v){return String(v).toUpperCase();}).sort(function(a,b){return a.localeCompare(b);}).forEach(function(v){
         var o=document.createElement('option'); o.value=v; o.textContent=v; if(v===cur) o.selected=true; sel.appendChild(o);
       });
       var add=document.createElement('option'); add.value='__new__'; add.textContent='+ Add new vendor…'; sel.appendChild(add);
     }
     el('b_vendor').onchange=function(){
       if(this.value!=='__new__') return;
-      var name=(prompt('New vendor name:')||'').trim();
+      var name=(prompt('New vendor name:')||'').toUpperCase().trim();   // vendors are always UPPERCASE
       if(!name){ this.value=''; return; }
       var self=this;
       fetch('/api/procurement/vendors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
@@ -326,7 +334,7 @@
         colour:el('f_colour').value,
         fit:el('f_fit').value,
         sizeLabel:el('f_sizeLabel').value,
-        chinaSize:isLower?el('f_chinaSize').value:'',
+        chinaSize:el('f_chinaSize').value,
         audience:el('f_audience').value,
         qty:el('f_qty').value,
         perPcsYuan:el('f_perPcsYuan').value,
@@ -340,17 +348,20 @@
       if(!l.colour) miss.push('colour');
       if(!l.fit) miss.push('fit');
       if(!l.sizeLabel) miss.push(isLower?'Indian size':'size');
-      if(isLower && !l.chinaSize) miss.push('China size');
+      if(!l.chinaSize) miss.push('China size');
       if(!(Number(l.qty)>0)) miss.push('qty');
       if(!(Number(l.perPcsYuan)>0)) miss.push('¥/pc');
       if(!l.photoUrl) miss.push('product photo');
       if(miss.length){ alert('Please fill: '+miss.join(', ')+'.'); return; }
       lines.push(l); resetLineForm(); renderLines();
     };
+    // Keep the "prefix" data (design, vendor code, product, fit, colour, size,
+    // audience, ¥/pc AND the photo) filled from the just-added line, so the next
+    // line only needs the colour/size changed. Only qty + explicit-SKU reset.
     function resetLineForm(){
-      el('f_designName').value=''; el('f_designCode').value=''; el('f_qty').value='1';
-      el('f_perPcsYuan').value=''; el('f_sku').value=''; el('f_photo').value='';
-      pendingPhotoUrl=''; el('f_photoThumb').classList.add('hidden'); el('photoNote').textContent='';
+      el('f_qty').value='1';
+      el('f_sku').value='';
+      el('photoNote').textContent = pendingPhotoUrl ? 'Photo kept from last line — replace it if the colour changed.' : '';
     }
     el('clearLines').onclick=function(){ lines=[]; el('advanceResult').innerHTML=''; renderLines(); };
 
@@ -397,7 +408,7 @@
       fetch('/api/procurement/advance',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ lines:lines, exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
           leadTimeDays:el('b_leadTime').value,
-          vendor:el('b_vendor').value.trim(), billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
+          vendor:el('b_vendor').value.trim().toUpperCase(), billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save advance purchase →';
         if(!d.success){ el('advanceResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
@@ -442,17 +453,33 @@
         renderPoDetail(d.po);
       });
     }
+    var currentPo=null;
     function renderPoDetail(po){
-      lastReceive=null;
+      lastReceive=null; currentPo=po;
       var posted = po.status==='posted';
       var etaHdr='';
       if(!posted && po.expectedReceiveDate){
         var ov=(daysUntil(po.expectedReceiveDate)||0)<0;
         etaHdr='<div class="muted" style="font-size:12px;margin-top:2px">Expected arrival: <b>'+esc(fmtDate(po.expectedReceiveDate))+'</b> <span style="color:'+(ov?'var(--err)':'var(--emerald-d)')+';font-weight:600">('+esc(etaLabel(po.expectedReceiveDate))+')</span>'+(po.leadTimeDays!=null?(' · lead time '+esc(po.leadTimeDays)+' days'):'')+'</div>';
       }
+      var actions = posted ? '' :
+        '<div style="display:flex;gap:6px"><button class="btn ghost sm" id="editPoBtn">Edit</button><button class="btn danger sm" id="delPoBtn">Delete PO</button></div>';
       var h='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
         '<div><h2 style="margin:0">'+esc(po.id)+' <span class="muted" style="font-size:12px;font-weight:400">· '+esc(po.vendor||'—')+(po.billNo?(' · bill '+esc(po.billNo)):'')+'</span></h2>'+etaHdr+'</div>'+
-        '<span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span></div>';
+        '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
+      // editable PO header (hidden until Edit is clicked)
+      if(!posted){
+        h+='<div id="poEditPanel" class="hidden" style="margin-top:12px;border:1px dashed var(--line);border-radius:10px;padding:12px;background:var(--ivory2)">'+
+          '<div class="settingsgrid">'+
+          '<div class="fld"><label>Vendor</label><input id="e_vendor" value="'+esc(po.vendor||'')+'" style="text-transform:uppercase"></div>'+
+          '<div class="fld"><label>Bill number</label><input id="e_billNo" value="'+esc(po.billNo||'')+'"></div>'+
+          '<div class="fld"><label>Date of purchase</label><input id="e_datePurchase" type="date" value="'+esc(po.datePurchase||'')+'"></div>'+
+          '<div class="fld"><label>Lead time (days)</label><input id="e_leadTime" type="number" min="0" step="1" value="'+esc(po.leadTimeDays!=null?po.leadTimeDays:'')+'"></div>'+
+          '</div>'+
+          '<p class="sub" style="margin:4px 2px 8px">Tick a line below to remove it, then Save. Remaining lines keep their SKUs.</p>'+
+          '<div style="display:flex;gap:8px"><button class="btn sm" id="savePoEdit">Save changes</button><button class="btn ghost sm" id="cancelPoEdit">Cancel</button></div>'+
+        '</div>';
+      }
       // rates carried from the advance purchase — editable here before final calc
       if(!posted){
         h+='<div class="settingsgrid" style="margin-top:12px">'+
@@ -461,12 +488,13 @@
         '</div>';
       }
       // weight-entry table
-      h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">¥/pc</th><th>Weight g/pc '+(posted?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
+      h+='<table style="margin-top:10px"><thead><tr><th class="editcol">✕</th><th>Photo</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">¥/pc</th><th>Weight g/pc '+(posted?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
       (po.lines||[]).forEach(function(l,i){
         var cls = l.classification==='EXISTING' ? '<span class="pill exist">restock</span>' : '<span class="pill new">new</span>';
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
         var lw=(Number(l.weightGrams)||0)*(Number(l.qty)||0);
-        h+='<tr><td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
+        h+='<tr><td class="editcol"><input type="checkbox" class="rmLine" data-idx="'+i+'" title="Remove this line"></td>'+
+          '<td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
           '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
           '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
           '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td>'+
@@ -475,7 +503,7 @@
       });
       var tw=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.weightGrams)||0)*(Number(l.qty)||0); },0);
       var tq=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.qty)||0); },0);
-      h+='<tr class="totalrow"><td colspan="4" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
+      h+='<tr class="totalrow"><td class="editcol"></td><td colspan="4" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
       h+='</tbody></table>';
       if(!posted){
         h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'+
@@ -498,6 +526,31 @@
             el('totWeight').textContent = t?(t.toLocaleString('en-IN')+' g / '+(t/1000).toFixed(2)+' kg'):'—';
           };
         });
+        // ── edit / delete PO ──
+        el('editPoBtn').onclick=function(){
+          var on=el('poDetailHost').classList.toggle('editing');
+          el('poEditPanel').classList.toggle('hidden', !on);
+          this.textContent = on ? 'Editing…' : 'Edit';
+        };
+        el('cancelPoEdit').onclick=function(){ renderPoDetail(currentPo); };
+        el('savePoEdit').onclick=function(){
+          var rm=[]; Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('.rmLine:checked'),function(c){ rm.push(Number(c.getAttribute('data-idx'))); });
+          if(rm.length && rm.length===(po.lines||[]).length){ alert('Cannot remove every line — delete the whole PO instead.'); return; }
+          var btn=el('savePoEdit'); btn.disabled=true; btn.textContent='Saving…';
+          fetch('/api/procurement/pos/'+encodeURIComponent(po.id),{method:'PATCH',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ vendor:el('e_vendor').value, billNo:el('e_billNo').value, datePurchase:el('e_datePurchase').value, leadTimeDays:el('e_leadTime').value, removeLineIndexes:rm })
+          }).then(r=>r.json()).then(function(d){
+            if(!d.success){ btn.disabled=false; btn.textContent='Save changes'; alert(d.error||'Could not save'); return; }
+            renderPoDetail(d.po); loadPos();
+          }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; alert(e.message); });
+        };
+        el('delPoBtn').onclick=function(){
+          if(!confirm('Delete '+po.id+' permanently? This removes all its lines and SKUs. (Nothing on Shopify is affected.)')) return;
+          fetch('/api/procurement/pos/'+encodeURIComponent(po.id),{method:'DELETE'}).then(r=>r.json()).then(function(d){
+            if(!d.success){ alert(d.error||'Could not delete'); return; }
+            el('poDetailHost').innerHTML='<div class="banner ok">'+esc(po.id)+' deleted.</div>'; loadPos();
+          }).catch(function(e){ alert(e.message); });
+        };
       }
     }
 
