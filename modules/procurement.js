@@ -201,43 +201,50 @@ function charmPrice(x) { const up = Math.ceil(x / 100) * 100; return Math.max(up
 // draft the user edits in the preview before anything is written.
 function genSeo(g) {
   const designName  = titleCase(g.designName || '');
+  const designCode  = String(g.designCode || '').toUpperCase().trim();
+  // Design name is OPTIONAL — fall back to the design code for the title/name.
+  const nameForTitle = designName || designCode;
   const productType = g.productType || '';
   const colour      = titleCase(g.colour || '');
   const fit         = titleCase(g.fit || '');
   const audience    = g.audience || 'Men';           // 'Men' | 'Women' | 'Unisex'
   const sizeList    = (g.sizeLabels || []).map(l => (g.sizeCodeOf ? g.sizeCodeOf(l) : l)).join(', ');
+  const nm          = nameForTitle ? nameForTitle + ' ' : '';
 
   // Customer-facing product title (the H1 / storefront name).
   const descriptor  = [fit ? fit + ' Fit' : '', colour].filter(Boolean).join(', ');
-  const titleCore   = [designName, productType].filter(Boolean).join(' ').trim();
+  const titleCore   = [nameForTitle, productType].filter(Boolean).join(' ').trim() || productType;
   const title       = descriptor ? `${titleCore} — ${descriptor}` : titleCore;
 
-  // URL handle: clean, keyword-rich, no code up front.
-  const handle = slugify([designName, productType, colour, fit].filter(Boolean).join(' '));
+  // URL handle: clean, keyword-rich. Always fold in the design code (when
+  // present) so two same-named products can never collide on the same URL.
+  const handleCode = (designCode && designCode.toUpperCase() !== nameForTitle.toUpperCase()) ? designCode : '';
+  const handle = slugify([nameForTitle, productType, colour, fit, handleCode].filter(Boolean).join(' '))
+    || slugify([productType, colour].filter(Boolean).join(' '));
 
   // SEO <title> (global.title_tag) — keep ~60 chars, brand at the end.
   const metaTitle = truncate(
-    `${[fit, colour].filter(Boolean).join(' ')} ${productType} – ${designName} | SANKI`.replace(/\s+/g, ' ').trim(),
+    `${[fit, colour].filter(Boolean).join(' ')} ${productType}${nameForTitle ? ' – ' + nameForTitle : ''} | SANKI`.replace(/\s+/g, ' ').trim(),
     60
   );
 
   // Meta description (global.description_tag) — natural, AEO-friendly, ~155 chars.
   const audienceWord = audience === 'Unisex' ? 'unisex' : (audience === 'Women' ? "women's" : "men's");
   const metaDescription = truncate(
-    `Shop the ${designName} ${String(productType).toLowerCase()} in ${colour.toLowerCase()} by SANKI — premium ${audienceWord} streetwear` +
+    `Shop the ${nm}${String(productType).toLowerCase()} in ${colour.toLowerCase()} by SANKI — premium ${audienceWord} streetwear` +
     (fit ? `, ${fit.toLowerCase()} fit` : '') +
     `. ${sizeList ? 'Sizes ' + sizeList + '. ' : ''}COD available. Limited drop.`,
     160
   );
 
   // Image alt-text (accessibility + image SEO). One per product image slot.
-  const imageAlt = [colour, designName, productType, 'by SANKI',
+  const imageAlt = [colour, nameForTitle, productType, 'by SANKI',
     fit ? '— ' + fit.toLowerCase() : '', audienceWord, 'streetwear']
     .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 
   // Search tags.
   const tags = Array.from(new Set([
-    productType, colour, fit, designName, 'SANKI', 'Streetwear',
+    productType, colour, fit, nameForTitle, 'SANKI', 'Streetwear',
     audience === 'Unisex' ? 'Unisex' : audience,
     `${colour} ${productType}`.trim(),
     fit ? `${fit} ${productType}`.trim() : ''
@@ -248,7 +255,7 @@ function genSeo(g) {
     `<p>The <strong>${title}</strong> from SANKI — premium ${audienceWord} streetwear` +
     `${fit ? ', ' + fit.toLowerCase() + ' fit' : ''}, in ${colour.toLowerCase()}.</p>` +
     `<ul>` +
-    `<li>Design: ${designName || productType}</li>` +
+    `<li>Design: ${nameForTitle || productType}</li>` +
     `<li>Colour: ${colour || '—'}</li>` +
     (fit ? `<li>Fit: ${fit}</li>` : '') +
     (sizeList ? `<li>Available sizes: ${sizeList}</li>` : '') +
@@ -259,10 +266,13 @@ function genSeo(g) {
 }
 
 // ── Grouping: intake lines → products (one product per design×colour) ──
-// A "group key" = brand+design+colour+productType+fit+audience. Each group
-// becomes one Shopify product; its lines (sizes) become the variants.
+// A "group key" identifies one product whose sizes become the variants.
+// The DESIGN CODE (sheet's "CODE AS PER PRODUCT") is the primary identifier;
+// design name is optional and only used for the SEO title. We fall back to
+// the name if no code is given.
 function groupKey(l) {
-  return [l.designName || '', l.productType || '', l.colour || '', l.fit || '', l.audience || 'Men']
+  const design = (l.designCode || l.designName || '').trim().toLowerCase();
+  return [design, l.productType || '', l.colour || '', l.fit || '', l.audience || 'Men']
     .map(x => String(x).trim().toLowerCase()).join('|');
 }
 
@@ -326,12 +336,15 @@ async function computePreview(store, body) {
   });
   const newProducts = Object.values(groups).map(g => {
     const seo = genSeo({
-      designName: g.designName, productType: g.productType, colour: g.colour,
+      designName: g.designName, designCode: g.designCode, productType: g.productType, colour: g.colour,
       fit: g.fit, audience: g.audience, sizeLabels: g.lines.map(l => l.sizeLabel), sizeCodeOf
     });
+    // Ambiguous if it has neither a design code nor a design name — two truly
+    // different products could otherwise merge into one.
+    const ambiguous = !((g.designCode || '').trim() || (g.designName || '').trim());
     return {
       key: g.key, vendor: g.vendor, designCode: g.designCode,
-      colour: g.colour, productType: g.productType,
+      colour: g.colour, productType: g.productType, ambiguous,
       seo,
       variants: g.lines.map(l => ({
         sku: l.sku, sizeLabel: l.sizeLabel, sizeCode: sizeCodeOf(l.sizeLabel),
@@ -349,7 +362,8 @@ async function computePreview(store, body) {
     settings, warehouseLocationId: store.settings.warehouseLocationId,
     lines, newProducts, existingAdds,
     counts: { total: lines.length, newProducts: newProducts.length, existingAdds: existingAdds.length,
-              errors: lines.filter(l => l.skuError).length }
+              errors: lines.filter(l => l.skuError).length,
+              ambiguous: newProducts.filter(p => p.ambiguous).length }
   };
 }
 

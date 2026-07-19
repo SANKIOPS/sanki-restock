@@ -84,7 +84,7 @@
     <div class="panel">
       <h2 style="margin-top:0">Add intake line</h2>
       <div class="lineform">
-        <div class="fld"><label>Design name</label><input id="f_designName" placeholder="e.g. Glowing" /></div>
+        <div class="fld"><label>Design name <span class="muted" style="font-weight:400;text-transform:none">(optional)</span></label><input id="f_designName" placeholder="SEO name — e.g. Glowing" /></div>
         <div class="fld"><label>Product</label><select id="f_productType"></select></div>
         <div class="fld"><label>Colour</label><select id="f_colour"></select></div>
         <div class="fld"><label>Size</label><select id="f_sizeLabel"></select></div>
@@ -98,7 +98,7 @@
         <summary>More fields (vendor · design code · audience · explicit SKU)</summary>
         <div class="row2" style="margin-top:8px">
           <div class="fld"><label>Vendor</label><input id="f_vendor" placeholder="CHAOUFI / YOK …" /></div>
-          <div class="fld"><label>Design code</label><input id="f_designCode" placeholder="A611" /></div>
+          <div class="fld"><label>Design code <span class="muted" style="font-weight:400;text-transform:none">(groups sizes into one product)</span></label><input id="f_designCode" placeholder="A611 / K562 …" /></div>
           <div class="fld"><label>Audience</label><select id="f_audience"><option>Men</option><option>Women</option><option>Unisex</option></select></div>
           <div class="fld"><label>Explicit SKU (existing restock only)</label><input id="f_sku" class="mono" placeholder="leave blank to auto-generate" /></div>
         </div>
@@ -217,6 +217,7 @@
     function renderPreview(d){
       var h = '<h2>Preview — review before writing to Shopify</h2>';
       h += '<div class="banner info">Will <b>CREATE</b> '+d.counts.newProducts+' draft product(s) · Will <b>ADD stock</b> to '+d.counts.existingAdds+' existing variant(s)'+(d.counts.errors?(' · <b style="color:#b42318">'+d.counts.errors+' error(s)</b>'):'')+'. Nothing is written until you approve.</div>';
+      if(d.counts.ambiguous){ h += '<div class="banner err">'+d.counts.ambiguous+' product(s) have no design code and no design name — different products could merge into one. Add a design code to separate them.</div>'; }
 
       // computed lines table
       h += '<div class="panel"><h2 style="margin-top:0">Computed lines &amp; landed cost</h2><table><thead><tr><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th class="money">¥/pc</th><th class="money">Freight</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
@@ -232,7 +233,7 @@
         h += '<h2>New products to create (draft) — edit the SEO before approving</h2>';
         d.newProducts.forEach(function(np,idx){
           h += '<div class="npcard" data-np="'+idx+'">';
-          h += '<h3>'+esc(np.productType)+' · '+esc(np.colour)+' <span class="muted mono">'+(np.vendor?('· '+esc(np.vendor)):'')+(np.designCode?(' · '+esc(np.designCode)):'')+'</span></h3>';
+          h += '<h3>'+esc(np.productType)+' · '+esc(np.colour)+' <span class="muted mono">'+(np.vendor?('· '+esc(np.vendor)):'')+(np.designCode?(' · '+esc(np.designCode)):'')+'</span>'+(np.ambiguous?' <span class="pill err">no design code</span>':'')+'</h3>';
           h += '<div class="row2">';
           h += '<div class="fld"><label>Title (H1)</label><input data-f="title" value="'+esc(np.seo.title)+'" /></div>';
           h += '<div class="fld"><label>URL handle</label><input class="mono" data-f="handle" value="'+esc(np.seo.handle)+'" /></div>';
