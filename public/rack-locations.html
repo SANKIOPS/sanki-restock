@@ -54,8 +54,10 @@
     <label class="chip"><input type="checkbox" id="hasRack"> Has rack</label>
     <label class="chip"><input type="checkbox" id="noRack"> No rack</label>
     <button class="btn ghost" id="refreshBtn" title="Re-crawl the Shopify catalog">↻ Refresh catalog</button>
+    <button class="btn ghost" id="risBtn" title="Pull rack layout from the RIS Google Sheet">⤓ Sync RIS sheet</button>
   </div>
   <div class="meta" id="meta"></div>
+  <div class="meta" id="risMeta"></div>
 
   <table>
     <thead><tr>
@@ -75,6 +77,8 @@
   var rowsEl = document.getElementById('rows');
   var metaEl = document.getElementById('meta');
   var refreshBtn = document.getElementById('refreshBtn');
+  var risBtn = document.getElementById('risBtn');
+  var risMetaEl = document.getElementById('risMeta');
   var timer = null, seq = 0;
 
   function fmtAgo(ts) {
@@ -136,6 +140,12 @@
       input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
       input.addEventListener('blur', function () { saveRack(input, r.variantId, r.sku); });
       tdRack.appendChild(input);
+      if (r.rackSource === 'ris') {
+        var tag = document.createElement('span');
+        tag.textContent = 'RIS'; tag.title = 'From the RIS sheet — edit + blur to override manually';
+        tag.style.cssText = 'margin-left:6px;font-size:10px;font-weight:700;color:#185FA5;background:#eef2ff;padding:1px 6px;border-radius:20px;vertical-align:middle;';
+        tdRack.appendChild(tag);
+      }
       tr.appendChild(tdRack);
 
       rowsEl.appendChild(tr);
@@ -179,8 +189,34 @@
     }).catch(function () { refreshBtn.disabled = false; refreshBtn.textContent = old; alert('Refresh failed (network).'); });
   });
 
+  function loadRisStatus() {
+    fetch('/api/racks/ris/status').then(function (r) { return r.json(); }).then(function (j) {
+      if (!j || !j.success) return;
+      risMetaEl.textContent = j.count
+        ? ('RIS: ' + j.count + ' SKUs mapped · last synced ' + fmtAgo(j.syncedAt))
+        : 'RIS: not yet synced — click “Sync RIS sheet” to import your rack layout.';
+    }).catch(function () {});
+  }
+
+  risBtn.addEventListener('click', function () {
+    risBtn.disabled = true; var old = risBtn.textContent; risBtn.textContent = 'Syncing…';
+    fetch('/api/racks/ris/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        risBtn.disabled = false; risBtn.textContent = old;
+        if (j && j.success) {
+          risMetaEl.textContent = 'RIS: imported ' + j.imported + ' SKUs (' + j.matchedToCatalog + ' matched to live catalog) · just now';
+          search();
+        } else {
+          risMetaEl.textContent = 'RIS sync failed: ' + ((j && j.error) || 'unknown');
+        }
+      })
+      .catch(function () { risBtn.disabled = false; risBtn.textContent = old; risMetaEl.textContent = 'RIS sync failed (network).'; });
+  });
+
   // Initial load — show what's in the catalog straight away.
   search();
+  loadRisStatus();
 })();
 </script>
 </body>

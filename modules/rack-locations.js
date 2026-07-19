@@ -40,6 +40,13 @@ const RACKS_PATH = process.env.RACKS_PATH ||
   path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'),
             'rack_locations.json');
 
+// RIS (Rack Identification System) source sheet — the founder's live Google
+// Sheet, published to the web as CSV. Overridable via env if the sheet moves.
+// One-click sync pulls this, parses the grid (columns = rack codes, cells =
+// SKUs on that rack) and bulk-assigns racks by SKU.
+const RIS_SHEET_URL = process.env.RIS_SHEET_URL ||
+  'https://docs.google.com/spreadsheets/d/1XJ48SpCqjHjLFJcMyCK10FChRDVblkMff_wlk7rG9dg/export?format=csv&gid=332571016';
+
 // ── JSON store (atomic write, mirrors server.js atomicWrite) ──────
 function atomicWrite(filePath, data) {
   const tmp = filePath + '.tmp-' + process.pid + '-' + Date.now();
@@ -47,11 +54,60 @@ function atomicWrite(filePath, data) {
   fs.renameSync(tmp, filePath);
 }
 function loadRacks() {
-  try { return JSON.parse(fs.readFileSync(RACKS_PATH, 'utf8')); }
-  catch { return { racks: {} }; }   // { racks: { [variantId]: { rack, sku, updatedAt } } }
+  // { racks:   { [variantId]: { rack, sku, updatedAt } }   ← manual, per-variant
+  //   skuRacks:{ [SKU]:       { rack, updatedAt, source } } ← bulk RIS import
+  //   ris:     { syncedAt, count, skus } }                  ← last RIS sync meta
+  try { const s = JSON.parse(fs.readFileSync(RACKS_PATH, 'utf8')); if (!s.racks) s.racks = {}; return s; }
+  catch { return { racks: {} }; }
 }
 function saveRacks(store) {
   atomicWrite(RACKS_PATH, JSON.stringify(store, null, 2));
+}
+
+// Normalise a SKU for matching: trim + uppercase (RIS cells have stray spaces).
+function normSku(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
+
+// Minimal CSV parser (handles quoted fields + embedded commas/newlines).
+function parseCsv(text) {
+  const rows = []; let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += ch;
+    } else if (ch === '"') { inQuotes = true; }
+    else if (ch === ',') { row.push(field); field = ''; }
+    else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else if (ch === '\r') { /* ignore */ }
+    else field += ch;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// Parse the RIS grid → { SKU: rackCode }.
+// Row 0 = rack-code headers (5A, 5B, … 16D) in certain columns; every non-empty
+// SKU-looking cell below a header column belongs to that rack. Garment-type
+// words (Lower/Hoodie/T-Shirt) sit in non-header columns and are ignored.
+function parseRisGrid(csvText) {
+  const rows = parseCsv(csvText);
+  if (!rows.length) return {};
+  const header = rows[0];
+  const rackByCol = {};
+  for (let c = 0; c < header.length; c++) {
+    const code = String(header[c] || '').trim().toUpperCase();
+    if (code) rackByCol[c] = code;
+  }
+  const map = {};
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    for (const c in rackByCol) {
+      const cell = normSku(row[c]);
+      // SKU shape: 2+ letters then a digit (e.g. SA11J934FS, CH111H01M, BRS316SZ073).
+      if (cell && /^[A-Z]{2,}\d/.test(cell)) map[cell] = rackByCol[c];
+    }
+  }
+  return map;
 }
 
 // ── Shopify catalog crawl (paginated) with in-memory TTL cache ────
@@ -176,8 +232,15 @@ router.get('/api/stock-search', async (req, res) => {
 
     const [variants, store] = [await getCatalog(false), loadRacks()];
     const racks = store.racks || {};
+    const skuRacks = store.skuRacks || {};
 
-    let rows = variants.map(v => ({ ...v, rack: (racks[String(v.variantId)] || {}).rack || '' }));
+    // Rack precedence: a manual per-variant assignment wins over the bulk RIS
+    // SKU import, so hand-tuned corrections aren't overwritten by a resync.
+    let rows = variants.map(v => {
+      const byVariant = (racks[String(v.variantId)] || {}).rack || '';
+      const bySku = v.sku ? (skuRacks[normSku(v.sku)] || {}).rack || '' : '';
+      return { ...v, rack: byVariant || bySku, rackSource: byVariant ? 'manual' : (bySku ? 'ris' : '') };
+    });
 
     if (vendor)  rows = rows.filter(r => r.vendor.toLowerCase() === vendor);
     if (type)    rows = rows.filter(r => r.productType.toLowerCase() === type);
@@ -209,6 +272,65 @@ router.get('/api/stock-search', async (req, res) => {
       stale: (Date.now() - _catalog.at) > CATALOG_TTL_MS,
       rows: rows.slice(0, limit)
     });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
+// ── RIS (Rack Identification System) bulk import ──────────────────
+// GET  /api/racks/ris/status → last sync time + how many SKUs are mapped
+router.get('/api/racks/ris/status', (req, res) => {
+  const store = loadRacks();
+  const ris = store.ris || {};
+  res.json({
+    success: true,
+    syncedAt: ris.syncedAt || null,
+    count: Object.keys(store.skuRacks || {}).length,
+    sourceUrl: RIS_SHEET_URL
+  });
+});
+
+// POST /api/racks/ris/sync → import rack↔SKU map.
+//   body.csv (optional) = paste RIS CSV directly; otherwise fetch the live sheet.
+// Bulk-replaces the skuRacks map (RIS is the source of truth for shelf layout);
+// manual per-variant assignments in `racks` are untouched and still take priority.
+router.post('/api/racks/ris/sync', async (req, res) => {
+  try {
+    let csv = (req.body && typeof req.body.csv === 'string' && req.body.csv.trim()) ? req.body.csv : null;
+    let source = 'paste';
+    if (!csv) {
+      source = 'sheet';
+      const r = await fetch(RIS_SHEET_URL, { redirect: 'follow' });
+      if (!r.ok) {
+        return res.json({ success: false, error: 'Could not fetch RIS sheet (HTTP ' + r.status + '). Is it still shared as "Anyone with the link"? You can also paste the CSV instead.' });
+      }
+      csv = await r.text();
+      // A private sheet returns Google's HTML login page, not CSV — detect that.
+      if (/^\s*</.test(csv) || /<html/i.test(csv.slice(0, 200))) {
+        return res.json({ success: false, error: 'RIS sheet is not publicly readable (got a login page). Set link sharing to "Anyone with the link → Viewer", or paste the CSV.' });
+      }
+    }
+
+    const map = parseRisGrid(csv);
+    const skus = Object.keys(map);
+    if (!skus.length) return res.json({ success: false, error: 'No SKUs found in the RIS data — check the sheet/CSV format.' });
+
+    const store = loadRacks();
+    const now = Date.now();
+    const skuRacks = {};
+    skus.forEach(sku => { skuRacks[sku] = { rack: map[sku], updatedAt: now, source: 'RIS' }; });
+    store.skuRacks = skuRacks;                       // full replace = layout snapshot
+    store.ris = { syncedAt: now, count: skus.length, source };
+    saveRacks(store);
+
+    // Count how many of these SKUs actually resolve to a live catalog variant,
+    // so the user knows the import "took" (mismatches usually = typos in RIS).
+    let matched = 0;
+    try {
+      const variants = await getCatalog(false);
+      const have = new Set(variants.map(v => normSku(v.sku)).filter(Boolean));
+      matched = skus.filter(s => have.has(s)).length;
+    } catch (e) { /* catalog optional for the count */ }
+
+    res.json({ success: true, imported: skus.length, matchedToCatalog: matched, source, syncedAt: now });
   } catch (e) { res.json({ success: false, error: e.message }); }
 });
 
