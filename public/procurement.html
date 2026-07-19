@@ -50,7 +50,12 @@
     .money{ font-variant-numeric:tabular-nums; white-space:nowrap; }
     .muted{ color:var(--muted); }
     .mono{ font-family:ui-monospace,Menlo,monospace; font-size:12px; }
-    .thumb{ width:38px; height:38px; object-fit:cover; border-radius:7px; border:1px solid var(--line); background:#f4f4f2; display:block; }
+    .thumb{ width:38px; height:38px; object-fit:cover; border-radius:7px; border:1px solid var(--line); background:#f4f4f2; display:block; cursor:zoom-in; transition:transform .08s ease; }
+    .thumb:hover{ transform:scale(1.06); border-color:var(--emerald); }
+    .totalrow td{ background:var(--ivory2); border-top:2px solid var(--line); }
+    #imgZoom{ position:fixed; inset:0; background:rgba(12,20,16,.82); display:none; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; padding:24px; }
+    #imgZoom.open{ display:flex; }
+    #imgZoom img{ max-width:92vw; max-height:92vh; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.5); background:#fff; }
     .npcard{ border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; background:var(--ivory2); }
     .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .banner{ border-radius:10px; padding:10px 14px; font-size:13px; margin:10px 0; }
@@ -71,6 +76,7 @@
   </style>
 </head>
 <body>
+  <div id="imgZoom" title="Click to close"><img src="" alt="" /></div>
   <div class="wrap">
     <div class="top">
       <div>
@@ -162,6 +168,18 @@
   <script src="/sidebar.js"></script>
   <script>
   (function(){
+    // ── image zoom (any .thumb, anywhere) ──
+    (function(){
+      var ov=document.getElementById('imgZoom'), im=ov.firstElementChild;
+      document.addEventListener('click',function(e){
+        var t=e.target;
+        if(t&&t.tagName==='IMG'&&t.classList.contains('thumb')&&t.getAttribute('src')){
+          im.src=t.getAttribute('src'); ov.classList.add('open');
+        } else if(t===ov||t===im){ ov.classList.remove('open'); im.src=''; }
+      });
+      document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ ov.classList.remove('open'); im.src=''; } });
+    })();
+
     var lines = [];                 // pending advance lines
     var lookups = { products:{}, colours:{}, sizes:{} };
     var settings = {};
@@ -170,12 +188,14 @@
     var lastReceive = null;         // last receive preview (for admin commit)
 
     function money(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
+    function yuan(n){ return '¥' + (Number(n)||0).toLocaleString('en-IN',{maximumFractionDigits:2}); }
     function el(id){ return document.getElementById(id); }
     function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
     function opts(sel,obj,ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} Object.keys(obj).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
     function optsArr(sel,arr,ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} arr.forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
     function exRate(){ return Number(el('exRate').value)||Number(settings.exRate)||0; }
     function chinaCost(l){ return (Number(l.perPcsYuan)||0) * exRate(); }
+    function lineCost(l){ return (Number(l.qty)||0) * (Number(l.perPcsYuan)||0) * exRate(); }
 
     // ── category-aware fits & sizes ──
     var UPPER_FITS=['Oversized','Drop Shoulder','Boxy Fit','Relaxed Fit','Regular Fit','Slim Fit','Muscle Fit'];
@@ -325,11 +345,15 @@
           '<td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
           '<td>'+esc(l.designName||'—')+'</td><td class="mono">'+esc(l.designCode||'—')+'</td>'+
           '<td>'+esc(l.productType)+'</td><td>'+esc(l.colour)+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
-          '<td>'+esc(l.qty)+'</td><td class="money">'+esc(l.perPcsYuan)+'</td><td class="money">'+money(chinaCost(l))+'</td>'+
+          '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+money(lineCost(l))+'</td>'+
           '<td><button class="btn ghost sm" data-edit="'+i+'">Edit</button> <button class="x" data-del="'+i+'">✕</button></td></tr>';
       }).join('');
-      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>¥/pc</th><th>China cost</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'+
-        '<p class="sub">China cost = ¥/pc × exchange rate. Freight &amp; final landed cost are added after the goods are received &amp; weighed.</p>';
+      var totalPurchase = lines.reduce(function(s,l){ return s + lineCost(l); }, 0);
+      var totalQty = lines.reduce(function(s,l){ return s + (Number(l.qty)||0); }, 0);
+      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>¥/pc</th><th>Purchase cost</th><th></th></tr></thead><tbody>'+rows+
+        '<tr class="totalrow"><td colspan="7" style="text-align:right;font-weight:600">Total purchase cost</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+money(totalPurchase)+'</td><td></td></tr>'+
+        '</tbody></table>'+
+        '<p class="sub">Purchase cost = qty × ¥/pc × exchange rate (China purchase, converted to ₹). Freight &amp; final landed cost are added after the goods are received &amp; weighed.</p>';
       Array.prototype.forEach.call(el('linesHost').querySelectorAll('[data-del]'),function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-del'),1); renderLines(); }; });
       Array.prototype.forEach.call(el('linesHost').querySelectorAll('[data-edit]'),function(b){ b.onclick=function(){ editLine(+b.getAttribute('data-edit')); }; });
     }
@@ -407,7 +431,7 @@
         h+='<tr><td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
           '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
           '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
-          '<td>'+esc(l.qty)+'</td><td class="money">'+esc(l.perPcsYuan)+'</td>'+
+          '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td>'+
           '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" value="'+(l.weightGrams||'')+'" style="width:90px">')+'</td></tr>';
       });
       h+='</tbody></table>';
@@ -444,7 +468,7 @@
       var h='<div class="panel"><h2 style="margin-top:0">Final landed cost</h2><table><thead><tr><th>SKU</th><th>Product / Colour / Size</th><th class="money">¥/pc</th><th class="money">Freight</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
       (d.lines||[]).forEach(function(l){
         h+='<tr><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+esc(l.sizeLabel)+'</td>'+
-          '<td class="money">'+esc(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.suggestedMrp)+'</td><td>'+esc(l.qty)+'</td></tr>';
+          '<td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.suggestedMrp)+'</td><td>'+esc(l.qty)+'</td></tr>';
       });
       h+='</tbody></table></div>';
 
