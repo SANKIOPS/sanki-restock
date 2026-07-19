@@ -69,6 +69,17 @@
       <p class="sub" id="settingsNote"></p>
     </div>
 
+    <!-- Vendor bill (tracking) -->
+    <div class="panel">
+      <h2 style="margin-top:0">Vendor bill <span class="muted" style="font-size:12px;font-weight:400">— saved with this intake for tracking</span></h2>
+      <div class="settingsgrid">
+        <div class="fld"><label>Vendor</label><input id="b_vendor" placeholder="CHAOUFI / YOK / HK …" /></div>
+        <div class="fld"><label>Bill number</label><input id="b_billNo" placeholder="vendor invoice no." /></div>
+        <div class="fld"><label>Date of purchase</label><input id="b_datePurchase" type="date" /></div>
+        <div class="fld"><label>Date of receive</label><input id="b_dateReceive" type="date" /></div>
+      </div>
+    </div>
+
     <!-- Add line -->
     <div class="panel">
       <h2 style="margin-top:0">Add intake line</h2>
@@ -278,6 +289,10 @@
       var btn = el('commitBtn'); btn.disabled=true; btn.textContent='Writing…';
       var payload = collectApproved();
       payload.approve = true; payload.warehouseLocationId = el('warehouse').value;
+      payload.vendor = el('b_vendor').value.trim();
+      payload.billNo = el('b_billNo').value.trim();
+      payload.datePurchase = el('b_datePurchase').value;
+      payload.dateReceive = el('b_dateReceive').value;
       fetch('/api/procurement/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
         .then(r=>r.json()).then(function(d){
           btn.disabled=false; btn.textContent='✓ Approve & write to Shopify';

@@ -522,6 +522,8 @@ router.post('/api/procurement/commit', async (req, res) => {
     createdBy: (req.user && req.user.username) || 'system',
     vendor: b.vendor || '',
     billNo: b.billNo || '',
+    datePurchase: b.datePurchase || '',
+    dateReceive: b.dateReceive || '',
     warehouseLocationId,
     newProducts: b.newProducts || [],
     existingAdds: b.existingAdds || [],
