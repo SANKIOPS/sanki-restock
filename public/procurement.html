@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Procurement · Sanki Business OS</title>
+  <style>
+    :root { --ink:#1a1a1a; --muted:#6b7280; --line:rgba(0,0,0,.09); --brand:#185FA5; --bg:#f6f7f9; --ok:#15803d; --warn:#b45309; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+    .wrap { max-width:1240px; margin:0 auto; padding:28px 24px 90px; }
+    h1 { font-size:23px; font-weight:800; margin:0; letter-spacing:-.3px; }
+    h2 { font-size:15px; font-weight:800; margin:26px 0 10px; }
+    .sub { color:var(--muted); font-size:13px; margin:4px 0 0; }
+    .top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    .btn { font-size:13px; font-weight:600; padding:9px 14px; border-radius:9px; border:1px solid var(--brand); background:var(--brand); color:#fff; cursor:pointer; }
+    .btn:hover { filter:brightness(1.05); }
+    .btn.ghost { background:#fff; color:var(--brand); }
+    .btn.warn { background:#b42318; border-color:#b42318; }
+    .btn:disabled { opacity:.5; cursor:default; }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+    .grid { display:grid; gap:10px; }
+    .fld label { display:block; font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+    .fld input, .fld select, .fld textarea { width:100%; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
+    .fld textarea { resize:vertical; min-height:44px; }
+    .lineform { display:grid; grid-template-columns:1.3fr 1fr 1fr .8fr .9fr .7fr .8fr .9fr auto; gap:8px; align-items:end; }
+    table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; font-size:12.5px; }
+    th, td { text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    th { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#9aa0a6; background:#fafbfc; }
+    tr:last-child td { border-bottom:none; }
+    .pill { display:inline-block; font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; letter-spacing:.3px; }
+    .pill.new { background:#eef6ff; color:#185FA5; }
+    .pill.exist { background:#f0fdf4; color:#15803d; }
+    .pill.err { background:#fef2f2; color:#b42318; }
+    .money { font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .muted { color:var(--muted); }
+    .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+    .npcard { border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; background:#fff; }
+    .npcard h3 { margin:0 0 8px; font-size:14px; }
+    .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .banner { border-radius:10px; padding:10px 14px; font-size:13px; margin:10px 0; }
+    .banner.ok { background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
+    .banner.err { background:#fef2f2; color:#b42318; border:1px solid #fecaca; }
+    .banner.info { background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe; }
+    .x { cursor:pointer; color:#b42318; font-weight:700; border:none; background:none; font-size:15px; }
+    .settingsgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; align-items:end; }
+    details.lk summary { cursor:pointer; font-size:12px; color:var(--brand); font-weight:600; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>Procurement · Inventory Intake</h1>
+        <p class="sub">Generate SKUs, compute landed cost, and (after your approval) create draft products or add stock in Shopify.</p>
+      </div>
+      <div><span class="pill new" id="serialTag">serial …</span></div>
+    </div>
+
+    <!-- Settings -->
+    <div class="panel">
+      <h2 style="margin-top:0">Rates &amp; warehouse</h2>
+      <div class="settingsgrid">
+        <div class="fld"><label>Exchange rate ₹/RMB</label><input id="exRate" type="number" step="0.01" /></div>
+        <div class="fld"><label>Freight ₹/gram</label><input id="freightPerGram" type="number" step="0.001" /></div>
+        <div class="fld"><label>Warehouse location</label><select id="warehouse"><option value="">Loading…</option></select></div>
+        <div class="fld"><label>&nbsp;</label><button class="btn ghost" id="saveSettings">Save</button></div>
+      </div>
+      <p class="sub" id="settingsNote"></p>
+    </div>
+
+    <!-- Add line -->
+    <div class="panel">
+      <h2 style="margin-top:0">Add intake line</h2>
+      <div class="lineform">
+        <div class="fld"><label>Design name</label><input id="f_designName" placeholder="e.g. Glowing" /></div>
+        <div class="fld"><label>Product</label><select id="f_productType"></select></div>
+        <div class="fld"><label>Colour</label><select id="f_colour"></select></div>
+        <div class="fld"><label>Size</label><select id="f_sizeLabel"></select></div>
+        <div class="fld"><label>Fit</label><input id="f_fit" placeholder="Oversized" /></div>
+        <div class="fld"><label>Qty</label><input id="f_qty" type="number" min="0" value="1" /></div>
+        <div class="fld"><label>¥/pc</label><input id="f_perPcsYuan" type="number" step="0.01" /></div>
+        <div class="fld"><label>Weight g</label><input id="f_weightGrams" type="number" step="1" /></div>
+        <div class="fld"><label>&nbsp;</label><button class="btn" id="addLine">Add</button></div>
+      </div>
+      <details class="lk" style="margin-top:8px">
+        <summary>More fields (vendor · design code · audience · explicit SKU)</summary>
+        <div class="row2" style="margin-top:8px">
+          <div class="fld"><label>Vendor</label><input id="f_vendor" placeholder="CHAOUFI / YOK …" /></div>
+          <div class="fld"><label>Design code</label><input id="f_designCode" placeholder="A611" /></div>
+          <div class="fld"><label>Audience</label><select id="f_audience"><option>Men</option><option>Women</option><option>Unisex</option></select></div>
+          <div class="fld"><label>Explicit SKU (existing restock only)</label><input id="f_sku" class="mono" placeholder="leave blank to auto-generate" /></div>
+        </div>
+      </details>
+    </div>
+
+    <!-- Lines table -->
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h2 style="margin:0">Lines <span class="muted" id="lineCount"></span></h2>
+        <div>
+          <button class="btn ghost" id="clearLines">Clear</button>
+          <button class="btn" id="previewBtn">Generate &amp; preview →</button>
+        </div>
+      </div>
+      <div id="linesHost" style="margin-top:10px"></div>
+    </div>
+
+    <!-- Preview / approval gate -->
+    <div id="previewHost"></div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script>
+  (function () {
+    var lines = [];         // pending intake lines (raw)
+    var lookups = { products:{}, colours:{}, sizes:{} };
+    var settings = {};
+    var lastPreview = null;
+
+    function money(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN', { maximumFractionDigits:0 }); }
+    function el(id){ return document.getElementById(id); }
+    function opts(sel, obj, ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} Object.keys(obj).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
+    function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+    // ── boot ───────────────────────────────────────────────────
+    Promise.all([
+      fetch('/api/procurement/settings').then(r=>r.json()),
+      fetch('/api/procurement/lookups').then(r=>r.json()),
+      fetch('/api/showroom/locations').then(r=>r.json()).catch(()=>({locations:[]}))
+    ]).then(function(res){
+      settings = (res[0]&&res[0].settings)||{};
+      lookups = res[1]||lookups;
+      el('exRate').value = settings.exRate!=null?settings.exRate:'';
+      el('freightPerGram').value = settings.freightPerGram!=null?settings.freightPerGram:'';
+      opts(el('f_productType'), lookups.products);
+      opts(el('f_colour'), lookups.colours);
+      opts(el('f_sizeLabel'), lookups.sizes);
+      var wh = el('warehouse'); wh.innerHTML='';
+      var locs = (res[2]&&res[2].locations)||[];
+      var none = document.createElement('option'); none.value=''; none.textContent='— choose —'; wh.appendChild(none);
+      locs.forEach(function(l){ var o=document.createElement('option'); o.value=l.id; o.textContent=l.name; if(String(l.id)===String(settings.warehouseLocationId)) o.selected=true; wh.appendChild(o); });
+      if(!settings.warehouseLocationId) el('settingsNote').textContent='Pick the warehouse location that receives incoming stock, then Save.';
+    });
+
+    fetch('/api/procurement/next-serial').then(r=>r.json()).then(function(d){
+      if(d.success){ var n=d.next; el('serialTag').textContent = 'next serial '+n.alpha+n.num+' · '+(d.skuCount||0)+' SKUs'; }
+      else el('serialTag').textContent='serial n/a';
+    }).catch(function(){ el('serialTag').textContent='serial n/a'; });
+
+    // ── settings save ──────────────────────────────────────────
+    el('saveSettings').onclick = function(){
+      fetch('/api/procurement/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ exRate:el('exRate').value, freightPerGram:el('freightPerGram').value, warehouseLocationId:el('warehouse').value })
+      }).then(r=>r.json()).then(function(d){ if(d.success){ settings=d.settings; el('settingsNote').textContent='Saved.'; } });
+    };
+
+    // ── add / render lines ─────────────────────────────────────
+    el('addLine').onclick = function(){
+      var l = {
+        designName: el('f_designName').value.trim(),
+        productType: el('f_productType').value,
+        colour: el('f_colour').value,
+        sizeLabel: el('f_sizeLabel').value,
+        fit: el('f_fit').value.trim(),
+        qty: el('f_qty').value,
+        perPcsYuan: el('f_perPcsYuan').value,
+        weightGrams: el('f_weightGrams').value,
+        vendor: el('f_vendor').value.trim(),
+        designCode: el('f_designCode').value.trim(),
+        audience: el('f_audience').value,
+        sku: el('f_sku').value.trim()
+      };
+      if(!l.productType || !l.colour || !l.sizeLabel){ alert('Product, colour and size are required.'); return; }
+      lines.push(l); el('f_designCode').value=''; el('f_sku').value=''; renderLines();
+    };
+    el('clearLines').onclick = function(){ lines=[]; lastPreview=null; el('previewHost').innerHTML=''; renderLines(); };
+
+    function renderLines(){
+      el('lineCount').textContent = lines.length ? '('+lines.length+')' : '';
+      if(!lines.length){ el('linesHost').innerHTML='<p class="muted" style="padding:8px 2px">No lines yet. Add intake lines above.</p>'; return; }
+      var rows = lines.map(function(l,i){
+        return '<tr><td>'+esc(l.designName||'—')+'</td><td>'+esc(l.productType)+'</td><td>'+esc(l.colour)+'</td><td>'+esc(l.sizeLabel)+'</td>'+
+          '<td>'+esc(l.fit||'—')+'</td><td>'+esc(l.qty)+'</td><td>'+esc(l.perPcsYuan||'—')+'</td><td>'+esc(l.weightGrams||'—')+'</td>'+
+          '<td class="mono">'+esc(l.sku||'auto')+'</td>'+
+          '<td><button class="x" data-i="'+i+'">✕</button></td></tr>';
+      }).join('');
+      el('linesHost').innerHTML = '<table><thead><tr><th>Design</th><th>Product</th><th>Colour</th><th>Size</th><th>Fit</th><th>Qty</th><th>¥/pc</th><th>Wt g</th><th>SKU</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+      Array.prototype.forEach.call(el('linesHost').querySelectorAll('.x'), function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-i'),1); renderLines(); }; });
+    }
+    renderLines();
+
+    // ── preview ────────────────────────────────────────────────
+    el('previewBtn').onclick = function(){
+      if(!lines.length){ alert('Add at least one line.'); return; }
+      el('previewBtn').disabled=true; el('previewBtn').textContent='Generating…';
+      fetch('/api/procurement/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ lines:lines, exRate:el('exRate').value, freightPerGram:el('freightPerGram').value })
+      }).then(r=>r.json()).then(function(d){
+        el('previewBtn').disabled=false; el('previewBtn').textContent='Generate & preview →';
+        if(!d.success){ el('previewHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
+        lastPreview = d; renderPreview(d);
+      }).catch(function(e){ el('previewBtn').disabled=false; el('previewBtn').textContent='Generate & preview →'; el('previewHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+    };
+
+    function renderPreview(d){
+      var h = '<h2>Preview — review before writing to Shopify</h2>';
+      h += '<div class="banner info">Will <b>CREATE</b> '+d.counts.newProducts+' draft product(s) · Will <b>ADD stock</b> to '+d.counts.existingAdds+' existing variant(s)'+(d.counts.errors?(' · <b style="color:#b42318">'+d.counts.errors+' error(s)</b>'):'')+'. Nothing is written until you approve.</div>';
+
+      // computed lines table
+      h += '<div class="panel"><h2 style="margin-top:0">Computed lines &amp; landed cost</h2><table><thead><tr><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th class="money">¥/pc</th><th class="money">Freight</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
+      d.lines.forEach(function(l){
+        var cls = l.skuError ? '<span class="pill err">error</span>' : (l.classification==='NEW'?'<span class="pill new">new</span>':'<span class="pill exist">restock</span>');
+        h += '<tr><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+esc(l.sizeLabel)+(l.skuError?'<br><span class="pill err">'+esc(l.skuError)+'</span>':'')+'</td><td>'+cls+'</td>'+
+          '<td class="money">'+esc(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.suggestedMrp)+'</td><td>'+esc(l.qty)+'</td></tr>';
+      });
+      h += '</tbody></table></div>';
+
+      // NEW products — editable SEO
+      if(d.newProducts.length){
+        h += '<h2>New products to create (draft) — edit the SEO before approving</h2>';
+        d.newProducts.forEach(function(np,idx){
+          h += '<div class="npcard" data-np="'+idx+'">';
+          h += '<h3>'+esc(np.productType)+' · '+esc(np.colour)+' <span class="muted mono">'+(np.vendor?('· '+esc(np.vendor)):'')+(np.designCode?(' · '+esc(np.designCode)):'')+'</span></h3>';
+          h += '<div class="row2">';
+          h += '<div class="fld"><label>Title (H1)</label><input data-f="title" value="'+esc(np.seo.title)+'" /></div>';
+          h += '<div class="fld"><label>URL handle</label><input class="mono" data-f="handle" value="'+esc(np.seo.handle)+'" /></div>';
+          h += '<div class="fld"><label>Meta title (SEO)</label><input data-f="metaTitle" value="'+esc(np.seo.metaTitle)+'" /></div>';
+          h += '<div class="fld"><label>Image alt-text</label><input data-f="imageAlt" value="'+esc(np.seo.imageAlt)+'" /></div>';
+          h += '</div>';
+          h += '<div class="fld"><label>Meta description (SEO / AEO)</label><textarea data-f="metaDescription">'+esc(np.seo.metaDescription)+'</textarea></div>';
+          h += '<div class="fld"><label>Tags</label><input data-f="tags" value="'+esc(np.seo.tags.join(', '))+'" /></div>';
+          h += '<div class="muted" style="font-size:12px;margin-top:6px">Variants: '+np.variants.map(function(v){return '<span class="mono">'+esc(v.sku)+'</span> ('+esc(v.sizeCode)+' ×'+v.qty+' @ '+money(v.price)+')';}).join(' · ')+'</div>';
+          h += '</div>';
+        });
+      }
+
+      // EXISTING adds
+      if(d.existingAdds.length){
+        h += '<h2>Existing variants — add received stock</h2><div class="panel"><table><thead><tr><th>SKU</th><th>Add qty</th><th class="money">Landed</th></tr></thead><tbody>';
+        d.existingAdds.forEach(function(e){ h += '<tr><td class="mono">'+esc(e.sku)+'</td><td>+'+e.qty+'</td><td class="money">'+money(e.landed)+'</td></tr>'; });
+        h += '</tbody></table></div>';
+      }
+
+      // approve
+      h += '<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">';
+      h += '<div class="muted" style="font-size:12.5px">New products are created as <b>draft</b> (hidden from storefront) and stock lands at the <b>warehouse</b> location. This action writes to your live Shopify store.</div>';
+      h += '<button class="btn warn" id="commitBtn">✓ Approve &amp; write to Shopify</button></div>';
+      h += '<div id="resultHost"></div>';
+
+      el('previewHost').innerHTML = h;
+      el('commitBtn').onclick = commit;
+    }
+
+    // gather (possibly edited) SEO back from the DOM
+    function collectApproved(){
+      var d = lastPreview;
+      var nps = (d.newProducts||[]).map(function(np,idx){
+        var card = document.querySelector('.npcard[data-np="'+idx+'"]');
+        var g = function(f){ var e=card && card.querySelector('[data-f="'+f+'"]'); return e?e.value:''; };
+        return {
+          colour: np.colour, productType: np.productType, vendor: np.vendor, designCode: np.designCode,
+          variants: np.variants,
+          seo: {
+            title: g('title'), handle: g('handle'), metaTitle: g('metaTitle'),
+            metaDescription: g('metaDescription'), imageAlt: g('imageAlt'),
+            tags: g('tags').split(',').map(function(t){return t.trim();}).filter(Boolean),
+            bodyHtml: np.seo.bodyHtml
+          }
+        };
+      });
+      return { newProducts: nps, existingAdds: d.existingAdds||[] };
+    }
+
+    function commit(){
+      if(!el('warehouse').value){ alert('Choose and Save a warehouse location first.'); return; }
+      if(!confirm('Write to the LIVE Shopify store now?\nDraft products will be created and warehouse stock updated.')) return;
+      var btn = el('commitBtn'); btn.disabled=true; btn.textContent='Writing…';
+      var payload = collectApproved();
+      payload.approve = true; payload.warehouseLocationId = el('warehouse').value;
+      fetch('/api/procurement/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+        .then(r=>r.json()).then(function(d){
+          btn.disabled=false; btn.textContent='✓ Approve & write to Shopify';
+          if(!d.success){ el('resultHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
+          var r=d.results, out='<div class="banner ok">Done — '+d.poId+'. Created '+r.created.length+' product(s), adjusted '+r.adjusted.length+' variant(s).'+(r.errors.length?(' '+r.errors.length+' error(s).'):'')+'</div>';
+          if(r.errors.length){ out += '<div class="banner err">'+r.errors.map(function(e){return esc((e.kind||'')+' '+(e.sku||e.product||'')+': '+e.error);}).join('<br>')+'</div>'; }
+          el('resultHost').innerHTML = out;
+          lines=[]; renderLines();
+          fetch('/api/procurement/next-serial?refresh=1').then(r=>r.json()).then(function(s){ if(s.success){var n=s.next; el('serialTag').textContent='next serial '+n.alpha+n.num+' · '+(s.skuCount||0)+' SKUs';} });
+        }).catch(function(e){ btn.disabled=false; btn.textContent='✓ Approve & write to Shopify'; el('resultHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+    }
+  })();
+  </script>
+</body>
+</html>

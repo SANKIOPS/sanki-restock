@@ -76,9 +76,9 @@ const ROLE_HOME = {
 // '*' = all pages. Otherwise an allow-list of exact page paths.
 const ROLE_PAGES = {
   admin:       '*',
-  inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html'],
+  inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html', '/procurement.html'],
   sales:       ['/orders.html', '/sales.html', '/analytics.html', '/velocity.html'],
-  procurement: ['/coming-soon.html'],
+  procurement: ['/procurement.html'],
   revenue:     ['/orders.html', '/coming-soon.html'],
   warehouse:   ['/orders.html', '/rack-locations.html'],
   stocksearch: ['/rack-locations.html']

@@ -40,6 +40,8 @@ const MODULES = [
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.
   { key: 'sales',        title: 'Record a Sale',         desc: 'Log walk-in / IG / WhatsApp / phone sales',          icon: '📝', href: '/sales.html',                     section: 'Sales',     status: 'hidden', roles: ['admin', 'sales'] },
 
+  { key: 'procurement', title: 'Procurement',            desc: 'Generate SKUs, landed cost, create products / add stock', icon: '📦', href: '/procurement.html',           section: 'Procurement', status: 'hidden', roles: ['admin', 'procurement', 'inventory'] },
+
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
   { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },
 
