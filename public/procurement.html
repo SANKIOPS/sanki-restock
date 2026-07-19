@@ -104,7 +104,7 @@
       <div class="panel">
         <h2 style="margin-top:0">Vendor bill <span class="muted" style="font-size:12px;font-weight:400">— saved with this advance purchase</span></h2>
         <div class="settingsgrid">
-          <div class="fld"><label>Vendor</label><input id="b_vendor" placeholder="CHAOUFI / YOK / HK …" /></div>
+          <div class="fld"><label>Vendor</label><select id="b_vendor"><option value="">Select vendor…</option><option value="__new__">+ Add new vendor…</option></select></div>
           <div class="fld"><label>Bill number</label><input id="b_billNo" placeholder="vendor invoice no." /></div>
           <div class="fld"><label>Date of purchase</label><input id="b_datePurchase" type="date" /></div>
         </div>
@@ -213,7 +213,8 @@
       fetch('/api/auth/me').then(r=>r.json()).catch(()=>({})),
       fetch('/api/procurement/settings').then(r=>r.json()),
       fetch('/api/procurement/lookups').then(r=>r.json()),
-      fetch('/api/showroom/locations').then(r=>r.json()).catch(()=>({locations:[]}))
+      fetch('/api/showroom/locations').then(r=>r.json()).catch(()=>({locations:[]})),
+      fetch('/api/procurement/vendors').then(r=>r.json()).catch(()=>({vendors:[]}))
     ]).then(function(res){
       me = { isAdmin:!!res[0].isAdmin, role:res[0].role||'', username:res[0].username||'' };
       el('roleBadge').textContent = me.isAdmin ? 'ADMIN — full access' : (me.role||'user')+' — SEO & posting are admin-only';
@@ -230,7 +231,28 @@
       var none=document.createElement('option'); none.value=''; none.textContent='— choose —'; wh.appendChild(none);
       locs.forEach(function(l){ var o=document.createElement('option'); o.value=l.id; o.textContent=l.name; if(String(l.id)===String(settings.warehouseLocationId)) o.selected=true; wh.appendChild(o); });
       if(!settings.warehouseLocationId) el('settingsNote').textContent='Pick the warehouse location that receives incoming stock, then Save.';
+      fillVendors((res[4]&&res[4].vendors)||[]);
     });
+
+    // ── vendor dropdown (+ add-new) ──
+    function fillVendors(list, selectName){
+      var sel=el('b_vendor'); var cur=selectName||sel.value;
+      sel.innerHTML='';
+      var ph=document.createElement('option'); ph.value=''; ph.textContent='Select vendor…'; sel.appendChild(ph);
+      (list||[]).slice().sort(function(a,b){return a.localeCompare(b);}).forEach(function(v){
+        var o=document.createElement('option'); o.value=v; o.textContent=v; if(v===cur) o.selected=true; sel.appendChild(o);
+      });
+      var add=document.createElement('option'); add.value='__new__'; add.textContent='+ Add new vendor…'; sel.appendChild(add);
+    }
+    el('b_vendor').onchange=function(){
+      if(this.value!=='__new__') return;
+      var name=(prompt('New vendor name:')||'').trim();
+      if(!name){ this.value=''; return; }
+      var self=this;
+      fetch('/api/procurement/vendors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
+        .then(r=>r.json()).then(function(d){ if(d.success){ fillVendors(d.vendors, name); } else { alert(d.error||'Could not add vendor'); self.value=''; } })
+        .catch(function(e){ alert(e.message); self.value=''; });
+    };
 
     fetch('/api/procurement/next-serial').then(r=>r.json()).then(function(d){
       if(d.success){ var n=d.next; el('serialTag').textContent='next serial '+n.alpha+n.num+' · '+(d.skuCount||0)+' SKUs'; }

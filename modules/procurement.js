@@ -85,6 +85,10 @@ const SEED = {
     'Waist 28': '28', 'Waist 30': '30', 'Waist 32': '32', 'Waist 34': '34',
     'Waist 36': '36', 'Waist 38': '38', 'Waist 40': '40', 'Waist 42': '42', 'Waist 44': '44'
   },
+  vendors: [ // known China vendors (from the sheet); editable/extendable in-app
+    'CHAOUFI', 'YOK', 'HK', 'NTVG', 'Amaze Variety', 'EU Fun2 TNC', 'TANG',
+    'WR+FUNK', 'HS1', 'FUNK', 'BM BAGS', 'TG'
+  ],
   settings: {
     exRate: 15,           // ₹ per RMB
     freightPerGram: 0.42, // ₹ per gram (≈ ₹420/kg)
@@ -119,6 +123,7 @@ function loadStore() {
   if (!s.products) s.products = { ...SEED.products };
   if (!s.colours)  s.colours = { ...SEED.colours };
   if (!s.sizes)    s.sizes = { ...SEED.sizes };
+  if (!Array.isArray(s.vendors)) s.vendors = [ ...SEED.vendors ];
   if (!s.settings) s.settings = { ...SEED.settings };
   else s.settings = { ...SEED.settings, ...s.settings };
   if (!s.pos)      s.pos = {};      // { [poId]: PO }
@@ -578,6 +583,25 @@ router.post('/api/procurement/lookups', (req, res) => {
   res.json({ success: true, brand: s.brand, products: s.products, colours: s.colours, sizes: s.sizes });
 });
 
+// ── Vendors (persisted list; dropdown + add-new) ─────────────────
+router.get('/api/procurement/vendors', (req, res) => {
+  const s = loadStore();
+  res.json({ success: true, vendors: s.vendors });
+});
+router.post('/api/procurement/vendors', (req, res) => {
+  const s = loadStore();
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  if (!name) return res.status(400).json({ success: false, error: 'Vendor name required.' });
+  if (b.remove) {
+    s.vendors = s.vendors.filter(v => v.toLowerCase() !== name.toLowerCase());
+  } else if (!s.vendors.some(v => v.toLowerCase() === name.toLowerCase())) {
+    s.vendors.push(name);
+  }
+  saveStore(s);
+  res.json({ success: true, vendors: s.vendors });
+});
+
 router.get('/api/procurement/next-serial', async (req, res) => {
   try {
     const cat = await loadCatalogue(req.query.refresh === '1');
@@ -637,6 +661,9 @@ router.post('/api/procurement/advance', async (req, res) => {
       seoDraft: (preview.newProducts || []).map(np => ({ key: np.key, designCode: np.designCode, colour: np.colour, productType: np.productType, seo: np.seo })),
       results: null
     };
+    // Remember any newly-typed vendor so it appears in the dropdown next time.
+    const vn = String(b.vendor || '').trim();
+    if (vn && !s.vendors.some(v => v.toLowerCase() === vn.toLowerCase())) s.vendors.push(vn);
     saveStore(s);
     // Never leak SEO to a non-admin caller.
     const out = publicPo(s.pos[poId], req);
