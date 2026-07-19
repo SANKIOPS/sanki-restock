@@ -23,7 +23,8 @@
     .fld label { display:block; font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
     .fld input, .fld select, .fld textarea { width:100%; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
     .fld textarea { resize:vertical; min-height:44px; }
-    .lineform { display:grid; grid-template-columns:1.3fr 1fr 1fr .8fr .9fr .7fr .8fr .9fr auto; gap:8px; align-items:end; }
+    .lineform { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px; align-items:end; }
+    .lineform .fld:first-child { grid-column:span 2; }
     table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; font-size:12.5px; }
     th, td { text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:middle; }
     th { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#9aa0a6; background:#fafbfc; }
@@ -87,17 +88,17 @@
         <div class="fld"><label>Design name <span class="muted" style="font-weight:400;text-transform:none">(your name → we SEO it)</span></label><input id="f_designName" placeholder="your name — e.g. Glowing" /></div>
         <div class="fld"><label>Product</label><select id="f_productType"></select></div>
         <div class="fld"><label>Colour</label><select id="f_colour"></select></div>
-        <div class="fld"><label>Size</label><select id="f_sizeLabel"></select></div>
-        <div class="fld"><label>Fit</label><input id="f_fit" placeholder="Oversized" /></div>
+        <div class="fld"><label>Fit</label><select id="f_fit"></select></div>
+        <div class="fld"><label id="sizeLabelTxt">Size</label><select id="f_sizeLabel"></select></div>
+        <div class="fld" id="chinaWrap" style="display:none"><label>China size <span class="muted" style="font-weight:400;text-transform:none">(record only)</span></label><select id="f_chinaSize"></select></div>
         <div class="fld"><label>Qty</label><input id="f_qty" type="number" min="0" value="1" /></div>
         <div class="fld"><label>¥/pc</label><input id="f_perPcsYuan" type="number" step="0.01" /></div>
-        <div class="fld"><label>Weight g</label><input id="f_weightGrams" type="number" step="1" /></div>
+        <div class="fld"><label>Weight g <span class="muted" style="font-weight:400;text-transform:none">(optional)</span></label><input id="f_weightGrams" type="number" step="1" /></div>
         <div class="fld"><label>&nbsp;</label><button class="btn" id="addLine">Add</button></div>
       </div>
       <details class="lk" style="margin-top:8px">
-        <summary>More fields (vendor · design code · audience · explicit SKU)</summary>
+        <summary>More fields (vendor product code · audience · explicit SKU)</summary>
         <div class="row2" style="margin-top:8px">
-          <div class="fld"><label>Vendor</label><input id="f_vendor" placeholder="CHAOUFI / YOK …" /></div>
           <div class="fld"><label>Vendor product code <span class="muted" style="font-weight:400;text-transform:none">(from the invoice — identifies the product)</span></label><input id="f_designCode" placeholder="vendor's code, e.g. A611" /></div>
           <div class="fld"><label>Audience</label><select id="f_audience"><option>Men</option><option>Women</option><option>Unisex</option></select></div>
           <div class="fld"><label>Explicit SKU (existing restock only)</label><input id="f_sku" class="mono" placeholder="leave blank to auto-generate" /></div>
@@ -132,7 +133,29 @@
     function money(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN', { maximumFractionDigits:0 }); }
     function el(id){ return document.getElementById(id); }
     function opts(sel, obj, ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} Object.keys(obj).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
+    function optsArr(sel, arr, ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} arr.forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
     function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+    // ── category-aware fits & sizes ────────────────────────────
+    var UPPER_FITS = ['Oversized','Drop Shoulder','Boxy Fit','Relaxed Fit','Regular Fit','Slim Fit','Muscle Fit'];
+    var LOWER_FITS = ['Baggy Fit','Straight Fit','Relaxed Fit','Tapered Fit','Slim Fit','Skinny Fit','Narrow Fit','Wide Leg','Bootcut','Cargo Fit'];
+    var UPPER_SIZES = ['FS','M','L','XL','XXL','3XL','4XL'];
+    var LOWER_SIZES_INDIA = ['28','30','32','34','36','38','40','42','44'];
+    var CHINA_SIZES = ['M','L','XL','XXL','3XL','4XL'];
+    function categoryOf(p){ p=String(p||'').toLowerCase();
+      if(/jean|trouser|lower|short|jogger|jort|pant|cargo|denim|bottom/.test(p)) return 'lower';
+      if(/shirt|tee|t-shirt|sweat|hoodie|hood|sando|top|jacket|tank|coord|set/.test(p)) return 'upper';
+      return 'other';
+    }
+    function syncCategory(){
+      var cat = categoryOf(el('f_productType').value);
+      var isLower = cat==='lower';
+      optsArr(el('f_fit'), isLower?LOWER_FITS:UPPER_FITS);
+      optsArr(el('f_sizeLabel'), isLower?LOWER_SIZES_INDIA:UPPER_SIZES);
+      el('sizeLabelTxt').textContent = isLower ? 'Indian size (waist)' : 'Size';
+      el('chinaWrap').style.display = isLower ? '' : 'none';
+      if(isLower && !el('f_chinaSize').options.length) optsArr(el('f_chinaSize'), CHINA_SIZES);
+    }
 
     // ── boot ───────────────────────────────────────────────────
     Promise.all([
@@ -146,7 +169,8 @@
       el('freightPerGram').value = settings.freightPerGram!=null?settings.freightPerGram:'';
       opts(el('f_productType'), lookups.products);
       opts(el('f_colour'), lookups.colours);
-      opts(el('f_sizeLabel'), lookups.sizes);
+      el('f_productType').onchange = syncCategory;
+      syncCategory();
       var wh = el('warehouse'); wh.innerHTML='';
       var locs = (res[2]&&res[2].locations)||[];
       var none = document.createElement('option'); none.value=''; none.textContent='— choose —'; wh.appendChild(none);
@@ -168,21 +192,33 @@
 
     // ── add / render lines ─────────────────────────────────────
     el('addLine').onclick = function(){
+      var isLower = categoryOf(el('f_productType').value)==='lower';
       var l = {
         designName: el('f_designName').value.trim(),
         productType: el('f_productType').value,
         colour: el('f_colour').value,
+        fit: el('f_fit').value,
         sizeLabel: el('f_sizeLabel').value,
-        fit: el('f_fit').value.trim(),
+        chinaSize: isLower ? el('f_chinaSize').value : '',
         qty: el('f_qty').value,
         perPcsYuan: el('f_perPcsYuan').value,
         weightGrams: el('f_weightGrams').value,
-        vendor: el('f_vendor').value.trim(),
         designCode: el('f_designCode').value.trim(),
         audience: el('f_audience').value,
         sku: el('f_sku').value.trim()
       };
-      if(!l.productType || !l.colour || !l.sizeLabel){ alert('Product, colour and size are required.'); return; }
+      // all mandatory except weight (+ China size only for lowers)
+      var miss = [];
+      if(!l.designName) miss.push('design name');
+      if(!l.designCode) miss.push('vendor product code');
+      if(!l.productType) miss.push('product');
+      if(!l.colour) miss.push('colour');
+      if(!l.fit) miss.push('fit');
+      if(!l.sizeLabel) miss.push(isLower?'Indian size':'size');
+      if(isLower && !l.chinaSize) miss.push('China size');
+      if(!(Number(l.qty)>0)) miss.push('qty');
+      if(!(Number(l.perPcsYuan)>0)) miss.push('¥/pc');
+      if(miss.length){ alert('Please fill: '+miss.join(', ')+'.\n(Weight is the only optional field.)'); return; }
       lines.push(l); el('f_designCode').value=''; el('f_sku').value=''; renderLines();
     };
     el('clearLines').onclick = function(){ lines=[]; lastPreview=null; el('previewHost').innerHTML=''; renderLines(); };
@@ -191,12 +227,13 @@
       el('lineCount').textContent = lines.length ? '('+lines.length+')' : '';
       if(!lines.length){ el('linesHost').innerHTML='<p class="muted" style="padding:8px 2px">No lines yet. Add intake lines above.</p>'; return; }
       var rows = lines.map(function(l,i){
-        return '<tr><td>'+esc(l.designName||'—')+'</td><td>'+esc(l.productType)+'</td><td>'+esc(l.colour)+'</td><td>'+esc(l.sizeLabel)+'</td>'+
-          '<td>'+esc(l.fit||'—')+'</td><td>'+esc(l.qty)+'</td><td>'+esc(l.perPcsYuan||'—')+'</td><td>'+esc(l.weightGrams||'—')+'</td>'+
+        var sizeCell = esc(l.sizeLabel) + (l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
+        return '<tr><td>'+esc(l.designName||'—')+'</td><td>'+esc(l.productType)+'</td><td>'+esc(l.colour)+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
+          '<td>'+esc(l.qty)+'</td><td>'+esc(l.perPcsYuan||'—')+'</td><td>'+esc(l.weightGrams||'—')+'</td>'+
           '<td class="mono">'+esc(l.sku||'auto')+'</td>'+
           '<td><button class="x" data-i="'+i+'">✕</button></td></tr>';
       }).join('');
-      el('linesHost').innerHTML = '<table><thead><tr><th>Design</th><th>Product</th><th>Colour</th><th>Size</th><th>Fit</th><th>Qty</th><th>¥/pc</th><th>Wt g</th><th>SKU</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+      el('linesHost').innerHTML = '<table><thead><tr><th>Design</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>¥/pc</th><th>Wt g</th><th>SKU</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
       Array.prototype.forEach.call(el('linesHost').querySelectorAll('.x'), function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-i'),1); renderLines(); }; });
     }
     renderLines();

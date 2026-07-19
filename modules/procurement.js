@@ -61,10 +61,11 @@ const SEED = {
     'Yellow': 13, 'Beige': 14, 'Sky Blue': 16, 'Olive': 17, 'Khaki': 18,
     'Golden': 20, 'Silver': 21
   },
-  sizes: { // size label → suffix code
+  sizes: { // size label → suffix code (letter sizes for uppers, waist for bottoms)
     'Free Size': 'FS', 'Medium': 'M', 'Large': 'L', 'Extra Large': 'XL',
     'Double Extra Large': 'XXL', 'Triple Extra Large': '3XL', 'Four Extra Large': '4XL',
-    'Waist 36': '36'
+    'Waist 28': '28', 'Waist 30': '30', 'Waist 32': '32', 'Waist 34': '34',
+    'Waist 36': '36', 'Waist 38': '38', 'Waist 40': '40', 'Waist 42': '42', 'Waist 44': '44'
   },
   settings: {
     exRate: 15,           // ₹ per RMB
@@ -77,7 +78,16 @@ const SEED = {
 };
 
 // Known size suffix tokens — used to parse the serial out of an existing SKU.
-const SIZE_TOKENS = ['FS','XS','S','M','L','XL','XXL','3XL','4XL','5XL','36','38','40','28','30','32','34'];
+const SIZE_TOKENS = ['FS','XS','S','M','L','XL','XXL','3XL','4XL','5XL','28','30','32','34','36','38','40','42','44'];
+// Trailing size embedded in the serial regex (longest-first) so the greedy
+// number group backtracks to a VALID size token — critical for numeric waist
+// sizes (…33 could otherwise split as num=…3, size='3').
+const SIZE_ALT = SIZE_TOKENS.slice().sort((a, b) => b.length - a.length).join('|');
+// The running serial number rolls to the next letter at 999, so it is ALWAYS
+// 1-3 digits. Bounding the number group to \d{1,3} lets it hand the extra
+// leading digit to sizes like 3XL/4XL (e.g. …5633XL = serial 563 + size 3XL,
+// not serial 5633 + size XL).
+const SERIAL_RE = new RegExp('^SA\\d+([A-Z])(\\d{1,3})(' + SIZE_ALT + ')$');
 
 // ── JSON store (atomic) ──────────────────────────────────────────
 function atomicWrite(fp, data) {
@@ -117,11 +127,9 @@ function titleCase(s) { return String(s || '').replace(/\w\S*/g, w => w.charAt(0
 // trailing token is a known size code. Old eras (two letters, or no size
 // suffix) don't match and are ignored.
 function parseSerial(sku) {
-  const m = String(sku || '').toUpperCase().match(/^SA\d+([A-Z])(\d{1,4})([A-Z0-9]{1,3})$/);
+  const m = String(sku || '').toUpperCase().match(SERIAL_RE);
   if (!m) return null;
-  const [, alpha, numStr, size] = m;
-  if (!SIZE_TOKENS.includes(size)) return null;
-  return { alpha, num: parseInt(numStr, 10) };
+  return { alpha: m[1], num: parseInt(m[2], 10) };
 }
 // Compare two serials: alpha first (A<B…), then number.
 function serialGt(a, b) {
@@ -167,7 +175,9 @@ async function loadCatalogue(force) {
 function buildSku(store, productType, colour, sizeLabel, serial) {
   const pc = store.products[productType];
   const cc = store.colours[colour];
-  const sc = store.sizes[sizeLabel];
+  // Resolve size: a mapped label, or a raw code already sent by the UI (e.g. '32', 'XL').
+  const sc = store.sizes[sizeLabel] ||
+    (SIZE_TOKENS.includes(String(sizeLabel).toUpperCase()) ? String(sizeLabel).toUpperCase() : null);
   const missing = [];
   if (pc == null) missing.push('product "' + productType + '"');
   if (cc == null) missing.push('colour "' + colour + '"');
@@ -207,24 +217,25 @@ function genSeo(g) {
   const productType = g.productType || '';
   const colour      = titleCase(g.colour || '');
   const fit         = titleCase(g.fit || '');
+  const fitBase     = fit.replace(/\s*fit$/i, '').trim();   // strip trailing "Fit" so we never double it
   const audience    = g.audience || 'Men';           // 'Men' | 'Women' | 'Unisex'
   const sizeList    = (g.sizeLabels || []).map(l => (g.sizeCodeOf ? g.sizeCodeOf(l) : l)).join(', ');
   const nm          = nameForTitle ? nameForTitle + ' ' : '';
 
   // Customer-facing product title (the H1 / storefront name).
-  const descriptor  = [fit ? fit + ' Fit' : '', colour].filter(Boolean).join(', ');
+  const descriptor  = [fitBase ? fitBase + ' Fit' : '', colour].filter(Boolean).join(', ');
   const titleCore   = [nameForTitle, productType].filter(Boolean).join(' ').trim() || productType;
   const title       = descriptor ? `${titleCore} — ${descriptor}` : titleCore;
 
   // URL handle: clean, keyword-rich. Always fold in the design code (when
   // present) so two same-named products can never collide on the same URL.
   const handleCode = (designCode && designCode.toUpperCase() !== nameForTitle.toUpperCase()) ? designCode : '';
-  const handle = slugify([nameForTitle, productType, colour, fit, handleCode].filter(Boolean).join(' '))
+  const handle = slugify([nameForTitle, productType, colour, fitBase, handleCode].filter(Boolean).join(' '))
     || slugify([productType, colour].filter(Boolean).join(' '));
 
   // SEO <title> (global.title_tag) — keep ~60 chars, brand at the end.
   const metaTitle = truncate(
-    `${[fit, colour].filter(Boolean).join(' ')} ${productType}${nameForTitle ? ' – ' + nameForTitle : ''} | SANKI`.replace(/\s+/g, ' ').trim(),
+    `${[fitBase, colour].filter(Boolean).join(' ')} ${productType}${nameForTitle ? ' – ' + nameForTitle : ''} | SANKI`.replace(/\s+/g, ' ').trim(),
     60
   );
 
@@ -232,32 +243,32 @@ function genSeo(g) {
   const audienceWord = audience === 'Unisex' ? 'unisex' : (audience === 'Women' ? "women's" : "men's");
   const metaDescription = truncate(
     `Shop the ${nm}${String(productType).toLowerCase()} in ${colour.toLowerCase()} by SANKI — premium ${audienceWord} streetwear` +
-    (fit ? `, ${fit.toLowerCase()} fit` : '') +
+    (fitBase ? `, ${fitBase.toLowerCase()} fit` : '') +
     `. ${sizeList ? 'Sizes ' + sizeList + '. ' : ''}COD available. Limited drop.`,
     160
   );
 
   // Image alt-text (accessibility + image SEO). One per product image slot.
   const imageAlt = [colour, nameForTitle, productType, 'by SANKI',
-    fit ? '— ' + fit.toLowerCase() : '', audienceWord, 'streetwear']
+    fitBase ? '— ' + fitBase.toLowerCase() + ' fit' : '', audienceWord, 'streetwear']
     .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 
   // Search tags.
   const tags = Array.from(new Set([
-    productType, colour, fit, nameForTitle, 'SANKI', 'Streetwear',
+    productType, colour, fitBase ? fitBase + ' Fit' : '', nameForTitle, 'SANKI', 'Streetwear',
     audience === 'Unisex' ? 'Unisex' : audience,
     `${colour} ${productType}`.trim(),
-    fit ? `${fit} ${productType}`.trim() : ''
+    fitBase ? `${fitBase} ${productType}`.trim() : ''
   ].filter(Boolean)));
 
   // Body / description HTML (schema-friendly plain prose + feature list).
   const bodyHtml =
     `<p>The <strong>${title}</strong> from SANKI — premium ${audienceWord} streetwear` +
-    `${fit ? ', ' + fit.toLowerCase() + ' fit' : ''}, in ${colour.toLowerCase()}.</p>` +
+    `${fitBase ? ', ' + fitBase.toLowerCase() + ' fit' : ''}, in ${colour.toLowerCase()}.</p>` +
     `<ul>` +
     `<li>Design: ${nameForTitle || productType}</li>` +
     `<li>Colour: ${colour || '—'}</li>` +
-    (fit ? `<li>Fit: ${fit}</li>` : '') +
+    (fitBase ? `<li>Fit: ${fitBase} Fit</li>` : '') +
     (sizeList ? `<li>Available sizes: ${sizeList}</li>` : '') +
     `<li>Cash on Delivery available · Limited drop</li>` +
     `</ul>`;
@@ -294,10 +305,11 @@ async function computePreview(store, body) {
       designName:  (raw.designName || '').trim(),
       productType: (raw.productType || '').trim(),
       colour:      (raw.colour || '').trim(),
-      sizeLabel:   (raw.sizeLabel || '').trim(),
+      sizeLabel:   (raw.sizeLabel || '').trim(),   // Indian size — used for the SKU
+      chinaSize:   (raw.chinaSize || '').trim(),   // China size — recorded only
       fit:         (raw.fit || '').trim(),
       audience:    (raw.audience || 'Men').trim(),
-      vendor:      (raw.vendor || '').trim(),
+      vendor:      (raw.vendor || body.vendor || '').trim(),  // vendor comes from the bill
       designCode:  (raw.designCode || '').trim(),
       qty:         Math.max(0, Math.round(num(raw.qty))),
       perPcsYuan:  num(raw.perPcsYuan),
@@ -347,14 +359,14 @@ async function computePreview(store, body) {
       colour: g.colour, productType: g.productType, ambiguous,
       seo,
       variants: g.lines.map(l => ({
-        sku: l.sku, sizeLabel: l.sizeLabel, sizeCode: sizeCodeOf(l.sizeLabel),
+        sku: l.sku, sizeLabel: l.sizeLabel, sizeCode: sizeCodeOf(l.sizeLabel), chinaSize: l.chinaSize,
         qty: l.qty, landed: l.landed, price: l.suggestedMrp, skuError: l.skuError
       }))
     };
   });
 
   const existingAdds = lines.filter(l => l.classification === 'EXISTING').map(l => ({
-    sku: l.sku, qty: l.qty, landed: l.landed,
+    sku: l.sku, qty: l.qty, landed: l.landed, chinaSize: l.chinaSize,
     productId: l.existing.productId, variantId: l.existing.variantId, inventoryItemId: l.existing.inventoryItemId
   }));
 
