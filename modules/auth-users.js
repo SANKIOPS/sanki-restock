@@ -64,7 +64,7 @@ const ROLE_IDS = ROLES.map(r => r.id);
 const ROLE_HOME = {
   admin:       '/index.html',
   inventory:   '/showroom-replenishment.html',
-  sales:       '/analytics.html',
+  sales:       '/sales.html',
   procurement: '/coming-soon.html?m=Fresh%20Procurement',
   revenue:     '/coming-soon.html?m=Revenue%20%2F%20Accounts',
   warehouse:   '/rack-locations.html',
@@ -74,7 +74,7 @@ const ROLE_HOME = {
 const ROLE_PAGES = {
   admin:       '*',
   inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html'],
-  sales:       ['/analytics.html', '/velocity.html'],
+  sales:       ['/sales.html', '/analytics.html', '/velocity.html'],
   procurement: ['/coming-soon.html'],
   revenue:     ['/coming-soon.html'],
   warehouse:   ['/rack-locations.html'],

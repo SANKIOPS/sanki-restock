@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Record a Sale · SANKI Business OS</title>
+  <style>
+    :root { --blue:#185FA5; --green:#047857; --ink:#1a1a1a; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f6f7f9; color:var(--ink); }
+    .wrap { max-width:1000px; margin:0 auto; padding:22px 20px 70px; }
+    h1 { font-size:22px; margin:0 0 2px; font-weight:800; }
+    .sub { color:#6b7280; font-size:13px; margin:0 0 18px; }
+
+    .today {
+      display:flex; flex-wrap:wrap; gap:14px; margin-bottom:18px;
+    }
+    .stat { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:12px 16px; min-width:130px; }
+    .stat .k { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; }
+    .stat .v { font-size:20px; font-weight:800; margin-top:2px; }
+
+    .grid { display:grid; grid-template-columns:1fr 360px; gap:18px; align-items:start; }
+    @media(max-width:820px){ .grid { grid-template-columns:1fr; } }
+
+    .card { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:16px; }
+    .card h2 { font-size:14px; margin:0 0 12px; font-weight:700; }
+
+    input, select { font-size:13px; padding:9px 10px; border:1px solid #d1d5db; border-radius:7px; outline:none; width:100%; background:#fff; }
+    input:focus, select:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(24,95,165,.13); }
+    label { display:block; font-size:11px; font-weight:600; color:#374151; margin:0 0 4px; }
+
+    .search-wrap { position:relative; }
+    .results { position:absolute; z-index:30; left:0; right:0; top:100%; margin-top:4px; background:#fff;
+      border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,.14); max-height:340px; overflow:auto; }
+    .results:empty { display:none; }
+    .res-row { display:flex; align-items:center; gap:10px; padding:8px 10px; cursor:pointer; border-bottom:1px solid #f2f3f5; }
+    .res-row:hover { background:#f5f8ff; }
+    .res-row img { width:34px; height:34px; object-fit:cover; border-radius:6px; background:#eee; flex:0 0 auto; }
+    .res-main { flex:1 1 auto; min-width:0; }
+    .res-title { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .res-meta { font-size:11px; color:#6b7280; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .res-stock { font-size:11px; font-weight:700; flex:0 0 auto; }
+    .res-stock.in { color:var(--green); } .res-stock.out { color:#b42318; }
+
+    table.cart { width:100%; border-collapse:collapse; font-size:13px; }
+    table.cart th, table.cart td { padding:8px 6px; border-bottom:1px solid #eef0f2; text-align:left; vertical-align:middle; }
+    table.cart th { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; }
+    table.cart td.num, table.cart th.num { text-align:right; }
+    table.cart input { width:72px; padding:6px 8px; text-align:right; }
+    table.cart input.qty { width:56px; }
+    .rm { background:none; border:none; color:#b42318; cursor:pointer; font-size:16px; line-height:1; }
+    .empty-cart { color:#9ca3af; font-size:13px; padding:16px 0; text-align:center; }
+
+    .row2 { display:flex; gap:10px; }
+    .row2 > div { flex:1; }
+    .totline { display:flex; justify-content:space-between; font-size:13px; padding:4px 0; }
+    .totline.grand { font-size:18px; font-weight:800; border-top:1px solid #e5e7eb; margin-top:6px; padding-top:10px; }
+
+    button.primary { width:100%; margin-top:14px; padding:12px; font-size:15px; font-weight:800; color:#fff;
+      background:var(--green); border:none; border-radius:9px; cursor:pointer; }
+    button.primary:disabled { opacity:.5; cursor:not-allowed; }
+    button.primary:hover:not(:disabled) { background:#036249; }
+
+    .msg { font-size:13px; min-height:18px; margin-top:10px; text-align:center; }
+    .msg.err { color:#b42318; } .msg.ok { color:var(--green); }
+
+    .recent { margin-top:22px; }
+    table.recent-tbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+    table.recent-tbl th, table.recent-tbl td { padding:8px 6px; border-bottom:1px solid #eef0f2; text-align:left; }
+    table.recent-tbl th { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; }
+    .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; font-weight:600; background:#eef2ff; color:var(--blue); text-transform:capitalize; }
+    .void { background:none; border:1px solid #f0c2bd; color:#b42318; border-radius:6px; font-size:11px; padding:4px 9px; cursor:pointer; }
+    .voided-tag { color:#9ca3af; font-style:italic; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Record a Sale</h1>
+    <p class="sub">In-store, Instagram, WhatsApp or phone orders. Recording a sale reduces front-of-store stock automatically.</p>
+
+    <div class="today" id="today-strip"></div>
+
+    <div class="grid">
+      <!-- LEFT: product search + cart -->
+      <div class="card">
+        <h2>Products</h2>
+        <div class="search-wrap">
+          <input id="search" type="text" placeholder="Search by product, SKU, size, vendor…" autocomplete="off" />
+          <div class="results" id="results"></div>
+        </div>
+
+        <table class="cart" style="margin-top:14px;">
+          <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th><th></th></tr></thead>
+          <tbody id="cart-body"><tr><td colspan="5" class="empty-cart">No items yet — search above to add.</td></tr></tbody>
+        </table>
+      </div>
+
+      <!-- RIGHT: sale details + checkout -->
+      <div class="card">
+        <h2>Sale details</h2>
+        <div class="row2">
+          <div>
+            <label for="channel">Channel</label>
+            <select id="channel">
+              <option value="walk-in">Walk-in</option>
+              <option value="instagram">Instagram</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="phone">Phone</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label for="payment">Payment</label>
+            <select id="payment">
+              <option value="cash">Cash</option>
+              <option value="upi">UPI</option>
+              <option value="card">Card</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-top:10px;">
+          <label for="cust-name">Customer (optional)</label>
+          <input id="cust-name" type="text" placeholder="Name" autocomplete="off" />
+        </div>
+        <div style="margin-top:8px;">
+          <input id="cust-phone" type="tel" placeholder="Phone" autocomplete="off" />
+        </div>
+
+        <div style="margin-top:10px;">
+          <label for="discount">Discount (₹)</label>
+          <input id="discount" type="number" min="0" step="1" value="0" />
+        </div>
+
+        <div style="margin-top:14px;">
+          <div class="totline"><span>Subtotal</span><span id="t-sub">₹0</span></div>
+          <div class="totline"><span>Discount</span><span id="t-disc">−₹0</span></div>
+          <div class="totline grand"><span>Total</span><span id="t-total">₹0</span></div>
+        </div>
+
+        <button class="primary" id="record-btn" disabled>Record sale</button>
+        <div class="msg" id="msg"></div>
+      </div>
+    </div>
+
+    <div class="recent card" style="margin-top:22px;">
+      <h2>Today's sales</h2>
+      <table class="recent-tbl">
+        <thead><tr><th>Time</th><th>Items</th><th>Channel</th><th>Pay</th><th>Staff</th><th class="num" style="text-align:right;">Total</th><th></th></tr></thead>
+        <tbody id="recent-body"><tr><td colspan="7" class="empty-cart">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script>
+    var cart = [];            // [{variantId, inventoryItemId, sku, title, variantTitle, qty, unitPrice, stock}]
+    var searchSeq = 0;
+
+    function money(n) { return '₹' + (Math.round((Number(n)||0)*100)/100).toLocaleString('en-IN'); }
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+    function setMsg(t, k) { var m = document.getElementById('msg'); m.textContent = t||''; m.className = 'msg' + (k?' '+k:''); }
+
+    // ── Product search (debounced, race-guarded) ──────────────────
+    var searchInput = document.getElementById('search');
+    var resultsBox  = document.getElementById('results');
+    var debounceT = null;
+    searchInput.addEventListener('input', function () {
+      clearTimeout(debounceT);
+      var q = searchInput.value.trim();
+      if (q.length < 2) { resultsBox.textContent = ''; return; }
+      debounceT = setTimeout(function () { runSearch(q); }, 220);
+    });
+    document.addEventListener('click', function (e) {
+      if (!resultsBox.contains(e.target) && e.target !== searchInput) resultsBox.textContent = '';
+    });
+
+    function runSearch(q) {
+      var seq = ++searchSeq;
+      fetch('/api/stock-search?limit=25&q=' + encodeURIComponent(q), { headers: { 'Accept':'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (seq !== searchSeq) return;         // a newer search superseded this one
+          resultsBox.textContent = '';
+          if (!d.success || !d.rows || !d.rows.length) {
+            resultsBox.appendChild(el('div', 'res-row', 'No matches'));
+            return;
+          }
+          d.rows.forEach(function (v) {
+            var row = el('div', 'res-row');
+            var img = document.createElement('img');
+            if (v.image) img.src = v.image; img.alt = '';
+            row.appendChild(img);
+            var main = el('div', 'res-main');
+            main.appendChild(el('div', 'res-title', v.productTitle || v.sku || '(untitled)'));
+            var metaBits = [];
+            if (v.variantTitle && v.variantTitle !== 'Default Title') metaBits.push(v.variantTitle);
+            if (v.sku) metaBits.push(v.sku);
+            if (v.rack) metaBits.push('Rack ' + v.rack);
+            main.appendChild(el('div', 'res-meta', metaBits.join('  ·  ')));
+            row.appendChild(main);
+            var stk = (typeof v.inventoryQuantity === 'number') ? v.inventoryQuantity : null;
+            var sEl = el('div', 'res-stock ' + (stk && stk > 0 ? 'in' : 'out'), stk == null ? '—' : (stk + ' left'));
+            row.appendChild(sEl);
+            row.addEventListener('click', function () { addToCart(v); searchInput.value = ''; resultsBox.textContent = ''; searchInput.focus(); });
+            resultsBox.appendChild(row);
+          });
+        })
+        .catch(function () { if (seq === searchSeq) { resultsBox.textContent=''; resultsBox.appendChild(el('div','res-row','Search failed')); } });
+    }
+
+    // ── Cart ──────────────────────────────────────────────────────
+    function addToCart(v) {
+      var existing = cart.find(function (c) { return c.variantId === String(v.variantId); });
+      if (existing) { existing.qty += 1; }
+      else {
+        cart.push({
+          variantId: String(v.variantId),
+          inventoryItemId: v.inventoryItemId != null ? String(v.inventoryItemId) : '',
+          sku: v.sku || '',
+          title: v.productTitle || '',
+          variantTitle: (v.variantTitle && v.variantTitle !== 'Default Title') ? v.variantTitle : '',
+          qty: 1,
+          unitPrice: Number(v.price) || 0,
+          stock: (typeof v.inventoryQuantity === 'number') ? v.inventoryQuantity : null
+        });
+      }
+      renderCart();
+    }
+
+    function renderCart() {
+      var body = document.getElementById('cart-body');
+      body.textContent = '';
+      if (!cart.length) {
+        var tr = el('tr'); var td = el('td', 'empty-cart', 'No items yet — search above to add.'); td.colSpan = 5;
+        tr.appendChild(td); body.appendChild(tr);
+      } else {
+        cart.forEach(function (c, idx) {
+          var tr = el('tr');
+          var tdItem = el('td');
+          tdItem.appendChild(el('div', null, c.title || c.sku));
+          var meta = [c.variantTitle, c.sku].filter(Boolean).join(' · ');
+          if (meta) { var m = el('div', null, meta); m.style.cssText='font-size:11px;color:#6b7280'; tdItem.appendChild(m); }
+          tr.appendChild(tdItem);
+
+          var tdQty = el('td', 'num');
+          var qty = document.createElement('input'); qty.className='qty'; qty.type='number'; qty.min='1'; qty.value=c.qty;
+          qty.addEventListener('input', function () { c.qty = Math.max(1, Math.floor(Number(qty.value)||1)); recalcRow(tr, c); recalcTotals(); });
+          tdQty.appendChild(qty); tr.appendChild(tdQty);
+
+          var tdPrice = el('td', 'num');
+          var price = document.createElement('input'); price.type='number'; price.min='0'; price.step='1'; price.value=c.unitPrice;
+          price.addEventListener('input', function () { c.unitPrice = Math.max(0, Number(price.value)||0); recalcRow(tr, c); recalcTotals(); });
+          tdPrice.appendChild(price); tr.appendChild(tdPrice);
+
+          var tdLine = el('td', 'num line', money(c.qty * c.unitPrice)); tr.appendChild(tdLine);
+
+          var tdRm = el('td');
+          var rm = el('button', 'rm', '×'); rm.title='Remove';
+          rm.addEventListener('click', function () { cart.splice(idx, 1); renderCart(); });
+          tdRm.appendChild(rm); tr.appendChild(tdRm);
+
+          body.appendChild(tr);
+        });
+      }
+      recalcTotals();
+    }
+    function recalcRow(tr, c) { var cell = tr.querySelector('.line'); if (cell) cell.textContent = money(c.qty * c.unitPrice); }
+
+    function recalcTotals() {
+      var sub = cart.reduce(function (s, c) { return s + c.qty * c.unitPrice; }, 0);
+      var disc = Math.max(0, Number(document.getElementById('discount').value) || 0);
+      var total = Math.max(0, sub - disc);
+      document.getElementById('t-sub').textContent = money(sub);
+      document.getElementById('t-disc').textContent = '−' + money(disc);
+      document.getElementById('t-total').textContent = money(total);
+      document.getElementById('record-btn').disabled = cart.length === 0;
+    }
+    document.getElementById('discount').addEventListener('input', recalcTotals);
+
+    // ── Record ────────────────────────────────────────────────────
+    document.getElementById('record-btn').addEventListener('click', function () {
+      if (!cart.length) return;
+      var btn = document.getElementById('record-btn');
+      btn.disabled = true; setMsg('Recording…');
+      var payload = {
+        items: cart.map(function (c) { return { variantId:c.variantId, inventoryItemId:c.inventoryItemId, sku:c.sku, title:c.title, variantTitle:c.variantTitle, qty:c.qty, unitPrice:c.unitPrice }; }),
+        channel: document.getElementById('channel').value,
+        paymentMode: document.getElementById('payment').value,
+        discount: Math.max(0, Number(document.getElementById('discount').value)||0),
+        customer: { name: document.getElementById('cust-name').value.trim(), phone: document.getElementById('cust-phone').value.trim() }
+      };
+      fetch('/api/sales/record', { method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, body: JSON.stringify(payload) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.success) {
+            setMsg(d.inventoryWarning || ('Sale recorded — ' + money(d.sale.total)), d.inventoryWarning ? 'err' : 'ok');
+            cart = []; renderCart();
+            document.getElementById('cust-name').value = '';
+            document.getElementById('cust-phone').value = '';
+            document.getElementById('discount').value = '0';
+            loadToday();
+          } else {
+            btn.disabled = false; setMsg(d.error || 'Could not record sale', 'err');
+          }
+        })
+        .catch(function () { btn.disabled = false; setMsg('Network error — try again', 'err'); });
+    });
+
+    // ── Today's rollup + recent list ──────────────────────────────
+    function loadToday() {
+      fetch('/api/sales/today', { headers:{'Accept':'application/json'} })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.success) return;
+          var strip = document.getElementById('today-strip');
+          strip.textContent = '';
+          [['Today\u2019s sales', d.count], ['Revenue', money(d.gross)], ['Units', d.units]].forEach(function (pair) {
+            var s = el('div', 'stat');
+            s.appendChild(el('div', 'k', pair[0]));
+            s.appendChild(el('div', 'v', pair[1]));
+            strip.appendChild(s);
+          });
+        }).catch(function(){});
+      loadRecent();
+    }
+
+    function loadRecent() {
+      var today = new Date(Date.now() + 5.5*3600*1000).toISOString().slice(0,10);
+      fetch('/api/sales?limit=50&from=' + today, { headers:{'Accept':'application/json'} })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var body = document.getElementById('recent-body');
+          body.textContent = '';
+          if (!d.success || !d.rows.length) {
+            var tr = el('tr'); var td = el('td', 'empty-cart', 'No sales yet today.'); td.colSpan = 7; tr.appendChild(td); body.appendChild(tr);
+            return;
+          }
+          d.rows.forEach(function (s) {
+            var tr = el('tr');
+            if (s.voided) tr.style.opacity = '.55';
+            var t = new Date(s.ts); var hh = t.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' });
+            tr.appendChild(el('td', null, hh));
+            tr.appendChild(el('td', null, s.items.reduce(function(m,it){return m+it.qty;},0) + ' pc'));
+            var tdCh = el('td'); tdCh.appendChild(el('span','pill', s.channel)); tr.appendChild(tdCh);
+            tr.appendChild(el('td', null, s.paymentMode));
+            tr.appendChild(el('td', null, s.staff));
+            var tdTot = el('td', 'num'); tdTot.style.textAlign='right'; tdTot.textContent = money(s.total); tr.appendChild(tdTot);
+            var tdAct = el('td');
+            if (s.voided) { tdAct.appendChild(el('span','voided-tag','voided')); }
+            else {
+              var vb = el('button','void','Void');
+              vb.addEventListener('click', function () {
+                if (!confirm('Void this sale? Stock it took will be added back.')) return;
+                fetch('/api/sales/void', { method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, body: JSON.stringify({ id: s.id }) })
+                  .then(function(r){return r.json();})
+                  .then(function(d){ if (d.success) loadToday(); else alert(d.error || 'Could not void'); });
+              });
+              tdAct.appendChild(vb);
+            }
+            tr.appendChild(tdAct);
+            body.appendChild(tr);
+          });
+        }).catch(function(){});
+    }
+
+    renderCart();
+    loadToday();
+  </script>
+</body>
+</html>

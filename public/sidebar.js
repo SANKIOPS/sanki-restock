@@ -24,6 +24,9 @@
       { icon: '📊', text: 'Analytics',            href: '/analytics.html' },
       { icon: '📈', text: 'Inventory Statistics', href: '/inventory-stats.html' }
     ] },
+    { label: 'Sales', items: [
+      { icon: '🧾', text: 'Record a Sale', href: '/sales.html' }
+    ] },
     { label: 'Store Ops', items: [
       { icon: '🛍️', text: 'Showroom Replenishment', href: '/showroom-replenishment.html' },
       { icon: '🗄️', text: 'Rack Locations',         href: '/rack-locations.html' }
