@@ -98,7 +98,7 @@
         <summary>More fields (vendor · design code · audience · explicit SKU)</summary>
         <div class="row2" style="margin-top:8px">
           <div class="fld"><label>Vendor</label><input id="f_vendor" placeholder="CHAOUFI / YOK …" /></div>
-          <div class="fld"><label>Design code <span class="muted" style="font-weight:400;text-transform:none">(groups sizes into one product)</span></label><input id="f_designCode" placeholder="A611 / K562 …" /></div>
+          <div class="fld"><label>Vendor product code <span class="muted" style="font-weight:400;text-transform:none">(from the invoice — identifies the product)</span></label><input id="f_designCode" placeholder="vendor's code, e.g. A611" /></div>
           <div class="fld"><label>Audience</label><select id="f_audience"><option>Men</option><option>Women</option><option>Unisex</option></select></div>
           <div class="fld"><label>Explicit SKU (existing restock only)</label><input id="f_sku" class="mono" placeholder="leave blank to auto-generate" /></div>
         </div>
@@ -217,7 +217,7 @@
     function renderPreview(d){
       var h = '<h2>Preview — review before writing to Shopify</h2>';
       h += '<div class="banner info">Will <b>CREATE</b> '+d.counts.newProducts+' draft product(s) · Will <b>ADD stock</b> to '+d.counts.existingAdds+' existing variant(s)'+(d.counts.errors?(' · <b style="color:#b42318">'+d.counts.errors+' error(s)</b>'):'')+'. Nothing is written until you approve.</div>';
-      if(d.counts.ambiguous){ h += '<div class="banner err">'+d.counts.ambiguous+' product(s) have no design code and no design name — different products could merge into one. Add a design code to separate them.</div>'; }
+      if(d.counts.ambiguous){ h += '<div class="banner err">'+d.counts.ambiguous+' product(s) have no vendor product code and no design name — different products could merge into one. Add the vendor product code to separate them.</div>'; }
 
       // computed lines table
       h += '<div class="panel"><h2 style="margin-top:0">Computed lines &amp; landed cost</h2><table><thead><tr><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th class="money">¥/pc</th><th class="money">Freight</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
@@ -233,7 +233,7 @@
         h += '<h2>New products to create (draft) — edit the SEO before approving</h2>';
         d.newProducts.forEach(function(np,idx){
           h += '<div class="npcard" data-np="'+idx+'">';
-          h += '<h3>'+esc(np.productType)+' · '+esc(np.colour)+' <span class="muted mono">'+(np.vendor?('· '+esc(np.vendor)):'')+(np.designCode?(' · '+esc(np.designCode)):'')+'</span>'+(np.ambiguous?' <span class="pill err">no design code</span>':'')+'</h3>';
+          h += '<h3>'+esc(np.productType)+' · '+esc(np.colour)+' <span class="muted mono">'+(np.vendor?('· '+esc(np.vendor)):'')+(np.designCode?(' · '+esc(np.designCode)):'')+'</span>'+(np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</h3>';
           if(np.designName){ h += '<div class="muted" style="font-size:12px;margin-bottom:8px">Your design name: <b>'+esc(np.designName)+'</b> → generated SEO name below (editable)</div>'; }
           h += '<div class="row2">';
           h += '<div class="fld"><label>SEO product name (Title / H1)</label><input data-f="title" value="'+esc(np.seo.title)+'" /></div>';
