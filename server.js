@@ -2525,6 +2525,7 @@ app.get('/api/showroom/notify/test', async (req, res) => {
 //    catch-all so their /api/* routes resolve instead of falling
 //    through to index.html). Each module owns its own store + helpers.
 app.use(require('./modules/rack-locations').router);
+app.use(require('./modules/auth-users').router);
 
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -2541,6 +2542,12 @@ app.listen(PORT, async () => {
   console.log(`   Velocity:  ${hasVelocity ? '✅ configured' : '⚠️  set VELOCITY_USERNAME + VELOCITY_PASSWORD in Render'}`);
   console.log(`   Bitespeed: ${BITESPEED_API_KEY ? '✅ configured' : '⚠️  key missing'}`);
   console.log(`   Velocity Webhook URL: ${SELF_URL}/api/webhooks/velocity`);
+
+  // Phase 0 — seed the first admin from DASH_USER/DASH_PASS if no users exist
+  // yet (no-lockout migration: the shared login you already use keeps working,
+  // now via the login page). Safe to call every boot; it's a no-op once seeded.
+  try { require('./modules/auth-users').seedAdminIfEmpty(); }
+  catch (e) { console.error('[auth] seed error:', e.message); }
 
   // Load caches from disk
   loadCache();

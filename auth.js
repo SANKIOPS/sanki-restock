@@ -28,6 +28,20 @@
 // ═══════════════════════════════════════════════════════════════
 const crypto = require('crypto');
 const path   = require('path');
+// Phase 0: per-person logins + roles live in modules/auth-users. The gate
+// stays the single chokepoint but now also accepts a valid session cookie
+// and enforces which pages each role may open. Basic-auth + x-api-key are
+// kept as admin fallbacks so scripts/automation and the bootstrap admin
+// never get locked out.
+const { verifySession, roleCanAccessPath, landingFor } = require('./modules/auth-users');
+
+// Static asset extensions any logged-in user may fetch regardless of role
+// (JS/CSS/images the shared pages need). Page/navigation requests are gated.
+const ASSET_EXT = new Set(['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.map', '.webp']);
+function isAssetPath(p) {
+  const m = p.match(/\.[a-z0-9]+$/i);
+  return m ? ASSET_EXT.has(m[0].toLowerCase()) : false;
+}
 
 // Normalize the request path before making any auth decision. Express does NOT
 // collapse `..` or decode `%2f` in req.path, so a request like
@@ -80,20 +94,50 @@ function gate(req, res, next) {
     return res.status(404).json({ success: false, error: 'Not found' });
   }
 
-  // Exempt external webhooks (authenticated by signature) and health/keep-alive
+  // PUBLIC (no auth): external webhooks (signature-authed), health/keep-alive,
+  // and the login page + login/logout endpoints (so people can get in).
   if (p.startsWith('/api/webhooks/') ||
       p === '/api/health' ||
-      p === '/healthz') {
+      p === '/healthz' ||
+      p === '/login.html' ||
+      p === '/api/auth/login' ||
+      p === '/api/auth/logout') {
     return next();
   }
 
-  if (checkApiKey(req) || checkBasic(req)) return next();
-
-  if (p.startsWith('/api/')) {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  // Identify the caller: a valid session cookie, else an admin fallback
+  // (x-api-key for automation, Basic-auth for the bootstrap/admin login).
+  let user = verifySession(req);
+  if (!user) {
+    if (checkApiKey(req)) user = { username: 'automation', role: 'admin' };
+    else if (checkBasic(req)) user = { username: process.env.DASH_USER || 'admin', role: 'admin' };
   }
-  res.set('WWW-Authenticate', 'Basic realm="SANKI Business OS", charset="UTF-8"');
-  return res.status(401).send('Authentication required.');
+
+  if (!user) {
+    // API callers get a clean 401; browsers are sent to the login page
+    // (instead of the old native Basic-auth popup).
+    if (p.startsWith('/api/')) return res.status(401).json({ success: false, error: 'Unauthorized' });
+    return res.redirect(302, '/login.html');
+  }
+  req.user = user;
+
+  // Admin-only management APIs.
+  if (p.startsWith('/api/admin')) {
+    if (user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+    return next();
+  }
+
+  // Other APIs: any authenticated user for now (Phase 0). Sensitive future
+  // modules (revenue/accounts) will add their own per-role checks.
+  if (p.startsWith('/api/')) return next();
+
+  // ── Page/navigation gating by role (admin sees everything) ──
+  if (user.role === 'admin') return next();
+  if (isAssetPath(p)) return next();                 // shared JS/CSS/images
+  if (p === '/') return res.redirect(302, landingFor(user.role));
+  if (roleCanAccessPath(user.role, p)) return next();
+  // Any other page/route this role isn't allowed → send to their home.
+  return res.redirect(302, landingFor(user.role));
 }
 
 module.exports = { gate };
