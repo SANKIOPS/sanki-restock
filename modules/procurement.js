@@ -35,6 +35,8 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
+const crypto  = require('crypto');
+const multer  = require('multer');
 const fetch   = require('node-fetch');
 
 const router = express.Router();
@@ -43,9 +45,25 @@ const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const API = '2024-01';
 
-const STORE_PATH = process.env.PROCUREMENT_PATH ||
-  path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'),
-            'procurement.json');
+const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
+const STORE_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
+
+// ── Raw product photos (mandatory per SKU) ───────────────────────
+// These are the source images the AI image module will judge to generate the
+// AI photos + SEO. Stored on the persistent volume so they survive redeploys.
+const PHOTO_DIR = path.join(DATA_DIR, 'procurement-photos');
+try { fs.mkdirSync(PHOTO_DIR, { recursive: true }); } catch { /* exists */ }
+const photoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, PHOTO_DIR),
+    filename: (req, file, cb) => {
+      const ext = (path.extname(file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '');
+      cb(null, Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg'));
+    }
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
+});
 
 // ── Seeds (decoded once from the sheet; editable in-app thereafter) ──
 const SEED = {
@@ -287,6 +305,41 @@ function groupKey(l) {
     .map(x => String(x).trim().toLowerCase()).join('|');
 }
 
+// Normalize a raw intake line into a clean, storable shape. Weight is optional
+// at the ADVANCE stage (product not yet received / weighed).
+function normalizeLine(raw, body) {
+  return {
+    designName:  (raw.designName || '').trim(),
+    productType: (raw.productType || '').trim(),
+    colour:      (raw.colour || '').trim(),
+    sizeLabel:   (raw.sizeLabel || '').trim(),   // Indian size — used for the SKU
+    chinaSize:   (raw.chinaSize || '').trim(),   // China size — recorded only
+    fit:         (raw.fit || '').trim(),
+    audience:    (raw.audience || 'Men').trim(),
+    vendor:      (raw.vendor || (body && body.vendor) || '').trim(),  // vendor comes from the bill
+    designCode:  (raw.designCode || '').trim(),
+    photoUrl:    (raw.photoUrl || '').trim(),        // mandatory raw image → AI pipeline
+    sku:         (raw.sku || '').toUpperCase().trim(),
+    qty:         Math.max(0, Math.round(num(raw.qty))),
+    perPcsYuan:  num(raw.perPcsYuan),
+    weightGrams: num(raw.weightGrams)               // 0 until received & weighed
+  };
+}
+
+// Highest serial already RESERVED by not-yet-posted POs. Advance POs generate
+// SKUs immediately but only reach Shopify at the receive/post stage, so their
+// serials aren't in the live catalogue yet — we must not hand them out twice.
+function pendingSerialMax(store) {
+  let best = null;
+  Object.values(store.pos || {}).forEach(po => {
+    if (po.status === 'posted') return;   // already on Shopify → counted via catalogue
+    (po.lines || []).forEach(l => {
+      if (l.serialUsed && serialGt(l.serialUsed, best)) best = { ...l.serialUsed };
+    });
+  });
+  return best;
+}
+
 // Compute a full preview for a set of intake lines (no writes).
 async function computePreview(store, body) {
   const settings = { ...store.settings };
@@ -296,25 +349,15 @@ async function computePreview(store, body) {
   const cat = await loadCatalogue(!!body.refresh);
   const sizeCodeOf = (label) => store.sizes[label] || label;
 
-  // Serial cursor starts from the live Shopify max; hand out consecutive
-  // serials as we walk the lines (each size variant gets its own).
+  // Serial cursor starts from the live Shopify max, but also clears any serials
+  // already reserved by pending advance POs so two advance purchases can never
+  // collide. Lines that already carry a SKU (from the advance stage) keep it.
   let cursor = cat.maxSerial ? { ...cat.maxSerial } : null;
+  const pend = pendingSerialMax(store);
+  if (pend && serialGt(pend, cursor)) cursor = { ...pend };
 
   const lines = (body.lines || []).map(raw => {
-    const line = {
-      designName:  (raw.designName || '').trim(),
-      productType: (raw.productType || '').trim(),
-      colour:      (raw.colour || '').trim(),
-      sizeLabel:   (raw.sizeLabel || '').trim(),   // Indian size — used for the SKU
-      chinaSize:   (raw.chinaSize || '').trim(),   // China size — recorded only
-      fit:         (raw.fit || '').trim(),
-      audience:    (raw.audience || 'Men').trim(),
-      vendor:      (raw.vendor || body.vendor || '').trim(),  // vendor comes from the bill
-      designCode:  (raw.designCode || '').trim(),
-      qty:         Math.max(0, Math.round(num(raw.qty))),
-      perPcsYuan:  num(raw.perPcsYuan),
-      weightGrams: num(raw.weightGrams)
-    };
+    const line = normalizeLine(raw, body);
     const cost = landedCost(line, settings);
 
     // Classify against Shopify: does this exact SKU already exist?
@@ -464,6 +507,24 @@ async function addExistingInventory(ea, warehouseLocationId) {
   return { sku: ea.sku, added: ea.qty, newAvailable: lvl ? lvl.available : null };
 }
 
+// ── Role helpers: SEO is ADMIN-ONLY ──────────────────────────────
+// Inventory managers create advance POs, weigh on arrival, and REQUEST
+// approval — but they never see the generated SEO and cannot post to Shopify.
+// The admin reviews the SEO and is the only one who can post.
+function isAdmin(req) { return !!(req.user && req.user.role === 'admin'); }
+function publicPo(po, req) {
+  if (isAdmin(req)) return po;
+  const clone = JSON.parse(JSON.stringify(po));
+  delete clone.seoDraft;                                   // hide SEO drafts
+  (clone.newProducts || []).forEach(np => { delete np.seo; });
+  return clone;
+}
+function stripPreviewForRole(preview, req) {
+  if (isAdmin(req)) return preview;
+  (preview.newProducts || []).forEach(np => { delete np.seo; });
+  return preview;
+}
+
 // ═════════════════════════ ROUTES ═══════════════════════════════
 router.get('/api/procurement/settings', (req, res) => {
   const s = loadStore();
@@ -478,6 +539,19 @@ router.post('/api/procurement/settings', (req, res) => {
   if (b.gstLowThreshold != null) s.settings.gstLowThreshold = num(b.gstLowThreshold);
   saveStore(s);
   res.json({ success: true, settings: s.settings });
+});
+
+// ── Photo upload / serve (mandatory raw image per SKU) ───────────
+router.post('/api/procurement/photo', photoUpload.single('photo'), (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: 'No image received (JPG/PNG/WebP only).' });
+  res.json({ success: true, file: req.file.filename, url: '/api/procurement/photo/' + req.file.filename });
+});
+router.get('/api/procurement/photo/:file', (req, res) => {
+  // Guard against path traversal — only serve plain filenames from PHOTO_DIR.
+  const name = path.basename(String(req.params.file || ''));
+  const fp = path.join(PHOTO_DIR, name);
+  if (!fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp)) return res.status(404).end();
+  res.sendFile(fp);
 });
 
 router.get('/api/procurement/lookups', (req, res) => {
@@ -520,9 +594,112 @@ router.post('/api/procurement/preview', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── Stage 1: save an ADVANCE purchase — SKUs generated NOW, no Shopify write ──
+// The product hasn't arrived, so there is no weight / freight / final landed
+// cost yet. But SKUs ARE assigned here (and reserved via pendingSerialMax) so
+// photos / AI images can be prepared against a real SKU during the lead time.
+router.post('/api/procurement/advance', async (req, res) => {
+  try {
+    const s = loadStore();
+    const b = req.body || {};
+    if (!(b.lines || []).length) return res.status(400).json({ success: false, error: 'Add at least one line before saving.' });
+    // Photo is mandatory per SKU — it is what the AI image module will judge.
+    const missingPhoto = (b.lines || []).filter(l => !(l.photoUrl || '').trim()).length;
+    if (missingPhoto) return res.status(400).json({ success: false, error: 'Every line needs a product photo (' + missingPhoto + ' missing).' });
+    // Run the preview engine to assign SKUs + classify NEW vs EXISTING (weight
+    // is 0 at this stage, so any landed figure is provisional and unused here).
+    const preview = await computePreview(s, { lines: b.lines, vendor: b.vendor, exRate: b.exRate });
+    const lines = preview.lines.map(l => ({
+      designName: l.designName, productType: l.productType, colour: l.colour,
+      sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
+      vendor: l.vendor, designCode: l.designCode, photoUrl: l.photoUrl,
+      qty: l.qty, perPcsYuan: l.perPcsYuan,
+      weightGrams: 0,                                   // filled at receive
+      sku: l.sku, serialUsed: l.serialUsed || null, skuError: l.skuError || null,
+      classification: l.classification                 // NEW = create; EXISTING = restock
+    }));
+    s.seq += 1;
+    const poId = 'PO-' + String(s.seq).padStart(4, '0');
+    s.pos[poId] = {
+      id: poId,
+      status: 'advance',               // advance → received → awaiting_approval → posted
+      createdAt: new Date().toISOString(),
+      createdBy: (req.user && req.user.username) || 'system',
+      vendor: b.vendor || '',
+      billNo: b.billNo || '',
+      datePurchase: b.datePurchase || '',
+      dateReceive: '',
+      exRate: b.exRate != null && b.exRate !== '' ? num(b.exRate) : s.settings.exRate,
+      lines,                           // intake lines WITH generated SKUs
+      // SEO drafts generated at SKU time (admin-only). Keyed by product group.
+      // Placeholder text drafts for now — the AI image module will regenerate
+      // these by judging the uploaded photos. Never shown to non-admins.
+      seoDraft: (preview.newProducts || []).map(np => ({ key: np.key, designCode: np.designCode, colour: np.colour, productType: np.productType, seo: np.seo })),
+      results: null
+    };
+    saveStore(s);
+    // Never leak SEO to a non-admin caller.
+    const out = publicPo(s.pos[poId], req);
+    res.json({ success: true, poId, po: out, lines: out.lines });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Stage 2a: receive an advance PO — attach weights, compute the preview ──
+// Merges the per-line weights the user recorded on arrival, then generates
+// SKUs + landed cost + draft SEO for approval (still no Shopify write).
+router.post('/api/procurement/pos/:id/receive', async (req, res) => {
+  try {
+    const s = loadStore();
+    const po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'This PO is already posted to Shopify.' });
+    const b = req.body || {};
+    const weights = b.weights || {};            // { lineIndex: grams }
+    po.lines = (po.lines || []).map((l, i) => {
+      const w = weights[i] != null ? num(weights[i]) : num(l.weightGrams);
+      return { ...l, weightGrams: w };
+    });
+    if (b.dateReceive) po.dateReceive = b.dateReceive;
+    if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = num(b.freightPerGram);
+    if (po.status === 'advance') po.status = 'received';
+    saveStore(s);
+    const preview = await computePreview(s, {
+      lines: po.lines, vendor: po.vendor,
+      exRate: po.exRate, freightPerGram: po.freightPerGram
+    });
+    // Overlay the SEO drafts saved at advance so the admin edits persist.
+    if (isAdmin(req) && Array.isArray(po.seoDraft)) {
+      (preview.newProducts || []).forEach(np => {
+        const d = po.seoDraft.find(x => x.key === np.key);
+        if (d && d.seo) np.seo = d.seo;
+      });
+    }
+    res.json({ success: true, poId: po.id, po: publicPo(po, req), ...stripPreviewForRole(preview, req) });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Stage 2b: inventory REQUESTS admin approval (no Shopify write) ──
+// Once weights are in, the inventory manager sends the PO to the admin. Only
+// the admin can then post it to Shopify (see commit, admin-gated).
+router.post('/api/procurement/pos/:id/request-approval', (req, res) => {
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  const unweighed = (po.lines || []).filter(l => !(num(l.weightGrams) > 0)).length;
+  if (unweighed) return res.status(400).json({ success: false, error: 'Enter weight for every line first (' + unweighed + ' missing).' });
+  po.status = 'awaiting_approval';
+  po.approvalRequestedBy = (req.user && req.user.username) || 'system';
+  po.approvalRequestedAt = new Date().toISOString();
+  saveStore(s);
+  res.json({ success: true, poId: po.id, status: po.status });
+});
+
 // The gated write. Body carries the user-approved plan (edited SEO allowed).
 router.post('/api/procurement/commit', async (req, res) => {
   if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return res.status(400).json({ success: false, error: 'Shopify env not configured' });
+  // ADMIN ONLY: posting to Shopify is the admin's approval step.
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only an admin can approve and post to Shopify.' });
   const s = loadStore();
   const b = req.body || {};
   if (!b.approve) return res.status(400).json({ success: false, error: 'Missing approval flag' });
@@ -545,22 +722,37 @@ router.post('/api/procurement/commit', async (req, res) => {
     } catch (e) { results.errors.push({ kind: 'adjust', sku: ea.sku, error: e.message }); }
   }
 
-  // Record the PO in history.
-  s.seq += 1;
-  const poId = 'PO-' + String(s.seq).padStart(4, '0');
-  s.pos[poId] = {
-    id: poId,
-    createdAt: new Date().toISOString(),
-    createdBy: (req.user && req.user.username) || 'system',
-    vendor: b.vendor || '',
-    billNo: b.billNo || '',
-    datePurchase: b.datePurchase || '',
-    dateReceive: b.dateReceive || '',
-    warehouseLocationId,
-    newProducts: b.newProducts || [],
-    existingAdds: b.existingAdds || [],
-    results
-  };
+  // Finalize the PO. If a poId is supplied (Stage-2 receive→post flow) we mark
+  // that advance PO as posted; otherwise we record a fresh one (legacy path).
+  let poId, po;
+  if (b.poId && s.pos[b.poId]) {
+    poId = b.poId; po = s.pos[poId];
+    po.status = 'posted';
+    po.postedAt = new Date().toISOString();
+    po.dateReceive = b.dateReceive || po.dateReceive || '';
+    po.warehouseLocationId = warehouseLocationId;
+    po.newProducts = b.newProducts || [];
+    po.existingAdds = b.existingAdds || [];
+    po.results = results;
+  } else {
+    s.seq += 1;
+    poId = 'PO-' + String(s.seq).padStart(4, '0');
+    po = s.pos[poId] = {
+      id: poId,
+      status: 'posted',
+      createdAt: new Date().toISOString(),
+      postedAt: new Date().toISOString(),
+      createdBy: (req.user && req.user.username) || 'system',
+      vendor: b.vendor || '',
+      billNo: b.billNo || '',
+      datePurchase: b.datePurchase || '',
+      dateReceive: b.dateReceive || '',
+      warehouseLocationId,
+      newProducts: b.newProducts || [],
+      existingAdds: b.existingAdds || [],
+      results
+    };
+  }
   saveStore(s);
   _catalogue = null; // invalidate cache so new SKUs are seen next time
   res.json({ success: true, poId, results });
@@ -568,14 +760,16 @@ router.post('/api/procurement/commit', async (req, res) => {
 
 router.get('/api/procurement/pos', (req, res) => {
   const s = loadStore();
-  const list = Object.values(s.pos).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  res.json({ success: true, pos: list });
+  let list = Object.values(s.pos);
+  if (req.query.status) { const want = String(req.query.status).split(','); list = list.filter(p => want.includes(p.status)); }
+  list = list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  res.json({ success: true, pos: list.map(p => publicPo(p, req)) });
 });
 router.get('/api/procurement/pos/:id', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  res.json({ success: true, po });
+  res.json({ success: true, po: publicPo(po, req) });
 });
 
 module.exports = { router, genSeo, buildSku, landedCost, parseSerial, nextSerial };
