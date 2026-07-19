@@ -76,6 +76,25 @@ const invoiceUpload = multer({
   fileFilter: (req, file, cb) => cb(null, /^image\/|application\/pdf/.test(file.mimetype))
 });
 
+// ── AI product images (Google Gemini image generation) ───────────
+// Feed the raw invoice/garment photo to Gemini and get back polished listing
+// images: a clean model shot, front-only, back-only and a studio product shot.
+// Requires GEMINI_API_KEY (or GOOGLE_API_KEY). Model is overridable.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const IMAGE_MODEL = process.env.PROCUREMENT_IMAGE_MODEL || 'gemini-2.5-flash-image';
+// The four shots we make for every product. `prompt` is suffixed with the
+// product context (type / colour / audience) at generation time.
+const AI_IMAGE_SPECS = [
+  { type: 'model',  label: 'Model shot',
+    prompt: 'Generate a clean e-commerce MODEL photo of a real human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, full or three-quarter body, natural relaxed pose, streetwear styling. Photorealistic, high resolution, no text or watermark.' },
+  { type: 'front',  label: 'Product front',
+    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the FRONT of this exact garment, centered on a pure white background. Keep the garment identical to the reference. Even studio lighting, no model, no props, no text or watermark, sharp product detail.' },
+  { type: 'back',   label: 'Product back',
+    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the BACK of this exact garment, centered on a pure white background. Keep colour and details consistent with the reference front view. Even studio lighting, no model, no props, no text or watermark.' },
+  { type: 'studio', label: 'Studio shot',
+    prompt: 'Generate a premium studio PRODUCT photo of this exact garment, styled on an invisible/ghost mannequin at a slight angle, soft gradient light-grey background, catalogue lighting with gentle shadow. Keep the garment identical to the reference. High-end streetwear look, photorealistic, no text or watermark.' }
+];
+
 // ── Seeds (decoded once from the sheet; editable in-app thereafter) ──
 const SEED = {
   brand: 'SA',
@@ -490,6 +509,14 @@ async function createDraftProduct(np, warehouseLocationId) {
       )
     }
   };
+  // Attach the approved AI images (base64) so the listing is born with photos.
+  // Shopify can't fetch our private URLs, so we upload each as an attachment.
+  const imgs = Array.isArray(np.images) ? np.images : [];
+  const attachments = imgs.map(im => {
+    const src = readStoredPhoto(im.url);
+    return src ? { attachment: src.buf.toString('base64'), alt: (im.alt || np.seo.imageAlt || '').slice(0, 512) } : null;
+  }).filter(Boolean);
+  if (attachments.length) payload.product.images = attachments;
   const created = await shopifyPost('products.json', payload).then(d => d.product);
 
   // Stock each variant at the warehouse location with its received qty.
@@ -573,6 +600,53 @@ router.get('/api/procurement/photo/:file', (req, res) => {
   if (!fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp)) return res.status(404).end();
   res.sendFile(fp);
 });
+
+// ── AI image helpers (Gemini) ────────────────────────────────────
+// Persist a generated image buffer to the photo volume, return its URL.
+function savePhotoBuffer(buf, ext) {
+  const name = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg');
+  fs.writeFileSync(path.join(PHOTO_DIR, name), buf);
+  return { file: name, url: '/api/procurement/photo/' + name };
+}
+// Read a stored /api/procurement/photo/<file> URL back into a buffer + mime.
+function readStoredPhoto(url) {
+  const name = path.basename(String(url || ''));
+  const fp = path.join(PHOTO_DIR, name);
+  if (!fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp)) return null;
+  const ext = path.extname(name).toLowerCase();
+  const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+  return { buf: fs.readFileSync(fp), mime };
+}
+// Call Gemini image generation: reference image + instruction → new image buffer.
+async function geminiGenerateImage(baseB64, baseMime, prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 120000);
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ inline_data: { mime_type: baseMime, data: baseB64 } }, { text: prompt }] }],
+        generationConfig: { responseModalities: ['IMAGE'] }
+      }),
+      signal: ctrl.signal
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    if (err.name === 'AbortError') { const e = new Error('Image generation timed out.'); e.timeout = true; throw e; }
+    throw err;
+  }
+  clearTimeout(timer);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (((j.error && j.error.message) || '').slice(0, 200) || 'image error'));
+  const parts = ((((j.candidates || [])[0] || {}).content) || {}).parts || [];
+  const img = parts.find(p => p.inlineData || p.inline_data);
+  const data = img && (img.inlineData || img.inline_data).data;
+  if (!data) throw new Error('The model returned no image (try again or use a clearer source photo).');
+  return Buffer.from(data, 'base64');
+}
 
 router.get('/api/procurement/lookups', (req, res) => {
   const s = loadStore();
@@ -919,6 +993,182 @@ router.post('/api/procurement/pos/:id/request-approval', (req, res) => {
   res.json({ success: true, poId: po.id, status: po.status });
 });
 
+// ── AI IMAGE STUDIO (admin) ──────────────────────────────────────
+// The listing-image + image-judged-SEO pipeline that sits between "received"
+// and "posted": generate 4 shots per NEW product → admin approves → generate
+// display name + SEO by JUDGING the approved photo → admin approves → post.
+
+// NEW-product groups of a PO (design×colour), each with a representative raw
+// photo to feed the image model. Only NEW products need images (EXISTING ones
+// already have a Shopify listing we only add stock to).
+async function newGroupsOf(s, po) {
+  const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram });
+  return (preview.newProducts || []).map(np => {
+    const line = (po.lines || []).find(l => groupKey(l) === np.key && (l.photoUrl || '').trim());
+    return { key: np.key, colour: np.colour, productType: np.productType, designName: np.designName,
+             designCode: np.designCode, audience: (line && line.audience) || 'Men',
+             fit: (line && line.fit) || '', sizeLabels: np.variants.map(v => v.sizeLabel),
+             photoUrl: line ? line.photoUrl : '' };
+  });
+}
+
+// Generate the AI shots for ONE product group (or specific `types`).
+router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only an admin can generate AI images.' });
+    if (!GEMINI_API_KEY) return res.status(400).json({ success: false, error: 'AI images are not enabled. Set GEMINI_API_KEY in Railway to turn it on.' });
+    const s = loadStore();
+    const po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'This PO is already posted.' });
+    const b = req.body || {};
+    if (!b.groupKey) return res.status(400).json({ success: false, error: 'groupKey required.' });
+    const groups = await newGroupsOf(s, po);
+    const g = groups.find(x => x.key === b.groupKey);
+    if (!g) return res.status(404).json({ success: false, error: 'Product group not found on this PO.' });
+    const src = readStoredPhoto(g.photoUrl);
+    if (!src) return res.status(400).json({ success: false, error: 'No source photo for this product — add one first.' });
+    const baseB64 = src.buf.toString('base64');
+    const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.`;
+    const wantTypes = Array.isArray(b.types) && b.types.length ? b.types : AI_IMAGE_SPECS.map(s2 => s2.type);
+    po.aiImages = po.aiImages || {};
+    const existing = Array.isArray(po.aiImages[g.key]) ? po.aiImages[g.key] : [];
+    const errors = [];
+    for (const spec of AI_IMAGE_SPECS) {
+      if (wantTypes.indexOf(spec.type) < 0) continue;
+      try {
+        const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + context);
+        const saved = savePhotoBuffer(out, '.jpg');
+        const idx = existing.findIndex(x => x.type === spec.type);
+        const rec = { type: spec.type, label: spec.label, url: saved.url, approved: false };
+        if (idx >= 0) existing[idx] = rec; else existing.push(rec);
+      } catch (e) { errors.push({ type: spec.type, error: e.message }); }
+    }
+    // keep a stable model→front→back→studio order
+    existing.sort((a, c) => AI_IMAGE_SPECS.findIndex(x => x.type === a.type) - AI_IMAGE_SPECS.findIndex(x => x.type === c.type));
+    po.aiImages[g.key] = existing;
+    saveStore(s);
+    res.json({ success: true, groupKey: g.key, images: existing, errors });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Persist image approve/unapprove (and manual replacements) from the studio.
+router.post('/api/procurement/pos/:id/images', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  const b = req.body || {};
+  if (b.aiImages && typeof b.aiImages === 'object') {
+    po.aiImages = po.aiImages || {};
+    Object.keys(b.aiImages).forEach(k => {
+      po.aiImages[k] = (b.aiImages[k] || []).map(x => ({ type: String(x.type || ''), label: String(x.label || x.type || ''), url: String(x.url || ''), approved: !!x.approved })).filter(x => x.url);
+    });
+    saveStore(s);
+  }
+  res.json({ success: true, aiImages: po.aiImages || {} });
+});
+
+// Judge the APPROVED product photo(s) with vision → display name + SEO.
+router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI SEO is not enabled. Set ANTHROPIC_API_KEY in Railway.' });
+    const s = loadStore();
+    const po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+    const b = req.body || {};
+    if (!b.groupKey) return res.status(400).json({ success: false, error: 'groupKey required.' });
+    const groups = await newGroupsOf(s, po);
+    const g = groups.find(x => x.key === b.groupKey);
+    if (!g) return res.status(404).json({ success: false, error: 'Product group not found.' });
+    // Prefer an approved AI image; fall back to the model/studio shot, then the raw photo.
+    const imgs = (po.aiImages && po.aiImages[g.key]) || [];
+    const chosen = imgs.find(x => x.approved && (x.type === 'model' || x.type === 'studio'))
+                || imgs.find(x => x.approved) || null;
+    const src = readStoredPhoto(chosen ? chosen.url : g.photoUrl);
+    if (!src) return res.status(400).json({ success: false, error: 'No photo available to judge — generate/approve an image first.' });
+    const sizeCodeOf = (label) => s.sizes[label] || label;
+    const sizeList = (g.sizeLabels || []).map(sizeCodeOf).join(', ');
+    const prompt =
+`You are naming and writing SEO for an Indian premium streetwear product for the brand SANKI, based on the product PHOTO shown.\n` +
+`Known facts: product type = ${g.productType || 'garment'}; colour = ${g.colour || 'as shown'}; audience = ${g.audience}; ${g.fit ? 'fit = ' + g.fit + '; ' : ''}available sizes = ${sizeList || 'as listed'}.\n` +
+`Look at the actual garment in the photo (graphics, print, silhouette, vibe) and write copy that fits WHAT YOU SEE.\n\n` +
+`Return STRICT JSON ONLY:\n` +
+`{"displayName":"","title":"","metaTitle":"","metaDescription":"","imageAlt":"","tags":[""],"bodyHtml":""}\n\n` +
+`Rules:\n` +
+`- displayName = a short, catchy customer-facing product name (2-4 words), inspired by what the garment looks like. No brand, no colour.\n` +
+`- title = storefront H1: "<displayName> <productType> — <Fit>, <Colour>" style, natural and clean.\n` +
+`- metaTitle <= 60 chars, ends with " | SANKI".\n` +
+`- metaDescription <= 155 chars, natural, mentions colour + streetwear + COD + limited drop.\n` +
+`- imageAlt = concise descriptive alt text of the garment.\n` +
+`- tags = 5-8 short search tags.\n` +
+`- bodyHtml = 2-3 sentences of product description in simple HTML (<p>…</p>), premium streetwear tone, describing what is visibly distinctive.\n` +
+`- Never invent sizes/prices. No markdown, JSON only.`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90000);
+    let r;
+    try {
+      r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 1500, messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: src.mime, data: src.buf.toString('base64') } },
+          { type: 'text', text: prompt }
+        ] }] }),
+        signal: ctrl.signal
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err.name === 'AbortError') return res.status(504).json({ success: false, error: 'The SEO writer timed out — try again.' });
+      return res.status(502).json({ success: false, error: 'Could not reach the SEO writer: ' + err.message });
+    }
+    clearTimeout(timer);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(502).json({ success: false, error: 'AI error: ' + ((j.error && j.error.message) || ('HTTP ' + r.status)) });
+    const parsed = extractJsonBlock((j.content || []).map(c => c.text || '').join('')) || {};
+    // Deterministic fields still come from our own generator (handle uniqueness etc).
+    const base = genSeo({ designName: parsed.displayName || g.designName, designCode: g.designCode, productType: g.productType, colour: g.colour, fit: g.fit, audience: g.audience, sizeLabels: g.sizeLabels, sizeCodeOf });
+    const seo = {
+      displayName: String(parsed.displayName || g.designName || '').trim(),
+      title: String(parsed.title || base.title).trim(),
+      handle: base.handle,
+      metaTitle: String(parsed.metaTitle || base.metaTitle).trim().slice(0, 70),
+      metaDescription: String(parsed.metaDescription || base.metaDescription).trim().slice(0, 320),
+      imageAlt: String(parsed.imageAlt || base.imageAlt).trim(),
+      tags: Array.isArray(parsed.tags) && parsed.tags.length ? parsed.tags.map(t => String(t).trim()).filter(Boolean) : base.tags,
+      bodyHtml: String(parsed.bodyHtml || base.bodyHtml)
+    };
+    // Persist onto the PO's seoDraft (keyed by group) so it survives reloads/posts.
+    po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
+    const di = po.seoDraft.findIndex(d => d.key === g.key);
+    const rec = { key: g.key, designCode: g.designCode, colour: g.colour, productType: g.productType, seo, seoApproved: false };
+    if (di >= 0) po.seoDraft[di] = rec; else po.seoDraft.push(rec);
+    saveStore(s);
+    res.json({ success: true, groupKey: g.key, seo });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Persist edited/approved SEO from the studio (before posting).
+router.post('/api/procurement/pos/:id/seo', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  const b = req.body || {};
+  if (!b.groupKey || !b.seo) return res.status(400).json({ success: false, error: 'groupKey and seo required.' });
+  po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
+  const di = po.seoDraft.findIndex(d => d.key === b.groupKey);
+  const prev = di >= 0 ? po.seoDraft[di] : { key: b.groupKey };
+  const rec = Object.assign({}, prev, { key: b.groupKey, seo: Object.assign({}, prev.seo, b.seo), seoApproved: !!b.seoApproved });
+  if (di >= 0) po.seoDraft[di] = rec; else po.seoDraft.push(rec);
+  saveStore(s);
+  res.json({ success: true, seoDraft: po.seoDraft });
+});
+
 // The gated write. Body carries the user-approved plan (edited SEO allowed).
 router.post('/api/procurement/commit', async (req, res) => {
   if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return res.status(400).json({ success: false, error: 'Shopify env not configured' });
@@ -930,10 +1180,16 @@ router.post('/api/procurement/commit', async (req, res) => {
   const warehouseLocationId = String(b.warehouseLocationId || s.settings.warehouseLocationId || '');
   if (!warehouseLocationId) return res.status(400).json({ success: false, error: 'Warehouse location not set — choose it in Settings first.' });
 
+  // Approved AI images live on the PO (keyed by product group). Attach them
+  // to each new product at post time so the listing is born with photos.
+  const poForImages = (b.poId && s.pos[b.poId]) ? s.pos[b.poId] : null;
   const results = { created: [], adjusted: [], errors: [] };
   // 1) Create new draft products.
   for (const np of (b.newProducts || [])) {
     try {
+      if (!np.images && poForImages && poForImages.aiImages && poForImages.aiImages[np.key]) {
+        np.images = poForImages.aiImages[np.key].filter(x => x.approved).map(x => ({ url: x.url, alt: np.seo && np.seo.imageAlt }));
+      }
       const r = await createDraftProduct(np, warehouseLocationId);
       results.created.push(r);
     } catch (e) { results.errors.push({ kind: 'create', product: np.seo && np.seo.title, error: e.message }); }
