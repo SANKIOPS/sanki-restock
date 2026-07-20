@@ -126,8 +126,8 @@
       <div class="panel">
         <h2 style="margin-top:0">Rates &amp; warehouse</h2>
         <div class="settingsgrid">
-          <div class="fld"><label>Exchange rate ₹/RMB</label><input id="exRate" type="number" step="0.01" /></div>
-          <div class="fld"><label>Freight ₹/gram <span class="muted" style="font-weight:400;text-transform:none">(used at receive)</span></label><input id="freightPerGram" type="number" step="0.001" /></div>
+          <div class="fld" id="exRateWrap"><label>Exchange rate ₹/RMB</label><input id="exRate" type="number" step="0.01" /></div>
+          <div class="fld" id="freightWrap"><label>Freight ₹/gram <span class="muted" style="font-weight:400;text-transform:none">(used at receive)</span></label><input id="freightPerGram" type="number" step="0.001" /></div>
           <div class="fld"><label>Warehouse location</label><select id="warehouse"><option value="">Loading…</option></select></div>
           <div class="fld"><label>&nbsp;</label><button class="btn ghost" id="saveSettings">Save</button></div>
         </div>
@@ -333,6 +333,9 @@
       var india=isIndia();
       var tw=el('transportWrap'); if(tw) tw.style.display=india?'':'none';
       var pl=el('perPcsLabel'); if(pl) pl.textContent=india?'₹/pc':'¥/pc';
+      // Exchange rate + per-gram freight are China-only — hide them for India.
+      var xw=el('exRateWrap'); if(xw) xw.style.display=india?'none':'';
+      var fw=el('freightWrap'); if(fw) fw.style.display=india?'none':'';
       renderLines();   // cost columns depend on origin
     }
     el('b_origin').onchange=syncOrigin;
