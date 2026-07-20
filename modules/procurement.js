@@ -600,6 +600,23 @@ router.get('/api/procurement/photo/:file', (req, res) => {
   if (!fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp)) return res.status(404).end();
   res.sendFile(fp);
 });
+// Attach (or clear) a real BACK-view reference photo for a product group so the
+// "Product back" shot is generated from the true reverse instead of guessing.
+// The image itself is uploaded via /api/procurement/photo first; we just store
+// its URL against the group on the PO.
+router.post('/api/procurement/pos/:id/back-ref', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  const b = req.body || {};
+  if (!b.groupKey) return res.status(400).json({ success: false, error: 'groupKey required.' });
+  po.backRefs = po.backRefs || {};
+  if (b.url) po.backRefs[b.groupKey] = String(b.url);
+  else delete po.backRefs[b.groupKey];
+  saveStore(s);
+  res.json({ success: true, groupKey: b.groupKey, url: po.backRefs[b.groupKey] || '' });
+});
 
 // ── AI image helpers (Gemini) ────────────────────────────────────
 // Persist a generated image buffer to the photo volume, return its URL.
@@ -1059,7 +1076,11 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     const src = readStoredPhoto(g.photoUrl);
     if (!src) return res.status(400).json({ success: false, error: 'No source photo for this product — add one first.' });
     const baseB64 = src.buf.toString('base64');
+    // Optional explicit fit/length chosen in the studio (e.g. "oversized",
+    // "three-quarter (3/4)") — the strongest lever for getting the cut right.
+    const fitDesc = String(b.fit || '').trim();
     const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.` +
+      (fitDesc ? ` This garment is a ${fitDesc.toUpperCase()} — render it with exactly that cut and length in every shot; do not change it.` : '') +
       // Lock the garment's real proportions — Gemini otherwise lengthens 3/4 or
       // cropped pieces into full-length ones.
       ` Preserve the garment's EXACT length, hemline, proportions and silhouette exactly as shown in the reference — if it is cropped, three-quarter, calf-length or ankle-length, keep that same length; never lengthen or shorten it.` +
@@ -1073,13 +1094,24 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     // Optional per-product styling for the model shots only (e.g. pair a top with
     // jeans/trousers). Front/back flat-lays have no model so it's ignored there.
     const styling = String(b.styling || '').trim();
+    // If the admin uploaded a REAL back-view photo for this group, the "back"
+    // shot is generated from it (accurate) instead of guessed from the front.
+    const backRef = (po.backRefs && po.backRefs[g.key]) ? readStoredPhoto(po.backRefs[g.key]) : null;
+    const backRefB64 = backRef ? backRef.buf.toString('base64') : null;
     for (const spec of AI_IMAGE_SPECS) {
       if (wantTypes.indexOf(spec.type) < 0) continue;
+      // Never fabricate a back: the back shot is only produced from a real
+      // uploaded back photo. Without one we simply skip it (no error).
+      if (spec.type === 'back' && !backRefB64) continue;
       try {
         const styleAdd = (styling && (spec.type === 'female' || spec.type === 'male'))
           ? ` Style the model wearing this exact garment ${styling}. Keep any paired clothing understated and choose colours that complement and flatter THIS garment tastefully, so it stays the clear hero of the photo.`
           : '';
-        const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + styleAdd + context, spec.aspect);
+        const useBackRef = spec.type === 'back' && backRefB64;
+        const promptText = useBackRef
+          ? 'Generate a clean FLAT-LAY / ghost-mannequin photo of the BACK of this exact garment, reproducing the reference image faithfully — same colour, print, graphics, cut and length; do not redesign it. Centered on a pure white background, even studio lighting, no model, no props, no text or watermark, sharp product detail. Show a SINGLE garment fully in frame; no duplicated copies, no collage. The background must be pure white filling the ENTIRE frame to all four edges — absolutely no black bars, letterboxing, borders or coloured padding.' + context
+          : spec.prompt + styleAdd + context;
+        const out = await geminiGenerateImage(useBackRef ? backRefB64 : baseB64, useBackRef ? backRef.mime : src.mime, promptText, spec.aspect);
         const saved = savePhotoBuffer(out.buf, extForMime(out.mime));
         const idx = existing.findIndex(x => x.type === spec.type);
         const rec = { type: spec.type, label: spec.label, url: saved.url, approved: false };

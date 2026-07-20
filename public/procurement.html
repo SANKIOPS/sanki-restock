@@ -899,9 +899,12 @@
     }
 
     // ══════════ AI STUDIO ══════════
-    var studio={ images:{}, seo:{}, styling:{} };     // keyed by product group key
+    var studio={ images:{}, seo:{}, styling:{}, backRefs:{} };     // keyed by product group key
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
+    // ── Fit / length (affects EVERY shot — the strongest lever for the cut) ──
+    var FIT_UPPER=['Auto','Oversized','Boxy / relaxed','Normal fit','Slim fit'];
+    var FIT_LOWER=['Auto','Shorts / half','Three-quarter (3/4)','Ankle length','Full length'];
     // ── Simple styling dropdowns (only affect the 2 model shots) ──
     var PAIR_UPPER=['Auto','Baggy trousers','Normal trousers','Baggy jeans','Normal jeans','Cargo pants','Shorts'];
     var PAIR_LOWER=['Auto','Plain white tee','Plain black tee','Oversized tee','Hoodie','Button-up shirt'];
@@ -915,7 +918,8 @@
       if(lowers.indexOf(pt)>=0) return 'lower';
       return 'other';
     }
-    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={pair:'',tuck:'',chain:'',cap:false,sunglasses:false,watch:false}); }
+    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={fit:'',pair:'',tuck:'',chain:'',cap:false,sunglasses:false,watch:false}); }
+    function fitOf(np){ var f=stylingOf(np).fit; return (f&&f!=='Auto')?f:''; }
     function composeStyling(np){
       var s=stylingOf(np), parts=[], acc=[];
       if(s.pair && s.pair!=='Auto') parts.push('paired with '+s.pair.toLowerCase());
@@ -940,8 +944,9 @@
           return;
         }
         lastReceive=d;                          // studio funcs read lastReceive.newProducts
-        studio={ images:{}, seo:{}, styling:{} };
+        studio={ images:{}, seo:{}, styling:{}, backRefs:{} };
         var po=d.po||{};
+        if(po.backRefs){ Object.keys(po.backRefs).forEach(function(k){ studio.backRefs[k]=po.backRefs[k]; }); }
         if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
         if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved }; }); }
         renderStudio();
@@ -961,7 +966,7 @@
       var head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div>'+
-        '<button class="btn sm" data-genimg="'+i+'">'+(imgs.length?'Regenerate all 4':'Generate 4 photos')+'</button></div>';
+        '<button class="btn sm" data-genimg="'+i+'">'+(imgs.length?'Regenerate all':'Generate photos')+'</button></div>';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?PAIR_UPPER:PAIR_LOWER, s=stylingOf(np);
       function sel(kind,label,opts,val){
         var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
@@ -973,6 +978,10 @@
         return '<label class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap">'+
           '<input type="checkbox" data-styck="'+kind+'" data-i="'+i+'"'+(on?' checked':'')+'>'+label+'</label>';
       }
+      var fitOpts=cat==='upper'?FIT_UPPER:(cat==='lower'?FIT_LOWER:null);
+      var fitRow=fitOpts?('<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+        sel('fit','Fit / length',fitOpts,s.fit)+
+        '<span class="muted" style="font-size:11px">applies to ALL shots — sets the exact cut &amp; length</span></div>'):'';
       var pair='<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
         (cat!=='other'?sel('pair','Pair with',pairOpts,s.pair):'')+
         sel('tuck','Tuck',TUCK,s.tuck)+
@@ -980,17 +989,28 @@
         chk('cap','Cap',s.cap)+chk('sunglasses','Sunglasses',s.sunglasses)+chk('watch','Watch',s.watch)+
         '<span class="muted" style="font-size:11px">only affects the 2 model shots · AI picks colours</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
+      var hasBackRef=!!studio.backRefs[np.key];
       IMG_TYPES.forEach(function(t){
-        var im=byType[t[0]];
+        var im=byType[t[0]], isBack=t[0]==='back';
+        // "change back photo" link (only for the back slot once a ref exists)
+        var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
+        var empty;
+        if(isBack&&!hasBackRef){
+          // No real back photo → don't fabricate one; offer an upload instead.
+          empty='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px;text-align:center;padding:0 6px">upload a real back photo to create this</div>'+
+            '<div style="margin-top:5px"><label class="btn ghost sm" style="cursor:pointer">Upload back photo<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label></div>';
+        } else {
+          empty='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>'+
+            '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button>'+chg+'</div>';
+        }
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
-              '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center">'+
+              '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
               '<button class="btn sm '+(im.approved?'':'')+'" data-approveimg="'+i+'" data-type="'+t[0]+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
-              '<button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">↻</button></div>')
-             :('<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>'+
-              '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button></div>'))+
+              '<button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">↻</button>'+chg+'</div>')
+             :empty)+
           '</div>';
       });
       grid+='</div>';
@@ -1015,7 +1035,7 @@
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs 1 approved photo + approved SEO</span>';
-      return head+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
+      return head+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
     }
     function rerenderCard(i){
       var np=lastReceive.newProducts[i], c=el('scard'+i);
@@ -1041,10 +1061,24 @@
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
       Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ stylingOf(np)[sel.getAttribute('data-sty')]=sel.value; }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-styck]'),function(cb){ cb.onchange=function(){ stylingOf(np)[cb.getAttribute('data-styck')]=cb.checked; }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-backup]'),function(inp){ inp.onchange=function(){ uploadBackPhoto(np,i,inp.files&&inp.files[0]); }; });
+    }
+    function uploadBackPhoto(np,i,file){
+      if(!file) return;
+      var fd=new FormData(); fd.append('photo',file);
+      fetch('/api/procurement/photo',{method:'POST',body:fd}).then(readJson).then(function(u){
+        if(!u.success){ alert(u.error||'Upload failed.'); return; }
+        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/back-ref',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, url:u.url })})
+          .then(readJson).then(function(r){
+            if(!r.success){ alert(r.error||'Could not attach back photo.'); return; }
+            studio.backRefs[np.key]=u.url; rerenderCard(i);
+            genImages(np,i,['back']);   // create the back shot from the real photo now
+          });
+      }).catch(function(e){ alert(e.message); });
     }
     function genImages(np,i,types,btn){
       var lbl=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='Generating…'; }
-      var body={ groupKey:np.key, styling:composeStyling(np) }; if(types) body.types=types;
+      var body={ groupKey:np.key, styling:composeStyling(np), fit:fitOf(np) }; if(types) body.types=types;
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
         .then(readJson).then(function(dd){
           if(btn){ btn.disabled=false; btn.textContent=lbl; }
@@ -1057,21 +1091,22 @@
       // Generate the 4 shots ONE AT A TIME so a single blank/failed image never
       // spoils the batch, each appears as it lands, and the browser never freezes
       // decoding 4 images at once. Per-slot ↻ still refills just one shot.
-      var types=IMG_TYPES.map(function(t){ return t[0]; });
+      // Back is only generated from a real uploaded photo — skip it otherwise.
+      var types=IMG_TYPES.map(function(t){ return t[0]; }).filter(function(t){ return t!=='back' || studio.backRefs[np.key]; });
       var n=0, errs=[];
       function setBtn(txt,dis){
         var c=el('scard'+i); if(!c) return; var b=c.querySelector('[data-genimg]');
         if(b){ b.disabled=dis; b.textContent=txt; }
       }
       function done(){
-        setBtn((studio.images[np.key]&&studio.images[np.key].length)?'Regenerate all 4':'Generate 4 photos',false);
+        setBtn((studio.images[np.key]&&studio.images[np.key].length)?'Regenerate all':'Generate photos',false);
         if(errs.length) alert('Some photos could not be generated:\n'+errs.join('\n')+'\n\nUse “Generate this” under a blank slot to retry it.');
       }
       function step(){
         if(n>=types.length){ done(); return; }
         var t=types[n];
         setBtn('Generating '+(n+1)+'/'+types.length+'…',true);
-        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, types:[t], styling:composeStyling(np) })})
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, types:[t], styling:composeStyling(np), fit:fitOf(np) })})
           .then(readJson).then(function(dd){
             if(dd&&dd.success){ studio.images[np.key]=dd.images; rerenderCard(i); }
             if(dd&&dd.errors&&dd.errors.length){ dd.errors.forEach(function(e){ errs.push(e.type+': '+e.error); }); }
