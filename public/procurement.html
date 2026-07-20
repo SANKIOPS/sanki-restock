@@ -191,6 +191,13 @@
           <button class="btn ghost sm" id="refreshPos">Refresh</button>
         </div>
         <p class="sub">Open a purchase once goods arrive: enter each garment's weight → landed cost is computed → send for admin approval / post to Shopify.</p>
+        <div class="settingsgrid" id="poFilterBar" style="margin-top:6px">
+          <div class="fld"><label>Search <span class="muted" style="font-weight:400;text-transform:none">PO / vendor / bill / design</span></label><input id="poSearch" type="search" placeholder="Type to filter…" autocomplete="off"></div>
+          <div class="fld"><label>Vendor</label><select id="poVendorFilter"><option value="">All vendors</option></select></div>
+          <div class="fld"><label>Status</label><select id="poStatusFilter"><option value="open">Open (not posted)</option><option value="all">All</option><option value="advance">Advance</option><option value="received">Received</option><option value="awaiting_approval">Awaiting approval</option><option value="posted">Posted</option></select></div>
+          <div class="fld"><label>Source</label><select id="poOriginFilter"><option value="">Any source</option><option value="china">China</option><option value="india">India</option></select></div>
+        </div>
+        <p class="sub" id="poFilterNote" style="margin:4px 2px 0"></p>
         <div id="poListHost" class="polist" style="margin-top:10px"></div>
       </div>
       <div id="poDetailHost"></div>
@@ -727,33 +734,71 @@
 
     // ══════════ RECEIVE & POST ══════════
     el('refreshPos').onclick=loadPos;
+    // Search + filters re-render the already-loaded list (no re-fetch needed).
+    ['poSearch','poVendorFilter','poStatusFilter','poOriginFilter'].forEach(function(id){
+      var e=el(id); if(!e) return;
+      e.oninput=renderPoList; e.onchange=renderPoList;
+    });
     var STATUS_META={ advance:['adv','Advance — awaiting goods'], received:['rec','Received — weighed'], awaiting_approval:['await','Awaiting admin approval'], posted:['posted','Posted to Shopify'] };
     var poIndex={};   // id → full PO (from the last list load), used for list-level edit
+    var allPos=[];    // full unfiltered list from the last load (search/filter work on this)
     function loadPos(){
       openPoId=null;   // list is being rebuilt — drop the toggle state
       el('poListHost').innerHTML='<p class="muted">Loading…</p>';
       fetch('/api/procurement/pos').then(r=>r.json()).then(function(d){
         if(!d.success){ el('poListHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
-        poIndex={}; (d.pos||[]).forEach(function(p){ poIndex[p.id]=p; });
-        var pos=(d.pos||[]).filter(function(p){ return p.status!=='posted'; });
-        var posted=(d.pos||[]).filter(function(p){ return p.status==='posted'; });
-        var html='';
-        if(!pos.length){ html='<p class="muted">No open purchases. Create one under “New advance purchase”.</p>'; }
-        else {
+        poIndex={}; allPos=(d.pos||[]); allPos.forEach(function(p){ poIndex[p.id]=p; });
+        // Refresh the vendor dropdown from the vendors actually present on POs.
+        var vf=el('poVendorFilter'); if(vf){
+          var cur=vf.value;
+          var vendors=allPos.map(function(p){ return (p.vendor||'').toUpperCase(); }).filter(Boolean);
+          vendors=vendors.filter(function(v,i){ return vendors.indexOf(v)===i; }).sort(function(a,b){ return a.localeCompare(b); });
+          vf.innerHTML='<option value="">All vendors</option>'+vendors.map(function(v){ return '<option value="'+esc(v)+'"'+(v===cur?' selected':'')+'>'+esc(v)+'</option>'; }).join('');
+        }
+        renderPoList();
+      });
+    }
+    // Filter allPos by the search box + vendor/status/source selects, then render.
+    function poMatches(p){
+      var q=(el('poSearch')&&el('poSearch').value||'').trim().toLowerCase();
+      if(q){
+        var hay=[p.id, p.vendor, p.billNo].concat((p.lines||[]).map(function(l){ return (l.designName||'')+' '+(l.designCode||'')+' '+(l.sku||''); })).join(' ').toLowerCase();
+        if(hay.indexOf(q)<0) return false;
+      }
+      var vf=el('poVendorFilter')&&el('poVendorFilter').value; if(vf && (p.vendor||'').toUpperCase()!==vf) return false;
+      var of=el('poOriginFilter')&&el('poOriginFilter').value; if(of && (p.origin==='india'?'india':'china')!==of) return false;
+      var sf=(el('poStatusFilter')&&el('poStatusFilter').value)||'open';
+      if(sf==='open'){ if(p.status==='posted') return false; }
+      else if(sf!=='all'){ if(p.status!==sf) return false; }
+      return true;
+    }
+    function renderPoList(){
+      var matched=allPos.filter(poMatches);
+      var pos=matched.filter(function(p){ return p.status!=='posted'; });
+      var posted=matched.filter(function(p){ return p.status==='posted'; });
+      var html='';
+      if(!matched.length){
+        html='<p class="muted">'+(allPos.length?'No purchases match your search / filters.':'No open purchases. Create one under “New advance purchase”.')+'</p>';
+        el('poListHost').innerHTML=html;
+      } else {
+        if(pos.length){
           html='<div id="poBulkBar" style="display:none;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;padding:8px 10px;background:var(--ivory2);border:1px solid var(--line);border-radius:8px">'+
             '<span class="muted" id="poSelCount" style="font-size:13px">0 selected</span>'+
             '<div style="display:flex;gap:6px"><button class="btn ghost sm" id="poEditSel">Edit</button><button class="btn danger sm" id="poDelSel">Delete selected</button></div></div>'+
             pos.map(poRow).join('');
         }
         el('poListHost').innerHTML=html;
-        if(posted.length){ el('poListHost').innerHTML+='<h2>Posted history</h2>'+posted.map(poRow).join(''); }
-        // open on row click (but not when clicking the checkbox)
-        Array.prototype.forEach.call(el('poListHost').querySelectorAll('.porow'),function(r){
-          r.onclick=function(e){ if(e.target && (e.target.classList.contains('poCheck')||e.target.tagName==='LABEL')) return; openPo(r.getAttribute('data-po')); };
-        });
-        Array.prototype.forEach.call(el('poListHost').querySelectorAll('.poCheck'),function(c){ c.onclick=function(e){ e.stopPropagation(); }; c.onchange=updateBulkBar; });
-        updateBulkBar();
+        if(posted.length){ el('poListHost').innerHTML+='<h2>Posted'+((el('poStatusFilter')&&el('poStatusFilter').value)==='posted'?'':' history')+'</h2>'+posted.map(poRow).join(''); }
+      }
+      // count note
+      var note=el('poFilterNote'); if(note){ note.textContent = allPos.length ? ('Showing '+matched.length+' of '+allPos.length+' purchase(s).') : ''; }
+      // open on row click (but not when clicking the checkbox)
+      Array.prototype.forEach.call(el('poListHost').querySelectorAll('.porow'),function(r){
+        r.onclick=function(e){ if(e.target && (e.target.classList.contains('poCheck')||e.target.tagName==='LABEL')) return; openPo(r.getAttribute('data-po')); };
       });
+      Array.prototype.forEach.call(el('poListHost').querySelectorAll('.poCheck'),function(c){ c.onclick=function(e){ e.stopPropagation(); }; c.onchange=updateBulkBar; });
+      updateBulkBar();
+      markOpenRow();
     }
     function selectedPoIds(){
       var ids=[]; Array.prototype.forEach.call(document.querySelectorAll('.poCheck:checked'),function(c){ ids.push(c.getAttribute('data-po')); }); return ids;
