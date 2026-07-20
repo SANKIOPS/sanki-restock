@@ -906,7 +906,8 @@
     var PAIR_UPPER=['Auto','Baggy trousers','Normal trousers','Baggy jeans','Normal jeans','Cargo pants','Shorts'];
     var PAIR_LOWER=['Auto','Plain white tee','Plain black tee','Oversized tee','Hoodie','Button-up shirt'];
     var TUCK=['Auto','Tucked in','Untucked'];
-    var ACC=['None','Silver chain','Gold chain','Cap','Sunglasses','Watch'];
+    var CHAIN=['None','Silver chain','Gold chain'];
+    var ACC_TOGGLES=[['cap','Cap','a cap'],['sunglasses','Sunglasses','sunglasses'],['watch','Watch','a watch']];
     function garmentCat(pt){
       var uppers=['Shirt','T-Shirt','Sando','Hoodie','Jacket'];
       var lowers=['Jeans','Trouser','Lower','Shorts','Jogger','Jorts','Denim Joggers','Cargo'];
@@ -914,12 +915,14 @@
       if(lowers.indexOf(pt)>=0) return 'lower';
       return 'other';
     }
-    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={pair:'',tuck:'',acc:''}); }
+    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={pair:'',tuck:'',chain:'',cap:false,sunglasses:false,watch:false}); }
     function composeStyling(np){
-      var s=stylingOf(np), parts=[];
+      var s=stylingOf(np), parts=[], acc=[];
       if(s.pair && s.pair!=='Auto') parts.push('paired with '+s.pair.toLowerCase());
       if(s.tuck && s.tuck!=='Auto') parts.push(garmentCat(np.productType)==='upper'?('worn '+s.tuck.toLowerCase()):('with the top '+s.tuck.toLowerCase()));
-      if(s.acc && s.acc!=='None') parts.push('accessorised with a '+s.acc.toLowerCase());
+      if(s.chain && s.chain!=='None') acc.push('a '+s.chain.toLowerCase());
+      ACC_TOGGLES.forEach(function(a){ if(s[a[0]]) acc.push(a[2]); });
+      if(acc.length) parts.push('accessorised with '+(acc.length>1?acc.slice(0,-1).join(', ')+' and '+acc[acc.length-1]:acc[0]));
       return parts.join(', ');
     }
     function studioReadyFor(np){
@@ -966,10 +969,15 @@
         opts.forEach(function(op){ o+='<option'+((val||opts[0])===op?' selected':'')+'>'+esc(op)+'</option>'; });
         return o+'</select>';
       }
-      var pair='<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
+      function chk(kind,label,on){
+        return '<label class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap">'+
+          '<input type="checkbox" data-styck="'+kind+'" data-i="'+i+'"'+(on?' checked':'')+'>'+label+'</label>';
+      }
+      var pair='<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
         (cat!=='other'?sel('pair','Pair with',pairOpts,s.pair):'')+
         sel('tuck','Tuck',TUCK,s.tuck)+
-        sel('acc','Accessory',ACC,s.acc)+
+        sel('chain','Chain',CHAIN,s.chain)+
+        chk('cap','Cap',s.cap)+chk('sunglasses','Sunglasses',s.sunglasses)+chk('watch','Watch',s.watch)+
         '<span class="muted" style="font-size:11px">only affects the 2 model shots · AI picks colours</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
       IMG_TYPES.forEach(function(t){
@@ -1032,6 +1040,7 @@
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
       Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ stylingOf(np)[sel.getAttribute('data-sty')]=sel.value; }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-styck]'),function(cb){ cb.onchange=function(){ stylingOf(np)[cb.getAttribute('data-styck')]=cb.checked; }; });
     }
     function genImages(np,i,types,btn){
       var lbl=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='Generating…'; }
