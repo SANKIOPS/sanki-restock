@@ -1015,6 +1015,20 @@ async function newGroupsOf(s, po) {
   });
 }
 
+// Read-only: the NEW-product groups of a PO so the AI studio can be prepared
+// at the ADVANCE stage — during the shipping lead time, before goods arrive.
+// No status change and no weights required (weights don't affect imaging/SEO).
+router.get('/api/procurement/pos/:id/studio', async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+    const s = loadStore();
+    const po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+    const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram });
+    res.json({ success: true, newProducts: preview.newProducts || [], po: publicPo(po, req) });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // Generate the AI shots for ONE product group (or specific `types`).
 router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
   try {

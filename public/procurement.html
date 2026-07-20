@@ -791,9 +791,18 @@
         else h+='<span class="muted" style="align-self:center;font-size:12px">Shopify posting is done by the admin after your request.</span>';
         h+='</div>';
       }
-      h+='</div><div id="receiveHost"></div>';
+      h+='</div>';
+      // AI STUDIO — available at every non-posted stage (incl. ADVANCE) so listing
+      // photos + SEO are prepared during the shipping lead time, not at receive.
+      if(me.isAdmin && !posted){
+        h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">AI image studio — new products</h2>'+
+           '<p class="sub">Prepare listing images &amp; SEO <b>now</b>, during the shipping lead time. Per new product: <b>1)</b> generate 4 photos &amp; approve the good ones, <b>2)</b> generate the name &amp; SEO from an approved photo and approve it. When the goods arrive you just enter weights and post — no waiting.</p>'+
+           '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
+      }
+      h+='<div id="receiveHost"></div>';
       el('poDetailHost').innerHTML=h;
       el('poDetailHost').scrollIntoView({behavior:'smooth'});
+      if(me.isAdmin && !posted) initStudioFor(po.id);
       if(!posted){
         el('computeBtn').onclick=function(){ computeReceive(po.id); };
         // live total-weight + per-line weight as the user types
@@ -847,11 +856,9 @@
 
       if(me.isAdmin){
         if((d.newProducts||[]).length){
-          // AI STUDIO: generate + approve listing photos, then generate + approve
-          // the display name / SEO judged FROM those photos, per new product.
-          h+='<div class="panel"><h2 style="margin-top:0">AI image studio — new products</h2>'+
-             '<p class="sub">For each new product: <b>1)</b> generate 4 photos &amp; approve the good ones, <b>2)</b> generate the name &amp; SEO from an approved photo and approve it. Both are required before posting.</p>'+
-             '<div id="studioHost"></div></div>';
+          // The AI studio itself lives in the PO detail (above) so it can be
+          // prepared during lead time; here we only remind + gate the post.
+          h+='<div class="banner" style="background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe">Listing photos &amp; SEO are managed in the <b>AI image studio</b> above. Every new product needs an approved photo + approved SEO before you can post.</div>';
         }
         if((d.existingAdds||[]).length){
           h+='<h2>Existing variants — add received stock</h2><div class="panel"><table><thead><tr><th>SKU</th><th>Add qty</th><th class="money">Landed</th></tr></thead><tbody>';
@@ -870,13 +877,10 @@
       el('receiveHost').innerHTML=h;
       if(me.isAdmin){
         receiveId=id;
-        // seed studio state from the PO (survives reloads: images + seo persist server-side)
-        studio={ images:{}, seo:{} };
-        var po=d.po||{};
-        if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
-        if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved }; }); }
-        renderStudio();
+        // Studio state was already prepared in the PO detail (initStudioFor) and
+        // persists in module-level `studio`; here we just gate the post button.
         el('postBtn').onclick=function(){ postToShopify(id); };
+        refreshPostGate();
       } else el('requestBtn').onclick=function(){ requestApproval(id); };
     }
 
@@ -887,6 +891,24 @@
     function studioReadyFor(np){
       var imgs=studio.images[np.key]||[]; var okImg=imgs.some(function(x){return x.approved;});
       var seo=studio.seo[np.key]; return okImg && seo && seo.approved;
+    }
+    // Load the NEW-product groups for a PO and render the studio into the PO
+    // detail view — works at the advance stage (no receive/weights needed).
+    function initStudioFor(id){
+      receiveId=id;
+      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/studio').then(r=>r.json()).then(function(d){
+        if(!d.success){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
+        if(!(d.newProducts||[]).length){
+          if(el('studioHost')) el('studioHost').innerHTML='<p class="muted">No new products on this PO — everything here is a restock of an existing Shopify product, so no images are needed.</p>';
+          return;
+        }
+        lastReceive=d;                          // studio funcs read lastReceive.newProducts
+        studio={ images:{}, seo:{} };
+        var po=d.po||{};
+        if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
+        if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved }; }); }
+        renderStudio();
+      }).catch(function(e){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     }
     function renderStudio(){
       var d=lastReceive; if(!d||!el('studioHost')) return;
