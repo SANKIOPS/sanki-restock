@@ -244,9 +244,16 @@ function buildSku(store, productType, colour, sizeLabel, serial) {
 }
 
 // ── Landed cost + suggested MRP (per pc) ─────────────────────────
-function landedCost(line, settings) {
-  const inrValue    = num(line.perPcsYuan) * num(settings.exRate);
-  const freightPerPc = num(line.weightGrams) * num(settings.freightPerGram);
+// opts.origin === 'india' → the goods are bought locally in ₹: `perPcsYuan`
+// holds the ₹ unit cost (no exchange-rate conversion) and freight is a flat
+// per-piece transport share (opts.transportPerPc) instead of weight×rate.
+// Anything else (default) is the China model: ¥ × exRate + weight × freight.
+function landedCost(line, settings, opts) {
+  const india = opts && opts.origin === 'india';
+  const inrValue    = india ? num(line.perPcsYuan)
+                            : num(line.perPcsYuan) * num(settings.exRate);
+  const freightPerPc = india ? num(opts.transportPerPc)
+                             : num(line.weightGrams) * num(settings.freightPerGram);
   const landed      = inrValue + freightPerPc;
   // MRP ≈ 2×landed + GST; GST tier depends on the resulting price.
   let mrpRaw = 2 * landed * (1 + settings.gstLow);
@@ -410,6 +417,14 @@ async function computePreview(store, body) {
   if (body.exRate != null && body.exRate !== '')       settings.exRate = num(body.exRate);
   if (body.freightPerGram != null && body.freightPerGram !== '') settings.freightPerGram = num(body.freightPerGram);
 
+  // Origin of the whole PO: 'india' (bought locally in ₹, flat transport split
+  // by piece count) or 'china' (default: ¥ × exRate + weight × per-gram freight).
+  const origin = body.origin === 'india' ? 'india' : 'china';
+  const totalQty = (body.lines || []).reduce((s, l) => s + (num(l.qty) || 0), 0);
+  const transportPerPc = (origin === 'india' && totalQty > 0)
+    ? num(body.transportTotal) / totalQty : 0;
+  const costOpts = { origin, transportPerPc };
+
   const cat = await loadCatalogue(!!body.refresh);
   const sizeCodeOf = (label) => store.sizes[label] || label;
 
@@ -422,7 +437,7 @@ async function computePreview(store, body) {
 
   const lines = (body.lines || []).map(raw => {
     const line = normalizeLine(raw, body);
-    const cost = landedCost(line, settings);
+    const cost = landedCost(line, settings, costOpts);
 
     // Classify against Shopify: does this exact SKU already exist?
     // We generate the candidate SKU using the NEXT serial, but if the user
@@ -483,6 +498,8 @@ async function computePreview(store, body) {
 
   return {
     settings, warehouseLocationId: store.settings.warehouseLocationId,
+    origin, transportTotal: origin === 'india' ? num(body.transportTotal) : 0,
+    transportPerPc: round2(transportPerPc),
     lines, newProducts, existingAdds,
     counts: { total: lines.length, newProducts: newProducts.length, existingAdds: existingAdds.length,
               errors: lines.filter(l => l.skuError).length,
@@ -888,7 +905,9 @@ router.post('/api/procurement/advance', async (req, res) => {
     if (missingPhoto) return res.status(400).json({ success: false, error: 'Every line needs a product photo (' + missingPhoto + ' missing).' });
     // Run the preview engine to assign SKUs + classify NEW vs EXISTING (weight
     // is 0 at this stage, so any landed figure is provisional and unused here).
-    const preview = await computePreview(s, { lines: b.lines, vendor: b.vendor, exRate: b.exRate });
+    const origin = b.origin === 'india' ? 'india' : 'china';
+    const transportTotal = origin === 'india' ? num(b.transportTotal) : 0;
+    const preview = await computePreview(s, { lines: b.lines, vendor: b.vendor, exRate: b.exRate, origin, transportTotal });
     const lines = preview.lines.map(l => ({
       designName: l.designName, productType: l.productType, colour: l.colour,
       sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
@@ -903,6 +922,10 @@ router.post('/api/procurement/advance', async (req, res) => {
     s.pos[poId] = {
       id: poId,
       status: 'advance',               // advance → received → awaiting_approval → posted
+      // Origin of the whole PO: 'china' (¥ × exRate + weight×freight) or 'india'
+      // (₹ unit cost + flat transport share, no exchange rate / per-kg freight).
+      origin,
+      transportTotal,                  // ₹ total transport for the shipment (india only)
       createdAt: new Date().toISOString(),
       createdBy: (req.user && req.user.username) || 'system',
       vendor: String(b.vendor || '').toUpperCase().trim(),
@@ -959,13 +982,17 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     if (b.dateReceive) po.dateReceive = b.dateReceive;
     if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = num(b.freightPerGram);
     if (b.exRate != null && b.exRate !== '') po.exRate = num(b.exRate);
+    // India POs: the total shipment transport can be adjusted at receive time
+    // (e.g. once the actual courier bill is known). Ignored for China POs.
+    if (po.origin === 'india' && b.transportTotal != null && b.transportTotal !== '') po.transportTotal = num(b.transportTotal);
     // NOTE: computing landed cost is a PREVIEW only — it no longer flips the PO
     // to "received". Arrival is confirmed explicitly via /mark-received so that
     // previewing costs during the advance/lead-time stage never mis-marks a PO.
     saveStore(s);
     const preview = await computePreview(s, {
       lines: po.lines, vendor: po.vendor,
-      exRate: po.exRate, freightPerGram: po.freightPerGram
+      exRate: po.exRate, freightPerGram: po.freightPerGram,
+      origin: po.origin, transportTotal: po.transportTotal
     });
     // Overlay the SEO drafts saved at advance so the admin edits persist.
     if (isAdmin(req) && Array.isArray(po.seoDraft)) {
@@ -1036,6 +1063,10 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     if (b.leadTimeDays != null && b.leadTimeDays !== '') po.leadTimeDays = Math.max(0, Math.round(num(b.leadTimeDays)));
     if (b.exRate != null && b.exRate !== '')         po.exRate = num(b.exRate);
     if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = num(b.freightPerGram);
+    // Origin can be corrected before posting; transportTotal applies to india only.
+    if (b.origin != null) po.origin = b.origin === 'india' ? 'india' : 'china';
+    if (po.origin === 'india' && b.transportTotal != null && b.transportTotal !== '') po.transportTotal = num(b.transportTotal);
+    else if (po.origin !== 'india') po.transportTotal = 0;
     // Recompute expected arrival = purchase date (or today) + lead time.
     if (po.leadTimeDays != null) {
       const base = po.datePurchase ? new Date(po.datePurchase) : new Date();
@@ -1046,7 +1077,7 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     // serial. computePreview honours an explicit sku, so pre-filling each line's
     // sku preserves it. Weight is carried through if the line already had one.
     if (Array.isArray(b.lines)) {
-      const preview = await computePreview(s, { lines: b.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram });
+      const preview = await computePreview(s, { lines: b.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
       po.lines = preview.lines.map(l => ({
         designName: l.designName, productType: l.productType, colour: l.colour,
         sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
@@ -1089,8 +1120,12 @@ router.post('/api/procurement/pos/:id/request-approval', (req, res) => {
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
   if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
-  const unweighed = (po.lines || []).filter(l => !(num(l.weightGrams) > 0)).length;
-  if (unweighed) return res.status(400).json({ success: false, error: 'Enter weight for every line first (' + unweighed + ' missing).' });
+  // India POs price on a flat transport split, not weight — so weights aren't
+  // required. China POs still need a weight per line to compute per-kg freight.
+  if (po.origin !== 'india') {
+    const unweighed = (po.lines || []).filter(l => !(num(l.weightGrams) > 0)).length;
+    if (unweighed) return res.status(400).json({ success: false, error: 'Enter weight for every line first (' + unweighed + ' missing).' });
+  }
   po.status = 'awaiting_approval';
   po.approvalRequestedBy = (req.user && req.user.username) || 'system';
   po.approvalRequestedAt = new Date().toISOString();
@@ -1107,7 +1142,7 @@ router.post('/api/procurement/pos/:id/request-approval', (req, res) => {
 // photo to feed the image model. Only NEW products need images (EXISTING ones
 // already have a Shopify listing we only add stock to).
 async function newGroupsOf(s, po) {
-  const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram });
+  const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
   return (preview.newProducts || []).map(np => {
     const line = (po.lines || []).find(l => groupKey(l) === np.key && (l.photoUrl || '').trim());
     return { key: np.key, colour: np.colour, productType: np.productType, designName: np.designName,
@@ -1126,7 +1161,7 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-    const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram });
+    const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     res.json({ success: true, newProducts: preview.newProducts || [], po: publicPo(po, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });

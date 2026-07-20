@@ -141,6 +141,8 @@
           <div class="fld"><label>Bill number</label><input id="b_billNo" placeholder="vendor invoice no." /></div>
           <div class="fld"><label>Date of purchase</label><input id="b_datePurchase" type="date" /></div>
           <div class="fld"><label>Lead time (days) <span class="muted" style="font-weight:400;text-transform:none">China→India</span></label><input id="b_leadTime" type="number" min="0" step="1" placeholder="e.g. 10" /></div>
+          <div class="fld"><label>Sourced from</label><select id="b_origin"><option value="china">China (¥ + per-kg freight)</option><option value="india">India (₹ + flat transport)</option></select></div>
+          <div class="fld" id="transportWrap" style="display:none"><label>Total transport ₹ <span class="muted" style="font-weight:400;text-transform:none">(split by pieces)</span></label><input id="b_transportTotal" type="number" min="0" step="0.01" placeholder="whole shipment" /></div>
         </div>
         <p class="sub" id="etaNote" style="margin:6px 2px 0"></p>
       </div>
@@ -157,7 +159,7 @@
           <div class="fld" id="chinaWrap" style="display:none"><label>China size <span class="muted" style="font-weight:400;text-transform:none">(record only)</span></label><select id="f_chinaSize"></select></div>
           <div class="fld"><label>Audience</label><select id="f_audience"><option>Men</option><option>Women</option><option>Unisex</option></select></div>
           <div class="fld"><label>Qty</label><input id="f_qty" type="number" min="0" value="1" /></div>
-          <div class="fld"><label>¥/pc</label><input id="f_perPcsYuan" type="number" step="0.01" /></div>
+          <div class="fld"><label id="perPcsLabel">¥/pc</label><input id="f_perPcsYuan" type="number" step="0.01" /></div>
           <div class="fld"><label>Explicit SKU <span class="muted" style="font-weight:400;text-transform:none">(restock only)</span></label><input id="f_sku" class="mono" placeholder="auto" /></div>
           <div class="fld wide"><label>Product photo <span style="color:var(--err)">*</span></label>
             <div class="photocell"><input id="f_photo" type="file" accept="image/*" style="font-size:12px" /><img id="f_photoThumb" class="thumb hidden" alt="" /></div>
@@ -245,9 +247,13 @@
     function opts(sel,obj,ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} Object.keys(obj).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
     function optsArr(sel,arr,ph){ sel.innerHTML=''; if(ph){var o=document.createElement('option');o.value='';o.textContent=ph;sel.appendChild(o);} arr.forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=k;sel.appendChild(o);}); }
     function exRate(){ return Number(el('exRate').value)||Number(settings.exRate)||0; }
+    // Origin of the PO being built in the advance form ('china' default | 'india').
+    function advOrigin(){ var e=el('b_origin'); return (e && e.value==='india') ? 'india' : 'china'; }
+    function isIndia(){ return advOrigin()==='india'; }
     function chinaCost(l){ return (Number(l.perPcsYuan)||0) * exRate(); }
-    function lineYuan(l){ return (Number(l.qty)||0) * (Number(l.perPcsYuan)||0); }            // qty × ¥/pc (Yuan)
-    function lineCost(l){ return lineYuan(l) * exRate(); }                                    // × exchange rate (INR)
+    // For China perPcsYuan is ¥/pc; for India the SAME field holds ₹/pc directly.
+    function lineYuan(l){ return (Number(l.qty)||0) * (Number(l.perPcsYuan)||0); }            // qty × unit cost
+    function lineCost(l){ return isIndia() ? lineYuan(l) : lineYuan(l) * exRate(); }          // India: ₹ direct; China: × exchange rate
 
     // ── category-aware fits & sizes ──
     var UPPER_FITS=['Oversized','Drop Shoulder','Boxy Fit','Relaxed Fit','Regular Fit','Slim Fit','Muscle Fit'];
@@ -318,6 +324,19 @@
     }
     el('b_leadTime').oninput=updateEta;
     el('b_datePurchase').onchange=updateEta;
+
+    // ── origin (China / India) toggles the cost model shown in the form ──
+    // India: unit cost is entered in ₹ and freight is a flat transport total
+    // split by pieces — so the ¥/pc label becomes ₹/pc, the transport field
+    // appears, and the ¥/exchange-rate settings become irrelevant.
+    function syncOrigin(){
+      var india=isIndia();
+      var tw=el('transportWrap'); if(tw) tw.style.display=india?'':'none';
+      var pl=el('perPcsLabel'); if(pl) pl.textContent=india?'₹/pc':'¥/pc';
+      renderLines();   // cost columns depend on origin
+    }
+    el('b_origin').onchange=syncOrigin;
+    el('b_transportTotal').oninput=function(){ if(isIndia()) renderLines(); };
 
     // ── vendor dropdown (+ add-new) ──
     function fillVendors(list, selectName){
@@ -390,7 +409,7 @@
       if(!l.sizeLabel) miss.push(isLower?'Indian size':'size');
       if(!l.chinaSize) miss.push('China size');
       if(!(Number(l.qty)>0)) miss.push('qty');
-      if(!(Number(l.perPcsYuan)>0)) miss.push('¥/pc');
+      if(!(Number(l.perPcsYuan)>0)) miss.push(isIndia()?'₹/pc':'¥/pc');
       if(!l.photoUrl) miss.push('product photo');
       if(miss.length){ alert('Please fill: '+miss.join(', ')+'.'); return; }
       lines.push(l); resetLineForm(); renderLines();
@@ -430,7 +449,7 @@
           '<div class="fld"><label>China size</label><select data-e="chinaSize">'+optList(CHINA_SIZES,l.chinaSize)+'</select></div>'+
           '<div class="fld"><label>Audience</label><select data-e="audience">'+optList(['Men','Women','Unisex'],l.audience||'Men')+'</select></div>'+
           '<div class="fld"><label>Qty</label><input data-e="qty" type="number" min="0" value="'+esc(l.qty)+'"></div>'+
-          '<div class="fld"><label>¥/pc</label><input data-e="perPcsYuan" type="number" step="0.01" value="'+esc(l.perPcsYuan)+'"></div>'+
+          '<div class="fld"><label>'+(isIndia()?'₹/pc':'¥/pc')+'</label><input data-e="perPcsYuan" type="number" step="0.01" value="'+esc(l.perPcsYuan)+'"></div>'+
           '<div class="fld wide"><label>Product photo <span style="color:var(--err)">*</span></label>'+
             '<div class="photocell"><input type="file" accept="image/*" data-photoinput style="font-size:12px"><img data-photothumb class="thumb'+(l.photoUrl?'':' hidden')+'" src="'+esc(l.photoUrl||'')+'" alt=""></div>'+
             '<label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;text-transform:none;font-size:12px"><input type="checkbox" data-approve'+(l.photoApproved?' checked':'')+'> Photo is correct — approve it</label>'+
@@ -444,6 +463,9 @@
     function renderLines(){
       el('lineCount').textContent = lines.length ? '('+lines.length+')' : '';
       if(!lines.length){ el('linesHost').innerHTML='<p class="muted" style="padding:8px 2px">No lines yet. Add intake lines above, or upload an invoice to auto-fill.</p>'; return; }
+      var india=isIndia();
+      // India: the unit cost is already ₹ (no ¥ conversion), so show it as money.
+      var unit=function(v){ return india?money(v):yuan(v); };
       var rows=lines.map(function(l,i){
         if(i===editingLineIdx) return lineEditorRow(l,i);
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
@@ -456,16 +478,19 @@
           '<td>'+photoCell+'</td>'+
           '<td>'+esc(l.designName||'—')+'</td><td class="mono">'+esc(l.designCode||'—')+'</td>'+
           '<td>'+esc(l.productType||'—')+'</td><td>'+esc(l.colour||'—')+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
-          '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+yuan(lineYuan(l))+'</td><td class="money">'+money(lineCost(l))+'</td>'+
+          '<td>'+esc(l.qty)+'</td><td class="money">'+unit(l.perPcsYuan)+'</td><td class="money">'+unit(lineYuan(l))+'</td><td class="money">'+money(lineCost(l))+'</td>'+
           '<td><button class="btn ghost sm" data-edit="'+i+'">Edit</button> <button class="x" data-del="'+i+'">✕</button></td></tr>';
       }).join('');
       var totalYuan = lines.reduce(function(s,l){ return s + lineYuan(l); }, 0);
       var totalInr  = lines.reduce(function(s,l){ return s + lineCost(l); }, 0);
       var totalQty  = lines.reduce(function(s,l){ return s + (Number(l.qty)||0); }, 0);
-      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>¥/pc</th><th>Purchase cost (¥)</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
-        '<tr class="totalrow"><td colspan="7" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+yuan(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
+      var unitHdr=india?'₹/pc':'¥/pc', costHdr=india?'Purchase cost (₹)':'Purchase cost (¥)';
+      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>'+unitHdr+'</th><th>'+costHdr+'</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
+        '<tr class="totalrow"><td colspan="7" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+unit(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
         '</tbody></table>'+
-        '<p class="sub">Tap <b>Edit</b> on a line to change any field or its photo right here. Purchase cost (¥) = qty × ¥/pc; Total (₹) = × exchange rate ('+exRate()+').</p>';
+        '<p class="sub">Tap <b>Edit</b> on a line to change any field or its photo right here. '+(india
+          ? 'Purchase cost (₹) = qty × ₹/pc; landed cost adds the shipment transport (₹'+(Number(el('b_transportTotal')&&el('b_transportTotal').value)||0).toLocaleString('en-IN')+' split by pieces) at receive.'
+          : 'Purchase cost (¥) = qty × ¥/pc; Total (₹) = × exchange rate ('+exRate()+').')+'</p>';
       wireLineHandlers();
     }
     function wireLineHandlers(){
@@ -525,7 +550,7 @@
       var btn=el('saveAdvanceBtn'); btn.disabled=true; btn.textContent='Saving…';
       fetch('/api/procurement/advance',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ lines:lines, exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
-          leadTimeDays:el('b_leadTime').value,
+          leadTimeDays:el('b_leadTime').value, origin:advOrigin(), transportTotal:el('b_transportTotal').value,
           vendor:el('b_vendor').value.trim().toUpperCase(), billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save advance purchase →';
@@ -549,6 +574,9 @@
       // header / rates
       if(po.exRate!=null) el('exRate').value=po.exRate;
       if(po.freightPerGram!=null) el('freightPerGram').value=po.freightPerGram;
+      el('b_origin').value=(po.origin==='india'?'india':'china');
+      el('b_transportTotal').value=(po.transportTotal!=null?po.transportTotal:'');
+      syncOrigin();
       ensureVendorOption(po.vendor||'');
       el('b_billNo').value=po.billNo||'';
       el('b_datePurchase').value=po.datePurchase||'';
@@ -573,6 +601,7 @@
     }
     function exitEditMode(){
       editingPoId=null; lines=[]; renderLines();
+      el('b_origin').value='china'; el('b_transportTotal').value=''; syncOrigin();
       el('editingBanner').classList.add('hidden');
       el('saveAdvanceBtn').classList.remove('hidden');
       el('updatePoBtn').classList.add('hidden');
@@ -585,7 +614,8 @@
       fetch('/api/procurement/pos/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ vendor:el('b_vendor').value.trim().toUpperCase(), billNo:el('b_billNo').value.trim(),
           datePurchase:el('b_datePurchase').value, leadTimeDays:el('b_leadTime').value,
-          exRate:el('exRate').value, freightPerGram:el('freightPerGram').value, lines:lines })
+          exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
+          origin:advOrigin(), transportTotal:el('b_transportTotal').value, lines:lines })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Update PO →';
         if(!d.success){ el('advanceResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
@@ -776,6 +806,8 @@
     function renderPoDetail(po){
       lastReceive=null; currentPo=po;
       var posted = po.status==='posted';
+      var india = po.origin==='india';
+      var unit=function(v){ return india?money(v):yuan(v); };
       var etaHdr='';
       if(!posted && po.expectedReceiveDate){
         var ov=(daysUntil(po.expectedReceiveDate)||0)<0;
@@ -791,14 +823,17 @@
       if(!posted){
         h+='<div class="settingsgrid" style="margin-top:12px">'+
           '<div class="fld"><label>Date of receiving</label><input id="r_dateReceive" type="date" value="'+esc(po.dateReceive||new Date().toISOString().slice(0,10))+'"></div>'+
-          '<div class="fld"><label>Exchange rate ₹/RMB <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_exRate" type="number" step="0.01" value="'+esc(po.exRate!=null?po.exRate:'')+'"></div>'+
-          '<div class="fld"><label>Freight ₹/gram <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_freight" type="number" step="0.001" value="'+esc(po.freightPerGram!=null?po.freightPerGram:'')+'"></div>'+
-        '</div>';
+          (india
+            ? '<div class="fld"><label>Total transport ₹ <span class="muted" style="font-weight:400;text-transform:none">split by pieces</span></label><input id="r_transportTotal" type="number" min="0" step="0.01" value="'+esc(po.transportTotal!=null?po.transportTotal:'')+'"></div>'
+            : '<div class="fld"><label>Exchange rate ₹/RMB <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_exRate" type="number" step="0.01" value="'+esc(po.exRate!=null?po.exRate:'')+'"></div>'+
+              '<div class="fld"><label>Freight ₹/gram <span class="muted" style="font-weight:400;text-transform:none">from advance</span></label><input id="r_freight" type="number" step="0.001" value="'+esc(po.freightPerGram!=null?po.freightPerGram:'')+'"></div>')+
+        '</div>'+
+        (india?'<p class="sub" style="margin:6px 2px 0">Sourced from <b>India</b> — landed cost = ₹ unit cost + a flat transport share (total ÷ pieces). No exchange rate or per-kg freight. Weights are optional.</p>':'');
       } else if(po.dateReceive){
         h+='<div class="muted" style="font-size:12px;margin-top:8px">Received on <b>'+esc(fmtDate(po.dateReceive))+'</b></div>';
       }
       // weight-entry table
-      h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">¥/pc</th><th>Weight g/pc '+(posted?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
+      h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">'+(india?'₹/pc':'¥/pc')+'</th><th>Weight g/pc '+((posted||india)?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
       (po.lines||[]).forEach(function(l,i){
         var cls = l.classification==='EXISTING' ? '<span class="pill exist">restock</span>' : '<span class="pill new">new</span>';
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
@@ -810,8 +845,8 @@
           '<td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
           '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
           '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
-          '<td>'+esc(l.qty)+'</td><td class="money">'+yuan(l.perPcsYuan)+'</td>'+
-          '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" data-qty="'+(Number(l.qty)||0)+'" value="'+(l.weightGrams||'')+'" style="width:90px">')+'</td>'+
+          '<td>'+esc(l.qty)+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
+          '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" data-qty="'+(Number(l.qty)||0)+'" value="'+(l.weightGrams||'')+'" style="width:90px"'+(india?' placeholder="optional"':'')+'>')+'</td>'+
           '<td class="money" data-lw="'+i+'">'+(lw?(lw.toLocaleString('en-IN')+' g'):'—')+'</td></tr>';
       });
       var tw=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.weightGrams)||0)*(Number(l.qty)||0); },0);
@@ -880,6 +915,7 @@
         body:JSON.stringify({ weights:collectWeights(),
           exRate:(el('r_exRate')?el('r_exRate').value:''),
           freightPerGram:(el('r_freight')?el('r_freight').value:el('freightPerGram').value),
+          transportTotal:(el('r_transportTotal')?el('r_transportTotal').value:''),
           dateReceive:(el('r_dateReceive')&&el('r_dateReceive').value)?el('r_dateReceive').value:new Date().toISOString().slice(0,10) })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save weights & preview landed cost';
@@ -916,11 +952,15 @@
     }
 
     function renderReceive(d, id){
-      var h='<div class="panel"><h2 style="margin-top:0">Final landed cost</h2><table><thead><tr><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th class="money">¥/pc</th><th class="money">Freight</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
+      var india=d.origin==='india';
+      var unit=function(v){ return india?money(v):yuan(v); };
+      var h='<div class="panel"><h2 style="margin-top:0">Final landed cost</h2>'+
+        (india?'<p class="sub" style="margin:0 2px 8px">India PO — landed = ₹ unit cost + transport share (₹'+(Number(d.transportTotal)||0).toLocaleString('en-IN')+' ÷ '+((d.lines||[]).reduce(function(s,l){return s+(Number(l.qty)||0);},0)||0)+' pcs = '+money(d.transportPerPc)+'/pc).</p>':'')+
+        '<table><thead><tr><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th class="money">'+(india?'₹/pc':'¥/pc')+'</th><th class="money">'+(india?'Transport':'Freight')+'</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
       (d.lines||[]).forEach(function(l){
         h+='<tr><td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
           '<td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+esc(l.sizeLabel)+'</td>'+
-          '<td class="money">'+yuan(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.suggestedMrp)+'</td><td>'+esc(l.qty)+'</td></tr>';
+          '<td class="money">'+unit(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.suggestedMrp)+'</td><td>'+esc(l.qty)+'</td></tr>';
       });
       h+='</tbody></table></div>';
 
