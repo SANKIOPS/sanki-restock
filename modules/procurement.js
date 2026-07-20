@@ -85,14 +85,14 @@ const IMAGE_MODEL = process.env.PROCUREMENT_IMAGE_MODEL || 'gemini-2.5-flash-ima
 // The four shots we make for every product. `prompt` is suffixed with the
 // product context (type / colour / audience) at generation time.
 const AI_IMAGE_SPECS = [
-  { type: 'model',  label: 'Model shot',
-    prompt: 'Generate a clean e-commerce MODEL photo of a real human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, full or three-quarter body, natural relaxed pose, streetwear styling. Photorealistic, high resolution, no text or watermark.' },
+  { type: 'female', label: 'Female model',
+    prompt: 'Generate a clean e-commerce photo of a real FEMALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, full or three-quarter body, natural relaxed pose, streetwear styling. Photorealistic, high resolution, no text or watermark.' },
+  { type: 'male',   label: 'Male model',
+    prompt: 'Generate a clean e-commerce photo of a real MALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, full or three-quarter body, natural relaxed pose, streetwear styling. Photorealistic, high resolution, no text or watermark.' },
   { type: 'front',  label: 'Product front',
     prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the FRONT of this exact garment, centered on a pure white background. Keep the garment identical to the reference. Even studio lighting, no model, no props, no text or watermark, sharp product detail.' },
   { type: 'back',   label: 'Product back',
-    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the BACK of this exact garment, centered on a pure white background. Keep colour and details consistent with the reference front view. Even studio lighting, no model, no props, no text or watermark.' },
-  { type: 'studio', label: 'Studio shot',
-    prompt: 'Generate a premium studio PRODUCT photo of this exact garment, styled on an invisible/ghost mannequin at a slight angle, soft gradient light-grey background, catalogue lighting with gentle shadow. Keep the garment identical to the reference. High-end streetwear look, photorealistic, no text or watermark.' }
+    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the BACK of this exact garment, centered on a pure white background. Keep colour and details consistent with the reference front view. Even studio lighting, no model, no props, no text or watermark.' }
 ];
 
 // ── Seeds (decoded once from the sheet; editable in-app thereafter) ──
@@ -643,9 +643,18 @@ async function geminiGenerateImage(baseB64, baseMime, prompt) {
   if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (((j.error && j.error.message) || '').slice(0, 200) || 'image error'));
   const parts = ((((j.candidates || [])[0] || {}).content) || {}).parts || [];
   const img = parts.find(p => p.inlineData || p.inline_data);
-  const data = img && (img.inlineData || img.inline_data).data;
+  const blob = img && (img.inlineData || img.inline_data);
+  const data = blob && blob.data;
   if (!data) throw new Error('The model returned no image (try again or use a clearer source photo).');
-  return Buffer.from(data, 'base64');
+  const mime = (blob.mimeType || blob.mime_type || 'image/png').toLowerCase();
+  return { buf: Buffer.from(data, 'base64'), mime };
+}
+// Map an image mime type to the file extension Shopify (and the browser) expect.
+function extForMime(mime) {
+  if (mime === 'image/png') return '.png';
+  if (mime === 'image/webp') return '.webp';
+  if (mime === 'image/gif') return '.gif';
+  return '.jpg';
 }
 
 router.get('/api/procurement/lookups', (req, res) => {
@@ -1046,7 +1055,9 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     const src = readStoredPhoto(g.photoUrl);
     if (!src) return res.status(400).json({ success: false, error: 'No source photo for this product — add one first.' });
     const baseB64 = src.buf.toString('base64');
-    const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.`;
+    const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.` +
+      // Shopify product-image rules: square 1:1, high-res, clean, no text/watermark/border.
+      ` Output a SQUARE 1:1 aspect-ratio image at high resolution (at least 2048x2048 pixels), formatted for a Shopify product listing: the full garment centered and fully in frame with even margins, sharp focus, plain uncluttered background, no text, logos, watermarks, borders or UI overlays.`;
     const wantTypes = Array.isArray(b.types) && b.types.length ? b.types : AI_IMAGE_SPECS.map(s2 => s2.type);
     po.aiImages = po.aiImages || {};
     const existing = Array.isArray(po.aiImages[g.key]) ? po.aiImages[g.key] : [];
@@ -1055,7 +1066,7 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
       if (wantTypes.indexOf(spec.type) < 0) continue;
       try {
         const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + context);
-        const saved = savePhotoBuffer(out, '.jpg');
+        const saved = savePhotoBuffer(out.buf, extForMime(out.mime));
         const idx = existing.findIndex(x => x.type === spec.type);
         const rec = { type: spec.type, label: spec.label, url: saved.url, approved: false };
         if (idx >= 0) existing[idx] = rec; else existing.push(rec);
@@ -1103,7 +1114,7 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     if (!g) return res.status(404).json({ success: false, error: 'Product group not found.' });
     // Prefer an approved AI image; fall back to the model/studio shot, then the raw photo.
     const imgs = (po.aiImages && po.aiImages[g.key]) || [];
-    const chosen = imgs.find(x => x.approved && (x.type === 'model' || x.type === 'studio'))
+    const chosen = imgs.find(x => x.approved && (x.type === 'female' || x.type === 'male'))
                 || imgs.find(x => x.approved) || null;
     const src = readStoredPhoto(chosen ? chosen.url : g.photoUrl);
     if (!src) return res.status(400).json({ success: false, error: 'No photo available to judge — generate/approve an image first.' });
