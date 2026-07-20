@@ -948,7 +948,8 @@
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center">'+
               '<button class="btn sm '+(im.approved?'':'')+'" data-approveimg="'+i+'" data-type="'+t[0]+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved':'Approve')+'</button>'+
               '<button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">↻</button></div>')
-             :'<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>')+
+             :('<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>'+
+              '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button></div>'))+
           '</div>';
       });
       grid+='</div>';
@@ -991,7 +992,7 @@
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
-      var gi=host.querySelector('[data-genimg]'); if(gi) gi.onclick=function(){ genImages(np,i,null,gi); };
+      var gi=host.querySelector('[data-genimg]'); if(gi) gi.onclick=function(){ genImagesSequential(np,i); };
       Array.prototype.forEach.call(host.querySelectorAll('[data-regen]'),function(b){ b.onclick=function(){ genImages(np,i,[b.getAttribute('data-type')],b); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-approveimg]'),function(b){ b.onclick=function(){ toggleImg(np,i,b.getAttribute('data-type')); }; });
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ genSeoFor(np,i,gs); };
@@ -1008,6 +1009,34 @@
           studio.images[np.key]=dd.images; rerenderCard(i);
           if(dd.errors&&dd.errors.length){ alert(dd.errors.map(function(e){return e.type+': '+e.error;}).join('\n')); }
         }).catch(function(e){ if(btn){ btn.disabled=false; btn.textContent=lbl; } alert(e.message); });
+    }
+    function genImagesSequential(np,i){
+      // Generate the 4 shots ONE AT A TIME so a single blank/failed image never
+      // spoils the batch, each appears as it lands, and the browser never freezes
+      // decoding 4 images at once. Per-slot ↻ still refills just one shot.
+      var types=IMG_TYPES.map(function(t){ return t[0]; });
+      var n=0, errs=[];
+      function setBtn(txt,dis){
+        var c=el('scard'+i); if(!c) return; var b=c.querySelector('[data-genimg]');
+        if(b){ b.disabled=dis; b.textContent=txt; }
+      }
+      function done(){
+        setBtn((studio.images[np.key]&&studio.images[np.key].length)?'Regenerate all 4':'Generate 4 photos',false);
+        if(errs.length) alert('Some photos could not be generated:\n'+errs.join('\n')+'\n\nUse “Generate this” under a blank slot to retry it.');
+      }
+      function step(){
+        if(n>=types.length){ done(); return; }
+        var t=types[n];
+        setBtn('Generating '+(n+1)+'/'+types.length+'…',true);
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, types:[t] })})
+          .then(readJson).then(function(dd){
+            if(dd&&dd.success){ studio.images[np.key]=dd.images; rerenderCard(i); }
+            if(dd&&dd.errors&&dd.errors.length){ dd.errors.forEach(function(e){ errs.push(e.type+': '+e.error); }); }
+            else if(!dd||!dd.success){ errs.push(t+': '+((dd&&dd.error)||'failed')); }
+            n++; step();
+          }).catch(function(e){ errs.push(t+': '+e.message); n++; step(); });
+      }
+      step();
     }
     function toggleImg(np,i,type){
       var imgs=studio.images[np.key]||[]; var im=imgs.find(function(x){return x.type===type;}); if(!im) return;
