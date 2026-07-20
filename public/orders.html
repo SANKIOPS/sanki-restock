@@ -27,6 +27,19 @@
     .filters input, .filters select { font-size:13px; padding:8px 10px; border:1px solid var(--line);
       border-radius:8px; background:#fff; color:var(--ink); }
     .filters input[type=search] { min-width:230px; }
+    /* quick-filter tab rows */
+    .tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 10px; }
+    .tab { font-size:12.5px; font-weight:600; padding:6px 13px; border-radius:999px; cursor:pointer;
+      border:1px solid var(--line); background:#fff; color:var(--muted); }
+    .tab:hover { border-color:var(--brand); color:var(--brand); }
+    .tab.active { background:var(--brand); border-color:var(--brand); color:#fff; }
+    .tabs .lbl { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px;
+      color:#9aa0a6; align-self:center; margin-right:4px; }
+    /* read-only order detail sections */
+    .dsec { border-top:1px solid var(--line); margin-top:12px; padding-top:10px; }
+    .dsec h4 { margin:0 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9aa0a6; }
+    .drow { display:flex; justify-content:space-between; gap:10px; font-size:13px; padding:2px 0; }
+    .drow .k { color:var(--muted); }
     table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
       border-radius:12px; overflow:hidden; font-size:13px; }
     th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -68,14 +81,31 @@
         <h1>Orders</h1>
         <p class="sub" id="sub">Every Shopify sale (POS + Website), tracked end-to-end.</p>
       </div>
-      <button class="btn" id="syncBtn">↻ Sync now</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn ghost" id="backfillBtn" title="Re-pull the ENTIRE order history from Shopify (older orders that predate the first sync)">⇊ Backfill all history</button>
+        <button class="btn" id="syncBtn">↻ Sync now</button>
+      </div>
     </div>
 
     <div class="cards" id="cards"></div>
 
+    <div class="tabs" id="chanTabs">
+      <span class="lbl">Channel</span>
+      <button class="tab active" data-chan="">All</button>
+      <button class="tab" data-chan="POS">POS</button>
+      <button class="tab" data-chan="Website">Website</button>
+    </div>
+    <div class="tabs" id="dateTabs">
+      <span class="lbl">Date</span>
+      <button class="tab active" data-range="">All time</button>
+      <button class="tab" data-range="today">Today</button>
+      <button class="tab" data-range="7">7 days</button>
+      <button class="tab" data-range="30">30 days</button>
+      <button class="tab" data-range="month">This month</button>
+    </div>
+
     <div class="filters">
-      <input type="search" id="q" placeholder="Search order #, customer, phone, city, SKU…" />
-      <select id="channel"><option value="">All channels</option><option>POS</option><option>Website</option></select>
+      <input type="search" id="q" placeholder="Search order #, name, email, phone, city, SKU…" />
       <select id="packing">
         <option value="">All packing</option>
         <option value="pending">Pending</option><option value="packed">Packed</option>
@@ -84,6 +114,8 @@
       </select>
       <input type="date" id="from" title="From date" />
       <input type="date" id="to" title="To date" />
+      <button class="btn ghost" id="clearBtn" style="display:none">✕ Clear filters</button>
+      <span class="muted" id="activeNote" style="font-size:12px"></span>
     </div>
 
     <div id="tableHost"></div>
@@ -139,11 +171,14 @@
         var tb = el('tbody');
         orders.forEach(function(o){
           var tr = el('tr');
-          // order
-          var c1=el('td'); c1.appendChild(el('strong',null,o.name||'')); if(o.cancelledAt){ c1.appendChild(el('div','st cancelled','cancelled')); } tr.appendChild(c1);
+          // order — clickable name opens the full detail view
+          var c1=el('td'); var nm=el('a','lnk'); nm.style.fontWeight='700'; nm.textContent=o.name||'';
+            nm.onclick=function(){ openDetails(o); }; c1.appendChild(nm);
+            if(o.cancelledAt){ c1.appendChild(el('div','st cancelled','cancelled')); } tr.appendChild(c1);
           tr.appendChild(el('td','muted',fmtDate(o.createdAt)));
           var c3=el('td'); var p=el('span','pill ch-'+o.channel,o.channel); c3.appendChild(p); tr.appendChild(c3);
           var c4=el('td'); c4.appendChild(el('div',null,o.customer.name||'—'));
+            if(o.customer.email) c4.appendChild(el('div','muted',o.customer.email));
             if(o.customer.phone) c4.appendChild(el('div','muted',o.customer.phone));
             if(o.city) c4.appendChild(el('div','muted',o.city)); tr.appendChild(c4);
           tr.appendChild(el('td',null,String(o.itemCount||0)));
@@ -221,6 +256,54 @@
           .catch(function(){ btn.disabled=false; btn.textContent='Save'; alert('Network error'); });
       }
 
+      // ── Full order detail (read-only) ──
+      function drow(k,v){ return '<div class="drow"><span class="k">'+esc(k)+'</span><span>'+esc(v)+'</span></div>'; }
+      function openDetails(o){
+        // Re-fetch the freshest single order (dispatch + all fields), fall back to row data.
+        fetch('/api/orders-ledger/'+o.id,{headers:{Accept:'application/json'}})
+          .then(function(r){ return r.ok?r.json():null; })
+          .then(function(res){ renderDetails(res&&res.order?res.order:o); })
+          .catch(function(){ renderDetails(o); });
+      }
+      function renderDetails(o){
+        var d=o.dispatch||{}, addr=o.shipAddress||{};
+        var addrLine=[addr.address1,addr.address2,addr.city,addr.province,addr.zip,addr.country].filter(Boolean).join(', ');
+        var items=(o.lineItems||[]).map(function(li){ return '<div class="it"><span>'+esc(li.title)+(li.variantTitle?' · '+esc(li.variantTitle):'')+' <span class="muted">'+esc(li.sku)+'</span></span><span>×'+li.qty+' · '+money(li.price)+'</span></div>'; }).join('');
+        modal.innerHTML =
+          '<h3>'+esc(o.name)+' · '+esc(o.channel)+'</h3>'+
+          '<div class="oc">'+esc(fmtDate(o.createdAt))+(o.cancelledAt?' · cancelled':'')+'</div>'+
+          '<div class="items">'+(items||'<span class="muted">no line items</span>')+'</div>'+
+          '<div class="dsec"><h4>Customer</h4>'+
+            drow('Name', o.customer.name||'—')+
+            (o.customer.email?drow('Email', o.customer.email):'')+
+            (o.customer.phone?drow('Phone', o.customer.phone):'')+
+            (addrLine?drow('Ship to', addrLine):'')+'</div>'+
+          '<div class="dsec"><h4>Payment</h4>'+
+            drow('Total', money(o.total))+
+            drow('Subtotal', money(o.subtotal))+
+            (o.discount?drow('Discount', '−'+money(o.discount)):'')+
+            (o.tax?drow('Tax', money(o.tax)):'')+
+            (o.shipping?drow('Shipping', money(o.shipping)):'')+
+            (o.refundAmount?drow('Refunded', '−'+money(o.refundAmount)):'')+
+            drow('Financial status', o.financialStatus||'—')+
+            drow('Fulfillment', o.fulfillmentStatus||'—')+
+            (o.paymentGateways&&o.paymentGateways.length?drow('Gateway', o.paymentGateways.join(', ')):'')+
+            (o.couponCodes&&o.couponCodes.length?drow('Coupons', o.couponCodes.join(', ')):'')+'</div>'+
+          '<div class="dsec"><h4>Dispatch</h4>'+
+            drow('Packing', d.packingStatus||'—')+
+            drow('Confirmation', d.orderConfirmation||'—')+
+            drow('Payment mode', d.paymentMode||'—')+
+            (d.dueAmount?drow('COD due', money(d.dueAmount)):'')+
+            (d.courier?drow('Courier', d.courier):'')+
+            (d.trackingUrl?drow('Tracking', d.trackingUrl):'')+
+            (d.remarks?drow('Remarks', d.remarks):'')+'</div>'+
+          (o.note?'<div class="dsec"><h4>Order note</h4><div style="font-size:13px">'+esc(o.note)+'</div></div>':'')+
+          '<div class="mactions"><button class="btn ghost" id="d_close">Close</button><button class="btn" id="d_edit">Edit dispatch</button></div>';
+        ov.classList.add('open');
+        document.getElementById('d_close').onclick=closeEditor;
+        document.getElementById('d_edit').onclick=function(){ openEditor(o); };
+      }
+
       // ── Sync ──
       syncBtn.onclick=function(){
         syncBtn.disabled=true; var t=syncBtn.textContent; syncBtn.textContent='Syncing…';
@@ -231,14 +314,64 @@
           .catch(function(){ syncBtn.disabled=false; syncBtn.textContent=t; alert('Sync error'); });
       };
 
-      // filters wiring
+      // ── filters wiring ──
       var qEl=document.getElementById('q'); var deb;
-      qEl.oninput=function(){ clearTimeout(deb); deb=setTimeout(function(){ filters.q=qEl.value.trim(); load(); },300); };
-      document.getElementById('channel').onchange=function(){ filters.channel=this.value; load(); };
-      document.getElementById('packing').onchange=function(){ filters.packing=this.value; load(); };
-      document.getElementById('from').onchange=function(){ filters.from=this.value; load(); };
-      document.getElementById('to').onchange=function(){ filters.to=this.value; load(); };
+      var fromEl=document.getElementById('from'), toEl=document.getElementById('to'), packEl=document.getElementById('packing');
+      function anyActive(){ return !!(filters.q||filters.channel||filters.packing||filters.from||filters.to); }
+      function syncClear(){
+        document.getElementById('clearBtn').style.display = anyActive() ? '' : 'none';
+        document.getElementById('activeNote').textContent = anyActive() ? 'filters applied' : '';
+      }
+      function afterFilterChange(){ syncClear(); load(); }
 
+      qEl.oninput=function(){ clearTimeout(deb); deb=setTimeout(function(){ filters.q=qEl.value.trim(); afterFilterChange(); },300); };
+      packEl.onchange=function(){ filters.packing=this.value; afterFilterChange(); };
+      fromEl.onchange=function(){ filters.from=this.value; clearDateTabs(); afterFilterChange(); };
+      toEl.onchange=function(){ filters.to=this.value; clearDateTabs(); afterFilterChange(); };
+
+      // channel tabs
+      Array.prototype.forEach.call(document.querySelectorAll('#chanTabs .tab'), function(t){
+        t.onclick=function(){
+          Array.prototype.forEach.call(document.querySelectorAll('#chanTabs .tab'), function(x){ x.classList.remove('active'); });
+          t.classList.add('active'); filters.channel=t.getAttribute('data-chan'); afterFilterChange();
+        };
+      });
+      // date preset tabs → set from/to
+      function isoDay(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+      function setDateTab(elm){ Array.prototype.forEach.call(document.querySelectorAll('#dateTabs .tab'), function(x){ x.classList.remove('active'); }); if(elm) elm.classList.add('active'); }
+      function clearDateTabs(){ setDateTab(document.querySelector('#dateTabs .tab[data-range=""]')); }
+      Array.prototype.forEach.call(document.querySelectorAll('#dateTabs .tab'), function(t){
+        t.onclick=function(){
+          setDateTab(t);
+          var r=t.getAttribute('data-range'), now=new Date(), from='', to='';
+          if(r==='today'){ from=isoDay(now); to=isoDay(now); }
+          else if(r==='7'){ var a=new Date(now); a.setDate(a.getDate()-6); from=isoDay(a); to=isoDay(now); }
+          else if(r==='30'){ var b=new Date(now); b.setDate(b.getDate()-29); from=isoDay(b); to=isoDay(now); }
+          else if(r==='month'){ from=isoDay(new Date(now.getFullYear(), now.getMonth(), 1)); to=isoDay(now); }
+          filters.from=from; filters.to=to; fromEl.value=from; toEl.value=to; afterFilterChange();
+        };
+      });
+
+      // clear filters
+      document.getElementById('clearBtn').onclick=function(){
+        filters={ q:'', channel:'', packing:'', from:'', to:'' };
+        qEl.value=''; packEl.value=''; fromEl.value=''; toEl.value='';
+        Array.prototype.forEach.call(document.querySelectorAll('#chanTabs .tab'), function(x){ x.classList.toggle('active', x.getAttribute('data-chan')===''); });
+        clearDateTabs(); afterFilterChange();
+      };
+
+      // backfill full history (imports orders that predate the first sync)
+      document.getElementById('backfillBtn').onclick=function(){
+        if(!confirm('Re-pull the ENTIRE order history from Shopify? This can take a while on large stores, but only needs doing once.')) return;
+        var b=this, t=b.textContent; b.disabled=true; b.textContent='Backfilling…';
+        fetch('/api/orders-ledger/sync?full=1',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+          .then(function(r){ return r.json(); })
+          .then(function(res){ b.disabled=false; b.textContent=t; if(!res.success){ alert(res.error||'Backfill failed'); return; }
+            alert('Backfill complete — '+(res.total||0)+' orders in the ledger.'); load(); })
+          .catch(function(){ b.disabled=false; b.textContent=t; alert('Backfill error'); });
+      };
+
+      syncClear();
       load();
     })();
   </script>

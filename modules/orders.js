@@ -47,8 +47,8 @@ const ORDER_FIELDS = [
   'id', 'name', 'order_number', 'created_at', 'updated_at', 'processed_at', 'cancelled_at',
   'source_name', 'financial_status', 'fulfillment_status', 'currency',
   'subtotal_price', 'total_discounts', 'total_tax', 'total_price', 'total_shipping_price_set',
-  'discount_codes', 'payment_gateway_names', 'customer', 'phone', 'shipping_address',
-  'line_items', 'refunds'
+  'discount_codes', 'payment_gateway_names', 'customer', 'email', 'contact_email', 'phone',
+  'shipping_address', 'billing_address', 'note', 'line_items', 'refunds'
 ].join(',');
 
 // ── JSON store (atomic write) ────────────────────────────────────
@@ -111,11 +111,22 @@ function refundTotal(o) {
   o.refunds.forEach(rf => (rf.transactions || []).forEach(t => { if (t.kind === 'refund') sum += num(t.amount); }));
   return sum;
 }
+function addressObj(a) {
+  a = a || {};
+  return {
+    name: a.name || [a.first_name, a.last_name].filter(Boolean).join(' ').trim() || '',
+    phone: a.phone || '',
+    address1: a.address1 || '', address2: a.address2 || '',
+    city: a.city || '', province: a.province || '', zip: a.zip || '',
+    country: a.country || ''
+  };
+}
 function normalizeOrder(o) {
   const cust = o.customer || {};
   const ship = o.shipping_address || {};
   const custName = [cust.first_name, cust.last_name].filter(Boolean).join(' ').trim()
     || ship.name || '';
+  const email = cust.email || o.email || o.contact_email || '';
   const lineItems = (o.line_items || []).map(li => ({
     sku: li.sku || '', title: li.title || '', variantTitle: li.variant_title || '',
     qty: li.quantity || 0, price: num(li.price)
@@ -130,8 +141,11 @@ function normalizeOrder(o) {
     cancelledAt: o.cancelled_at || null,
     channel: channelOf(o.source_name),
     sourceName: o.source_name || '',
-    customer: { name: custName, phone: o.phone || cust.phone || ship.phone || '' },
+    customer: { name: custName, phone: o.phone || cust.phone || ship.phone || '', email },
     city: ship.city || '',
+    shipAddress: addressObj(ship),
+    billAddress: addressObj(o.billing_address),
+    note: o.note || '',
     lineItems,
     itemCount: lineItems.reduce((s, li) => s + (li.qty || 0), 0),
     currency: o.currency || 'INR',
@@ -159,13 +173,16 @@ function paymentModeGuess(n) {
 
 // ── Sync (backfill or incremental) ───────────────────────────────
 let _syncing = false;
-async function runSync() {
+async function runSync(opts = {}) {
   if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) throw new Error('Shopify env not configured');
   if (_syncing) return { skipped: 'already running' };
   _syncing = true;
   try {
     const store = loadStore();
-    const isBackfill = Object.keys(store.orders).length === 0;
+    // Full backfill when: forced (opts.full), OR nothing stored yet. A forced full
+    // re-pulls the ENTIRE history (no updated_at_min) so orders that predate the
+    // first sync get imported — this is what "Backfill all history" triggers.
+    const isBackfill = opts.full === true || Object.keys(store.orders).length === 0;
     // Incremental syncs re-pull anything updated since a small safety margin
     // before the last sync (catches edits/refunds/fulfilment changes).
     let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?status=any&limit=250&fields=${ORDER_FIELDS}`;
@@ -222,7 +239,8 @@ router.get('/api/orders-ledger/sync/status', (req, res) => {
 
 router.post('/api/orders-ledger/sync', async (req, res) => {
   try {
-    const out = await runSync();
+    const full = req.query.full === '1' || !!(req.body && req.body.full);
+    const out = await runSync({ full });
     res.json({ success: true, ...out });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -248,6 +266,7 @@ router.get('/api/orders-ledger', (req, res) => {
     (o.name || '').toLowerCase().includes(q) ||
     (o.customer.name || '').toLowerCase().includes(q) ||
     (o.customer.phone || '').toLowerCase().includes(q) ||
+    (o.customer.email || '').toLowerCase().includes(q) ||
     (o.city || '').toLowerCase().includes(q) ||
     o.lineItems.some(li => (li.sku || '').toLowerCase().includes(q) || (li.title || '').toLowerCase().includes(q))
   );
