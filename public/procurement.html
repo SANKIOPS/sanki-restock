@@ -1132,8 +1132,18 @@
     }
     function toggleImg(np,i,type){
       var imgs=studio.images[np.key]||[]; var im=imgs.find(function(x){return x.type===type;}); if(!im) return;
+      var wasApproved=im.approved;
       im.approved=!im.approved; rerenderCard(i);
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ aiImages:(function(){var o={};o[np.key]=imgs;return o;})() })}).catch(function(){});
+      // Approving a photo auto-generates the name & SEO from it — unless the SEO
+      // for this product is already approved (don't clobber a blessed one).
+      if(!wasApproved && im.approved){
+        var cur=studio.seo[np.key];
+        if(!(cur&&cur.approved)){
+          var host=el('scard'+i); var gs=host?host.querySelector('[data-genseo]'):null;
+          genSeoFor(np,i,gs);
+        }
+      }
     }
     function genSeoFor(np,i,btn){
       var lbl=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='Reading photo…'; }
