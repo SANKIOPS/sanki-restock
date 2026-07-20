@@ -73,8 +73,10 @@ const ROLE_HOME = {
   warehouse:   '/dashboard.html',
   stocksearch: '/dashboard.html'
 };
-// '*' = all pages. Otherwise an allow-list of exact page paths.
-const ROLE_PAGES = {
+// '*' = all pages. Otherwise an allow-list of exact page paths. This is the
+// DEFAULT (seed) map — the admin can override it per role (persisted in the
+// user store under `rolePages`); admin always stays '*'.
+const DEFAULT_ROLE_PAGES = {
   admin:       '*',
   inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html', '/procurement.html'],
   sales:       ['/orders.html', '/sales.html', '/analytics.html', '/velocity.html'],
@@ -84,16 +86,77 @@ const ROLE_PAGES = {
   stocksearch: ['/rack-locations.html']
 };
 
-function landingFor(role) { return ROLE_HOME[role] || '/login.html'; }
-function allowedPagesFor(role) { return ROLE_PAGES[role] || []; }
+// The module registry pushes its catalog here at boot (avoids a circular
+// require). Used to (a) seed each role's default pages from the modules that
+// list that role, and (b) build the admin permissions grid.
+let MODULE_CATALOG = [];
+function registerModules(mods) { MODULE_CATALOG = Array.isArray(mods) ? mods : []; }
+function modulePath(href) { return String(href || '').split('#')[0]; }
+// Deduped catalog of pages the admin can grant, from the module registry.
+function pageCatalog() {
+  const seen = {}, out = [];
+  MODULE_CATALOG.forEach(m => {
+    const p = modulePath(m.href);
+    if (!p || seen[p]) return;
+    seen[p] = 1;
+    out.push({ path: p, label: m.title || p, section: m.section || '' });
+  });
+  return out;
+}
+// Default pages for a role = its DEFAULT_ROLE_PAGES entry UNION every module
+// path that lists the role. Reproduces current access + tiles before any edit.
+function seedPagesForRole(role) {
+  const set = new Set(Array.isArray(DEFAULT_ROLE_PAGES[role]) ? DEFAULT_ROLE_PAGES[role] : []);
+  MODULE_CATALOG.forEach(m => { if ((m.roles || []).includes(role)) set.add(modulePath(m.href)); });
+  return Array.from(set);
+}
+// The effective role→pages map (admin overrides layered over the seed).
+function getRolePages() {
+  const store = loadUsers();
+  const overrides = store.rolePages || {};
+  const out = {};
+  ROLE_IDS.forEach(r => {
+    if (r === 'admin') { out[r] = '*'; return; }             // admin is always full access
+    out[r] = Array.isArray(overrides[r]) ? overrides[r] : seedPagesForRole(r);
+  });
+  return out;
+}
+
+// ── Multi-role helpers ───────────────────────────────────────────
+// A user may hold SEVERAL roles; their access is the UNION. We keep a single
+// `role` (the primary, = admin if held else the first) for legacy checks that
+// still read one role, plus the full `roles` array.
+function normalizeRoles(u) {
+  let roles = Array.isArray(u.roles) ? u.roles.slice() : (u.role ? [u.role] : []);
+  roles = roles.filter(r => ROLE_IDS.includes(r));
+  return roles.length ? Array.from(new Set(roles)) : [];
+}
+function primaryRole(roles) { return roles.includes('admin') ? 'admin' : (roles[0] || ''); }
+function rolesOf(user) {
+  if (!user) return [];
+  if (Array.isArray(user.roles) && user.roles.length) return user.roles;
+  return user.role ? [user.role] : [];
+}
+
+function landingFor(role) { return ROLE_HOME[role] || '/dashboard.html'; }
+function allowedPagesFor(role) { const a = getRolePages()[role]; return a === '*' ? '*' : (a || []); }
 function roleCanAccessPath(role, p) {
   // The launcher is the shared front door — every authenticated role may
   // open it (it filters its own contents by role via /api/modules).
   if (p === '/dashboard.html') return true;
-  const a = ROLE_PAGES[role];
+  const a = getRolePages()[role];
   if (a === '*') return true;
   if (!a) return false;
   return a.includes(p);
+}
+// Union access across all of a user's roles.
+function userCanAccessPath(user, p) { return rolesOf(user).some(r => roleCanAccessPath(r, p)); }
+function allowedPagesForUser(user) {
+  const roles = rolesOf(user);
+  if (roles.some(r => getRolePages()[r] === '*')) return '*';
+  const set = new Set();
+  roles.forEach(r => { const a = getRolePages()[r]; if (Array.isArray(a)) a.forEach(x => set.add(x)); });
+  return Array.from(set);
 }
 
 // ── User store (atomic JSON on the volume) ───────────────────────
@@ -157,7 +220,8 @@ function verifySession(req) {
   if (!p) return null;
   const u = loadUsers().users.find(x => x.username === p.u);
   if (!u) return null;
-  return { username: u.username, role: u.role };
+  const roles = normalizeRoles(u);
+  return { username: u.username, role: primaryRole(roles), roles };
 }
 
 // ── Boot seed: first Admin from existing DASH_USER / DASH_PASS ────
@@ -166,7 +230,7 @@ function seedAdminIfEmpty() {
   if (store.users.length) return;
   const u = process.env.DASH_USER, p = process.env.DASH_PASS;
   if (!u || !p) { console.warn('[auth] no users and DASH_USER/DASH_PASS unset — set them to seed the first admin'); return; }
-  store.users.push({ username: u, role: 'admin', password: hashPassword(p), createdAt: Date.now(), seeded: true });
+  store.users.push({ username: u, roles: ['admin'], password: hashPassword(p), createdAt: Date.now(), seeded: true });
   saveUsers(store);
   console.log('[auth] seeded initial admin user "' + u + '" from DASH_USER');
 }
@@ -177,9 +241,11 @@ router.post('/api/auth/login', (req, res) => {
   if (!username || !password) return res.json({ success: false, error: 'Enter username and password' });
   const u = loadUsers().users.find(x => x.username === String(username));
   if (!u || !verifyPassword(password, u.password)) return res.json({ success: false, error: 'Invalid username or password' });
-  const token = signSession({ u: u.username, r: u.role, exp: Date.now() + SESSION_TTL_MS });
+  const roles = normalizeRoles(u);
+  const primary = primaryRole(roles);
+  const token = signSession({ u: u.username, r: primary, exp: Date.now() + SESSION_TTL_MS });
   res.cookie(COOKIE, token, { httpOnly: true, secure: true, sameSite: 'lax', maxAge: SESSION_TTL_MS });
-  res.json({ success: true, username: u.username, role: u.role, home: landingFor(u.role) });
+  res.json({ success: true, username: u.username, role: primary, roles, home: landingFor(primary) });
 });
 
 router.post('/api/auth/logout', (req, res) => {
@@ -190,13 +256,15 @@ router.post('/api/auth/logout', (req, res) => {
 router.get('/api/auth/me', (req, res) => {
   const user = req.user || verifySession(req);
   if (!user) return res.status(401).json({ success: false, error: 'Not logged in' });
+  const roles = rolesOf(user);
   res.json({
     success: true,
     username: user.username,
     role: user.role,
-    isAdmin: user.role === 'admin',
+    roles,
+    isAdmin: roles.includes('admin'),
     home: landingFor(user.role),
-    allowedPages: allowedPagesFor(user.role)
+    allowedPages: allowedPagesForUser(user)
   });
 });
 
@@ -206,22 +274,34 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// Accept either a `roles` array or a single `role`; return a clean valid list.
+function rolesFromBody(body) {
+  let roles = Array.isArray(body.roles) ? body.roles : (body.role ? [body.role] : []);
+  roles = roles.filter(r => ROLE_IDS.includes(r));
+  return Array.from(new Set(roles));
+}
+function adminCount(store) { return store.users.filter(u => normalizeRoles(u).includes('admin')).length; }
+
 router.get('/api/admin/users', requireAdmin, (req, res) => {
-  const users = loadUsers().users.map(u => ({ username: u.username, role: u.role, createdAt: u.createdAt || null }));
-  res.json({ success: true, users, roles: ROLES });
+  const users = loadUsers().users.map(u => {
+    const roles = normalizeRoles(u);
+    return { username: u.username, role: primaryRole(roles), roles, createdAt: u.createdAt || null };
+  });
+  res.json({ success: true, users, roles: ROLES, rolePages: getRolePages(), pageCatalog: pageCatalog() });
 });
 
 router.post('/api/admin/users', requireAdmin, (req, res) => {
-  const { username, password, role } = (req.body || {});
-  const uname = String(username || '').trim();
+  const b = req.body || {};
+  const uname = String(b.username || '').trim();
+  const roles = rolesFromBody(b);
   if (!uname) return res.json({ success: false, error: 'Username required' });
-  if (!password || String(password).length < 4) return res.json({ success: false, error: 'Password must be at least 4 characters' });
-  if (!ROLE_IDS.includes(role)) return res.json({ success: false, error: 'Pick a valid role' });
+  if (!b.password || String(b.password).length < 4) return res.json({ success: false, error: 'Password must be at least 4 characters' });
+  if (!roles.length) return res.json({ success: false, error: 'Pick at least one role' });
   const store = loadUsers();
   if (store.users.some(u => u.username === uname)) return res.json({ success: false, error: 'That username already exists' });
-  store.users.push({ username: uname, role, password: hashPassword(password), createdAt: Date.now() });
+  store.users.push({ username: uname, roles, password: hashPassword(b.password), createdAt: Date.now() });
   saveUsers(store);
-  res.json({ success: true, username: uname, role });
+  res.json({ success: true, username: uname, roles });
 });
 
 router.post('/api/admin/users/reset', requireAdmin, (req, res) => {
@@ -235,18 +315,51 @@ router.post('/api/admin/users/reset', requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+// Set a user's FULL role set (multi-role). Accepts `roles` array (or single
+// `role`). Blocks removing admin from the only admin (avoid lockout).
+router.post('/api/admin/users/roles', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const roles = rolesFromBody(b);
+  if (!roles.length) return res.json({ success: false, error: 'Pick at least one role' });
+  const store = loadUsers();
+  const u = store.users.find(x => x.username === String(b.username));
+  if (!u) return res.json({ success: false, error: 'User not found' });
+  const wasAdmin = normalizeRoles(u).includes('admin');
+  if (wasAdmin && !roles.includes('admin') && adminCount(store) <= 1)
+    return res.json({ success: false, error: 'Cannot remove admin from the only admin — create another admin first' });
+  u.roles = roles; delete u.role;   // migrate to the array model
+  saveUsers(store);
+  res.json({ success: true, username: u.username, roles });
+});
+
+// Back-compat: single-role change → treated as the full set [role].
 router.post('/api/admin/users/role', requireAdmin, (req, res) => {
   const { username, role } = (req.body || {});
   if (!ROLE_IDS.includes(role)) return res.json({ success: false, error: 'Pick a valid role' });
   const store = loadUsers();
   const u = store.users.find(x => x.username === String(username));
   if (!u) return res.json({ success: false, error: 'User not found' });
-  // Don't allow removing the last admin's admin role (avoid lockout).
-  if (u.role === 'admin' && role !== 'admin' && store.users.filter(x => x.role === 'admin').length <= 1)
+  if (normalizeRoles(u).includes('admin') && role !== 'admin' && adminCount(store) <= 1)
     return res.json({ success: false, error: 'Cannot change the only admin — create another admin first' });
-  u.role = role;
+  u.roles = [role]; delete u.role;
   saveUsers(store);
-  res.json({ success: true, username: u.username, role });
+  res.json({ success: true, username: u.username, roles: u.roles });
+});
+
+// Edit a ROLE's page permissions. Body: { role, pages:[paths] }. Admin is
+// locked to full access. Pages must be from the known page catalogue.
+router.post('/api/admin/permissions', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const role = String(b.role || '');
+  if (!ROLE_IDS.includes(role)) return res.json({ success: false, error: 'Unknown role' });
+  if (role === 'admin') return res.json({ success: false, error: 'Admin always has full access — it cannot be limited.' });
+  const known = pageCatalog().map(p => p.path);
+  const pages = Array.from(new Set((Array.isArray(b.pages) ? b.pages : []).map(String).filter(p => known.includes(p))));
+  const store = loadUsers();
+  store.rolePages = store.rolePages || {};
+  store.rolePages[role] = pages;
+  saveUsers(store);
+  res.json({ success: true, role, pages, rolePages: getRolePages() });
 });
 
 router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
@@ -254,7 +367,7 @@ router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
   const store = loadUsers();
   const u = store.users.find(x => x.username === String(username));
   if (!u) return res.json({ success: false, error: 'User not found' });
-  if (u.role === 'admin' && store.users.filter(x => x.role === 'admin').length <= 1)
+  if (normalizeRoles(u).includes('admin') && adminCount(store) <= 1)
     return res.json({ success: false, error: 'Cannot delete the only admin' });
   if (req.user && req.user.username === u.username)
     return res.json({ success: false, error: 'You cannot delete your own account while logged in' });
@@ -263,4 +376,8 @@ router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
   res.json({ success: true, removed: u.username });
 });
 
-module.exports = { router, seedAdminIfEmpty, verifySession, roleCanAccessPath, landingFor, ROLES };
+module.exports = {
+  router, seedAdminIfEmpty, verifySession, landingFor, ROLES,
+  roleCanAccessPath, userCanAccessPath,
+  allowedPagesForUser, rolesOf, registerModules
+};

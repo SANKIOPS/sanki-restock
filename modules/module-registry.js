@@ -20,8 +20,19 @@
 const express = require('express');
 const router = express.Router();
 
-let verifySession;
-try { verifySession = require('./auth-users').verifySession; } catch { verifySession = () => null; }
+let verifySession, allowedPagesForUser, rolesOf, registerModules;
+try {
+  const au = require('./auth-users');
+  verifySession = au.verifySession;
+  allowedPagesForUser = au.allowedPagesForUser;
+  rolesOf = au.rolesOf;
+  registerModules = au.registerModules;
+} catch {
+  verifySession = () => null;
+  allowedPagesForUser = () => [];
+  rolesOf = (u) => (u && u.roles) || (u && u.role ? [u.role] : []);
+  registerModules = () => {};
+}
 
 // Section order controls how groups stack in the sidebar / dashboard.
 const SECTION_ORDER = ['Main', 'Sales', 'Store Ops', 'Purchases', 'Accounts', 'Marketing', 'Admin'];
@@ -48,13 +59,26 @@ const MODULES = [
   { key: 'users',        title: 'Users & Roles',         desc: 'Add staff and set what they can access',             icon: '👥', href: '/admin-users.html',               section: 'Admin',     status: 'live',   roles: ['admin'] }
 ];
 
+// Hand the module list to auth-users so role-permission seeding knows which
+// page each module lives at (union'd with DEFAULT_ROLE_PAGES). Safe no-op if
+// auth-users wasn't loaded.
+registerModules(MODULES);
+
+// Strip any '#anchor' so a module href maps to the underlying page path the
+// permission map is keyed on (e.g. '/index.html#restock' → '/index.html').
+function modulePath(href) { return String(href || '').split('#')[0]; }
+
 // ── Visibility resolution ───────────────────────────────────────
 function visibleFor(user) {
-  const role = user && user.role;
-  const isAdmin = role === 'admin';
+  const isAdmin = rolesOf(user).includes('admin');
+  // Non-admins: visibility follows the (editable) role→pages permission map,
+  // union'd across all of the user's roles. A module shows when its page path
+  // is in that allow-list. Admin sees everything not hidden.
+  const allowed = isAdmin ? '*' : allowedPagesForUser(user);
+  const canSee = (m) => isAdmin || (Array.isArray(allowed) && allowed.includes(modulePath(m.href)));
   return MODULES
     .filter(m => m.status !== 'hidden')
-    .filter(m => isAdmin || (m.roles || []).includes(role))
+    .filter(canSee)
     .map(m => ({ key: m.key, title: m.title, desc: m.desc, icon: m.icon, href: m.href, section: m.section, status: m.status }))
     .sort((a, b) => {
       const sa = SECTION_ORDER.indexOf(a.section), sb = SECTION_ORDER.indexOf(b.section);

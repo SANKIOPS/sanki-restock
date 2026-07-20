@@ -33,7 +33,7 @@ const path   = require('path');
 // and enforces which pages each role may open. Basic-auth + x-api-key are
 // kept as admin fallbacks so scripts/automation and the bootstrap admin
 // never get locked out.
-const { verifySession, roleCanAccessPath, landingFor } = require('./modules/auth-users');
+const { verifySession, userCanAccessPath, rolesOf, landingFor } = require('./modules/auth-users');
 
 // Static asset extensions any logged-in user may fetch regardless of role
 // (JS/CSS/images the shared pages need). Page/navigation requests are gated.
@@ -109,8 +109,8 @@ function gate(req, res, next) {
   // (x-api-key for automation, Basic-auth for the bootstrap/admin login).
   let user = verifySession(req);
   if (!user) {
-    if (checkApiKey(req)) user = { username: 'automation', role: 'admin' };
-    else if (checkBasic(req)) user = { username: process.env.DASH_USER || 'admin', role: 'admin' };
+    if (checkApiKey(req)) user = { username: 'automation', role: 'admin', roles: ['admin'] };
+    else if (checkBasic(req)) user = { username: process.env.DASH_USER || 'admin', role: 'admin', roles: ['admin'] };
   }
 
   if (!user) {
@@ -123,7 +123,7 @@ function gate(req, res, next) {
 
   // Admin-only management APIs.
   if (p.startsWith('/api/admin')) {
-    if (user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+    if (!rolesOf(user).includes('admin')) return res.status(403).json({ success: false, error: 'Admin only' });
     return next();
   }
 
@@ -132,10 +132,10 @@ function gate(req, res, next) {
   if (p.startsWith('/api/')) return next();
 
   // ── Page/navigation gating by role (admin sees everything) ──
-  if (user.role === 'admin') return next();
+  if (rolesOf(user).includes('admin')) return next();
   if (isAssetPath(p)) return next();                 // shared JS/CSS/images
   if (p === '/') return res.redirect(302, landingFor(user.role));
-  if (roleCanAccessPath(user.role, p)) return next();
+  if (userCanAccessPath(user, p)) return next();     // union across all roles
   // Any other page/route this role isn't allowed → send to their home.
   return res.redirect(302, landingFor(user.role));
 }

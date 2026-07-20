@@ -12,7 +12,7 @@
       margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
       background:#f6f7f9; color:#1a1a1a;
     }
-    .wrap { max-width:900px; margin:0 auto; padding:26px 22px 60px; }
+    .wrap { max-width:960px; margin:0 auto; padding:26px 22px 60px; }
     h1 { font-size:22px; margin:0 0 4px; font-weight:800; }
     .sub { color:#6b7280; font-size:13px; margin:0 0 22px; }
     .card {
@@ -20,6 +20,7 @@
       padding:20px; margin-bottom:22px;
     }
     .card h2 { font-size:15px; margin:0 0 14px; font-weight:700; }
+    .card .hint { color:#6b7280; font-size:12px; margin:-8px 0 14px; }
     .row { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
     .field { flex:1 1 150px; min-width:130px; }
     label { display:block; font-size:11px; font-weight:600; color:#374151; margin-bottom:4px; }
@@ -37,12 +38,22 @@
     button.ghost:hover { background:#f3f4f6; }
     button.danger { background:#fff; color:#b42318; border:1px solid #f0c2bd; }
     button.danger:hover { background:#fef2f1; }
+    button.sm { padding:6px 10px; font-size:12px; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid #eef0f2; vertical-align:middle; }
+    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid #eef0f2; vertical-align:top; }
     th { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; }
-    td.actions { display:flex; gap:6px; flex-wrap:wrap; }
-    td.actions button { padding:6px 10px; font-size:12px; }
-    .role-pill { display:inline-block; padding:2px 9px; border-radius:99px; background:#eef2ff; color:#185FA5; font-weight:600; font-size:12px; text-transform:capitalize; }
+    td.actions { white-space:nowrap; }
+    td.actions button { margin-right:6px; margin-bottom:4px; }
+    .role-pill { display:inline-block; padding:2px 9px; border-radius:99px; background:#eef2ff; color:#185FA5; font-weight:600; font-size:12px; text-transform:capitalize; margin:0 4px 4px 0; }
+    /* checkbox groups */
+    .checks { display:flex; flex-wrap:wrap; gap:6px 14px; }
+    .chk { display:flex; align-items:center; gap:6px; font-size:13px; font-weight:500; color:#374151; }
+    .chk input { width:auto; padding:0; }
+    .chk.section-label { flex:0 0 100%; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; font-weight:700; margin-top:6px; }
+    .perm-block { border:1px solid #eef0f2; border-radius:9px; padding:14px; margin-bottom:12px; }
+    .perm-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+    .perm-head strong { font-size:14px; text-transform:capitalize; }
+    .perm-full { color:#047857; font-size:12px; font-weight:600; }
     .msg { font-size:13px; min-height:18px; margin-top:10px; }
     .msg.err { color:#b42318; } .msg.ok { color:#047857; }
     .empty { color:#9ca3af; font-size:13px; padding:14px 0; }
@@ -53,32 +64,44 @@
   <div class="wrap">
     <a class="back" href="/index.html">&larr; Back to dashboard</a>
     <h1 style="margin-top:12px;">Users &amp; Roles</h1>
-    <p class="sub">Give each employee their own login. Their role decides which departments they can open. Admins see everything.</p>
+    <p class="sub">Give each employee their own login. Assign one or more roles — access is the union of every role they hold. Admins always see everything.</p>
 
     <div class="card">
       <h2>Add a user</h2>
       <div class="row">
         <div class="field"><label for="n-user">Username</label><input id="n-user" type="text" autocomplete="off" /></div>
         <div class="field"><label for="n-pass">Password</label><input id="n-pass" type="text" autocomplete="off" placeholder="min 4 characters" /></div>
-        <div class="field"><label for="n-role">Role</label><select id="n-role"></select></div>
-        <div class="field" style="flex:0 0 auto;"><button id="add-btn">Add user</button></div>
       </div>
+      <div style="margin-top:12px;">
+        <label>Roles</label>
+        <div class="checks" id="n-roles"></div>
+      </div>
+      <div style="margin-top:14px;"><button id="add-btn">Add user</button></div>
       <div class="msg" id="add-msg"></div>
     </div>
 
     <div class="card">
       <h2>Team</h2>
       <table>
-        <thead><tr><th>User</th><th>Role</th><th style="width:1%;">Actions</th></tr></thead>
+        <thead><tr><th>User</th><th>Roles</th><th style="width:1%;">Actions</th></tr></thead>
         <tbody id="users-body"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
       </table>
       <div class="msg" id="list-msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Role permissions</h2>
+      <p class="hint">Tick the pages each role can open. This also controls which tiles appear on their dashboard. Admin always has full access and can't be limited.</p>
+      <div id="perm-host"><div class="empty">Loading…</div></div>
+      <div class="msg" id="perm-msg"></div>
     </div>
   </div>
 
   <script src="/sidebar.js"></script>
   <script>
-    var ROLES = [];
+    var ROLES = [];        // [{id,label}]
+    var PAGES = [];        // [{path,label,section}]
+    var ROLE_PAGES = {};   // { roleId: '*' | [paths] }
     var body = document.getElementById('users-body');
 
     function setMsg(el, text, kind) {
@@ -93,27 +116,24 @@
       }).then(function (r) { return r.json(); });
     }
 
-    function roleSelect(selected) {
-      var sel = document.createElement('select');
+    // Build a set of role checkboxes into `host`; returns a reader for the ticked ids.
+    function roleChecks(host, selected) {
+      host.textContent = '';
+      var sel = {}; (selected || []).forEach(function (r) { sel[r] = 1; });
+      var boxes = [];
       ROLES.forEach(function (r) {
-        var o = document.createElement('option');
-        o.value = r.id; o.textContent = r.label;
-        if (r.id === selected) o.selected = true;
-        sel.appendChild(o);
+        var lab = document.createElement('label'); lab.className = 'chk';
+        var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = r.id;
+        if (sel[r.id]) cb.checked = true;
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(r.label));
+        host.appendChild(lab);
+        boxes.push(cb);
       });
-      return sel;
+      return function () { return boxes.filter(function (c) { return c.checked; }).map(function (c) { return c.value; }); };
     }
 
-    function fillRoleDropdown() {
-      var sel = document.getElementById('n-role');
-      sel.textContent = '';
-      ROLES.forEach(function (r) {
-        var o = document.createElement('option');
-        o.value = r.id; o.textContent = r.label;
-        sel.appendChild(o);
-      });
-    }
-
+    // ── Team ─────────────────────────────────────────────────────────
     function renderUsers(users) {
       body.textContent = '';
       if (!users.length) {
@@ -131,24 +151,49 @@
         tdUser.textContent = u.username;
         tr.appendChild(tdUser);
 
-        // Role cell = inline dropdown to change role.
+        // Roles cell: pills + an inline editor toggled by "Edit roles".
         var tdRole = document.createElement('td');
-        var sel = roleSelect(u.role);
-        sel.style.maxWidth = '190px';
-        sel.addEventListener('change', function () {
-          api('/api/admin/users/role', { username: u.username, role: sel.value }).then(function (d) {
-            if (d.success) { setMsg(document.getElementById('list-msg'), 'Updated ' + u.username + '\u2019s role.', 'ok'); }
-            else { sel.value = u.role; setMsg(document.getElementById('list-msg'), d.error || 'Could not change role', 'err'); }
+        var pills = document.createElement('div');
+        (u.roles || []).forEach(function (r) {
+          var s = document.createElement('span'); s.className = 'role-pill'; s.textContent = r;
+          pills.appendChild(s);
+        });
+        var editor = document.createElement('div');
+        editor.style.display = 'none'; editor.style.marginTop = '8px';
+        var checks = document.createElement('div'); checks.className = 'checks';
+        var readRoles = roleChecks(checks, u.roles || []);
+        editor.appendChild(checks);
+        var editActions = document.createElement('div'); editActions.style.marginTop = '8px';
+        var saveBtn = document.createElement('button'); saveBtn.className = 'sm'; saveBtn.textContent = 'Save roles';
+        var cancelBtn = document.createElement('button'); cancelBtn.className = 'ghost sm'; cancelBtn.textContent = 'Cancel';
+        cancelBtn.style.marginLeft = '6px';
+        editActions.appendChild(saveBtn); editActions.appendChild(cancelBtn);
+        editor.appendChild(editActions);
+        saveBtn.addEventListener('click', function () {
+          var roles = readRoles();
+          if (!roles.length) { setMsg(document.getElementById('list-msg'), 'Pick at least one role', 'err'); return; }
+          api('/api/admin/users/roles', { username: u.username, roles: roles }).then(function (d) {
+            if (d.success) { setMsg(document.getElementById('list-msg'), 'Updated ' + u.username + '\u2019s roles.', 'ok'); load(); }
+            else { setMsg(document.getElementById('list-msg'), d.error || 'Could not change roles', 'err'); }
           });
         });
-        tdRole.appendChild(sel);
+        cancelBtn.addEventListener('click', function () { editor.style.display = 'none'; pills.style.display = ''; editLink.style.display = ''; });
+        tdRole.appendChild(pills);
+        tdRole.appendChild(editor);
         tr.appendChild(tdRole);
 
         var tdAct = document.createElement('td');
         tdAct.className = 'actions';
 
+        var editLink = document.createElement('button');
+        editLink.className = 'ghost sm'; editLink.textContent = 'Edit roles';
+        editLink.addEventListener('click', function () {
+          editor.style.display = ''; pills.style.display = 'none'; editLink.style.display = 'none';
+        });
+        tdAct.appendChild(editLink);
+
         var resetBtn = document.createElement('button');
-        resetBtn.className = 'ghost'; resetBtn.textContent = 'Reset password';
+        resetBtn.className = 'ghost sm'; resetBtn.textContent = 'Reset password';
         resetBtn.addEventListener('click', function () {
           var pw = prompt('New password for ' + u.username + ' (min 4 chars):');
           if (pw == null) return;
@@ -161,7 +206,7 @@
         tdAct.appendChild(resetBtn);
 
         var delBtn = document.createElement('button');
-        delBtn.className = 'danger'; delBtn.textContent = 'Delete';
+        delBtn.className = 'danger sm'; delBtn.textContent = 'Delete';
         delBtn.addEventListener('click', function () {
           if (!confirm('Delete user "' + u.username + '"? This cannot be undone.')) return;
           api('/api/admin/users/delete', { username: u.username }).then(function (d) {
@@ -176,6 +221,71 @@
       });
     }
 
+    // ── Role permissions editor ──────────────────────────────────────
+    function renderPermissions() {
+      var host = document.getElementById('perm-host');
+      host.textContent = '';
+      ROLES.forEach(function (r) {
+        var block = document.createElement('div'); block.className = 'perm-block';
+        var head = document.createElement('div'); head.className = 'perm-head';
+        var name = document.createElement('strong'); name.textContent = r.label;
+        head.appendChild(name);
+
+        var current = ROLE_PAGES[r.id];
+        if (r.id === 'admin' || current === '*') {
+          var full = document.createElement('span'); full.className = 'perm-full'; full.textContent = 'Full access — all pages';
+          head.appendChild(full);
+          block.appendChild(head);
+          host.appendChild(block);
+          return;
+        }
+
+        var saveBtn = document.createElement('button'); saveBtn.className = 'sm'; saveBtn.textContent = 'Save';
+        head.appendChild(saveBtn);
+        block.appendChild(head);
+
+        var allow = {}; (Array.isArray(current) ? current : []).forEach(function (p) { allow[p] = 1; });
+        var checks = document.createElement('div'); checks.className = 'checks';
+        // Group by section for readability.
+        var bySection = {}; var order = [];
+        PAGES.forEach(function (pg) {
+          var s = pg.section || 'Other';
+          if (!bySection[s]) { bySection[s] = []; order.push(s); }
+          bySection[s].push(pg);
+        });
+        var boxes = [];
+        order.forEach(function (s) {
+          var slab = document.createElement('div'); slab.className = 'chk section-label'; slab.textContent = s;
+          checks.appendChild(slab);
+          bySection[s].forEach(function (pg) {
+            var lab = document.createElement('label'); lab.className = 'chk';
+            var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = pg.path;
+            if (allow[pg.path]) cb.checked = true;
+            lab.appendChild(cb);
+            lab.appendChild(document.createTextNode(pg.label));
+            checks.appendChild(lab);
+            boxes.push(cb);
+          });
+        });
+        block.appendChild(checks);
+
+        saveBtn.addEventListener('click', function () {
+          var pages = boxes.filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+          api('/api/admin/permissions', { role: r.id, pages: pages }).then(function (d) {
+            if (d.success) {
+              ROLE_PAGES = d.rolePages || ROLE_PAGES;
+              setMsg(document.getElementById('perm-msg'), 'Saved permissions for ' + r.label + '.', 'ok');
+            } else {
+              setMsg(document.getElementById('perm-msg'), d.error || 'Could not save', 'err');
+            }
+          });
+        });
+
+        host.appendChild(block);
+      });
+    }
+
+    // ── Load ─────────────────────────────────────────────────────────
     function load() {
       fetch('/api/admin/users', { headers: { 'Accept': 'application/json' } })
         .then(function (r) {
@@ -185,8 +295,11 @@
         .then(function (d) {
           if (!d.success) throw new Error(d.error || 'Could not load users');
           ROLES = d.roles || [];
-          fillRoleDropdown();
+          PAGES = d.pageCatalog || [];
+          ROLE_PAGES = d.rolePages || {};
+          renderAddRoles();
           renderUsers(d.users || []);
+          renderPermissions();
         })
         .catch(function (e) {
           setMsg(document.getElementById('list-msg'), e.message, 'err');
@@ -194,16 +307,23 @@
         });
     }
 
+    var readAddRoles = function () { return []; };
+    function renderAddRoles() {
+      readAddRoles = roleChecks(document.getElementById('n-roles'), []);
+    }
+
     document.getElementById('add-btn').addEventListener('click', function () {
       var username = document.getElementById('n-user').value.trim();
       var password = document.getElementById('n-pass').value;
-      var role = document.getElementById('n-role').value;
+      var roles = readAddRoles();
       if (!username || !password) { setMsg(document.getElementById('add-msg'), 'Enter a username and password', 'err'); return; }
-      api('/api/admin/users', { username: username, password: password, role: role }).then(function (d) {
+      if (!roles.length) { setMsg(document.getElementById('add-msg'), 'Pick at least one role', 'err'); return; }
+      api('/api/admin/users', { username: username, password: password, roles: roles }).then(function (d) {
         if (d.success) {
-          setMsg(document.getElementById('add-msg'), 'Added ' + d.username + ' (' + d.role + ')', 'ok');
+          setMsg(document.getElementById('add-msg'), 'Added ' + d.username + ' (' + (d.roles || []).join(', ') + ')', 'ok');
           document.getElementById('n-user').value = '';
           document.getElementById('n-pass').value = '';
+          renderAddRoles();
           load();
         } else {
           setMsg(document.getElementById('add-msg'), d.error || 'Could not add user', 'err');
