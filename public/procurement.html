@@ -59,7 +59,9 @@
     .btn.sm{ padding:5px 10px; font-size:12px; }
     #imgZoom{ position:fixed; inset:0; background:rgba(12,20,16,.82); display:none; align-items:center; justify-content:center; z-index:9999; cursor:zoom-out; padding:24px; }
     #imgZoom.open{ display:flex; }
-    #imgZoom img{ max-width:92vw; max-height:92vh; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.5); background:#fff; }
+    /* Fill the viewport and let object-fit scale the source UP (not just down),
+       so a small invoice-crop still enlarges instead of showing at 38px. */
+    #imgZoom img{ width:92vw; height:92vh; object-fit:contain; border-radius:12px; }
     .npcard{ border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; background:var(--ivory2); }
     .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .banner{ border-radius:10px; padding:10px 14px; font-size:13px; margin:10px 0; }
@@ -194,7 +196,7 @@
       var ov=document.getElementById('imgZoom'), im=ov.firstElementChild;
       document.addEventListener('click',function(e){
         var t=e.target;
-        if(t&&t.tagName==='IMG'&&t.classList.contains('thumb')&&t.getAttribute('src')){
+        if(t&&t.tagName==='IMG'&&(t.classList.contains('thumb')||t.hasAttribute('data-zoom'))&&t.getAttribute('src')){
           im.src=t.getAttribute('src'); ov.classList.add('open');
         } else if(t===ov||t===im){ ov.classList.remove('open'); im.src=''; }
       });
@@ -494,6 +496,7 @@
     // ── save advance purchase ──
     el('saveAdvanceBtn').onclick=function(){
       if(!lines.length){ alert('Add at least one line.'); return; }
+      if(!el('b_vendor').value.trim()){ alert('Pick or add a vendor name before saving the PO.'); el('b_vendor').focus(); return; }
       var noPhoto=lines.filter(function(l){ return !(l.photoUrl||'').trim(); }).length;
       if(noPhoto){ alert(noPhoto+' line(s) have no product photo. Add a photo to every line before saving.'); return; }
       var unappr=lines.filter(function(l){ return (l.photoUrl||'').trim() && !l.photoApproved; }).length;
@@ -749,7 +752,8 @@
       var actions = posted ? '' :
         '<div style="display:flex;gap:6px"><button class="btn ghost sm" id="editPoBtn">Edit</button><button class="btn danger sm" id="delPoBtn">Delete PO</button></div>';
       var h='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
-        '<div><h2 style="margin:0">'+esc(po.id)+' <span class="muted" style="font-size:12px;font-weight:400">· '+esc(po.vendor||'—')+(po.billNo?(' · bill '+esc(po.billNo)):'')+'</span></h2>'+etaHdr+'</div>'+
+        '<div><h2 style="margin:0">'+esc(po.id)+'</h2>'+
+          '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
       // rates + date-of-receive carried from the advance purchase — editable here before final calc
       if(!posted){
@@ -904,7 +908,7 @@
         var im=byType[t[0]];
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
-          (im?('<img src="'+esc(im.url)+'" style="width:100%;height:120px;object-fit:cover;border-radius:6px'+(im.approved?';outline:3px solid #059669':'')+'">'+
+          (im?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center">'+
               '<button class="btn sm '+(im.approved?'':'')+'" data-approveimg="'+i+'" data-type="'+t[0]+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved':'Approve')+'</button>'+
               '<button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">↻</button></div>')

@@ -821,6 +821,9 @@ router.post('/api/procurement/advance', async (req, res) => {
     const s = loadStore();
     const b = req.body || {};
     if (!(b.lines || []).length) return res.status(400).json({ success: false, error: 'Add at least one line before saving.' });
+    // Vendor is mandatory — it identifies who the goods were bought from and
+    // is shown on every advance / receive / post line.
+    if (!String(b.vendor || '').trim()) return res.status(400).json({ success: false, error: 'Pick or type a vendor name before saving the PO.' });
     // Photo is mandatory per SKU — it is what the AI image module will judge.
     const missingPhoto = (b.lines || []).filter(l => !(l.photoUrl || '').trim()).length;
     if (missingPhoto) return res.status(400).json({ success: false, error: 'Every line needs a product photo (' + missingPhoto + ' missing).' });
