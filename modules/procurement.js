@@ -89,10 +89,10 @@ const AI_IMAGE_SPECS = [
     prompt: 'Generate a clean e-commerce photo of a real FEMALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, natural relaxed pose, streetwear styling. Show EXACTLY ONE model, the full body from head to shoes fully inside the frame with even margin above the head and below the shoes. Photorealistic, high resolution. Do NOT place anything below the shoes; do NOT add any duplicated, repeated, tiled or extra copies of the garment; no second image, no split frame, no collage, no text or watermark.' },
   { type: 'male',   label: 'Male model', aspect: '4:5',
     prompt: 'Generate a clean e-commerce photo of a real MALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, natural relaxed pose, streetwear styling. Show EXACTLY ONE model, the full body from head to shoes fully inside the frame with even margin above the head and below the shoes. Photorealistic, high resolution. Do NOT place anything below the shoes; do NOT add any duplicated, repeated, tiled or extra copies of the garment; no second image, no split frame, no collage, no text or watermark.' },
-  { type: 'front',  label: 'Product front', aspect: '1:1',
-    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the FRONT of this exact garment, centered on a pure white background. Keep the garment identical to the reference. Even studio lighting, no model, no props, no text or watermark, sharp product detail. Show a SINGLE garment fully in frame; no duplicated or repeated copies, no collage.' },
-  { type: 'back',   label: 'Product back', aspect: '1:1',
-    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the BACK of this exact garment, centered on a pure white background. Keep colour and details consistent with the reference front view. Even studio lighting, no model, no props, no text or watermark. Show a SINGLE garment fully in frame; no duplicated or repeated copies, no collage.' }
+  { type: 'front',  label: 'Product front',
+    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the FRONT of this exact garment, centered on a pure white background. Keep the garment identical to the reference. Even studio lighting, no model, no props, no text or watermark, sharp product detail. Show a SINGLE garment fully in frame; no duplicated or repeated copies, no collage. The background must be pure white filling the ENTIRE frame to all four edges — absolutely no black bars, letterboxing, borders or coloured padding.' },
+  { type: 'back',   label: 'Product back',
+    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing the BACK (reverse side) of this exact garment, centered on a pure white background. Keep the same colour, fabric, cut and length as the reference. The large graphics, numbers or prints that appear on the FRONT must NOT be shown on the back — render the rear panel as it would realistically look (usually plainer). Even studio lighting, no model, no props, no text or watermark. Show a SINGLE garment fully in frame; no duplicated or repeated copies, no collage. The background must be pure white filling the ENTIRE frame to all four edges — absolutely no black bars, letterboxing, borders or coloured padding.' }
 ];
 
 // ── Seeds (decoded once from the sheet; editable in-app thereafter) ──
@@ -1060,8 +1060,11 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     if (!src) return res.status(400).json({ success: false, error: 'No source photo for this product — add one first.' });
     const baseB64 = src.buf.toString('base64');
     const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.` +
+      // Lock the garment's real proportions — Gemini otherwise lengthens 3/4 or
+      // cropped pieces into full-length ones.
+      ` Preserve the garment's EXACT length, hemline, proportions and silhouette exactly as shown in the reference — if it is cropped, three-quarter, calf-length or ankle-length, keep that same length; never lengthen or shorten it.` +
       // Shopify product-image rules: high-res, clean, centered, no text/watermark/border.
-      // (Aspect ratio is pinned per shot via Gemini's imageConfig — 4:5 model, 1:1 flat-lay.)
+      // (Model shots get a 4:5 ratio via imageConfig; flat-lays keep their natural white-bg framing.)
       ` Output a high-resolution image formatted for a Shopify product listing: the subject centered and fully in frame with even margins, sharp focus, plain uncluttered background, no text, logos, watermarks, borders or UI overlays.`;
     const wantTypes = Array.isArray(b.types) && b.types.length ? b.types : AI_IMAGE_SPECS.map(s2 => s2.type);
     po.aiImages = po.aiImages || {};
