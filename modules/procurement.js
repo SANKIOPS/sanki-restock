@@ -85,14 +85,14 @@ const IMAGE_MODEL = process.env.PROCUREMENT_IMAGE_MODEL || 'gemini-2.5-flash-ima
 // The four shots we make for every product. `prompt` is suffixed with the
 // product context (type / colour / audience) at generation time.
 const AI_IMAGE_SPECS = [
-  { type: 'female', label: 'Female model',
-    prompt: 'Generate a clean e-commerce photo of a real FEMALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, full or three-quarter body, natural relaxed pose, streetwear styling. Photorealistic, high resolution, no text or watermark.' },
-  { type: 'male',   label: 'Male model',
-    prompt: 'Generate a clean e-commerce photo of a real MALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, full or three-quarter body, natural relaxed pose, streetwear styling. Photorealistic, high resolution, no text or watermark.' },
-  { type: 'front',  label: 'Product front',
-    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the FRONT of this exact garment, centered on a pure white background. Keep the garment identical to the reference. Even studio lighting, no model, no props, no text or watermark, sharp product detail.' },
-  { type: 'back',   label: 'Product back',
-    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the BACK of this exact garment, centered on a pure white background. Keep colour and details consistent with the reference front view. Even studio lighting, no model, no props, no text or watermark.' }
+  { type: 'female', label: 'Female model', aspect: '4:5',
+    prompt: 'Generate a clean e-commerce photo of a real FEMALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, natural relaxed pose, streetwear styling. Show EXACTLY ONE model, the full body from head to shoes fully inside the frame with even margin above the head and below the shoes. Photorealistic, high resolution. Do NOT place anything below the shoes; do NOT add any duplicated, repeated, tiled or extra copies of the garment; no second image, no split frame, no collage, no text or watermark.' },
+  { type: 'male',   label: 'Male model', aspect: '4:5',
+    prompt: 'Generate a clean e-commerce photo of a real MALE human model wearing THIS EXACT garment. Keep the garment identical — same colour, print, graphics, cut and details as the reference image; do not redesign it. Neutral light-grey studio background, soft even lighting, natural relaxed pose, streetwear styling. Show EXACTLY ONE model, the full body from head to shoes fully inside the frame with even margin above the head and below the shoes. Photorealistic, high resolution. Do NOT place anything below the shoes; do NOT add any duplicated, repeated, tiled or extra copies of the garment; no second image, no split frame, no collage, no text or watermark.' },
+  { type: 'front',  label: 'Product front', aspect: '1:1',
+    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the FRONT of this exact garment, centered on a pure white background. Keep the garment identical to the reference. Even studio lighting, no model, no props, no text or watermark, sharp product detail. Show a SINGLE garment fully in frame; no duplicated or repeated copies, no collage.' },
+  { type: 'back',   label: 'Product back', aspect: '1:1',
+    prompt: 'Generate a clean FLAT-LAY / ghost-mannequin photo showing ONLY the BACK of this exact garment, centered on a pure white background. Keep colour and details consistent with the reference front view. Even studio lighting, no model, no props, no text or watermark. Show a SINGLE garment fully in frame; no duplicated or repeated copies, no collage.' }
 ];
 
 // ── Seeds (decoded once from the sheet; editable in-app thereafter) ──
@@ -618,10 +618,14 @@ function readStoredPhoto(url) {
   return { buf: fs.readFileSync(fp), mime };
 }
 // Call Gemini image generation: reference image + instruction → new image buffer.
-async function geminiGenerateImage(baseB64, baseMime, prompt) {
+async function geminiGenerateImage(baseB64, baseMime, prompt, aspect) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 120000);
+  // Pin the output aspect ratio so full-body model shots don't come back as an
+  // over-tall canvas that Gemini fills by tiling a duplicate of the garment.
+  const generationConfig = { responseModalities: ['IMAGE'] };
+  if (aspect) generationConfig.imageConfig = { aspectRatio: aspect };
   let r;
   try {
     r = await fetch(url, {
@@ -629,7 +633,7 @@ async function geminiGenerateImage(baseB64, baseMime, prompt) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ inline_data: { mime_type: baseMime, data: baseB64 } }, { text: prompt }] }],
-        generationConfig: { responseModalities: ['IMAGE'] }
+        generationConfig
       }),
       signal: ctrl.signal
     });
@@ -1056,8 +1060,9 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     if (!src) return res.status(400).json({ success: false, error: 'No source photo for this product — add one first.' });
     const baseB64 = src.buf.toString('base64');
     const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.` +
-      // Shopify product-image rules: square 1:1, high-res, clean, no text/watermark/border.
-      ` Output a SQUARE 1:1 aspect-ratio image at high resolution (at least 2048x2048 pixels), formatted for a Shopify product listing: the full garment centered and fully in frame with even margins, sharp focus, plain uncluttered background, no text, logos, watermarks, borders or UI overlays.`;
+      // Shopify product-image rules: high-res, clean, centered, no text/watermark/border.
+      // (Aspect ratio is pinned per shot via Gemini's imageConfig — 4:5 model, 1:1 flat-lay.)
+      ` Output a high-resolution image formatted for a Shopify product listing: the subject centered and fully in frame with even margins, sharp focus, plain uncluttered background, no text, logos, watermarks, borders or UI overlays.`;
     const wantTypes = Array.isArray(b.types) && b.types.length ? b.types : AI_IMAGE_SPECS.map(s2 => s2.type);
     po.aiImages = po.aiImages || {};
     const existing = Array.isArray(po.aiImages[g.key]) ? po.aiImages[g.key] : [];
@@ -1071,7 +1076,7 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
         const styleAdd = (styling && (spec.type === 'female' || spec.type === 'male'))
           ? ` Style the model wearing this exact garment ${styling}. Keep any paired clothing understated and choose colours that complement and flatter THIS garment tastefully, so it stays the clear hero of the photo.`
           : '';
-        const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + styleAdd + context);
+        const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + styleAdd + context, spec.aspect);
         const saved = savePhotoBuffer(out.buf, extForMime(out.mime));
         const idx = existing.findIndex(x => x.type === spec.type);
         const rec = { type: spec.type, label: spec.label, url: saved.url, approved: false };
