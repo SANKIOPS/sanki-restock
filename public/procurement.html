@@ -899,7 +899,7 @@
     }
 
     // ══════════ AI STUDIO ══════════
-    var studio={ images:{}, seo:{} };     // keyed by product group key
+    var studio={ images:{}, seo:{}, styling:{} };     // keyed by product group key
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
     function studioReadyFor(np){
@@ -917,7 +917,7 @@
           return;
         }
         lastReceive=d;                          // studio funcs read lastReceive.newProducts
-        studio={ images:{}, seo:{} };
+        studio={ images:{}, seo:{}, styling:{} };
         var po=d.po||{};
         if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
         if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved }; }); }
@@ -939,6 +939,10 @@
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div>'+
         '<button class="btn sm" data-genimg="'+i+'">'+(imgs.length?'Regenerate all 4':'Generate 4 photos')+'</button></div>';
+      var pair='<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
+        '<label class="muted" style="font-size:12px;white-space:nowrap">Pair model with</label>'+
+        '<input data-styling="'+i+'" value="'+esc(studio.styling[np.key]||'')+'" placeholder="e.g. blue jeans · beige trousers · plain white tee · black cargos" style="flex:1;min-width:220px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px">'+
+        '<span class="muted" style="font-size:11px">only affects the 2 model shots · leave blank for auto</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
       IMG_TYPES.forEach(function(t){
         var im=byType[t[0]];
@@ -975,7 +979,7 @@
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs 1 approved photo + approved SEO</span>';
-      return head+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
+      return head+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
     }
     function rerenderCard(i){
       var np=lastReceive.newProducts[i], c=el('scard'+i);
@@ -999,10 +1003,11 @@
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
+      var stl=host.querySelector('[data-styling]'); if(stl) stl.oninput=function(){ studio.styling[np.key]=stl.value; };
     }
     function genImages(np,i,types,btn){
       var lbl=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='Generating…'; }
-      var body={ groupKey:np.key }; if(types) body.types=types;
+      var body={ groupKey:np.key, styling:studio.styling[np.key]||'' }; if(types) body.types=types;
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
         .then(readJson).then(function(dd){
           if(btn){ btn.disabled=false; btn.textContent=lbl; }
@@ -1029,7 +1034,7 @@
         if(n>=types.length){ done(); return; }
         var t=types[n];
         setBtn('Generating '+(n+1)+'/'+types.length+'…',true);
-        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, types:[t] })})
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, types:[t], styling:studio.styling[np.key]||'' })})
           .then(readJson).then(function(dd){
             if(dd&&dd.success){ studio.images[np.key]=dd.images; rerenderCard(i); }
             if(dd&&dd.errors&&dd.errors.length){ dd.errors.forEach(function(e){ errs.push(e.type+': '+e.error); }); }

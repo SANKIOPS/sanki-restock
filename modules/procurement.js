@@ -1062,10 +1062,16 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     po.aiImages = po.aiImages || {};
     const existing = Array.isArray(po.aiImages[g.key]) ? po.aiImages[g.key] : [];
     const errors = [];
+    // Optional per-product styling for the model shots only (e.g. pair a top with
+    // jeans/trousers). Front/back flat-lays have no model so it's ignored there.
+    const styling = String(b.styling || '').trim();
     for (const spec of AI_IMAGE_SPECS) {
       if (wantTypes.indexOf(spec.type) < 0) continue;
       try {
-        const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + context);
+        const styleAdd = (styling && (spec.type === 'female' || spec.type === 'male'))
+          ? ` Style the model wearing this garment paired with ${styling}; keep that paired item simple and neutral so THIS garment stays the clear hero of the photo.`
+          : '';
+        const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + styleAdd + context);
         const saved = savePhotoBuffer(out.buf, extForMime(out.mime));
         const idx = existing.findIndex(x => x.type === spec.type);
         const rec = { type: spec.type, label: spec.label, url: saved.url, approved: false };
