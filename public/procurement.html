@@ -78,6 +78,7 @@
     .polist{ display:grid; gap:8px; }
     .porow{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer; }
     .porow:hover{ border-color:var(--emerald-l); background:#f9fdfb; }
+    .porow.active{ border-color:var(--emerald-d); background:#eefdf6; box-shadow:0 0 0 2px var(--emerald-l) inset; }
     .hidden{ display:none !important; }
   </style>
 </head>
@@ -690,6 +691,7 @@
     var STATUS_META={ advance:['adv','Advance — awaiting goods'], received:['rec','Received — weighed'], awaiting_approval:['await','Awaiting admin approval'], posted:['posted','Posted to Shopify'] };
     var poIndex={};   // id → full PO (from the last list load), used for list-level edit
     function loadPos(){
+      openPoId=null;   // list is being rebuilt — drop the toggle state
       el('poListHost').innerHTML='<p class="muted">Loading…</p>';
       fetch('/api/procurement/pos').then(r=>r.json()).then(function(d){
         if(!d.success){ el('poListHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
@@ -747,9 +749,19 @@
       }
     });
 
+    var openPoId=null;   // which PO is currently expanded below (null = none)
+    function markOpenRow(){
+      Array.prototype.forEach.call(document.querySelectorAll('.porow'),function(r){
+        r.classList.toggle('active', r.getAttribute('data-po')===openPoId);
+      });
+    }
     function openPo(id){
+      // Toggle: clicking the PO that's already open collapses it back to the list.
+      if(openPoId===id){ openPoId=null; el('poDetailHost').innerHTML=''; markOpenRow(); return; }
+      openPoId=id; markOpenRow();
       el('poDetailHost').innerHTML='<div class="panel"><p class="muted">Loading '+esc(id)+'…</p></div>';
       fetch('/api/procurement/pos/'+encodeURIComponent(id)).then(r=>r.json()).then(function(d){
+        if(openPoId!==id) return;   // user collapsed or switched while loading
         if(!d.success){ el('poDetailHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
         renderPoDetail(d.po);
       });
@@ -963,9 +975,11 @@
     function studioCard(np,i){
       var imgs=studio.images[np.key]||[];
       var byType={}; imgs.forEach(function(x){ byType[x.type]=x; });
+      var thumb=np.photoUrl?('<img data-zoom src="'+esc(np.photoUrl)+'" title="Uploaded product photo — click to enlarge" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;flex:none">'):'';
       var head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
+        '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
-        (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div>'+
+        (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
         '<button class="btn sm" data-genimg="'+i+'">'+(imgs.length?'Regenerate all':'Generate photos')+'</button></div>';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?PAIR_UPPER:PAIR_LOWER, s=stylingOf(np);
       function sel(kind,label,opts,val){

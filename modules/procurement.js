@@ -266,11 +266,36 @@ function charmPrice(x) { const up = Math.ceil(x / 100) * 100; return Math.max(up
 // Matches SANKI's newer, keyword-first title style (em-dash, fit words,
 // colour) rather than the old code-first names. Everything is a starting
 // draft the user edits in the preview before anything is written.
+// Strip internal warehouse codes out of any CUSTOMER-FACING string. Vendor
+// design numbers (e.g. "71383") and SKU fragments (e.g. "SA-2-11-FS") must never
+// appear in a storefront name, title, meta or alt text — they hurt SEO/AEO/GEO
+// and read like noise to shoppers and to answer/generative engines.
+function stripInternalCodes(str, designCode) {
+  if (!str) return '';
+  let out = String(str);
+  if (designCode) {
+    const esc = String(designCode).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp('\\b' + esc + '\\b', 'ig'), ' ');
+  }
+  out = out
+    .replace(/\bSA[-\s]?\d+(?:[-\s]?\w+)*\b/ig, ' ')   // brand SKU fragments (SA-2-11-FS)
+    .replace(/\b\d{3,}\b/g, ' ')                        // bare vendor codes (71383)
+    .replace(/\s{2,}/g, ' ')                            // collapse gaps left by removals
+    .replace(/\s+,/g, ',')                              // no space before a comma
+    .replace(/,(?=\s*(?:,|$))/g, '')                    // drop empty comma segments
+    .replace(/\s*([—–|])\s*/g, ' $1 ')                 // single space around en/em-dash & pipe (leave hyphens in T-Shirt alone)
+    .replace(/^[\s—–|,]+|[\s—–|,]+$/g, '')             // trim stray leading/trailing separators
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return out;
+}
 function genSeo(g) {
-  const designName  = titleCase(g.designName || '');
   const designCode  = String(g.designCode || '').toUpperCase().trim();
-  // Design name is OPTIONAL — fall back to the design code for the title/name.
-  const nameForTitle = designName || designCode;
+  // Clean the vendor design name of any embedded codes; if nothing meaningful
+  // is left, we simply omit the name and let colour + product type carry it.
+  const designName  = stripInternalCodes(titleCase(g.designName || ''), designCode);
+  // Customer-facing copy NEVER falls back to the raw design code.
+  const nameForTitle = designName;
   const productType = g.productType || '';
   const colour      = titleCase(g.colour || '');
   const fit         = titleCase(g.fit || '');
@@ -436,9 +461,13 @@ async function computePreview(store, body) {
     // Ambiguous if it has neither a design code nor a design name — two truly
     // different products could otherwise merge into one.
     const ambiguous = !((g.designCode || '').trim() || (g.designName || '').trim());
+    // A representative uploaded photo (first line that has one) so the studio
+    // can show what the product actually is.
+    const repLine = g.lines.find(l => (l.photoUrl || '').trim());
     return {
       key: g.key, vendor: g.vendor, designCode: g.designCode, designName: g.designName,
       colour: g.colour, productType: g.productType, ambiguous,
+      photoUrl: repLine ? repLine.photoUrl : '',
       seo,
       variants: g.lines.map(l => ({
         sku: l.sku, sizeLabel: l.sizeLabel, sizeCode: sizeCodeOf(l.sizeLabel), chinaSize: l.chinaSize,
@@ -1167,19 +1196,24 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     const sizeCodeOf = (label) => s.sizes[label] || label;
     const sizeList = (g.sizeLabels || []).map(sizeCodeOf).join(', ');
     const prompt =
-`You are naming and writing SEO for an Indian premium streetwear product for the brand SANKI, based on the product PHOTO shown.\n` +
+`You are an expert e-commerce SEO/AEO/GEO copywriter naming and writing listing copy for an Indian premium streetwear product for the brand SANKI, based on the product PHOTO shown.\n` +
 `Known facts: product type = ${g.productType || 'garment'}; colour = ${g.colour || 'as shown'}; audience = ${g.audience}; ${g.fit ? 'fit = ' + g.fit + '; ' : ''}available sizes = ${sizeList || 'as listed'}.\n` +
 `Look at the actual garment in the photo (graphics, print, silhouette, vibe) and write copy that fits WHAT YOU SEE.\n\n` +
+`Optimise for three things at once:\n` +
+`- SEO (Google): natural, keyword-rich phrasing built around real search terms a shopper types (e.g. "baggy red cargo pants men").\n` +
+`- AEO (answer engines / voice): clear, factual, self-contained sentences that directly answer "what is this product?" so it can be quoted as a snippet.\n` +
+`- GEO (ChatGPT/Perplexity/Gemini): state the product entity plainly — brand SANKI + product type + colour + fit + key visible detail — so generative engines can confidently cite it.\n\n` +
 `Return STRICT JSON ONLY:\n` +
 `{"displayName":"","title":"","metaTitle":"","metaDescription":"","imageAlt":"","tags":[""],"bodyHtml":""}\n\n` +
 `Rules:\n` +
-`- displayName = a short, catchy customer-facing product name (2-4 words), inspired by what the garment looks like. No brand, no colour.\n` +
+`- CRITICAL: never include any internal codes, vendor design numbers, SKUs, or bare numbers (e.g. "71383", "SA-2-11-FS") in ANY field. These are warehouse-only. Names must read like real retail product names.\n` +
+`- displayName = a short, catchy customer-facing product name (2-4 words), inspired by what the garment looks like. No brand, no colour, no numbers.\n` +
 `- title = storefront H1: "<displayName> <productType> — <Fit>, <Colour>" style, natural and clean.\n` +
-`- metaTitle <= 60 chars, ends with " | SANKI".\n` +
-`- metaDescription <= 155 chars, natural, mentions colour + streetwear + COD + limited drop.\n` +
-`- imageAlt = concise descriptive alt text of the garment.\n` +
-`- tags = 5-8 short search tags.\n` +
-`- bodyHtml = 2-3 sentences of product description in simple HTML (<p>…</p>), premium streetwear tone, describing what is visibly distinctive.\n` +
+`- metaTitle <= 60 chars, front-loads the main keyword, ends with " | SANKI".\n` +
+`- metaDescription <= 155 chars: one natural sentence that states what it is (brand + colour + fit + product type), mentions premium streetwear, COD and limited drop. Written to answer a search query directly.\n` +
+`- imageAlt = concise, literal description of the garment as seen (colour + key visible feature + product type).\n` +
+`- tags = 5-8 short, real-world search tags (mix of head + long-tail keywords). No codes.\n` +
+`- bodyHtml = 2-3 sentences of product description in simple HTML (<p>…</p>), premium streetwear tone; lead with a plain factual sentence (great for AEO/GEO) then describe what is visibly distinctive.\n` +
 `- Never invent sizes/prices. No markdown, JSON only.`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 90000);
@@ -1204,16 +1238,22 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     if (!r.ok) return res.status(502).json({ success: false, error: 'AI error: ' + ((j.error && j.error.message) || ('HTTP ' + r.status)) });
     const parsed = extractJsonBlock((j.content || []).map(c => c.text || '').join('')) || {};
     // Deterministic fields still come from our own generator (handle uniqueness etc).
-    const base = genSeo({ designName: parsed.displayName || g.designName, designCode: g.designCode, productType: g.productType, colour: g.colour, fit: g.fit, audience: g.audience, sizeLabels: g.sizeLabels, sizeCodeOf });
+    // Clean the model's suggested name of any codes BEFORE using it as a fallback,
+    // so genSeo's deterministic title/meta are built on clean copy too.
+    const cleanDisplay = stripInternalCodes(String(parsed.displayName || '').trim(), g.designCode);
+    const base = genSeo({ designName: cleanDisplay || g.designName, designCode: g.designCode, productType: g.productType, colour: g.colour, fit: g.fit, audience: g.audience, sizeLabels: g.sizeLabels, sizeCodeOf });
+    // Belt-and-braces: strip codes from every customer-facing field the model returned.
+    const clean = (v, fb) => stripInternalCodes(String(v || '').trim(), g.designCode) || fb;
     const seo = {
-      displayName: String(parsed.displayName || g.designName || '').trim(),
-      title: String(parsed.title || base.title).trim(),
+      displayName: cleanDisplay || base.title.split('—')[0].trim(),
+      title: clean(parsed.title, base.title),
       handle: base.handle,
-      metaTitle: String(parsed.metaTitle || base.metaTitle).trim().slice(0, 70),
-      metaDescription: String(parsed.metaDescription || base.metaDescription).trim().slice(0, 320),
-      imageAlt: String(parsed.imageAlt || base.imageAlt).trim(),
-      tags: Array.isArray(parsed.tags) && parsed.tags.length ? parsed.tags.map(t => String(t).trim()).filter(Boolean) : base.tags,
-      bodyHtml: String(parsed.bodyHtml || base.bodyHtml)
+      metaTitle: clean(parsed.metaTitle, base.metaTitle).slice(0, 70),
+      metaDescription: clean(parsed.metaDescription, base.metaDescription).slice(0, 320),
+      imageAlt: clean(parsed.imageAlt, base.imageAlt),
+      tags: (Array.isArray(parsed.tags) && parsed.tags.length ? parsed.tags : base.tags)
+        .map(t => stripInternalCodes(String(t).trim(), g.designCode)).filter(Boolean),
+      bodyHtml: stripInternalCodes(String(parsed.bodyHtml || base.bodyHtml), g.designCode)
     };
     // Persist onto the PO's seoDraft (keyed by group) so it survives reloads/posts.
     po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
