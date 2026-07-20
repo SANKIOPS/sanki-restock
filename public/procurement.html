@@ -62,6 +62,12 @@
     /* Show the image at its TRUE resolution, capped to the viewport — big and
        sharp for high-res photos, never upscaled into blur for small crops. */
     #imgZoom img{ width:auto; height:auto; max-width:96vw; max-height:96vh; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.5); background:#fff; }
+    /* Final "what will be posted" preview shown before the Shopify commit. */
+    #postPreview{ position:fixed; inset:0; background:rgba(12,20,16,.82); display:flex; align-items:center; justify-content:center; z-index:9999; padding:24px; }
+    #postPreview .ppbox{ background:#fff; border-radius:14px; max-width:780px; width:100%; max-height:90vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+    #postPreview .pphead{ padding:14px 18px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:2px; }
+    #postPreview .ppbody{ padding:14px 18px; overflow:auto; }
+    #postPreview .ppfoot{ padding:12px 18px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:10px; }
     .npcard{ border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; background:var(--ivory2); }
     .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .banner{ border-radius:10px; padding:10px 14px; font-size:13px; margin:10px 0; }
@@ -1175,9 +1181,50 @@
       });
       return { newProducts:nps, existingAdds:d.existingAdds||[] };
     }
+    // Show a final "here is exactly what will be created" preview before the
+    // irreversible live-Shopify commit — approved images, names, sizes & MRP.
+    function showPostPreview(id){
+      var data=collectApproved(), nps=data.newProducts||[], adds=data.existingAdds||[];
+      var body='';
+      nps.forEach(function(p){
+        var seo=p.seo||{};
+        var imgs=(p.images||[]).map(function(im){ return '<img src="'+esc(im.url)+'" style="width:64px;height:78px;object-fit:cover;border-radius:6px;border:1px solid var(--line)">'; }).join('');
+        var rows=(p.variants||[]).map(function(v){ return '<tr><td class="mono">'+esc(v.sku||'')+'</td><td>'+esc(v.sizeCode||v.sizeLabel||'')+'</td><td>'+v.qty+'</td><td class="money">'+money(v.landed)+'</td><td class="money">'+money(v.price)+'</td></tr>'; }).join('');
+        body+='<div class="npcard">'+
+          '<div style="display:flex;gap:10px;align-items:flex-start">'+
+            '<div style="display:flex;gap:4px;flex-wrap:wrap">'+(imgs||'<span class="muted" style="font-size:12px">no approved image</span>')+'</div>'+
+            '<div style="flex:1;min-width:0">'+
+              '<div style="font-weight:700">'+esc(seo.displayName||seo.title||p.productType||'')+'</div>'+
+              '<div class="muted" style="font-size:12px">'+esc(seo.title||'')+'</div>'+
+              '<div class="muted" style="font-size:12px;margin-top:4px">'+esc(seo.metaDescription||'')+'</div>'+
+            '</div>'+
+          '</div>'+
+          '<table style="margin-top:8px;width:100%"><thead><tr><th>SKU</th><th>Size</th><th>Qty</th><th class="money">Landed</th><th class="money">MRP</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+        '</div>';
+      });
+      if(adds.length){
+        body+='<div class="npcard"><div style="font-weight:700">Existing variants — add received stock</div>'+
+          '<table style="margin-top:6px;width:100%"><thead><tr><th>SKU</th><th>Add qty</th><th class="money">Landed</th></tr></thead><tbody>'+
+          adds.map(function(e){ return '<tr><td class="mono">'+esc(e.sku)+'</td><td>+'+e.qty+'</td><td class="money">'+money(e.landed)+'</td></tr>'; }).join('')+
+          '</tbody></table></div>';
+      }
+      var ov=document.createElement('div'); ov.id='postPreview';
+      ov.innerHTML='<div class="ppbox">'+
+        '<div class="pphead"><b>Final preview — '+esc(id)+'</b><span class="muted" style="font-size:12px">Creates '+nps.length+' new <b>draft</b> product(s)'+(adds.length?(' · adds stock to '+adds.length+' existing'):'')+' on the LIVE Shopify store.</span></div>'+
+        '<div class="ppbody">'+(body||'<p class="muted">Nothing to post.</p>')+'</div>'+
+        '<div class="ppfoot"><button class="btn ghost" id="ppCancel">Cancel</button><button class="btn warn" id="ppConfirm">✓ Confirm &amp; post to Shopify</button></div>'+
+      '</div>';
+      document.body.appendChild(ov);
+      function close(){ if(ov.parentNode) ov.parentNode.removeChild(ov); }
+      el('ppCancel').onclick=close;
+      ov.onclick=function(e){ if(e.target===ov) close(); };
+      el('ppConfirm').onclick=function(){ close(); doPost(id); };
+    }
     function postToShopify(id){
       if(!el('warehouse').value){ alert('Choose and Save a warehouse location first (tab ①).'); return; }
-      if(!confirm('Post '+id+' to the LIVE Shopify store now?')) return;
+      showPostPreview(id);
+    }
+    function doPost(id){
       var btn=el('postBtn'); btn.disabled=true; btn.textContent='Posting…';
       var payload=collectApproved(); payload.approve=true; payload.poId=id; payload.warehouseLocationId=el('warehouse').value;
       fetch('/api/procurement/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
