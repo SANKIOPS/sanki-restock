@@ -194,10 +194,24 @@
     // ── image zoom (any .thumb, anywhere) ──
     (function(){
       var ov=document.getElementById('imgZoom'), im=ov.firstElementChild;
+      // Smart sizing: shrink big images to fit the screen (stay sharp), and
+      // enlarge small images up to a cap so they get BIG without turning blurry.
+      var MAX_UPSCALE=2.5;   // don't blow a low-res crop up more than 2.5×
+      function sizeZoom(){
+        var nw=im.naturalWidth, nh=im.naturalHeight; if(!nw||!nh) return;
+        var vw=window.innerWidth*0.96, vh=window.innerHeight*0.96;
+        var fit=Math.min(vw/nw, vh/nh);          // scale that fits the viewport (may be <1)
+        var scale=Math.min(fit, MAX_UPSCALE);    // cap upscaling to keep it crisp
+        im.style.width=Math.round(nw*scale)+'px';
+        im.style.height=Math.round(nh*scale)+'px';
+      }
+      im.onload=sizeZoom;
+      window.addEventListener('resize',function(){ if(ov.classList.contains('open')) sizeZoom(); });
       document.addEventListener('click',function(e){
         var t=e.target;
         if(t&&t.tagName==='IMG'&&(t.classList.contains('thumb')||t.hasAttribute('data-zoom'))&&t.getAttribute('src')){
           im.src=t.getAttribute('src'); ov.classList.add('open');
+          if(im.complete&&im.naturalWidth) sizeZoom();   // already cached → size now
         } else if(t===ov||t===im){ ov.classList.remove('open'); im.src=''; }
       });
       document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ ov.classList.remove('open'); im.src=''; } });
