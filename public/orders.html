@@ -164,10 +164,10 @@
         var qs = new URLSearchParams();
         Object.keys(filters).forEach(function(k){ if(filters[k]) qs.set(k, filters[k]); });
         qs.set('limit','500');
-        fetch('/api/orders?'+qs.toString(), { headers:{Accept:'application/json'} })
+        fetch('/api/orders-ledger?'+qs.toString(), { headers:{Accept:'application/json'} })
           .then(function(r){ if(r.status===401){ location.href='/login.html'; return null; } return r.json(); })
           .then(function(d){ if(!d) return; renderCards(d.summary||{}, null); renderTable(d.orders||[]); });
-        fetch('/api/orders/sync/status',{headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null;})
+        fetch('/api/orders-ledger/sync/status',{headers:{Accept:'application/json'}}).then(function(r){return r.ok?r.json():null;})
           .then(function(s){ if(s&&s.sync) renderCards(currentSummary||{count:0,revenue:0,byChannel:{}}, s.sync); });
       }
       var currentSummary = null;
@@ -215,7 +215,7 @@
           remarks: document.getElementById('f_rem').value
         };
         var btn=document.getElementById('f_save'); btn.disabled=true; btn.textContent='Saving…';
-        fetch('/api/orders/'+id+'/dispatch',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+        fetch('/api/orders-ledger/'+id+'/dispatch',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
           .then(function(r){ return r.json(); })
           .then(function(res){ if(res.success){ closeEditor(); load(); } else { btn.disabled=false; btn.textContent='Save'; alert(res.error||'Failed'); } })
           .catch(function(){ btn.disabled=false; btn.textContent='Save'; alert('Network error'); });
@@ -224,7 +224,7 @@
       // ── Sync ──
       syncBtn.onclick=function(){
         syncBtn.disabled=true; var t=syncBtn.textContent; syncBtn.textContent='Syncing…';
-        fetch('/api/orders/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+        fetch('/api/orders-ledger/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
           .then(function(r){ return r.json(); })
           .then(function(res){ syncBtn.disabled=false; syncBtn.textContent=t;
             if(!res.success){ alert(res.error||'Sync failed'); return; } load(); })

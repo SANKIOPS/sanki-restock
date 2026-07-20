@@ -18,12 +18,15 @@
 // Shopify; dispatch layer = in-app CRUD (the app is the source of truth,
 // retiring the dispatch sheet).
 //
-// Endpoints (all behind the auth gate):
-//   POST /api/orders/sync         → backfill (first run) or incremental
-//   GET  /api/orders/sync/status  → last sync meta
-//   GET  /api/orders              → filtered list + summary
-//   GET  /api/orders/:id          → one order (with dispatch layer)
-//   POST /api/orders/:id/dispatch → update the editable dispatch fields
+// Endpoints (all behind the auth gate). NOTE the /api/orders-ledger/* base:
+// server.js already owns a legacy GET/POST /api/orders (the velocity/analytics
+// COD cache, different shape) that is registered first and would otherwise
+// shadow these. Keeping this module on its own namespace avoids the clash.
+//   POST /api/orders-ledger/sync         → backfill (first run) or incremental
+//   GET  /api/orders-ledger/sync/status  → last sync meta
+//   GET  /api/orders-ledger              → filtered list + summary
+//   GET  /api/orders-ledger/:id          → one order (with dispatch layer)
+//   POST /api/orders-ledger/:id/dispatch → update the editable dispatch fields
 // ═══════════════════════════════════════════════════════════════
 const express = require('express');
 const path    = require('path');
@@ -212,12 +215,12 @@ function mergedList(store) {
   });
 }
 
-router.get('/api/orders/sync/status', (req, res) => {
+router.get('/api/orders-ledger/sync/status', (req, res) => {
   const s = loadStore();
   res.json({ success: true, sync: s.sync || {}, running: _syncing });
 });
 
-router.post('/api/orders/sync', async (req, res) => {
+router.post('/api/orders-ledger/sync', async (req, res) => {
   try {
     const out = await runSync();
     res.json({ success: true, ...out });
@@ -226,7 +229,7 @@ router.post('/api/orders/sync', async (req, res) => {
   }
 });
 
-router.get('/api/orders', (req, res) => {
+router.get('/api/orders-ledger', (req, res) => {
   const store = loadStore();
   let list = mergedList(store);
   const q = (req.query.q || '').toString().trim().toLowerCase();
@@ -265,7 +268,7 @@ router.get('/api/orders', (req, res) => {
   res.json({ success: true, total: list.length, summary, orders: list.slice(offset, offset + limit) });
 });
 
-router.get('/api/orders/:id', (req, res) => {
+router.get('/api/orders-ledger/:id', (req, res) => {
   const store = loadStore();
   const o = store.orders[String(req.params.id)];
   if (!o) return res.status(404).json({ success: false, error: 'Order not found' });
@@ -276,7 +279,7 @@ router.get('/api/orders/:id', (req, res) => {
 const PACKING_STATES = ['pending', 'packed', 'booked', 'dispatched', 'delivered', 'rto', 'cancelled'];
 const CONFIRM_STATES = ['pending', 'confirmed', 'unreachable', 'cancelled'];
 
-router.post('/api/orders/:id/dispatch', (req, res) => {
+router.post('/api/orders-ledger/:id/dispatch', (req, res) => {
   const store = loadStore();
   const id = String(req.params.id);
   if (!store.orders[id]) return res.status(404).json({ success: false, error: 'Order not found' });
