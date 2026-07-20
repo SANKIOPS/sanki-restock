@@ -52,6 +52,11 @@
     .mono{ font-family:ui-monospace,Menlo,monospace; font-size:12px; }
     .thumb{ width:38px; height:38px; object-fit:cover; border-radius:7px; border:1px solid var(--line); background:#f4f4f2; display:block; cursor:zoom-in; transition:transform .08s ease; }
     .thumb:hover{ transform:scale(1.06); border-color:var(--emerald); }
+    .thumb-lg{ width:84px; height:84px; border-radius:9px; }   /* bigger, clearer preview in the advance-purchase lines */
+    /* Frozen PO/vendor bar — stays pinned to the top while doing photos & weights in Audit Purchases */
+    .po-sticky{ position:sticky; top:0; z-index:30; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;
+      background:var(--ivory,#fbfaf7); border:1px solid var(--line); border-radius:11px; padding:9px 14px; margin-bottom:10px; box-shadow:0 4px 14px rgba(12,20,16,.08); }
+    .po-sticky b{ font-size:15px; }
     .totalrow td{ background:var(--ivory2); border-top:2px solid var(--line); }
     .editcol{ display:none; text-align:center; }
     .editing .editcol{ display:table-cell; }
@@ -104,7 +109,7 @@
 
     <div class="tabs">
       <div class="tab active" id="tabAdvance">① New advance purchase</div>
-      <div class="tab" id="tabReceive">② Receive &amp; post</div>
+      <div class="tab" id="tabReceive">② Audit Purchases</div>
     </div>
 
     <!-- ══════════ VIEW 1: ADVANCE ══════════ -->
@@ -265,9 +270,9 @@
     // ── category-aware fits & sizes ──
     var UPPER_FITS=['Oversized','Drop Shoulder','Boxy Fit','Relaxed Fit','Regular Fit','Slim Fit','Muscle Fit'];
     var LOWER_FITS=['Baggy Fit','Straight Fit','Relaxed Fit','Tapered Fit','Slim Fit','Skinny Fit','Narrow Fit','Wide Leg','Bootcut','Cargo Fit'];
-    var UPPER_SIZES=['FS','M','L','XL','XXL','3XL','4XL'];
+    var UPPER_SIZES=['FS','S','M','L','XL','XXL','3XL','4XL'];
     var LOWER_SIZES_INDIA=['FS','28','30','32','34','36','38','40','42','44'];
-    var CHINA_SIZES=['FS','M','L','XL','XXL','3XL','4XL'];
+    var CHINA_SIZES=['FS','S','M','L','XL','XXL','3XL','4XL'];
     function categoryOf(p){ p=String(p||'').toLowerCase();
       if(/jean|trouser|lower|short|jogger|jort|pant|cargo|denim|bottom/.test(p)) return 'lower';
       if(/shirt|tee|t-shirt|sweat|hoodie|hood|sando|top|jacket|tank|coord|set/.test(p)) return 'upper';
@@ -359,12 +364,12 @@
       var add=document.createElement('option'); add.value='__new__'; add.textContent='+ Add new vendor…'; sel.appendChild(add);
     }
     el('b_vendor').onchange=function(){
-      if(this.value!=='__new__') return;
+      if(this.value!=='__new__'){ if(lines.length) renderLines(); return; }   // reflect the chosen vendor on every line
       var name=(prompt('New vendor name:')||'').toUpperCase().trim();   // vendors are always UPPERCASE
       if(!name){ this.value=''; return; }
       var self=this;
       fetch('/api/procurement/vendors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
-        .then(r=>r.json()).then(function(d){ if(d.success){ fillVendors(d.vendors, name); } else { alert(d.error||'Could not add vendor'); self.value=''; } })
+        .then(r=>r.json()).then(function(d){ if(d.success){ fillVendors(d.vendors, name); if(lines.length) renderLines(); } else { alert(d.error||'Could not add vendor'); self.value=''; } })
         .catch(function(e){ alert(e.message); self.value=''; });
     };
 
@@ -476,6 +481,7 @@
       var india=isIndia();
       // India: the unit cost is already ₹ (no ¥ conversion), so show it as money.
       var unit=function(v){ return india?money(v):yuan(v); };
+      var vend=(el('b_vendor')&&el('b_vendor').value||'').trim();   // vendor is per-PO, shown on every line
       var rows=lines.map(function(l,i){
         if(i===editingLineIdx) return lineEditorRow(l,i);
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
@@ -483,9 +489,10 @@
         var approveBtn = (l.photoUrl && !l.photoApproved)
           ? ' <button class="btn sm" data-approveline="'+i+'" style="background:#059669;color:#fff;border-color:#059669">Approve</button>'
           : (l.photoUrl && l.photoApproved ? ' <button class="btn ghost sm" data-unapproveline="'+i+'">Undo</button>' : '');
-        var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'')+'<div style="margin-top:3px">'+photoBadge(l)+approveBtn+'</div>';
+        var photoCell=(l.photoUrl?'<img class="thumb thumb-lg" title="Click to enlarge" src="'+esc(l.photoUrl)+'">':'')+'<div style="margin-top:3px">'+photoBadge(l)+approveBtn+'</div>';
         return '<tr>'+
           '<td>'+photoCell+'</td>'+
+          '<td>'+esc(vend||'—')+'</td>'+
           '<td>'+esc(l.designName||'—')+'</td><td class="mono">'+esc(l.designCode||'—')+'</td>'+
           '<td>'+esc(l.productType||'—')+'</td><td>'+esc(l.colour||'—')+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
           '<td>'+esc(l.qty)+'</td><td class="money">'+unit(l.perPcsYuan)+'</td><td class="money">'+unit(lineYuan(l))+'</td><td class="money">'+money(lineCost(l))+'</td>'+
@@ -495,8 +502,8 @@
       var totalInr  = lines.reduce(function(s,l){ return s + lineCost(l); }, 0);
       var totalQty  = lines.reduce(function(s,l){ return s + (Number(l.qty)||0); }, 0);
       var unitHdr=india?'₹/pc':'¥/pc', costHdr=india?'Purchase cost (₹)':'Purchase cost (¥)';
-      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>'+unitHdr+'</th><th>'+costHdr+'</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
-        '<tr class="totalrow"><td colspan="7" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+unit(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
+      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Vendor</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>'+unitHdr+'</th><th>'+costHdr+'</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
+        '<tr class="totalrow"><td colspan="8" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+unit(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
         '</tbody></table>'+
         '<p class="sub">Tap <b>Edit</b> on a line to change any field or its photo right here. '+(india
           ? 'Purchase cost (₹) = qty × ₹/pc; landed cost adds the shipment transport (₹'+(Number(el('b_transportTotal')&&el('b_transportTotal').value)||0).toLocaleString('en-IN')+' split by pieces) at receive.'
@@ -566,7 +573,7 @@
         btn.disabled=false; btn.textContent='Save advance purchase →';
         if(!d.success){ el('advanceResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
         var skus=(d.lines||[]).map(function(l){ return '<span class="mono">'+esc(l.sku||l.skuError||'—')+'</span>'; }).join(' · ');
-        el('advanceResult').innerHTML='<div class="banner ok"><b>'+esc(d.poId)+'</b> saved as advance purchase. SKUs generated: '+skus+'.<br>Photos are stored for the AI image step. Come back under “Receive &amp; post” when the goods arrive.</div>';
+        el('advanceResult').innerHTML='<div class="banner ok"><b>'+esc(d.poId)+'</b> saved as advance purchase. SKUs generated: '+skus+'.<br>Photos are stored for the AI image step. Come back under “Audit Purchases” when the goods arrive.</div>';
         lines=[]; renderLines();
         fetch('/api/procurement/next-serial?refresh=1').then(r=>r.json()).then(function(s){ if(s.success){var n=s.next; el('serialTag').textContent='next serial '+n.alpha+n.num+' · '+(s.skuCount||0)+' SKUs';} });
       }).catch(function(e){ btn.disabled=false; btn.textContent='Save advance purchase →'; el('advanceResult').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
@@ -818,7 +825,8 @@
         eta='<div class="muted" style="font-size:12px;margin-top:3px">Expected: '+esc(fmtDate(p.expectedReceiveDate))+' <span style="color:'+(overdue?'var(--err)':'var(--emerald-d)')+';font-weight:600">('+esc(lbl)+')</span></div>';
       }
       var chk = p.status!=='posted' ? '<input type="checkbox" class="poCheck" data-po="'+esc(p.id)+'" title="Select" style="margin-right:10px;transform:scale(1.15)">' : '';
-      return '<div class="porow" data-po="'+esc(p.id)+'"><div style="display:flex;align-items:center">'+chk+'<div><b>'+esc(p.id)+'</b> <span class="muted">· '+esc(p.vendor||'—')+(p.billNo?(' · bill '+esc(p.billNo)):'')+' · '+n+' line(s)</span>'+eta+'</div></div>'+
+      var purch = p.datePurchase ? (' · purchased '+esc(fmtDate(p.datePurchase))) : '';
+      return '<div class="porow" data-po="'+esc(p.id)+'"><div style="display:flex;align-items:center">'+chk+'<div><b>'+esc(p.id)+'</b> <span class="muted">· '+esc(p.vendor||'—')+(p.billNo?(' · bill '+esc(p.billNo)):'')+purch+' · '+n+' line(s)</span>'+eta+'</div></div>'+
         '<span class="pill '+m[0]+'">'+esc(m[1])+'</span></div>';
     }
     // bulk edit / delete (delegated — the buttons live inside poListHost)
@@ -863,7 +871,10 @@
       }
       var actions = posted ? '' :
         '<div style="display:flex;gap:6px"><button class="btn ghost sm" id="editPoBtn">Edit</button><button class="btn danger sm" id="delPoBtn">Delete PO</button></div>';
-      var h='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+      var stMeta=STATUS_META[po.status]||['adv',po.status];
+      var h='<div class="po-sticky"><div><b>'+esc(po.id)+'</b> <span class="muted">· Vendor: '+esc(po.vendor||'—')+(po.billNo?(' · bill '+esc(po.billNo)):'')+'</span></div>'+
+        '<span class="pill '+stMeta[0]+'">'+esc(stMeta[1])+'</span></div>';
+      h+='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
         '<div><h2 style="margin:0">'+esc(po.id)+'</h2>'+
           '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
@@ -888,18 +899,25 @@
         var lw=(Number(l.weightGrams)||0)*(Number(l.qty)||0);
         var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'<span class="muted" style="font-size:11px">none</span>')+
           (posted?'':'<div style="margin-top:3px"><label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">'+(l.photoUrl?'replace':'upload')+'<input type="file" accept="image/*" data-linephoto="'+i+'" style="display:none"></label></div>');
+        // Optional back raw photo (admin, new products only). Feeds the AI back shot.
+        if(!posted && me.isAdmin && l.classification!=='EXISTING'){
+          var gk=groupKeyOf(l), backUrl=(po.backRefs&&po.backRefs[gk])||'';
+          photoCell+='<div style="margin-top:5px;padding-top:4px;border-top:1px dashed var(--line)">'+
+            (backUrl?'<img class="thumb" src="'+esc(backUrl)+'" title="Back reference — the AI back photo is built from this">':'<span class="muted" style="font-size:10px">back: none</span>')+
+            '<div style="margin-top:2px"><label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">'+(backUrl?'replace back':'add back photo')+' <span style="opacity:.7">(optional)</span><input type="file" accept="image/*" data-lineback="'+i+'" data-gk="'+esc(gk)+'" style="display:none"></label></div></div>';
+        }
         h+='<tr>'+
           '<td>'+photoCell+'</td>'+
           '<td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
           '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
           '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
-          '<td>'+esc(l.qty)+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
+          '<td>'+(posted?esc(l.qty):'<input type="number" min="0" step="1" data-q="'+i+'" value="'+(Number(l.qty)||0)+'" style="width:70px" title="Actual received qty — edit if it differs from ordered">')+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
           '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" data-qty="'+(Number(l.qty)||0)+'" value="'+(l.weightGrams||'')+'" style="width:90px"'+(india?' placeholder="optional"':'')+'>')+'</td>'+
           '<td class="money" data-lw="'+i+'">'+(lw?(lw.toLocaleString('en-IN')+' g'):'—')+'</td></tr>';
       });
       var tw=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.weightGrams)||0)*(Number(l.qty)||0); },0);
       var tq=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.qty)||0); },0);
-      h+='<tr class="totalrow"><td colspan="5" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
+      h+='<tr class="totalrow"><td colspan="5" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600" id="totQty">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
       h+='</tbody></table>';
       if(!posted){
         var recvCtl = po.status==='advance'
@@ -931,13 +949,29 @@
         Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-linephoto]'),function(inp){
           inp.onchange=function(){ replaceLinePhoto(po.id, +inp.getAttribute('data-linephoto'), inp.files&&inp.files[0]); };
         });
+        // optional per-line back raw-photo → attaches to the group + builds the back AI shot
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-lineback]'),function(inp){
+          inp.onchange=function(){ uploadLineBackPhoto(po.id, inp.getAttribute('data-gk'), inp.files&&inp.files[0]); };
+        });
         // live total-weight + per-line weight as the user types
-        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(inp){
-          inp.oninput=function(){
-            var q=Number(inp.getAttribute('data-qty'))||0, g=Number(inp.value)||0, i=inp.getAttribute('data-w');
+        function recalcWeights(){
+          var t=0; Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(x){
+            var q=Number(x.getAttribute('data-qty'))||0, g=Number(x.value)||0, i=x.getAttribute('data-w');
             var cell=el('poDetailHost').querySelector('[data-lw="'+i+'"]'); if(cell) cell.textContent=(g*q)?((g*q).toLocaleString('en-IN')+' g'):'—';
-            var t=0; Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(x){ t+=(Number(x.value)||0)*(Number(x.getAttribute('data-qty'))||0); });
-            el('totWeight').textContent = t?(t.toLocaleString('en-IN')+' g / '+(t/1000).toFixed(2)+' kg'):'—';
+            t+=g*q;
+          });
+          var tw=el('totWeight'); if(tw) tw.textContent = t?(t.toLocaleString('en-IN')+' g / '+(t/1000).toFixed(2)+' kg'):'—';
+        }
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(inp){ inp.oninput=recalcWeights; });
+        // editable received qty — keep the matching weight input's qty in sync and
+        // live-update the line weight, total weight, and total qty as it changes.
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-q]'),function(inp){
+          inp.oninput=function(){
+            var i=inp.getAttribute('data-q'), q=Number(inp.value)||0;
+            var wInp=el('poDetailHost').querySelector('[data-w="'+i+'"]'); if(wInp) wInp.setAttribute('data-qty', q);
+            var tq=0; Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-q]'),function(x){ tq+=Number(x.value)||0; });
+            var tqCell=el('totQty'); if(tqCell) tqCell.textContent=tq;
+            recalcWeights();
           };
         });
         // ── edit (full form) / delete PO ──
@@ -957,10 +991,15 @@
       Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(inp){ w[inp.getAttribute('data-w')]=inp.value; });
       return w;
     }
+    function collectQtys(){
+      var q={};
+      Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-q]'),function(inp){ q[inp.getAttribute('data-q')]=inp.value; });
+      return q;
+    }
     function computeReceive(id){
       var btn=el('computeBtn'); btn.disabled=true; btn.textContent='Computing…';
       fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/receive',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ weights:collectWeights(),
+        body:JSON.stringify({ weights:collectWeights(), qtys:collectQtys(),
           exRate:(el('r_exRate')?el('r_exRate').value:''),
           freightPerGram:(el('r_freight')?el('r_freight').value:el('freightPerGram').value),
           transportTotal:(el('r_transportTotal')?el('r_transportTotal').value:''),
@@ -995,6 +1034,30 @@
           .then(readJson).then(function(r){
             if(!r.success){ alert(r.error||'Could not attach photo.'); return; }
             openPoId=null; openPo(id);   // re-render detail + re-feed the studio
+          });
+      }).catch(function(e){ alert(e.message); });
+    }
+    // Group key for a line — MUST mirror groupKey() in modules/procurement.js so the
+    // optional back reference attaches to the same product group the AI studio uses.
+    function groupKeyOf(l){
+      var design=String((l.designCode||l.designName||'')).trim().toLowerCase();
+      return [design, l.productType||'', l.colour||'', l.fit||'', l.audience||'Men']
+        .map(function(x){ return String(x).trim().toLowerCase(); }).join('|');
+    }
+    // Optional back raw-photo attached while receiving. The AI back shot is built
+    // from it (types:['back']); until one is uploaded no back photo is fabricated.
+    function uploadLineBackPhoto(id, groupKey, file){
+      if(!file||!groupKey) return;
+      var fd=new FormData(); fd.append('photo',file);
+      fetch('/api/procurement/photo',{method:'POST',body:fd}).then(readJson).then(function(u){
+        if(!u.success){ alert(u.error||'Upload failed.'); return; }
+        return fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/back-ref',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:groupKey, url:u.url })})
+          .then(readJson).then(function(r){
+            if(!r.success){ alert(r.error||'Could not attach back photo.'); return; }
+            // Build the back AI shot from this real photo, then re-render (studio + table).
+            fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:groupKey, types:['back'] })})
+              .then(readJson).then(function(){ openPoId=null; openPo(id); })
+              .catch(function(){ openPoId=null; openPo(id); });
           });
       }).catch(function(e){ alert(e.message); });
     }
