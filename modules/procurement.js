@@ -959,7 +959,9 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     if (b.dateReceive) po.dateReceive = b.dateReceive;
     if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = num(b.freightPerGram);
     if (b.exRate != null && b.exRate !== '') po.exRate = num(b.exRate);
-    if (po.status === 'advance') po.status = 'received';
+    // NOTE: computing landed cost is a PREVIEW only — it no longer flips the PO
+    // to "received". Arrival is confirmed explicitly via /mark-received so that
+    // previewing costs during the advance/lead-time stage never mis-marks a PO.
     saveStore(s);
     const preview = await computePreview(s, {
       lines: po.lines, vendor: po.vendor,
@@ -974,6 +976,47 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     }
     res.json({ success: true, poId: po.id, po: publicPo(po, req), ...stripPreviewForRole(preview, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Explicitly confirm the physical goods arrived (advance → received) ──
+// Kept SEPARATE from computing landed cost so previewing costs during the
+// lead-time stage never mis-marks a PO as received. Reversible while not posted
+// via /mark-received {undo:true}.
+router.post('/api/procurement/pos/:id/mark-received', (req, res) => {
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  const b = req.body || {};
+  if (b.undo) {
+    // Roll back an accidental "received" (or a stale awaiting_approval) to advance.
+    po.status = 'advance';
+    delete po.receivedBy; delete po.receivedAt;
+  } else {
+    if (po.status === 'advance') po.status = 'received';
+    if (b.dateReceive) po.dateReceive = b.dateReceive;
+    else if (!po.dateReceive) po.dateReceive = new Date().toISOString().slice(0, 10);
+    po.receivedBy = (req.user && req.user.username) || 'system';
+    po.receivedAt = new Date().toISOString();
+  }
+  saveStore(s);
+  res.json({ success: true, poId: po.id, status: po.status, dateReceive: po.dateReceive });
+});
+
+// ── Replace/attach the RAW source photo of a single PO line (pre-post) ──
+// The AI studio feeds off the group's first line that has a photo, so swapping
+// the photo here re-feeds the image generator on the next studio render.
+router.post('/api/procurement/pos/:id/line-photo', (req, res) => {
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  const b = req.body || {};
+  const i = Number(b.lineIndex);
+  if (!Array.isArray(po.lines) || !(i >= 0 && i < po.lines.length)) return res.status(400).json({ success: false, error: 'Bad line index.' });
+  po.lines[i].photoUrl = String(b.url || '').trim();
+  saveStore(s);
+  res.json({ success: true, lineIndex: i, url: po.lines[i].photoUrl });
 });
 
 // ── Edit a PO's header + drop lines (not posted) ─────────────────

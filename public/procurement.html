@@ -803,8 +803,10 @@
         var cls = l.classification==='EXISTING' ? '<span class="pill exist">restock</span>' : '<span class="pill new">new</span>';
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
         var lw=(Number(l.weightGrams)||0)*(Number(l.qty)||0);
+        var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'<span class="muted" style="font-size:11px">none</span>')+
+          (posted?'':'<div style="margin-top:3px"><label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">'+(l.photoUrl?'replace':'upload')+'<input type="file" accept="image/*" data-linephoto="'+i+'" style="display:none"></label></div>');
         h+='<tr>'+
-          '<td>'+(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'—')+'</td>'+
+          '<td>'+photoCell+'</td>'+
           '<td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
           '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
           '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
@@ -817,11 +819,14 @@
       h+='<tr class="totalrow"><td colspan="5" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
       h+='</tbody></table>';
       if(!posted){
-        h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">'+
-          '<button class="btn" id="computeBtn">Save weights &amp; compute landed cost</button>';
-        if(me.isAdmin) h+='<span class="muted" style="align-self:center;font-size:12px">You are admin — you can post to Shopify directly.</span>';
-        else h+='<span class="muted" style="align-self:center;font-size:12px">Shopify posting is done by the admin after your request.</span>';
-        h+='</div>';
+        var recvCtl = po.status==='advance'
+          ? '<button class="btn ghost" id="markRecvBtn">📦 Mark goods received</button>'
+          : '<span class="pill rec">✓ Received'+(po.dateReceive?(' · '+esc(fmtDate(po.dateReceive))):'')+'</span> <button class="btn ghost sm" id="undoRecvBtn" title="Undo — set back to Advance">↩ Undo received</button>';
+        h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
+          '<button class="btn" id="computeBtn">Save weights &amp; preview landed cost</button>'+
+          recvCtl+
+          '<span class="muted" style="align-self:center;font-size:12px">Preview only — this no longer marks the PO received. Use “Mark goods received” when stock physically arrives.</span>'+
+        '</div>';
       }
       h+='</div>';
       // AI STUDIO — available at every non-posted stage (incl. ADVANCE) so listing
@@ -837,6 +842,12 @@
       if(me.isAdmin && !posted) initStudioFor(po.id);
       if(!posted){
         el('computeBtn').onclick=function(){ computeReceive(po.id); };
+        var mrb=el('markRecvBtn'); if(mrb) mrb.onclick=function(){ markReceived(po.id,false); };
+        var urb=el('undoRecvBtn'); if(urb) urb.onclick=function(){ markReceived(po.id,true); };
+        // per-line raw-photo replace/upload (feeds the AI studio)
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-linephoto]'),function(inp){
+          inp.onchange=function(){ replaceLinePhoto(po.id, +inp.getAttribute('data-linephoto'), inp.files&&inp.files[0]); };
+        });
         // live total-weight + per-line weight as the user types
         Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(inp){
           inp.oninput=function(){
@@ -871,10 +882,37 @@
           freightPerGram:(el('r_freight')?el('r_freight').value:el('freightPerGram').value),
           dateReceive:(el('r_dateReceive')&&el('r_dateReceive').value)?el('r_dateReceive').value:new Date().toISOString().slice(0,10) })
       }).then(r=>r.json()).then(function(d){
-        btn.disabled=false; btn.textContent='Save weights & compute landed cost';
+        btn.disabled=false; btn.textContent='Save weights & preview landed cost';
         if(!d.success){ el('receiveHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
         lastReceive=d; renderReceive(d, id);
-      }).catch(function(e){ btn.disabled=false; btn.textContent='Save weights & compute landed cost'; el('receiveHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+      }).catch(function(e){ btn.disabled=false; btn.textContent='Save weights & preview landed cost'; el('receiveHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+    }
+    // Explicit arrival toggle — separate from computing so a cost preview never
+    // mis-marks a PO. undo=true rolls a received PO back to advance.
+    function markReceived(id,undo){
+      if(!undo && !confirm('Mark the goods for '+id+' as physically received?')) return;
+      if(undo && !confirm('Undo received for '+id+' — set it back to Advance?')) return;
+      var btn=el(undo?'undoRecvBtn':'markRecvBtn'); if(btn){ btn.disabled=true; btn.textContent=undo?'Undoing…':'Marking…'; }
+      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/mark-received',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ undo:!!undo, dateReceive:(el('r_dateReceive')&&el('r_dateReceive').value)?el('r_dateReceive').value:'' })})
+        .then(readJson).then(function(d){
+          if(!d.success){ if(btn){ btn.disabled=false; } alert(d.error||'Could not update status.'); return; }
+          loadPos(); openPoId=null; openPo(id);   // refresh list pills + re-render the detail
+        }).catch(function(e){ if(btn){ btn.disabled=false; } alert(e.message); });
+    }
+    // Replace/attach a line's raw source photo, then re-render so the AI studio
+    // picks up the new image. Works at every pre-post stage.
+    function replaceLinePhoto(id,idx,file){
+      if(!file) return;
+      var fd=new FormData(); fd.append('photo',file);
+      fetch('/api/procurement/photo',{method:'POST',body:fd}).then(readJson).then(function(u){
+        if(!u.success){ alert(u.error||'Upload failed.'); return; }
+        return fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/line-photo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ lineIndex:idx, url:u.url })})
+          .then(readJson).then(function(r){
+            if(!r.success){ alert(r.error||'Could not attach photo.'); return; }
+            openPoId=null; openPo(id);   // re-render detail + re-feed the studio
+          });
+      }).catch(function(e){ alert(e.message); });
     }
 
     function renderReceive(d, id){
@@ -1027,7 +1065,7 @@
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
-              '<button class="btn sm '+(im.approved?'':'')+'" data-approveimg="'+i+'" data-type="'+t[0]+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved':'Approve')+'</button>'+
+              '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.approved?'Approved — click to UNDO':'Approve this photo')+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
               '<button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">↻</button>'+chg+'</div>')
              :empty)+
@@ -1050,7 +1088,7 @@
           '</div>'+
           '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
           '<button class="btn sm" data-saveseo="'+i+'">Save</button>'+
-          '<button class="btn sm" data-approveseo="'+i+'" style="'+(seo.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(seo.approved?'✓ SEO approved':'Approve SEO')+'</button>'+
+          '<button class="btn sm" data-approveseo="'+i+'" title="'+(seo.approved?'Approved — click to UNDO':'Approve this SEO')+'" style="'+(seo.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(seo.approved?'✓ SEO approved · undo':'Approve SEO')+'</button>'+
           '<button class="btn ghost sm" data-genseo="'+i+'">↻ Regenerate</button>'+
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
