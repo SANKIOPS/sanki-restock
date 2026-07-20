@@ -125,7 +125,7 @@
           <button class="btn" id="parseInvoiceBtn">Read invoice &amp; fill lines</button>
           <span class="muted" id="invoiceNote" style="font-size:12px"></span>
         </div>
-        <p class="sub">Extracted vendor, bill no., date &amp; every line drop into the form below — edit anything, add each product photo, then Save. Photos still need attaching per line (via each line's <b>Edit</b>).</p>
+        <p class="sub">First set <b>Vendor</b>, <b>Bill number</b> &amp; <b>Date of purchase</b> in the “Vendor bill” panel below (all required) — then read the invoice. Extracted lines drop into the form below to review; add each product photo, then Save.</p>
       </div>
 
       <div class="panel">
@@ -142,9 +142,9 @@
       <div class="panel">
         <h2 style="margin-top:0">Vendor bill <span class="muted" style="font-size:12px;font-weight:400">— saved with this advance purchase</span></h2>
         <div class="settingsgrid">
-          <div class="fld"><label>Vendor</label><select id="b_vendor"><option value="">Select vendor…</option><option value="__new__">+ Add new vendor…</option></select></div>
-          <div class="fld"><label>Bill number</label><input id="b_billNo" placeholder="vendor invoice no." /></div>
-          <div class="fld"><label>Date of purchase</label><input id="b_datePurchase" type="date" /></div>
+          <div class="fld"><label>Vendor <span style="color:var(--err)">*</span></label><select id="b_vendor"><option value="">Select vendor…</option><option value="__new__">+ Add new vendor…</option></select></div>
+          <div class="fld"><label>Bill number <span style="color:var(--err)">*</span></label><input id="b_billNo" placeholder="vendor invoice no." /></div>
+          <div class="fld"><label>Date of purchase <span style="color:var(--err)">*</span></label><input id="b_datePurchase" type="date" /></div>
           <div class="fld"><label>Lead time (days) <span class="muted" style="font-weight:400;text-transform:none">China→India</span></label><input id="b_leadTime" type="number" min="0" step="1" placeholder="e.g. 10" /></div>
           <div class="fld"><label>Sourced from</label><select id="b_origin"><option value="china">China (¥ + per-kg freight)</option><option value="india">India (₹ + flat transport)</option></select></div>
           <div class="fld" id="transportWrap" style="display:none"><label>Total transport ₹ <span class="muted" style="font-weight:400;text-transform:none">(split by pieces)</span></label><input id="b_transportTotal" type="number" min="0" step="0.01" placeholder="whole shipment" /></div>
@@ -167,7 +167,7 @@
           <div class="fld"><label id="perPcsLabel">¥/pc</label><input id="f_perPcsYuan" type="number" step="0.01" /></div>
           <div class="fld"><label>Explicit SKU <span class="muted" style="font-weight:400;text-transform:none">(restock only)</span></label><input id="f_sku" class="mono" placeholder="auto" /></div>
           <div class="fld wide"><label>Product photo <span style="color:var(--err)">*</span></label>
-            <div class="photocell"><input id="f_photo" type="file" accept="image/*" style="font-size:12px" /><img id="f_photoThumb" class="thumb hidden" alt="" /></div>
+            <div class="photocell"><input id="f_photo" type="file" accept="image/*" style="font-size:12px" /><img id="f_photoThumb" class="thumb thumb-lg hidden" title="Click to enlarge" alt="" /></div>
           </div>
           <div class="fld"><label>&nbsp;</label><button class="btn" id="addLine">Add line</button></div>
         </div>
@@ -175,8 +175,8 @@
       </div>
 
       <div class="panel">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h2 style="margin:0">Lines <span class="muted" id="lineCount"></span></h2>
+        <div class="lines-hdr" style="display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; z-index:20; background:var(--ivory,#fbfaf7); padding:8px 2px; margin:-4px 0 4px; border-bottom:1px solid var(--line);">
+          <h2 style="margin:0">Lines <span class="muted" id="lineCount"></span> <span id="linesVendor" style="font-size:13px;font-weight:600;color:var(--emerald-d,#047857)"></span></h2>
           <div>
             <button class="btn ghost" id="clearLines">Clear</button>
             <button class="btn" id="saveAdvanceBtn">Save advance purchase →</button>
@@ -364,12 +364,12 @@
       var add=document.createElement('option'); add.value='__new__'; add.textContent='+ Add new vendor…'; sel.appendChild(add);
     }
     el('b_vendor').onchange=function(){
-      if(this.value!=='__new__'){ if(lines.length) renderLines(); return; }   // reflect the chosen vendor on every line
+      if(this.value!=='__new__'){ updateLinesVendor(); if(lines.length) renderLines(); return; }   // reflect the chosen vendor on every line + header
       var name=(prompt('New vendor name:')||'').toUpperCase().trim();   // vendors are always UPPERCASE
-      if(!name){ this.value=''; return; }
+      if(!name){ this.value=''; updateLinesVendor(); return; }
       var self=this;
       fetch('/api/procurement/vendors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
-        .then(r=>r.json()).then(function(d){ if(d.success){ fillVendors(d.vendors, name); if(lines.length) renderLines(); } else { alert(d.error||'Could not add vendor'); self.value=''; } })
+        .then(r=>r.json()).then(function(d){ if(d.success){ fillVendors(d.vendors, name); updateLinesVendor(); if(lines.length) renderLines(); } else { alert(d.error||'Could not add vendor'); self.value=''; } })
         .catch(function(e){ alert(e.message); self.value=''; });
     };
 
@@ -475,8 +475,15 @@
       '</td></tr>';
     }
 
+    // Vendor shown next to the (sticky) "Lines" header, so it stays visible while scrolling.
+    function updateLinesVendor(){
+      var vhdr=el('linesVendor'); if(!vhdr) return;
+      var vv=(el('b_vendor')&&el('b_vendor').value||'').trim();
+      vhdr.textContent = (vv&&vv!=='__new__') ? ('· '+vv) : '';
+    }
     function renderLines(){
       el('lineCount').textContent = lines.length ? '('+lines.length+')' : '';
+      updateLinesVendor();
       if(!lines.length){ el('linesHost').innerHTML='<p class="muted" style="padding:8px 2px">No lines yet. Add intake lines above, or upload an invoice to auto-fill.</p>'; return; }
       var india=isIndia();
       // India: the unit cost is already ₹ (no ¥ conversion), so show it as money.
@@ -671,6 +678,11 @@
     el('parseInvoiceBtn').onclick=function(){
       var f=el('invoiceFile').files&&el('invoiceFile').files[0];
       if(!f){ el('invoiceNote').textContent='Choose an invoice image or PDF first.'; return; }
+      // Vendor, bill number & date of purchase are mandatory BEFORE reading the bill.
+      var vsel=el('b_vendor'), vend=(vsel&&vsel.value||'').trim();
+      if(!vend||vend==='__new__'){ el('invoiceNote').textContent='Select the vendor first (required).'; if(vsel) vsel.focus(); return; }
+      if(!el('b_billNo').value.trim()){ el('invoiceNote').textContent='Enter the bill number first (required).'; el('b_billNo').focus(); return; }
+      if(!el('b_datePurchase').value){ el('invoiceNote').textContent='Enter the date of purchase first (required).'; el('b_datePurchase').focus(); return; }
       var btn=el('parseInvoiceBtn'); btn.disabled=true; btn.textContent='Reading…';
       el('invoiceNote').textContent='Reading the invoice — this can take a few seconds…';
       downscaleImage(f, 2200).then(function(up){
@@ -679,9 +691,9 @@
       }).then(function(d){
         btn.disabled=false; btn.textContent='Read invoice & fill lines';
         if(!d.success){ el('invoiceNote').textContent=d.error||'Could not read the invoice.'; return; }
-        // vendor is NOT auto-filled — the user always picks it manually.
-        if(d.billNo){ el('b_billNo').value=d.billNo; }
-        if(d.datePurchase){ el('b_datePurchase').value=d.datePurchase; }
+        // vendor/bill/date were entered manually before reading — don't clobber them.
+        if(d.billNo && !el('b_billNo').value.trim()){ el('b_billNo').value=d.billNo; }
+        if(d.datePurchase && !el('b_datePurchase').value){ el('b_datePurchase').value=d.datePurchase; }
         updateEta();
         // append parsed lines to the review table
         var added=(d.lines||[]).map(function(l){
