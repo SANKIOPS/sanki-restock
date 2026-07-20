@@ -902,6 +902,26 @@
     var studio={ images:{}, seo:{}, styling:{} };     // keyed by product group key
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
+    // ── Simple styling dropdowns (only affect the 2 model shots) ──
+    var PAIR_UPPER=['Auto','Baggy trousers','Normal trousers','Baggy jeans','Normal jeans','Cargo pants','Shorts'];
+    var PAIR_LOWER=['Auto','Plain white tee','Plain black tee','Oversized tee','Hoodie','Button-up shirt'];
+    var TUCK=['Auto','Tucked in','Untucked'];
+    var ACC=['None','Silver chain','Gold chain','Cap','Sunglasses','Watch'];
+    function garmentCat(pt){
+      var uppers=['Shirt','T-Shirt','Sando','Hoodie','Jacket'];
+      var lowers=['Jeans','Trouser','Lower','Shorts','Jogger','Jorts','Denim Joggers','Cargo'];
+      if(uppers.indexOf(pt)>=0) return 'upper';
+      if(lowers.indexOf(pt)>=0) return 'lower';
+      return 'other';
+    }
+    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={pair:'',tuck:'',acc:''}); }
+    function composeStyling(np){
+      var s=stylingOf(np), parts=[];
+      if(s.pair && s.pair!=='Auto') parts.push('paired with '+s.pair.toLowerCase());
+      if(s.tuck && s.tuck!=='Auto') parts.push(garmentCat(np.productType)==='upper'?('worn '+s.tuck.toLowerCase()):('with the top '+s.tuck.toLowerCase()));
+      if(s.acc && s.acc!=='None') parts.push('accessorised with a '+s.acc.toLowerCase());
+      return parts.join(', ');
+    }
     function studioReadyFor(np){
       var imgs=studio.images[np.key]||[]; var okImg=imgs.some(function(x){return x.approved;});
       var seo=studio.seo[np.key]; return okImg && seo && seo.approved;
@@ -939,10 +959,18 @@
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div>'+
         '<button class="btn sm" data-genimg="'+i+'">'+(imgs.length?'Regenerate all 4':'Generate 4 photos')+'</button></div>';
+      var cat=garmentCat(np.productType), pairOpts=cat==='upper'?PAIR_UPPER:PAIR_LOWER, s=stylingOf(np);
+      function sel(kind,label,opts,val){
+        var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
+          '<select data-sty="'+kind+'" data-i="'+i+'" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px">';
+        opts.forEach(function(op){ o+='<option'+((val||opts[0])===op?' selected':'')+'>'+esc(op)+'</option>'; });
+        return o+'</select>';
+      }
       var pair='<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'+
-        '<label class="muted" style="font-size:12px;white-space:nowrap">Pair model with</label>'+
-        '<input data-styling="'+i+'" value="'+esc(studio.styling[np.key]||'')+'" placeholder="e.g. blue jeans · beige trousers · plain white tee · black cargos" style="flex:1;min-width:220px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px">'+
-        '<span class="muted" style="font-size:11px">only affects the 2 model shots · leave blank for auto</span></div>';
+        (cat!=='other'?sel('pair','Pair with',pairOpts,s.pair):'')+
+        sel('tuck','Tuck',TUCK,s.tuck)+
+        sel('acc','Accessory',ACC,s.acc)+
+        '<span class="muted" style="font-size:11px">only affects the 2 model shots · AI picks colours</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
       IMG_TYPES.forEach(function(t){
         var im=byType[t[0]];
@@ -1003,11 +1031,11 @@
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
-      var stl=host.querySelector('[data-styling]'); if(stl) stl.oninput=function(){ studio.styling[np.key]=stl.value; };
+      Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ stylingOf(np)[sel.getAttribute('data-sty')]=sel.value; }; });
     }
     function genImages(np,i,types,btn){
       var lbl=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='Generating…'; }
-      var body={ groupKey:np.key, styling:studio.styling[np.key]||'' }; if(types) body.types=types;
+      var body={ groupKey:np.key, styling:composeStyling(np) }; if(types) body.types=types;
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
         .then(readJson).then(function(dd){
           if(btn){ btn.disabled=false; btn.textContent=lbl; }
@@ -1034,7 +1062,7 @@
         if(n>=types.length){ done(); return; }
         var t=types[n];
         setBtn('Generating '+(n+1)+'/'+types.length+'…',true);
-        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, types:[t], styling:studio.styling[np.key]||'' })})
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, types:[t], styling:composeStyling(np) })})
           .then(readJson).then(function(dd){
             if(dd&&dd.success){ studio.images[np.key]=dd.images; rerenderCard(i); }
             if(dd&&dd.errors&&dd.errors.length){ dd.errors.forEach(function(e){ errs.push(e.type+': '+e.error); }); }

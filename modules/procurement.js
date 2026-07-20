@@ -1069,7 +1069,7 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
       if (wantTypes.indexOf(spec.type) < 0) continue;
       try {
         const styleAdd = (styling && (spec.type === 'female' || spec.type === 'male'))
-          ? ` Style the model wearing this garment paired with ${styling}; keep that paired item simple and neutral so THIS garment stays the clear hero of the photo.`
+          ? ` Style the model wearing this exact garment ${styling}. Keep any paired clothing understated and choose colours that complement and flatter THIS garment tastefully, so it stays the clear hero of the photo.`
           : '';
         const out = await geminiGenerateImage(baseB64, src.mime, spec.prompt + styleAdd + context);
         const saved = savePhotoBuffer(out.buf, extForMime(out.mime));
