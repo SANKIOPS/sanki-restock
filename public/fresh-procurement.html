@@ -303,10 +303,11 @@
       if(d.success) renderCandidates(d.candidates, d.vendors);
     });
   }
-  // Upload in small batches — a single 500-photo request would exceed the
-  // platform's request-size limit and the server's 200-file cap. Chunking
-  // keeps each POST small and lets us show running progress.
-  var BATCH = 20;
+  // Upload in small batches. Railway's edge drops requests over ~50–100 MB, so
+  // we chunk by TOTAL BYTES (not file count) — vendor phone photos run 5–10 MB
+  // each, so a fixed count of 20 could hit 200 MB and never reach the server.
+  // Cap each POST at ~35 MB (well under the proven-good 50 MB) and 30 files.
+  var BATCH_BYTES = 35 * 1024 * 1024, BATCH_MAX = 30;
   function uploadFiles(files){
     if(!files || !files.length) return;
     var vendor = (el('candVendor').value||'').trim();
@@ -314,8 +315,15 @@
     var all = Array.prototype.slice.call(files);
     var colour = (el('candColour').value||'').trim();
     var cost = (el('candCost').value||'').trim();
-    var chunks = [];
-    for(var i=0;i<all.length;i+=BATCH) chunks.push(all.slice(i,i+BATCH));
+    // Size-aware chunking: start a new batch when adding the next photo would
+    // push the batch past the byte cap (a single oversized photo goes alone).
+    var chunks = [], cur = [], curBytes = 0;
+    all.forEach(function(f){
+      var sz = f.size || 0;
+      if(cur.length && (curBytes + sz > BATCH_BYTES || cur.length >= BATCH_MAX)){ chunks.push(cur); cur = []; curBytes = 0; }
+      cur.push(f); curBytes += sz;
+    });
+    if(cur.length) chunks.push(cur);
     var done = 0, addedTotal = 0, lastVendors = null, total = 0;
     function sendChunk(idx){
       if(idx >= chunks.length){
