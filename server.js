@@ -2529,6 +2529,7 @@ app.use(require('./modules/auth-users').router);
 app.use(require('./modules/sales').router);
 app.use(require('./modules/orders').router);
 app.use(require('./modules/procurement').router);
+app.use(require('./modules/fresh-procurement').router);
 app.use(require('./modules/module-registry').router);
 
 app.get('*', (req, res) => {

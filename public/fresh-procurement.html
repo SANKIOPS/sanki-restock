@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fresh Procurement · Sanki Business OS</title>
+  <style>
+    :root{
+      --ivory:#FBF8EF; --ivory2:#FFFDF6; --panel:#FFFFFF;
+      --ink:#1b2620; --muted:#6f7d74; --line:rgba(4,120,87,.14);
+      --emerald:#059669; --emerald-d:#047857; --emerald-l:#10B981;
+      --warn:#b45309; --err:#b42318; --ok:#047857;
+      --statement:#7c3aed; --medium:#0891b2; --basic:#64748b;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--ivory); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+    .wrap{ max-width:1180px; margin:0 auto; padding:26px 22px 120px; }
+    h1{ font-size:23px; font-weight:800; margin:0; letter-spacing:-.3px; }
+    h2{ font-size:15px; font-weight:800; margin:0; }
+    .sub{ color:var(--muted); font-size:13px; margin:4px 0 0; }
+    .top{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:8px; }
+    .btn{ font-size:13px; font-weight:600; padding:9px 14px; border-radius:9px; border:1px solid var(--emerald); background:var(--emerald); color:#fff; cursor:pointer; }
+    .btn:hover{ background:var(--emerald-d); border-color:var(--emerald-d); }
+    .btn.ghost{ background:#fff; color:var(--emerald-d); }
+    .btn.ghost:hover{ background:#f2faf6; }
+    .btn.lg{ padding:13px 26px; font-size:15px; font-weight:800; }
+    .btn.sm{ padding:5px 10px; font-size:12px; }
+    .btn:disabled{ opacity:.5; cursor:default; }
+    .panel{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+    .fld label{ display:block; font-size:11px; font-weight:700; color:#5f6d65; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+    .fld input,.fld select{ width:100%; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
+    .muted{ color:var(--muted); }
+    .mono{ font-family:ui-monospace,Menlo,monospace; }
+    .pill{ display:inline-block; font-size:10px; font-weight:700; padding:2px 9px; border-radius:999px; letter-spacing:.3px; }
+    .pill.st{ background:#f3e8ff; color:var(--statement); }
+    .pill.md{ background:#cffafe; color:#0e7490; }
+    .pill.bs{ background:#e2e8f0; color:#475569; }
+    .sig{ display:flex; gap:12px; align-items:flex-start; }
+    .sig .num{ flex:0 0 34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; color:#fff; }
+    .sig.s1 .num,.sig.s2 .num{ background:var(--emerald); }
+    .sig.s3 .num{ background:#b6c2ba; }
+    .sig .body{ flex:1; }
+    .sig h2 .weight{ font-size:10.5px; font-weight:800; padding:2px 9px; border-radius:999px; margin-left:8px; vertical-align:middle; }
+    .weight.primary{ background:#fee2e2; color:#b91c1c; }
+    .weight.minor{ background:#e2e8f0; color:#64748b; }
+    .soon{ display:inline-block; font-size:10px; font-weight:800; padding:2px 9px; border-radius:999px; background:#fffbeb; color:#92400e; border:1px solid #fde68a; margin-left:8px; }
+    .drop{ border:2px dashed var(--line); border-radius:12px; padding:26px; text-align:center; background:var(--ivory2); color:var(--muted); }
+    .drop b{ color:var(--emerald-d); }
+    .compbar{ display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 2px; align-items:center; }
+    .comp{ font-size:11px; font-weight:700; padding:4px 11px; border-radius:8px; background:#111; color:#fff; }
+    .comp .rm{ cursor:pointer; opacity:.6; margin-left:5px; }
+    .comp .rm:hover{ opacity:1; }
+    .comp.add{ background:#f2faf6; color:var(--emerald-d); border:1px solid var(--line); cursor:pointer; }
+    .tierset{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:8px; }
+    .tiercard{ border:1px solid var(--line); border-radius:11px; padding:12px 14px; background:#fff; }
+    .tiercard .hd{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+    .tiercard .pct{ font-size:26px; font-weight:800; font-variant-numeric:tabular-nums; }
+    .tiercard input[type=range]{ width:100%; accent-color:var(--emerald); }
+    .tiercard.st{ border-top:3px solid var(--statement); }
+    .tiercard.md{ border-top:3px solid var(--medium); }
+    .tiercard.bs{ border-top:3px solid var(--basic); }
+    .tierdesc{ font-size:11.5px; color:var(--muted); margin-top:4px; min-height:30px; }
+    .sumline{ font-size:12px; margin-top:8px; }
+    .hgrid{ display:flex; gap:30px; flex-wrap:wrap; }
+    .hcol h4{ margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+    .swatchrow{ display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+    .sw{ width:20px; height:20px; border-radius:5px; border:1px solid var(--line); flex:0 0 auto; }
+    .bar{ height:8px; border-radius:4px; background:var(--emerald-l); }
+    .divider{ height:1px; background:var(--line); margin:22px 0; }
+    .banner{ border-radius:10px; padding:10px 14px; font-size:13px; margin:10px 0; }
+    .banner.info{ background:#f2faf6; color:var(--emerald-d); border:1px solid #bbf0d6; }
+    .banner.warn{ background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
+    .saved{ font-size:12px; color:var(--emerald-d); opacity:0; transition:opacity .2s; }
+    .saved.show{ opacity:1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="top">
+      <div>
+        <h1>Fresh Procurement <span class="mono" style="font-size:12px;font-weight:600;color:var(--muted)">· the buying brain</span></h1>
+        <p class="sub">Decide what NEW fashion to source this cycle — driven by funkiness tiers &amp; live market trends, lightly tuned by buyer taste. This is not restocking.</p>
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">
+        <div class="fld"><label>Cycle</label>
+          <select id="cycle">
+            <option value="15">Every 15 days</option>
+            <option value="20">Every 20 days</option>
+            <option value="30">Every 30 days</option>
+          </select>
+        </div>
+        <div class="fld"><label>Budget (₹)</label><input id="budget" inputmode="numeric" /></div>
+        <span class="saved" id="savedTag">✓ saved</span>
+      </div>
+    </div>
+
+    <!-- ══════════ SIGNAL 1 — THE FEED ══════════ -->
+    <div class="panel">
+      <div class="sig s1">
+        <div class="num">1</div>
+        <div class="body">
+          <h2>The Feed — vendor candidates &amp; impression tiers <span class="weight primary">PRIMARY</span><span class="soon">upload wiring next</span></h2>
+          <p class="sub">Upload every candidate photo from your vendors. Set how much of the budget goes to each funkiness tier — on Analyze, the app sorts all candidates into Statement / Medium / Basic and tells you what to source per tier.</p>
+
+          <div class="drop" style="margin-top:12px" id="drop">
+            <div style="font-size:32px">⬆</div>
+            <div><b>Drop vendor photos here</b> or click to browse</div>
+            <div style="font-size:12px; margin-top:4px">Tag each batch with a vendor name + optional colour / ¥ cost</div>
+          </div>
+
+          <h4 style="margin:18px 0 2px; font-size:12px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted)">Impression tier split — set your mix (of the budget)</h4>
+          <div class="tierset">
+            <div class="tiercard st">
+              <div class="hd"><span class="pill st">STATEMENT · High</span><span class="pct" id="pctStatement" style="color:var(--statement)">20%</span></div>
+              <input type="range" id="tStatement" value="20" min="0" max="100" />
+              <div class="tierdesc">The loudest, funkiest hero pieces — the drop's showstoppers.</div>
+            </div>
+            <div class="tiercard md">
+              <div class="hd"><span class="pill md">MEDIUM · Daily-funk</span><span class="pct" id="pctMedium" style="color:var(--medium)">50%</span></div>
+              <input type="range" id="tMedium" value="50" min="0" max="100" />
+              <div class="tierdesc">Funky but wearable every day — the volume core of the range.</div>
+            </div>
+            <div class="tiercard bs">
+              <div class="hd"><span class="pill bs">BASIC · Low-funk</span><span class="pct" id="pctBasic" style="color:var(--basic)">30%</span></div>
+              <input type="range" id="tBasic" value="30" min="0" max="100" />
+              <div class="tierdesc">Clean essentials that anchor the range &amp; pair with statements.</div>
+            </div>
+          </div>
+          <div class="sumline" id="tierSum"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ SIGNAL 2 — MARKET TRENDS ══════════ -->
+    <div class="panel">
+      <div class="sig s2">
+        <div class="num">2</div>
+        <div class="body">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap">
+            <div>
+              <h2>Market Trends — competitors &amp; what's hot now <span class="weight primary">PRIMARY</span><span class="soon">live pull next</span></h2>
+              <p class="sub">Refreshed live every cycle from your competitors &amp; market signals. Tilts the buy toward what's trending outside.</p>
+            </div>
+            <button class="btn ghost sm" id="refreshTrends" disabled title="Live trend pull ships in the next build">↻ Refresh trends</button>
+          </div>
+          <div class="compbar" id="compBar"></div>
+          <div class="muted" style="font-size:11px; margin-top:4px">· plus Google Trends (India) &amp; niche streetwear signals</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ SIGNAL 3 — TASTE LENS (LIVE) ══════════ -->
+    <div class="panel">
+      <div class="sig s3">
+        <div class="num">3</div>
+        <div class="body">
+          <h2>Buyer-taste lens — sizes &amp; colours only <span class="weight minor">LEAST · taste only</span></h2>
+          <p class="sub"><b>Taste, nothing else.</b> Reads past sales purely to learn which <b>sizes</b> &amp; <b>colours</b> your buyers reach for, then nudges the size-curve &amp; colour mix of whatever signals 1 &amp; 2 already chose. It does <b>not</b> pick products, set quantities, or reorder old designs.</p>
+          <div id="tasteBox" style="margin-top:12px">
+            <div class="muted" style="font-size:13px">Loading from your sales ledger…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center; margin:22px 0">
+      <button class="btn lg" id="analyzeBtn" disabled title="Enable once the Feed upload &amp; Trends pull are wired">▶ Analyze candidates</button>
+      <div class="sub" style="margin-top:6px">Sorts every photo into tiers, ranks by trend-fit, applies taste, allocates size-wise qty → vendor buy sheet</div>
+      <div class="banner warn" style="max-width:640px;margin:12px auto 0;text-align:left">
+        <b>Build status:</b> Settings &amp; the taste lens (Signal 3) are live now. Photo upload + tier-sorting (Signal 1) and the live competitor trend pull (Signal 2) are the next slices — Analyze switches on when they land.
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+  var el = function(id){ return document.getElementById(id); };
+  var COLOUR_HEX = { BLACK:'#111', BLUE:'#2563eb', BROWN:'#7c4a2d', CREAM:'#efe6d4', GREEN:'#16a34a',
+    GREY:'#6b7280', MAROON:'#7f1d1d', ORANGE:'#ea580c', PINK:'#ec4899', PURPLE:'#7c3aed', RED:'#dc2626',
+    WHITE:'#f8fafc', YELLOW:'#eab308', BEIGE:'#e7d9bf', 'SKY BLUE':'#38bdf8', OLIVE:'#5b6b4e',
+    KHAKI:'#b8a980', GOLDEN:'#d4af37', SILVER:'#c0c0c0' };
+  var settings = null, savedTimer = null;
+
+  function fmtINR(n){ return Number(n||0).toLocaleString('en-IN'); }
+  function flashSaved(){ var t=el('savedTag'); t.classList.add('show'); clearTimeout(savedTimer); savedTimer=setTimeout(function(){ t.classList.remove('show'); }, 1400); }
+
+  function renderTiers(){
+    var s = parseInt(el('tStatement').value)||0, m = parseInt(el('tMedium').value)||0, b = parseInt(el('tBasic').value)||0;
+    el('pctStatement').textContent = s + '%'; el('pctMedium').textContent = m + '%'; el('pctBasic').textContent = b + '%';
+    var total = s + m + b, budget = settings ? settings.budget : 0;
+    var ok = total === 100;
+    var split = '₹' + fmtINR(Math.round(budget*s/100)) + ' statement · ₹' + fmtINR(Math.round(budget*m/100)) + ' medium · ₹' + fmtINR(Math.round(budget*b/100)) + ' basic';
+    el('tierSum').innerHTML = '<span class="muted">Total:</span> <b style="color:' + (ok?'var(--emerald-d)':'var(--err)') + '">' + total + '%</b> ' + (ok?'✓':'— must sum to 100%') + ' &nbsp;·&nbsp; <span class="muted">of ₹' + fmtINR(budget) + ' → ' + split + '</span>';
+  }
+
+  function renderCompetitors(){
+    var bar = el('compBar'); bar.innerHTML = '<span class="muted" style="font-size:11px">Watching:</span>';
+    (settings.competitors||[]).forEach(function(name, i){
+      var c = document.createElement('span'); c.className='comp';
+      c.innerHTML = escapeHtml(name) + '<span class="rm" title="Remove">✕</span>';
+      c.querySelector('.rm').onclick = function(){ settings.competitors.splice(i,1); renderCompetitors(); saveSettings(); };
+      bar.appendChild(c);
+    });
+    var add = document.createElement('span'); add.className='comp add'; add.textContent='+ add';
+    add.onclick = function(){ var n = prompt('Competitor / brand to watch:'); if(n && n.trim()){ settings.competitors.push(n.trim()); renderCompetitors(); saveSettings(); } };
+    bar.appendChild(add);
+  }
+
+  function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+  function saveSettings(){
+    settings.cycleDays = parseInt(el('cycle').value)||20;
+    settings.budget = parseInt((el('budget').value||'').replace(/[^\d]/g,''))||0;
+    settings.tiers = { statement: parseInt(el('tStatement').value)||0, medium: parseInt(el('tMedium').value)||0, basic: parseInt(el('tBasic').value)||0 };
+    fetch('/api/fresh/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(settings) })
+      .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ flashSaved(); } });
+  }
+
+  function loadSettings(){
+    return fetch('/api/fresh/settings').then(function(r){ return r.json(); }).then(function(d){
+      settings = d.settings;
+      el('cycle').value = String(settings.cycleDays);
+      el('budget').value = fmtINR(settings.budget);
+      el('tStatement').value = settings.tiers.statement;
+      el('tMedium').value = settings.tiers.medium;
+      el('tBasic').value = settings.tiers.basic;
+      renderTiers(); renderCompetitors();
+    });
+  }
+
+  function renderTaste(t){
+    var box = el('tasteBox');
+    if(!t || !t.ok){ box.innerHTML = '<div class="banner warn">Couldn\'t read the sales ledger yet — the taste lens fills in once Orders has synced.</div>'; return; }
+    if(!t.unitsCounted){ box.innerHTML = '<div class="banner info">No matching sales in this window yet.</div>'; return; }
+    var maxCol = Math.max.apply(null, t.colours.map(function(c){return c.qty;}).concat([1]));
+    var maxSz  = Math.max.apply(null, t.sizes.map(function(s){return s.qty;}).concat([1]));
+    var colH = t.colours.slice(0,6).map(function(c){
+      var hex = COLOUR_HEX[c.name] || '#ccc';
+      return '<div class="swatchrow"><span class="sw" style="background:'+hex+'"></span><div class="bar" style="width:'+Math.round(c.qty/maxCol*130+8)+'px"></div><span class="muted" style="font-size:11px">'+escapeHtml(c.name.charAt(0)+c.name.slice(1).toLowerCase())+' '+c.pct+'%</span></div>';
+    }).join('');
+    var szH = t.sizes.map(function(s){
+      return '<div class="swatchrow"><span class="mono" style="font-size:11px;width:34px">'+escapeHtml(s.name)+'</span><div class="bar" style="width:'+Math.round(s.qty/maxSz*130+8)+'px"></div><span class="muted" style="font-size:11px">'+s.pct+'%</span></div>';
+    }).join('');
+    box.innerHTML =
+      '<div class="hgrid">' +
+        '<div class="hcol"><h4>Colours your buyers pick</h4>'+colH+'</div>' +
+        '<div class="hcol"><h4>Size curve that sells</h4>'+szH+'</div>' +
+      '</div>' +
+      '<div class="muted" style="font-size:11px;margin-top:10px">From '+t.orderCount+' orders · '+t.unitsCounted+' units'+(t.windowDays?(' · last '+t.windowDays+' days'):' · all time')+'</div>';
+  }
+
+  function loadTaste(){
+    // Taste uses the same cycle length as the trailing window, but taste is
+    // about long-run preference — read all-time so the size/colour signal is stable.
+    fetch('/api/fresh/taste').then(function(r){ return r.json(); }).then(function(d){ renderTaste(d.taste); })
+      .catch(function(){ renderTaste(null); });
+  }
+
+  // Wiring
+  ['tStatement','tMedium','tBasic'].forEach(function(id){ el(id).addEventListener('input', renderTiers); el(id).addEventListener('change', saveSettings); });
+  el('cycle').addEventListener('change', saveSettings);
+  el('budget').addEventListener('change', function(){ el('budget').value = fmtINR(parseInt((el('budget').value||'').replace(/[^\d]/g,''))||0); renderTiers(); saveSettings(); });
+
+  loadSettings().then(loadTaste);
+  </script>
+  <script src="/sidebar.js"></script>
+</body>
+</html>

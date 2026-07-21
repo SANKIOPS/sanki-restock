@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fresh Procurement (Preview) · Sanki Business OS</title>
+  <style>
+    :root{
+      --ivory:#FBF8EF; --ivory2:#FFFDF6; --panel:#FFFFFF;
+      --ink:#1b2620; --muted:#6f7d74; --line:rgba(4,120,87,.14);
+      --emerald:#059669; --emerald-d:#047857; --emerald-l:#10B981;
+      --warn:#b45309; --err:#b42318; --ok:#047857;
+      --statement:#7c3aed; --medium:#0891b2; --basic:#64748b;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--ivory); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+    .wrap{ max-width:1180px; margin:0 auto; padding:26px 22px 120px; }
+    h1{ font-size:23px; font-weight:800; margin:0; letter-spacing:-.3px; }
+    h2{ font-size:15px; font-weight:800; margin:0; }
+    .sub{ color:var(--muted); font-size:13px; margin:4px 0 0; }
+    .top{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:8px; }
+    .btn{ font-size:13px; font-weight:600; padding:9px 14px; border-radius:9px; border:1px solid var(--emerald); background:var(--emerald); color:#fff; cursor:pointer; }
+    .btn:hover{ background:var(--emerald-d); border-color:var(--emerald-d); }
+    .btn.ghost{ background:#fff; color:var(--emerald-d); }
+    .btn.ghost:hover{ background:#f2faf6; }
+    .btn.lg{ padding:13px 26px; font-size:15px; font-weight:800; }
+    .btn.sm{ padding:5px 10px; font-size:12px; }
+    .panel{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+    .fld label{ display:block; font-size:11px; font-weight:700; color:#5f6d65; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+    .fld input,.fld select{ width:100%; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
+    .muted{ color:var(--muted); }
+    .mono{ font-family:ui-monospace,Menlo,monospace; }
+    .money{ font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .pill{ display:inline-block; font-size:10px; font-weight:700; padding:2px 9px; border-radius:999px; letter-spacing:.3px; }
+    .pill.st{ background:#f3e8ff; color:var(--statement); }
+    .pill.md{ background:#cffafe; color:#0e7490; }
+    .pill.bs{ background:#e2e8f0; color:#475569; }
+    .pill.new{ background:#eafaf2; color:var(--emerald-d); }
+    .preview-flag{ position:fixed; top:0; left:0; right:0; background:repeating-linear-gradient(45deg,#7c3aed,#7c3aed 12px,#6d28d9 12px,#6d28d9 24px); color:#fff; text-align:center; font-size:11.5px; font-weight:800; letter-spacing:.5px; padding:4px; z-index:9999; text-transform:uppercase; }
+    /* Signal cards */
+    .sig{ display:flex; gap:12px; align-items:flex-start; margin-bottom:14px; }
+    .sig .num{ flex:0 0 34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; color:#fff; }
+    .sig.s1 .num{ background:var(--emerald); }
+    .sig.s2 .num{ background:var(--emerald); }
+    .sig.s3 .num{ background:#b6c2ba; }
+    .sig .body{ flex:1; }
+    .sig h2 .weight{ font-size:10.5px; font-weight:800; padding:2px 9px; border-radius:999px; margin-left:8px; vertical-align:middle; }
+    .weight.primary{ background:#fee2e2; color:#b91c1c; }
+    .weight.minor{ background:#e2e8f0; color:#64748b; }
+    /* dropzone */
+    .drop{ border:2px dashed var(--line); border-radius:12px; padding:26px; text-align:center; background:var(--ivory2); color:var(--muted); }
+    .drop b{ color:var(--emerald-d); }
+    .vchips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+    .vchip{ font-size:11px; font-weight:600; padding:4px 10px; border-radius:999px; background:#f2faf6; border:1px solid var(--line); color:var(--emerald-d); }
+    .vchip .n{ color:var(--muted); font-weight:700; margin-left:4px; }
+    /* tier sliders */
+    .tierset{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:8px; }
+    .tiercard{ border:1px solid var(--line); border-radius:11px; padding:12px 14px; background:#fff; }
+    .tiercard .hd{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+    .tiercard .pct{ font-size:26px; font-weight:800; font-variant-numeric:tabular-nums; }
+    .tiercard input[type=range]{ width:100%; accent-color:var(--emerald); }
+    .tiercard.st{ border-top:3px solid var(--statement); }
+    .tiercard.md{ border-top:3px solid var(--medium); }
+    .tiercard.bs{ border-top:3px solid var(--basic); }
+    .tierdesc{ font-size:11.5px; color:var(--muted); margin-top:4px; min-height:30px; }
+    .sumline{ font-size:12px; margin-top:8px; }
+    /* trend cards */
+    .trendgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; margin-top:6px; }
+    .trendcard{ border:1px solid var(--line); border-radius:11px; padding:12px 14px; background:#fff; }
+    .trendcard .src{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+    .trendcard .ttl{ font-size:14px; font-weight:700; margin:3px 0; }
+    .up{ color:var(--emerald-d); font-weight:700; font-size:12px; }
+    .down{ color:var(--err); font-weight:700; font-size:12px; }
+    .compbar{ display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 2px; }
+    .comp{ font-size:11px; font-weight:700; padding:4px 11px; border-radius:8px; background:#111; color:#fff; }
+    /* history mini */
+    .hgrid{ display:flex; gap:22px; flex-wrap:wrap; }
+    .hcol h4{ margin:0 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+    .swatchrow{ display:flex; gap:6px; align-items:center; }
+    .sw{ width:20px; height:20px; border-radius:5px; border:1px solid var(--line); }
+    .bar{ height:8px; border-radius:4px; background:var(--emerald-l); }
+    /* output */
+    table{ width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; font-size:12.5px; }
+    th,td{ text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:middle; }
+    th{ font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#8a978f; background:#f7fbf9; }
+    tr:last-child td{ border-bottom:none; }
+    .thumb{ width:40px; height:52px; object-fit:cover; border-radius:6px; border:1px solid var(--line); background:linear-gradient(135deg,#e9ede9,#f4f6f2); display:block; }
+    .out{ display:none; }
+    .out.show{ display:block; }
+    .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
+    .kpi{ border:1px solid var(--line); border-radius:11px; padding:12px 15px; background:#fff; }
+    .kpi .v{ font-size:24px; font-weight:800; }
+    .kpi .l{ font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; }
+    .divider{ height:1px; background:var(--line); margin:22px 0; }
+    details.note{ margin-top:6px; }
+    details.note summary{ cursor:pointer; font-size:12px; color:var(--emerald-d); font-weight:600; }
+  </style>
+</head>
+<body>
+  <div class="preview-flag">◆ Layout preview — sample data, buttons not wired yet — react to the design, then I build it for real ◆</div>
+  <div class="wrap" style="padding-top:40px">
+
+    <div class="top">
+      <div>
+        <h1>Fresh Procurement</h1>
+        <p class="sub">Decide what NEW fashion to source this cycle — driven by funkiness tiers &amp; live market trends, lightly tuned by buyer taste. Not restocking.</p>
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">
+        <div class="fld"><label>Cycle</label>
+          <select><option>Every 15 days</option><option selected>Every 20 days</option><option>Every 30 days</option></select>
+        </div>
+        <div class="fld"><label>Budget (₹)</label><input value="4,00,000" /></div>
+      </div>
+    </div>
+
+    <!-- ══════════ SIGNAL 1 — THE FEED ══════════ -->
+    <div class="panel">
+      <div class="sig s1">
+        <div class="num">1</div>
+        <div class="body">
+          <h2>The Feed — vendor candidates &amp; impression tiers <span class="weight primary">PRIMARY</span></h2>
+          <p class="sub">Upload every candidate photo from your vendors. Set how much of the buy goes to each funkiness tier. On Analyze, the app sorts all 500 photos into Statement / Medium / Basic and tells you what to source per tier.</p>
+
+          <div class="drop" style="margin-top:12px">
+            <div style="font-size:32px">⬆</div>
+            <div><b>Drop ~500 vendor photos here</b> or click to browse</div>
+            <div style="font-size:12px; margin-top:4px">Tag each batch with a vendor name + optional colour / ¥ cost</div>
+          </div>
+
+          <div class="vchips">
+            <span class="muted" style="font-size:11px; align-self:center">Uploaded so far:</span>
+            <span class="vchip">Snitch-supplier CHAOUFI<span class="n">62</span></span>
+            <span class="vchip">YOK<span class="n">48</span></span>
+            <span class="vchip">HK Textiles<span class="n">51</span></span>
+            <span class="vchip">NTVG<span class="n">40</span></span>
+            <span class="vchip">Amaze Variety<span class="n">37</span></span>
+            <span class="vchip">TANG<span class="n">33</span></span>
+            <span class="vchip">+ 9 more vendors<span class="n">241</span></span>
+            <span class="vchip" style="background:#eafaf2; border-color:#a7f3d0"><b>Total 512</b></span>
+          </div>
+
+          <h4 style="margin:18px 0 2px; font-size:12px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted)">Impression tier split — set your mix</h4>
+          <div class="tierset">
+            <div class="tiercard st">
+              <div class="hd"><span class="pill st">STATEMENT · High</span><span class="pct" style="color:var(--statement)">20%</span></div>
+              <input type="range" value="20" min="0" max="100" />
+              <div class="tierdesc">The loudest, funkiest hero pieces — the drop's showstoppers.</div>
+            </div>
+            <div class="tiercard md">
+              <div class="hd"><span class="pill md">MEDIUM · Daily-funk</span><span class="pct" style="color:var(--medium)">50%</span></div>
+              <input type="range" value="50" min="0" max="100" />
+              <div class="tierdesc">Funky but wearable every day — the volume core of the range.</div>
+            </div>
+            <div class="tiercard bs">
+              <div class="hd"><span class="pill bs">BASIC · Low-funk</span><span class="pct" style="color:var(--basic)">30%</span></div>
+              <input type="range" value="30" min="0" max="100" />
+              <div class="tierdesc">Clean essentials that anchor the range &amp; pair with statements.</div>
+            </div>
+          </div>
+          <div class="sumline"><span class="muted">Total:</span> <b style="color:var(--emerald-d)">100%</b> ✓ &nbsp;·&nbsp; <span class="muted">of ₹4,00,000 → ₹80k statement · ₹2,00,000 medium · ₹1,20,000 basic</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ SIGNAL 2 — MARKET TRENDS ══════════ -->
+    <div class="panel">
+      <div class="sig s2">
+        <div class="num">2</div>
+        <div class="body">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap">
+            <div>
+              <h2>Market Trends — competitors &amp; what's hot now <span class="weight primary">PRIMARY</span></h2>
+              <p class="sub">Refreshed live every cycle from your competitors &amp; market signals. Tilts the buy toward what's trending outside.</p>
+            </div>
+            <button class="btn ghost sm">↻ Refresh trends</button>
+          </div>
+
+          <div class="compbar">
+            <span class="muted" style="font-size:11px; align-self:center">Watching:</span>
+            <span class="comp">Zara</span>
+            <span class="comp">Snitch</span>
+            <span class="comp">The Souled Store</span>
+            <span class="comp">Bluorng</span>
+            <span class="comp">Jaywalking</span>
+            <span class="comp">Dripping Monkey</span>
+            <span class="comp">Farak</span>
+            <span class="comp" style="background:#f2faf6; color:var(--emerald-d); border:1px solid var(--line)">+ add</span>
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:4px">· plus Google Trends (India) &amp; niche streetwear signals</div>
+
+          <div class="trendgrid">
+            <div class="trendcard">
+              <div class="src">Snitch · bestseller</div>
+              <div class="ttl">Oversized cargo trousers</div>
+              <div class="up">▲ trending · seen across 3 sources</div>
+            </div>
+            <div class="trendcard">
+              <div class="src">Bluorng · new drop</div>
+              <div class="ttl">Boxy graphic shirts</div>
+              <div class="up">▲ rising</div>
+            </div>
+            <div class="trendcard">
+              <div class="src">Google Trends IN</div>
+              <div class="ttl">"Korean oversized shirt"</div>
+              <div class="up">▲ +48% (20d)</div>
+            </div>
+            <div class="trendcard">
+              <div class="src">Niche · streetwear</div>
+              <div class="ttl">Acid-wash denim</div>
+              <div class="up">▲ steady-hot</div>
+            </div>
+            <div class="trendcard">
+              <div class="src">Snitch</div>
+              <div class="ttl">Funky bowling shirts</div>
+              <div class="down">▼ cooling</div>
+            </div>
+          </div>
+          <details class="note"><summary>How this affects the buy</summary>
+            <p class="sub" style="margin-top:6px">Candidate photos that match a rising trend get boosted in the ranking; those matching a cooling trend get down-weighted. You always see WHY a product was picked.</p>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ SIGNAL 3 — HISTORY LENS ══════════ -->
+    <div class="panel">
+      <div class="sig s3">
+        <div class="num">3</div>
+        <div class="body">
+          <h2>Buyer-taste lens — sizes &amp; colours only <span class="weight minor">LEAST · taste only</span></h2>
+          <p class="sub"><b>Taste, nothing else.</b> Reads past sales purely to learn which <b>sizes</b> &amp; <b>colours</b> your buyers reach for — then nudges the size-curve &amp; colour mix of whatever signals 1 &amp; 2 already chose. It does <b>not</b> pick products, set quantities, or reorder old designs.</p>
+          <div class="hgrid" style="margin-top:12px">
+            <div class="hcol">
+              <h4>Colours your buyers pick</h4>
+              <div class="swatchrow" style="margin-bottom:5px"><span class="sw" style="background:#111"></span><div class="bar" style="width:120px"></div><span class="muted" style="font-size:11px">Black 34%</span></div>
+              <div class="swatchrow" style="margin-bottom:5px"><span class="sw" style="background:#5b6b4e"></span><div class="bar" style="width:78px"></div><span class="muted" style="font-size:11px">Olive 22%</span></div>
+              <div class="swatchrow" style="margin-bottom:5px"><span class="sw" style="background:#efe6d4"></span><div class="bar" style="width:56px"></div><span class="muted" style="font-size:11px">Cream 16%</span></div>
+              <div class="swatchrow"><span class="sw" style="background:#6b7280"></span><div class="bar" style="width:40px"></div><span class="muted" style="font-size:11px">Grey 11%</span></div>
+            </div>
+            <div class="hcol">
+              <h4>Size curve that sells</h4>
+              <div class="swatchrow" style="margin-bottom:5px"><span class="mono" style="font-size:11px; width:34px">M</span><div class="bar" style="width:70px"></div><span class="muted" style="font-size:11px">21%</span></div>
+              <div class="swatchrow" style="margin-bottom:5px"><span class="mono" style="font-size:11px; width:34px">L</span><div class="bar" style="width:110px"></div><span class="muted" style="font-size:11px">32%</span></div>
+              <div class="swatchrow" style="margin-bottom:5px"><span class="mono" style="font-size:11px; width:34px">XL</span><div class="bar" style="width:88px"></div><span class="muted" style="font-size:11px">26%</span></div>
+              <div class="swatchrow"><span class="mono" style="font-size:11px; width:34px">XXL</span><div class="bar" style="width:48px"></div><span class="muted" style="font-size:11px">14%</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center; margin:22px 0">
+      <button class="btn lg" onclick="document.getElementById('out').classList.add('show'); window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});">▶ Analyze 512 candidates</button>
+      <div class="sub" style="margin-top:6px">Sorts every photo into tiers, ranks by trend-fit, allocates size-wise qty → buy sheet</div>
+    </div>
+
+    <!-- ══════════ OUTPUT ══════════ -->
+    <div class="out" id="out">
+      <div class="divider"></div>
+      <h2 style="margin-bottom:12px">Sourcing plan — this cycle</h2>
+
+      <div class="kpis">
+        <div class="kpi"><div class="v">128</div><div class="l">Designs to source</div></div>
+        <div class="kpi"><div class="v">512</div><div class="l">Candidates reviewed</div></div>
+        <div class="kpi"><div class="v">₹3,94,200</div><div class="l">Est. spend (within budget)</div></div>
+        <div class="kpi"><div class="v">15</div><div class="l">Vendors</div></div>
+      </div>
+
+      <div style="display:flex; gap:8px; margin:6px 0 14px; flex-wrap:wrap">
+        <span class="pill st">STATEMENT 26 designs · ₹79k</span>
+        <span class="pill md">MEDIUM 64 designs · ₹1,98k</span>
+        <span class="pill bs">BASIC 38 designs · ₹1,17k</span>
+      </div>
+
+      <h4 style="font-size:12px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:6px 0">Recommended buy — grouped by vendor</h4>
+      <table>
+        <thead><tr><th>Photo</th><th>Design</th><th>Tier</th><th>Why picked</th><th>Colours</th><th>Size-wise qty</th><th class="money">¥ / total</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><div class="thumb"></div></td>
+            <td><b>Oversized cargo trouser</b><div class="muted mono" style="font-size:11px">CHAOUFI · A611</div></td>
+            <td><span class="pill md">Medium</span></td>
+            <td class="muted" style="font-size:11.5px">▲ Snitch bestseller + Google Trends ↑</td>
+            <td class="muted" style="font-size:11.5px">Black, Olive</td>
+            <td class="mono" style="font-size:11px">L·8 XL·6 M·4 XXL·2</td>
+            <td class="money">¥58 · <b>1,160</b></td>
+          </tr>
+          <tr>
+            <td><div class="thumb"></div></td>
+            <td><b>Boxy graphic shirt</b><div class="muted mono" style="font-size:11px">CHAOUFI · A736</div></td>
+            <td><span class="pill st">Statement</span></td>
+            <td class="muted" style="font-size:11.5px">▲ Bluorng new drop · high funk</td>
+            <td class="muted" style="font-size:11.5px">Cream</td>
+            <td class="mono" style="font-size:11px">L·6 XL·5 M·3</td>
+            <td class="money">¥64 · <b>896</b></td>
+          </tr>
+          <tr>
+            <td><div class="thumb"></div></td>
+            <td><b>Acid-wash denim jogger</b><div class="muted mono" style="font-size:11px">YOK · Y204</div></td>
+            <td><span class="pill md">Medium</span></td>
+            <td class="muted" style="font-size:11.5px">▲ niche streetwear ↑</td>
+            <td class="muted" style="font-size:11.5px">Blue</td>
+            <td class="mono" style="font-size:11px">L·7 XL·5 M·4 XXL·2</td>
+            <td class="money">¥71 · <b>1,278</b></td>
+          </tr>
+          <tr>
+            <td><div class="thumb"></div></td>
+            <td><b>Clean crew tee</b><div class="muted mono" style="font-size:11px">HK · H118</div></td>
+            <td><span class="pill bs">Basic</span></td>
+            <td class="muted" style="font-size:11.5px">Anchor essential · buyer black 34%</td>
+            <td class="muted" style="font-size:11.5px">Black, Grey</td>
+            <td class="mono" style="font-size:11px">L·10 XL·8 M·6 XXL·4</td>
+            <td class="money">¥29 · <b>812</b></td>
+          </tr>
+          <tr>
+            <td colspan="7" class="muted" style="text-align:center; font-style:italic">…124 more designs across 15 vendors…</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="display:flex; gap:10px; margin-top:16px; flex-wrap:wrap">
+        <button class="btn">⬇ Download vendor buy sheets (with photos)</button>
+        <button class="btn ghost">→ Send picks to Advance Purchase</button>
+        <button class="btn ghost">Adjust tiers &amp; re-analyze</button>
+      </div>
+      <p class="sub" style="margin-top:10px">The approved picks flow straight into the existing <b>Purchases → Advance Purchase</b> screen — nothing entered twice. Buy small &amp; broad; whatever sells fast, the <b>Restock</b> module chases automatically next cycle.</p>
+    </div>
+
+  </div>
+</body>
+</html>
