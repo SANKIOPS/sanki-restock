@@ -27,18 +27,36 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
+const crypto  = require('crypto');
+const multer  = require('multer');
 
 const router = express.Router();
 
+const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
+
 // ── JSON store (atomic write, same pattern as every module) ──────
-const STORE_PATH = process.env.FRESH_PROC_PATH ||
-  path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'),
-            'fresh-procurement.json');
+const STORE_PATH = process.env.FRESH_PROC_PATH || path.join(DATA_DIR, 'fresh-procurement.json');
 
 // The orders ledger lives beside us on the volume — Signal ③ reads it.
-const ORDERS_PATH = process.env.ORDERS_PATH ||
-  path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'),
-            'orders.json');
+const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
+
+// ── Candidate photos (Signal ①) ─────────────────────────────────
+// Vendor candidate photos uploaded for a sourcing cycle. Stored on the
+// persistent volume so they survive redeploys. These are the pool the tier
+// sorter and (later) AI trend-ranker judge.
+const CAND_DIR = path.join(DATA_DIR, 'fresh-candidates');
+try { fs.mkdirSync(CAND_DIR, { recursive: true }); } catch { /* exists */ }
+const candidateUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, CAND_DIR),
+    filename: (req, file, cb) => {
+      const ext = (path.extname(file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '');
+      cb(null, Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg'));
+    }
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
+});
 
 const DEFAULTS = {
   cycleDays: 20,
@@ -57,10 +75,23 @@ function loadStore() {
     const s = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
     if (!s.settings) s.settings = {};
     if (!s.sessions) s.sessions = {};
+    if (!Array.isArray(s.candidates)) s.candidates = [];
     return s;
-  } catch { return { settings: {}, sessions: {} }; }
+  } catch { return { settings: {}, sessions: {}, candidates: [] }; }
 }
 function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
+
+// Public shape of a candidate (never leak the disk path).
+function publicCandidate(c) {
+  return { id: c.id, vendor: c.vendor || '', colour: c.colour || '', cost: c.cost || null,
+    url: '/api/fresh/candidate/' + c.id, tier: c.tier || null, uploadedAt: c.uploadedAt };
+}
+// Group candidates by vendor for the chip counts the UI shows.
+function vendorCounts(cands) {
+  const by = {};
+  cands.forEach(c => { const v = c.vendor || 'Unassigned'; by[v] = (by[v] || 0) + 1; });
+  return Object.entries(by).map(([vendor, count]) => ({ vendor, count })).sort((a, b) => b.count - a.count);
+}
 
 function settingsWithDefaults(s) {
   const st = s.settings || {};
@@ -180,6 +211,62 @@ router.post('/api/fresh/settings', (req, res) => {
 router.get('/api/fresh/taste', (req, res) => {
   const w = req.query.window ? parseInt(req.query.window) : null;
   res.json({ success: true, taste: computeTaste(w) });
+});
+
+// ── Signal ① — candidate photo feed ─────────────────────────────
+// List all candidates + per-vendor counts.
+router.get('/api/fresh/candidates', (req, res) => {
+  const s = loadStore();
+  res.json({ success: true, candidates: s.candidates.map(publicCandidate),
+    vendors: vendorCounts(s.candidates), total: s.candidates.length });
+});
+
+// Upload one or more photos, tagged with a vendor (+ optional colour / ¥ cost).
+router.post('/api/fresh/candidates', candidateUpload.array('photos', 200), (req, res) => {
+  const files = req.files || [];
+  if (!files.length) return res.status(400).json({ success: false, error: 'No photos received' });
+  const vendor = String((req.body && req.body.vendor) || '').trim();
+  const colour = String((req.body && req.body.colour) || '').trim();
+  const cost = req.body && req.body.cost ? parseFloat(req.body.cost) || null : null;
+  const s = loadStore();
+  const added = files.map(f => {
+    const c = { id: crypto.randomBytes(8).toString('hex'), file: f.filename,
+      vendor, colour, cost, tier: null, uploadedAt: new Date().toISOString() };
+    s.candidates.push(c);
+    return publicCandidate(c);
+  });
+  saveStore(s);
+  res.json({ success: true, added, total: s.candidates.length, vendors: vendorCounts(s.candidates) });
+});
+
+// Serve a stored candidate image by id.
+router.get('/api/fresh/candidate/:id', (req, res) => {
+  const s = loadStore();
+  const c = s.candidates.find(x => x.id === req.params.id);
+  if (!c) return res.status(404).end();
+  const fp = path.join(CAND_DIR, c.file);
+  if (!fs.existsSync(fp)) return res.status(404).end();
+  res.sendFile(fp);
+});
+
+// Delete one candidate (removes the file too).
+router.delete('/api/fresh/candidate/:id', (req, res) => {
+  const s = loadStore();
+  const i = s.candidates.findIndex(x => x.id === req.params.id);
+  if (i < 0) return res.status(404).json({ success: false, error: 'Not found' });
+  const [c] = s.candidates.splice(i, 1);
+  try { fs.unlinkSync(path.join(CAND_DIR, c.file)); } catch { /* already gone */ }
+  saveStore(s);
+  res.json({ success: true, total: s.candidates.length, vendors: vendorCounts(s.candidates) });
+});
+
+// Clear the whole candidate pool (start a fresh cycle).
+router.post('/api/fresh/candidates/clear', (req, res) => {
+  const s = loadStore();
+  s.candidates.forEach(c => { try { fs.unlinkSync(path.join(CAND_DIR, c.file)); } catch { /* ignore */ } });
+  s.candidates = [];
+  saveStore(s);
+  res.json({ success: true, total: 0, vendors: [] });
 });
 
 module.exports = { router, computeTaste, detectColour, detectSize };

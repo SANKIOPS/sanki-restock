@@ -72,6 +72,15 @@
     .banner.warn{ background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
     .saved{ font-size:12px; color:var(--emerald-d); opacity:0; transition:opacity .2s; }
     .saved.show{ opacity:1; }
+    .drop{ cursor:pointer; transition:border-color .15s, background .15s; }
+    .drop:hover,.drop.drag{ border-color:var(--emerald); background:#f2faf6; color:var(--emerald-d); }
+    .vchip{ font-size:11px; font-weight:600; padding:4px 10px; border-radius:999px; background:#f2faf6; border:1px solid var(--line); color:var(--emerald-d); }
+    .vchip .n{ color:var(--muted); font-weight:700; margin-left:4px; }
+    .cand{ position:relative; aspect-ratio:1; border-radius:8px; overflow:hidden; border:1px solid var(--line); background:#f4f6f2; }
+    .cand img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .cand .del{ position:absolute; top:2px; right:2px; width:18px; height:18px; border-radius:50%; border:none; background:rgba(180,35,24,.9); color:#fff; font-size:11px; line-height:1; cursor:pointer; display:none; }
+    .cand:hover .del{ display:block; }
+    .cand .vt{ position:absolute; bottom:0; left:0; right:0; font-size:9px; padding:2px 4px; background:rgba(0,0,0,.55); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   </style>
 </head>
 <body>
@@ -100,14 +109,24 @@
       <div class="sig s1">
         <div class="num">1</div>
         <div class="body">
-          <h2>The Feed — vendor candidates &amp; impression tiers <span class="weight primary">PRIMARY</span><span class="soon">upload wiring next</span></h2>
+          <h2>The Feed — vendor candidates &amp; impression tiers <span class="weight primary">PRIMARY</span></h2>
           <p class="sub">Upload every candidate photo from your vendors. Set how much of the budget goes to each funkiness tier — on Analyze, the app sorts all candidates into Statement / Medium / Basic and tells you what to source per tier.</p>
 
-          <div class="drop" style="margin-top:12px" id="drop">
+          <div style="display:flex; gap:8px; margin:12px 0 8px; flex-wrap:wrap; align-items:flex-end">
+            <div class="fld" style="min-width:150px"><label>Vendor (tags this batch)</label><input id="candVendor" placeholder="e.g. CHAOUFI" /></div>
+            <div class="fld" style="min-width:110px"><label>Colour (optional)</label><input id="candColour" placeholder="e.g. Black" /></div>
+            <div class="fld" style="min-width:90px"><label>¥ / pc (optional)</label><input id="candCost" inputmode="decimal" placeholder="e.g. 58" /></div>
+          </div>
+          <div class="drop" style="margin-top:4px" id="drop">
             <div style="font-size:32px">⬆</div>
             <div><b>Drop vendor photos here</b> or click to browse</div>
-            <div style="font-size:12px; margin-top:4px">Tag each batch with a vendor name + optional colour / ¥ cost</div>
+            <div style="font-size:12px; margin-top:4px">Photos are tagged with the vendor above. Select many at once — up to 200 per batch.</div>
+            <input type="file" id="candInput" accept="image/*" multiple style="display:none" />
           </div>
+          <div id="uploadStatus" class="muted" style="font-size:12px; margin-top:6px"></div>
+
+          <div class="vchips" id="vendorChips" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:12px"></div>
+          <div id="candGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:8px; margin-top:12px"></div>
 
           <h4 style="margin:18px 0 2px; font-size:12px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted)">Impression tier split — set your mix (of the budget)</h4>
           <div class="tierset">
@@ -168,7 +187,7 @@
       <button class="btn lg" id="analyzeBtn" disabled title="Enable once the Feed upload &amp; Trends pull are wired">▶ Analyze candidates</button>
       <div class="sub" style="margin-top:6px">Sorts every photo into tiers, ranks by trend-fit, applies taste, allocates size-wise qty → vendor buy sheet</div>
       <div class="banner warn" style="max-width:640px;margin:12px auto 0;text-align:left">
-        <b>Build status:</b> Settings &amp; the taste lens (Signal 3) are live now. Photo upload + tier-sorting (Signal 1) and the live competitor trend pull (Signal 2) are the next slices — Analyze switches on when they land.
+        <b>Build status:</b> Settings, the taste lens (Signal 3) and the photo feed upload (Signal 1) are live now. AI tier-sorting of the photos and the live competitor trend pull (Signal 2) are the next slices — Analyze switches on when they land.
       </div>
     </div>
 
@@ -257,12 +276,60 @@
       .catch(function(){ renderTaste(null); });
   }
 
+  // ── Signal ① candidate feed ──
+  function renderCandidates(list, vendors){
+    var chips = el('vendorChips');
+    if(!vendors || !vendors.length){ chips.innerHTML=''; }
+    else {
+      var total = list.length;
+      chips.innerHTML = '<span class="muted" style="font-size:11px;align-self:center">Uploaded:</span>' +
+        vendors.map(function(v){ return '<span class="vchip">'+escapeHtml(v.vendor)+'<span class="n">'+v.count+'</span></span>'; }).join('') +
+        '<span class="vchip" style="background:#eafaf2;border-color:#a7f3d0"><b>Total '+total+'</b></span>' +
+        (total ? '<span class="vchip" style="background:#fef2f2;border-color:#fecaca;color:var(--err);cursor:pointer" id="clearCand">✕ clear all</span>' : '');
+      var cc = el('clearCand');
+      if(cc) cc.onclick = function(){ if(confirm('Remove all '+total+' candidate photos?')) fetch('/api/fresh/candidates/clear',{method:'POST'}).then(function(){ loadCandidates(); }); };
+    }
+    var grid = el('candGrid');
+    grid.innerHTML = list.map(function(c){
+      var tag = escapeHtml(c.vendor || '—') + (c.colour ? ' · '+escapeHtml(c.colour) : '');
+      return '<div class="cand"><img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+tag+'</span></div>';
+    }).join('');
+    Array.prototype.forEach.call(grid.querySelectorAll('.del'), function(b){
+      b.onclick = function(){ fetch('/api/fresh/candidate/'+b.getAttribute('data-id'),{method:'DELETE'}).then(function(){ loadCandidates(); }); };
+    });
+  }
+  function loadCandidates(){
+    return fetch('/api/fresh/candidates').then(function(r){ return r.json(); }).then(function(d){
+      if(d.success) renderCandidates(d.candidates, d.vendors);
+    });
+  }
+  function uploadFiles(files){
+    if(!files || !files.length) return;
+    var vendor = (el('candVendor').value||'').trim();
+    if(!vendor){ el('uploadStatus').innerHTML = '<span style="color:var(--err)">Enter a vendor name first, then add photos.</span>'; el('candVendor').focus(); return; }
+    var fd = new FormData();
+    Array.prototype.forEach.call(files, function(f){ fd.append('photos', f); });
+    fd.append('vendor', vendor);
+    fd.append('colour', (el('candColour').value||'').trim());
+    fd.append('cost', (el('candCost').value||'').trim());
+    el('uploadStatus').textContent = 'Uploading '+files.length+' photo'+(files.length>1?'s':'')+'…';
+    fetch('/api/fresh/candidates', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
+      if(d.success){ el('uploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+d.added.length+' — total '+d.total+'</span>'; renderCandidates(null, d.vendors); loadCandidates(); }
+      else { el('uploadStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Upload failed')+'</span>'; }
+    }).catch(function(){ el('uploadStatus').innerHTML = '<span style="color:var(--err)">Upload failed — try again.</span>'; });
+  }
+  el('drop').addEventListener('click', function(){ el('candInput').click(); });
+  el('candInput').addEventListener('change', function(){ uploadFiles(el('candInput').files); el('candInput').value=''; });
+  ['dragover','dragenter'].forEach(function(ev){ el('drop').addEventListener(ev, function(e){ e.preventDefault(); el('drop').classList.add('drag'); }); });
+  ['dragleave','drop'].forEach(function(ev){ el('drop').addEventListener(ev, function(e){ e.preventDefault(); el('drop').classList.remove('drag'); }); });
+  el('drop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) uploadFiles(e.dataTransfer.files); });
+
   // Wiring
   ['tStatement','tMedium','tBasic'].forEach(function(id){ el(id).addEventListener('input', renderTiers); el(id).addEventListener('change', saveSettings); });
   el('cycle').addEventListener('change', saveSettings);
   el('budget').addEventListener('change', function(){ el('budget').value = fmtINR(parseInt((el('budget').value||'').replace(/[^\d]/g,''))||0); renderTiers(); saveSettings(); });
 
-  loadSettings().then(loadTaste);
+  loadSettings().then(loadTaste).then(loadCandidates);
   </script>
   <script src="/sidebar.js"></script>
 </body>
