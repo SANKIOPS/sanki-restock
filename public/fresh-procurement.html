@@ -303,20 +303,35 @@
       if(d.success) renderCandidates(d.candidates, d.vendors);
     });
   }
+  // Upload in small batches — a single 500-photo request would exceed the
+  // platform's request-size limit and the server's 200-file cap. Chunking
+  // keeps each POST small and lets us show running progress.
+  var BATCH = 20;
   function uploadFiles(files){
     if(!files || !files.length) return;
     var vendor = (el('candVendor').value||'').trim();
     if(!vendor){ el('uploadStatus').innerHTML = '<span style="color:var(--err)">Enter a vendor name first, then add photos.</span>'; el('candVendor').focus(); return; }
-    var fd = new FormData();
-    Array.prototype.forEach.call(files, function(f){ fd.append('photos', f); });
-    fd.append('vendor', vendor);
-    fd.append('colour', (el('candColour').value||'').trim());
-    fd.append('cost', (el('candCost').value||'').trim());
-    el('uploadStatus').textContent = 'Uploading '+files.length+' photo'+(files.length>1?'s':'')+'…';
-    fetch('/api/fresh/candidates', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
-      if(d.success){ el('uploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+d.added.length+' — total '+d.total+'</span>'; renderCandidates(null, d.vendors); loadCandidates(); }
-      else { el('uploadStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Upload failed')+'</span>'; }
-    }).catch(function(){ el('uploadStatus').innerHTML = '<span style="color:var(--err)">Upload failed — try again.</span>'; });
+    var all = Array.prototype.slice.call(files);
+    var colour = (el('candColour').value||'').trim();
+    var cost = (el('candCost').value||'').trim();
+    var chunks = [];
+    for(var i=0;i<all.length;i+=BATCH) chunks.push(all.slice(i,i+BATCH));
+    var done = 0, addedTotal = 0, lastVendors = null, total = 0;
+    function sendChunk(idx){
+      if(idx >= chunks.length){
+        el('uploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+addedTotal+' — total '+total+'</span>';
+        renderCandidates(null, lastVendors); loadCandidates(); return;
+      }
+      var fd = new FormData();
+      chunks[idx].forEach(function(f){ fd.append('photos', f); });
+      fd.append('vendor', vendor); fd.append('colour', colour); fd.append('cost', cost);
+      el('uploadStatus').textContent = 'Uploading '+(done+1)+'–'+(done+chunks[idx].length)+' of '+all.length+'…';
+      fetch('/api/fresh/candidates', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
+        if(d.success){ addedTotal += d.added.length; total = d.total; lastVendors = d.vendors; done += chunks[idx].length; sendChunk(idx+1); }
+        else { el('uploadStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Upload failed')+'</span>'; }
+      }).catch(function(){ el('uploadStatus').innerHTML = '<span style="color:var(--err)">Upload failed after '+done+' of '+all.length+' — try again.</span>'; });
+    }
+    sendChunk(0);
   }
   el('drop').addEventListener('click', function(){ el('candInput').click(); });
   el('candInput').addEventListener('change', function(){ uploadFiles(el('candInput').files); el('candInput').value=''; });

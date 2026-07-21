@@ -48,15 +48,33 @@ const CAND_DIR = path.join(DATA_DIR, 'fresh-candidates');
 try { fs.mkdirSync(CAND_DIR, { recursive: true }); } catch { /* exists */ }
 const candidateUpload = multer({
   storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, CAND_DIR),
+    destination: (req, file, cb) => {
+      try { fs.mkdirSync(CAND_DIR, { recursive: true }); } catch { /* exists */ }
+      cb(null, CAND_DIR);
+    },
     filename: (req, file, cb) => {
       const ext = (path.extname(file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '');
       cb(null, Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg'));
     }
   }),
-  limits: { fileSize: 15 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024, files: 200 },
   fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
 });
+// Run the multer middleware but always resolve to JSON — an uncaught multer
+// error (file too large, too many files, disk issue) would otherwise fall to
+// Express's default HTML error page, which the client can't parse.
+function runCandidateUpload(req, res) {
+  return new Promise((resolve) => {
+    candidateUpload.array('photos', 200)(req, res, (err) => {
+      if (err) {
+        const map = { LIMIT_FILE_SIZE: 'A photo is larger than 25 MB — compress it and retry.',
+          LIMIT_FILE_COUNT: 'Too many photos at once (max 200 per batch).',
+          LIMIT_UNEXPECTED_FILE: 'Unexpected upload field.' };
+        resolve({ ok: false, error: map[err.code] || ('Upload error: ' + (err.message || err.code || 'unknown')) });
+      } else resolve({ ok: true });
+    });
+  });
+}
 
 const DEFAULTS = {
   cycleDays: 20,
@@ -222,7 +240,10 @@ router.get('/api/fresh/candidates', (req, res) => {
 });
 
 // Upload one or more photos, tagged with a vendor (+ optional colour / ¥ cost).
-router.post('/api/fresh/candidates', candidateUpload.array('photos', 200), (req, res) => {
+router.post('/api/fresh/candidates', async (req, res) => {
+  const r = await runCandidateUpload(req, res);
+  if (res.headersSent) return;
+  if (!r.ok) return res.status(400).json({ success: false, error: r.error });
   const files = req.files || [];
   if (!files.length) return res.status(400).json({ success: false, error: 'No photos received' });
   const vendor = String((req.body && req.body.vendor) || '').trim();
