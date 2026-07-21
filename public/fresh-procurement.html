@@ -201,6 +201,20 @@
       <p class="sub">Your budget of <b id="planBudget"></b> split across the tiers the AI found. Spend each tier's slice across its designs — the loud Statement pieces stay a small, deliberate bet; the Medium tier carries the volume.</p>
       <div class="tierset" id="planCards" style="margin-bottom:14px"></div>
       <div id="planGrid"></div>
+
+      <div id="buyPanel" style="margin-top:26px;border-top:1px solid var(--line);padding-top:18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div>
+            <h2 style="margin:0 0 4px">Buy sheet</h2>
+            <p class="sub" style="margin:0">The pieces you're actually ordering this cycle, grouped by vendor. Each vendor's subtotal is what to spend with them.</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button id="copyBuyBtn" class="btn ghost" type="button">Copy</button>
+            <button id="sendBuyBtn" class="btn" type="button">Send to Purchases →</button>
+          </div>
+        </div>
+        <div id="buySheet" style="margin-top:14px"></div>
+      </div>
     </div>
 
   </div>
@@ -378,7 +392,63 @@
         setTier(b.getAttribute('data-id'), next==='auto'? null : next);
       };
     });
+    renderBuySheet(d);
     el('planPanel').style.display='';
+  }
+  // ── Buy sheet: selected designs regrouped by vendor ──
+  var lastBuy = null;
+  function collectBuy(d){
+    var byVendor = {}, budget = d.budget||0;
+    ['statement','medium','basic'].forEach(function(t){
+      var p = d.plan[t]; if(!p) return;
+      p.designs.forEach(function(c){
+        var v = c.vendor || 'Unassigned';
+        (byVendor[v] = byVendor[v] || []).push({ id:c.id, vendor:v, colour:c.colour||'', url:c.url, tier:t, funk:c.funk, budget:p.perDesign });
+      });
+    });
+    var vendors = Object.keys(byVendor).map(function(v){
+      var lines = byVendor[v].sort(function(a,b){ return (['statement','medium','basic'].indexOf(a.tier)-['statement','medium','basic'].indexOf(b.tier)) || ((b.funk||0)-(a.funk||0)); });
+      var subtotal = lines.reduce(function(s,l){ return s+(l.budget||0); },0);
+      return { vendor:v, count:lines.length, subtotal:subtotal, lines:lines };
+    }).sort(function(a,b){ return b.subtotal-a.subtotal; });
+    var totalDesigns = vendors.reduce(function(s,v){ return s+v.count; },0);
+    var allocated = vendors.reduce(function(s,v){ return s+v.subtotal; },0);
+    return { budget:budget, totalDesigns:totalDesigns, allocated:allocated, vendors:vendors };
+  }
+  function renderBuySheet(d){
+    if(!d || !d.plan){ el('buyPanel').style.display='none'; return; }
+    var b = lastBuy = collectBuy(d);
+    if(!b.totalDesigns){ el('buySheet').innerHTML = '<p class="sub" style="margin:0">Nothing selected to buy yet — analyze your feed first.</p>'; el('buyPanel').style.display=''; return; }
+    var head = '<div class="sub" style="margin:0 0 12px"><b>'+b.totalDesigns+'</b> design'+(b.totalDesigns===1?'':'s')+' across <b>'+b.vendors.length+'</b> vendor'+(b.vendors.length===1?'':'s')+' · ₹'+fmtINR(b.allocated)+' allocated <span class="muted">of ₹'+fmtINR(b.budget)+'</span></div>';
+    var body = b.vendors.map(function(v){
+      var chips = v.lines.map(function(l){
+        var m = TIER_META[l.tier];
+        var tag = escapeHtml(l.colour||'—');
+        return '<div class="cand" title="'+m.label+' · funk '+(l.funk!=null?l.funk:'—')+' · ₹'+fmtINR(l.budget)+'">'+
+          '<span class="tbadge" style="background:'+m.col+'">'+m.label.charAt(0)+'</span>'+
+          '<img src="'+l.url+'" loading="lazy" alt=""/>'+
+          '<span class="vt">'+tag+' · ₹'+fmtINR(l.budget)+'</span></div>';
+      }).join('');
+      return '<div style="margin:0 0 16px">'+
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:0 0 6px">'+
+          '<h4 style="margin:0;font-size:13px;font-weight:800">'+escapeHtml(v.vendor)+' <span class="muted" style="font-weight:600">· '+v.count+' design'+(v.count===1?'':'s')+'</span></h4>'+
+          '<b style="font-size:14px">₹'+fmtINR(v.subtotal)+'</b>'+
+        '</div>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+chips+'</div>'+
+      '</div>';
+    }).join('');
+    el('buySheet').innerHTML = head + body;
+    el('buyPanel').style.display='';
+  }
+  function buyToText(b){
+    if(!b) return '';
+    var out = ['SANKI — Fresh Procurement buy sheet', b.totalDesigns+' designs · '+b.vendors.length+' vendors · ₹'+fmtINR(b.allocated)+' of ₹'+fmtINR(b.budget), ''];
+    b.vendors.forEach(function(v){
+      out.push(v.vendor+' — '+v.count+' designs — ₹'+fmtINR(v.subtotal));
+      v.lines.forEach(function(l){ out.push('  • '+(TIER_META[l.tier].label)+' · '+(l.colour||'—')+' · ₹'+fmtINR(l.budget)); });
+      out.push('');
+    });
+    return out.join('\n');
   }
   function analyze(force){
     var btn = el('analyzeBtn');
@@ -445,6 +515,15 @@
   el('cycle').addEventListener('change', saveSettings);
   el('budget').addEventListener('change', function(){ el('budget').value = fmtINR(parseInt((el('budget').value||'').replace(/[^\d]/g,''))||0); renderTiers(); saveSettings(); });
   el('analyzeBtn').addEventListener('click', function(){ analyze(false); });
+  el('copyBuyBtn').addEventListener('click', function(){
+    var txt = buyToText(lastBuy); if(!txt) return;
+    navigator.clipboard.writeText(txt).then(function(){ var b=el('copyBuyBtn'); var o=b.textContent; b.textContent='Copied ✓'; setTimeout(function(){ b.textContent=o; },1400); });
+  });
+  el('sendBuyBtn').addEventListener('click', function(){
+    if(!lastBuy || !lastBuy.totalDesigns){ return; }
+    try { localStorage.setItem('sanki_fresh_buysheet', JSON.stringify({ at: Date.now(), sheet: lastBuy })); } catch(e){}
+    location.href = '/procurement.html?from=fresh';
+  });
 
   // Show an existing plan on load (if photos were already sorted).
   function loadPlan(){ return fetch('/api/fresh/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.total) renderPlan(d); }).catch(function(){}); }

@@ -446,6 +446,39 @@ function buildPlan(cands, settings) {
   return { budget, total, plan };
 }
 
+// Buy sheet: take the SELECTED designs out of the plan and regroup them by
+// vendor — the actual "go order this" list. Each line carries its tier's
+// per-design budget so a vendor's subtotal = what to spend with that vendor.
+function buildBuySheet(cands, settings) {
+  const { budget, plan } = buildPlan(cands, settings);
+  const byVendor = {};
+  TIER_KEYS.forEach(t => {
+    const perDesign = plan[t].perDesign;
+    plan[t].designs.forEach(c => {
+      const v = c.vendor || 'Unassigned';
+      (byVendor[v] = byVendor[v] || []).push(Object.assign({}, c, { budget: perDesign }));
+    });
+  });
+  const vendors = Object.entries(byVendor).map(([vendor, lines]) => {
+    lines.sort((a, b) => (TIER_KEYS.indexOf(a.tier) - TIER_KEYS.indexOf(b.tier)) || ((b.funk || 0) - (a.funk || 0)));
+    const subtotal = lines.reduce((s, l) => s + (l.budget || 0), 0);
+    return { vendor, count: lines.length, subtotal, lines };
+  }).sort((a, b) => b.subtotal - a.subtotal);
+  const totalDesigns = vendors.reduce((s, v) => s + v.count, 0);
+  const allocated = vendors.reduce((s, v) => s + v.subtotal, 0);
+  return { budget, totalDesigns, allocated, vendors };
+}
+
+// The vendor-grouped buy sheet — derived live from the stored scores + split.
+router.get('/api/fresh/buysheet', (req, res) => {
+  const s = loadStore();
+  const settings = settingsWithDefaults(s);
+  const cands = s.candidates || [];
+  const scored = cands.some(c => typeof c.funk === 'number');
+  if (scored) { assignTiersBySplit(cands, settings); saveStore(s); }
+  res.json({ success: true, scored, ...buildBuySheet(cands, settings) });
+});
+
 // Analyze: (re)classify every candidate, persist tiers, return the buy plan.
 router.post('/api/fresh/analyze', async (req, res) => {
   try {
@@ -509,4 +542,4 @@ router.post('/api/fresh/candidate/:id/tier', (req, res) => {
   res.json({ success: true, settings, candidates: s.candidates.map(publicCandidate), vendors: vendorCounts(s.candidates), ...buildPlan(s.candidates, settings) });
 });
 
-module.exports = { router, computeTaste, detectColour, detectSize, buildPlan, splitCounts, assignTiersBySplit };
+module.exports = { router, computeTaste, detectColour, detectSize, buildPlan, buildBuySheet, splitCounts, assignTiersBySplit };
