@@ -126,7 +126,8 @@ function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
 // Public shape of a candidate (never leak the disk path).
 function publicCandidate(c) {
   return { id: c.id, vendor: c.vendor || '', colour: c.colour || '', cost: c.cost || null,
-    url: '/api/fresh/candidate/' + c.id, tier: c.tier || null, uploadedAt: c.uploadedAt };
+    url: '/api/fresh/candidate/' + c.id, tier: c.tier || null, funk: (typeof c.funk === 'number' ? c.funk : null),
+    locked: !!c.tierLocked, uploadedAt: c.uploadedAt };
 }
 // Group candidates by vendor for the chip counts the UI shows.
 function vendorCounts(cands) {
@@ -320,21 +321,26 @@ router.post('/api/fresh/candidates/clear', (req, res) => {
 const TIER_KEYS = ['statement', 'medium', 'basic'];
 const VISION_BATCH = 10; // images per vision call
 
-async function classifyBatch(items) {
-  // items: [{id, buffer, mediaType}]. Returns map id→tier.
+// Score each photo's "funkiness" on an ABSOLUTE 0–100 scale at temperature 0.
+// Absolute + deterministic means the same photo gets (near) the same score every
+// run and regardless of which batch it lands in — the two things that made the
+// old per-batch tier call jump around and mis-file statements as medium.
+async function scoreBatch(items) {
+  // items: [{id, buffer, mediaType}]. Returns map id→score(0..100).
   const content = [];
   items.forEach((it, i) => {
     content.push({ type: 'text', text: 'IMAGE ' + (i + 1) + ':' });
     content.push({ type: 'image', source: { type: 'base64', media_type: it.mediaType, data: it.buffer.toString('base64') } });
   });
   content.push({ type: 'text', text:
-`You are a buyer for an Indian premium streetwear brand deciding how "funky" each garment photo is. ` +
-`Classify EACH of the ${items.length} images above into exactly one tier:\n` +
-`- "statement" = loud, bold, funky hero pieces — heavy graphics, wild colour, unusual cuts; the showstoppers.\n` +
-`- "medium" = funky-but-wearable daily pieces — some character/print but everyday-friendly; the volume core.\n` +
-`- "basic" = clean essentials — plain or minimal, anchor pieces that pair with statements.\n\n` +
-`Return STRICT JSON ONLY, no prose: {"tiers":["statement"|"medium"|"basic", ... one per image in order]}. ` +
-`The array MUST have exactly ${items.length} entries.` });
+`You are a buyer for an Indian premium streetwear brand. Score how LOUD / FUNKY / statement-y each garment above is on an ABSOLUTE 0–100 scale. ` +
+`Judge each image on its own against this fixed rubric — NOT relative to the other images in this message:\n` +
+`- 85–100: extremely loud hero piece — heavy all-over graphics, wild clashing colour, bold unusual cut.\n` +
+`- 60–84: clearly funky/eye-catching — prominent print or graphic, strong colour, distinctive styling.\n` +
+`- 35–59: has some character but everyday-wearable — a modest logo/print, one accent colour, mild detailing.\n` +
+`- 15–34: mostly clean — subtle branding or texture on an otherwise plain garment.\n` +
+`- 0–14: pure basic — plain solid colour, no graphics, essential staple.\n\n` +
+`Return STRICT JSON ONLY, no prose: {"scores":[n, n, ...]} with exactly ${items.length} integers 0–100, one per image in order.` });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   let r;
@@ -342,17 +348,53 @@ async function classifyBatch(items) {
     r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1000, messages: [{ role: 'user', content }] }),
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1000, temperature: 0, messages: [{ role: 'user', content }] }),
       signal: ctrl.signal
     });
   } finally { clearTimeout(timer); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
   const parsed = extractJson((j.content || []).map(c => c.text || '').join(''));
-  const arr = parsed && Array.isArray(parsed.tiers) ? parsed.tiers : [];
+  const arr = parsed && Array.isArray(parsed.scores) ? parsed.scores : [];
   const out = {};
-  items.forEach((it, i) => { const t = String(arr[i] || '').toLowerCase(); out[it.id] = TIER_KEYS.includes(t) ? t : 'medium'; });
+  items.forEach((it, i) => { const n = Math.round(Number(arr[i])); out[it.id] = isFinite(n) ? Math.max(0, Math.min(100, n)) : 50; });
   return out;
+}
+
+// Turn the tier % split into exact whole-photo counts for N candidates, using
+// largest-remainder rounding so the counts always sum to N (e.g. 50 @ 20/50/30
+// → 10 / 25 / 15).
+function splitCounts(n, settings) {
+  const p = settings.tiers || {};
+  let s = Math.max(0, +p.statement || 0), m = Math.max(0, +p.medium || 0), b = Math.max(0, +p.basic || 0);
+  let tot = s + m + b; if (tot <= 0) { s = 20; m = 50; b = 30; tot = 100; }
+  const raw = { statement: n * s / tot, medium: n * m / tot, basic: n * b / tot };
+  const base = { statement: Math.floor(raw.statement), medium: Math.floor(raw.medium), basic: Math.floor(raw.basic) };
+  let rem = n - (base.statement + base.medium + base.basic);
+  const order = TIER_KEYS.map(k => ({ k, f: raw[k] - Math.floor(raw[k]) })).sort((a, b) => b.f - a.f);
+  for (let i = 0; i < rem; i++) base[order[i % 3].k]++;
+  return base;
+}
+
+// Assign tiers by RANK: sort candidates by funk score (desc) and slice into the
+// split-derived quotas. Manually locked candidates keep their tier and consume
+// their tier's quota; the rest fill what's left by rank. Fully deterministic.
+function assignTiersBySplit(cands, settings) {
+  const N = cands.length;
+  const quota = splitCounts(N, settings);
+  const locked = cands.filter(c => c.tierLocked && TIER_KEYS.includes(c.tier));
+  const rem = Object.assign({}, quota);
+  locked.forEach(c => { rem[c.tier] = Math.max(0, rem[c.tier] - 1); });
+  const unlocked = cands.filter(c => !(c.tierLocked && TIER_KEYS.includes(c.tier)));
+  // Reconcile remaining quotas to exactly the unlocked count (medium is the buffer).
+  let need = unlocked.length, have = rem.statement + rem.medium + rem.basic;
+  rem.medium += (need - have);
+  if (rem.medium < 0) { let d = -rem.medium; rem.medium = 0; const tb = Math.min(d, rem.basic); rem.basic -= tb; d -= tb; rem.statement = Math.max(0, rem.statement - d); }
+  unlocked.sort((a, b) => ((b.funk || 0) - (a.funk || 0)) || (a.id < b.id ? -1 : 1));
+  let i = 0;
+  for (let k = 0; k < rem.statement && i < unlocked.length; k++) unlocked[i++].tier = 'statement';
+  for (let k = 0; k < rem.medium && i < unlocked.length; k++) unlocked[i++].tier = 'medium';
+  while (i < unlocked.length) unlocked[i++].tier = 'basic';
 }
 
 // Budget-led allocation: each tier gets budget×pct; spread evenly across the
@@ -362,7 +404,7 @@ function buildPlan(cands, settings) {
   const pct = settings.tiers || {};
   const plan = {};
   TIER_KEYS.forEach(t => {
-    const designs = cands.filter(c => c.tier === t);
+    const designs = cands.filter(c => c.tier === t).sort((a, b) => ((b.funk || 0) - (a.funk || 0)));
     const share = Math.max(0, Number(pct[t]) || 0);
     const tierBudget = Math.round(budget * share / 100);
     plan[t] = {
@@ -386,8 +428,8 @@ router.post('/api/fresh/analyze', async (req, res) => {
     const cands = s.candidates || [];
     if (!cands.length) return res.status(400).json({ success: false, error: 'No candidate photos yet — upload some in The Feed first.' });
     const force = req.body && (req.body.force === true || req.body.force === 'true');
-    // Only classify what needs it (unless forced) to save time/cost.
-    const todo = cands.filter(c => force || !c.tier);
+    // Score anything without a funk score yet (or everything, if forced).
+    const todo = cands.filter(c => force || typeof c.funk !== 'number');
     let classified = 0;
     for (let i = 0; i < todo.length; i += VISION_BATCH) {
       const slice = todo.slice(i, i + VISION_BATCH);
@@ -397,11 +439,14 @@ router.post('/api/fresh/analyze', async (req, res) => {
         catch { /* file missing — skip */ }
       });
       if (!items.length) continue;
-      const map = await classifyBatch(items);
-      slice.forEach(c => { if (map[c.id]) { c.tier = map[c.id]; classified++; } });
+      const map = await scoreBatch(items);
+      slice.forEach(c => { if (typeof map[c.id] === 'number') { c.funk = map[c.id]; classified++; } });
       saveStore(s); // persist progressively so a mid-run failure keeps prior work
     }
     const settings = settingsWithDefaults(s);
+    // Rank all candidates by funk score and cut into the split's exact counts.
+    assignTiersBySplit(s.candidates, settings);
+    saveStore(s);
     const result = buildPlan(s.candidates, settings);
     res.json({ success: true, classified, settings, candidates: s.candidates.map(publicCandidate), vendors: vendorCounts(s.candidates), ...result });
   } catch (err) {
@@ -410,11 +455,32 @@ router.post('/api/fresh/analyze', async (req, res) => {
   }
 });
 
-// Return the current plan without re-running the AI (uses stored tiers).
+// Return the current plan without re-running the AI. Re-cuts tiers from the
+// stored funk scores against the current split, so changing the % split re-
+// divides the pool instantly (and for free) — no re-scoring needed.
 router.get('/api/fresh/plan', (req, res) => {
   const s = loadStore();
   const settings = settingsWithDefaults(s);
-  res.json({ success: true, settings, ...buildPlan(s.candidates || [], settings) });
+  const cands = s.candidates || [];
+  const scored = cands.some(c => typeof c.funk === 'number');
+  if (scored) { assignTiersBySplit(cands, settings); saveStore(s); }
+  res.json({ success: true, scored, settings, candidates: cands.map(publicCandidate), vendors: vendorCounts(cands), ...buildPlan(cands, settings) });
 });
 
-module.exports = { router, computeTaste, detectColour, detectSize, buildPlan };
+// Manual override: pin one candidate to a tier (locks it so re-analyze/re-cut
+// won't move it). Pass tier:null to unlock and let it flow back to auto-ranking.
+router.post('/api/fresh/candidate/:id/tier', (req, res) => {
+  const s = loadStore();
+  const c = (s.candidates || []).find(x => x.id === req.params.id);
+  if (!c) return res.status(404).json({ success: false, error: 'Not found' });
+  const t = req.body && req.body.tier;
+  if (t === null || t === '' || t === 'auto') { c.tierLocked = false; }
+  else if (TIER_KEYS.includes(t)) { c.tier = t; c.tierLocked = true; }
+  else return res.status(400).json({ success: false, error: 'Bad tier' });
+  const settings = settingsWithDefaults(s);
+  assignTiersBySplit(s.candidates, settings); // re-cut the rest around the pin
+  saveStore(s);
+  res.json({ success: true, settings, candidates: s.candidates.map(publicCandidate), vendors: vendorCounts(s.candidates), ...buildPlan(s.candidates, settings) });
+});
+
+module.exports = { router, computeTaste, detectColour, detectSize, buildPlan, splitCounts, assignTiersBySplit };

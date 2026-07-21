@@ -82,6 +82,9 @@
     .cand:hover .del{ display:block; }
     .cand .vt{ position:absolute; bottom:0; left:0; right:0; font-size:9px; padding:2px 4px; background:rgba(0,0,0,.55); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .cand .tbadge{ position:absolute; top:2px; left:2px; z-index:2; width:16px; height:16px; border-radius:4px; color:#fff; font-size:10px; font-weight:800; line-height:16px; text-align:center; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+    .cand .tbtn{ border:none; cursor:pointer; padding:0; width:auto; min-width:16px; height:16px; }
+    .cand .tbtn:hover{ outline:2px solid #fff; }
+    .cand .tbtn .lockdot{ color:#fff; font-weight:900; margin-left:1px; }
   </style>
 </head>
 <body>
@@ -321,6 +324,17 @@
     var m = TIER_META[tier]; if(!m) return '';
     return '<span class="tbadge" style="background:'+m.col+'">'+m.label.charAt(0)+'</span>';
   }
+  // Clickable badge for the plan grid — click to override this photo's tier.
+  function tierBadgeBtn(c){
+    var m = TIER_META[c.tier]; if(!m) return '';
+    var lock = c.locked ? '<span class="lockdot" title="Pinned by you">•</span>' : '';
+    var score = (c.funk!=null) ? (' · funk '+c.funk) : '';
+    return '<button class="tbadge tbtn" data-id="'+c.id+'" data-tier="'+c.tier+'" style="background:'+m.col+'" title="'+m.label+score+' — click to change">'+m.label.charAt(0)+lock+'</button>';
+  }
+  function setTier(id, tier){
+    fetch('/api/fresh/candidate/'+id+'/tier', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ tier: tier }) })
+      .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ renderCandidates(d.candidates, d.vendors); renderPlan(d); } });
+  }
   function renderPlan(d){
     if(!d || !d.plan){ el('planPanel').style.display='none'; return; }
     el('planBudget').textContent = '₹'+fmtINR(d.budget);
@@ -329,21 +343,29 @@
       var actualPct = d.total ? Math.round(p.designCount/d.total*100) : 0;
       return '<div class="tiercard '+m.cls+'">'+
         '<div class="hd"><b>'+m.label+'</b><span class="pct" style="font-size:20px">₹'+fmtINR(p.tierBudget)+'</span></div>'+
-        '<div class="sub" style="margin:0"><b>'+p.designCount+'</b> design'+(p.designCount===1?'':'s')+' found · <b>'+actualPct+'%</b> of pool <span class="muted">(target '+p.targetPct+'%)</span></div>'+
+        '<div class="sub" style="margin:0"><b>'+p.designCount+'</b> design'+(p.designCount===1?'':'s')+' · <b>'+actualPct+'%</b> <span class="muted">(target '+p.targetPct+'%)</span></div>'+
         '<div class="sub" style="margin:4px 0 0">≈ ₹'+fmtINR(p.perDesign)+' / design</div>'+
       '</div>';
     }).join('');
-    // Designs grouped by tier
+    // Designs grouped by tier, ranked funkiest-first. Badge is clickable to fix.
     el('planGrid').innerHTML = ['statement','medium','basic'].map(function(t){
       var p = d.plan[t], m = TIER_META[t];
       if(!p.designCount) return '';
       var cards = p.designs.map(function(c){
         var tag = escapeHtml(c.vendor||'—') + (c.colour ? ' · '+escapeHtml(c.colour) : '');
-        return '<div class="cand">'+tierBadge(t)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
+        return '<div class="cand">'+tierBadgeBtn(c)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
       }).join('');
       return '<h4 style="margin:16px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:'+m.col+'">'+m.label+' — '+p.designCount+'</h4>'+
         '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+cards+'</div>';
     }).join('');
+    // Wire badge clicks: cycle statement → medium → basic → auto(unlock).
+    Array.prototype.forEach.call(el('planGrid').querySelectorAll('.tbtn'), function(b){
+      b.onclick = function(){
+        var order = ['statement','medium','basic','auto'];
+        var next = order[(order.indexOf(b.getAttribute('data-tier'))+1) % 4];
+        setTier(b.getAttribute('data-id'), next==='auto'? null : next);
+      };
+    });
     el('planPanel').style.display='';
   }
   function analyze(force){
@@ -354,7 +376,8 @@
       .then(function(r){ return r.json(); }).then(function(d){
         btn.disabled = false;
         if(!d.success){ el('analyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Analyze failed')+'</span>'; return; }
-        el('analyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Sorted '+d.total+' photo'+(d.total===1?'':'s')+' into tiers.</span> <a href="#" id="reAnalyze" style="color:var(--muted);font-size:12px">re-sort all</a>';
+        var cnts = d.plan ? (d.plan.statement.designCount+' statement · '+d.plan.medium.designCount+' medium · '+d.plan.basic.designCount+' basic') : '';
+        el('analyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Ranked '+d.total+' photo'+(d.total===1?'':'s')+' by funkiness → '+cnts+'.</span> <span class="muted" style="font-size:12px">Click any tier badge below to move a photo.</span> <a href="#" id="reAnalyze" style="color:var(--muted);font-size:12px">re-score all</a>';
         renderCandidates(d.candidates, d.vendors);
         renderPlan(d);
         var ra = el('reAnalyze'); if(ra) ra.onclick = function(e){ e.preventDefault(); analyze(true); };
