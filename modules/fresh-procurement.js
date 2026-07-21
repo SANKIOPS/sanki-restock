@@ -127,7 +127,7 @@ function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
 function publicCandidate(c) {
   return { id: c.id, vendor: c.vendor || '', colour: c.colour || '', cost: c.cost || null,
     url: '/api/fresh/candidate/' + c.id, tier: c.tier || null, funk: (typeof c.funk === 'number' ? c.funk : null),
-    locked: !!c.tierLocked, uploadedAt: c.uploadedAt };
+    locked: !!c.tierLocked, selected: !!c.selected, uploadedAt: c.uploadedAt };
 }
 // Group candidates by vendor for the chip counts the UI shows.
 function vendorCounts(cands) {
@@ -376,25 +376,43 @@ function splitCounts(n, settings) {
   return base;
 }
 
-// Assign tiers by RANK: sort candidates by funk score (desc) and slice into the
-// split-derived quotas. Manually locked candidates keep their tier and consume
-// their tier's quota; the rest fill what's left by rank. Fully deterministic.
+// A piece's tier is INTRINSIC to how funky it is — it is decided purely by its
+// own funk score against fixed bands, and is NEVER shifted to a different tier
+// to hit a quota. Matches the scoring rubric: 60+ = statement, 35–59 = medium,
+// below 35 = basic.
+function tierFromScore(score) {
+  const n = Number(score) || 0;
+  if (n >= 60) return 'statement';
+  if (n >= 35) return 'medium';
+  return 'basic';
+}
+
+// Classify + select. Two independent steps:
+//   1) TIER  = intrinsic band from the funk score (never cross-shifted).
+//              Manually locked pieces keep the tier the user pinned.
+//   2) SELECT = within each tier, the % split is a CAP ("show the best N").
+//              Sort that tier's pieces by funk desc and mark the top `quota`
+//              as selected; the rest stay IN THE SAME TIER but held back
+//              (selected:false). Under-fill is fine — if a tier has fewer
+//              pieces than its quota we just select them all, we do NOT borrow
+//              from another tier. Locked pieces are always selected.
 function assignTiersBySplit(cands, settings) {
-  const N = cands.length;
-  const quota = splitCounts(N, settings);
-  const locked = cands.filter(c => c.tierLocked && TIER_KEYS.includes(c.tier));
-  const rem = Object.assign({}, quota);
-  locked.forEach(c => { rem[c.tier] = Math.max(0, rem[c.tier] - 1); });
-  const unlocked = cands.filter(c => !(c.tierLocked && TIER_KEYS.includes(c.tier)));
-  // Reconcile remaining quotas to exactly the unlocked count (medium is the buffer).
-  let need = unlocked.length, have = rem.statement + rem.medium + rem.basic;
-  rem.medium += (need - have);
-  if (rem.medium < 0) { let d = -rem.medium; rem.medium = 0; const tb = Math.min(d, rem.basic); rem.basic -= tb; d -= tb; rem.statement = Math.max(0, rem.statement - d); }
-  unlocked.sort((a, b) => ((b.funk || 0) - (a.funk || 0)) || (a.id < b.id ? -1 : 1));
-  let i = 0;
-  for (let k = 0; k < rem.statement && i < unlocked.length; k++) unlocked[i++].tier = 'statement';
-  for (let k = 0; k < rem.medium && i < unlocked.length; k++) unlocked[i++].tier = 'medium';
-  while (i < unlocked.length) unlocked[i++].tier = 'basic';
+  const quota = splitCounts(cands.length, settings);
+  // Step 1 — intrinsic tier.
+  cands.forEach(c => {
+    if (c.tierLocked && TIER_KEYS.includes(c.tier)) return; // user-pinned
+    c.tier = tierFromScore(c.funk);
+  });
+  // Step 2 — per-tier cap.
+  TIER_KEYS.forEach(t => {
+    const inTier = cands.filter(c => c.tier === t).sort((a, b) => {
+      const la = a.tierLocked ? 1 : 0, lb = b.tierLocked ? 1 : 0;
+      if (la !== lb) return lb - la;                 // locked first
+      return ((b.funk || 0) - (a.funk || 0)) || (a.id < b.id ? -1 : 1);
+    });
+    const cap = Math.max(0, quota[t] || 0);
+    inTier.forEach((c, idx) => { c.selected = idx < cap || !!c.tierLocked; });
+  });
 }
 
 // Budget-led allocation: each tier gets budget×pct; spread evenly across the
@@ -402,18 +420,26 @@ function assignTiersBySplit(cands, settings) {
 function buildPlan(cands, settings) {
   const budget = Math.max(0, Number(settings.budget) || 0);
   const pct = settings.tiers || {};
+  const quota = splitCounts(cands.length, settings);
   const plan = {};
   TIER_KEYS.forEach(t => {
-    const designs = cands.filter(c => c.tier === t).sort((a, b) => ((b.funk || 0) - (a.funk || 0)));
+    const all = cands.filter(c => c.tier === t)
+      .sort((a, b) => ((b.funk || 0) - (a.funk || 0)) || (a.id < b.id ? -1 : 1));
+    const designs = all.filter(c => c.selected);   // the best N we actually buy
+    const overflow = all.filter(c => !c.selected);  // held back, same tier
     const share = Math.max(0, Number(pct[t]) || 0);
     const tierBudget = Math.round(budget * share / 100);
     plan[t] = {
       tier: t,
       targetPct: share,
-      designCount: designs.length,
+      quota: quota[t] || 0,        // the cap = best-N to buy this cycle
+      tierCount: all.length,       // how many pieces are intrinsically this tier
+      designCount: designs.length, // selected (buying) count
+      overflowCount: overflow.length,
       tierBudget,
       perDesign: designs.length ? Math.round(tierBudget / designs.length) : 0,
-      designs: designs.map(publicCandidate)
+      designs: designs.map(publicCandidate),
+      overflow: overflow.map(publicCandidate)
     };
   });
   const total = cands.length;

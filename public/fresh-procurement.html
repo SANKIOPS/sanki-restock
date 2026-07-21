@@ -85,6 +85,9 @@
     .cand .tbtn{ border:none; cursor:pointer; padding:0; width:auto; min-width:16px; height:16px; }
     .cand .tbtn:hover{ outline:2px solid #fff; }
     .cand .tbtn .lockdot{ color:#fff; font-weight:900; margin-left:1px; }
+    .cand.held{ opacity:.42; filter:grayscale(.35); }
+    .cand.held:hover{ opacity:.85; filter:none; }
+    .heldlbl{ margin:10px 0 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -316,9 +319,9 @@
 
   // ── Signal ①b: analyze (AI tier sort) + buy plan ──
   var TIER_META = {
-    statement: { label:'Statement', cls:'st', col:'var(--statement)' },
-    medium:    { label:'Medium',    cls:'md', col:'var(--medium)' },
-    basic:     { label:'Basic',     cls:'bs', col:'var(--basic)' }
+    statement: { label:'Statement impression', cls:'st', col:'var(--statement)' },
+    medium:    { label:'Medium impression',    cls:'md', col:'var(--medium)' },
+    basic:     { label:'Basic impression',     cls:'bs', col:'var(--basic)' }
   };
   function tierBadge(tier){
     var m = TIER_META[tier]; if(!m) return '';
@@ -340,23 +343,32 @@
     el('planBudget').textContent = '₹'+fmtINR(d.budget);
     el('planCards').innerHTML = ['statement','medium','basic'].map(function(t){
       var p = d.plan[t], m = TIER_META[t];
-      var actualPct = d.total ? Math.round(p.designCount/d.total*100) : 0;
+      // How many pieces ARE this tier (intrinsic) vs how many we buy (the cap).
+      var held = p.overflowCount || 0;
+      var heldTxt = held ? ' · <span class="muted">'+held+' held back</span>' : '';
       return '<div class="tiercard '+m.cls+'">'+
         '<div class="hd"><b>'+m.label+'</b><span class="pct" style="font-size:20px">₹'+fmtINR(p.tierBudget)+'</span></div>'+
-        '<div class="sub" style="margin:0"><b>'+p.designCount+'</b> design'+(p.designCount===1?'':'s')+' · <b>'+actualPct+'%</b> <span class="muted">(target '+p.targetPct+'%)</span></div>'+
+        '<div class="sub" style="margin:0">buy <b>'+p.designCount+'</b> of <b>'+p.tierCount+'</b> · cap <b>'+p.quota+'</b> <span class="muted">('+p.targetPct+'%)</span>'+heldTxt+'</div>'+
         '<div class="sub" style="margin:4px 0 0">≈ ₹'+fmtINR(p.perDesign)+' / design</div>'+
       '</div>';
     }).join('');
-    // Designs grouped by tier, ranked funkiest-first. Badge is clickable to fix.
+    // Designs grouped by tier, ranked funkiest-first. The best-N we buy show
+    // full; anything over the cap stays in the SAME tier but dimmed + held back.
     el('planGrid').innerHTML = ['statement','medium','basic'].map(function(t){
       var p = d.plan[t], m = TIER_META[t];
-      if(!p.designCount) return '';
-      var cards = p.designs.map(function(c){
+      if(!p.tierCount) return '';
+      function card(c, dim){
         var tag = escapeHtml(c.vendor||'—') + (c.colour ? ' · '+escapeHtml(c.colour) : '');
-        return '<div class="cand">'+tierBadgeBtn(c)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
-      }).join('');
-      return '<h4 style="margin:16px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:'+m.col+'">'+m.label+' — '+p.designCount+'</h4>'+
-        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+cards+'</div>';
+        return '<div class="cand'+(dim?' held':'')+'"'+(dim?' title="Over the '+p.quota+' cap — held back this cycle">':'>')+tierBadgeBtn(c)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
+      }
+      var buy = p.designs.map(function(c){ return card(c,false); }).join('');
+      var held = (p.overflow||[]).map(function(c){ return card(c,true); }).join('');
+      var heldBlock = held ? '<div class="heldlbl">Held back — over the '+p.quota+' cap ('+p.overflowCount+')</div>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+held+'</div>' : '';
+      var buyBlock = buy ? '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+buy+'</div>'
+        : '<div class="muted" style="font-size:12px;padding:4px 0">No pieces landed in this tier.</div>';
+      return '<h4 style="margin:16px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:'+m.col+'">'+m.label+' — buy '+p.designCount+' of '+p.tierCount+'</h4>'+
+        buyBlock + heldBlock;
     }).join('');
     // Wire badge clicks: cycle statement → medium → basic → auto(unlock).
     Array.prototype.forEach.call(el('planGrid').querySelectorAll('.tbtn'), function(b){
@@ -376,7 +388,7 @@
       .then(function(r){ return r.json(); }).then(function(d){
         btn.disabled = false;
         if(!d.success){ el('analyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Analyze failed')+'</span>'; return; }
-        var cnts = d.plan ? (d.plan.statement.designCount+' statement · '+d.plan.medium.designCount+' medium · '+d.plan.basic.designCount+' basic') : '';
+        var cnts = d.plan ? (d.plan.statement.tierCount+' statement · '+d.plan.medium.tierCount+' medium · '+d.plan.basic.tierCount+' basic') : '';
         el('analyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Ranked '+d.total+' photo'+(d.total===1?'':'s')+' by funkiness → '+cnts+'.</span> <span class="muted" style="font-size:12px">Click any tier badge below to move a photo.</span> <a href="#" id="reAnalyze" style="color:var(--muted);font-size:12px">re-score all</a>';
         renderCandidates(d.candidates, d.vendors);
         renderPlan(d);
