@@ -278,6 +278,7 @@
 
   // ── Signal ① candidate feed ──
   function renderCandidates(list, vendors){
+    list = list || [];
     var chips = el('vendorChips');
     if(!vendors || !vendors.length){ chips.innerHTML=''; }
     else {
@@ -328,7 +329,7 @@
     function sendChunk(idx){
       if(idx >= chunks.length){
         el('uploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+addedTotal+' — total '+total+'</span>';
-        renderCandidates(null, lastVendors); loadCandidates(); return;
+        loadCandidates(); return;
       }
       var fd = new FormData();
       chunks[idx].forEach(function(f){ fd.append('photos', f); });
