@@ -85,6 +85,7 @@
     .cand .tbtn{ border:none; cursor:pointer; padding:0; width:auto; min-width:16px; height:16px; }
     .cand .tbtn:hover{ outline:2px solid #fff; }
     .cand .tbtn .lockdot{ color:#fff; font-weight:900; margin-left:1px; }
+    .cand.cold{ box-shadow:inset 0 0 0 2px #f59e0b; }
     .cand.held{ opacity:.42; filter:grayscale(.35); }
     .cand.held:hover{ opacity:.85; filter:none; }
     .heldlbl{ margin:10px 0 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
@@ -295,10 +296,11 @@
       '<div class="muted" style="font-size:11px;margin-top:10px">From '+t.orderCount+' orders · '+t.unitsCounted+' units'+(t.windowDays?(' · last '+t.windowDays+' days'):' · all time')+'</div>';
   }
 
+  var lastTaste = null;
   function loadTaste(){
     // Taste uses the same cycle length as the trailing window, but taste is
     // about long-run preference — read all-time so the size/colour signal is stable.
-    fetch('/api/fresh/taste').then(function(r){ return r.json(); }).then(function(d){ renderTaste(d.taste); })
+    return fetch('/api/fresh/taste').then(function(r){ return r.json(); }).then(function(d){ lastTaste = d.taste; renderTaste(d.taste); if(lastPlanD) renderBuySheet(lastPlanD); })
       .catch(function(){ renderTaste(null); });
   }
 
@@ -396,7 +398,15 @@
     el('planPanel').style.display='';
   }
   // ── Buy sheet: selected designs regrouped by vendor ──
-  var lastBuy = null;
+  var lastBuy = null, lastPlanD = null;
+  // Colour demand % from the taste lens, keyed uppercase. Empty until taste loads.
+  function demandPct(colour){
+    if(!colour || !lastTaste || !lastTaste.colours) return null;
+    var hit = lastTaste.colours.filter(function(c){ return String(c.name).toUpperCase()===String(colour).toUpperCase().trim(); })[0];
+    return hit ? hit.pct : 0;
+  }
+  // A pick is "cold" if its colour is tagged AND sells in the bottom slice.
+  function isColdColour(colour){ var p = demandPct(colour); return (p!=null && p<5); }
   function collectBuy(d){
     var byVendor = {}, budget = d.budget||0;
     ['statement','medium','basic'].forEach(function(t){
@@ -417,14 +427,29 @@
   }
   function renderBuySheet(d){
     if(!d || !d.plan){ el('buyPanel').style.display='none'; return; }
+    lastPlanD = d;
     var b = lastBuy = collectBuy(d);
     if(!b.totalDesigns){ el('buySheet').innerHTML = '<p class="sub" style="margin:0">Nothing selected to buy yet — analyze your feed first.</p>'; el('buyPanel').style.display=''; return; }
     var head = '<div class="sub" style="margin:0 0 12px"><b>'+b.totalDesigns+'</b> design'+(b.totalDesigns===1?'':'s')+' across <b>'+b.vendors.length+'</b> vendor'+(b.vendors.length===1?'':'s')+' · ₹'+fmtINR(b.allocated)+' allocated <span class="muted">of ₹'+fmtINR(b.budget)+'</span></div>';
+    // Taste advisory — impression drives the picks; taste only nudges + flags.
+    var allLines = b.vendors.reduce(function(a,v){ return a.concat(v.lines); },[]);
+    var tagged = allLines.filter(function(l){ return demandPct(l.colour)!=null; }).length;
+    var cold = allLines.filter(function(l){ return isColdColour(l.colour); }).length;
+    var advisory = '';
+    if(lastTaste && lastTaste.ok && lastTaste.colours && lastTaste.colours.length){
+      var top = lastTaste.colours.slice(0,3).map(function(c){ return c.name.charAt(0)+c.name.slice(1).toLowerCase()+' '+c.pct+'%'; }).join(' · ');
+      var note = !tagged ? 'None of these picks carry a colour tag, so taste can only advise once you tag colours on upload.'
+        : (cold ? cold+' pick'+(cold===1?' is':'s are')+' in a colour your buyers rarely take (marked ✱ below) — worth a second look.'
+                : 'All tagged picks are in colours that sell. Good mix.');
+      advisory = '<div class="banner info" style="margin:0 0 12px;font-size:12px"><b>Taste check</b> — buyers favour '+escapeHtml(top)+'. '+note+'</div>';
+    }
+    head += advisory;
     var body = b.vendors.map(function(v){
       var chips = v.lines.map(function(l){
         var m = TIER_META[l.tier];
-        var tag = escapeHtml(l.colour||'—');
-        return '<div class="cand" title="'+m.label+' · funk '+(l.funk!=null?l.funk:'—')+' · ₹'+fmtINR(l.budget)+'">'+
+        var cold = isColdColour(l.colour);
+        var tag = escapeHtml(l.colour||'—') + (cold?' ✱':'');
+        return '<div class="cand'+(cold?' cold':'')+'" title="'+m.label+' · funk '+(l.funk!=null?l.funk:'—')+' · ₹'+fmtINR(l.budget)+(cold?' · cold colour (rarely sells)':'')+'">'+
           '<span class="tbadge" style="background:'+m.col+'">'+m.label.charAt(0)+'</span>'+
           '<img src="'+l.url+'" loading="lazy" alt=""/>'+
           '<span class="vt">'+tag+' · ₹'+fmtINR(l.budget)+'</span></div>';

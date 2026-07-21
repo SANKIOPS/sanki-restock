@@ -387,28 +387,50 @@ function tierFromScore(score) {
   return 'basic';
 }
 
+// Taste nudge. This is FRESH sourcing, not restocking, so past sales must never
+// drive picks — but at the MARGIN (which pieces make the cap) a colour that
+// actually sells should edge out a dead one. We give each candidate a small,
+// bounded bonus from its colour's share of past unit sales. Capped at
+// TASTE_MAX_BONUS so it can never override the impression tier or pull a clearly
+// weaker piece over a clearly funkier one — it only tips near-boundary picks.
+const TASTE_MAX_BONUS = 10;
+function colourDemandMap() {
+  const t = computeTaste(null);
+  const map = {};
+  if (t && t.ok) (t.colours || []).forEach(c => { map[String(c.name).toUpperCase()] = c.pct || 0; });
+  return map;
+}
+function tasteBonus(colour, map) {
+  if (!colour || !map) return 0;
+  const pct = map[String(colour).toUpperCase().trim()] || 0; // colour's % of past unit sales
+  return Math.min(TASTE_MAX_BONUS, pct * 0.5);               // 20%+ of sales → full +10
+}
+
 // Classify + select. Two independent steps:
 //   1) TIER  = intrinsic band from the funk score (never cross-shifted).
 //              Manually locked pieces keep the tier the user pinned.
 //   2) SELECT = within each tier, the % split is a CAP ("show the best N").
-//              Sort that tier's pieces by funk desc and mark the top `quota`
+//              Rank by funk + a bounded taste bonus and mark the top `quota`
 //              as selected; the rest stay IN THE SAME TIER but held back
 //              (selected:false). Under-fill is fine — if a tier has fewer
 //              pieces than its quota we just select them all, we do NOT borrow
 //              from another tier. Locked pieces are always selected.
 function assignTiersBySplit(cands, settings) {
   const quota = splitCounts(cands.length, settings);
-  // Step 1 — intrinsic tier.
+  const demand = colourDemandMap();
+  // Step 1 — intrinsic tier (impression only — taste never moves a tier).
   cands.forEach(c => {
     if (c.tierLocked && TIER_KEYS.includes(c.tier)) return; // user-pinned
     c.tier = tierFromScore(c.funk);
   });
-  // Step 2 — per-tier cap.
+  // Step 2 — per-tier cap, ranked by funk + bounded taste nudge.
   TIER_KEYS.forEach(t => {
     const inTier = cands.filter(c => c.tier === t).sort((a, b) => {
       const la = a.tierLocked ? 1 : 0, lb = b.tierLocked ? 1 : 0;
       if (la !== lb) return lb - la;                 // locked first
-      return ((b.funk || 0) - (a.funk || 0)) || (a.id < b.id ? -1 : 1);
+      const sa = (a.funk || 0) + tasteBonus(a.colour, demand);
+      const sb = (b.funk || 0) + tasteBonus(b.colour, demand);
+      return (sb - sa) || (a.id < b.id ? -1 : 1);
     });
     const cap = Math.max(0, quota[t] || 0);
     inTier.forEach((c, idx) => { c.selected = idx < cap || !!c.tierLocked; });
