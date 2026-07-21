@@ -34,6 +34,30 @@ const router = express.Router();
 
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 
+// Vision model that sorts candidate photos into funkiness tiers (same key the
+// Purchases module already uses for invoice reading).
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const AI_MODEL = process.env.FRESH_PROC_AI_MODEL || process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
+
+// Pull the first {...} JSON object/array out of a model reply (it may wrap the
+// JSON in prose or ```json fences).
+function extractJson(text) {
+  if (!text) return null;
+  let t = String(text).replace(/```json/gi, '').replace(/```/g, '').trim();
+  const first = Math.min(...['{', '['].map(c => { const i = t.indexOf(c); return i < 0 ? Infinity : i; }));
+  if (!isFinite(first)) return null;
+  const open = t[first], close = open === '{' ? '}' : ']';
+  let depth = 0, end = -1;
+  for (let i = first; i < t.length; i++) { if (t[i] === open) depth++; else if (t[i] === close) { depth--; if (depth === 0) { end = i; break; } } }
+  if (end < 0) return null;
+  try { return JSON.parse(t.slice(first, end + 1)); } catch { return null; }
+}
+
+function mediaTypeForFile(fn) {
+  const e = path.extname(fn || '').toLowerCase();
+  return e === '.png' ? 'image/png' : e === '.webp' ? 'image/webp' : e === '.gif' ? 'image/gif' : 'image/jpeg';
+}
+
 // ── JSON store (atomic write, same pattern as every module) ──────
 const STORE_PATH = process.env.FRESH_PROC_PATH || path.join(DATA_DIR, 'fresh-procurement.json');
 
@@ -290,4 +314,107 @@ router.post('/api/fresh/candidates/clear', (req, res) => {
   res.json({ success: true, total: 0, vendors: [] });
 });
 
-module.exports = { router, computeTaste, detectColour, detectSize };
+// ── Signal ①b — AI tier sort + buy plan ─────────────────────────
+// Classify each candidate photo into a funkiness tier via Claude vision, then
+// turn the budget + tier % split into a concrete allocation.
+const TIER_KEYS = ['statement', 'medium', 'basic'];
+const VISION_BATCH = 10; // images per vision call
+
+async function classifyBatch(items) {
+  // items: [{id, buffer, mediaType}]. Returns map id→tier.
+  const content = [];
+  items.forEach((it, i) => {
+    content.push({ type: 'text', text: 'IMAGE ' + (i + 1) + ':' });
+    content.push({ type: 'image', source: { type: 'base64', media_type: it.mediaType, data: it.buffer.toString('base64') } });
+  });
+  content.push({ type: 'text', text:
+`You are a buyer for an Indian premium streetwear brand deciding how "funky" each garment photo is. ` +
+`Classify EACH of the ${items.length} images above into exactly one tier:\n` +
+`- "statement" = loud, bold, funky hero pieces — heavy graphics, wild colour, unusual cuts; the showstoppers.\n` +
+`- "medium" = funky-but-wearable daily pieces — some character/print but everyday-friendly; the volume core.\n` +
+`- "basic" = clean essentials — plain or minimal, anchor pieces that pair with statements.\n\n` +
+`Return STRICT JSON ONLY, no prose: {"tiers":["statement"|"medium"|"basic", ... one per image in order]}. ` +
+`The array MUST have exactly ${items.length} entries.` });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let r;
+  try {
+    r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1000, messages: [{ role: 'user', content }] }),
+      signal: ctrl.signal
+    });
+  } finally { clearTimeout(timer); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
+  const parsed = extractJson((j.content || []).map(c => c.text || '').join(''));
+  const arr = parsed && Array.isArray(parsed.tiers) ? parsed.tiers : [];
+  const out = {};
+  items.forEach((it, i) => { const t = String(arr[i] || '').toLowerCase(); out[it.id] = TIER_KEYS.includes(t) ? t : 'medium'; });
+  return out;
+}
+
+// Budget-led allocation: each tier gets budget×pct; spread evenly across the
+// designs the AI put in that tier. Returns a per-tier plan the UI renders.
+function buildPlan(cands, settings) {
+  const budget = Math.max(0, Number(settings.budget) || 0);
+  const pct = settings.tiers || {};
+  const plan = {};
+  TIER_KEYS.forEach(t => {
+    const designs = cands.filter(c => c.tier === t);
+    const share = Math.max(0, Number(pct[t]) || 0);
+    const tierBudget = Math.round(budget * share / 100);
+    plan[t] = {
+      tier: t,
+      targetPct: share,
+      designCount: designs.length,
+      tierBudget,
+      perDesign: designs.length ? Math.round(tierBudget / designs.length) : 0,
+      designs: designs.map(publicCandidate)
+    };
+  });
+  const total = cands.length;
+  return { budget, total, plan };
+}
+
+// Analyze: (re)classify every candidate, persist tiers, return the buy plan.
+router.post('/api/fresh/analyze', async (req, res) => {
+  try {
+    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI tier-sorting is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
+    const s = loadStore();
+    const cands = s.candidates || [];
+    if (!cands.length) return res.status(400).json({ success: false, error: 'No candidate photos yet — upload some in The Feed first.' });
+    const force = req.body && (req.body.force === true || req.body.force === 'true');
+    // Only classify what needs it (unless forced) to save time/cost.
+    const todo = cands.filter(c => force || !c.tier);
+    let classified = 0;
+    for (let i = 0; i < todo.length; i += VISION_BATCH) {
+      const slice = todo.slice(i, i + VISION_BATCH);
+      const items = [];
+      slice.forEach(c => {
+        try { items.push({ id: c.id, buffer: fs.readFileSync(path.join(CAND_DIR, c.file)), mediaType: mediaTypeForFile(c.file) }); }
+        catch { /* file missing — skip */ }
+      });
+      if (!items.length) continue;
+      const map = await classifyBatch(items);
+      slice.forEach(c => { if (map[c.id]) { c.tier = map[c.id]; classified++; } });
+      saveStore(s); // persist progressively so a mid-run failure keeps prior work
+    }
+    const settings = settingsWithDefaults(s);
+    const result = buildPlan(s.candidates, settings);
+    res.json({ success: true, classified, settings, candidates: s.candidates.map(publicCandidate), vendors: vendorCounts(s.candidates), ...result });
+  } catch (err) {
+    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'The tier sorter timed out. Try again — already-sorted photos are saved.' });
+    res.status(502).json({ success: false, error: 'Tier sort failed: ' + (err.message || 'unknown') });
+  }
+});
+
+// Return the current plan without re-running the AI (uses stored tiers).
+router.get('/api/fresh/plan', (req, res) => {
+  const s = loadStore();
+  const settings = settingsWithDefaults(s);
+  res.json({ success: true, settings, ...buildPlan(s.candidates || [], settings) });
+});
+
+module.exports = { router, computeTaste, detectColour, detectSize, buildPlan };

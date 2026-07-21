@@ -81,6 +81,7 @@
     .cand .del{ position:absolute; top:2px; right:2px; width:18px; height:18px; border-radius:50%; border:none; background:rgba(180,35,24,.9); color:#fff; font-size:11px; line-height:1; cursor:pointer; display:none; }
     .cand:hover .del{ display:block; }
     .cand .vt{ position:absolute; bottom:0; left:0; right:0; font-size:9px; padding:2px 4px; background:rgba(0,0,0,.55); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .cand .tbadge{ position:absolute; top:2px; left:2px; z-index:2; width:16px; height:16px; border-radius:4px; color:#fff; font-size:10px; font-weight:800; line-height:16px; text-align:center; box-shadow:0 1px 2px rgba(0,0,0,.3); }
   </style>
 </head>
 <body>
@@ -184,11 +185,16 @@
     </div>
 
     <div style="text-align:center; margin:22px 0">
-      <button class="btn lg" id="analyzeBtn" disabled title="Enable once the Feed upload &amp; Trends pull are wired">▶ Analyze candidates</button>
-      <div class="sub" style="margin-top:6px">Sorts every photo into tiers, ranks by trend-fit, applies taste, allocates size-wise qty → vendor buy sheet</div>
-      <div class="banner warn" style="max-width:640px;margin:12px auto 0;text-align:left">
-        <b>Build status:</b> Settings, the taste lens (Signal 3) and the photo feed upload (Signal 1) are live now. AI tier-sorting of the photos and the live competitor trend pull (Signal 2) are the next slices — Analyze switches on when they land.
-      </div>
+      <button class="btn lg" id="analyzeBtn">▶ Analyze candidates</button>
+      <div class="sub" style="margin-top:6px">AI sorts every uploaded photo into Statement / Medium / Basic, then splits your budget across the tiers.</div>
+      <div id="analyzeStatus" class="sub" style="margin-top:8px"></div>
+    </div>
+
+    <div id="planPanel" style="display:none">
+      <h2 style="margin:0 0 4px">Buy plan</h2>
+      <p class="sub">Your budget of <b id="planBudget"></b> split across the tiers the AI found. Spend each tier's slice across its designs — the loud Statement pieces stay a small, deliberate bet; the Medium tier carries the volume.</p>
+      <div class="tierset" id="planCards" style="margin-bottom:14px"></div>
+      <div id="planGrid"></div>
     </div>
 
   </div>
@@ -293,7 +299,7 @@
     var grid = el('candGrid');
     grid.innerHTML = list.map(function(c){
       var tag = escapeHtml(c.vendor || '—') + (c.colour ? ' · '+escapeHtml(c.colour) : '');
-      return '<div class="cand"><img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+tag+'</span></div>';
+      return '<div class="cand">'+tierBadge(c.tier)+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+tag+'</span></div>';
     }).join('');
     Array.prototype.forEach.call(grid.querySelectorAll('.del'), function(b){
       b.onclick = function(){ fetch('/api/fresh/candidate/'+b.getAttribute('data-id'),{method:'DELETE'}).then(function(){ loadCandidates(); }); };
@@ -303,6 +309,57 @@
     return fetch('/api/fresh/candidates').then(function(r){ return r.json(); }).then(function(d){
       if(d.success) renderCandidates(d.candidates, d.vendors);
     });
+  }
+
+  // ── Signal ①b: analyze (AI tier sort) + buy plan ──
+  var TIER_META = {
+    statement: { label:'Statement', cls:'st', col:'var(--statement)' },
+    medium:    { label:'Medium',    cls:'md', col:'var(--medium)' },
+    basic:     { label:'Basic',     cls:'bs', col:'var(--basic)' }
+  };
+  function tierBadge(tier){
+    var m = TIER_META[tier]; if(!m) return '';
+    return '<span class="tbadge" style="background:'+m.col+'">'+m.label.charAt(0)+'</span>';
+  }
+  function renderPlan(d){
+    if(!d || !d.plan){ el('planPanel').style.display='none'; return; }
+    el('planBudget').textContent = '₹'+fmtINR(d.budget);
+    el('planCards').innerHTML = ['statement','medium','basic'].map(function(t){
+      var p = d.plan[t], m = TIER_META[t];
+      var actualPct = d.total ? Math.round(p.designCount/d.total*100) : 0;
+      return '<div class="tiercard '+m.cls+'">'+
+        '<div class="hd"><b>'+m.label+'</b><span class="pct" style="font-size:20px">₹'+fmtINR(p.tierBudget)+'</span></div>'+
+        '<div class="sub" style="margin:0"><b>'+p.designCount+'</b> design'+(p.designCount===1?'':'s')+' found · <b>'+actualPct+'%</b> of pool <span class="muted">(target '+p.targetPct+'%)</span></div>'+
+        '<div class="sub" style="margin:4px 0 0">≈ ₹'+fmtINR(p.perDesign)+' / design</div>'+
+      '</div>';
+    }).join('');
+    // Designs grouped by tier
+    el('planGrid').innerHTML = ['statement','medium','basic'].map(function(t){
+      var p = d.plan[t], m = TIER_META[t];
+      if(!p.designCount) return '';
+      var cards = p.designs.map(function(c){
+        var tag = escapeHtml(c.vendor||'—') + (c.colour ? ' · '+escapeHtml(c.colour) : '');
+        return '<div class="cand">'+tierBadge(t)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
+      }).join('');
+      return '<h4 style="margin:16px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:'+m.col+'">'+m.label+' — '+p.designCount+'</h4>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+cards+'</div>';
+    }).join('');
+    el('planPanel').style.display='';
+  }
+  function analyze(force){
+    var btn = el('analyzeBtn');
+    btn.disabled = true;
+    el('analyzeStatus').innerHTML = '<span style="color:var(--muted)">Sorting photos into tiers… this takes a moment for a big feed.</span>';
+    fetch('/api/fresh/analyze', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ force: !!force }) })
+      .then(function(r){ return r.json(); }).then(function(d){
+        btn.disabled = false;
+        if(!d.success){ el('analyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Analyze failed')+'</span>'; return; }
+        el('analyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Sorted '+d.total+' photo'+(d.total===1?'':'s')+' into tiers.</span> <a href="#" id="reAnalyze" style="color:var(--muted);font-size:12px">re-sort all</a>';
+        renderCandidates(d.candidates, d.vendors);
+        renderPlan(d);
+        var ra = el('reAnalyze'); if(ra) ra.onclick = function(e){ e.preventDefault(); analyze(true); };
+        el('planPanel').scrollIntoView({behavior:'smooth', block:'start'});
+      }).catch(function(){ btn.disabled=false; el('analyzeStatus').innerHTML = '<span style="color:var(--err)">Analyze failed — try again.</span>'; });
   }
   // Upload in small batches. Railway's edge drops requests over ~50–100 MB, so
   // we chunk by TOTAL BYTES (not file count) — vendor phone photos run 5–10 MB
@@ -352,8 +409,12 @@
   ['tStatement','tMedium','tBasic'].forEach(function(id){ el(id).addEventListener('input', renderTiers); el(id).addEventListener('change', saveSettings); });
   el('cycle').addEventListener('change', saveSettings);
   el('budget').addEventListener('change', function(){ el('budget').value = fmtINR(parseInt((el('budget').value||'').replace(/[^\d]/g,''))||0); renderTiers(); saveSettings(); });
+  el('analyzeBtn').addEventListener('click', function(){ analyze(false); });
 
-  loadSettings().then(loadTaste).then(loadCandidates);
+  // Show an existing plan on load (if photos were already sorted).
+  function loadPlan(){ return fetch('/api/fresh/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.total) renderPlan(d); }).catch(function(){}); }
+
+  loadSettings().then(loadTaste).then(loadCandidates).then(loadPlan);
   </script>
   <script src="/sidebar.js"></script>
 </body>
