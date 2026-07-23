@@ -52,7 +52,7 @@ const MODULES = [
   { key: 'sales',        title: 'Record a Sale',         desc: 'Log walk-in / IG / WhatsApp / phone sales',          icon: '📝', href: '/sales.html',                     section: 'Sales',     status: 'hidden', roles: ['admin', 'sales'] },
 
   { key: 'procurement', title: 'Purchases',              desc: 'Generate SKUs, landed cost, create products / add stock', icon: '📦', href: '/procurement.html',           section: 'Purchases', status: 'live',   roles: ['admin', 'procurement', 'inventory'] },
-  { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Decide what NEW fashion to source — funkiness tiers + live market trends', icon: '🧠', href: '/fresh-procurement.html', section: 'Purchases', status: 'hidden', roles: ['admin', 'procurement'] },
+  { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Decide what NEW fashion to source — funkiness tiers + live market trends', icon: '🧠', href: '/fresh-procurement.html', section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
   { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },
