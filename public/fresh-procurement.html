@@ -98,7 +98,13 @@
     .cand.cold{ box-shadow:inset 0 0 0 2px #f59e0b; }
     .cand.held{ opacity:.42; filter:grayscale(.35); }
     .cand.held:hover{ opacity:.85; filter:none; }
+    .cand .catbadge{ position:absolute; top:2px; right:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:rgba(17,17,17,.72); color:#fff; letter-spacing:.2px; max-width:70%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .cand .artbadge{ position:absolute; top:20px; right:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:#7c3aed; color:#fff; }
+    .cand .dupeflag{ position:absolute; bottom:16px; left:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:#dc2626; color:#fff; text-transform:uppercase; letter-spacing:.3px; }
     .heldlbl{ margin:10px 0 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+    .catsec{ margin:22px 0 0; }
+    .catsec > .cathd{ display:flex; align-items:baseline; gap:10px; margin:0 0 4px; padding:0 0 6px; border-bottom:2px solid var(--line); }
+    .catsec > .cathd h3{ margin:0; font-size:16px; font-weight:800; }
   </style>
 </head>
 <body>
@@ -341,8 +347,12 @@
     }
     var grid = el('candGrid');
     grid.innerHTML = list.map(function(c){
-      var tag = escapeHtml(c.vendor || '—') + (c.colour ? ' · '+escapeHtml(c.colour) : '');
-      return '<div class="cand">'+tierBadge(c.tier)+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+tag+'</span></div>';
+      var colour = c.aiColour || c.colour;
+      var tag = escapeHtml(c.vendor || '—') + (colour ? ' · '+escapeHtml(colour) : '');
+      var dupe = c.dupeOf ? '<span class="dupeflag" title="Near-duplicate of another photo — left out of the buy">dupe</span>' : '';
+      var cat = c.category ? '<span class="catbadge" title="Auto-detected category">'+escapeHtml(c.category)+'</span>' : '';
+      var arts = (c.articles && c.articles > 1) ? '<span class="artbadge" title="'+c.articles+' garments detected in this photo">×'+c.articles+'</span>' : '';
+      return '<div class="cand'+(c.dupeOf?' held':'')+'">'+tierBadge(c.tier)+cat+arts+dupe+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+tag+'</span></div>';
     }).join('');
     Array.prototype.forEach.call(grid.querySelectorAll('.del'), function(b){
       b.onclick = function(){ fetch('/api/fresh/candidate/'+b.getAttribute('data-id'),{method:'DELETE'}).then(function(){ loadCandidates(); }); };
@@ -375,37 +385,53 @@
     fetch('/api/fresh/candidate/'+id+'/tier', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ tier: tier }) })
       .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ renderCandidates(d.candidates, d.vendors); renderPlan(d); } });
   }
+  // Aggregate the per-category tier blocks into store-wide tier totals for the
+  // summary cards at the top of the plan.
+  function aggTiers(categories){
+    var agg = { statement:{tierCount:0,designCount:0,overflowCount:0}, medium:{tierCount:0,designCount:0,overflowCount:0}, basic:{tierCount:0,designCount:0,overflowCount:0} };
+    (categories||[]).forEach(function(cat){
+      ['statement','medium','basic'].forEach(function(t){
+        var p = cat.plan[t]; if(!p) return;
+        agg[t].tierCount += p.tierCount||0; agg[t].designCount += p.designCount||0; agg[t].overflowCount += p.overflowCount||0;
+      });
+    });
+    return agg;
+  }
   function renderPlan(d){
-    if(!d || !d.plan){ el('planPanel').style.display='none'; return; }
+    if(!d || !d.categories){ el('planPanel').style.display='none'; return; }
     el('planBudget').textContent = '₹'+fmtINR(d.budget);
+    // Top summary: store-wide tier totals (the % split lives per-category now).
+    var agg = aggTiers(d.categories);
     el('planCards').innerHTML = ['statement','medium','basic'].map(function(t){
-      var p = d.plan[t], m = TIER_META[t];
-      // How many pieces ARE this tier (intrinsic) vs how many we buy (the cap).
-      var held = p.overflowCount || 0;
-      var heldTxt = held ? ' · <span class="muted">'+held+' held back</span>' : '';
+      var a = agg[t], m = TIER_META[t];
+      var heldTxt = a.overflowCount ? ' · <span class="muted">'+a.overflowCount+' held back</span>' : '';
       return '<div class="tiercard '+m.cls+'">'+
-        '<div class="hd"><b>'+m.label+'</b><span class="pct" style="font-size:20px">₹'+fmtINR(p.tierBudget)+'</span></div>'+
-        '<div class="sub" style="margin:0">buy <b>'+p.designCount+'</b> of <b>'+p.tierCount+'</b> · cap <b>'+p.quota+'</b> <span class="muted">('+p.targetPct+'%)</span>'+heldTxt+'</div>'+
-        '<div class="sub" style="margin:4px 0 0">≈ ₹'+fmtINR(p.perDesign)+' / design</div>'+
+        '<div class="hd"><b>'+m.label+'</b><span class="pct" style="font-size:20px">'+a.designCount+'</span></div>'+
+        '<div class="sub" style="margin:0">buy <b>'+a.designCount+'</b> of <b>'+a.tierCount+'</b> across all categories'+heldTxt+'</div>'+
       '</div>';
     }).join('');
-    // Designs grouped by tier, ranked funkiest-first. The best-N we buy show
-    // full; anything over the cap stays in the SAME tier but dimmed + held back.
-    el('planGrid').innerHTML = ['statement','medium','basic'].map(function(t){
-      var p = d.plan[t], m = TIER_META[t];
-      if(!p.tierCount) return '';
-      function card(c, dim){
-        var tag = escapeHtml(c.vendor||'—') + (c.colour ? ' · '+escapeHtml(c.colour) : '');
-        return '<div class="cand'+(dim?' held':'')+'"'+(dim?' title="Over the '+p.quota+' cap — held back this cycle">':'>')+tierBadgeBtn(c)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
-      }
-      var buy = p.designs.map(function(c){ return card(c,false); }).join('');
-      var held = (p.overflow||[]).map(function(c){ return card(c,true); }).join('');
-      var heldBlock = held ? '<div class="heldlbl">Held back — over the '+p.quota+' cap ('+p.overflowCount+')</div>'+
-        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+held+'</div>' : '';
-      var buyBlock = buy ? '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+buy+'</div>'
-        : '<div class="muted" style="font-size:12px;padding:4px 0">No pieces landed in this tier.</div>';
-      return '<h4 style="margin:16px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:'+m.col+'">'+m.label+' — buy '+p.designCount+' of '+p.tierCount+'</h4>'+
-        buyBlock + heldBlock;
+    // Body: CATEGORY first, then the three impression tiers inside each.
+    el('planGrid').innerHTML = d.categories.map(function(cat){
+      var tiers = ['statement','medium','basic'].map(function(t){
+        var p = cat.plan[t], m = TIER_META[t];
+        if(!p.tierCount) return '';
+        function card(c, dim){
+          var colour = c.aiColour || c.colour;
+          var tag = escapeHtml(c.vendor||'—') + (colour ? ' · '+escapeHtml(colour) : '');
+          return '<div class="cand'+(dim?' held':'')+'"'+(dim?' title="Over the '+p.quota+' cap — held back this cycle">':'>')+tierBadgeBtn(c)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
+        }
+        var buy = p.designs.map(function(c){ return card(c,false); }).join('');
+        var held = (p.overflow||[]).map(function(c){ return card(c,true); }).join('');
+        var heldBlock = held ? '<div class="heldlbl">Held back — over the '+p.quota+' cap ('+p.overflowCount+')</div>'+
+          '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+held+'</div>' : '';
+        var buyBlock = buy ? '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px">'+buy+'</div>'
+          : '<div class="muted" style="font-size:12px;padding:4px 0">No pieces landed in this tier.</div>';
+        return '<h4 style="margin:14px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:'+m.col+'">'+m.label+' — buy '+p.designCount+' of '+p.tierCount+' <span class="muted">('+p.targetPct+'% cap '+p.quota+')</span></h4>'+
+          buyBlock + heldBlock;
+      }).join('');
+      return '<div class="catsec"><div class="cathd"><h3>'+escapeHtml(cat.category)+'</h3>'+
+        '<span class="muted" style="font-size:12px">buy <b>'+cat.selectedCount+'</b> of '+cat.total+' pieces</span></div>'+
+        tiers+'</div>';
     }).join('');
     // Wire badge clicks: cycle statement → medium → basic → auto(unlock).
     Array.prototype.forEach.call(el('planGrid').querySelectorAll('.tbtn'), function(b){
@@ -428,17 +454,20 @@
   }
   // A pick is "cold" if its colour is tagged AND sells in the bottom slice.
   function isColdColour(colour){ var p = demandPct(colour); return (p!=null && p<5); }
+  var CAT_ORDER = ['T-shirt','Shirt','Trouser','Jeans','Cordset','Shorts','Jacket','Sweatshirt','Hoodie','Dress','Other'];
   function collectBuy(d){
     var byVendor = {}, budget = d.budget||0;
-    ['statement','medium','basic'].forEach(function(t){
-      var p = d.plan[t]; if(!p) return;
-      p.designs.forEach(function(c){
-        var v = c.vendor || 'Unassigned';
-        (byVendor[v] = byVendor[v] || []).push({ id:c.id, vendor:v, colour:c.colour||'', url:c.url, tier:t, funk:c.funk, budget:p.perDesign });
+    (d.categories||[]).forEach(function(cat){
+      ['statement','medium','basic'].forEach(function(t){
+        var p = cat.plan[t]; if(!p) return;
+        p.designs.forEach(function(c){
+          var v = c.vendor || 'Unassigned';
+          (byVendor[v] = byVendor[v] || []).push({ id:c.id, vendor:v, colour:(c.aiColour||c.colour||''), url:c.url, tier:t, category:cat.category, funk:c.funk, budget:p.perDesign });
+        });
       });
     });
     var vendors = Object.keys(byVendor).map(function(v){
-      var lines = byVendor[v].sort(function(a,b){ return (['statement','medium','basic'].indexOf(a.tier)-['statement','medium','basic'].indexOf(b.tier)) || ((b.funk||0)-(a.funk||0)); });
+      var lines = byVendor[v].sort(function(a,b){ return (CAT_ORDER.indexOf(a.category)-CAT_ORDER.indexOf(b.category)) || (['statement','medium','basic'].indexOf(a.tier)-['statement','medium','basic'].indexOf(b.tier)) || ((b.funk||0)-(a.funk||0)); });
       var subtotal = lines.reduce(function(s,l){ return s+(l.budget||0); },0);
       return { vendor:v, count:lines.length, subtotal:subtotal, lines:lines };
     }).sort(function(a,b){ return b.subtotal-a.subtotal; });
@@ -447,7 +476,7 @@
     return { budget:budget, totalDesigns:totalDesigns, allocated:allocated, vendors:vendors };
   }
   function renderBuySheet(d){
-    if(!d || !d.plan){ el('buyPanel').style.display='none'; return; }
+    if(!d || !d.categories){ el('buyPanel').style.display='none'; return; }
     lastPlanD = d;
     var b = lastBuy = collectBuy(d);
     if(!b.totalDesigns){ el('buySheet').innerHTML = '<p class="sub" style="margin:0">Nothing selected to buy yet — analyze your feed first.</p>'; el('buyPanel').style.display=''; return; }
@@ -470,8 +499,9 @@
         var m = TIER_META[l.tier];
         var cold = isColdColour(l.colour);
         var tag = escapeHtml(l.colour||'—') + (cold?' ✱':'');
-        return '<div class="cand'+(cold?' cold':'')+'" title="'+m.label+' · funk '+(l.funk!=null?l.funk:'—')+' · ₹'+fmtINR(l.budget)+(cold?' · cold colour (rarely sells)':'')+'">'+
-          '<span class="tbadge" style="background:'+m.col+'">'+m.label.charAt(0)+'</span>'+
+        var cat = l.category ? '<span class="catbadge" title="Category">'+escapeHtml(l.category)+'</span>' : '';
+        return '<div class="cand'+(cold?' cold':'')+'" title="'+escapeHtml(l.category||'')+' · '+m.label+' · funk '+(l.funk!=null?l.funk:'—')+' · ₹'+fmtINR(l.budget)+(cold?' · cold colour (rarely sells)':'')+'">'+
+          '<span class="tbadge" style="background:'+m.col+'">'+m.label.charAt(0)+'</span>'+cat+
           '<img src="'+l.url+'" loading="lazy" alt=""/>'+
           '<span class="vt">'+tag+' · ₹'+fmtINR(l.budget)+'</span></div>';
       }).join('');
@@ -491,7 +521,7 @@
     var out = ['SANKI — Fresh Procurement · Desired PO', b.totalDesigns+' designs · '+b.vendors.length+' vendors · ₹'+fmtINR(b.allocated)+' of ₹'+fmtINR(b.budget), ''];
     b.vendors.forEach(function(v){
       out.push(v.vendor+' — '+v.count+' designs — ₹'+fmtINR(v.subtotal));
-      v.lines.forEach(function(l){ out.push('  • '+(TIER_META[l.tier].label)+' · '+(l.colour||'—')+' · ₹'+fmtINR(l.budget)); });
+      v.lines.forEach(function(l){ out.push('  • '+(l.category||'—')+' · '+(TIER_META[l.tier].label)+' · '+(l.colour||'—')+' · ₹'+fmtINR(l.budget)); });
       out.push('');
     });
     return out.join('\n');
@@ -504,8 +534,9 @@
       .then(function(r){ return r.json(); }).then(function(d){
         btn.disabled = false;
         if(!d.success){ el('analyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Analyze failed')+'</span>'; return; }
-        var cnts = d.plan ? (d.plan.statement.tierCount+' statement · '+d.plan.medium.tierCount+' medium · '+d.plan.basic.tierCount+' basic') : '';
-        el('analyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Ranked '+d.total+' photo'+(d.total===1?'':'s')+' by funkiness → '+cnts+'.</span> <span class="muted" style="font-size:12px">Click any tier badge below to move a photo.</span> <a href="#" id="reAnalyze" style="color:var(--muted);font-size:12px">re-score all</a>';
+        var catCnt = (d.categories||[]).length;
+        var dupeTxt = d.dupes ? ' · '+d.dupes+' near-dupe'+(d.dupes===1?'':'s')+' set aside' : '';
+        el('analyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Sorted '+d.total+' photo'+(d.total===1?'':'s')+' into '+catCnt+' categor'+(catCnt===1?'y':'ies')+' → funkiness tiers'+dupeTxt+'.</span> <span class="muted" style="font-size:12px">Click any tier badge below to move a photo.</span> <a href="#" id="reAnalyze" style="color:var(--muted);font-size:12px">re-score all</a>';
         renderCandidates(d.candidates, d.vendors);
         renderPlan(d);
         var ra = el('reAnalyze'); if(ra) ra.onclick = function(e){ e.preventDefault(); analyze(true); };

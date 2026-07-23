@@ -29,8 +29,75 @@ const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
 const multer  = require('multer');
+let Jimp = null; try { Jimp = require('jimp'); } catch { /* dedup degrades to off */ }
 
 const router = express.Router();
+
+// ── Category vocabulary ──────────────────────────────────────────
+// Auto-detected per photo by the vision pass. We map free-text to this
+// canonical list so "Tee"/"T-Shirt"/"tshirt" don't fragment into buckets.
+// Anything unrecognised falls into 'Other'.
+const CATEGORIES = ['T-shirt', 'Shirt', 'Trouser', 'Jeans', 'Cordset', 'Shorts', 'Jacket', 'Sweatshirt', 'Hoodie', 'Dress', 'Other'];
+function normCategory(raw) {
+  const t = String(raw || '').toLowerCase().replace(/[^a-z]/g, '');
+  const map = {
+    tshirt: 'T-shirt', tee: 'T-shirt', tees: 'T-shirt', halfsleeve: 'T-shirt',
+    shirt: 'Shirt', shirts: 'Shirt', overshirt: 'Shirt',
+    trouser: 'Trouser', trousers: 'Trouser', pant: 'Trouser', pants: 'Trouser', cargo: 'Trouser', cargos: 'Trouser', chino: 'Trouser', chinos: 'Trouser',
+    jean: 'Jeans', jeans: 'Jeans', denim: 'Jeans',
+    cordset: 'Cordset', coord: 'Cordset', coordset: 'Cordset', coords: 'Cordset', twopiece: 'Cordset',
+    short: 'Shorts', shorts: 'Shorts',
+    jacket: 'Jacket', jackets: 'Jacket', bomber: 'Jacket', coat: 'Jacket',
+    sweatshirt: 'Sweatshirt', crewneck: 'Sweatshirt', sweater: 'Sweatshirt',
+    hoodie: 'Hoodie', hooded: 'Hoodie',
+    dress: 'Dress', gown: 'Dress'
+  };
+  if (map[t]) return map[t];
+  // substring fallback
+  for (const k of Object.keys(map)) if (t.includes(k)) return map[k];
+  return 'Other';
+}
+
+// ── Perceptual hash + near-dup detection ─────────────────────────
+// dHash: resize to 9×8 greyscale, compare each pixel to its right neighbour →
+// 64 bits. Near-identical shots (same garment, slightly different angle) land
+// within a few bits. We AND it with an average-colour check so two different
+// COLOURWAYS of the same style are NOT merged (they're different SKUs to buy).
+const DUP_HAM_MAX = 8;      // ≤8 of 64 bits differ → structurally the same shot
+const DUP_COL_MAX = 40;     // avg-colour euclidean distance ceiling
+async function computeSignature(filePath) {
+  if (!Jimp) return null;
+  try {
+    const img = await Jimp.read(filePath);
+    const g = img.clone().resize(9, 8).greyscale();
+    let bits = '';
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+      const l = Jimp.intToRGBA(g.getPixelColor(x, y)).r;
+      const r = Jimp.intToRGBA(g.getPixelColor(x + 1, y)).r;
+      bits += l > r ? '1' : '0';
+    }
+    const small = img.clone().resize(8, 8);
+    let R = 0, G = 0, B = 0;
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+      const p = Jimp.intToRGBA(small.getPixelColor(x, y)); R += p.r; G += p.g; B += p.b;
+    }
+    return { phash: bits, avg: [Math.round(R / 64), Math.round(G / 64), Math.round(B / 64)] };
+  } catch { return null; }
+}
+function hamming(a, b) { if (!a || !b || a.length !== b.length) return 999; let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; }
+function colourDist(a, b) { if (!a || !b) return 999; return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2); }
+// Scan candidates in upload order; mark each as dupeOf the FIRST earlier unique
+// candidate it near-matches. Dupes are excluded from all segregation counts.
+function markDuplicates(cands) {
+  const uniques = [];
+  cands.forEach(c => {
+    c.dupeOf = null;
+    if (!c.phash) { uniques.push(c); return; } // no signature → treat as unique
+    const hit = uniques.find(u => u.phash && hamming(c.phash, u.phash) <= DUP_HAM_MAX && colourDist(c.avg, u.avg) <= DUP_COL_MAX);
+    if (hit) c.dupeOf = hit.id; else uniques.push(c);
+  });
+  return cands.filter(c => c.dupeOf).length;
+}
 
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 
@@ -127,6 +194,8 @@ function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
 function publicCandidate(c) {
   return { id: c.id, vendor: c.vendor || '', colour: c.colour || '', cost: c.cost || null,
     url: '/api/fresh/candidate/' + c.id, tier: c.tier || null, funk: (typeof c.funk === 'number' ? c.funk : null),
+    category: c.category || null, aiColour: c.aiColour || null, articles: c.articles || 1,
+    dupeOf: c.dupeOf || null,
     locked: !!c.tierLocked, selected: !!c.selected, uploadedAt: c.uploadedAt };
 }
 // Group candidates by vendor for the chip counts the UI shows.
@@ -136,8 +205,20 @@ function vendorCounts(cands) {
   return Object.entries(by).map(([vendor, count]) => ({ vendor, count })).sort((a, b) => b.count - a.count);
 }
 
+// Sanitise a {statement,medium,basic} split into whole non-negative numbers.
+function cleanSplit(o) {
+  return { statement: Math.max(0, parseInt(o && o.statement) || 0),
+    medium: Math.max(0, parseInt(o && o.medium) || 0),
+    basic: Math.max(0, parseInt(o && o.basic) || 0) };
+}
 function settingsWithDefaults(s) {
   const st = s.settings || {};
+  // Per-category tier %: an optional override map { 'T-shirt': {statement,medium,basic}, … }.
+  // Any category without an entry falls back to the global `tiers` split.
+  const ct = {};
+  if (st.categoryTiers && typeof st.categoryTiers === 'object') {
+    for (const [k, v] of Object.entries(st.categoryTiers)) if (v && typeof v === 'object') ct[k] = cleanSplit(v);
+  }
   return {
     cycleDays: st.cycleDays || DEFAULTS.cycleDays,
     budget: st.budget != null ? st.budget : DEFAULTS.budget,
@@ -146,8 +227,16 @@ function settingsWithDefaults(s) {
       medium:    st.tiers && st.tiers.medium    != null ? st.tiers.medium    : DEFAULTS.tiers.medium,
       basic:     st.tiers && st.tiers.basic      != null ? st.tiers.basic      : DEFAULTS.tiers.basic
     },
+    categoryTiers: ct,
     competitors: Array.isArray(st.competitors) && st.competitors.length ? st.competitors : DEFAULTS.competitors.slice()
   };
+}
+// The tier % split that governs a given category — its own override if set,
+// else the global split. This is what makes each category cut independently.
+function tiersForCategory(settings, cat) {
+  const ct = settings.categoryTiers && settings.categoryTiers[cat];
+  if (ct && (ct.statement || ct.medium || ct.basic)) return ct;
+  return settings.tiers;
 }
 
 // ── Signal ③ — buyer-taste lens (sizes & colours from the ledger) ─
@@ -239,11 +328,13 @@ router.post('/api/fresh/settings', (req, res) => {
   const next = {
     cycleDays: b.cycleDays != null ? parseInt(b.cycleDays) || cur.cycleDays : cur.cycleDays,
     budget: b.budget != null ? Math.max(0, parseInt(String(b.budget).replace(/[^\d]/g, '')) || 0) : cur.budget,
-    tiers: b.tiers && typeof b.tiers === 'object' ? {
-      statement: Math.max(0, parseInt(b.tiers.statement) || 0),
-      medium:    Math.max(0, parseInt(b.tiers.medium) || 0),
-      basic:     Math.max(0, parseInt(b.tiers.basic) || 0)
-    } : cur.tiers,
+    tiers: b.tiers && typeof b.tiers === 'object' ? cleanSplit(b.tiers) : cur.tiers,
+    categoryTiers: (() => {
+      if (!b.categoryTiers || typeof b.categoryTiers !== 'object') return cur.categoryTiers;
+      const out = {};
+      for (const [k, v] of Object.entries(b.categoryTiers)) if (v && typeof v === 'object') out[k] = cleanSplit(v);
+      return out;
+    })(),
     competitors: Array.isArray(b.competitors) ? b.competitors.map(x => String(x).trim()).filter(Boolean) : cur.competitors
   };
   s.settings = next;
@@ -275,14 +366,18 @@ router.post('/api/fresh/candidates', async (req, res) => {
   const colour = String((req.body && req.body.colour) || '').trim();
   const cost = req.body && req.body.cost ? parseFloat(req.body.cost) || null : null;
   const s = loadStore();
-  const added = files.map(f => {
+  const added = [];
+  for (const f of files) {
+    const sig = await computeSignature(path.join(CAND_DIR, f.filename));
     const c = { id: crypto.randomBytes(8).toString('hex'), file: f.filename,
-      vendor, colour, cost, tier: null, uploadedAt: new Date().toISOString() };
+      vendor, colour, cost, tier: null, uploadedAt: new Date().toISOString(),
+      phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null };
     s.candidates.push(c);
-    return publicCandidate(c);
-  });
+    added.push(publicCandidate(c));
+  }
+  const dupes = markDuplicates(s.candidates);  // flag near-dupes across the whole pool
   saveStore(s);
-  res.json({ success: true, added, total: s.candidates.length, vendors: vendorCounts(s.candidates) });
+  res.json({ success: true, added, total: s.candidates.length, dupes, vendors: vendorCounts(s.candidates) });
 });
 
 // Serve a stored candidate image by id.
@@ -326,21 +421,24 @@ const VISION_BATCH = 10; // images per vision call
 // run and regardless of which batch it lands in — the two things that made the
 // old per-batch tier call jump around and mis-file statements as medium.
 async function scoreBatch(items) {
-  // items: [{id, buffer, mediaType}]. Returns map id→score(0..100).
+  // items: [{id, buffer, mediaType}]. Returns map id→{funk, category, colour, articles}.
   const content = [];
   items.forEach((it, i) => {
     content.push({ type: 'text', text: 'IMAGE ' + (i + 1) + ':' });
     content.push({ type: 'image', source: { type: 'base64', media_type: it.mediaType, data: it.buffer.toString('base64') } });
   });
   content.push({ type: 'text', text:
-`You are a buyer for an Indian premium streetwear brand. Score how LOUD / FUNKY / statement-y each garment above is on an ABSOLUTE 0–100 scale. ` +
-`Judge each image on its own against this fixed rubric — NOT relative to the other images in this message:\n` +
-`- 85–100: extremely loud hero piece — heavy all-over graphics, wild clashing colour, bold unusual cut.\n` +
-`- 60–84: clearly funky/eye-catching — prominent print or graphic, strong colour, distinctive styling.\n` +
-`- 35–59: has some character but everyday-wearable — a modest logo/print, one accent colour, mild detailing.\n` +
-`- 15–34: mostly clean — subtle branding or texture on an otherwise plain garment.\n` +
-`- 0–14: pure basic — plain solid colour, no graphics, essential staple.\n\n` +
-`Return STRICT JSON ONLY, no prose: {"scores":[n, n, ...]} with exactly ${items.length} integers 0–100, one per image in order.` });
+`You are a buyer for an Indian premium streetwear brand. For EACH image above, report four things. Judge each image on its own — NOT relative to the others.\n\n` +
+`1) "funk" — how LOUD / FUNKY / statement-y the garment is, ABSOLUTE 0–100:\n` +
+`   - 85–100: extremely loud hero piece — heavy all-over graphics, wild clashing colour, bold unusual cut.\n` +
+`   - 60–84: clearly funky/eye-catching — prominent print or graphic, strong colour, distinctive styling.\n` +
+`   - 35–59: has some character but everyday-wearable — a modest logo/print, one accent colour, mild detailing.\n` +
+`   - 15–34: mostly clean — subtle branding or texture on an otherwise plain garment.\n` +
+`   - 0–14: pure basic — plain solid colour, no graphics, essential staple.\n` +
+`2) "category" — the garment type, EXACTLY one of: ${CATEGORIES.join(', ')}. A matching top+bottom worn together is "Cordset". Use "Other" only if none fit.\n` +
+`3) "colour" — the single dominant colour word (e.g. Black, White, Blue, Olive, Maroon, Cream).\n` +
+`4) "articles" — how many SEPARATE distinct garments are laid out in the photo (a cordset counts as 1 outfit; count 2+ only if clearly different products shown together).\n\n` +
+`Return STRICT JSON ONLY, no prose: {"items":[{"funk":n,"category":"..","colour":"..","articles":n}, ...]} with exactly ${items.length} objects, one per image in order.` });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   let r;
@@ -348,16 +446,25 @@ async function scoreBatch(items) {
     r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1000, temperature: 0, messages: [{ role: 'user', content }] }),
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 2000, temperature: 0, messages: [{ role: 'user', content }] }),
       signal: ctrl.signal
     });
   } finally { clearTimeout(timer); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
   const parsed = extractJson((j.content || []).map(c => c.text || '').join(''));
-  const arr = parsed && Array.isArray(parsed.scores) ? parsed.scores : [];
+  const arr = parsed && Array.isArray(parsed.items) ? parsed.items : (parsed && Array.isArray(parsed.scores) ? parsed.scores.map(n => ({ funk: n })) : []);
   const out = {};
-  items.forEach((it, i) => { const n = Math.round(Number(arr[i])); out[it.id] = isFinite(n) ? Math.max(0, Math.min(100, n)) : 50; });
+  items.forEach((it, i) => {
+    const o = arr[i] || {};
+    const n = Math.round(Number(o.funk));
+    out[it.id] = {
+      funk: isFinite(n) ? Math.max(0, Math.min(100, n)) : 50,
+      category: normCategory(o.category),
+      colour: String(o.colour || '').trim() || null,
+      articles: Math.max(1, Math.round(Number(o.articles)) || 1)
+    };
+  });
   return out;
 }
 
@@ -406,83 +513,109 @@ function tasteBonus(colour, map) {
   return Math.min(TASTE_MAX_BONUS, pct * 0.5);               // 20%+ of sales → full +10
 }
 
-// Classify + select. Two independent steps:
+// Classify + select. The pool is cut CATEGORY-FIRST (Shirts, T-shirts,
+// Trousers…), and only then by impression inside each category. Three steps:
+//   0) EXCLUDE near-duplicates entirely — a dupe is never tiered or selected.
 //   1) TIER  = intrinsic band from the funk score (never cross-shifted).
 //              Manually locked pieces keep the tier the user pinned.
-//   2) SELECT = within each tier, the % split is a CAP ("show the best N").
-//              Rank by funk + a bounded taste bonus and mark the top `quota`
-//              as selected; the rest stay IN THE SAME TIER but held back
-//              (selected:false). Under-fill is fine — if a tier has fewer
-//              pieces than its quota we just select them all, we do NOT borrow
-//              from another tier. Locked pieces are always selected.
+//   2) SELECT = within each (category, tier), that category's own % split is a
+//              CAP ("buy the best N"). Rank by funk + a bounded taste bonus and
+//              mark the top `quota` selected; the rest stay in the same tier but
+//              held back. Under-fill is fine — we never borrow across tiers or
+//              across categories. Locked pieces are always selected.
 function assignTiersBySplit(cands, settings) {
-  const quota = splitCounts(cands.length, settings);
   const demand = colourDemandMap();
+  // Step 0 — dupes sit out of every count.
+  const active = cands.filter(c => !c.dupeOf);
+  cands.forEach(c => { if (c.dupeOf) c.selected = false; });
   // Step 1 — intrinsic tier (impression only — taste never moves a tier).
-  cands.forEach(c => {
+  active.forEach(c => {
     if (c.tierLocked && TIER_KEYS.includes(c.tier)) return; // user-pinned
     c.tier = tierFromScore(c.funk);
   });
-  // Step 2 — per-tier cap, ranked by funk + bounded taste nudge.
-  TIER_KEYS.forEach(t => {
-    const inTier = cands.filter(c => c.tier === t).sort((a, b) => {
-      const la = a.tierLocked ? 1 : 0, lb = b.tierLocked ? 1 : 0;
-      if (la !== lb) return lb - la;                 // locked first
-      const sa = (a.funk || 0) + tasteBonus(a.colour, demand);
-      const sb = (b.funk || 0) + tasteBonus(b.colour, demand);
-      return (sb - sa) || (a.id < b.id ? -1 : 1);
+  // Step 2 — bucket by category, then cap each tier by THAT category's split.
+  const byCat = {};
+  active.forEach(c => { const cat = c.category || 'Other'; (byCat[cat] = byCat[cat] || []).push(c); });
+  Object.keys(byCat).forEach(cat => {
+    const group = byCat[cat];
+    const quota = splitCounts(group.length, { tiers: tiersForCategory(settings, cat) });
+    TIER_KEYS.forEach(t => {
+      const inTier = group.filter(c => c.tier === t).sort((a, b) => {
+        const la = a.tierLocked ? 1 : 0, lb = b.tierLocked ? 1 : 0;
+        if (la !== lb) return lb - la;                 // locked first
+        const sa = (a.funk || 0) + tasteBonus(a.aiColour || a.colour, demand);
+        const sb = (b.funk || 0) + tasteBonus(b.aiColour || b.colour, demand);
+        return (sb - sa) || (a.id < b.id ? -1 : 1);
+      });
+      const cap = Math.max(0, quota[t] || 0);
+      inTier.forEach((c, idx) => { c.selected = idx < cap || !!c.tierLocked; });
     });
-    const cap = Math.max(0, quota[t] || 0);
-    inTier.forEach((c, idx) => { c.selected = idx < cap || !!c.tierLocked; });
   });
 }
 
-// Budget-led allocation: each tier gets budget×pct; spread evenly across the
-// designs the AI put in that tier. Returns a per-tier plan the UI renders.
+// Budget-led allocation, CATEGORY-FIRST. Dupes are excluded up front. Within
+// each category the pieces are grouped by impression tier and the best-N (that
+// category's cap) are marked as the designs to buy. Stage 1 spreads the budget
+// evenly across every selected design as a placeholder — the true per-piece
+// rupee→unit maths lands in Stage 2, once vendor costs are entered.
 function buildPlan(cands, settings) {
   const budget = Math.max(0, Number(settings.budget) || 0);
-  const pct = settings.tiers || {};
-  const quota = splitCounts(cands.length, settings);
-  const plan = {};
-  TIER_KEYS.forEach(t => {
-    const all = cands.filter(c => c.tier === t)
-      .sort((a, b) => ((b.funk || 0) - (a.funk || 0)) || (a.id < b.id ? -1 : 1));
-    const designs = all.filter(c => c.selected);   // the best N we actually buy
-    const overflow = all.filter(c => !c.selected);  // held back, same tier
-    const share = Math.max(0, Number(pct[t]) || 0);
-    const tierBudget = Math.round(budget * share / 100);
-    plan[t] = {
-      tier: t,
-      targetPct: share,
-      quota: quota[t] || 0,        // the cap = best-N to buy this cycle
-      tierCount: all.length,       // how many pieces are intrinsically this tier
-      designCount: designs.length, // selected (buying) count
-      overflowCount: overflow.length,
-      tierBudget,
-      perDesign: designs.length ? Math.round(tierBudget / designs.length) : 0,
-      designs: designs.map(publicCandidate),
-      overflow: overflow.map(publicCandidate)
-    };
+  const active = cands.filter(c => !c.dupeOf);
+  const totalSelected = active.filter(c => c.selected).length;
+  const perDesign = totalSelected ? Math.round(budget / totalSelected) : 0;
+
+  const byCat = {};
+  active.forEach(c => { const cat = c.category || 'Other'; (byCat[cat] = byCat[cat] || []).push(c); });
+
+  const categories = Object.keys(byCat).sort((a, b) => {
+    const ia = CATEGORIES.indexOf(a), ib = CATEGORIES.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  }).map(cat => {
+    const group = byCat[cat];
+    const catPct = tiersForCategory(settings, cat);
+    const quota = splitCounts(group.length, { tiers: catPct });
+    const plan = {};
+    TIER_KEYS.forEach(t => {
+      const all = group.filter(c => c.tier === t)
+        .sort((a, b) => ((b.funk || 0) - (a.funk || 0)) || (a.id < b.id ? -1 : 1));
+      const designs = all.filter(c => c.selected);
+      const overflow = all.filter(c => !c.selected);
+      plan[t] = {
+        tier: t,
+        targetPct: Math.max(0, Number(catPct[t]) || 0),
+        quota: quota[t] || 0,
+        tierCount: all.length,
+        designCount: designs.length,
+        overflowCount: overflow.length,
+        perDesign,
+        designs: designs.map(publicCandidate),
+        overflow: overflow.map(publicCandidate)
+      };
+    });
+    const selectedCount = group.filter(c => c.selected).length;
+    return { category: cat, total: group.length, selectedCount, subtotal: selectedCount * perDesign, plan };
   });
-  const total = cands.length;
-  return { budget, total, plan };
+
+  return { budget, total: active.length, totalSelected, perDesign, categories };
 }
 
-// Buy sheet: take the SELECTED designs out of the plan and regroup them by
-// vendor — the actual "go order this" list. Each line carries its tier's
-// per-design budget so a vendor's subtotal = what to spend with that vendor.
+// Buy sheet: take every SELECTED design (across all categories) and regroup by
+// vendor — the actual "go order this" Desired PO. Each line carries the per-
+// design budget so a vendor's subtotal = what to spend with that vendor.
 function buildBuySheet(cands, settings) {
-  const { budget, plan } = buildPlan(cands, settings);
+  const { budget, perDesign, categories } = buildPlan(cands, settings);
   const byVendor = {};
-  TIER_KEYS.forEach(t => {
-    const perDesign = plan[t].perDesign;
-    plan[t].designs.forEach(c => {
-      const v = c.vendor || 'Unassigned';
-      (byVendor[v] = byVendor[v] || []).push(Object.assign({}, c, { budget: perDesign }));
+  categories.forEach(cat => {
+    TIER_KEYS.forEach(t => {
+      cat.plan[t].designs.forEach(c => {
+        const v = c.vendor || 'Unassigned';
+        (byVendor[v] = byVendor[v] || []).push(Object.assign({}, c, { budget: perDesign, category: cat.category }));
+      });
     });
   });
   const vendors = Object.entries(byVendor).map(([vendor, lines]) => {
-    lines.sort((a, b) => (TIER_KEYS.indexOf(a.tier) - TIER_KEYS.indexOf(b.tier)) || ((b.funk || 0) - (a.funk || 0)));
+    lines.sort((a, b) => (CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category))
+      || (TIER_KEYS.indexOf(a.tier) - TIER_KEYS.indexOf(b.tier)) || ((b.funk || 0) - (a.funk || 0)));
     const subtotal = lines.reduce((s, l) => s + (l.budget || 0), 0);
     return { vendor, count: lines.length, subtotal, lines };
   }).sort((a, b) => b.subtotal - a.subtotal);
@@ -497,7 +630,7 @@ router.get('/api/fresh/buysheet', (req, res) => {
   const settings = settingsWithDefaults(s);
   const cands = s.candidates || [];
   const scored = cands.some(c => typeof c.funk === 'number');
-  if (scored) { assignTiersBySplit(cands, settings); saveStore(s); }
+  if (scored) { markDuplicates(cands); assignTiersBySplit(cands, settings); saveStore(s); }
   res.json({ success: true, scored, ...buildBuySheet(cands, settings) });
 });
 
@@ -509,8 +642,11 @@ router.post('/api/fresh/analyze', async (req, res) => {
     const cands = s.candidates || [];
     if (!cands.length) return res.status(400).json({ success: false, error: 'No candidate photos yet — upload some in The Feed first.' });
     const force = req.body && (req.body.force === true || req.body.force === 'true');
-    // Score anything without a funk score yet (or everything, if forced).
-    const todo = cands.filter(c => force || typeof c.funk !== 'number');
+    // De-dupe FIRST so near-duplicate shots never skew the tier counts.
+    const dupes = markDuplicates(s.candidates);
+    // Score anything without a funk score yet (or everything, if forced) — but
+    // never spend vision calls on flagged duplicates.
+    const todo = cands.filter(c => !c.dupeOf && (force || typeof c.funk !== 'number'));
     let classified = 0;
     for (let i = 0; i < todo.length; i += VISION_BATCH) {
       const slice = todo.slice(i, i + VISION_BATCH);
@@ -521,15 +657,18 @@ router.post('/api/fresh/analyze', async (req, res) => {
       });
       if (!items.length) continue;
       const map = await scoreBatch(items);
-      slice.forEach(c => { if (typeof map[c.id] === 'number') { c.funk = map[c.id]; classified++; } });
+      slice.forEach(c => {
+        const r = map[c.id];
+        if (r && typeof r.funk === 'number') { c.funk = r.funk; c.category = r.category; c.aiColour = r.colour; c.articles = r.articles; classified++; }
+      });
       saveStore(s); // persist progressively so a mid-run failure keeps prior work
     }
     const settings = settingsWithDefaults(s);
-    // Rank all candidates by funk score and cut into the split's exact counts.
+    // Segregate by category → impression tier, cut each category by its split.
     assignTiersBySplit(s.candidates, settings);
     saveStore(s);
     const result = buildPlan(s.candidates, settings);
-    res.json({ success: true, classified, settings, candidates: s.candidates.map(publicCandidate), vendors: vendorCounts(s.candidates), ...result });
+    res.json({ success: true, classified, dupes, settings, candidates: s.candidates.map(publicCandidate), vendors: vendorCounts(s.candidates), ...result });
   } catch (err) {
     if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'The tier sorter timed out. Try again — already-sorted photos are saved.' });
     res.status(502).json({ success: false, error: 'Tier sort failed: ' + (err.message || 'unknown') });
@@ -544,7 +683,7 @@ router.get('/api/fresh/plan', (req, res) => {
   const settings = settingsWithDefaults(s);
   const cands = s.candidates || [];
   const scored = cands.some(c => typeof c.funk === 'number');
-  if (scored) { assignTiersBySplit(cands, settings); saveStore(s); }
+  if (scored) { markDuplicates(cands); assignTiersBySplit(cands, settings); saveStore(s); }
   res.json({ success: true, scored, settings, candidates: cands.map(publicCandidate), vendors: vendorCounts(cands), ...buildPlan(cands, settings) });
 });
 
@@ -559,6 +698,7 @@ router.post('/api/fresh/candidate/:id/tier', (req, res) => {
   else if (TIER_KEYS.includes(t)) { c.tier = t; c.tierLocked = true; }
   else return res.status(400).json({ success: false, error: 'Bad tier' });
   const settings = settingsWithDefaults(s);
+  markDuplicates(s.candidates);
   assignTiersBySplit(s.candidates, settings); // re-cut the rest around the pin
   saveStore(s);
   res.json({ success: true, settings, candidates: s.candidates.map(publicCandidate), vendors: vendorCounts(s.candidates), ...buildPlan(s.candidates, settings) });
