@@ -102,9 +102,19 @@
     .cand .artbadge{ position:absolute; top:20px; right:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:#7c3aed; color:#fff; }
     .cand .dupeflag{ position:absolute; bottom:16px; left:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:#dc2626; color:#fff; text-transform:uppercase; letter-spacing:.3px; }
     .heldlbl{ margin:10px 0 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
-    .catsec{ margin:22px 0 0; }
-    .catsec > .cathd{ display:flex; align-items:baseline; gap:10px; margin:0 0 4px; padding:0 0 6px; border-bottom:2px solid var(--line); }
-    .catsec > .cathd h3{ margin:0; font-size:16px; font-weight:800; }
+    .catsec{ margin:14px 0 0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#fff; }
+    .catsec.open{ box-shadow:0 1px 4px rgba(0,0,0,.05); }
+    .catrow{ display:flex; align-items:center; gap:12px; padding:10px 12px; cursor:pointer; user-select:none; transition:background .12s; }
+    .catrow:hover{ background:#f7faf5; }
+    .cattw{ flex:0 0 auto; }
+    .catthumb{ width:44px; height:44px; border-radius:8px; object-fit:cover; display:block; border:1px solid var(--line); background:#f4f6f2; }
+    .catthumb.ph{ display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--muted); font-size:18px; }
+    .catmeta{ flex:1 1 auto; min-width:0; }
+    .catmeta h3{ margin:0; font-size:15px; font-weight:800; }
+    .catchips{ flex:0 0 auto; display:flex; gap:5px; }
+    .catmix{ font-size:11px; font-weight:800; color:#fff; padding:2px 7px; border-radius:999px; letter-spacing:.2px; }
+    .catcaret{ flex:0 0 auto; font-size:12px; color:var(--muted); width:14px; text-align:center; }
+    .catbody{ padding:2px 12px 14px; border-top:1px solid var(--line); }
   </style>
 </head>
 <body>
@@ -352,7 +362,7 @@
       var dupe = c.dupeOf ? '<span class="dupeflag" title="Near-duplicate of another photo — left out of the buy">dupe</span>' : '';
       var cat = c.category ? '<span class="catbadge" title="Auto-detected category">'+escapeHtml(c.category)+'</span>' : '';
       var arts = (c.articles && c.articles > 1) ? '<span class="artbadge" title="'+c.articles+' garments detected in this photo">×'+c.articles+'</span>' : '';
-      return '<div class="cand'+(c.dupeOf?' held':'')+'">'+tierBadge(c.tier)+cat+arts+dupe+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+tag+'</span></div>';
+      return '<div class="cand'+(c.dupeOf?' held':'')+'" data-cap="'+escapeHtml(candCap(c))+'">'+tierBadge(c.tier)+cat+arts+dupe+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+tag+'</span></div>';
     }).join('');
     Array.prototype.forEach.call(grid.querySelectorAll('.del'), function(b){
       b.onclick = function(){ fetch('/api/fresh/candidate/'+b.getAttribute('data-id'),{method:'DELETE'}).then(function(){ loadCandidates(); }); };
@@ -374,6 +384,17 @@
     var m = TIER_META[tier]; if(!m) return '';
     return '<span class="tbadge" style="background:'+m.col+'">'+m.label.charAt(0)+'</span>';
   }
+  // Caption shown when a photo is zoomed: vendor · colour · impression type.
+  // (The lightbox appends the running "(i / n)" position on its own.)
+  function candCap(c, tier){
+    var colour = c.aiColour || c.colour;
+    var parts = [c.vendor || '—'];
+    if(colour) parts.push(colour);
+    var m = TIER_META[tier || c.tier];
+    if(m) parts.push(m.label);
+    if(c.category) parts.push(c.category);
+    return parts.join(' · ');
+  }
   // Clickable badge for the plan grid — click to override this photo's tier.
   function tierBadgeBtn(c){
     var m = TIER_META[c.tier]; if(!m) return '';
@@ -385,6 +406,8 @@
     fetch('/api/fresh/candidate/'+id+'/tier', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ tier: tier }) })
       .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ renderCandidates(d.candidates, d.vendors); renderPlan(d); } });
   }
+  // Which category sections are expanded (persists across re-renders / re-cuts).
+  var openCats = {};
   // Aggregate the per-category tier blocks into store-wide tier totals for the
   // summary cards at the top of the plan.
   function aggTiers(categories){
@@ -418,7 +441,8 @@
         function card(c, dim){
           var colour = c.aiColour || c.colour;
           var tag = escapeHtml(c.vendor||'—') + (colour ? ' · '+escapeHtml(colour) : '');
-          return '<div class="cand'+(dim?' held':'')+'"'+(dim?' title="Over the '+p.quota+' cap — held back this cycle">':'>')+tierBadgeBtn(c)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
+          var capAttr = ' data-cap="'+escapeHtml(candCap(c, t))+'"';
+          return '<div class="cand'+(dim?' held':'')+'"'+capAttr+(dim?' title="Over the '+p.quota+' cap — held back this cycle"':'')+'>'+tierBadgeBtn(c)+'<img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+tag+'</span></div>';
         }
         var buy = p.designs.map(function(c){ return card(c,false); }).join('');
         var held = (p.overflow||[]).map(function(c){ return card(c,true); }).join('');
@@ -429,13 +453,44 @@
         return '<h4 style="margin:14px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:'+m.col+'">'+m.label+' — buy '+p.designCount+' of '+p.tierCount+' <span class="muted">('+p.targetPct+'% cap '+p.quota+')</span></h4>'+
           buyBlock + heldBlock;
       }).join('');
-      return '<div class="catsec"><div class="cathd"><h3>'+escapeHtml(cat.category)+'</h3>'+
-        '<span class="muted" style="font-size:12px">buy <b>'+cat.selectedCount+'</b> of '+cat.total+' pieces</span></div>'+
-        tiers+'</div>';
+      // Tier mix chips shown on the collapsed header — the characteristics.
+      var mix = ['statement','medium','basic'].map(function(t){
+        var p = cat.plan[t]; if(!p || !p.designCount) return '';
+        var m = TIER_META[t];
+        return '<span class="catmix" style="background:'+m.col+'">'+m.label.charAt(0)+' '+p.designCount+'</span>';
+      }).join('');
+      var thumb = cat.plan.statement.designs[0] || cat.plan.medium.designs[0] || cat.plan.basic.designs[0]
+        || cat.plan.statement.overflow[0] || cat.plan.medium.overflow[0] || cat.plan.basic.overflow[0];
+      var thumbH = thumb ? '<img class="catthumb" src="'+thumb.url+'" loading="lazy" alt=""/>' : '<span class="catthumb ph">'+escapeHtml(cat.category.charAt(0))+'</span>';
+      var open = !!openCats[cat.category];
+      return '<div class="catsec'+(open?' open':'')+'" data-cat="'+escapeHtml(cat.category)+'">'+
+        '<div class="cathd catrow" data-cat="'+escapeHtml(cat.category)+'">'+
+          '<span class="cattw">'+thumbH+'</span>'+
+          '<div class="catmeta"><h3>'+escapeHtml(cat.category)+'</h3>'+
+            '<span class="muted" style="font-size:12px">buy <b>'+cat.selectedCount+'</b> of '+cat.total+' pieces</span></div>'+
+          '<div class="catchips">'+mix+'</div>'+
+          '<span class="catcaret">'+(open?'▾':'▸')+'</span>'+
+        '</div>'+
+        '<div class="catbody"'+(open?'':' style="display:none"')+'>'+tiers+'</div>'+
+      '</div>';
     }).join('');
+    // Toggle a category open/closed (remember state across re-renders).
+    Array.prototype.forEach.call(el('planGrid').querySelectorAll('.catrow'), function(row){
+      row.onclick = function(e){
+        if(e.target.closest('.tbtn')) return; // let badge clicks through
+        var cat = row.getAttribute('data-cat');
+        openCats[cat] = !openCats[cat];
+        var sec = row.closest('.catsec'), body = sec.querySelector('.catbody'), caret = sec.querySelector('.catcaret');
+        var show = openCats[cat];
+        sec.classList.toggle('open', show);
+        body.style.display = show ? '' : 'none';
+        caret.textContent = show ? '▾' : '▸';
+      };
+    });
     // Wire badge clicks: cycle statement → medium → basic → auto(unlock).
     Array.prototype.forEach.call(el('planGrid').querySelectorAll('.tbtn'), function(b){
-      b.onclick = function(){
+      b.onclick = function(e){
+        e.stopPropagation();
         var order = ['statement','medium','basic','auto'];
         var next = order[(order.indexOf(b.getAttribute('data-tier'))+1) % 4];
         setTier(b.getAttribute('data-id'), next==='auto'? null : next);
@@ -587,9 +642,12 @@
   var lbList = [], lbIdx = 0;
   function lbShow(){ var it = lbList[lbIdx]; if(!it) return; el('lbImg').src = it.src; el('lbCap').textContent = (it.cap||'')+'  ('+(lbIdx+1)+' / '+lbList.length+')'; }
   function openLightbox(img){
-    var grid = img.closest('.candGrid, #candGrid, #planGrid, #buySheet') || img.closest('body');
-    var imgs = Array.prototype.slice.call(grid.querySelectorAll('.cand img'));
-    lbList = imgs.map(function(im){ var c = im.closest('.cand'); return { src: im.getAttribute('src'), cap: c && c.querySelector('.vt') ? c.querySelector('.vt').textContent : '' }; });
+    // Scope scrolling to ONE category section when we're inside the plan grid;
+    // otherwise fall back to the whole grid (candidate feed / buy sheet).
+    var scope = img.closest('.catsec') || img.closest('.candGrid, #candGrid, #planGrid, #buySheet') || img.closest('body');
+    var imgs = Array.prototype.slice.call(scope.querySelectorAll('.cand img'));
+    lbList = imgs.map(function(im){ var c = im.closest('.cand'); return { src: im.getAttribute('src'),
+      cap: (c && c.getAttribute('data-cap')) || (c && c.querySelector('.vt') ? c.querySelector('.vt').textContent : '') }; });
     lbIdx = Math.max(0, imgs.indexOf(img));
     lbShow(); el('lightbox').classList.add('show');
   }
