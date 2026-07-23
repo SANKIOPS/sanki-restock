@@ -680,8 +680,16 @@ function readStoredPhoto(url) {
   const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
   return { buf: fs.readFileSync(fp), mime };
 }
-// Call Gemini image generation: reference image + instruction → new image buffer.
-async function geminiGenerateImage(baseB64, baseMime, prompt, aspect) {
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+// Gemini's image model returns 503 ("overloaded / high demand") and 429 (rate)
+// intermittently — they are transient, so a short exponential backoff usually
+// clears them without the user seeing a thing. 500 is likewise retried.
+const IMG_RETRY_STATUS = new Set([429, 500, 503]);
+const IMG_MAX_ATTEMPTS = 4;
+
+// One raw attempt at Gemini image generation. Attaches `.status` on HTTP errors
+// so the caller can decide whether to retry.
+async function geminiImageAttempt(baseB64, baseMime, prompt, aspect) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 120000);
@@ -707,7 +715,11 @@ async function geminiGenerateImage(baseB64, baseMime, prompt, aspect) {
   }
   clearTimeout(timer);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (((j.error && j.error.message) || '').slice(0, 200) || 'image error'));
+  if (!r.ok) {
+    const e = new Error('Gemini ' + r.status + ': ' + (((j.error && j.error.message) || '').slice(0, 200) || 'image error'));
+    e.status = r.status;
+    throw e;
+  }
   const parts = ((((j.candidates || [])[0] || {}).content) || {}).parts || [];
   const img = parts.find(p => p.inlineData || p.inline_data);
   const blob = img && (img.inlineData || img.inline_data);
@@ -715,6 +727,24 @@ async function geminiGenerateImage(baseB64, baseMime, prompt, aspect) {
   if (!data) throw new Error('The model returned no image (try again or use a clearer source photo).');
   const mime = (blob.mimeType || blob.mime_type || 'image/png').toLowerCase();
   return { buf: Buffer.from(data, 'base64'), mime };
+}
+
+// Call Gemini image generation with automatic backoff on transient overload
+// (503/429/500). Waits ~2s, 4s, 8s between attempts so a demand spike recovers
+// silently instead of surfacing an error to the user.
+async function geminiGenerateImage(baseB64, baseMime, prompt, aspect) {
+  let lastErr;
+  for (let attempt = 1; attempt <= IMG_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await geminiImageAttempt(baseB64, baseMime, prompt, aspect);
+    } catch (err) {
+      lastErr = err;
+      const retryable = IMG_RETRY_STATUS.has(err.status);
+      if (!retryable || attempt === IMG_MAX_ATTEMPTS) throw err;
+      await sleep(1000 * Math.pow(2, attempt)); // 2s, 4s, 8s
+    }
+  }
+  throw lastErr;
 }
 // Map an image mime type to the file extension Shopify (and the browser) expect.
 function extForMime(mime) {
