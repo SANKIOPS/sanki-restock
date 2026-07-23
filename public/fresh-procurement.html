@@ -115,6 +115,19 @@
     .catmix{ font-size:11px; font-weight:800; color:#fff; padding:2px 7px; border-radius:999px; letter-spacing:.2px; }
     .catcaret{ flex:0 0 auto; font-size:12px; color:var(--muted); width:14px; text-align:center; }
     .catbody{ padding:2px 12px 14px; border-top:1px solid var(--line); }
+    /* ── Line tabs: SANKI FUNKY vs SANKI CASUALS ── */
+    .linetabs{ display:flex; gap:8px; margin:18px 0 20px; border-bottom:2px solid var(--line); }
+    .linetab{ appearance:none; border:none; background:none; cursor:pointer; padding:12px 20px 14px; font-size:15px; font-weight:800; letter-spacing:.3px; color:var(--muted); position:relative; border-radius:10px 10px 0 0; transition:color .12s, background .12s; }
+    .linetab:hover{ color:var(--ink); background:#f7faf5; }
+    .linetab.active{ color:var(--ink); }
+    .linetab.active::after{ content:''; position:absolute; left:8px; right:8px; bottom:-2px; height:3px; border-radius:3px; background:var(--ink); }
+    .linetab .em{ font-weight:900; }
+    .linetab.funky.active::after{ background:#7c3aed; }
+    .linetab.casual.active::after{ background:#0ea5e9; }
+    .linetab.funky.active{ color:#7c3aed; }
+    .linetab.casual.active{ color:#0284c7; }
+    .comingsoon{ text-align:center; padding:60px 24px; border:1px dashed var(--line); border-radius:14px; background:#fbfdfb; }
+    .comingsoon h2{ margin:0 0 8px; }
   </style>
 </head>
 <body>
@@ -137,6 +150,15 @@
         <span class="saved" id="savedTag">✓ saved</span>
       </div>
     </div>
+
+    <!-- ══════════ LINE TABS ══════════ -->
+    <div class="linetabs" id="lineTabs">
+      <button class="linetab funky active" id="tabFunky" data-line="funky"><span class="em">SANKI</span> FUNKY</button>
+      <button class="linetab casual" id="tabCasual" data-line="casual"><span class="em">SANKI</span> CASUALS</button>
+    </div>
+
+    <!-- ══════════ SANKI FUNKY (existing system) ══════════ -->
+    <div id="lineFunky">
 
     <!-- ══════════ SIGNAL 1 — THE FEED ══════════ -->
     <div class="panel">
@@ -240,6 +262,17 @@
           </div>
         </div>
         <div id="buySheet" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    </div><!-- /#lineFunky -->
+
+    <!-- ══════════ SANKI CASUALS (its own system — different formulas) ══════════ -->
+    <div id="lineCasual" style="display:none">
+      <div class="comingsoon">
+        <div style="font-size:40px">🧵</div>
+        <h2><span style="font-weight:900">SANKI</span> CASUALS</h2>
+        <p class="sub" style="max-width:520px;margin:6px auto 0">A separate sourcing system for casual wear — its own photo feed and its own buying formulas (different from the funky impression tiers). Tell me the casual formulas &amp; combinations and this fills in.</p>
       </div>
     </div>
 
@@ -675,6 +708,19 @@
   ['dragover','dragenter'].forEach(function(ev){ el('drop').addEventListener(ev, function(e){ e.preventDefault(); el('drop').classList.add('drag'); }); });
   ['dragleave','drop'].forEach(function(ev){ el('drop').addEventListener(ev, function(e){ e.preventDefault(); el('drop').classList.remove('drag'); }); });
   el('drop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) uploadFiles(e.dataTransfer.files); });
+
+  // ── Line tabs: SANKI FUNKY (existing) vs SANKI CASUALS (new system) ──
+  function switchLine(line){
+    var funky = line !== 'casual';
+    el('lineFunky').style.display = funky ? '' : 'none';
+    el('lineCasual').style.display = funky ? 'none' : '';
+    el('tabFunky').classList.toggle('active', funky);
+    el('tabCasual').classList.toggle('active', !funky);
+    try { localStorage.setItem('sanki_fresh_line', line); } catch(e){}
+  }
+  el('tabFunky').addEventListener('click', function(){ switchLine('funky'); });
+  el('tabCasual').addEventListener('click', function(){ switchLine('casual'); });
+  (function(){ var saved='funky'; try { saved = localStorage.getItem('sanki_fresh_line') || 'funky'; } catch(e){} switchLine(saved); })();
 
   // Wiring
   ['tStatement','tMedium','tBasic'].forEach(function(id){ el(id).addEventListener('input', renderTiers); el(id).addEventListener('change', saveSettings); });
