@@ -128,6 +128,47 @@
     .linetab.casual.active{ color:#0284c7; }
     .comingsoon{ text-align:center; padding:60px 24px; border:1px dashed var(--line); border-radius:14px; background:#fbfdfb; }
     .comingsoon h2{ margin:0 0 8px; }
+    /* ── SANKI CASUALS ── */
+    .czhead h2{ margin:0 0 3px; }
+    .czmodes{ display:flex; gap:14px; flex-wrap:wrap; margin:10px 0 4px; }
+    .czmodes label{ display:flex; gap:7px; align-items:center; font-size:13px; font-weight:600; cursor:pointer; padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:#fbfdfb; }
+    .czmodes label.on{ border-color:#0ea5e9; background:#eff9ff; color:#0369a1; }
+    .czcatchips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+    .czcatchip{ font-size:11px; font-weight:700; padding:4px 9px; border-radius:20px; border:1px solid var(--line); background:#f7faf5; }
+    .czcatchip .n{ margin-left:5px; opacity:.6; }
+    .czcard{ border:1px solid var(--line); border-radius:14px; padding:0; margin:14px 0; overflow:hidden; }
+    .czcard.off{ opacity:.55; }
+    .czcardhd{ display:flex; align-items:center; gap:12px; padding:14px 16px; background:#fbfdfb; border-bottom:1px solid var(--line); cursor:pointer; }
+    .czcardhd h3{ margin:0; font-size:16px; }
+    .czcardhd .note{ font-size:11px; color:var(--muted); margin-top:2px; }
+    .czcardhd .grow{ flex:1; }
+    .czcardhd .caret{ font-size:14px; color:var(--muted); }
+    .czsw{ position:relative; width:40px; height:22px; flex:none; }
+    .czsw input{ opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
+    .czsw .tk{ position:absolute; inset:0; border-radius:20px; background:#d1d5db; transition:.15s; pointer-events:none; }
+    .czsw .tk::after{ content:''; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:.15s; }
+    .czsw input:checked + .tk{ background:#0ea5e9; }
+    .czsw input:checked + .tk::after{ transform:translateX(18px); }
+    .czcardbody{ padding:14px 16px; }
+    .czrow{ display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:6px; }
+    .czpills{ display:flex; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+    .czpill{ background:#f7faf5; border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:12px; }
+    .czpill b{ font-size:15px; display:block; }
+    .czsub{ font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin:14px 0 6px; font-weight:700; }
+    .czdist{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; }
+    .czdrow{ display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px; padding:6px 8px; background:#fff; }
+    .czdrow .lbl{ flex:1; font-size:13px; font-weight:600; }
+    .czdrow input{ width:52px; text-align:right; padding:4px 6px; border:1px solid var(--line); border-radius:7px; font-size:13px; }
+    .czdrow .u{ font-size:11px; color:var(--muted); min-width:44px; text-align:right; }
+    .czdrow .rm{ cursor:pointer; color:var(--err); font-weight:700; opacity:.5; }
+    .czdrow .rm:hover{ opacity:1; }
+    .czaddrow{ font-size:12px; font-weight:700; color:#0369a1; cursor:pointer; padding:6px 2px; display:inline-block; }
+    .czfit{ border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:10px 0; }
+    .czfit .fh{ display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+    .czfit .fh h4{ margin:0; font-size:14px; }
+    .czfit .fh .m{ font-size:12px; color:var(--muted); }
+    .czfit .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:8px; margin-top:10px; }
+    .czmatrix{ font-size:12px; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -269,11 +310,54 @@
 
     <!-- ══════════ SANKI CASUALS (its own system — different formulas) ══════════ -->
     <div id="lineCasual" style="display:none">
-      <div class="comingsoon">
-        <div style="font-size:40px">🧵</div>
-        <h2><span style="font-weight:900">SANKI</span> CASUALS</h2>
-        <p class="sub" style="max-width:520px;margin:6px auto 0">A separate sourcing system for casual wear — its own photo feed and its own buying formulas (different from the funky impression tiers). Tell me the casual formulas &amp; combinations and this fills in.</p>
+
+      <!-- ① Upload everything together -->
+      <div class="panel">
+        <div class="czhead">
+          <h2>① The Casual Feed — upload everything together</h2>
+          <p class="sub">Trousers, shirts and tees all in one pile. On <b>Segregate &amp; plan</b> the app sorts every photo into its <b>category</b> and then its <b>fit</b>.</p>
+        </div>
+        <div style="display:flex;gap:8px;margin:12px 0 8px;flex-wrap:wrap;align-items:flex-end">
+          <div class="fld" style="min-width:170px"><label>Vendor (tags this batch)</label><input id="czVendor" placeholder="e.g. CHAOUFI" /></div>
+        </div>
+        <div class="drop" style="margin-top:4px" id="czDrop">
+          <div style="font-size:32px">⬆</div>
+          <div><b>Drop casual-wear photos here</b> or click to browse</div>
+          <div style="font-size:12px; margin-top:4px">Mix trousers, shirts &amp; tees freely — up to 200 per batch.</div>
+          <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
+        </div>
+        <div id="czUploadStatus" class="muted" style="font-size:12px; margin-top:6px"></div>
+        <div class="czcatchips" id="czCatChips"></div>
+        <div id="czGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:8px; margin-top:12px"></div>
       </div>
+
+      <!-- ② Budget model -->
+      <div class="panel">
+        <h2 style="margin:0 0 3px">② Budget — for all, any one, or two</h2>
+        <p class="sub">Enable the categories you're buying this cycle. Choose one total budget split across them, or set a separate rupee ceiling per category.</p>
+        <div class="czmodes" id="czModes">
+          <label data-mode="total"><input type="radio" name="czmode" value="total" /> One total budget <span class="muted" style="font-weight:500">· split across enabled categories</span></label>
+          <label data-mode="perCategory"><input type="radio" name="czmode" value="perCategory" /> A budget per category</label>
+        </div>
+        <div class="fld" id="czTotalWrap" style="max-width:220px;margin-top:8px"><label>Total budget ₹</label><input id="czTotalBudget" inputmode="numeric" placeholder="10,00,000" /></div>
+      </div>
+
+      <!-- ③ Categories — enable + budget + editable % (fit / size / colour) -->
+      <div id="czCats"></div>
+
+      <div style="text-align:center; margin:22px 0">
+        <button class="btn lg" id="czAnalyzeBtn">▶ Segregate &amp; plan</button>
+        <div class="sub" style="margin-top:6px">AI sorts each photo into category &amp; fit, then distributes each category's budget hierarchy-wise: fit → size → colour.</div>
+        <div id="czAnalyzeStatus" class="sub" style="margin-top:8px"></div>
+      </div>
+
+      <!-- Plan -->
+      <div id="czPlanPanel" style="display:none">
+        <h2 style="margin:0 0 4px">Casual buy plan</h2>
+        <p class="sub" id="czPlanSummary"></p>
+        <div id="czPlan"></div>
+      </div>
+
     </div>
 
   </div>
@@ -736,6 +820,303 @@
   function loadPlan(){ return fetch('/api/fresh/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.total) renderPlan(d); }).catch(function(){}); }
 
   loadSettings().then(loadTaste).then(loadCandidates).then(loadPlan);
+
+  // ════════════════════════════════════════════════════════════════
+  //  SANKI CASUALS — separate line, own pool, hierarchy-wise budget
+  // ════════════════════════════════════════════════════════════════
+  var czSettings = null, czSaveTimer = null, czBooted = false;
+  function czSlug(s){ return String(s||'').trim().replace(/\s+/g,' '); }
+
+  function czSaveSettings(now){
+    if(!czSettings) return;
+    clearTimeout(czSaveTimer);
+    var doSave = function(){
+      fetch('/api/casuals/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(czSettings) })
+        .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czSettings = d.settings; flashSaved(); } });
+    };
+    if(now) doSave(); else czSaveTimer = setTimeout(doSave, 500);
+  }
+
+  function czLoadSettings(){
+    return fetch('/api/casuals/settings').then(function(r){ return r.json(); }).then(function(d){
+      czSettings = d.settings; czRenderBudget(); czRenderCats();
+    });
+  }
+
+  function czRenderBudget(){
+    var mode = czSettings.budgetMode || 'total';
+    Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){ r.checked = (r.value === mode); });
+    Array.prototype.forEach.call(document.querySelectorAll('#czModes label'), function(l){ l.classList.toggle('on', l.getAttribute('data-mode') === mode); });
+    el('czTotalWrap').style.display = (mode === 'total') ? '' : 'none';
+    el('czTotalBudget').value = fmtINR(czSettings.budget || 0);
+  }
+
+  // One editable %-row (fit / size / colour). `removable` custom rows show ✕.
+  function czDistRow(catKey, kind, key, label, pct, removable){
+    var d = document.createElement('div'); d.className = 'czdrow';
+    d.innerHTML = '<span class="lbl">'+escapeHtml(label)+'</span>'+
+      '<input type="number" min="0" step="1" value="'+(pct||0)+'" />'+
+      '<span style="font-size:12px;color:var(--muted)">%</span>'+
+      '<span class="u" data-u></span>'+
+      (removable ? '<span class="rm" title="Remove">✕</span>' : '');
+    var inp = d.querySelector('input');
+    inp.addEventListener('input', function(){ czSettings.categories[catKey][kind][key] = Math.max(0, parseInt(inp.value)||0); czRecalcCard(catKey); czSaveSettings(); });
+    var rm = d.querySelector('.rm');
+    if(rm) rm.addEventListener('click', function(){ delete czSettings.categories[catKey][kind][key]; czRenderCats(); czSaveSettings(true); });
+    return d;
+  }
+
+  // Sum-aware helper: total of a pct map.
+  function czSum(map){ return Object.keys(map).reduce(function(s,k){ return s + (Math.max(0,parseInt(map[k])||0)); }, 0); }
+
+  // Recompute the live "units" hints on a category card after any edit.
+  function czRecalcCard(catKey){
+    var card = document.querySelector('.czcard[data-cat="'+catKey+'"]'); if(!card) return;
+    var c = czSettings.categories[catKey];
+    var budget = (czSettings.budgetMode === 'perCategory') ? (c.budget||0)
+      : (function(){ var en = CAT_KEYS.filter(function(k){ return czSettings.categories[k].enabled; }); return en.length && c.enabled ? Math.floor((czSettings.budget||0)/en.length) : 0; })();
+    var units = c.enabled ? Math.floor(budget / Math.max(1, c.avgCost||1)) : 0;
+    var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
+    var up = card.querySelector('[data-unitpill]'); if(up) up.textContent = fmtINR(units);
+    ['fits','sizes','colours'].forEach(function(kind){
+      var map = c[kind], tot = czSum(map) || 1;
+      Array.prototype.forEach.call(card.querySelectorAll('[data-kind="'+kind+'"] .czdrow'), function(row){
+        var key = row.getAttribute('data-key'); var pct = Math.max(0, parseInt(map[key])||0);
+        var u = row.querySelector('[data-u]'); if(u) u.textContent = units ? (Math.round(units*pct/tot)+' pc') : (Math.round(pct/tot*100)+'%');
+      });
+    });
+  }
+
+  var CAT_KEYS = ['Trouser','Shirt','T-shirt'];
+  var CAT_LABEL = { 'Trouser':'Trousers', 'Shirt':'Shirts', 'T-shirt':'T-Shirts & Polos' };
+  // Human labels for the spec fit keys (so the editor reads nicely).
+  var FIT_LABELS = {
+    'Trouser':{ wideleg:'Wide-leg / Controlled Baggy', relaxedstraight:'Relaxed Straight', koreanpleated:'Korean Pleated', flared:'Flared / Bootcut', tapered:'Tapered / Chino' },
+    'Shirt':{ oversized:'Oversized / Drop Shoulder', relaxedregular:'Relaxed Regular', boxy:'Boxy', cuban:'Cuban / Resort Collar' },
+    'T-shirt':{ oversizedround:'Oversized Round Neck', relaxedround:'Relaxed Round Neck', boxyround:'Boxy Round Neck', classictee:'Classic Regular Tee' }
+  };
+  function czFitLabel(catKey, key){ return (FIT_LABELS[catKey] && FIT_LABELS[catKey][key]) || key; }
+
+  var czOpenCards = {};
+  function czRenderCats(){
+    var host = el('czCats'); host.innerHTML = '';
+    CAT_KEYS.forEach(function(catKey){
+      var c = czSettings.categories[catKey];
+      var open = czOpenCards[catKey] !== false; // default open
+      var card = document.createElement('div');
+      card.className = 'czcard' + (c.enabled ? '' : ' off'); card.setAttribute('data-cat', catKey);
+
+      var hd = document.createElement('div'); hd.className = 'czcardhd';
+      hd.innerHTML =
+        '<label class="czsw" title="Buy this category this cycle"><input type="checkbox" '+(c.enabled?'checked':'')+' /><span class="tk"></span></label>'+
+        '<div class="grow"><h3>'+escapeHtml(CAT_LABEL[catKey])+'</h3><div class="note" data-note></div></div>'+
+        '<span class="caret">'+(open?'▾':'▸')+'</span>';
+      card.appendChild(hd);
+
+      var body = document.createElement('div'); body.className = 'czcardbody'; body.style.display = open ? '' : 'none';
+
+      // budget + avgCost + live pills
+      var perCat = (czSettings.budgetMode === 'perCategory');
+      var row = document.createElement('div'); row.className = 'czrow';
+      row.innerHTML =
+        (perCat ? '<div class="fld" style="min-width:150px"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>' : '')+
+        '<div class="fld" style="min-width:130px"><label>Avg landed ₹ / pc</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
+      body.appendChild(row);
+
+      var pills = document.createElement('div'); pills.className = 'czpills';
+      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">≈ Units to buy<b data-unitpill>0</b></div>';
+      body.appendChild(pills);
+
+      ['fits','sizes','colours'].forEach(function(kind){
+        var title = kind === 'fits' ? 'Fit mix %' : (kind === 'sizes' ? 'Size mix %' : 'Colour mix %');
+        var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
+        body.appendChild(sub);
+        var wrap = document.createElement('div'); wrap.className = 'czdist'; wrap.setAttribute('data-kind', kind);
+        var map = c[kind];
+        Object.keys(map).forEach(function(key){
+          var label = (kind === 'fits') ? czFitLabel(catKey, key) : key;
+          var spec = (kind === 'fits') ? !!(FIT_LABELS[catKey] && FIT_LABELS[catKey][key]) : true; // spec size/colour keys are their own labels
+          var isCustom = (kind === 'fits') ? !spec : false; // only fits track custom vs spec cleanly
+          var r = czDistRow(catKey, kind, key, label, map[key], isCustom || (kind !== 'fits' && czIsCustom(catKey, kind, key)));
+          r.setAttribute('data-key', key); wrap.appendChild(r);
+        });
+        body.appendChild(wrap);
+        var add = document.createElement('span'); add.className = 'czaddrow'; add.textContent = '+ add ' + (kind === 'fits' ? 'fit' : kind === 'sizes' ? 'size' : 'colour');
+        add.addEventListener('click', function(){
+          var name = prompt('New ' + (kind === 'fits' ? 'fit' : kind === 'sizes' ? 'size' : 'colour') + ' name:');
+          if(!name || !czSlug(name)) return; var key = czSlug(name);
+          if(czSettings.categories[catKey][kind][key] == null){ czSettings.categories[catKey][kind][key] = 0; czRenderCats(); czSaveSettings(true); }
+        });
+        body.appendChild(add);
+      });
+
+      card.appendChild(body);
+      host.appendChild(card);
+
+      // wire header toggle + enable switch
+      hd.querySelector('.grow').addEventListener('click', function(){ czOpenCards[catKey] = !open; czRenderCats(); });
+      hd.querySelector('.caret').addEventListener('click', function(){ czOpenCards[catKey] = !open; czRenderCats(); });
+      var sw = hd.querySelector('.czsw input');
+      sw.addEventListener('click', function(e){ e.stopPropagation(); });
+      sw.addEventListener('change', function(){ c.enabled = sw.checked; card.classList.toggle('off', !c.enabled); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+
+      var bud = body.querySelector('[data-budget]');
+      if(bud) bud.addEventListener('change', function(){ c.budget = parseInt((bud.value||'').replace(/[^\d]/g,''))||0; bud.value = fmtINR(c.budget); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+      var avg = body.querySelector('[data-avgcost]');
+      if(avg) avg.addEventListener('change', function(){ c.avgCost = Math.max(1, parseInt((avg.value||'').replace(/[^\d]/g,''))||1); avg.value = fmtINR(c.avgCost); czRecalcCard(catKey); czSaveSettings(); });
+
+      // design note
+      var note = hd.querySelector('[data-note]'); note.textContent = CZ_NOTE[catKey] || '';
+
+      czRecalcCard(catKey);
+    });
+  }
+  // Spec size/colour keys are considered custom if not in the default set (so ✕ shows only for founder-added ones).
+  var CZ_DEFAULT = {
+    'Trouser':{ sizes:['26','28','30','32','34','36'], colours:['Black','Beige','Charcoal Grey','Olive','Brown','Navy Blue','Off White'] },
+    'Shirt':{ sizes:['XS','S','M','L','XL','XXL'], colours:['Black','Off White','White','Charcoal Grey','Olive Green','Beige','Sky Blue'] },
+    'T-shirt':{ sizes:['XS','S','M','L','XL','XXL'], colours:['Black','Off White','White','Charcoal Grey','Olive Green','Beige','Navy Blue'] }
+  };
+  var CZ_NOTE = { 'Trouser':'Mostly solids; texture / checks as accents', 'Shirt':'Solid ≈ 50%, rest prints / textures', 'T-shirt':'Solid 60–70%, texture / stripes / checks 25–30%' };
+  function czIsCustom(catKey, kind, key){
+    var def = CZ_DEFAULT[catKey] && CZ_DEFAULT[catKey][kind]; return def ? def.indexOf(key) < 0 : true;
+  }
+
+  // ── Casual candidate feed ──
+  function czRenderCandidates(list, cats){
+    var chips = el('czCatChips');
+    var total = (list||[]).length;
+    if(cats && cats.length){
+      chips.innerHTML = '<span class="muted" style="font-size:11px;align-self:center">Sorted:</span>' +
+        cats.map(function(c){ return '<span class="czcatchip">'+escapeHtml(c.label)+'<span class="n">'+c.count+'</span></span>'; }).join('') +
+        (total ? '<span class="czcatchip" style="background:#fef2f2;border-color:#fecaca;color:var(--err);cursor:pointer" id="czClear">✕ clear all</span>' : '');
+      var cc = el('czClear');
+      if(cc) cc.onclick = function(){ if(confirm('Remove all '+total+' casual photos?')) fetch('/api/casuals/candidates/clear',{method:'POST'}).then(function(){ czLoadCandidates(); }); };
+    } else chips.innerHTML = '';
+    var grid = el('czGrid');
+    grid.innerHTML = (list||[]).map(function(c){
+      var cap = [c.vendor||'—']; if(c.category) cap.push(CAT_LABEL[c.category]||c.category); if(c.fit) cap.push(czFitLabel(c.category, c.fit)); if(c.colour) cap.push(c.colour);
+      var dupe = c.dupeOf ? '<span class="dupeflag" title="Near-duplicate — left out of the buy">dupe</span>' : '';
+      var cat = c.category ? '<span class="catbadge" title="Auto-detected">'+escapeHtml(CAT_LABEL[c.category]||c.category)+'</span>' : '';
+      return '<div class="cand'+(c.dupeOf?' held':'')+'" data-cap="'+escapeHtml(cap.join(' · '))+'">'+cat+dupe+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+escapeHtml((c.colour||'')||(c.vendor||''))+'</span></div>';
+    }).join('');
+    Array.prototype.forEach.call(grid.querySelectorAll('.del'), function(b){
+      b.onclick = function(){ fetch('/api/casuals/candidate/'+b.getAttribute('data-id'),{method:'DELETE'}).then(function(){ czLoadCandidates(); }); };
+    });
+  }
+  function czLoadCandidates(){
+    return fetch('/api/casuals/candidates').then(function(r){ return r.json(); }).then(function(d){ if(d.success) czRenderCandidates(d.candidates, d.categories); });
+  }
+
+  function czUpload(files){
+    if(!files || !files.length) return;
+    var vendor = (el('czVendor').value||'').trim();
+    if(!vendor){ el('czUploadStatus').innerHTML = '<span style="color:var(--err)">Enter a vendor name first, then add photos.</span>'; el('czVendor').focus(); return; }
+    var all = Array.prototype.slice.call(files);
+    var chunks = [], cur = [], curBytes = 0;
+    all.forEach(function(f){ var sz=f.size||0; if(cur.length && (curBytes+sz > BATCH_BYTES || cur.length >= BATCH_MAX)){ chunks.push(cur); cur=[]; curBytes=0; } cur.push(f); curBytes+=sz; });
+    if(cur.length) chunks.push(cur);
+    var done=0, addedTotal=0, total=0;
+    function send(idx){
+      if(idx >= chunks.length){ el('czUploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+addedTotal+' — total '+total+'</span>'; czLoadCandidates(); return; }
+      var fd = new FormData(); chunks[idx].forEach(function(f){ fd.append('photos', f); }); fd.append('vendor', vendor);
+      el('czUploadStatus').textContent = 'Uploading '+(done+1)+'–'+(done+chunks[idx].length)+' of '+all.length+'…';
+      fetch('/api/casuals/candidates', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
+        if(d.success){ addedTotal += d.added.length; total = d.total; done += chunks[idx].length; send(idx+1); }
+        else el('czUploadStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Upload failed')+'</span>';
+      }).catch(function(){ el('czUploadStatus').innerHTML = '<span style="color:var(--err)">Upload failed after '+done+' of '+all.length+'.</span>'; });
+    }
+    send(0);
+  }
+
+  function czAnalyze(){
+    var btn = el('czAnalyzeBtn'); btn.disabled = true;
+    el('czAnalyzeStatus').innerHTML = '<span class="muted">Segregating photos by category &amp; fit…</span>';
+    fetch('/api/casuals/analyze', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({}) })
+      .then(function(r){ return r.json(); }).then(function(d){
+        btn.disabled = false;
+        if(!d.success){ el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Failed')+'</span>'; return; }
+        var msg = '✓ Sorted '+d.classified+' photo'+(d.classified===1?'':'s'); if(d.dupes) msg += ' · '+d.dupes+' near-dupe'+(d.dupes===1?'':'s')+' set aside';
+        el('czAnalyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">'+msg+'</span>';
+        czLoadCandidates(); czRenderPlan(d);
+      }).catch(function(){ btn.disabled = false; el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">Segregation failed — try again.</span>'; });
+  }
+
+  function czRenderPlan(d){
+    if(!d || !d.categories){ return; }
+    el('czPlanPanel').style.display = '';
+    el('czPlanSummary').innerHTML = '≈ <b>'+fmtINR(d.totalUnits||0)+' pieces</b> across the enabled categories for a total of <b>₹'+fmtINR(d.totalBudget||0)+'</b>. Each category is split hierarchy-wise: fit → size → colour.';
+    var host = el('czPlan'); host.innerHTML = '';
+    (d.categories||[]).forEach(function(cat){
+      if(!cat.enabled && !cat.poolCount) return; // hide disabled empties
+      var sec = document.createElement('div'); sec.className = 'catsec czcard'; sec.setAttribute('data-cat', cat.category);
+      var hd = document.createElement('div'); hd.className = 'czcardhd';
+      hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
+        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+' uploaded</div></div>'+
+        (cat.enabled ? '<div class="czpill" style="margin:0">≈ Units<b>'+fmtINR(cat.units)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Budget<b>₹'+fmtINR(cat.budget)+'</b></div>' : '');
+      sec.appendChild(hd);
+      var body = document.createElement('div'); body.className = 'czcardbody';
+
+      // Fit breakdown with photos
+      (cat.fits||[]).forEach(function(f){
+        if(!f.photos.length && !f.units && !f.unassignedFit) return;
+        var fit = document.createElement('div'); fit.className = 'czfit';
+        var meta = f.unassignedFit ? ('<span class="m">'+f.photos.length+' photo'+(f.photos.length===1?'':'s')+' — assign a fit manually</span>')
+          : ('<span class="m">'+f.share+'% · ≈ '+fmtINR(f.units)+' pc · ₹'+fmtINR(f.budget)+' · '+f.photos.length+' photo'+(f.photos.length===1?'':'s')+'</span>');
+        fit.innerHTML = '<div class="fh"><h4>'+escapeHtml(f.label)+'</h4>'+meta+'</div>';
+        if(f.photos.length){
+          var g = document.createElement('div'); g.className = 'grid';
+          g.innerHTML = f.photos.map(function(c){
+            var cap = [c.vendor||'—', cat.label, f.label]; if(c.colour) cap.push(c.colour);
+            return '<div class="cand" data-cap="'+escapeHtml(cap.join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
+          }).join('');
+          fit.appendChild(g);
+        }
+        body.appendChild(fit);
+      });
+
+      if(cat.enabled){
+        var mk = function(title, rows){
+          var s = document.createElement('div'); s.className='czsub'; s.textContent = title; body.appendChild(s);
+          var wrap = document.createElement('div'); wrap.className='czpills';
+          wrap.innerHTML = rows.map(function(r){ return '<div class="czpill">'+escapeHtml(r.label)+'<b>'+fmtINR(r.units)+' pc</b><span class="muted" style="font-size:11px">'+r.share+'%</span></div>'; }).join('');
+          body.appendChild(wrap);
+        };
+        mk('Size split — ≈ units', cat.sizes);
+        mk('Colour split — ≈ units', cat.colours);
+      }
+      sec.appendChild(body);
+      host.appendChild(sec);
+    });
+
+    if((d.unsorted||[]).length){
+      var sec = document.createElement('div'); sec.className='catsec czcard';
+      sec.innerHTML = '<div class="czcardhd"><div class="grow"><h3>Unsorted</h3><div class="note">Not recognised as a casual trouser / shirt / tee — check these</div></div></div>';
+      var g = document.createElement('div'); g.className='czcardbody'; var gg = document.createElement('div'); gg.className='grid'; gg.style.display='grid'; gg.style.gridTemplateColumns='repeat(auto-fill,minmax(78px,1fr))'; gg.style.gap='8px';
+      gg.innerHTML = d.unsorted.map(function(c){ return '<div class="cand" data-cap="'+escapeHtml((c.vendor||'—'))+'"><img src="'+c.url+'" loading="lazy" alt=""/></div>'; }).join('');
+      g.appendChild(gg); sec.appendChild(g); host.appendChild(sec);
+    }
+  }
+
+  function czLoadPlan(){ return fetch('/api/casuals/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.analysed) czRenderPlan(d); }).catch(function(){}); }
+
+  // Wiring (casuals)
+  el('czDrop').addEventListener('click', function(){ el('czInput').click(); });
+  el('czInput').addEventListener('change', function(){ czUpload(el('czInput').files); el('czInput').value=''; });
+  ['dragover','dragenter'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.add('drag'); }); });
+  ['dragleave','drop'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.remove('drag'); }); });
+  el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
+  el('czAnalyzeBtn').addEventListener('click', czAnalyze);
+  Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){
+    r.addEventListener('change', function(){ if(!czSettings) return; czSettings.budgetMode = r.value; czRenderBudget(); czRenderCats(); czSaveSettings(); });
+  });
+  el('czTotalBudget').addEventListener('change', function(){ if(!czSettings) return; czSettings.budget = parseInt((el('czTotalBudget').value||'').replace(/[^\d]/g,''))||0; el('czTotalBudget').value = fmtINR(czSettings.budget); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+
+  // Lazy boot the Casuals line the first time it's opened.
+  function czBoot(){ if(czBooted) return; czBooted = true; czLoadSettings().then(czLoadCandidates).then(czLoadPlan); }
+  var _switchLine = switchLine;
+  switchLine = function(line){ _switchLine(line); if(line === 'casual') czBoot(); };
+  (function(){ var saved='funky'; try { saved = localStorage.getItem('sanki_fresh_line')||'funky'; } catch(e){} if(saved === 'casual') czBoot(); })();
   </script>
   <script src="/sidebar.js"></script>
 </body>
