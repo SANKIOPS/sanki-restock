@@ -129,8 +129,17 @@ function normFit(catKey, raw) {
   return null;
 }
 
-// ── Perceptual hash + near-dup detection (same recipe as Funky) ──
-const DUP_HAM_MAX = 8, DUP_COL_MAX = 40;
+// ── Duplicate detection — EXACT matches only ─────────────────────
+// The founder wants a photo flagged as a duplicate only when it is the SAME
+// picture, not merely a similar-looking garment. So the primary test is an
+// exact SHA-256 of the file bytes; the perceptual hash is kept only as a
+// pixel-identical safety net (hamming 0 + no colour drift) for the case where
+// the identical image was re-encoded on the way in. Similar-but-different
+// styles / colourways are NEVER merged.
+function fileSha(filePath) {
+  try { return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex'); }
+  catch { return null; }
+}
 async function computeSignature(filePath) {
   if (!Jimp) return null;
   try {
@@ -152,12 +161,20 @@ async function computeSignature(filePath) {
 }
 function hamming(a, b) { if (!a || !b || a.length !== b.length) return 999; let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; }
 function colourDist(a, b) { if (!a || !b) return 999; return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2); }
+// Two candidates are duplicates only if they are the SAME picture: identical
+// file bytes (sha) OR a pixel-identical re-encode (phash matches exactly with
+// no colour drift). Anything less — a similar style, another colourway, a
+// different angle — is a distinct product and stays.
+function isExactDuplicate(a, b) {
+  if (a.sha && b.sha) return a.sha === b.sha;
+  if (a.phash && b.phash) return hamming(a.phash, b.phash) === 0 && colourDist(a.avg, b.avg) <= 6;
+  return false;
+}
 function markDuplicates(cands) {
   const uniques = [];
   cands.forEach(c => {
     c.dupeOf = null;
-    if (!c.phash) { uniques.push(c); return; }
-    const hit = uniques.find(u => u.phash && hamming(c.phash, u.phash) <= DUP_HAM_MAX && colourDist(c.avg, u.avg) <= DUP_COL_MAX);
+    const hit = uniques.find(u => isExactDuplicate(c, u));
     if (hit) c.dupeOf = hit.id; else uniques.push(c);
   });
   return cands.filter(c => c.dupeOf).length;
@@ -378,31 +395,50 @@ function buildPlan(cands, settings) {
 
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
+    // HIERARCHY, step 1: the category's units flow down to the fits by fit %.
     const fitUnits = splitInts(units, cfg.fits);
     const fitBudget = splitInts(budget, cfg.fits);
 
-    const sizeRows = pctRows(cfg.sizes, k => k);
-    const sizeUnits = splitInts(units, cfg.sizes);
-    const colRows = pctRows(cfg.colours, k => k);
-    const colUnits = splitInts(units, cfg.colours);
+    const sizeKeys = Object.keys(cfg.sizes);
+    const colKeys  = Object.keys(cfg.colours);
+    // Aggregates rebuilt from the nested numbers so the category-level size /
+    // colour totals always equal the sum of the fit-level splits (no drift).
+    const sizeAgg = {}; sizeKeys.forEach(k => sizeAgg[k] = 0);
+    const colAgg  = {}; colKeys.forEach(k => colAgg[k] = 0);
 
-    // Attach available uploaded photos to their detected fit.
     const pool = byCat[catKey] || [];
-    const fits = fitRows.map(fr => ({
-      key: fr.key, label: fr.label, pct: fr.pct, share: fr.share,
-      units: fitUnits[fr.key] || 0, budget: fitBudget[fr.key] || 0,
-      photos: pool.filter(c => c.fit === fr.key).map(publicCandidate),
-      unassignedFit: false
-    }));
+    const fits = fitRows.map(fr => {
+      const fu = fitUnits[fr.key] || 0;
+      // step 2: EACH FIT's units are split into SIZES (a sub-portion of the fit,
+      // not of the whole category).
+      const fitSizeUnits = splitInts(fu, cfg.sizes);
+      const sizes = sizeKeys.map(sk => {
+        const su = fitSizeUnits[sk] || 0;
+        sizeAgg[sk] += su;
+        // step 3: EACH (fit, size)'s units are split into COLOURS.
+        const scColUnits = splitInts(su, cfg.colours);
+        const colours = colKeys.map(ck => { colAgg[ck] += (scColUnits[ck] || 0); return { key: ck, label: ck, units: scColUnits[ck] || 0 }; })
+          .filter(c => c.units > 0);
+        return { key: sk, label: sk, units: su, colours };
+      }).filter(s => s.units > 0);
+      return {
+        key: fr.key, label: fr.label, pct: fr.pct, share: fr.share,
+        units: fu, budget: fitBudget[fr.key] || 0,
+        photos: pool.filter(c => c.fit === fr.key).map(publicCandidate),
+        sizes,
+        unassignedFit: false
+      };
+    });
     const noFit = pool.filter(c => !c.fit);
-    if (noFit.length) fits.push({ key: '_unassigned', label: 'Fit not detected', pct: 0, share: 0, units: 0, budget: 0, photos: noFit.map(publicCandidate), unassignedFit: true });
+    if (noFit.length) fits.push({ key: '_unassigned', label: 'Fit not detected', pct: 0, share: 0, units: 0, budget: 0, photos: noFit.map(publicCandidate), sizes: [], unassignedFit: true });
 
     return {
       category: catKey, label: spec.label, designNote: spec.designNote,
       enabled, budget, avgCost, units, poolCount: pool.length,
       fits,
-      sizes: sizeRows.map(r => ({ ...r, units: sizeUnits[r.key] || 0 })),
-      colours: colRows.map(r => ({ ...r, units: colUnits[r.key] || 0 }))
+      // Category-level roll-ups (summed from the hierarchy above, for a quick read).
+      sizes: pctRows(cfg.sizes, k => k).map(r => ({ ...r, units: sizeAgg[r.key] || 0 })),
+      colours: pctRows(cfg.colours, k => k).map(r => ({ ...r, units: colAgg[r.key] || 0 }))
     };
   });
 
@@ -472,10 +508,11 @@ router.post('/api/casuals/candidates', async (req, res) => {
   const s = loadStore();
   const added = [];
   for (const f of files) {
-    const sig = await computeSignature(path.join(CAND_DIR, f.filename));
+    const fp = path.join(CAND_DIR, f.filename);
+    const sig = await computeSignature(fp);
     const c = { id: crypto.randomBytes(8).toString('hex'), file: f.filename, vendor,
       category: null, fit: null, colour: null, pattern: null,
-      uploadedAt: new Date().toISOString(), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null };
+      uploadedAt: new Date().toISOString(), sha: fileSha(fp), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null };
     s.candidates.push(c);
     added.push(publicCandidate(c));
   }

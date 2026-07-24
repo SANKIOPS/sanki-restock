@@ -169,6 +169,14 @@
     .czfit .fh .m{ font-size:12px; color:var(--muted); }
     .czfit .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:8px; margin-top:10px; }
     .czmatrix{ font-size:12px; color:var(--muted); }
+    /* nested size run (sizes shown alongside a fit's images) */
+    .czsizerun{ display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
+    .czsz{ border:1px solid var(--line); border-radius:9px; padding:6px 9px; background:#fbfdfb; min-width:120px; }
+    .czsz .k{ font-weight:800; font-size:13px; }
+    .czsz .b{ font-weight:800; font-size:13px; margin-left:6px; color:#0369a1; }
+    .czsz .cols{ display:block; font-size:11px; color:var(--muted); margin-top:3px; line-height:1.5; }
+    /* size chip shown ON each product image */
+    .cand .szrun{ position:absolute; left:3px; bottom:3px; right:3px; font-size:9px; line-height:1.25; background:rgba(255,255,255,.9); border-radius:5px; padding:2px 4px; color:#0369a1; font-weight:700; }
   </style>
 </head>
 <body>
@@ -1057,20 +1065,38 @@
       sec.appendChild(hd);
       var body = document.createElement('div'); body.className = 'czcardbody';
 
-      // Fit breakdown with photos
+      // Hierarchy: Fit → (its own) Sizes → Colours. Each fit shows the sizes
+      // that belong to IT (a slice of the fit's units, not the category total),
+      // and each size lists its colour breakdown. Images carry a per-photo size
+      // run so the buyer sees the size ladder right on the picture.
+      var szCompact = function(sizes){
+        return (sizes||[]).map(function(s){ return escapeHtml(s.label)+':'+fmtINR(s.units); }).join('  ');
+      };
       (cat.fits||[]).forEach(function(f){
         if(!f.photos.length && !f.units && !f.unassignedFit) return;
         var fit = document.createElement('div'); fit.className = 'czfit';
         var meta = f.unassignedFit ? ('<span class="m">'+f.photos.length+' photo'+(f.photos.length===1?'':'s')+' — assign a fit manually</span>')
-          : ('<span class="m">'+f.share+'% · ≈ '+fmtINR(f.units)+' pc · ₹'+fmtINR(f.budget)+' · '+f.photos.length+' photo'+(f.photos.length===1?'':'s')+'</span>');
+          : ('<span class="m">'+f.share+'% of '+escapeHtml(cat.label)+' · ≈ '+fmtINR(f.units)+' pc · ₹'+fmtINR(f.budget)+' · '+f.photos.length+' photo'+(f.photos.length===1?'':'s')+'</span>');
         fit.innerHTML = '<div class="fh"><h4>'+escapeHtml(f.label)+'</h4>'+meta+'</div>';
+        var szInline = f.sizes && f.sizes.length ? szCompact(f.sizes) : '';
         if(f.photos.length){
           var g = document.createElement('div'); g.className = 'grid';
           g.innerHTML = f.photos.map(function(c){
             var cap = [c.vendor||'—', cat.label, f.label]; if(c.colour) cap.push(c.colour);
-            return '<div class="cand" data-cap="'+escapeHtml(cap.join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
+            if(szInline) cap.push('Sizes ' + f.sizes.map(function(s){ return s.label+' '+fmtINR(s.units); }).join(', '));
+            var run = szInline ? '<span class="szrun">'+escapeHtml(szInline)+'</span>' : '';
+            return '<div class="cand" data-cap="'+escapeHtml(cap.join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/>'+run+'<span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
           }).join('');
           fit.appendChild(g);
+        }
+        // Size ladder for this fit, each size showing its colour split beneath.
+        if(f.sizes && f.sizes.length){
+          var run = document.createElement('div'); run.className = 'czsizerun';
+          run.innerHTML = f.sizes.map(function(s){
+            var cols = (s.colours||[]).map(function(cl){ return escapeHtml(cl.label)+' '+fmtINR(cl.units); }).join(' · ');
+            return '<div class="czsz"><span class="k">'+escapeHtml(s.label)+'</span><span class="b">'+fmtINR(s.units)+' pc</span>'+(cols?'<span class="cols">'+cols+'</span>':'')+'</div>';
+          }).join('');
+          fit.appendChild(run);
         }
         body.appendChild(fit);
       });
@@ -1082,8 +1108,8 @@
           wrap.innerHTML = rows.map(function(r){ return '<div class="czpill">'+escapeHtml(r.label)+'<b>'+fmtINR(r.units)+' pc</b><span class="muted" style="font-size:11px">'+r.share+'%</span></div>'; }).join('');
           body.appendChild(wrap);
         };
-        mk('Size split — ≈ units', cat.sizes);
-        mk('Colour split — ≈ units', cat.colours);
+        mk('Category size roll-up — ≈ units', cat.sizes);
+        mk('Category colour roll-up — ≈ units', cat.colours);
       }
       sec.appendChild(body);
       host.appendChild(sec);
