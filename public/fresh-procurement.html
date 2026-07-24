@@ -158,9 +158,6 @@
     .comingsoon h2{ margin:0 0 8px; }
     /* ── SANKI CASUALS ── */
     .czhead h2{ margin:0 0 3px; }
-    .czmodes{ display:flex; gap:14px; flex-wrap:wrap; margin:10px 0 4px; }
-    .czmodes label{ display:flex; gap:7px; align-items:center; font-size:13px; font-weight:600; cursor:pointer; padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:#fbfdfb; }
-    .czmodes label.on{ border-color:#0ea5e9; background:#eff9ff; color:#0369a1; }
     .czcatchips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
     .czcatchip{ font-size:11px; font-weight:700; padding:4px 9px; border-radius:20px; border:1px solid var(--line); background:#f7faf5; }
     .czcatchip .n{ margin-left:5px; opacity:.6; }
@@ -248,6 +245,19 @@
     .popricein:focus{ outline:none; }
     .pocost{ font-size:13px; font-weight:800; color:#065f46; }
     .pocost.none{ color:#bbb; font-weight:600; }
+    /* Curation gate — AI rating badge + include/exclude controls */
+    .czrate{ display:inline-block; font-size:11px; font-weight:800; padding:1px 8px; border-radius:20px; margin-left:6px; white-space:nowrap; }
+    .czrate.hi{ background:#dcfce7; color:#166534; }
+    .czrate.mid{ background:#fef9c3; color:#854d0e; }
+    .czrate.lo{ background:#fee2e2; color:#991b1b; }
+    .czexhead{ font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.4px; color:#b45309; background:#fff7ed; border:1px dashed #fed7aa; border-radius:8px; padding:6px 11px; margin:14px 0 6px; }
+    .czporow.czexcl{ opacity:.6; }
+    .czporow.czexcl .cand img{ filter:grayscale(.6); }
+    .czexnote{ font-size:12px; color:var(--muted); margin:4px 0 7px; font-style:italic; }
+    .czinclbtn{ background:#065f46; color:#fff; border:0; border-radius:8px; padding:5px 12px; font-size:12px; font-weight:700; cursor:pointer; }
+    .czinclbtn:hover{ background:#047857; }
+    .czexclbtn{ background:transparent; border:1px solid var(--line); color:#b91c1c; border-radius:7px; padding:1px 8px; font-size:12px; font-weight:800; cursor:pointer; margin-left:6px; line-height:1.5; }
+    .czexclbtn:hover{ background:#fee2e2; border-color:#fca5a5; }
     .cztag{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:20px; margin-left:8px; }
     .cztag.ok{ background:#ecfdf5; color:#065f46; }
     .cztag.over{ background:#fef2f2; color:#b91c1c; }
@@ -440,15 +450,10 @@
       </div>
 
       <div id="czWorkflow" style="display:none"><!-- shown only while a batch is open -->
-      <!-- ② Budget model -->
+      <!-- ② Budget — set a separate rupee ceiling per category -->
       <div class="panel">
-        <h2 style="margin:0 0 3px">② Budget — for all, any one, or two</h2>
-        <p class="sub">Enable the categories you're buying this cycle. Choose one total budget split across them, or set a separate rupee ceiling per category.</p>
-        <div class="czmodes" id="czModes">
-          <label data-mode="total"><input type="radio" name="czmode" value="total" /> One total budget <span class="muted" style="font-weight:500">· split across enabled categories</span></label>
-          <label data-mode="perCategory"><input type="radio" name="czmode" value="perCategory" /> A budget per category</label>
-        </div>
-        <div class="fld" id="czTotalWrap" style="max-width:220px;margin-top:8px"><label>Total budget ₹</label><input id="czTotalBudget" inputmode="numeric" placeholder="10,00,000" /></div>
+        <h2 style="margin:0 0 3px">② Budget — per category</h2>
+        <p class="sub">Enable the categories you're buying this cycle and set a rupee budget for each one below — Trouser, Shirt and T-shirt are funded separately.</p>
       </div>
 
       <!-- ③ Categories — enable + budget + editable % (fit / size / colour) -->
@@ -975,11 +980,8 @@
   }
 
   function czRenderBudget(){
-    var mode = czSettings.budgetMode || 'total';
-    Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){ r.checked = (r.value === mode); });
-    Array.prototype.forEach.call(document.querySelectorAll('#czModes label'), function(l){ l.classList.toggle('on', l.getAttribute('data-mode') === mode); });
-    el('czTotalWrap').style.display = (mode === 'total') ? '' : 'none';
-    el('czTotalBudget').value = fmtINR(czSettings.budget || 0);
+    // Budget is always per-category now; nothing global to render here.
+    czSettings.budgetMode = 'perCategory';
   }
 
   // One editable %-row (fit / size / colour). `removable` custom rows show ✕.
@@ -1004,8 +1006,7 @@
   function czRecalcCard(catKey){
     var card = document.querySelector('.czcard[data-cat="'+catKey+'"]'); if(!card) return;
     var c = czSettings.categories[catKey];
-    var budget = (czSettings.budgetMode === 'perCategory') ? (c.budget||0)
-      : (function(){ var en = CAT_KEYS.filter(function(k){ return czSettings.categories[k].enabled; }); return en.length && c.enabled ? Math.floor((czSettings.budget||0)/en.length) : 0; })();
+    var budget = c.budget||0;
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
     // No piece-count estimate here (it needed a per-unit price we don't trust
     // until PO). Each row just shows its normalised share of the budget.
@@ -1050,12 +1051,9 @@
       // were removed: the per-unit price is only a soft guess that changes
       // nothing about the rupee plan — real units are decided at PO from the
       // vendor's actual quote. We keep the money, drop the fake piece counts.
-      var perCat = (czSettings.budgetMode === 'perCategory');
-      if(perCat){
-        var row = document.createElement('div'); row.className = 'czrow';
-        row.innerHTML = '<div class="fld" style="min-width:150px"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>';
-        body.appendChild(row);
-      }
+      var row = document.createElement('div'); row.className = 'czrow';
+      row.innerHTML = '<div class="fld" style="min-width:150px"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>';
+      body.appendChild(row);
 
       var pills = document.createElement('div'); pills.className = 'czpills';
       pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div>';
@@ -1178,7 +1176,7 @@
     } else if(b.count){
       out.push('<span class="czbchip muted">not segregated yet</span>');
     }
-    var bud = czSettings ? (czSettings.budget||0) : 0;
+    var bud = czSettings ? CAT_KEYS.reduce(function(s,k){ var c=czSettings.categories[k]; return s + ((c&&c.enabled)?(c.budget||0):0); }, 0) : 0;
     if(bud) out.push('<span class="czbchip bud">est. budget ₹'+fmtINR(bud)+'</span>');
     if(isActive && czPriced && czLastPlan){
       var sp = czPlanSpend();
@@ -1371,6 +1369,20 @@
   }
 
   // ── VIEW: Buy sheet (bill) — one photo per row, sizes/qty beside it ──
+  // AI suitability rating chip (green ≥8, amber 6-7, red ≤5).
+  function czRateBadge(c){
+    if(c.rating==null) return '';
+    var band = c.rating>=8 ? 'hi' : (c.rating>=6 ? 'mid' : 'lo');
+    return '<span class="czrate '+band+'" title="'+escapeHtml(c.ratingReason||'')+'">'+c.rating+'/10</span>';
+  }
+  // Manually pull a design into / out of the PO. The server re-nets the budget
+  // across whatever is now included, and hands back a fresh plan to re-render.
+  function czSetInclude(id, include){
+    return fetch('/api/casuals/candidate/'+encodeURIComponent(id)+'/include', {
+      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ include: include })
+    }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.success){ czRenderPlan(d); } });
+  }
+
   function czRenderPO(d, host){
     (d.categories||[]).forEach(function(cat){
       if(!cat.enabled && !cat.poolCount) return;
@@ -1382,7 +1394,32 @@
       (cat.fits||[]).forEach(function(f){
         if(!f.designs || !f.designs.length) return;   // the bill lists only real photos to buy
         var fitTotal = 0, fitCost = 0; var rowsWrap = document.createElement('div');
+        var excludedShown = false;
         f.designs.forEach(function(c){
+          var inc = (c.included !== false);
+          // ── Designs the curation gate holds BACK: shown greyed, not bought,
+          //    with a ＋Include button. They cost ₹0 and count toward no totals. ──
+          if(!inc){
+            if(!excludedShown){ excludedShown = true;
+              var dv = document.createElement('div'); dv.className='czexhead';
+              dv.textContent = 'Not included — below 8/10 (tap ＋ Include to add to the PO)';
+              rowsWrap.appendChild(dv);
+            }
+            var xrow = document.createElement('div'); xrow.className='czporow czexcl';
+            xrow.innerHTML =
+              '<div class="cand"'+czCandAttrs(c, cat.label, f.label, '')+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
+              '<div class="poinfo">'+
+                '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+'</div>'+
+                '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
+                (c.ratingReason ? '<div class="czexnote">“'+escapeHtml(c.ratingReason)+'”</div>' : '')+
+                '<button class="czinclbtn" type="button">＋ Include in PO</button>'+
+              '</div>';
+            xrow.querySelector('.czinclbtn').addEventListener('click', function(){ czSetInclude(c.id, true); });
+            rowsWrap.appendChild(xrow);
+            return;
+          }
+          // ── Included designs: full buy controls, plus a rating badge and an
+          //    ✕ button to pull them out of the PO. ──
           var sets = czSetsFor(c.id);
           var qty = czQtyMap(c, cat);
           var total = czQtyTotal(qty); fitTotal += total; catTotal += total;
@@ -1395,7 +1432,8 @@
           row.innerHTML =
             '<div class="cand"'+czCandAttrs(c, cat.label, f.label, sizeStr)+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
             '<div class="poinfo">'+
-              '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+
+              '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+
+                '<button class="czexclbtn" type="button" title="Remove from PO">✕ Exclude</button>'+
                 '<span class="pomoney">'+fmtINR(total)+' pc</span></div>'+
               '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
               '<div class="poset"><label>Sets</label>'+
@@ -1410,6 +1448,7 @@
                 (czPriced ? '<span class="pocost'+(rowCost?'':' none')+'">= ₹'+fmtINR(rowCost)+'</span>' : '')+
               '</div>'+
             '</div>';
+          row.querySelector('.czexclbtn').addEventListener('click', function(){ czSetInclude(c.id, false); });
           // Set stepper / input → regenerate the whole curve (ratio × sets).
           function applySets(n){ n = Math.max(0, n); czSets[c.id] = n; var m = {}; ratio.forEach(function(r){ m[r[0]] = r[1]*n; }); czQty[c.id] = m; czRenderPlan(czLastPlan); }
           row.querySelector('.posetin').addEventListener('change', function(){ var v = parseInt(this.value,10); applySets(isFinite(v)?v:0); });
@@ -1422,10 +1461,11 @@
           row.querySelector('.popricein').addEventListener('change', function(){ var v = parseFloat(this.value); czPrice[c.id] = (isFinite(v)&&v>=0)?v:0; if(czPriced) czRenderPlan(czLastPlan); });
           rowsWrap.appendChild(row);
         });
+        var heldBack = (f.photoCount||0) - (f.includedCount!=null ? f.includedCount : (f.photoCount||0));
         var fh = document.createElement('div'); fh.className='czpo-fit';
         fh.innerHTML = '<h4>'+escapeHtml(f.label)+'</h4><span class="m">'+
           (f.unassignedFit ? (f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit')
-            : (f.photoCount+' design'+(f.photoCount===1?'':'s')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
+            : ((f.includedCount!=null?f.includedCount:f.photoCount)+' in PO'+(heldBack>0?(' · <b style="color:#b45309">'+heldBack+' held back</b>'):'')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
                (czPriced ? 'actual spend <b>₹'+fmtINR(fitCost)+'</b>' : 'budget ₹'+fmtINR(f.budget))))+'</span>';
         body.appendChild(fh);
         // Open-to-buy: net the fit's budget target against what's already ordered.
@@ -1478,6 +1518,7 @@
       var ratio = czRatioFor(cat);
       (cat.fits||[]).forEach(function(f){
         (f.designs||[]).forEach(function(c){
+          if(c.included === false) return;   // curation-gated out → never in the PO
           var qty = czQtyMap(c, cat);
           var lines = ratio.map(function(r){ return { size:r[0], qty:qty[r[0]]||0 }; }).filter(function(x){ return x.qty > 0; });
           var total = lines.reduce(function(a,x){ return a + x.qty; }, 0);
@@ -1526,7 +1567,7 @@
     var summary = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per size. Colours are read from your photos.';
     if(czPriced){
       var grandCost = 0;
-      (d.categories||[]).forEach(function(cat){ if(!cat.enabled) return; (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){ grandCost += czRowCost(c, cat); }); }); });
+      (d.categories||[]).forEach(function(cat){ if(!cat.enabled) return; (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){ if(c.included === false) return; grandCost += czRowCost(c, cat); }); }); });
       var delta = (d.totalBudget||0) - grandCost;
       summary += '<br><b style="color:#065f46">Re-analysed with actual vendor prices:</b> real spend <b>₹'+fmtINR(grandCost)+'</b> vs budget ₹'+fmtINR(d.totalBudget||0)+
         ' — <b style="color:'+(delta<0?'#b91c1c':'#065f46')+'">'+(delta<0?('over by ₹'+fmtINR(-delta)):('₹'+fmtINR(delta)+' left'))+'</b>. Fill any blank unit prices, then Re-analyse again.';
@@ -1551,10 +1592,6 @@
   el('czExportBtn').addEventListener('click', czExportPO);
   el('czNewBatch').addEventListener('click', czCreateBatch);
   el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });
-  Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){
-    r.addEventListener('change', function(){ if(!czSettings) return; czSettings.budgetMode = r.value; czRenderBudget(); czRenderCats(); czSaveSettings(); });
-  });
-  el('czTotalBudget').addEventListener('change', function(){ if(!czSettings) return; czSettings.budget = parseInt((el('czTotalBudget').value||'').replace(/[^\d]/g,''))||0; el('czTotalBudget').value = fmtINR(czSettings.budget); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
 
   // Lazy boot the Casuals line the first time it's opened.
   function czBoot(){ if(czBooted) return; czBooted = true; czLoadSettings().then(czLoadCandidates).then(czLoadPlan); }

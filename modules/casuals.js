@@ -14,8 +14,8 @@
 // Defaults for every % come from the founder's "SANKI Casuals" workbook
 // and are fully editable in the UI. Budget is HIERARCHY-WISE:
 //   Category budget → Fit % → (Size % · Colour %) unit distributions.
-// Budget entry supports every option — one total split across the enabled
-// categories, or a per-category rupee ceiling for all / any one / any two.
+// Budget is entered per category — a separate rupee ceiling for Trouser /
+// Shirt / T-shirt (for all, any one, or any two enabled this cycle).
 //
 // Own store (casuals.json) + own photo pool (casuals-candidates) on the
 // /data volume, completely independent of the Funky pool. Nothing writes
@@ -280,7 +280,6 @@ function extractJson(text) {
 // ── Settings: spec defaults ⊕ saved overrides ────────────────────
 // A saved settings blob only stores what the founder CHANGED. We fold it over
 // the immutable spec so the UI always receives a complete, sane object.
-const DEFAULT_TOTAL_BUDGET = 1000000;
 function pctMapFromList(list) { const m = {}; list.forEach(x => { m[x.key] = x.pct; }); return m; }
 function cleanPct(v, fallback) { const n = Number(v); return isFinite(n) && n >= 0 ? n : fallback; }
 // Sanitize a { fitKey: units } map into positive integers — the per-fit
@@ -321,10 +320,21 @@ function settingsWithDefaults(s) {
     };
   });
   return {
-    budgetMode: saved.budgetMode === 'perCategory' ? 'perCategory' : 'total',
-    budget: saved.budget != null ? Math.max(0, parseInt(saved.budget) || 0) : DEFAULT_TOTAL_BUDGET,
+    // Budget is ALWAYS entered per category (Trouser / Shirt / T-shirt) — the
+    // old "one total budget split equally" mode was removed.
+    budgetMode: 'perCategory',
     categories
   };
+}
+
+// Curation gate: designs the AI rates this high (or better) are sourced by
+// default. The founder can still manually include/exclude any design, which is
+// stored per-candidate as `includeOverride` (true/false) and wins over the gate.
+const RATING_GATE = 8;
+function isIncluded(c) {
+  if (c.includeOverride === true) return true;
+  if (c.includeOverride === false) return false;
+  return c.rating != null ? c.rating >= RATING_GATE : true; // un-rated → keep in
 }
 
 // Public shape of a candidate (never leak the disk path).
@@ -332,6 +342,9 @@ function publicCandidate(c) {
   return { id: c.id, vendor: c.vendor || '', url: '/api/casuals/candidate/' + c.id,
     category: c.category || null, fit: c.fit || null, colour: c.colour || null,
     pattern: c.pattern || null, aiFit: c.aiFit || null, dupeOf: c.dupeOf || null,
+    rating: (c.rating != null ? c.rating : null), ratingReason: c.ratingReason || null,
+    includeOverride: (c.includeOverride === true || c.includeOverride === false) ? c.includeOverride : null,
+    included: isIncluded(c),
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 function categoryCounts(cands) {
@@ -378,12 +391,14 @@ async function scoreBatch(items) {
   });
   const fitGuide = CASUALS_SPEC.map(c => '   • ' + c.label + ' fits: ' + c.fits.map(f => f.label).join(' | ')).join('\n');
   content.push({ type: 'text', text:
-`You are a buyer for an Indian premium-casual clothing brand. For EACH image, identify a plain everyday garment and report four fields. Judge each image on its own.\n\n` +
+`You are a buyer for an Indian premium-casual clothing brand. For EACH image, identify a plain everyday garment and report six fields. Judge each image on its own.\n\n` +
 `1) "category" — EXACTLY one of: Trousers, Shirts, T-Shirts & Polos. (A collared button-up = Shirts; a pullover round-neck knit/jersey top or polo = T-Shirts & Polos; any lower-body pant/chino/trouser = Trousers.) If it is truly none of these, use "Other".\n` +
 `2) "fit" — the cut, chosen from that category's list:\n${fitGuide}\n   Pick the closest single fit label.\n` +
 `3) "colour" — the dominant colour word (e.g. Black, Off White, Beige, Olive, Charcoal Grey, Navy Blue, Sky Blue, Brown).\n` +
-`4) "pattern" — one of: "solid", "texture", "stripes", "checks", "print". Use "solid" for a plain single-colour garment.\n\n` +
-`Return STRICT JSON ONLY: {"items":[{"category":"..","fit":"..","colour":"..","pattern":".."}, ...]} with exactly ${items.length} objects, one per image in order.` });
+`4) "pattern" — one of: "solid", "texture", "stripes", "checks", "print". Use "solid" for a plain single-colour garment.\n` +
+`5) "rating" — an INTEGER 1-10 scoring how worth-buying this exact design is for a premium-casual Indian streetwear brand RIGHT NOW: judge it on current market trends, fashion relevance, versatility and how clean/desirable the fit and styling look. 10 = a must-have on-trend piece; 8-9 = strong, source it; 6-7 = passable but not exciting; 1-5 = dated, off-trend, or unappealing. Be discerning — do NOT give everything an 8+.\n` +
+`6) "reason" — max 8 words explaining the rating (e.g. "clean on-trend cut" or "dated wash, weak demand").\n\n` +
+`Return STRICT JSON ONLY: {"items":[{"category":"..","fit":"..","colour":"..","pattern":"..","rating":8,"reason":".."}, ...]} with exactly ${items.length} objects, one per image in order.` });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   let r;
@@ -403,12 +418,16 @@ async function scoreBatch(items) {
   items.forEach((it, i) => {
     const o = arr[i] || {};
     const cat = normCasualCategory(o.category);
+    let rating = parseInt(o.rating, 10);
+    if (!isFinite(rating)) rating = null; else rating = Math.max(1, Math.min(10, rating));
     out[it.id] = {
       category: cat,
       aiFit: String(o.fit || '').trim() || null,
       fit: cat ? normFit(cat, o.fit) : null,
       colour: String(o.colour || '').trim() || null,
-      pattern: String(o.pattern || '').trim().toLowerCase() || null
+      pattern: String(o.pattern || '').trim().toLowerCase() || null,
+      rating,
+      reason: String(o.reason || '').trim().slice(0, 80) || null
     };
   });
   return out;
@@ -439,15 +458,9 @@ function buildPlan(cands, settings) {
   const active = cands.filter(c => !c.dupeOf);
   // Which categories are in play + each one's rupee budget.
   const enabledKeys = CAT_KEYS.filter(k => settings.categories[k] && settings.categories[k].enabled);
+  // Budget is set manually per category (no total-split mode any more).
   const catBudget = {};
-  if (settings.budgetMode === 'perCategory') {
-    enabledKeys.forEach(k => { catBudget[k] = Math.max(0, settings.categories[k].budget || 0); });
-  } else {
-    // TOTAL mode: split the one budget equally across the enabled categories.
-    const each = enabledKeys.length ? Math.floor((settings.budget || 0) / enabledKeys.length) : 0;
-    let leftover = (settings.budget || 0) - each * enabledKeys.length;
-    enabledKeys.forEach((k, i) => { catBudget[k] = each + (i < leftover ? 1 : 0); });
-  }
+  enabledKeys.forEach(k => { catBudget[k] = Math.max(0, settings.categories[k].budget || 0); });
 
   const byCat = {}; active.forEach(c => { const k = c.category || 'Unsorted'; (byCat[k] = byCat[k] || []).push(c); });
 
@@ -478,25 +491,33 @@ function buildPlan(cands, settings) {
       const photos = pool.filter(c => c.fit === fr.key);
       const fitEst = enabled && expPrice > 0 ? Math.round(fb / expPrice) : 0;
 
-      // HIERARCHY step 2 — the fit's BUDGET is spread evenly across ITS actual
-      // designs (photos). Each design's slice = fitBudget / (#photos in fit).
-      const idWeights = {}; photos.forEach(p => idWeights[p.id] = 1);
-      const designBud = photos.length ? splitInts(fb, idWeights) : {};
+      // HIERARCHY step 2 — the fit's BUDGET is spread evenly across the designs
+      // the CURATION GATE keeps in (rating ≥ gate, or manually included). Designs
+      // the AI/founder excluded get ₹0 so the money concentrates on what we buy.
+      const incPhotos = photos.filter(isIncluded);
+      const idWeights = {}; incPhotos.forEach(p => idWeights[p.id] = 1);
+      const designBud = incPhotos.length ? splitInts(fb, idWeights) : {};
 
       const designs = photos.map(p => {
-        const db = designBud[p.id] || 0;
-        const du = enabled && expPrice > 0 ? Math.round(db / expPrice) : 0;
+        const inc = isIncluded(p);
+        const db = inc ? (designBud[p.id] || 0) : 0;
+        const du = inc && enabled && expPrice > 0 ? Math.round(db / expPrice) : 0;
         // HIERARCHY step 3 — a design's own est units fan out over the SIZE
         // ladder (editable %). This is the per-photo size run shown on the card.
         const sizeUnits = splitInts(du, cfg.sizes);
         const sizes = sizePctRows.map(s => ({ key: s.key, label: s.label, share: s.share, units: sizeUnits[s.key] || 0 })).filter(s => s.units > 0);
-        Object.keys(sizeUnits).forEach(sk => { catSizeAgg[sk] += sizeUnits[sk] || 0; });
         // COLOUR comes ONLY from the photo itself — no preset colour list.
         const colour = (p.colour && String(p.colour).trim()) || 'Unspecified';
-        const ca = catColourAgg[colour] = catColourAgg[colour] || { budget: 0, estUnits: 0, photos: 0 };
-        ca.budget += db; ca.estUnits += du; ca.photos += 1;
+        if (inc) {
+          Object.keys(sizeUnits).forEach(sk => { catSizeAgg[sk] += sizeUnits[sk] || 0; });
+          const ca = catColourAgg[colour] = catColourAgg[colour] || { budget: 0, estUnits: 0, photos: 0 };
+          ca.budget += db; ca.estUnits += du; ca.photos += 1;
+        }
         return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes });
       });
+      // Show the strongest designs first: included (best rating first), then the
+      // excluded ones (also best-first) so the founder scans the "maybe" pile top-down.
+      designs.sort((a, b) => (b.included ? 1 : 0) - (a.included ? 1 : 0) || (b.rating || 0) - (a.rating || 0));
 
       // Colour roll-up WITHIN this fit — again purely observed from its photos.
       const fitColMap = {};
@@ -516,7 +537,7 @@ function buildPlan(cands, settings) {
         key: fr.key, label: fr.label, pct: fr.pct, share: fr.share,
         budget: fb, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
         target: fitEst, onOrder, netUnits, freedBudget,
-        photoCount: photos.length, designs, colours, unassignedFit: false
+        photoCount: photos.length, includedCount: incPhotos.length, designs, colours, unassignedFit: false
       };
     });
     const noFit = pool.filter(c => !c.fit);
@@ -562,9 +583,7 @@ router.post('/api/casuals/settings', (req, res) => {
   const b = req.body || {};
   const cur = settingsWithDefaults(s);
   // Store a normalised, complete settings blob (simplest + safest).
-  const next = { budgetMode: b.budgetMode === 'perCategory' ? 'perCategory' : 'total',
-    budget: b.budget != null ? Math.max(0, parseInt(String(b.budget).replace(/[^\d]/g, '')) || 0) : cur.budget,
-    categories: {} };
+  const next = { budgetMode: 'perCategory', categories: {} };
   CAT_KEYS.forEach(k => {
     const inc = (b.categories && b.categories[k]) || {};
     const c = cur.categories[k];
@@ -694,6 +713,25 @@ router.delete('/api/casuals/candidate/:id', (req, res) => {
     batches: batchList(s), activeBatch: s.activeBatch });
 });
 
+// Manual include / exclude override for one design. body.include:
+//   true  → force into the PO, false → force out, null → back to AI's rating gate.
+router.post('/api/casuals/candidate/:id/include', (req, res) => {
+  const s = loadStore();
+  const c = s.candidates.find(x => x.id === req.params.id);
+  if (!c) return res.status(404).json({ success: false, error: 'Not found' });
+  const v = req.body ? req.body.include : undefined;
+  if (v === true) c.includeOverride = true;
+  else if (v === false) c.includeOverride = false;
+  else delete c.includeOverride; // null/undefined → clear, fall back to rating
+  saveStore(s);
+  const settings = settingsWithDefaults(s);
+  const active = activeCands(s);
+  markDuplicates(active);
+  res.json({ success: true, analysed: active.some(x => x.category), settings,
+    categories: categoryCounts(active), batches: batchList(s), activeBatch: s.activeBatch,
+    ...buildPlan(active, settings) });
+});
+
 // Clear only the ACTIVE batch's photos (the batch itself stays, now empty).
 router.post('/api/casuals/candidates/clear', (req, res) => {
   const s = loadStore();
@@ -722,7 +760,7 @@ router.post('/api/casuals/analyze', async (req, res) => {
       const map = await scoreBatch(items);
       slice.forEach(c => {
         const r = map[c.id];
-        if (r) { c.category = r.category; c.fit = r.fit; c.aiFit = r.aiFit; c.colour = r.colour; c.pattern = r.pattern; classified++; }
+        if (r) { c.category = r.category; c.fit = r.fit; c.aiFit = r.aiFit; c.colour = r.colour; c.pattern = r.pattern; c.rating = r.rating; c.ratingReason = r.reason; classified++; }
       });
       saveStore(s);
     }
