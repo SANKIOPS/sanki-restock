@@ -177,6 +177,11 @@
     .czsz .cols{ display:block; font-size:11px; color:var(--muted); margin-top:3px; line-height:1.5; }
     /* size chip shown ON each product image */
     .cand .szrun{ position:absolute; left:3px; bottom:3px; right:3px; font-size:9px; line-height:1.25; background:rgba(255,255,255,.9); border-radius:5px; padding:2px 4px; color:#0369a1; font-weight:700; }
+    .cand .czmoney{ position:absolute; left:3px; top:3px; font-size:9px; background:rgba(3,105,161,.92); color:#fff; border-radius:5px; padding:2px 5px; font-weight:800; }
+    /* observed-colour chips under a fit */
+    .czcolchips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .czcolchip{ font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; border:1px solid var(--line); background:#fff; color:var(--ink); }
+    .czcolchip b{ color:#0369a1; }
   </style>
 </head>
 <body>
@@ -883,14 +888,16 @@
     var c = czSettings.categories[catKey];
     var budget = (czSettings.budgetMode === 'perCategory') ? (c.budget||0)
       : (function(){ var en = CAT_KEYS.filter(function(k){ return czSettings.categories[k].enabled; }); return en.length && c.enabled ? Math.floor((czSettings.budget||0)/en.length) : 0; })();
-    var units = c.enabled ? Math.floor(budget / Math.max(1, c.avgCost||1)) : 0;
+    var units = c.enabled ? Math.round(budget / Math.max(1, c.avgCost||1)) : 0;
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
-    var up = card.querySelector('[data-unitpill]'); if(up) up.textContent = fmtINR(units);
-    ['fits','sizes','colours'].forEach(function(kind){
+    var up = card.querySelector('[data-unitpill]'); if(up) up.textContent = '≈ '+fmtINR(units);
+    // Colours are observed from the uploaded photos, so only fit & size %s drive
+    // the pre-upload hint here.
+    ['fits','sizes'].forEach(function(kind){
       var map = c[kind], tot = czSum(map) || 1;
       Array.prototype.forEach.call(card.querySelectorAll('[data-kind="'+kind+'"] .czdrow'), function(row){
         var key = row.getAttribute('data-key'); var pct = Math.max(0, parseInt(map[key])||0);
-        var u = row.querySelector('[data-u]'); if(u) u.textContent = units ? (Math.round(units*pct/tot)+' pc') : (Math.round(pct/tot*100)+'%');
+        var u = row.querySelector('[data-u]'); if(u) u.textContent = units ? ('≈ '+Math.round(units*pct/tot)+' pc') : (Math.round(pct/tot*100)+'%');
       });
     });
   }
@@ -928,15 +935,17 @@
       var row = document.createElement('div'); row.className = 'czrow';
       row.innerHTML =
         (perCat ? '<div class="fld" style="min-width:150px"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>' : '')+
-        '<div class="fld" style="min-width:130px"><label>Avg landed ₹ / pc</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
+        '<div class="fld" style="min-width:150px"><label>Expected ₹ / pc (estimate)</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
       body.appendChild(row);
 
       var pills = document.createElement('div'); pills.className = 'czpills';
-      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">≈ Units to buy<b data-unitpill>0</b></div>';
+      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">≈ Units (est.)<b data-unitpill>0</b><span class="muted" style="font-size:10px">firmed at PO</span></div>';
       body.appendChild(pills);
 
-      ['fits','sizes','colours'].forEach(function(kind){
-        var title = kind === 'fits' ? 'Fit mix %' : (kind === 'sizes' ? 'Size mix %' : 'Colour mix %');
+      // Only FIT and SIZE are decided by %. COLOUR is observed from the photos
+      // you upload, so there is no colour % editor here.
+      ['fits','sizes'].forEach(function(kind){
+        var title = kind === 'fits' ? 'Fit mix %' : 'Size mix %';
         var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
         body.appendChild(sub);
         var wrap = document.createElement('div'); wrap.className = 'czdist'; wrap.setAttribute('data-kind', kind);
@@ -957,6 +966,11 @@
         });
         body.appendChild(add);
       });
+
+      var colNote = document.createElement('div'); colNote.className = 'czsub';
+      colNote.style.textTransform = 'none'; colNote.style.letterSpacing = '0';
+      colNote.innerHTML = '<span style="font-weight:600;color:var(--muted)">Colour mix</span> — read automatically from the photos you upload (only the colours actually present are used). No colour % to set.';
+      body.appendChild(colNote);
 
       card.appendChild(body);
       host.appendChild(card);
@@ -1050,67 +1064,82 @@
       }).catch(function(){ btn.disabled = false; el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">Segregation failed — try again.</span>'; });
   }
 
+  // Drill-down state: which category / fit sections are expanded.
+  var czOpenPlanCat = {}, czOpenPlanFit = {};
   function czRenderPlan(d){
     if(!d || !d.categories){ return; }
     el('czPlanPanel').style.display = '';
-    el('czPlanSummary').innerHTML = '≈ <b>'+fmtINR(d.totalUnits||0)+' pieces</b> across the enabled categories for a total of <b>₹'+fmtINR(d.totalBudget||0)+'</b>. Each category is split hierarchy-wise: fit → size → colour.';
+    el('czPlanSummary').innerHTML = '≈ <b>'+fmtINR(d.totalEstUnits||0)+' pieces (estimate)</b> across the enabled categories for a total of <b>₹'+fmtINR(d.totalBudget||0)+'</b>. Budget flows Category → Fit → design, split as money; unit counts are estimates that firm up at PO. Colours are read from your photos. <b>Click a category to open its fits, click a fit to see its designs.</b>';
     var host = el('czPlan'); host.innerHTML = '';
+
     (d.categories||[]).forEach(function(cat){
       if(!cat.enabled && !cat.poolCount) return; // hide disabled empties
+      var catOpen = !!czOpenPlanCat[cat.category];
       var sec = document.createElement('div'); sec.className = 'catsec czcard'; sec.setAttribute('data-cat', cat.category);
-      var hd = document.createElement('div'); hd.className = 'czcardhd';
-      hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
-        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+' uploaded</div></div>'+
-        (cat.enabled ? '<div class="czpill" style="margin:0">≈ Units<b>'+fmtINR(cat.units)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Budget<b>₹'+fmtINR(cat.budget)+'</b></div>' : '');
-      sec.appendChild(hd);
-      var body = document.createElement('div'); body.className = 'czcardbody';
 
-      // Hierarchy: Fit → (its own) Sizes → Colours. Each fit shows the sizes
-      // that belong to IT (a slice of the fit's units, not the category total),
-      // and each size lists its colour breakdown. Images carry a per-photo size
-      // run so the buyer sees the size ladder right on the picture.
-      var szCompact = function(sizes){
-        return (sizes||[]).map(function(s){ return escapeHtml(s.label)+':'+fmtINR(s.units); }).join('  ');
-      };
+      // ── LEVEL 1: category header (click to open its fits) ──
+      var hd = document.createElement('div'); hd.className = 'czcardhd'; hd.style.cursor = 'pointer';
+      hd.innerHTML = '<span class="caret">'+(catOpen?'▾':'▸')+'</span>'+
+        '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
+        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+'</div></div>'+
+        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">≈ Units<b>'+fmtINR(cat.estUnits)+'</b><span class="muted" style="font-size:10px">est · ₹'+fmtINR(cat.expPrice)+'/pc</span></div>' : '');
+      sec.appendChild(hd);
+      hd.addEventListener('click', function(){ czOpenPlanCat[cat.category] = !catOpen; czRenderPlan(d); });
+
+      var body = document.createElement('div'); body.className = 'czcardbody'; body.style.display = catOpen ? '' : 'none';
+
+      // ── LEVEL 2: fits (each a click-to-open row) ──
       (cat.fits||[]).forEach(function(f){
-        if(!f.photos.length && !f.units && !f.unassignedFit) return;
+        if(!f.photoCount && !f.budget && !f.unassignedFit) return;
+        var fitKey = cat.category + '|' + f.key;
+        var fitOpen = !!czOpenPlanFit[fitKey];
         var fit = document.createElement('div'); fit.className = 'czfit';
-        var meta = f.unassignedFit ? ('<span class="m">'+f.photos.length+' photo'+(f.photos.length===1?'':'s')+' — assign a fit manually</span>')
-          : ('<span class="m">'+f.share+'% of '+escapeHtml(cat.label)+' · ≈ '+fmtINR(f.units)+' pc · ₹'+fmtINR(f.budget)+' · '+f.photos.length+' photo'+(f.photos.length===1?'':'s')+'</span>');
-        fit.innerHTML = '<div class="fh"><h4>'+escapeHtml(f.label)+'</h4>'+meta+'</div>';
-        var szInline = f.sizes && f.sizes.length ? szCompact(f.sizes) : '';
-        if(f.photos.length){
+
+        var fh = document.createElement('div'); fh.className = 'fh'; fh.style.cursor = 'pointer'; fh.style.alignItems = 'center';
+        var meta = f.unassignedFit ? ('<span class="m">'+f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit manually</span>')
+          : ('<span class="m">'+f.share+'% of '+escapeHtml(cat.label)+' · ₹'+fmtINR(f.budget)+' · ≈ '+fmtINR(f.estUnits)+' pc · '+f.photoCount+' design'+(f.photoCount===1?'':'s')+'</span>');
+        fh.innerHTML = '<span class="caret" style="margin-right:4px">'+(fitOpen?'▾':'▸')+'</span><h4 style="margin:0">'+escapeHtml(f.label)+'</h4>'+meta;
+        fit.appendChild(fh);
+        fh.addEventListener('click', function(){ czOpenPlanFit[fitKey] = !fitOpen; czRenderPlan(d); });
+
+        // Observed colour chips for the fit (always visible — quick read).
+        if(f.colours && f.colours.length){
+          var chips = document.createElement('div'); chips.className = 'czcolchips';
+          chips.innerHTML = f.colours.map(function(cl){ return '<span class="czcolchip">'+escapeHtml(cl.label)+' <b>₹'+fmtINR(cl.budget)+'</b> · ≈'+fmtINR(cl.estUnits)+'</span>'; }).join('');
+          fit.appendChild(chips);
+        }
+
+        // ── LEVEL 3: designs with their size run (only when fit is open) ──
+        var drill = document.createElement('div'); drill.style.display = fitOpen ? '' : 'none';
+        if(f.designs && f.designs.length){
           var g = document.createElement('div'); g.className = 'grid';
-          g.innerHTML = f.photos.map(function(c){
-            var cap = [c.vendor||'—', cat.label, f.label]; if(c.colour) cap.push(c.colour);
-            if(szInline) cap.push('Sizes ' + f.sizes.map(function(s){ return s.label+' '+fmtINR(s.units); }).join(', '));
+          g.innerHTML = f.designs.map(function(c){
+            var szInline = (c.sizes||[]).map(function(s){ return s.label+':'+fmtINR(s.units); }).join('  ');
+            var cap = [c.vendor||'—', cat.label, f.label, c.colour||'—', '₹'+fmtINR(c.budget)+' · ≈'+fmtINR(c.estUnits)+' pc'];
+            if(szInline) cap.push('Sizes ' + (c.sizes||[]).map(function(s){ return s.label+' '+fmtINR(s.units); }).join(', '));
             var run = szInline ? '<span class="szrun">'+escapeHtml(szInline)+'</span>' : '';
-            return '<div class="cand" data-cap="'+escapeHtml(cap.join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/>'+run+'<span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
+            var money = '<span class="czmoney">₹'+fmtINR(c.budget)+' · ≈'+fmtINR(c.estUnits)+'</span>';
+            return '<div class="cand" data-cap="'+escapeHtml(cap.join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/>'+money+run+'<span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
           }).join('');
-          fit.appendChild(g);
+          drill.appendChild(g);
+          // Fit-level size ladder (rolled up from the designs).
+          var sizeTot = {};
+          f.designs.forEach(function(c){ (c.sizes||[]).forEach(function(s){ sizeTot[s.label] = (sizeTot[s.label]||0) + s.units; }); });
+          var szKeys = Object.keys(sizeTot);
+          if(szKeys.length){
+            var run = document.createElement('div'); run.className = 'czsizerun';
+            run.innerHTML = szKeys.map(function(k){ return '<div class="czsz"><span class="k">'+escapeHtml(k)+'</span><span class="b">≈'+fmtINR(sizeTot[k])+' pc</span></div>'; }).join('');
+            drill.appendChild(run);
+          }
+        } else if(fitOpen && !f.unassignedFit){
+          var none = document.createElement('div'); none.className = 'm'; none.style.marginTop='8px'; none.style.color='var(--muted)';
+          none.textContent = 'No photos uploaded for this fit yet — its ₹'+fmtINR(f.budget)+' is reserved by the % split.';
+          drill.appendChild(none);
         }
-        // Size ladder for this fit, each size showing its colour split beneath.
-        if(f.sizes && f.sizes.length){
-          var run = document.createElement('div'); run.className = 'czsizerun';
-          run.innerHTML = f.sizes.map(function(s){
-            var cols = (s.colours||[]).map(function(cl){ return escapeHtml(cl.label)+' '+fmtINR(cl.units); }).join(' · ');
-            return '<div class="czsz"><span class="k">'+escapeHtml(s.label)+'</span><span class="b">'+fmtINR(s.units)+' pc</span>'+(cols?'<span class="cols">'+cols+'</span>':'')+'</div>';
-          }).join('');
-          fit.appendChild(run);
-        }
+        fit.appendChild(drill);
         body.appendChild(fit);
       });
 
-      if(cat.enabled){
-        var mk = function(title, rows){
-          var s = document.createElement('div'); s.className='czsub'; s.textContent = title; body.appendChild(s);
-          var wrap = document.createElement('div'); wrap.className='czpills';
-          wrap.innerHTML = rows.map(function(r){ return '<div class="czpill">'+escapeHtml(r.label)+'<b>'+fmtINR(r.units)+' pc</b><span class="muted" style="font-size:11px">'+r.share+'%</span></div>'; }).join('');
-          body.appendChild(wrap);
-        };
-        mk('Category size roll-up — ≈ units', cat.sizes);
-        mk('Category colour roll-up — ≈ units', cat.colours);
-      }
       sec.appendChild(body);
       host.appendChild(sec);
     });

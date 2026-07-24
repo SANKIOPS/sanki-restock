@@ -390,62 +390,82 @@ function buildPlan(cands, settings) {
     const cfg = settings.categories[catKey];
     const enabled = enabledKeys.includes(catKey);
     const budget = catBudget[catKey] || 0;
-    const avgCost = Math.max(1, cfg.avgCost || spec.avgCost);
-    const units = enabled ? Math.floor(budget / avgCost) : 0;
+    // MONEY is the anchor. We never need a real article price to plan — the
+    // whole tree is a % split of rupees. `expPrice` is only an EDITABLE
+    // ESTIMATE used to turn a rupee budget into a soft piece-count; it is
+    // replaced by the vendor's real quote at PO time.
+    const expPrice = Math.max(1, cfg.avgCost || spec.avgCost);
+    const estUnits = enabled ? Math.round(budget / expPrice) : 0;
 
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
-    // HIERARCHY, step 1: the category's units flow down to the fits by fit %.
-    const fitUnits = splitInts(units, cfg.fits);
+    // HIERARCHY step 1 — category BUDGET flows to the fits by fit %.
     const fitBudget = splitInts(budget, cfg.fits);
-
-    const sizeKeys = Object.keys(cfg.sizes);
-    const colKeys  = Object.keys(cfg.colours);
-    // Aggregates rebuilt from the nested numbers so the category-level size /
-    // colour totals always equal the sum of the fit-level splits (no drift).
-    const sizeAgg = {}; sizeKeys.forEach(k => sizeAgg[k] = 0);
-    const colAgg  = {}; colKeys.forEach(k => colAgg[k] = 0);
+    const sizePctRows = pctRows(cfg.sizes, k => k);
 
     const pool = byCat[catKey] || [];
+    const catColourAgg = {};        // observed colour → {budget, estUnits, photos}
+    const catSizeAgg = {}; Object.keys(cfg.sizes).forEach(k => catSizeAgg[k] = 0);
+
     const fits = fitRows.map(fr => {
-      const fu = fitUnits[fr.key] || 0;
-      // step 2: EACH FIT's units are split into SIZES (a sub-portion of the fit,
-      // not of the whole category).
-      const fitSizeUnits = splitInts(fu, cfg.sizes);
-      const sizes = sizeKeys.map(sk => {
-        const su = fitSizeUnits[sk] || 0;
-        sizeAgg[sk] += su;
-        // step 3: EACH (fit, size)'s units are split into COLOURS.
-        const scColUnits = splitInts(su, cfg.colours);
-        const colours = colKeys.map(ck => { colAgg[ck] += (scColUnits[ck] || 0); return { key: ck, label: ck, units: scColUnits[ck] || 0 }; })
-          .filter(c => c.units > 0);
-        return { key: sk, label: sk, units: su, colours };
-      }).filter(s => s.units > 0);
+      const fb = fitBudget[fr.key] || 0;
+      const photos = pool.filter(c => c.fit === fr.key);
+      const fitEst = enabled && expPrice > 0 ? Math.round(fb / expPrice) : 0;
+
+      // HIERARCHY step 2 — the fit's BUDGET is spread evenly across ITS actual
+      // designs (photos). Each design's slice = fitBudget / (#photos in fit).
+      const idWeights = {}; photos.forEach(p => idWeights[p.id] = 1);
+      const designBud = photos.length ? splitInts(fb, idWeights) : {};
+
+      const designs = photos.map(p => {
+        const db = designBud[p.id] || 0;
+        const du = enabled && expPrice > 0 ? Math.round(db / expPrice) : 0;
+        // HIERARCHY step 3 — a design's own est units fan out over the SIZE
+        // ladder (editable %). This is the per-photo size run shown on the card.
+        const sizeUnits = splitInts(du, cfg.sizes);
+        const sizes = sizePctRows.map(s => ({ key: s.key, label: s.label, share: s.share, units: sizeUnits[s.key] || 0 })).filter(s => s.units > 0);
+        Object.keys(sizeUnits).forEach(sk => { catSizeAgg[sk] += sizeUnits[sk] || 0; });
+        // COLOUR comes ONLY from the photo itself — no preset colour list.
+        const colour = (p.colour && String(p.colour).trim()) || 'Unspecified';
+        const ca = catColourAgg[colour] = catColourAgg[colour] || { budget: 0, estUnits: 0, photos: 0 };
+        ca.budget += db; ca.estUnits += du; ca.photos += 1;
+        return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes });
+      });
+
+      // Colour roll-up WITHIN this fit — again purely observed from its photos.
+      const fitColMap = {};
+      designs.forEach(dz => { const m = fitColMap[dz.colour] = fitColMap[dz.colour] || { budget: 0, estUnits: 0, photos: 0 }; m.budget += dz.budget; m.estUnits += dz.estUnits; m.photos += 1; });
+      const colours = Object.keys(fitColMap).map(col => ({ key: col, label: col, budget: fitColMap[col].budget, estUnits: fitColMap[col].estUnits, photos: fitColMap[col].photos }))
+        .sort((a, b) => b.budget - a.budget);
+
       return {
         key: fr.key, label: fr.label, pct: fr.pct, share: fr.share,
-        units: fu, budget: fitBudget[fr.key] || 0,
-        photos: pool.filter(c => c.fit === fr.key).map(publicCandidate),
-        sizes,
-        unassignedFit: false
+        budget: fb, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
+        photoCount: photos.length, designs, colours, unassignedFit: false
       };
     });
     const noFit = pool.filter(c => !c.fit);
-    if (noFit.length) fits.push({ key: '_unassigned', label: 'Fit not detected', pct: 0, share: 0, units: 0, budget: 0, photos: noFit.map(publicCandidate), sizes: [], unassignedFit: true });
+    if (noFit.length) fits.push({ key: '_unassigned', label: 'Fit not detected', pct: 0, share: 0, budget: 0, estUnits: 0, photoCount: noFit.length,
+      designs: noFit.map(p => Object.assign(publicCandidate(p), { budget: 0, estUnits: 0, colour: (p.colour && String(p.colour).trim()) || 'Unspecified', sizes: [] })), colours: [], unassignedFit: true });
+
+    // Category colour roll-up — observed across all fits (nothing preset).
+    const colours = Object.keys(catColourAgg).map(col => ({ key: col, label: col, budget: catColourAgg[col].budget, estUnits: catColourAgg[col].estUnits, photos: catColourAgg[col].photos }))
+      .sort((a, b) => b.budget - a.budget);
 
     return {
       category: catKey, label: spec.label, designNote: spec.designNote,
-      enabled, budget, avgCost, units, poolCount: pool.length,
+      enabled, budget, expPrice, estUnits, poolCount: pool.length,
       fits,
-      // Category-level roll-ups (summed from the hierarchy above, for a quick read).
-      sizes: pctRows(cfg.sizes, k => k).map(r => ({ ...r, units: sizeAgg[r.key] || 0 })),
-      colours: pctRows(cfg.colours, k => k).map(r => ({ ...r, units: colAgg[r.key] || 0 }))
+      // Size ladder is still a decided % (rolled up from the design runs).
+      sizes: sizePctRows.map(r => ({ ...r, units: catSizeAgg[r.key] || 0 })),
+      colours   // observed colours only
     };
   });
 
   const unsorted = (byCat['Unsorted'] || []).map(publicCandidate);
   const totalBudget = enabledKeys.reduce((s, k) => s + (catBudget[k] || 0), 0);
-  const totalUnits = categories.reduce((s, c) => s + c.units, 0);
-  return { budgetMode: settings.budgetMode, totalBudget, totalUnits, categories, unsorted };
+  const totalEstUnits = categories.reduce((s, c) => s + (c.enabled ? c.estUnits : 0), 0);
+  return { budgetMode: settings.budgetMode, totalBudget, totalEstUnits, categories, unsorted };
 }
 
 // ── Routes ───────────────────────────────────────────────────────
