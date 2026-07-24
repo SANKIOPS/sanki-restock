@@ -129,6 +129,17 @@
     .cand .catbadge{ position:absolute; top:2px; right:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:rgba(17,17,17,.72); color:#fff; letter-spacing:.2px; max-width:70%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .cand .artbadge{ position:absolute; top:20px; right:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:#7c3aed; color:#fff; }
     .cand .dupeflag{ position:absolute; bottom:16px; left:2px; z-index:2; font-size:8px; font-weight:800; padding:1px 4px; border-radius:4px; background:#dc2626; color:#fff; text-transform:uppercase; letter-spacing:.3px; }
+    .cand .czratepill{ position:absolute; top:2px; left:2px; z-index:3; font-size:9px; font-weight:800; padding:1px 5px; border-radius:10px; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+    .cand .czratepill.hi{ background:#16a34a; color:#fff; }
+    .cand .czratepill.mid{ background:#eab308; color:#111; }
+    .cand .czratepill.lo{ background:#dc2626; color:#fff; }
+    .cand.excl{ opacity:.5; filter:grayscale(.55); }
+    .cand.excl:hover{ opacity:.92; filter:none; }
+    .cand .czinctog{ position:absolute; bottom:0; left:0; right:0; z-index:4; border:none; padding:3px 4px; font-size:10px; font-weight:800; cursor:pointer; display:none; }
+    .cand:hover .czinctog{ display:block; }
+    .cand.excl .czinctog{ display:block; }
+    .cand .czinctog.inc{ background:rgba(6,95,70,.95); color:#fff; }
+    .cand .czinctog.exc{ background:rgba(185,28,28,.95); color:#fff; }
     .heldlbl{ margin:10px 0 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
     .catsec{ margin:14px 0 0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#fff; }
     .catsec.open{ box-shadow:0 1px 4px rgba(0,0,0,.05); }
@@ -1132,14 +1143,33 @@
       var cc = el('czClear');
       if(cc) cc.onclick = function(){ var act=czActiveBatchObj(); if(confirm('Remove all '+total+' photos in '+(act?'“'+act.name+'”':'this batch')+'?')) fetch('/api/casuals/candidates/clear',{method:'POST'}).then(function(){ czLoadCandidates(); }); };
     } else chips.innerHTML = '';
-    grid.innerHTML = (list||[]).map(function(c){
+    // Sort so the buy is obvious at a glance: real photos before dupes, then
+    // AI-included before held-back, then best rating first.
+    var sorted = (list||[]).slice().sort(function(a,b){
+      return (a.dupeOf?1:0)-(b.dupeOf?1:0)
+        || (b.included!==false?1:0)-(a.included!==false?1:0)
+        || (b.rating||0)-(a.rating||0);
+    });
+    grid.innerHTML = sorted.map(function(c){
       var cap = [c.vendor||'—']; if(c.category) cap.push(CAT_LABEL[c.category]||c.category); if(c.fit) cap.push(czFitLabel(c.category, c.fit)); if(c.colour) cap.push(c.colour);
       var dupe = c.dupeOf ? '<span class="dupeflag" title="Near-duplicate — left out of the buy">dupe</span>' : '';
       var cat = c.category ? '<span class="catbadge" title="Auto-detected">'+escapeHtml(CAT_LABEL[c.category]||c.category)+'</span>' : '';
-      return '<div class="cand'+(c.dupeOf?' held':'')+'" data-cap="'+escapeHtml(cap.join(' · '))+'">'+cat+dupe+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+escapeHtml((c.colour||'')||(c.vendor||''))+'</span></div>';
+      var excl = (c.included === false);
+      // Rating pill (top-left) shows the AI's 1–10 score once analysed.
+      var rate = '';
+      if(c.rating != null){ var band = c.rating>=8 ? 'hi' : (c.rating>=6 ? 'mid' : 'lo'); rate = '<span class="czratepill '+band+'" title="'+escapeHtml(c.ratingReason||'')+'">'+c.rating+'/10</span>'; }
+      // Manual include/exclude toggle on any rated, non-dupe card.
+      var tog = '';
+      if(c.rating != null && !c.dupeOf){ tog = excl
+        ? '<button class="czinctog inc" data-inc="1" data-id="'+c.id+'" title="Add to the PO">＋ Include</button>'
+        : '<button class="czinctog exc" data-inc="0" data-id="'+c.id+'" title="Leave out of the PO">✕ Exclude</button>'; }
+      return '<div class="cand'+(c.dupeOf?' held':'')+(excl?' excl':'')+'" data-cap="'+escapeHtml(cap.join(' · '))+'">'+rate+cat+dupe+'<img src="'+c.url+'" loading="lazy" alt=""/><button class="del" data-id="'+c.id+'" title="Remove">✕</button><span class="vt">'+escapeHtml((c.colour||'')||(c.vendor||''))+'</span>'+tog+'</div>';
     }).join('');
     Array.prototype.forEach.call(grid.querySelectorAll('.del'), function(b){
       b.onclick = function(){ fetch('/api/casuals/candidate/'+b.getAttribute('data-id'),{method:'DELETE'}).then(function(){ czLoadCandidates(); }); };
+    });
+    Array.prototype.forEach.call(grid.querySelectorAll('.czinctog'), function(b){
+      b.onclick = function(e){ e.stopPropagation(); var inc = b.getAttribute('data-inc')==='1'; czSetInclude(b.getAttribute('data-id'), inc).then(function(){ czLoadCandidates(); }); };
     });
   }
   function czLoadCandidates(){
@@ -1323,9 +1353,25 @@
     'Shirt':   [['XS',1],['S',2],['M',2],['L',2],['XL',2],['XXL',1]],
     'T-shirt': [['XS',1],['S',2],['M',2],['L',2],['XL',2],['XXL',1]]
   };
+  // Build one "set" size-curve straight from the editable SIZE-MIX %. Whatever
+  // the founder types into a category's size mix now drives the per-design size
+  // boxes: the %s are scaled to a compact integer curve (≈12 pcs), sizes at 0%
+  // drop out. Falls back to the old fixed curve only if no size mix is set.
+  var CZ_SET_BASE = 12;
   function czRatioFor(cat){
-    if(CZ_SETRATIO[cat.category]) return CZ_SETRATIO[cat.category];
-    return ((cat && cat.sizes) || []).map(function(s){ return [s, 1]; });
+    var key = cat.category;
+    var pairs = [];
+    // Prefer the LIVE edited settings so changes reflect without a re-analyse…
+    var pctMap = czSettings && czSettings.categories && czSettings.categories[key] && czSettings.categories[key].sizes;
+    if(pctMap){ Object.keys(pctMap).forEach(function(sz){ var p = +pctMap[sz]||0; if(p>0) pairs.push([sz, p]); }); }
+    // …else the %s baked into the plan.
+    if(!pairs.length && cat.sizes){ cat.sizes.forEach(function(s){ var p = +(s.pct!=null?s.pct:s.share)||0; if(p>0) pairs.push([s.key||s, p]); }); }
+    if(!pairs.length){
+      if(CZ_SETRATIO[key]) return CZ_SETRATIO[key];
+      return ((cat && cat.sizes) || []).map(function(s){ return [s.key||s, 1]; });
+    }
+    var tot = pairs.reduce(function(a,r){ return a + r[1]; }, 0) || 1;
+    return pairs.map(function(r){ return [r[0], Math.max(1, Math.round(r[1] / tot * CZ_SET_BASE))]; });
   }
   function czSetPieces(ratio){ return ratio.reduce(function(a,r){ return a + r[1]; }, 0); }
   function czSetsFor(id){ var v = czSets[id]; return (v == null || v < 0) ? 1 : v; }

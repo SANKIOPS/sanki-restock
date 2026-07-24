@@ -406,7 +406,7 @@ async function scoreBatch(items) {
     r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, max_tokens: 2000, temperature: 0, messages: [{ role: 'user', content }] }),
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 2500, temperature: 0, messages: [{ role: 'user', content }] }),
       signal: ctrl.signal
     });
   } finally { clearTimeout(timer); }
@@ -750,7 +750,9 @@ router.post('/api/casuals/analyze', async (req, res) => {
     if (!cands.length) return res.status(400).json({ success: false, error: 'No photos in this batch yet — upload some casual-wear photos first.' });
     const force = req.body && (req.body.force === true || req.body.force === 'true');
     const dupes = markDuplicates(cands);
-    const todo = cands.filter(c => !c.dupeOf && (force || !c.category));
+    // Re-score anything not yet categorised OR still missing an AI rating — so
+    // batches segregated before the rating feature existed get rated on next run.
+    const todo = cands.filter(c => !c.dupeOf && (force || !c.category || c.rating == null));
     let classified = 0;
     for (let i = 0; i < todo.length; i += VISION_BATCH) {
       const slice = todo.slice(i, i + VISION_BATCH);
