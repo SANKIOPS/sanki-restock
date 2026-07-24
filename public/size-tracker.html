@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Size Tracker — SANKI Business OS</title>
+<style>
+  :root { --accent:#185FA5; --ink:#1a1a1a; --muted:#666; --line:rgba(0,0,0,.1);
+          --ok:#15803d; --okbg:#f0fdf4; --warn:#b45309; --warnbg:#fffbeb; --bad:#b91c1c; --badbg:#fef2f2; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+         background:#f6f7f9; color:var(--ink); }
+  .wrap { max-width:1080px; margin:0 auto; padding:24px 22px 70px; }
+  h1 { font-size:22px; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 22px; line-height:1.5; }
+  h2 { font-size:15px; margin:0 0 3px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px 18px 20px; margin-bottom:20px; }
+  .cardhead { display:flex; align-items:baseline; gap:10px; margin-bottom:4px; }
+  .cardhead .num { width:24px; height:24px; border-radius:50%; background:var(--accent); color:#fff;
+        font-size:12px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .cardsub { color:var(--muted); font-size:12.5px; margin:0 0 16px 34px; line-height:1.5; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:14px; }
+  .field { display:flex; flex-direction:column; gap:5px; }
+  .field label { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#888; font-weight:600; }
+  select, input[type=number], input[type=text] { font:inherit; padding:9px 11px; border:1px solid var(--line);
+        border-radius:9px; font-size:14px; background:#fff; }
+  select { min-width:150px; }
+  .tolin { width:90px; }
+  button { font:inherit; cursor:pointer; border:none; border-radius:9px; }
+  .btn { background:var(--accent); color:#fff; padding:10px 16px; font-weight:600; font-size:14px; }
+  .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; margin-top:4px; }
+  th,td { text-align:center; padding:8px 9px; font-size:13px; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  th { background:#fafafa; font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#888; }
+  .sizecell { font-weight:700; font-size:13px; }
+  td input.meas { width:74px; text-align:center; padding:7px 6px; font-size:13px; }
+  td input.meas.filled { border-color:var(--accent); background:#f5f9ff; }
+  .hint { font-size:12px; color:var(--muted); margin:10px 0 0; }
+  .saved-flash { color:var(--ok); font-size:12.5px; font-weight:600; margin-left:10px; opacity:0; transition:opacity .2s; }
+  .saved-flash.show { opacity:1; }
+  .empty { text-align:center; color:var(--muted); padding:28px 0; font-size:13.5px; }
+  .spin { display:inline-block; width:15px; height:15px; border:2px solid rgba(0,0,0,.15);
+        border-top-color:var(--accent); border-radius:50%; animation:sp .7s linear infinite; vertical-align:-2px; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  /* results */
+  .verdict { border-radius:12px; padding:12px 14px; margin-bottom:10px; font-size:13.5px; line-height:1.5;
+        border:1px solid var(--line); display:flex; gap:10px; align-items:flex-start; }
+  .verdict .vsz { font-weight:800; font-size:13px; min-width:44px; padding:3px 0; text-align:center;
+        border-radius:7px; background:#f1f3f5; color:#333; }
+  .verdict.match { background:var(--okbg); border-color:#bbf7d0; }
+  .verdict.remap { background:var(--warnbg); border-color:#fde68a; }
+  .verdict.nofit { background:var(--badbg); border-color:#fecaca; }
+  .verdict.none  { background:#f8f9fa; }
+  .vbody { flex:1; }
+  .vbody .vmsg { }
+  .difftbl { margin-top:8px; width:auto; }
+  .difftbl td, .difftbl th { padding:4px 10px; font-size:12px; border:none; text-align:center; }
+  .difftbl th:first-child, .difftbl td:first-child { text-align:left; }
+  .diff-ok { color:var(--ok); font-weight:600; }
+  .diff-bad { color:var(--bad); font-weight:600; }
+  .summary { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
+  .summary h3 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.5px; color:#888; }
+  .srclist { display:flex; flex-wrap:wrap; gap:8px; }
+  .srcpill { font-size:13px; padding:6px 11px; border-radius:20px; background:var(--okbg); border:1px solid #bbf7d0;
+        color:#14532d; font-weight:600; }
+  .srcpill.remap { background:var(--warnbg); border-color:#fde68a; color:#7c4a03; }
+  .srcpill.none  { background:var(--badbg); border-color:#fecaca; color:#7f1d1d; }
+  .tag { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; padding:2px 7px;
+        border-radius:20px; margin-left:6px; }
+  .tag.match { background:#dcfce7; color:#14532d; }
+  .tag.remap { background:#fef3c7; color:#7c4a03; }
+  .tag.nofit { background:#fee2e2; color:#7f1d1d; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📏 Size Tracker</h1>
+  <p class="sub">Feed SANKI's <b>target</b> body/garment measurements once per category &amp; fit. Then at order time, paste the vendor's (China) size chart and we'll tell you <b>which China size to actually source</b> for each of your sizes — because China's "M" may really be your "S".</p>
+
+  <!-- ── Section 1: Target charts ─────────────────────────────── -->
+  <div class="card">
+    <div class="cardhead"><span class="num">1</span><h2>Feed SANKI target size charts</h2></div>
+    <p class="cardsub">Pick a category and fit, enter the ideal measurements (cm) for each size, and save. You only do this once per fit — it becomes the yardstick every future PO is checked against.</p>
+
+    <div class="row">
+      <div class="field">
+        <label>Category</label>
+        <select id="tCat"></select>
+      </div>
+      <div class="field">
+        <label>Fit</label>
+        <select id="tFit"></select>
+      </div>
+      <button class="btn" id="tSave" disabled>Save target chart</button>
+      <span class="saved-flash" id="tFlash">Saved ✓</span>
+    </div>
+
+    <div id="tGridWrap"><div class="empty">Choose a category and fit to enter its size chart.</div></div>
+    <p class="hint">Leave a cell blank if a measurement doesn't apply. Values are in centimetres.</p>
+  </div>
+
+  <!-- ── Section 2: Compare a vendor chart ────────────────────── -->
+  <div class="card">
+    <div class="cardhead"><span class="num">2</span><h2>Compare a vendor (China) chart for a PO</h2></div>
+    <p class="cardsub">Ask the vendor for their size chart, paste their measurements here, then hit Compare. We line every China size up against your saved target and tell you which one to source per desired size.</p>
+
+    <div class="row">
+      <div class="field">
+        <label>Category</label>
+        <select id="cCat"></select>
+      </div>
+      <div class="field">
+        <label>Fit</label>
+        <select id="cFit"></select>
+      </div>
+      <div class="field">
+        <label>Tolerance (± cm)</label>
+        <input type="number" class="tolin" id="cTol" step="0.1" min="0" value="1.5">
+      </div>
+      <button class="btn ghost" id="cAddRow">+ Add China size</button>
+      <button class="btn" id="cCompare" disabled>Compare</button>
+    </div>
+
+    <div id="cGridWrap"><div class="empty">Choose a category and fit to enter the vendor's chart.</div></div>
+    <p class="hint" id="cTargetNote"></p>
+  </div>
+
+  <!-- ── Results ──────────────────────────────────────────────── -->
+  <div id="resultWrap"></div>
+</div>
+
+<script src="/sidebar.js"></script>
+<script>
+(function () {
+  var CFG = { categories: [], tolerance: 1.5 };
+  var TARGETS = {};            // { cat: { fit: { SIZE: {field:val} } } }
+  var el = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); }
+  function catObj(key) { return CFG.categories.find(function (c) { return c.key === key; }) || null; }
+  function fitLabel(cat, fitKey) { var c = catObj(cat); if (!c) return fitKey;
+    var f = (c.fits || []).find(function (x) { return x.key === fitKey; }); return f ? f.label : fitKey; }
+
+  function fillCatSelect(sel) {
+    sel.innerHTML = '';
+    CFG.categories.forEach(function (c) {
+      var o = document.createElement('option'); o.value = c.key; o.textContent = c.label; sel.appendChild(o);
+    });
+  }
+  function fillFitSelect(catKey, sel) {
+    sel.innerHTML = '';
+    var c = catObj(catKey);
+    (c ? c.fits : []).forEach(function (f) {
+      var o = document.createElement('option'); o.value = f.key; o.textContent = f.label; sel.appendChild(o);
+    });
+  }
+
+  // ── Section 1: target grid ──────────────────────────────────
+  function renderTargetGrid() {
+    var cat = el('tCat').value, fit = el('tFit').value, c = catObj(cat);
+    var wrap = el('tGridWrap');
+    if (!c) { wrap.innerHTML = '<div class="empty">Choose a category and fit.</div>'; el('tSave').disabled = true; return; }
+    var fields = c.fields, sizes = c.sizes;
+    var saved = (TARGETS[cat] && TARGETS[cat][fit]) || {};
+    var html = '<table><thead><tr><th>Size</th>';
+    fields.forEach(function (f) { html += '<th>' + esc(f) + '<br><span style="font-weight:400;color:#aaa">cm</span></th>'; });
+    html += '</tr></thead><tbody>';
+    sizes.forEach(function (sz) {
+      var row = saved[sz] || {};
+      html += '<tr><td class="sizecell">' + esc(sz) + '</td>';
+      fields.forEach(function (f) {
+        var v = (row[f] != null) ? row[f] : '';
+        html += '<td><input class="meas' + (v !== '' ? ' filled' : '') + '" data-size="' + esc(sz) +
+                '" data-field="' + esc(f) + '" type="number" step="0.1" min="0" value="' + esc(v) + '"></td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('input.meas').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        if (inp.value.trim() !== '') inp.classList.add('filled'); else inp.classList.remove('filled');
+      });
+    });
+    el('tSave').disabled = false;
+  }
+
+  function collectTargetChart() {
+    var chart = {};
+    el('tGridWrap').querySelectorAll('input.meas').forEach(function (inp) {
+      var v = inp.value.trim(); if (v === '') return;
+      var sz = inp.getAttribute('data-size'), f = inp.getAttribute('data-field');
+      if (!chart[sz]) chart[sz] = {};
+      chart[sz][f] = parseFloat(v);
+    });
+    return chart;
+  }
+
+  function saveTarget() {
+    var cat = el('tCat').value, fit = el('tFit').value;
+    var chart = collectTargetChart();
+    el('tSave').disabled = true;
+    fetch('/api/sizetracker/targets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: cat, fit: fit, chart: chart })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      el('tSave').disabled = false;
+      if (j && j.success) {
+        TARGETS = j.targets || TARGETS;
+        var fl = el('tFlash'); fl.classList.add('show'); setTimeout(function () { fl.classList.remove('show'); }, 1600);
+        updateTargetNote();
+      } else { alert((j && j.error) || 'Could not save.'); }
+    }).catch(function () { el('tSave').disabled = false; alert('Network error saving chart.'); });
+  }
+
+  // ── Section 2: vendor grid ──────────────────────────────────
+  var vendorRows = [];  // [{label, meas:{field:val}}]
+
+  function renderVendorGrid() {
+    var cat = el('cCat').value, c = catObj(cat);
+    var wrap = el('cGridWrap');
+    if (!c) { wrap.innerHTML = '<div class="empty">Choose a category and fit.</div>'; el('cCompare').disabled = true; return; }
+    var fields = c.fields;
+    if (!vendorRows.length) seedVendorRows();
+    var html = '<table><thead><tr><th>China size</th>';
+    fields.forEach(function (f) { html += '<th>' + esc(f) + '<br><span style="font-weight:400;color:#aaa">cm</span></th>'; });
+    html += '<th></th></tr></thead><tbody>';
+    vendorRows.forEach(function (r, i) {
+      html += '<tr><td><input type="text" class="vlabel" data-i="' + i + '" value="' + esc(r.label) +
+              '" style="width:80px;text-align:center;text-transform:uppercase;font-weight:700"></td>';
+      fields.forEach(function (f) {
+        var v = (r.meas[f] != null) ? r.meas[f] : '';
+        html += '<td><input class="meas vmeas' + (v !== '' ? ' filled' : '') + '" data-i="' + i +
+                '" data-field="' + esc(f) + '" type="number" step="0.1" min="0" value="' + esc(v) + '"></td>';
+      });
+      html += '<td><button class="btn ghost vdel" data-i="' + i + '" title="Remove row" style="padding:6px 10px">✕</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('input.vmeas').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        var i = +inp.getAttribute('data-i'), f = inp.getAttribute('data-field');
+        var v = inp.value.trim();
+        vendorRows[i].meas[f] = (v === '') ? null : parseFloat(v);
+        if (v !== '') inp.classList.add('filled'); else inp.classList.remove('filled');
+      });
+    });
+    wrap.querySelectorAll('input.vlabel').forEach(function (inp) {
+      inp.addEventListener('input', function () { vendorRows[+inp.getAttribute('data-i')].label = inp.value; });
+    });
+    wrap.querySelectorAll('button.vdel').forEach(function (b) {
+      b.addEventListener('click', function () { vendorRows.splice(+b.getAttribute('data-i'), 1); if (!vendorRows.length) seedVendorRows(); renderVendorGrid(); });
+    });
+    el('cCompare').disabled = false;
+  }
+
+  function seedVendorRows() {
+    var c = catObj(el('cCat').value);
+    var sizes = (c && c.sizes) ? c.sizes.slice(0, 3) : ['S', 'M', 'L'];
+    vendorRows = sizes.map(function (s) { return { label: s, meas: {} }; });
+  }
+
+  function addVendorRow() {
+    vendorRows.push({ label: '', meas: {} });
+    renderVendorGrid();
+  }
+
+  function collectVendorChart() {
+    var out = {};
+    vendorRows.forEach(function (r) {
+      var lbl = String(r.label || '').trim().toUpperCase(); if (!lbl) return;
+      var row = {};
+      Object.keys(r.meas).forEach(function (f) { if (r.meas[f] != null && isFinite(r.meas[f])) row[f] = r.meas[f]; });
+      if (Object.keys(row).length) out[lbl] = row;
+    });
+    return out;
+  }
+
+  function updateTargetNote() {
+    var cat = el('cCat').value, fit = el('cFit').value;
+    var chart = (TARGETS[cat] && TARGETS[cat][fit]) || {};
+    var n = Object.keys(chart).length;
+    var note = el('cTargetNote');
+    if (n) note.innerHTML = '✓ Target chart on file for <b>' + esc(fitLabel(cat, fit)) + '</b>: ' + n + ' size' + (n > 1 ? 's' : '') + ' (' + esc(Object.keys(chart).join(', ')) + ').';
+    else note.innerHTML = '⚠ No target chart saved yet for <b>' + esc(fitLabel(cat, fit)) + '</b>. Fill it in Section 1 first, or Compare will have nothing to match against.';
+  }
+
+  function compare() {
+    var cat = el('cCat').value, fit = el('cFit').value;
+    var tol = parseFloat(el('cTol').value);
+    var vendor = collectVendorChart();
+    if (!Object.keys(vendor).length) { alert('Enter at least one China size with measurements.'); return; }
+    el('cCompare').disabled = true; el('cCompare').textContent = 'Comparing…';
+    fetch('/api/sizetracker/compare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: cat, fit: fit, vendor: vendor, tolerance: tol })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      el('cCompare').disabled = false; el('cCompare').textContent = 'Compare';
+      if (j && j.success) renderResults(j);
+      else { alert((j && j.error) || 'Compare failed.'); }
+    }).catch(function () { el('cCompare').disabled = false; el('cCompare').textContent = 'Compare'; alert('Network error on compare.'); });
+  }
+
+  function renderResults(j) {
+    var wrap = el('resultWrap');
+    if (!j.hasTarget) { wrap.innerHTML = '<div class="card"><div class="empty">No target chart saved for this fit yet — fill Section 1 first.</div></div>'; wrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    var html = '<div class="card"><div class="cardhead"><h2>Sourcing plan — ' + esc(j.category) + ' · ' + esc(fitLabel(j.category, j.fit)) + '</h2></div>';
+    html += '<p class="cardsub" style="margin-left:0">Matched within ±' + esc(j.tolerance) + 'cm on every measured field.</p>';
+
+    // Summary
+    html += '<div class="summary"><h3>Order these China sizes</h3>';
+    if (j.toSource && j.toSource.length) {
+      html += '<div class="srclist">';
+      j.toSource.forEach(function (s) {
+        html += '<span class="srcpill' + (s.remap ? ' remap' : '') + '">Your <b>' + esc(s.desired) + '</b> → source China <b>' + esc(s.china) + '</b>' + (s.remap ? ' ↺' : '') + '</span>';
+      });
+      html += '</div>';
+    } else { html += '<div class="empty" style="padding:10px 0">No China size matched any of your sizes within tolerance.</div>'; }
+    if (j.unmatched && j.unmatched.length) {
+      html += '<h3 style="margin-top:14px">No China size fits</h3><div class="srclist">';
+      j.unmatched.forEach(function (sz) { html += '<span class="srcpill none">' + esc(sz) + '</span>'; });
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Per-size detail
+    (j.results || []).forEach(function (r) {
+      var cls = r.status;
+      var tag = cls === 'match' ? '<span class="tag match">match</span>' :
+                cls === 'remap' ? '<span class="tag remap">re-map</span>' :
+                cls === 'nofit' ? '<span class="tag nofit">no fit</span>' : '';
+      html += '<div class="verdict ' + cls + '"><span class="vsz">' + esc(r.size) + '</span><div class="vbody">';
+      html += '<div class="vmsg">' + esc(r.verdict) + tag + '</div>';
+      if (r.best && r.best.diffs && Object.keys(r.best.diffs).length) {
+        html += '<table class="difftbl"><thead><tr><th>Field</th><th>Your ' + esc(r.size) + '</th><th>China ' + esc(r.best.label) + '</th><th>Δ</th></tr></thead><tbody>';
+        (r.fields || []).forEach(function (f) {
+          var d = r.best.diffs[f]; if (!d) return;
+          var dv = (d.d == null) ? '—' : ((d.d > 0 ? '+' : '') + d.d + 'cm');
+          html += '<tr><td>' + esc(f) + '</td><td>' + esc(d.t) + '</td><td>' + (d.v == null ? '<i style="color:#aaa">missing</i>' : esc(d.v)) +
+                  '</td><td class="' + (d.ok ? 'diff-ok' : 'diff-bad') + '">' + dv + '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+      html += '</div></div>';
+    });
+
+    html += '</div>';
+    wrap.innerHTML = html;
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ── Wiring ──────────────────────────────────────────────────
+  function boot() {
+    Promise.all([
+      fetch('/api/sizetracker/config').then(function (r) { return r.json(); }),
+      fetch('/api/sizetracker/targets').then(function (r) { return r.json(); })
+    ]).then(function (res) {
+      var cfg = res[0] || {}, tg = res[1] || {};
+      CFG.categories = cfg.categories || [];
+      CFG.tolerance = (typeof cfg.tolerance === 'number') ? cfg.tolerance : 1.5;
+      TARGETS = tg.targets || {};
+      if (!CFG.categories.length) { document.querySelector('.wrap').insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">No categories configured. Set up Casuals first.</div></div>'); return; }
+
+      fillCatSelect(el('tCat')); fillFitSelect(el('tCat').value, el('tFit')); renderTargetGrid();
+      fillCatSelect(el('cCat')); fillFitSelect(el('cCat').value, el('cFit'));
+      el('cTol').value = CFG.tolerance;
+      seedVendorRows(); renderVendorGrid(); updateTargetNote();
+
+      el('tCat').addEventListener('change', function () { fillFitSelect(el('tCat').value, el('tFit')); renderTargetGrid(); });
+      el('tFit').addEventListener('change', renderTargetGrid);
+      el('tSave').addEventListener('click', saveTarget);
+
+      el('cCat').addEventListener('change', function () { fillFitSelect(el('cCat').value, el('cFit')); vendorRows = []; renderVendorGrid(); updateTargetNote(); });
+      el('cFit').addEventListener('change', updateTargetNote);
+      el('cAddRow').addEventListener('click', addVendorRow);
+      el('cCompare').addEventListener('click', compare);
+    }).catch(function () {
+      document.querySelector('.wrap').insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">Could not load Size Tracker config.</div></div>');
+    });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

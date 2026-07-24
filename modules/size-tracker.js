@@ -1,0 +1,215 @@
+// ═══════════════════════════════════════════════════════════════
+// modules/size-tracker.js — SANKI Size Tracker
+//
+// Two jobs:
+//   ① Store SANKI's OWN target size charts — the measurements a garment
+//      SHOULD have, fed once per (category, fit, size): e.g. a Relaxed
+//      T-shirt in M = chest 54cm, shoulder 46cm, length 71cm, sleeve 22cm.
+//   ② At order time, take the VENDOR's (China) size chart, compare it to
+//      the stored target, and say — per desired size — which China size to
+//      actually source (China's "M" may really be SANKI's "S"), or flag
+//      that no China size fits within tolerance.
+//
+// This removes the manual "what's China's M chest vs India's M chest for
+// this fit?" cross-check that's done by hand on every PO.
+//
+// Categories / fits / sizes are borrowed from the Casuals spec so the two
+// tools stay in lock-step. Measurement FIELDS differ by garment type
+// (tops measure chest/shoulder; bottoms measure waist/hip).
+//
+// Store: size-tracker.json on the /data volume. Nothing writes to Shopify.
+//
+// Endpoints (behind the auth gate):
+//   GET  /api/sizetracker/config           → categories, fits, sizes, fields, tolerance
+//   GET  /api/sizetracker/targets          → all saved target charts
+//   POST /api/sizetracker/targets          → save one (category, fit) target chart
+//   POST /api/sizetracker/tolerance        → save the match tolerance (cm)
+//   POST /api/sizetracker/compare          → compare a vendor chart to the target
+// ═══════════════════════════════════════════════════════════════
+const express = require('express');
+const path    = require('path');
+const fs      = require('fs');
+
+const router = express.Router();
+
+// Borrow the category / fit / size scaffold from Casuals so the two never drift.
+let CASUALS_SPEC = [];
+try { CASUALS_SPEC = require('./casuals').CASUALS_SPEC || []; } catch { CASUALS_SPEC = []; }
+
+// Measurement fields per category (all centimetres). Tops vs bottoms differ.
+const FIELDS_BY_CAT = {
+  'T-shirt': ['Chest', 'Shoulder', 'Length', 'Sleeve'],
+  'Shirt':   ['Chest', 'Shoulder', 'Length', 'Sleeve'],
+  'Trouser': ['Waist', 'Hip', 'Inseam', 'Thigh', 'Bottom hem']
+};
+function fieldsFor(catKey) { return FIELDS_BY_CAT[catKey] || ['Chest', 'Shoulder', 'Length']; }
+
+// Build the config the UI needs: each category with its fits, sizes, and the
+// measurement fields that apply to it.
+function buildConfig() {
+  return CASUALS_SPEC.map(spec => ({
+    key: spec.key,
+    label: spec.label,
+    fits: spec.fits.map(f => ({ key: f.key, label: f.label })),
+    sizes: spec.sizes.map(s => s.key),
+    fields: fieldsFor(spec.key)
+  }));
+}
+const CAT_KEYS = () => CASUALS_SPEC.map(c => c.key);
+const catExists = (k) => CAT_KEYS().includes(k);
+const fitExists = (catKey, fitKey) => {
+  const c = CASUALS_SPEC.find(x => x.key === catKey);
+  return !!(c && c.fits.some(f => f.key === fitKey));
+};
+
+// ── Store ─────────────────────────────────────────────────────────
+const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
+const STORE_PATH = process.env.SIZE_TRACKER_PATH || path.join(DATA_DIR, 'size-tracker.json');
+const DEFAULT_TOLERANCE = 1.5; // cm — a China size within ±this on every field is a match
+
+function atomicWrite(fp, data) {
+  const tmp = fp + '.tmp-' + process.pid + '-' + Date.now();
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, fp);
+}
+function loadStore() {
+  try {
+    const s = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+    if (!s.targets) s.targets = {};
+    if (typeof s.tolerance !== 'number') s.tolerance = DEFAULT_TOLERANCE;
+    return s;
+  } catch { return { targets: {}, tolerance: DEFAULT_TOLERANCE }; }
+}
+function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
+
+// Coerce a measurement value to a positive number or null (blank = not set).
+function num(v) { const n = parseFloat(v); return isFinite(n) && n >= 0 ? Math.round(n * 10) / 10 : null; }
+// Clean an incoming chart { sizeLabel: { field: value } } down to known fields.
+function cleanChart(raw, fields) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [size, meas] of Object.entries(raw)) {
+    if (!meas || typeof meas !== 'object') continue;
+    const row = {};
+    fields.forEach(f => { const v = num(meas[f]); if (v != null) row[f] = v; });
+    if (Object.keys(row).length) out[String(size).trim().toUpperCase()] = row;
+  }
+  return out;
+}
+
+// ── Comparison engine ─────────────────────────────────────────────
+// For a target size T and a vendor size V, over the fields the TARGET defines:
+//   diff(field) = V - T   (positive = China runs bigger)
+//   ok(field)   = |diff| <= tol
+//   dist        = Σ |diff| over shared fields (unshared target fields penalised)
+// A vendor size "fits" a target when every target field is present AND within tol.
+function compareChartToTarget(targetChart, vendorChart, fields, tol) {
+  const results = [];
+  const targetSizes = Object.keys(targetChart);
+  const vendorSizes = Object.keys(vendorChart);
+
+  targetSizes.forEach(tSize => {
+    const T = targetChart[tSize];
+    const tFields = fields.filter(f => T[f] != null);
+
+    // Score every vendor size against this target.
+    const scored = vendorSizes.map(vSize => {
+      const V = vendorChart[vSize];
+      let dist = 0, missing = 0, allOk = true;
+      const diffs = {};
+      tFields.forEach(f => {
+        if (V[f] == null) { missing++; allOk = false; diffs[f] = { v: null, t: T[f], d: null, ok: false }; return; }
+        const d = Math.round((V[f] - T[f]) * 10) / 10;
+        const ok = Math.abs(d) <= tol;
+        if (!ok) allOk = false;
+        dist += Math.abs(d);
+        diffs[f] = { v: V[f], t: T[f], d, ok };
+      });
+      // Penalise vendor sizes that don't cover all target fields so they rank last.
+      dist += missing * 999;
+      return { label: vSize, dist: Math.round(dist * 10) / 10, fits: allOk && missing === 0, missing, diffs };
+    }).sort((a, b) => a.dist - b.dist);
+
+    const best = scored[0] || null;
+    const sameLabel = scored.find(s => s.label === tSize) || null;
+
+    // Decide the recommendation.
+    let verdict, source = null, status;
+    if (!best || !vendorSizes.length) {
+      verdict = 'No vendor chart entered for a comparison yet.'; status = 'none';
+    } else if (sameLabel && sameLabel.fits) {
+      verdict = '✓ Source China ' + tSize + ' — it matches your ' + tSize + ' within ±' + tol + 'cm.';
+      source = tSize; status = 'match';
+    } else if (best.fits) {
+      verdict = '⚠ Re-map: China ' + tSize + ' does not match — source China ' + best.label + ' for your ' + tSize + ' (it fits within ±' + tol + 'cm).';
+      source = best.label; status = 'remap';
+    } else {
+      // Nothing fits. Report the closest and the worst offending field.
+      let worst = null;
+      Object.entries(best.diffs).forEach(([f, o]) => { if (o.d != null && (!worst || Math.abs(o.d) > Math.abs(worst.d))) worst = { field: f, d: o.d }; });
+      const off = worst ? (Math.abs(worst.d) + 'cm on ' + worst.field + (worst.d > 0 ? ' (China bigger)' : ' (China smaller)')) : 'measurements incomplete';
+      verdict = '✗ No China size fits your ' + tSize + ' within ±' + tol + 'cm. Closest is China ' + best.label + ', off by ' + off + '. Ask the vendor to adjust, or drop this size.';
+      status = 'nofit';
+    }
+
+    results.push({ size: tSize, target: T, fields: tFields, best, sameLabel, source, status, verdict });
+  });
+
+  // Summary: which China sizes to actually order, and which desired sizes have no match.
+  const toSource = results.filter(r => r.source).map(r => ({ desired: r.size, china: r.source, remap: r.status === 'remap' }));
+  const unmatched = results.filter(r => r.status === 'nofit').map(r => r.size);
+  return { tolerance: tol, results, toSource, unmatched, hasTarget: targetSizes.length > 0, hasVendor: vendorSizes.length > 0 };
+}
+
+// ── Routes ─────────────────────────────────────────────────────────
+router.get('/api/sizetracker/config', (req, res) => {
+  const s = loadStore();
+  res.json({ success: true, categories: buildConfig(), tolerance: s.tolerance });
+});
+
+router.get('/api/sizetracker/targets', (req, res) => {
+  const s = loadStore();
+  res.json({ success: true, targets: s.targets, tolerance: s.tolerance });
+});
+
+// Save the SANKI target chart for one (category, fit).
+router.post('/api/sizetracker/targets', (req, res) => {
+  const b = req.body || {};
+  const category = String(b.category || '').trim();
+  const fit = String(b.fit || '').trim();
+  if (!catExists(category)) return res.status(400).json({ success: false, error: 'Unknown category' });
+  if (!fitExists(category, fit)) return res.status(400).json({ success: false, error: 'Unknown fit for this category' });
+  const fields = fieldsFor(category);
+  const chart = cleanChart(b.chart, fields);
+  const s = loadStore();
+  if (!s.targets[category]) s.targets[category] = {};
+  s.targets[category][fit] = chart;
+  saveStore(s);
+  res.json({ success: true, targets: s.targets });
+});
+
+router.post('/api/sizetracker/tolerance', (req, res) => {
+  const s = loadStore();
+  const t = parseFloat(req.body && req.body.tolerance);
+  s.tolerance = isFinite(t) && t >= 0 ? Math.round(t * 10) / 10 : DEFAULT_TOLERANCE;
+  saveStore(s);
+  res.json({ success: true, tolerance: s.tolerance });
+});
+
+// Compare a vendor's (China) chart to the stored target for (category, fit).
+router.post('/api/sizetracker/compare', (req, res) => {
+  const b = req.body || {};
+  const category = String(b.category || '').trim();
+  const fit = String(b.fit || '').trim();
+  if (!catExists(category)) return res.status(400).json({ success: false, error: 'Unknown category' });
+  if (!fitExists(category, fit)) return res.status(400).json({ success: false, error: 'Unknown fit for this category' });
+  const s = loadStore();
+  const fields = fieldsFor(category);
+  const targetChart = (s.targets[category] && s.targets[category][fit]) || {};
+  const vendorChart = cleanChart(b.vendor, fields);
+  const tol = (() => { const t = parseFloat(b.tolerance); return isFinite(t) && t >= 0 ? Math.round(t * 10) / 10 : s.tolerance; })();
+  const cmp = compareChartToTarget(targetChart, vendorChart, fields, tol);
+  res.json({ success: true, category, fit, fields, ...cmp });
+});
+
+module.exports = { router, compareChartToTarget, fieldsFor, buildConfig };
