@@ -199,10 +199,55 @@ function loadStore() {
     const s = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
     if (!s.settings) s.settings = {};
     if (!Array.isArray(s.candidates)) s.candidates = [];
+    ensureBatches(s);
     return s;
-  } catch { return { settings: {}, candidates: [] }; }
+  } catch { return ensureBatches({ settings: {}, candidates: [] }); }
 }
 function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
+
+// ── Batches ──────────────────────────────────────────────────────
+// Photos live in named batches (e.g. "Batch 1 · 24 Jul 2026, 4:25 PM"). The
+// plan, segregation and dupe check all run on the ACTIVE batch only, so a new
+// upload run is never mixed into an earlier one's calculation.
+function batchDateName(num, iso) {
+  const d = iso ? new Date(iso) : new Date();
+  let stamp;
+  try {
+    stamp = d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+  } catch { stamp = d.toISOString(); }
+  return 'Batch ' + num + ' · ' + stamp;
+}
+function newBatch(s, name) {
+  const num = (s.batches.reduce((m, b) => Math.max(m, b.num || 0), 0)) + 1;
+  const createdAt = new Date().toISOString();
+  const b = { id: crypto.randomBytes(6).toString('hex'), num, name: (name && String(name).trim()) || batchDateName(num, createdAt), createdAt };
+  s.batches.push(b);
+  return b;
+}
+// Migrate legacy stores (candidates with no batch) into "Batch 1", stamped from
+// the earliest photo's upload time — so the existing 84 photos become one batch.
+function ensureBatches(s) {
+  if (!Array.isArray(s.batches)) s.batches = [];
+  const orphans = s.candidates.filter(c => !c.batch);
+  if (orphans.length || (s.candidates.length && !s.batches.length)) {
+    let first = s.batches.find(b => b.num === 1);
+    if (!first) {
+      const earliest = orphans.map(c => c.uploadedAt).filter(Boolean).sort()[0] || new Date().toISOString();
+      first = { id: crypto.randomBytes(6).toString('hex'), num: 1, name: batchDateName(1, earliest), createdAt: earliest };
+      s.batches.push(first);
+    }
+    orphans.forEach(c => { c.batch = first.id; });
+  }
+  if (!s.activeBatch || !s.batches.some(b => b.id === s.activeBatch)) {
+    s.activeBatch = s.batches.length ? s.batches[s.batches.length - 1].id : null;
+  }
+  return s;
+}
+function activeCands(s) { return s.candidates.filter(c => c.batch === s.activeBatch); }
+function batchList(s) {
+  return s.batches.map(b => ({ id: b.id, num: b.num, name: b.name, createdAt: b.createdAt,
+    count: s.candidates.filter(c => c.batch === b.id).length }));
+}
 
 function mediaTypeForFile(fn) {
   const e = path.extname(fn || '').toLowerCase();
@@ -266,7 +311,7 @@ function publicCandidate(c) {
   return { id: c.id, vendor: c.vendor || '', url: '/api/casuals/candidate/' + c.id,
     category: c.category || null, fit: c.fit || null, colour: c.colour || null,
     pattern: c.pattern || null, aiFit: c.aiFit || null, dupeOf: c.dupeOf || null,
-    uploadedAt: c.uploadedAt };
+    uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 function categoryCounts(cands) {
   const active = cands.filter(c => !c.dupeOf);
@@ -513,9 +558,49 @@ router.post('/api/casuals/settings', (req, res) => {
 
 router.get('/api/casuals/candidates', (req, res) => {
   const s = loadStore();
-  markDuplicates(s.candidates);
-  res.json({ success: true, candidates: s.candidates.map(publicCandidate),
-    categories: categoryCounts(s.candidates), total: s.candidates.length });
+  const active = activeCands(s);
+  markDuplicates(active);
+  res.json({ success: true, candidates: active.map(publicCandidate),
+    categories: categoryCounts(active), total: active.length,
+    batches: batchList(s), activeBatch: s.activeBatch });
+});
+
+// List batches (id, name, count) + which one is active.
+router.get('/api/casuals/batches', (req, res) => {
+  const s = loadStore();
+  res.json({ success: true, batches: batchList(s), activeBatch: s.activeBatch });
+});
+
+// Create a new (empty) batch and make it active.
+router.post('/api/casuals/batches', (req, res) => {
+  const s = loadStore();
+  const b = newBatch(s, req.body && req.body.name);
+  s.activeBatch = b.id;
+  saveStore(s);
+  res.json({ success: true, batch: b, batches: batchList(s), activeBatch: s.activeBatch });
+});
+
+// Switch the active batch (the plan/segregate/upload target).
+router.post('/api/casuals/batches/active', (req, res) => {
+  const s = loadStore();
+  const id = String((req.body && req.body.id) || '');
+  if (!s.batches.some(b => b.id === id)) return res.status(400).json({ success: false, error: 'Unknown batch' });
+  s.activeBatch = id;
+  saveStore(s);
+  res.json({ success: true, activeBatch: s.activeBatch, batches: batchList(s) });
+});
+
+// Delete a batch and every photo in it; fall back to another active batch.
+router.delete('/api/casuals/batches/:id', (req, res) => {
+  const s = loadStore();
+  const id = req.params.id;
+  if (!s.batches.some(b => b.id === id)) return res.status(404).json({ success: false, error: 'Not found' });
+  s.candidates.filter(c => c.batch === id).forEach(c => { try { fs.unlinkSync(path.join(CAND_DIR, c.file)); } catch {} });
+  s.candidates = s.candidates.filter(c => c.batch !== id);
+  s.batches = s.batches.filter(b => b.id !== id);
+  if (s.activeBatch === id) s.activeBatch = s.batches.length ? s.batches[s.batches.length - 1].id : null;
+  saveStore(s);
+  res.json({ success: true, batches: batchList(s), activeBatch: s.activeBatch });
 });
 
 router.post('/api/casuals/candidates', async (req, res) => {
@@ -526,19 +611,29 @@ router.post('/api/casuals/candidates', async (req, res) => {
   if (!files.length) return res.status(400).json({ success: false, error: 'No photos received' });
   const vendor = String((req.body && req.body.vendor) || '').trim();
   const s = loadStore();
+  // Decide the target batch: 'new' → create one; a known id → use it; else the
+  // active batch (creating a first one if the store somehow has none).
+  const reqBatch = String((req.body && req.body.batch) || '').trim();
+  let target;
+  if (reqBatch === 'new') target = newBatch(s, req.body && req.body.batchName);
+  else if (reqBatch && s.batches.some(b => b.id === reqBatch)) target = s.batches.find(b => b.id === reqBatch);
+  else target = s.batches.find(b => b.id === s.activeBatch) || newBatch(s);
+  s.activeBatch = target.id;   // new photos' batch becomes the one being planned
   const added = [];
   for (const f of files) {
     const fp = path.join(CAND_DIR, f.filename);
     const sig = await computeSignature(fp);
-    const c = { id: crypto.randomBytes(8).toString('hex'), file: f.filename, vendor,
+    const c = { id: crypto.randomBytes(8).toString('hex'), file: f.filename, vendor, batch: target.id,
       category: null, fit: null, colour: null, pattern: null,
       uploadedAt: new Date().toISOString(), sha: fileSha(fp), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null };
     s.candidates.push(c);
     added.push(publicCandidate(c));
   }
-  const dupes = markDuplicates(s.candidates);
+  const active = activeCands(s);
+  const dupes = markDuplicates(active);
   saveStore(s);
-  res.json({ success: true, added, total: s.candidates.length, dupes, categories: categoryCounts(s.candidates) });
+  res.json({ success: true, added, total: active.length, dupes,
+    categories: categoryCounts(active), batches: batchList(s), activeBatch: s.activeBatch, batch: target });
 });
 
 router.get('/api/casuals/candidate/:id', (req, res) => {
@@ -556,27 +651,31 @@ router.delete('/api/casuals/candidate/:id', (req, res) => {
   if (i < 0) return res.status(404).json({ success: false, error: 'Not found' });
   const [c] = s.candidates.splice(i, 1);
   try { fs.unlinkSync(path.join(CAND_DIR, c.file)); } catch {}
-  markDuplicates(s.candidates);
+  const active = activeCands(s);
+  markDuplicates(active);
   saveStore(s);
-  res.json({ success: true, total: s.candidates.length, categories: categoryCounts(s.candidates) });
+  res.json({ success: true, total: active.length, categories: categoryCounts(active),
+    batches: batchList(s), activeBatch: s.activeBatch });
 });
 
+// Clear only the ACTIVE batch's photos (the batch itself stays, now empty).
 router.post('/api/casuals/candidates/clear', (req, res) => {
   const s = loadStore();
-  s.candidates.forEach(c => { try { fs.unlinkSync(path.join(CAND_DIR, c.file)); } catch {} });
-  s.candidates = [];
+  s.candidates.filter(c => c.batch === s.activeBatch).forEach(c => { try { fs.unlinkSync(path.join(CAND_DIR, c.file)); } catch {} });
+  s.candidates = s.candidates.filter(c => c.batch !== s.activeBatch);
   saveStore(s);
-  res.json({ success: true, total: 0, categories: categoryCounts([]) });
+  res.json({ success: true, total: 0, categories: categoryCounts([]),
+    batches: batchList(s), activeBatch: s.activeBatch });
 });
 
 router.post('/api/casuals/analyze', async (req, res) => {
   try {
     if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI segregation is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
     const s = loadStore();
-    const cands = s.candidates || [];
-    if (!cands.length) return res.status(400).json({ success: false, error: 'No photos yet — upload some casual-wear photos first.' });
+    const cands = activeCands(s);
+    if (!cands.length) return res.status(400).json({ success: false, error: 'No photos in this batch yet — upload some casual-wear photos first.' });
     const force = req.body && (req.body.force === true || req.body.force === 'true');
-    const dupes = markDuplicates(s.candidates);
+    const dupes = markDuplicates(cands);
     const todo = cands.filter(c => !c.dupeOf && (force || !c.category));
     let classified = 0;
     for (let i = 0; i < todo.length; i += VISION_BATCH) {
@@ -592,7 +691,9 @@ router.post('/api/casuals/analyze', async (req, res) => {
       saveStore(s);
     }
     const settings = settingsWithDefaults(s);
-    res.json({ success: true, classified, dupes, settings, categories: categoryCounts(s.candidates), ...buildPlan(s.candidates, settings) });
+    const active = activeCands(s);
+    res.json({ success: true, classified, dupes, settings, categories: categoryCounts(active),
+      batches: batchList(s), activeBatch: s.activeBatch, ...buildPlan(active, settings) });
   } catch (err) {
     if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'Segregation timed out. Try again — sorted photos are saved.' });
     res.status(502).json({ success: false, error: 'Segregation failed: ' + (err.message || 'unknown') });
@@ -602,9 +703,11 @@ router.post('/api/casuals/analyze', async (req, res) => {
 router.get('/api/casuals/plan', (req, res) => {
   const s = loadStore();
   const settings = settingsWithDefaults(s);
-  markDuplicates(s.candidates);
-  const analysed = s.candidates.some(c => c.category);
-  res.json({ success: true, analysed, settings, categories: categoryCounts(s.candidates), ...buildPlan(s.candidates, settings) });
+  const active = activeCands(s);
+  markDuplicates(active);
+  const analysed = active.some(c => c.category);
+  res.json({ success: true, analysed, settings, categories: categoryCounts(active),
+    batches: batchList(s), activeBatch: s.activeBatch, ...buildPlan(active, settings) });
 });
 
 module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts };
