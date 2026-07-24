@@ -182,6 +182,46 @@
     .czcolchips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
     .czcolchip{ font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; border:1px solid var(--line); background:#fff; color:var(--ink); }
     .czcolchip b{ color:#0369a1; }
+    /* ── Buy-sheet (PO) view + view toggle ───────────────────── */
+    .czviewtoggle{ display:inline-flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:0 0 14px; }
+    .czviewtoggle button{ border:none; background:#fff; padding:8px 15px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); }
+    .czviewtoggle button.active{ background:var(--accent); color:#fff; }
+    .czpo-fit{ display:flex; align-items:baseline; gap:10px; margin:16px 0 4px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+    .czpo-fit h4{ margin:0; font-size:14px; }
+    .czpo-fit .m{ font-size:12px; color:var(--muted); }
+    .czporow{ display:flex; gap:14px; align-items:stretch; padding:12px 0; border-bottom:1px dashed var(--line); }
+    .czporow:last-child{ border-bottom:none; }
+    .czporow .cand{ flex:0 0 auto; width:96px; height:120px; border-radius:10px; overflow:hidden; position:relative; background:#eee; }
+    .czporow .cand img{ width:100%; height:100%; object-fit:cover; cursor:zoom-in; display:block; }
+    .poinfo{ flex:1; display:flex; flex-direction:column; gap:8px; min-width:0; }
+    .potop{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; }
+    .pov{ font-size:15px; font-weight:800; }
+    .pomoney{ font-size:14px; font-weight:800; color:#0369a1; white-space:nowrap; }
+    .pometa{ display:flex; flex-wrap:wrap; gap:6px; }
+    .potag{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; background:#f1f3f5; color:#333; }
+    .potag.col{ background:#eef6ff; color:#0369a1; }
+    .poset{ display:flex; align-items:center; gap:7px; }
+    .poset label{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#888; font-weight:700; }
+    .posetbtn{ width:26px; height:26px; border:1px solid var(--line); background:#fff; border-radius:7px; font-size:16px; font-weight:700; line-height:1; cursor:pointer; color:var(--ink); }
+    .posetbtn:hover{ background:#f1f3f5; }
+    .posetin{ width:56px; text-align:center; padding:5px 4px; border:1px solid var(--line); border-radius:7px; font-size:14px; font-weight:700; }
+    .posetx{ font-size:12px; color:var(--muted); }
+    .posetx b{ color:#0369a1; }
+    .posizes{ display:flex; flex-wrap:wrap; gap:6px; }
+    .pobz{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700; padding:4px 9px; border-radius:8px; background:#fff; border:1px solid var(--line); }
+    .pobz b{ color:#0369a1; }
+    /* ── Rich lightbox detail card ───────────────────────────── */
+    .lightbox .lbcap.rich{ bottom:18px; left:18px; right:auto; text-align:left; max-width:min(430px,88vw); }
+    .lbcard{ background:rgba(20,20,22,.86); backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:14px 16px; }
+    .lbgrid{ display:grid; grid-template-columns:1fr 1fr; gap:9px 20px; }
+    .lbf{ display:flex; flex-direction:column; gap:1px; }
+    .lbk{ font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:rgba(255,255,255,.55); font-weight:700; }
+    .lbv{ font-size:15px; font-weight:700; color:#fff; }
+    .lbsizes{ margin-top:12px; }
+    .lbszwrap{ display:flex; flex-wrap:wrap; gap:6px; margin-top:5px; }
+    .lbsz{ font-size:13px; font-weight:700; color:#fff; background:rgba(255,255,255,.12); border-radius:8px; padding:4px 9px; }
+    .lbsz b{ color:#7dd3fc; margin-left:3px; }
+    .lbpos{ margin-top:10px; font-size:11px; color:rgba(255,255,255,.5); }
   </style>
 </head>
 <body>
@@ -368,6 +408,10 @@
       <div id="czPlanPanel" style="display:none">
         <h2 style="margin:0 0 4px">Casual buy plan</h2>
         <p class="sub" id="czPlanSummary"></p>
+        <div class="czviewtoggle" id="czViewToggle" style="display:none">
+          <button data-v="po" type="button">🧾 Buy sheet</button>
+          <button data-v="drill" type="button">🔽 Drill-down</button>
+        </div>
         <div id="czPlan"></div>
       </div>
 
@@ -770,14 +814,31 @@
   // and scroll / arrow-key / on-screen arrows to move through the rest of the
   // images IN THE SAME GRID — no need to exit and re-click.
   var lbList = [], lbIdx = 0;
-  function lbShow(){ var it = lbList[lbIdx]; if(!it) return; el('lbImg').src = it.src; el('lbCap').textContent = (it.cap||'')+'  ('+(lbIdx+1)+' / '+lbList.length+')'; }
+  // Build the big readable detail card from a candidate's data-* attributes.
+  function lbCardHtml(dd){
+    var fields = [['Vendor', dd.vendor||'—'], ['Category', dd.cat||'—'], ['Fit', dd.fit||'—'], ['Colour', dd.colour||'—']];
+    var totalPc = 0;
+    var sz = (dd.sizes||'').split(',').filter(Boolean).map(function(p){ var a = p.split(':'); totalPc += (+a[1]||0);
+      return '<span class="lbsz">'+escapeHtml(a[0])+' <b>'+fmtINR(+a[1]||0)+'</b></span>'; }).join('');
+    if(totalPc) fields.push(['Pieces', fmtINR(totalPc)]);
+    var fh = fields.map(function(f){ return '<div class="lbf"><span class="lbk">'+escapeHtml(f[0])+'</span><span class="lbv">'+escapeHtml(String(f[1]))+'</span></div>'; }).join('');
+    return '<div class="lbcard"><div class="lbgrid">'+fh+'</div>'+(sz?'<div class="lbsizes"><span class="lbk">Sizes to buy</span><div class="lbszwrap">'+sz+'</div></div>':'')+'</div>';
+  }
+  function lbShow(){
+    var it = lbList[lbIdx]; if(!it) return; el('lbImg').src = it.src;
+    var cap = el('lbCap');
+    if(it.rich && it.d){ cap.classList.add('rich'); cap.innerHTML = lbCardHtml(it.d) + '<div class="lbpos">'+(lbIdx+1)+' / '+lbList.length+'</div>'; }
+    else { cap.classList.remove('rich'); cap.textContent = (it.cap||'')+'  ('+(lbIdx+1)+' / '+lbList.length+')'; }
+  }
   function openLightbox(img){
     // Scope scrolling to ONE category section when we're inside the plan grid;
     // otherwise fall back to the whole grid (candidate feed / buy sheet).
     var scope = img.closest('.catsec') || img.closest('.candGrid, #candGrid, #planGrid, #buySheet') || img.closest('body');
     var imgs = Array.prototype.slice.call(scope.querySelectorAll('.cand img'));
     lbList = imgs.map(function(im){ var c = im.closest('.cand'); return { src: im.getAttribute('src'),
-      cap: (c && c.getAttribute('data-cap')) || (c && c.querySelector('.vt') ? c.querySelector('.vt').textContent : '') }; });
+      cap: (c && c.getAttribute('data-cap')) || (c && c.querySelector('.vt') ? c.querySelector('.vt').textContent : ''),
+      rich: !!(c && c.hasAttribute('data-vendor')),
+      d: c ? { vendor:c.getAttribute('data-vendor'), cat:c.getAttribute('data-cat'), fit:c.getAttribute('data-fit'), colour:c.getAttribute('data-colour'), sizes:c.getAttribute('data-sizes') } : null }; });
     lbIdx = Math.max(0, imgs.indexOf(img));
     lbShow(); el('lightbox').classList.add('show');
   }
@@ -1066,12 +1127,103 @@
 
   // Drill-down state: which category / fit sections are expanded.
   var czOpenPlanCat = {}, czOpenPlanFit = {};
-  function czRenderPlan(d){
-    if(!d || !d.categories){ return; }
-    el('czPlanPanel').style.display = '';
-    el('czPlanSummary').innerHTML = '≈ <b>'+fmtINR(d.totalEstUnits||0)+' pieces (estimate)</b> across the enabled categories for a total of <b>₹'+fmtINR(d.totalBudget||0)+'</b>. Budget flows Category → Fit → design, split as money; unit counts are estimates that firm up at PO. Colours are read from your photos. <b>Click a category to open its fits, click a fit to see its designs.</b>';
-    var host = el('czPlan'); host.innerHTML = '';
+  var czPlanView = 'po';   // 'po' = buy sheet (bill) | 'drill' = accordion
+  var czLastPlan = null;
+  var czSets = {};         // per-design set count (default 1), editable per design/colour
 
+  // A "set" = a fixed size curve bought as one unit. e.g. a trouser set =
+  // 26×1 28×2 30×2 32×2 34×2 36×1 = 10 pieces. Buying defaults to ONE set per
+  // design/colour; the set count is editable per design.
+  var CZ_SETRATIO = {
+    'Trouser': [['26',1],['28',2],['30',2],['32',2],['34',2],['36',1]],
+    'Shirt':   [['XS',1],['S',2],['M',2],['L',2],['XL',2],['XXL',1]],
+    'T-shirt': [['XS',1],['S',2],['M',2],['L',2],['XL',2],['XXL',1]]
+  };
+  function czRatioFor(cat){
+    if(CZ_SETRATIO[cat.category]) return CZ_SETRATIO[cat.category];
+    return ((cat && cat.sizes) || []).map(function(s){ return [s, 1]; });
+  }
+  function czSetPieces(ratio){ return ratio.reduce(function(a,r){ return a + r[1]; }, 0); }
+  function czSetsFor(id){ var v = czSets[id]; return (v == null || v < 0) ? 1 : v; }
+
+  // Shared "Unsorted" block for both views.
+  function czUnsorted(d, host){
+    if(!(d.unsorted||[]).length) return;
+    var sec = document.createElement('div'); sec.className='catsec czcard';
+    sec.innerHTML = '<div class="czcardhd"><div class="grow"><h3>Unsorted</h3><div class="note">Not recognised as a casual trouser / shirt / tee — check these</div></div></div>';
+    var g = document.createElement('div'); g.className='czcardbody'; var gg = document.createElement('div'); gg.className='grid'; gg.style.display='grid'; gg.style.gridTemplateColumns='repeat(auto-fill,minmax(78px,1fr))'; gg.style.gap='8px';
+    gg.innerHTML = d.unsorted.map(function(c){ return '<div class="cand" data-cap="'+escapeHtml((c.vendor||'—'))+'"><img src="'+c.url+'" loading="lazy" alt=""/></div>'; }).join('');
+    g.appendChild(gg); sec.appendChild(g); host.appendChild(sec);
+  }
+
+  // Data-* attributes carrying the full detail for the rich lightbox card.
+  function czCandAttrs(c, catLabel, fitLabel, sizeStr){
+    return ' data-vendor="'+escapeHtml(c.vendor||'')+'" data-cat="'+escapeHtml(catLabel||'')+
+      '" data-fit="'+escapeHtml(fitLabel||'')+'" data-colour="'+escapeHtml(c.colour||'')+
+      '" data-sizes="'+escapeHtml(sizeStr||'')+'"';
+  }
+
+  // ── VIEW: Buy sheet (bill) — one photo per row, sizes/qty beside it ──
+  function czRenderPO(d, host){
+    (d.categories||[]).forEach(function(cat){
+      if(!cat.enabled && !cat.poolCount) return;
+      var ratio = czRatioFor(cat), setPc = czSetPieces(ratio);
+      var sec = document.createElement('div'); sec.className='catsec czcard'; sec.setAttribute('data-cat', cat.category);
+      var body = document.createElement('div'); body.className='czcardbody'; var catTotal = 0;
+
+      (cat.fits||[]).forEach(function(f){
+        if(!f.designs || !f.designs.length) return;   // the bill lists only real photos to buy
+        var fitTotal = 0; var rowsWrap = document.createElement('div');
+        f.designs.forEach(function(c){
+          var sets = czSetsFor(c.id);
+          var perSize = ratio.map(function(r){ return [r[0], r[1]*sets]; }).filter(function(r){ return r[1] > 0; });
+          var total = setPc * sets; fitTotal += total; catTotal += total;
+          var sizeStr = perSize.map(function(r){ return r[0]+':'+r[1]; }).join(',');
+          var szHtml = perSize.map(function(r){ return '<span class="pobz">'+escapeHtml(r[0])+'<b>'+fmtINR(r[1])+'</b></span>'; }).join('') || '<span class="m">—</span>';
+          var row = document.createElement('div'); row.className='czporow';
+          row.innerHTML =
+            '<div class="cand"'+czCandAttrs(c, cat.label, f.label, sizeStr)+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
+            '<div class="poinfo">'+
+              '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+
+                '<span class="pomoney">'+fmtINR(total)+' pc</span></div>'+
+              '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
+              '<div class="poset"><label>Sets</label>'+
+                '<button class="posetbtn" type="button" data-id="'+c.id+'" data-op="-">–</button>'+
+                '<input class="posetin" type="number" min="0" step="1" value="'+sets+'" data-id="'+c.id+'">'+
+                '<button class="posetbtn" type="button" data-id="'+c.id+'" data-op="+">+</button>'+
+                '<span class="posetx">× '+setPc+' pc/set = <b>'+fmtINR(total)+' pc</b></span></div>'+
+              '<div class="posizes">'+szHtml+'</div>'+
+            '</div>';
+          rowsWrap.appendChild(row);
+        });
+        var fh = document.createElement('div'); fh.className='czpo-fit';
+        fh.innerHTML = '<h4>'+escapeHtml(f.label)+'</h4><span class="m">'+
+          (f.unassignedFit ? (f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit')
+            : (f.photoCount+' design'+(f.photoCount===1?'':'s')+' · <b>'+fmtINR(fitTotal)+' pc</b> · budget ₹'+fmtINR(f.budget)))+'</span>';
+        body.appendChild(fh); body.appendChild(rowsWrap);
+      });
+
+      var hd = document.createElement('div'); hd.className='czcardhd';
+      hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
+        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+'</div></div>'+
+        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(catTotal)+' pc</b></div>' : '');
+      sec.insertBefore(hd, sec.firstChild);
+      sec.appendChild(body);
+      host.appendChild(sec);
+    });
+    czUnsorted(d, host);
+
+    // Wire the editable set counts.
+    Array.prototype.forEach.call(host.querySelectorAll('.posetin'), function(inp){
+      inp.addEventListener('change', function(){ var v = parseInt(inp.value,10); if(!isFinite(v)||v<0) v=0; czSets[inp.getAttribute('data-id')] = v; czRenderPlan(czLastPlan); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.posetbtn'), function(b){
+      b.addEventListener('click', function(){ var id=b.getAttribute('data-id'); czSets[id] = Math.max(0, czSetsFor(id) + (b.getAttribute('data-op')==='+'?1:-1)); czRenderPlan(czLastPlan); });
+    });
+  }
+
+  // ── VIEW: Drill-down accordion (money / colour analytics) ──
+  function czRenderDrill(d, host){
     (d.categories||[]).forEach(function(cat){
       if(!cat.enabled && !cat.poolCount) return; // hide disabled empties
       var catOpen = !!czOpenPlanCat[cat.category];
@@ -1082,7 +1234,7 @@
       hd.innerHTML = '<span class="caret">'+(catOpen?'▾':'▸')+'</span>'+
         '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
         '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+'</div></div>'+
-        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">≈ Units<b>'+fmtINR(cat.estUnits)+'</b><span class="muted" style="font-size:10px">est · ₹'+fmtINR(cat.expPrice)+'/pc</span></div>' : '');
+        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div>' : '');
       sec.appendChild(hd);
       hd.addEventListener('click', function(){ czOpenPlanCat[cat.category] = !catOpen; czRenderPlan(d); });
 
@@ -1097,7 +1249,7 @@
 
         var fh = document.createElement('div'); fh.className = 'fh'; fh.style.cursor = 'pointer'; fh.style.alignItems = 'center';
         var meta = f.unassignedFit ? ('<span class="m">'+f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit manually</span>')
-          : ('<span class="m">'+f.share+'% of '+escapeHtml(cat.label)+' · ₹'+fmtINR(f.budget)+' · ≈ '+fmtINR(f.estUnits)+' pc · '+f.photoCount+' design'+(f.photoCount===1?'':'s')+'</span>');
+          : ('<span class="m">'+f.share+'% of '+escapeHtml(cat.label)+' · ₹'+fmtINR(f.budget)+' · '+f.photoCount+' design'+(f.photoCount===1?'':'s')+'</span>');
         fh.innerHTML = '<span class="caret" style="margin-right:4px">'+(fitOpen?'▾':'▸')+'</span><h4 style="margin:0">'+escapeHtml(f.label)+'</h4>'+meta;
         fit.appendChild(fh);
         fh.addEventListener('click', function(){ czOpenPlanFit[fitKey] = !fitOpen; czRenderPlan(d); });
@@ -1105,32 +1257,18 @@
         // Observed colour chips for the fit (always visible — quick read).
         if(f.colours && f.colours.length){
           var chips = document.createElement('div'); chips.className = 'czcolchips';
-          chips.innerHTML = f.colours.map(function(cl){ return '<span class="czcolchip">'+escapeHtml(cl.label)+' <b>₹'+fmtINR(cl.budget)+'</b> · ≈'+fmtINR(cl.estUnits)+'</span>'; }).join('');
+          chips.innerHTML = f.colours.map(function(cl){ return '<span class="czcolchip">'+escapeHtml(cl.label)+' <b>₹'+fmtINR(cl.budget)+'</b></span>'; }).join('');
           fit.appendChild(chips);
         }
 
-        // ── LEVEL 3: designs with their size run (only when fit is open) ──
+        // ── LEVEL 3: designs (only when fit is open) ──
         var drill = document.createElement('div'); drill.style.display = fitOpen ? '' : 'none';
         if(f.designs && f.designs.length){
           var g = document.createElement('div'); g.className = 'grid';
           g.innerHTML = f.designs.map(function(c){
-            var szInline = (c.sizes||[]).map(function(s){ return s.label+':'+fmtINR(s.units); }).join('  ');
-            var cap = [c.vendor||'—', cat.label, f.label, c.colour||'—', '₹'+fmtINR(c.budget)+' · ≈'+fmtINR(c.estUnits)+' pc'];
-            if(szInline) cap.push('Sizes ' + (c.sizes||[]).map(function(s){ return s.label+' '+fmtINR(s.units); }).join(', '));
-            var run = szInline ? '<span class="szrun">'+escapeHtml(szInline)+'</span>' : '';
-            var money = '<span class="czmoney">₹'+fmtINR(c.budget)+' · ≈'+fmtINR(c.estUnits)+'</span>';
-            return '<div class="cand" data-cap="'+escapeHtml(cap.join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/>'+money+run+'<span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
+            return '<div class="cand" data-cap="'+escapeHtml([c.vendor||'—', cat.label, f.label, c.colour||'—'].join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
           }).join('');
           drill.appendChild(g);
-          // Fit-level size ladder (rolled up from the designs).
-          var sizeTot = {};
-          f.designs.forEach(function(c){ (c.sizes||[]).forEach(function(s){ sizeTot[s.label] = (sizeTot[s.label]||0) + s.units; }); });
-          var szKeys = Object.keys(sizeTot);
-          if(szKeys.length){
-            var run = document.createElement('div'); run.className = 'czsizerun';
-            run.innerHTML = szKeys.map(function(k){ return '<div class="czsz"><span class="k">'+escapeHtml(k)+'</span><span class="b">≈'+fmtINR(sizeTot[k])+' pc</span></div>'; }).join('');
-            drill.appendChild(run);
-          }
         } else if(fitOpen && !f.unassignedFit){
           var none = document.createElement('div'); none.className = 'm'; none.style.marginTop='8px'; none.style.color='var(--muted)';
           none.textContent = 'No photos uploaded for this fit yet — its ₹'+fmtINR(f.budget)+' is reserved by the % split.';
@@ -1143,14 +1281,18 @@
       sec.appendChild(body);
       host.appendChild(sec);
     });
+    czUnsorted(d, host);
+  }
 
-    if((d.unsorted||[]).length){
-      var sec = document.createElement('div'); sec.className='catsec czcard';
-      sec.innerHTML = '<div class="czcardhd"><div class="grow"><h3>Unsorted</h3><div class="note">Not recognised as a casual trouser / shirt / tee — check these</div></div></div>';
-      var g = document.createElement('div'); g.className='czcardbody'; var gg = document.createElement('div'); gg.className='grid'; gg.style.display='grid'; gg.style.gridTemplateColumns='repeat(auto-fill,minmax(78px,1fr))'; gg.style.gap='8px';
-      gg.innerHTML = d.unsorted.map(function(c){ return '<div class="cand" data-cap="'+escapeHtml((c.vendor||'—'))+'"><img src="'+c.url+'" loading="lazy" alt=""/></div>'; }).join('');
-      g.appendChild(gg); sec.appendChild(g); host.appendChild(sec);
-    }
+  function czRenderPlan(d){
+    if(!d || !d.categories){ return; }
+    czLastPlan = d;
+    el('czPlanPanel').style.display = '';
+    el('czPlanSummary').innerHTML = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per design. Colours are read from your photos.';
+    Array.prototype.forEach.call(el('czViewToggle').children, function(b){ b.classList.toggle('active', b.getAttribute('data-v')===czPlanView); });
+    el('czViewToggle').style.display = '';
+    var host = el('czPlan'); host.innerHTML = '';
+    if(czPlanView === 'drill') czRenderDrill(d, host); else czRenderPO(d, host);
   }
 
   function czLoadPlan(){ return fetch('/api/casuals/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.analysed) czRenderPlan(d); }).catch(function(){}); }
@@ -1162,6 +1304,9 @@
   ['dragleave','drop'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.remove('drag'); }); });
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);
+  Array.prototype.forEach.call(el('czViewToggle').children, function(b){
+    b.addEventListener('click', function(){ czPlanView = b.getAttribute('data-v'); if(czLastPlan) czRenderPlan(czLastPlan); });
+  });
   Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){
     r.addEventListener('change', function(){ if(!czSettings) return; czSettings.budgetMode = r.value; czRenderBudget(); czRenderCats(); czSaveSettings(); });
   });
