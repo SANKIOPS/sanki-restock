@@ -186,6 +186,25 @@ function runChartUpload(req, res) {
     });
   });
 }
+// Sniff the TRUE image format from magic bytes — the browser's mimetype is
+// unreliable (iPhone sends image/heic, some send image/jpg not image/jpeg,
+// drag-drop can send application/octet-stream). Anthropic vision only accepts
+// jpeg/png/gif/webp, so we must send one of those or fail with a clear message.
+function sniffImageType(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png';
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif';
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image/webp';
+  // HEIC/HEIF (iPhone default): ....ftyp<brand> where brand starts heic/heif/hevc/mif1
+  if (buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) {
+    const brand = buf.slice(8, 12).toString('latin1');
+    if (/heic|heif|hevc|mif1|msf1/i.test(brand)) return 'heic';
+  }
+  return null;
+}
+
 // Minimal JSON extractor (first balanced {...} / [...] block in the reply).
 function extractJson(text) {
   if (!text) return null;
@@ -267,8 +286,13 @@ router.post('/api/sizetracker/extract', async (req, res) => {
   if (!catExists(category)) return res.status(400).json({ success: false, error: 'Unknown category' });
   if (!ANTHROPIC_API_KEY) return res.status(500).json({ success: false, error: 'Vision key not configured on the server.' });
   const fields = fieldsFor(category);
+  // Trust the file's magic bytes, not the browser-supplied mimetype (which is
+  // often image/heic or a wrong label the vision API rejects outright).
+  const sniffed = sniffImageType(req.file.buffer);
+  if (sniffed === 'heic') return res.status(415).json({ success: false, error: 'That looks like an iPhone HEIC photo, which can\'t be read. In Photos, tap Share → Options and turn off HEIC (or take a screenshot of the chart), then upload the JPEG/PNG.' });
+  if (!sniffed) return res.status(415).json({ success: false, error: 'Unsupported image format. Please upload a JPEG, PNG, GIF or WEBP (a screenshot of the chart works well).' });
   try {
-    const raw = await extractChart(req.file.buffer, req.file.mimetype || 'image/jpeg', fields);
+    const raw = await extractChart(req.file.buffer, sniffed, fields);
     const chart = cleanChart(raw, fields);
     if (!Object.keys(chart).length) return res.status(422).json({ success: false, error: 'Could not read any sizes from that photo. Try a clearer, straight-on shot of the chart.' });
     res.json({ success: true, category, fields, chart });
