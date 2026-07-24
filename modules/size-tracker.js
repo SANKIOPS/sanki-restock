@@ -29,8 +29,13 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
+const multer  = require('multer');
 
 const router = express.Router();
+
+// Vision (read a size-chart photo into numbers). Shares the Casuals key/model.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const AI_MODEL = process.env.SIZETRACKER_AI_MODEL || process.env.CASUALS_AI_MODEL || 'claude-sonnet-4-6';
 
 // Borrow the category / fit / size scaffold from Casuals so the two never drift.
 let CASUALS_SPEC = [];
@@ -161,6 +166,59 @@ function compareChartToTarget(targetChart, vendorChart, fields, tol) {
   return { tolerance: tol, results, toSource, unmatched, hasTarget: targetSizes.length > 0, hasVendor: vendorSizes.length > 0 };
 }
 
+// ── Vision: read a size-chart photo into a { size: { field: cm } } chart ──
+const chartUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
+});
+function runChartUpload(req, res) {
+  return new Promise((resolve) => {
+    chartUpload.single('image')(req, res, (err) => {
+      if (err) resolve({ ok: false, error: err.code === 'LIMIT_FILE_SIZE' ? 'Image is larger than 25 MB — compress it and retry.' : ('Upload error: ' + (err.message || err.code)) });
+      else resolve({ ok: true });
+    });
+  });
+}
+// Minimal JSON extractor (first balanced {...} / [...] block in the reply).
+function extractJson(text) {
+  if (!text) return null;
+  let t = String(text).replace(/```json/gi, '').replace(/```/g, '').trim();
+  const first = Math.min(...['{', '['].map(c => { const i = t.indexOf(c); return i < 0 ? Infinity : i; }));
+  if (!isFinite(first)) return null;
+  const open = t[first], close = open === '{' ? '}' : ']';
+  let depth = 0, end = -1;
+  for (let i = first; i < t.length; i++) { if (t[i] === open) depth++; else if (t[i] === close) { depth--; if (depth === 0) { end = i; break; } } }
+  if (end < 0) return null;
+  try { return JSON.parse(t.slice(first, end + 1)); } catch { return null; }
+}
+async function extractChart(buffer, mediaType, fields) {
+  const content = [
+    { type: 'image', source: { type: 'base64', media_type: mediaType, data: buffer.toString('base64') } },
+    { type: 'text', text:
+`You are reading a clothing SIZE CHART from this image. Extract garment/body measurements for every size, in CENTIMETRES.\n` +
+`The measurement fields we care about are EXACTLY these: ${fields.join(', ')}.\n` +
+`Size labels may look like XS, S, M, L, XL, XXL, or numeric waist sizes like 28, 30, 32, 34.\n` +
+`If a measurement is given in inches, convert it to centimetres (1 inch = 2.54 cm). Ignore any column/field not in the list.\n` +
+`Return STRICT JSON ONLY: {"chart":{"<SIZE>":{"<Field>": <number in cm>, ...}, ...}} with one object per size found. No commentary.` }
+  ];
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let r;
+  try {
+    r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1500, temperature: 0, messages: [{ role: 'user', content }] }),
+      signal: ctrl.signal
+    });
+  } finally { clearTimeout(timer); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
+  const parsed = extractJson((j.content || []).map(c => c.text || '').join(''));
+  return (parsed && parsed.chart && typeof parsed.chart === 'object') ? parsed.chart : {};
+}
+
 // ── Routes ─────────────────────────────────────────────────────────
 router.get('/api/sizetracker/config', (req, res) => {
   const s = loadStore();
@@ -188,6 +246,27 @@ router.post('/api/sizetracker/targets', (req, res) => {
   res.json({ success: true, targets: s.targets });
 });
 
+// Read a size-chart PHOTO into a { size: { field: cm } } chart for a category.
+// Used for BOTH the SANKI target chart (Section 1) and the vendor/China chart
+// (Section 2) — the caller decides what to do with the returned numbers.
+router.post('/api/sizetracker/extract', async (req, res) => {
+  const up = await runChartUpload(req, res);
+  if (!up.ok) return res.status(400).json({ success: false, error: up.error });
+  if (!req.file) return res.status(400).json({ success: false, error: 'No image uploaded' });
+  const category = String((req.body && req.body.category) || '').trim();
+  if (!catExists(category)) return res.status(400).json({ success: false, error: 'Unknown category' });
+  if (!ANTHROPIC_API_KEY) return res.status(500).json({ success: false, error: 'Vision key not configured on the server.' });
+  const fields = fieldsFor(category);
+  try {
+    const raw = await extractChart(req.file.buffer, req.file.mimetype || 'image/jpeg', fields);
+    const chart = cleanChart(raw, fields);
+    if (!Object.keys(chart).length) return res.status(422).json({ success: false, error: 'Could not read any sizes from that photo. Try a clearer, straight-on shot of the chart.' });
+    res.json({ success: true, category, fields, chart });
+  } catch (e) {
+    res.status(502).json({ success: false, error: 'Vision read failed: ' + (e.message || e) });
+  }
+});
+
 router.post('/api/sizetracker/tolerance', (req, res) => {
   const s = loadStore();
   const t = parseFloat(req.body && req.body.tolerance);
@@ -205,7 +284,14 @@ router.post('/api/sizetracker/compare', (req, res) => {
   if (!fitExists(category, fit)) return res.status(400).json({ success: false, error: 'Unknown fit for this category' });
   const s = loadStore();
   const fields = fieldsFor(category);
-  const targetChart = (s.targets[category] && s.targets[category][fit]) || {};
+  let targetChart = (s.targets[category] && s.targets[category][fit]) || {};
+  // Optional: only compare the India sizes the buyer actually wants this PO.
+  if (Array.isArray(b.wanted) && b.wanted.length) {
+    const want = new Set(b.wanted.map(w => String(w).trim().toUpperCase()));
+    const filtered = {};
+    Object.keys(targetChart).forEach(k => { if (want.has(k)) filtered[k] = targetChart[k]; });
+    targetChart = filtered;
+  }
   const vendorChart = cleanChart(b.vendor, fields);
   const tol = (() => { const t = parseFloat(b.tolerance); return isFinite(t) && t >= 0 ? Math.round(t * 10) / 10 : s.tolerance; })();
   const cmp = compareChartToTarget(targetChart, vendorChart, fields, tol);

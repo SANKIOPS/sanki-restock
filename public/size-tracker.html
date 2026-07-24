@@ -41,6 +41,18 @@
   .saved-flash { color:var(--ok); font-size:12.5px; font-weight:600; margin-left:10px; opacity:0; transition:opacity .2s; }
   .saved-flash.show { opacity:1; }
   .empty { text-align:center; color:var(--muted); padding:28px 0; font-size:13.5px; }
+  .btn.up { background:#fff; color:var(--accent); border:1px dashed var(--accent); font-size:13px; padding:9px 13px; }
+  .btn.up:hover { background:#f5f9ff; }
+  .upnote { font-size:12px; color:var(--muted); margin:2px 0 0; }
+  .upnote.err { color:var(--bad); }
+  .upnote.ok { color:var(--ok); }
+  .pickwrap { margin:14px 0 4px; }
+  .pickwrap .pklabel { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#888; font-weight:600; margin-bottom:8px; display:block; }
+  .picks { display:flex; flex-wrap:wrap; gap:8px; }
+  .pick { display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; padding:6px 12px;
+        border:1px solid var(--line); border-radius:20px; background:#fff; cursor:pointer; user-select:none; }
+  .pick input { margin:0; cursor:pointer; }
+  .pick.on { background:#f5f9ff; border-color:var(--accent); color:var(--accent); }
   .spin { display:inline-block; width:15px; height:15px; border:2px solid rgba(0,0,0,.15);
         border-top-color:var(--accent); border-radius:50%; animation:sp .7s linear infinite; vertical-align:-2px; }
   @keyframes sp { to { transform:rotate(360deg); } }
@@ -93,9 +105,12 @@
         <label>Fit</label>
         <select id="tFit"></select>
       </div>
+      <button class="btn up" id="tPhotoBtn" type="button">📷 Read from photo</button>
+      <input type="file" id="tPhoto" accept="image/*" style="display:none">
       <button class="btn" id="tSave" disabled>Save target chart</button>
       <span class="saved-flash" id="tFlash">Saved ✓</span>
     </div>
+    <p class="upnote" id="tPhotoNote">Have a size-chart image? Upload it and we'll fill the grid for you — you can still edit before saving.</p>
 
     <div id="tGridWrap"><div class="empty">Choose a category and fit to enter its size chart.</div></div>
     <p class="hint">Leave a cell blank if a measurement doesn't apply. Values are in centimetres.</p>
@@ -119,11 +134,20 @@
         <label>Tolerance (± cm)</label>
         <input type="number" class="tolin" id="cTol" step="0.1" min="0" value="1.5">
       </div>
+      <button class="btn up" id="cPhotoBtn" type="button">📷 Read China chart from photo</button>
+      <input type="file" id="cPhoto" accept="image/*" style="display:none">
       <button class="btn ghost" id="cAddRow">+ Add China size</button>
       <button class="btn" id="cCompare" disabled>Compare</button>
     </div>
+    <p class="upnote" id="cPhotoNote">Upload the vendor's size-chart image under here and we'll read their China measurements into the grid automatically.</p>
 
     <div id="cGridWrap"><div class="empty">Choose a category and fit to enter the vendor's chart.</div></div>
+
+    <div class="pickwrap" id="cPickWrap" style="display:none">
+      <span class="pklabel">India sizes to buy this PO</span>
+      <div class="picks" id="cPicks"></div>
+    </div>
+
     <p class="hint" id="cTargetNote"></p>
   </div>
 
@@ -154,6 +178,45 @@
     var c = catObj(catKey);
     (c ? c.fits : []).forEach(function (f) {
       var o = document.createElement('option'); o.value = f.key; o.textContent = f.label; sel.appendChild(o);
+    });
+  }
+
+  // ── Photo → chart (shared by target & vendor uploaders) ─────
+  function uploadChartPhoto(file, category, noteEl, btnEl, done) {
+    var fd = new FormData();
+    fd.append('image', file);
+    fd.append('category', category);
+    var oldTxt = btnEl.textContent; btnEl.disabled = true; btnEl.textContent = 'Reading…';
+    noteEl.className = 'upnote'; noteEl.innerHTML = '<span class="spin"></span> Reading the size chart from your photo…';
+    fetch('/api/sizetracker/extract', { method: 'POST', body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        btnEl.disabled = false; btnEl.textContent = oldTxt;
+        if (j && j.success && j.chart && Object.keys(j.chart).length) {
+          var n = Object.keys(j.chart).length;
+          noteEl.className = 'upnote ok';
+          noteEl.textContent = '✓ Read ' + n + ' size' + (n > 1 ? 's' : '') + ' from the photo — review the numbers below before saving.';
+          done(j.chart);
+        } else {
+          noteEl.className = 'upnote err';
+          noteEl.textContent = '✗ ' + ((j && j.error) || 'Could not read that photo.');
+        }
+      })
+      .catch(function () {
+        btnEl.disabled = false; btnEl.textContent = oldTxt;
+        noteEl.className = 'upnote err'; noteEl.textContent = '✗ Network error reading the photo.';
+      });
+  }
+
+  // Merge an extracted chart into the target grid inputs (still editable).
+  function applyChartToTargetGrid(chart) {
+    var wrap = el('tGridWrap');
+    Object.keys(chart).forEach(function (sz) {
+      var meas = chart[sz] || {};
+      Object.keys(meas).forEach(function (f) {
+        var inp = wrap.querySelector('input.meas[data-size="' + sz + '"][data-field="' + f + '"]');
+        if (inp) { inp.value = meas[f]; inp.classList.add('filled'); }
+      });
     });
   }
 
@@ -279,6 +342,38 @@
     return out;
   }
 
+  // Replace the vendor grid with an extracted China chart (still editable).
+  function applyChartToVendorGrid(chart) {
+    var c = catObj(el('cCat').value), fields = (c && c.fields) || [];
+    vendorRows = Object.keys(chart).map(function (sz) {
+      var meas = {}; fields.forEach(function (f) { if (chart[sz][f] != null) meas[f] = chart[sz][f]; });
+      return { label: sz, meas: meas };
+    });
+    if (!vendorRows.length) seedVendorRows();
+    renderVendorGrid();
+  }
+
+  // ── India sizes-to-buy picker (from the saved target chart) ──
+  function renderPicks() {
+    var cat = el('cCat').value, fit = el('cFit').value;
+    var chart = (TARGETS[cat] && TARGETS[cat][fit]) || {};
+    var sizes = Object.keys(chart);
+    var wrap = el('cPickWrap'), picks = el('cPicks');
+    if (!sizes.length) { wrap.style.display = 'none'; picks.innerHTML = ''; return; }
+    wrap.style.display = '';
+    picks.innerHTML = sizes.map(function (sz) {
+      return '<label class="pick on"><input type="checkbox" class="pkbox" value="' + esc(sz) + '" checked>' + esc(sz) + '</label>';
+    }).join('');
+    picks.querySelectorAll('.pkbox').forEach(function (b) {
+      b.addEventListener('change', function () { b.closest('.pick').classList.toggle('on', b.checked); });
+    });
+  }
+  function collectWanted() {
+    var out = [];
+    el('cPicks').querySelectorAll('.pkbox').forEach(function (b) { if (b.checked) out.push(b.value); });
+    return out;
+  }
+
   function updateTargetNote() {
     var cat = el('cCat').value, fit = el('cFit').value;
     var chart = (TARGETS[cat] && TARGETS[cat][fit]) || {};
@@ -286,6 +381,7 @@
     var note = el('cTargetNote');
     if (n) note.innerHTML = '✓ Target chart on file for <b>' + esc(fitLabel(cat, fit)) + '</b>: ' + n + ' size' + (n > 1 ? 's' : '') + ' (' + esc(Object.keys(chart).join(', ')) + ').';
     else note.innerHTML = '⚠ No target chart saved yet for <b>' + esc(fitLabel(cat, fit)) + '</b>. Fill it in Section 1 first, or Compare will have nothing to match against.';
+    renderPicks();
   }
 
   function compare() {
@@ -293,10 +389,12 @@
     var tol = parseFloat(el('cTol').value);
     var vendor = collectVendorChart();
     if (!Object.keys(vendor).length) { alert('Enter at least one China size with measurements.'); return; }
+    var wanted = collectWanted();
+    if (el('cPickWrap').style.display !== 'none' && !wanted.length) { alert('Tick at least one India size you want to buy.'); return; }
     el('cCompare').disabled = true; el('cCompare').textContent = 'Comparing…';
     fetch('/api/sizetracker/compare', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category: cat, fit: fit, vendor: vendor, tolerance: tol })
+      body: JSON.stringify({ category: cat, fit: fit, vendor: vendor, tolerance: tol, wanted: wanted })
     }).then(function (r) { return r.json(); }).then(function (j) {
       el('cCompare').disabled = false; el('cCompare').textContent = 'Compare';
       if (j && j.success) renderResults(j);
@@ -372,11 +470,23 @@
       el('tCat').addEventListener('change', function () { fillFitSelect(el('tCat').value, el('tFit')); renderTargetGrid(); });
       el('tFit').addEventListener('change', renderTargetGrid);
       el('tSave').addEventListener('click', saveTarget);
+      el('tPhotoBtn').addEventListener('click', function () { el('tPhoto').click(); });
+      el('tPhoto').addEventListener('change', function () {
+        var f = el('tPhoto').files[0]; if (!f) return;
+        uploadChartPhoto(f, el('tCat').value, el('tPhotoNote'), el('tPhotoBtn'), applyChartToTargetGrid);
+        el('tPhoto').value = '';
+      });
 
       el('cCat').addEventListener('change', function () { fillFitSelect(el('cCat').value, el('cFit')); vendorRows = []; renderVendorGrid(); updateTargetNote(); });
       el('cFit').addEventListener('change', updateTargetNote);
       el('cAddRow').addEventListener('click', addVendorRow);
       el('cCompare').addEventListener('click', compare);
+      el('cPhotoBtn').addEventListener('click', function () { el('cPhoto').click(); });
+      el('cPhoto').addEventListener('change', function () {
+        var f = el('cPhoto').files[0]; if (!f) return;
+        uploadChartPhoto(f, el('cCat').value, el('cPhotoNote'), el('cPhotoBtn'), applyChartToVendorGrid);
+        el('cPhoto').value = '';
+      });
     }).catch(function () {
       document.querySelector('.wrap').insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">Could not load Size Tracker config.</div></div>');
     });
