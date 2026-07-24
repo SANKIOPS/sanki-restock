@@ -203,9 +203,13 @@ async function extractChart(buffer, mediaType, fields) {
     { type: 'image', source: { type: 'base64', media_type: mediaType, data: buffer.toString('base64') } },
     { type: 'text', text:
 `You are reading a clothing SIZE CHART from this image. Extract garment/body measurements for every size, in CENTIMETRES.\n` +
-`The measurement fields we care about are EXACTLY these: ${fields.join(', ')}.\n` +
-`Size labels may look like XS, S, M, L, XL, XXL, or numeric waist sizes like 28, 30, 32, 34.\n` +
-`If a measurement is given in inches, convert it to centimetres (1 inch = 2.54 cm). Ignore any column/field not in the list.\n` +
+`The chart may be in ANY language — it is often a CHINESE vendor chart. Read Chinese (or other) text and TRANSLATE each column header to the matching English field below. Do not skip a column just because its header is not in English.\n` +
+`The measurement fields we want, using EXACTLY these English keys in the output: ${fields.join(', ')}.\n` +
+`Common Chinese → English column headers (match by meaning, ignore extra characters like 净/半/平铺/cm):\n` +
+`  胸围/胸宽 → Chest · 肩宽 → Shoulder · 衣长/身长 → Length · 袖长 → Sleeve ·\n` +
+`  腰围 → Waist · 臀围 → Hip · 内长/裤内长 → Inseam · 大腿围/腿围/髀围 → Thigh · 脚口/裤口/下摆 → Bottom hem\n` +
+`Size labels (the row headers, often under 尺码/码/规格) may be XS S M L XL XXL, numeric waist 28 30 32 34, or Chinese like 均码/加大 — keep the label AS PRINTED (romanise S/M/L; leave numeric as-is).\n` +
+`Values are usually already in cm. If a value is clearly in inches, convert (1 inch = 2.54 cm). If a Chinese chart gives a HALF/flat 半胸/平铺 chest, still report the number as printed. Ignore only columns with no measurement meaning (price, weight tolerance, model height suggestion).\n` +
 `Return STRICT JSON ONLY: {"chart":{"<SIZE>":{"<Field>": <number in cm>, ...}, ...}} with one object per size found. No commentary.` }
   ];
   const ctrl = new AbortController();
