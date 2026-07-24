@@ -25,10 +25,32 @@
     .btn.ghost:hover{ background:#f2faf6; }
     .btn.lg{ padding:13px 26px; font-size:15px; font-weight:800; }
     .btn.sm{ padding:5px 10px; font-size:12px; }
-    .czbatchbar{ display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; background:#f6faf8; border:1px solid var(--line);
-        border-radius:11px; padding:11px 13px; margin:12px 0 6px; }
-    .czbatchbar select{ min-width:240px; }
-    .czbatchnote{ font-size:12px; align-self:center; }
+    .czbatchbar{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:14px 0 8px; }
+    .czbatchbar .grow{ flex:1 1 auto; font-size:14px; }
+    /* ── Batch rows (replaces the old dropdown) ── */
+    .czbrow{ border:1px solid var(--line); border-radius:12px; background:#fff; margin:8px 0; overflow:hidden; transition:border-color .12s, box-shadow .12s; }
+    .czbrow.on{ border-color:var(--emerald-d); box-shadow:0 1px 5px rgba(4,120,87,.12); }
+    .czbhd{ display:flex; align-items:center; gap:12px; padding:11px 14px; cursor:pointer; user-select:none; transition:background .12s; }
+    .czbhd:hover{ background:#f7faf5; }
+    .czbnum{ flex:0 0 auto; width:30px; height:30px; border-radius:8px; background:#eef4ef; color:var(--emerald-d); font-weight:800; font-size:13px; display:flex; align-items:center; justify-content:center; }
+    .czbrow.on .czbnum{ background:var(--emerald-d); color:#fff; }
+    .czbmain{ flex:1 1 auto; min-width:0; }
+    .czbname{ font-size:14px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .czbchips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:5px; }
+    .czbchip{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; border:1px solid var(--line); background:#f7faf5; color:#374151; }
+    .czbchip.pcs{ background:#eef4ff; border-color:#c7d7f5; color:#1d4ed8; }
+    .czbchip.bud{ background:#fef9ec; border-color:#f2e3b8; color:#92600a; }
+    .czbchip.spend{ background:#ecfdf3; border-color:#a7e3c3; color:#065f46; }
+    .czbchip.warn{ background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
+    .czbchip.muted{ background:#f6f7f6; color:var(--muted); }
+    .czbcaret{ flex:0 0 auto; font-size:12px; color:var(--muted); width:14px; text-align:center; }
+    .czbbody{ border-top:1px solid var(--line); padding:12px 14px; background:#fbfdfb; }
+    .czphotos-tog{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:#374151;
+        border:1px solid var(--line); background:#fff; border-radius:9px; padding:7px 12px; }
+    .czphotos-tog:hover{ background:#f2f7f2; }
+    .czbactions{ margin-top:12px; }
+    .czbdel{ font-size:12px; font-weight:700; color:var(--err); background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:6px 11px; cursor:pointer; }
+    .czbdel:hover{ background:#fde3e3; }
     .btn:disabled{ opacity:.5; cursor:default; }
     .panel{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
     .fld label{ display:block; font-size:11px; font-weight:700; color:#5f6d65; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
@@ -385,13 +407,11 @@
           <p class="sub">Trousers, shirts and tees all in one pile. On <b>Segregate &amp; plan</b> the app sorts every photo into its <b>category</b> and then its <b>fit</b>.</p>
         </div>
         <div class="czbatchbar" id="czBatchBar">
-          <div class="fld" style="min-width:240px"><label>Active batch (photos &amp; plan use this)</label>
-            <select id="czBatchSel"></select></div>
+          <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to work on it; the plan uses the selected one</span></div>
           <button class="btn ghost sm" id="czNewBatch" type="button">＋ New batch</button>
-          <button class="btn ghost sm" id="czDelBatch" type="button" title="Delete this batch and its photos">🗑 Delete batch</button>
-          <span class="czbatchnote muted" id="czBatchNote"></span>
         </div>
-        <div style="display:flex;gap:8px;margin:12px 0 8px;flex-wrap:wrap;align-items:flex-end">
+        <div id="czBatchList"></div>
+        <div style="display:flex;gap:8px;margin:14px 0 8px;flex-wrap:wrap;align-items:flex-end">
           <div class="fld" style="min-width:170px"><label>Vendor (tags this batch)</label><input id="czVendor" placeholder="e.g. CHAOUFI" /></div>
         </div>
         <div class="drop" style="margin-top:4px" id="czDrop">
@@ -401,8 +421,6 @@
           <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
         </div>
         <div id="czUploadStatus" class="muted" style="font-size:12px; margin-top:6px"></div>
-        <div class="czcatchips" id="czCatChips"></div>
-        <div id="czGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:8px; margin-top:12px"></div>
       </div>
 
       <!-- ② Budget model -->
@@ -1088,6 +1106,8 @@
   // ── Casual candidate feed ──
   function czRenderCandidates(list, cats){
     var chips = el('czCatChips');
+    var grid = el('czGrid');
+    if(!chips || !grid) return;   // container lives inside the active batch row; skip if not mounted
     var total = (list||[]).length;
     if(cats && cats.length){
       chips.innerHTML = '<span class="muted" style="font-size:11px;align-self:center">Sorted:</span>' +
@@ -1096,7 +1116,6 @@
       var cc = el('czClear');
       if(cc) cc.onclick = function(){ var act=czActiveBatchObj(); if(confirm('Remove all '+total+' photos in '+(act?'“'+act.name+'”':'this batch')+'?')) fetch('/api/casuals/candidates/clear',{method:'POST'}).then(function(){ czLoadCandidates(); }); };
     } else chips.innerHTML = '';
-    var grid = el('czGrid');
     grid.innerHTML = (list||[]).map(function(c){
       var cap = [c.vendor||'—']; if(c.category) cap.push(CAT_LABEL[c.category]||c.category); if(c.fit) cap.push(czFitLabel(c.category, c.fit)); if(c.colour) cap.push(c.colour);
       var dupe = c.dupeOf ? '<span class="dupeflag" title="Near-duplicate — left out of the buy">dupe</span>' : '';
@@ -1108,23 +1127,84 @@
     });
   }
   function czLoadCandidates(){
-    return fetch('/api/casuals/candidates').then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czBatches = d.batches||[]; czActiveBatch = d.activeBatch||null; czRenderBatches(); czRenderCandidates(d.candidates, d.categories); } });
+    return fetch('/api/casuals/candidates').then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czBatches = d.batches||[]; czActiveBatch = d.activeBatch||null; czLastCands = d.candidates||[]; czLastCats = d.categories||[]; czRenderBatches(); czRenderCandidates(czLastCands, czLastCats); } });
   }
 
   // ── Batches: each upload session can be its own dated batch. The plan,
   // segregation and dedup all work on the ACTIVE batch only, so old photos
   // never mix into a fresh calculation. ──
-  var czBatches = [], czActiveBatch = null;
+  var czBatches = [], czActiveBatch = null, czPhotosOpen = false;
+  var czLastCands = [], czLastCats = [];
   function czActiveBatchObj(){ return czBatches.filter(function(b){ return b.id === czActiveBatch; })[0] || null; }
+
+  // Total actual spend across the current plan (only meaningful after prices
+  // are entered + Re-analyse). Used for the batch-row "actual ₹" chip.
+  function czPlanSpend(){
+    if(!czLastPlan) return 0; var s = 0;
+    (czLastPlan.categories||[]).forEach(function(cat){ if(!cat.enabled) return; (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){ s += czRowCost(c, cat); }); }); });
+    return s;
+  }
+
+  // The rich detail line shown on every batch row WITHOUT opening it:
+  // photos, category breakdown, ~pieces, estimated budget, and (once priced)
+  // the real spend.
+  function czBatchChips(b, isActive){
+    var out = ['<span class="czbchip">'+b.count+' photo'+(b.count===1?'':'s')+'</span>'];
+    if(b.categories && b.categories.length){
+      b.categories.forEach(function(c){ out.push('<span class="czbchip">'+escapeHtml(c.label)+' '+c.count+'</span>'); });
+      if(b.pieces) out.push('<span class="czbchip pcs">~'+fmtINR(b.pieces)+' pc</span>');
+    } else if(b.count){
+      out.push('<span class="czbchip muted">not segregated yet</span>');
+    }
+    var bud = czSettings ? (czSettings.budget||0) : 0;
+    if(bud) out.push('<span class="czbchip bud">est. budget ₹'+fmtINR(bud)+'</span>');
+    if(isActive && czPriced && czLastPlan){
+      var sp = czPlanSpend();
+      out.push('<span class="czbchip '+(sp>bud?'warn':'spend')+'">actual ₹'+fmtINR(sp)+'</span>');
+    }
+    return out.join('');
+  }
+
   function czRenderBatches(){
-    var sel = el('czBatchSel'); if(!sel) return;
-    if(!czBatches.length){ sel.innerHTML = '<option value="">No batches yet — add photos to start</option>'; el('czBatchNote').textContent=''; el('czDelBatch').disabled = true; return; }
-    el('czDelBatch').disabled = false;
-    sel.innerHTML = czBatches.map(function(b){
-      return '<option value="'+b.id+'"'+(b.id===czActiveBatch?' selected':'')+'>'+escapeHtml(b.name)+' ('+b.count+' photo'+(b.count===1?'':'s')+')</option>';
-    }).join('');
-    var act = czActiveBatchObj();
-    el('czBatchNote').textContent = act ? ('Plan & segregation use “'+act.name+'” — '+act.count+' photo'+(act.count===1?'':'s')) : '';
+    var host = el('czBatchList'); if(!host) return;
+    if(!czBatches.length){
+      host.innerHTML = '<div class="muted" style="font-size:13px;padding:10px 2px">No batches yet — enter a vendor and drop photos below to start <b>Batch 1</b>.</div>';
+      return;
+    }
+    host.innerHTML = '';
+    czBatches.forEach(function(b){
+      var isActive = b.id === czActiveBatch;
+      var row = document.createElement('div'); row.className = 'czbrow' + (isActive ? ' on' : '');
+      var hd = document.createElement('div'); hd.className = 'czbhd';
+      hd.innerHTML =
+        '<div class="czbnum">'+(b.num||'?')+'</div>'+
+        '<div class="czbmain"><div class="czbname">'+escapeHtml(b.name)+'</div>'+
+          '<div class="czbchips">'+czBatchChips(b, isActive)+'</div></div>'+
+        '<div class="czbcaret">'+(isActive ? '▾' : '▸')+'</div>';
+      hd.addEventListener('click', function(){
+        if(isActive){ czPhotosOpen = !czPhotosOpen; czRenderBatches(); czRenderCandidates(czLastCands, czLastCats); }
+        else { czPhotosOpen = false; czSetActiveBatch(b.id); }
+      });
+      row.appendChild(hd);
+
+      if(isActive){
+        var body = document.createElement('div'); body.className = 'czbbody';
+        var tog = document.createElement('div'); tog.className = 'czphotos-tog';
+        tog.innerHTML = (czPhotosOpen ? '▾' : '▸') + ' 🖼 Uploaded photos ('+b.count+')';
+        tog.addEventListener('click', function(e){ e.stopPropagation(); czPhotosOpen = !czPhotosOpen; czRenderBatches(); czRenderCandidates(czLastCands, czLastCats); });
+        body.appendChild(tog);
+        var pc = document.createElement('div'); pc.style.display = czPhotosOpen ? '' : 'none'; pc.style.marginTop = '10px';
+        pc.innerHTML = '<div class="czcatchips" id="czCatChips"></div>'+
+          '<div id="czGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(78px,1fr)); gap:8px; margin-top:10px"></div>';
+        body.appendChild(pc);
+        var act = document.createElement('div'); act.className = 'czbactions';
+        var del = document.createElement('button'); del.className = 'czbdel'; del.type = 'button'; del.textContent = '🗑 Delete this batch';
+        del.addEventListener('click', function(e){ e.stopPropagation(); czDeleteBatch(); });
+        act.appendChild(del); body.appendChild(act);
+        row.appendChild(body);
+      }
+      host.appendChild(row);
+    });
   }
   function czSetActiveBatch(id){
     return fetch('/api/casuals/batches/active',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:id})})
@@ -1159,7 +1239,7 @@
     if(cur.length) chunks.push(cur);
     var done=0, addedTotal=0, total=0;
     function send(idx){
-      if(idx >= chunks.length){ el('czUploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+addedTotal+' — total '+total+'</span>'; czLoadCandidates(); return; }
+      if(idx >= chunks.length){ el('czUploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+addedTotal+' — total '+total+'</span>'; czPhotosOpen = true; czLoadCandidates(); return; }
       var fd = new FormData(); chunks[idx].forEach(function(f){ fd.append('photos', f); }); fd.append('vendor', vendor); fd.append('batch', batchTarget);
       el('czUploadStatus').textContent = 'Uploading '+(done+1)+'–'+(done+chunks[idx].length)+' of '+all.length+'…';
       fetch('/api/casuals/candidates', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
@@ -1188,6 +1268,7 @@
   }
 
   var czLastPlan = null;
+  var czPlanOpen = {};     // which plan category is expanded (collapsed by default)
   var czSets = {};         // per-design set count (default 1), editable per design/colour
 
   // A "set" = a fixed size curve bought as one unit. e.g. a trouser set =
@@ -1248,8 +1329,9 @@
     (d.categories||[]).forEach(function(cat){
       if(!cat.enabled && !cat.poolCount) return;
       var ratio = czRatioFor(cat), setPc = czSetPieces(ratio);
-      var sec = document.createElement('div'); sec.className='catsec czcard'; sec.setAttribute('data-cat', cat.category);
-      var body = document.createElement('div'); body.className='czcardbody'; var catTotal = 0, catCost = 0;
+      var open = !!czPlanOpen[cat.category];
+      var sec = document.createElement('div'); sec.className='catsec czcard'+(open?' open':''); sec.setAttribute('data-cat', cat.category);
+      var body = document.createElement('div'); body.className='czcardbody'; body.style.display = open ? '' : 'none'; var catTotal = 0, catCost = 0;
 
       (cat.fits||[]).forEach(function(f){
         if(!f.designs || !f.designs.length) return;   // the bill lists only real photos to buy
@@ -1302,12 +1384,14 @@
         body.appendChild(fh); body.appendChild(rowsWrap);
       });
 
-      var hd = document.createElement('div'); hd.className='czcardhd';
+      var hd = document.createElement('div'); hd.className='czcardhd'; hd.style.cursor='pointer'; hd.style.userSelect='none';
       hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
-        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+'</div></div>'+
+        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+' · <b>'+(open?'tap to collapse':'tap to see photos, fits &amp; sizes')+'</b></div></div>'+
         (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(catTotal)+' pc</b></div>'+
           (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Actual spend<b>₹'+fmtINR(catCost)+'</b></div>'+
-            (cat.budget ? '<span class="cztag '+(catCost>cat.budget?'over':'ok')+'">'+(catCost>cat.budget?'Over by ₹'+fmtINR(catCost-cat.budget):'₹'+fmtINR(cat.budget-catCost)+' left')+'</span>' : '') : '') : '');
+            (cat.budget ? '<span class="cztag '+(catCost>cat.budget?'over':'ok')+'">'+(catCost>cat.budget?'Over by ₹'+fmtINR(catCost-cat.budget):'₹'+fmtINR(cat.budget-catCost)+' left')+'</span>' : '') : '') : '')+
+        '<span class="catcaret" style="margin-left:12px;font-size:14px">'+(open?'▾':'▸')+'</span>';
+      hd.addEventListener('click', function(){ czPlanOpen[cat.category] = !open; czRenderPlan(czLastPlan); });
       sec.insertBefore(hd, sec.firstChild);
       sec.appendChild(body);
       host.appendChild(sec);
@@ -1395,9 +1479,7 @@
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);
   el('czExportBtn').addEventListener('click', czExportPO);
-  el('czBatchSel').addEventListener('change', function(){ czSetActiveBatch(el('czBatchSel').value); });
   el('czNewBatch').addEventListener('click', czCreateBatch);
-  el('czDelBatch').addEventListener('click', czDeleteBatch);
   el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });
   Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){
     r.addEventListener('change', function(){ if(!czSettings) return; czSettings.budgetMode = r.value; czRenderBudget(); czRenderCats(); czSaveSettings(); });

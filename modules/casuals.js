@@ -108,6 +108,10 @@ const CASUALS_SPEC = [
 ];
 const CAT_KEYS  = CASUALS_SPEC.map(c => c.key);
 const CAT_BY_KEY = CASUALS_SPEC.reduce((m, c) => (m[c.key] = c, m), {});
+// Pieces in ONE default size-set per category (mirrors the frontend
+// CZ_SETRATIO curve: 1+2+2+2+2+1 = 10). Used only for the soft "pieces coming"
+// hint on a batch row — the real count is decided in the buy sheet.
+const SET_PIECES = { Trouser: 10, Shirt: 10, 'T-shirt': 10 };
 
 // Map a free-text garment word from the vision pass onto a Casuals category.
 // Anything that isn't one of our three casual categories returns null (it will
@@ -245,8 +249,16 @@ function ensureBatches(s) {
 }
 function activeCands(s) { return s.candidates.filter(c => c.batch === s.activeBatch); }
 function batchList(s) {
-  return s.batches.map(b => ({ id: b.id, num: b.num, name: b.name, createdAt: b.createdAt,
-    count: s.candidates.filter(c => c.batch === b.id).length }));
+  return s.batches.map(b => {
+    const cs = s.candidates.filter(c => c.batch === b.id);
+    const by = {}; let analysed = 0;
+    cs.forEach(c => { if (c.category && CAT_BY_KEY[c.category]) { by[c.category] = (by[c.category] || 0) + 1; analysed++; } });
+    const categories = CAT_KEYS.filter(k => by[k]).map(k => ({ category: k, label: CAT_BY_KEY[k].label, count: by[k] }));
+    // Soft pieces-coming estimate = one default set per categorised photo.
+    const pieces = Object.keys(by).reduce((sum, k) => sum + by[k] * (SET_PIECES[k] || 10), 0);
+    return { id: b.id, num: b.num, name: b.name, createdAt: b.createdAt,
+      count: cs.length, analysed, categories, pieces };
+  });
 }
 
 function mediaTypeForFile(fn) {
