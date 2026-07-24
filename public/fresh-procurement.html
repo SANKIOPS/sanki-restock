@@ -970,16 +970,14 @@
     var c = czSettings.categories[catKey];
     var budget = (czSettings.budgetMode === 'perCategory') ? (c.budget||0)
       : (function(){ var en = CAT_KEYS.filter(function(k){ return czSettings.categories[k].enabled; }); return en.length && c.enabled ? Math.floor((czSettings.budget||0)/en.length) : 0; })();
-    var units = c.enabled ? Math.round(budget / Math.max(1, c.avgCost||1)) : 0;
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
-    var up = card.querySelector('[data-unitpill]'); if(up) up.textContent = '≈ '+fmtINR(units);
-    // Colours are observed from the uploaded photos, so only fit & size %s drive
-    // the pre-upload hint here.
+    // No piece-count estimate here (it needed a per-unit price we don't trust
+    // until PO). Each row just shows its normalised share of the budget.
     ['fits','sizes'].forEach(function(kind){
       var map = c[kind], tot = czSum(map) || 1;
       Array.prototype.forEach.call(card.querySelectorAll('[data-kind="'+kind+'"] .czdrow'), function(row){
         var key = row.getAttribute('data-key'); var pct = Math.max(0, parseInt(map[key])||0);
-        var u = row.querySelector('[data-u]'); if(u) u.textContent = units ? ('≈ '+Math.round(units*pct/tot)+' pc') : (Math.round(pct/tot*100)+'%');
+        var u = row.querySelector('[data-u]'); if(u) u.textContent = Math.round(pct/tot*100)+'%';
       });
     });
   }
@@ -1012,16 +1010,19 @@
 
       var body = document.createElement('div'); body.className = 'czcardbody'; body.style.display = open ? '' : 'none';
 
-      // budget + avgCost + live pills
+      // budget + live pill. The old "Expected ₹/pc" estimate + "≈ Units" pill
+      // were removed: the per-unit price is only a soft guess that changes
+      // nothing about the rupee plan — real units are decided at PO from the
+      // vendor's actual quote. We keep the money, drop the fake piece counts.
       var perCat = (czSettings.budgetMode === 'perCategory');
-      var row = document.createElement('div'); row.className = 'czrow';
-      row.innerHTML =
-        (perCat ? '<div class="fld" style="min-width:150px"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>' : '')+
-        '<div class="fld" style="min-width:150px"><label>Expected ₹ / pc (estimate)</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
-      body.appendChild(row);
+      if(perCat){
+        var row = document.createElement('div'); row.className = 'czrow';
+        row.innerHTML = '<div class="fld" style="min-width:150px"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>';
+        body.appendChild(row);
+      }
 
       var pills = document.createElement('div'); pills.className = 'czpills';
-      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">≈ Units (est.)<b data-unitpill>0</b><span class="muted" style="font-size:10px">firmed at PO</span></div>';
+      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div>';
       body.appendChild(pills);
 
       // Only FIT and SIZE are decided by %. COLOUR is observed from the photos
@@ -1066,8 +1067,6 @@
 
       var bud = body.querySelector('[data-budget]');
       if(bud) bud.addEventListener('change', function(){ c.budget = parseInt((bud.value||'').replace(/[^\d]/g,''))||0; bud.value = fmtINR(c.budget); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
-      var avg = body.querySelector('[data-avgcost]');
-      if(avg) avg.addEventListener('change', function(){ c.avgCost = Math.max(1, parseInt((avg.value||'').replace(/[^\d]/g,''))||1); avg.value = fmtINR(c.avgCost); czRecalcCard(catKey); czSaveSettings(); });
 
       // design note
       var note = hd.querySelector('[data-note]'); note.textContent = CZ_NOTE[catKey] || '';
