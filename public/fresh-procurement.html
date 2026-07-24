@@ -182,10 +182,7 @@
     .czcolchips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
     .czcolchip{ font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; border:1px solid var(--line); background:#fff; color:var(--ink); }
     .czcolchip b{ color:#0369a1; }
-    /* ── Buy-sheet (PO) view + view toggle ───────────────────── */
-    .czviewtoggle{ display:inline-flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:0 0 14px; }
-    .czviewtoggle button{ border:none; background:#fff; padding:8px 15px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); }
-    .czviewtoggle button.active{ background:var(--accent); color:#fff; }
+    /* ── Buy-sheet (PO) view ─────────────────────────────────── */
     .czpo-fit{ display:flex; align-items:baseline; gap:10px; margin:16px 0 4px; padding-bottom:6px; border-bottom:1px solid var(--line); }
     .czpo-fit h4{ margin:0; font-size:14px; }
     .czpo-fit .m{ font-size:12px; color:var(--muted); }
@@ -208,8 +205,10 @@
     .posetx{ font-size:12px; color:var(--muted); }
     .posetx b{ color:#0369a1; }
     .posizes{ display:flex; flex-wrap:wrap; gap:6px; }
-    .pobz{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700; padding:4px 9px; border-radius:8px; background:#fff; border:1px solid var(--line); }
-    .pobz b{ color:#0369a1; }
+    .pobz{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700; padding:3px 6px 3px 9px; border-radius:8px; background:#fff; border:1px solid var(--line); }
+    .pobz .pobzk{ color:#333; }
+    .pobzin{ width:44px; text-align:center; padding:3px 4px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-weight:700; color:#0369a1; }
+    .pobzin.z{ color:#bbb; }
     /* ── Rich lightbox detail card ───────────────────────────── */
     .lightbox .lbcap.rich{ bottom:18px; left:18px; right:auto; text-align:left; max-width:min(430px,88vw); }
     .lbcard{ background:rgba(20,20,22,.86); backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:14px 16px; }
@@ -408,10 +407,7 @@
       <div id="czPlanPanel" style="display:none">
         <h2 style="margin:0 0 4px">Casual buy plan</h2>
         <p class="sub" id="czPlanSummary"></p>
-        <div class="czviewtoggle" id="czViewToggle" style="display:none">
-          <button data-v="po" type="button">🧾 Buy sheet</button>
-          <button data-v="drill" type="button">🔽 Drill-down</button>
-        </div>
+        <button class="btn" id="czExportBtn" type="button" style="display:none;margin:0 0 14px">⤓ Export PO</button>
         <div id="czPlan"></div>
       </div>
 
@@ -1125,9 +1121,6 @@
       }).catch(function(){ btn.disabled = false; el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">Segregation failed — try again.</span>'; });
   }
 
-  // Drill-down state: which category / fit sections are expanded.
-  var czOpenPlanCat = {}, czOpenPlanFit = {};
-  var czPlanView = 'po';   // 'po' = buy sheet (bill) | 'drill' = accordion
   var czLastPlan = null;
   var czSets = {};         // per-design set count (default 1), editable per design/colour
 
@@ -1145,6 +1138,19 @@
   }
   function czSetPieces(ratio){ return ratio.reduce(function(a,r){ return a + r[1]; }, 0); }
   function czSetsFor(id){ var v = czSets[id]; return (v == null || v < 0) ? 1 : v; }
+
+  // Per-design explicit size→qty map. If a design has no manual override yet,
+  // its quantities default to (ratio × set count). Editing a single size, OR
+  // changing the set count, materialises/overwrites this map.
+  var czQty = {};
+  function czQtyMap(c, cat){
+    if(czQty[c.id]) return czQty[c.id];
+    var ratio = czRatioFor(cat), sets = czSetsFor(c.id), m = {};
+    ratio.forEach(function(r){ m[r[0]] = r[1] * sets; });
+    return m;
+  }
+  function czEnsureQty(c, cat){ if(!czQty[c.id]) czQty[c.id] = czQtyMap(c, cat); return czQty[c.id]; }
+  function czQtyTotal(qty){ return Object.keys(qty).reduce(function(a,k){ return a + (qty[k]||0); }, 0); }
 
   // Shared "Unsorted" block for both views.
   function czUnsorted(d, host){
@@ -1176,10 +1182,12 @@
         var fitTotal = 0; var rowsWrap = document.createElement('div');
         f.designs.forEach(function(c){
           var sets = czSetsFor(c.id);
-          var perSize = ratio.map(function(r){ return [r[0], r[1]*sets]; }).filter(function(r){ return r[1] > 0; });
-          var total = setPc * sets; fitTotal += total; catTotal += total;
-          var sizeStr = perSize.map(function(r){ return r[0]+':'+r[1]; }).join(',');
-          var szHtml = perSize.map(function(r){ return '<span class="pobz">'+escapeHtml(r[0])+'<b>'+fmtINR(r[1])+'</b></span>'; }).join('') || '<span class="m">—</span>';
+          var qty = czQtyMap(c, cat);
+          var total = czQtyTotal(qty); fitTotal += total; catTotal += total;
+          var sizeStr = ratio.map(function(r){ return r[0]+':'+(qty[r[0]]||0); }).filter(function(s){ return +s.split(':')[1] > 0; }).join(',');
+          // Every size in the set curve is shown with its own editable qty box.
+          var szHtml = ratio.map(function(r){ var q = qty[r[0]]||0;
+            return '<span class="pobz"><span class="pobzk">'+escapeHtml(r[0])+'</span><input class="pobzin'+(q?'':' z')+'" type="number" min="0" step="1" value="'+q+'" data-id="'+c.id+'" data-size="'+escapeHtml(r[0])+'"></span>'; }).join('');
           var row = document.createElement('div'); row.className='czporow';
           row.innerHTML =
             '<div class="cand"'+czCandAttrs(c, cat.label, f.label, sizeStr)+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
@@ -1188,12 +1196,20 @@
                 '<span class="pomoney">'+fmtINR(total)+' pc</span></div>'+
               '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
               '<div class="poset"><label>Sets</label>'+
-                '<button class="posetbtn" type="button" data-id="'+c.id+'" data-op="-">–</button>'+
-                '<input class="posetin" type="number" min="0" step="1" value="'+sets+'" data-id="'+c.id+'">'+
-                '<button class="posetbtn" type="button" data-id="'+c.id+'" data-op="+">+</button>'+
-                '<span class="posetx">× '+setPc+' pc/set = <b>'+fmtINR(total)+' pc</b></span></div>'+
+                '<button class="posetbtn" type="button" data-op="-">–</button>'+
+                '<input class="posetin" type="number" min="0" step="1" value="'+sets+'">'+
+                '<button class="posetbtn" type="button" data-op="+">+</button>'+
+                '<span class="posetx">fills the '+setPc+'-pc curve · edit any size below</span></div>'+
               '<div class="posizes">'+szHtml+'</div>'+
             '</div>';
+          // Set stepper / input → regenerate the whole curve (ratio × sets).
+          function applySets(n){ n = Math.max(0, n); czSets[c.id] = n; var m = {}; ratio.forEach(function(r){ m[r[0]] = r[1]*n; }); czQty[c.id] = m; czRenderPlan(czLastPlan); }
+          row.querySelector('.posetin').addEventListener('change', function(){ var v = parseInt(this.value,10); applySets(isFinite(v)?v:0); });
+          Array.prototype.forEach.call(row.querySelectorAll('.posetbtn'), function(b){ b.addEventListener('click', function(){ applySets(czSetsFor(c.id) + (b.getAttribute('data-op')==='+'?1:-1)); }); });
+          // Individual size box → override just that size.
+          Array.prototype.forEach.call(row.querySelectorAll('.pobzin'), function(inp){
+            inp.addEventListener('change', function(){ var v = parseInt(inp.value,10); if(!isFinite(v)||v<0) v=0; czEnsureQty(c, cat)[inp.getAttribute('data-size')] = v; czRenderPlan(czLastPlan); });
+          });
           rowsWrap.appendChild(row);
         });
         var fh = document.createElement('div'); fh.className='czpo-fit';
@@ -1212,87 +1228,66 @@
       host.appendChild(sec);
     });
     czUnsorted(d, host);
-
-    // Wire the editable set counts.
-    Array.prototype.forEach.call(host.querySelectorAll('.posetin'), function(inp){
-      inp.addEventListener('change', function(){ var v = parseInt(inp.value,10); if(!isFinite(v)||v<0) v=0; czSets[inp.getAttribute('data-id')] = v; czRenderPlan(czLastPlan); });
-    });
-    Array.prototype.forEach.call(host.querySelectorAll('.posetbtn'), function(b){
-      b.addEventListener('click', function(){ var id=b.getAttribute('data-id'); czSets[id] = Math.max(0, czSetsFor(id) + (b.getAttribute('data-op')==='+'?1:-1)); czRenderPlan(czLastPlan); });
-    });
   }
 
-  // ── VIEW: Drill-down accordion (money / colour analytics) ──
-  function czRenderDrill(d, host){
+  // ── Export a printable PO, grouped by vendor, with photos + sizes + qty ──
+  function czExportPO(){
+    var d = czLastPlan; if(!d){ return; }
+    var byVendor = {};
     (d.categories||[]).forEach(function(cat){
-      if(!cat.enabled && !cat.poolCount) return; // hide disabled empties
-      var catOpen = !!czOpenPlanCat[cat.category];
-      var sec = document.createElement('div'); sec.className = 'catsec czcard'; sec.setAttribute('data-cat', cat.category);
-
-      // ── LEVEL 1: category header (click to open its fits) ──
-      var hd = document.createElement('div'); hd.className = 'czcardhd'; hd.style.cursor = 'pointer';
-      hd.innerHTML = '<span class="caret">'+(catOpen?'▾':'▸')+'</span>'+
-        '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
-        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+'</div></div>'+
-        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div>' : '');
-      sec.appendChild(hd);
-      hd.addEventListener('click', function(){ czOpenPlanCat[cat.category] = !catOpen; czRenderPlan(d); });
-
-      var body = document.createElement('div'); body.className = 'czcardbody'; body.style.display = catOpen ? '' : 'none';
-
-      // ── LEVEL 2: fits (each a click-to-open row) ──
+      if(!cat.enabled) return;
+      var ratio = czRatioFor(cat);
       (cat.fits||[]).forEach(function(f){
-        if(!f.photoCount && !f.budget && !f.unassignedFit) return;
-        var fitKey = cat.category + '|' + f.key;
-        var fitOpen = !!czOpenPlanFit[fitKey];
-        var fit = document.createElement('div'); fit.className = 'czfit';
-
-        var fh = document.createElement('div'); fh.className = 'fh'; fh.style.cursor = 'pointer'; fh.style.alignItems = 'center';
-        var meta = f.unassignedFit ? ('<span class="m">'+f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit manually</span>')
-          : ('<span class="m">'+f.share+'% of '+escapeHtml(cat.label)+' · ₹'+fmtINR(f.budget)+' · '+f.photoCount+' design'+(f.photoCount===1?'':'s')+'</span>');
-        fh.innerHTML = '<span class="caret" style="margin-right:4px">'+(fitOpen?'▾':'▸')+'</span><h4 style="margin:0">'+escapeHtml(f.label)+'</h4>'+meta;
-        fit.appendChild(fh);
-        fh.addEventListener('click', function(){ czOpenPlanFit[fitKey] = !fitOpen; czRenderPlan(d); });
-
-        // Observed colour chips for the fit (always visible — quick read).
-        if(f.colours && f.colours.length){
-          var chips = document.createElement('div'); chips.className = 'czcolchips';
-          chips.innerHTML = f.colours.map(function(cl){ return '<span class="czcolchip">'+escapeHtml(cl.label)+' <b>₹'+fmtINR(cl.budget)+'</b></span>'; }).join('');
-          fit.appendChild(chips);
-        }
-
-        // ── LEVEL 3: designs (only when fit is open) ──
-        var drill = document.createElement('div'); drill.style.display = fitOpen ? '' : 'none';
-        if(f.designs && f.designs.length){
-          var g = document.createElement('div'); g.className = 'grid';
-          g.innerHTML = f.designs.map(function(c){
-            return '<div class="cand" data-cap="'+escapeHtml([c.vendor||'—', cat.label, f.label, c.colour||'—'].join(' · '))+'"><img src="'+c.url+'" loading="lazy" alt=""/><span class="vt">'+escapeHtml(c.colour||c.vendor||'')+'</span></div>';
-          }).join('');
-          drill.appendChild(g);
-        } else if(fitOpen && !f.unassignedFit){
-          var none = document.createElement('div'); none.className = 'm'; none.style.marginTop='8px'; none.style.color='var(--muted)';
-          none.textContent = 'No photos uploaded for this fit yet — its ₹'+fmtINR(f.budget)+' is reserved by the % split.';
-          drill.appendChild(none);
-        }
-        fit.appendChild(drill);
-        body.appendChild(fit);
+        (f.designs||[]).forEach(function(c){
+          var qty = czQtyMap(c, cat);
+          var lines = ratio.map(function(r){ return { size:r[0], qty:qty[r[0]]||0 }; }).filter(function(x){ return x.qty > 0; });
+          var total = lines.reduce(function(a,x){ return a + x.qty; }, 0);
+          if(!total) return;
+          var v = c.vendor || 'Unspecified vendor';
+          (byVendor[v] = byVendor[v] || []).push({ url:c.url, cat:cat.label, fit:f.label, colour:c.colour||'—', lines:lines, total:total });
+        });
       });
-
-      sec.appendChild(body);
-      host.appendChild(sec);
     });
-    czUnsorted(d, host);
+    var vendors = Object.keys(byVendor).sort();
+    if(!vendors.length){ alert('Nothing to export yet — segregate & plan first.'); return; }
+    var abs = function(u){ return (u && u.charAt(0)==='/') ? (location.origin + u) : u; };
+    var today = new Date().toLocaleDateString('en-IN', { year:'numeric', month:'short', day:'numeric' });
+    var grand = 0, h = '';
+    h += '<!DOCTYPE html><html><head><meta charset="utf-8"><title>SANKI Purchase Order — '+today+'</title><style>'+
+      'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#1a1a1a;margin:24px;}'+
+      'h1{font-size:20px;margin:0 0 2px;} .sub{color:#666;font-size:12px;margin:0 0 18px;}'+
+      '.vend{margin:0 0 22px;page-break-inside:avoid;} .vend h2{font-size:15px;margin:18px 0 8px;padding-bottom:6px;border-bottom:2px solid #185FA5;}'+
+      'table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ddd;padding:7px 9px;font-size:12px;text-align:left;vertical-align:middle;}'+
+      'th{background:#f5f7fa;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#666;}'+
+      'img{width:64px;height:80px;object-fit:cover;border-radius:6px;display:block;} .sz{white-space:normal;} .sz b{color:#0369a1;}'+
+      '.tot{font-weight:800;text-align:center;} tfoot td{font-weight:800;background:#fafafa;}'+
+      '@media print{ .noprint{display:none;} body{margin:10px;} }'+
+      '</style></head><body>';
+    h += '<div class="noprint" style="margin-bottom:14px"><button onclick="window.print()" style="padding:9px 16px;font-size:14px;font-weight:600;background:#185FA5;color:#fff;border:none;border-radius:8px;cursor:pointer">🖨 Print / Save PDF</button></div>';
+    h += '<h1>SANKI — Purchase Order</h1><div class="sub">Generated '+today+' · grouped by vendor · quantities are per-size</div>';
+    vendors.forEach(function(v){
+      var items = byVendor[v], vt = 0;
+      h += '<div class="vend"><h2>'+escapeHtml(v)+'</h2><table><thead><tr><th>Photo</th><th>Item</th><th>Sizes &amp; qty</th><th style="text-align:center">Pieces</th></tr></thead><tbody>';
+      items.forEach(function(it){ vt += it.total; grand += it.total;
+        var szt = it.lines.map(function(l){ return escapeHtml(l.size)+' <b>'+l.qty+'</b>'; }).join('  ·  ');
+        h += '<tr><td><img src="'+abs(it.url)+'"></td><td>'+escapeHtml(it.cat)+' · '+escapeHtml(it.fit)+'<br><span style="color:#666">'+escapeHtml(it.colour)+'</span></td><td class="sz">'+szt+'</td><td class="tot">'+it.total+'</td></tr>';
+      });
+      h += '</tbody><tfoot><tr><td colspan="3">'+escapeHtml(v)+' — total</td><td class="tot">'+vt+'</td></tr></tfoot></table></div>';
+    });
+    h += '<h2 style="text-align:right;font-size:16px">Grand total: '+grand+' pieces</h2></body></html>';
+    var w = window.open('', '_blank');
+    if(!w){ alert('Please allow pop-ups to export the PO.'); return; }
+    w.document.open(); w.document.write(h); w.document.close();
   }
 
   function czRenderPlan(d){
     if(!d || !d.categories){ return; }
     czLastPlan = d;
     el('czPlanPanel').style.display = '';
-    el('czPlanSummary').innerHTML = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per design. Colours are read from your photos.';
-    Array.prototype.forEach.call(el('czViewToggle').children, function(b){ b.classList.toggle('active', b.getAttribute('data-v')===czPlanView); });
-    el('czViewToggle').style.display = '';
+    el('czPlanSummary').innerHTML = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per size. Colours are read from your photos.';
+    el('czExportBtn').style.display = 'inline-block';
     var host = el('czPlan'); host.innerHTML = '';
-    if(czPlanView === 'drill') czRenderDrill(d, host); else czRenderPO(d, host);
+    czRenderPO(d, host);
   }
 
   function czLoadPlan(){ return fetch('/api/casuals/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.analysed) czRenderPlan(d); }).catch(function(){}); }
@@ -1304,9 +1299,7 @@
   ['dragleave','drop'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.remove('drag'); }); });
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);
-  Array.prototype.forEach.call(el('czViewToggle').children, function(b){
-    b.addEventListener('click', function(){ czPlanView = b.getAttribute('data-v'); if(czLastPlan) czRenderPlan(czLastPlan); });
-  });
+  el('czExportBtn').addEventListener('click', czExportPO);
   Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){
     r.addEventListener('change', function(){ if(!czSettings) return; czSettings.budgetMode = r.value; czRenderBudget(); czRenderCats(); czSaveSettings(); });
   });
