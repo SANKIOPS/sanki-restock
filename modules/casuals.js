@@ -446,8 +446,13 @@ async function scoreBatch(items) {
 `2) "fit" — the cut, chosen from that category's list:\n${fitGuide}\n   Pick the closest single fit label.\n` +
 `3) "colour" — the dominant colour word (e.g. Black, Off White, Beige, Olive, Charcoal Grey, Navy Blue, Sky Blue, Brown).\n` +
 `4) "pattern" — one of: "solid", "texture", "stripes", "checks", "print". Use "solid" for a plain single-colour garment.\n` +
-`5) "rating" — an INTEGER 1-10 scoring how worth-buying this exact design is for a premium-casual Indian streetwear brand RIGHT NOW: judge it on current market trends, fashion relevance, versatility and how clean/desirable the fit and styling look. 10 = a must-have on-trend piece; 8-9 = strong, source it; 6-7 = passable but not exciting; 1-5 = dated, off-trend, or unappealing. Be discerning — do NOT give everything an 8+.\n` +
-`6) "reason" — max 8 words explaining the rating (e.g. "clean on-trend cut" or "dated wash, weak demand").\n\n` +
+`5) "rating" — an INTEGER 1-10 for how worth-buying this exact design is for a premium-casual Indian streetwear brand RIGHT NOW. Do NOT give a gut number. Score these four dimensions from the photo, then ADD them:\n` +
+`   • TREND (0-3): how current the silhouette, cut and detailing are for 2026 premium streetwear (3 = clearly on-trend now, 0 = dated/generic).\n` +
+`   • VERSATILITY (0-3): everyday wearability and broad appeal — easy to style across outfits, not a one-occasion or novelty piece (3 = wardrobe staple, 0 = niche/hard to wear).\n` +
+`   • COLOUR & PATTERN (0-2): commercial desirability of the palette/print for Indian buyers (2 = clean in-demand colour, 1 = acceptable, 0 = off/muddy/dated).\n` +
+`   • FIT & FINISH (0-2): proportion, drape and construction quality visible in the shot (2 = crisp premium look, 0 = cheap/ill-fitting).\n` +
+`   Sum the four to get 1-10. 8+ means source it, so be discerning — a piece must be strong on TREND and VERSATILITY to reach 8. Do NOT give everything an 8+.\n` +
+`6) "reason" — max 8 words naming the deciding dimension(s) (e.g. "on-trend cut, versatile" or "dated silhouette, weak colour").\n\n` +
 `Return STRICT JSON ONLY: {"items":[{"category":"..","fit":"..","colour":"..","pattern":"..","rating":8,"reason":".."}, ...]} with exactly ${items.length} objects, one per image in order.` });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
