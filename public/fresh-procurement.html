@@ -204,6 +204,17 @@
     .posetin{ width:56px; text-align:center; padding:5px 4px; border:1px solid var(--line); border-radius:7px; font-size:14px; font-weight:700; }
     .posetx{ font-size:12px; color:var(--muted); }
     .posetx b{ color:#0369a1; }
+    .poprice{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .poprice label{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#888; font-weight:700; }
+    .popin{ display:inline-flex; align-items:center; gap:3px; border:1px solid var(--line); border-radius:7px; padding:0 4px 0 8px; background:#fff; }
+    .popin .cur{ font-size:13px; font-weight:700; color:#888; }
+    .popricein{ width:74px; text-align:right; padding:6px 4px; border:none; font-size:14px; font-weight:700; color:#0369a1; background:transparent; }
+    .popricein:focus{ outline:none; }
+    .pocost{ font-size:13px; font-weight:800; color:#065f46; }
+    .pocost.none{ color:#bbb; font-weight:600; }
+    .cztag{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:20px; margin-left:8px; }
+    .cztag.ok{ background:#ecfdf5; color:#065f46; }
+    .cztag.over{ background:#fef2f2; color:#b91c1c; }
     .posizes{ display:flex; flex-wrap:wrap; gap:6px; }
     .pobz{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700; padding:3px 6px 3px 9px; border-radius:8px; background:#fff; border:1px solid var(--line); }
     .pobz .pobzk{ color:#333; }
@@ -407,7 +418,10 @@
       <div id="czPlanPanel" style="display:none">
         <h2 style="margin:0 0 4px">Casual buy plan</h2>
         <p class="sub" id="czPlanSummary"></p>
-        <button class="btn" id="czExportBtn" type="button" style="display:none;margin:0 0 14px">⤓ Export PO</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
+          <button class="btn" id="czExportBtn" type="button" style="display:none">⤓ Export PO</button>
+          <button class="btn ghost" id="czRepriceBtn" type="button" style="display:none">↻ Re-analyse budget (actual prices)</button>
+        </div>
         <div id="czPlan"></div>
       </div>
 
@@ -1152,6 +1166,14 @@
   function czEnsureQty(c, cat){ if(!czQty[c.id]) czQty[c.id] = czQtyMap(c, cat); return czQty[c.id]; }
   function czQtyTotal(qty){ return Object.keys(qty).reduce(function(a,k){ return a + (qty[k]||0); }, 0); }
 
+  // Actual unit price per design (₹), entered manually after confirming with the
+  // vendor. Stays INTERNAL — it drives the budget re-analysis but is never
+  // written into the exported PO. czPriced flips on once "Re-analyse" is clicked.
+  var czPrice = {};
+  var czPriced = false;
+  function czPriceFor(id){ var v = czPrice[id]; return (v==null||v<0)?0:v; }
+  function czRowCost(c, cat){ return czQtyTotal(czQtyMap(c, cat)) * czPriceFor(c.id); }
+
   // Shared "Unsorted" block for both views.
   function czUnsorted(d, host){
     if(!(d.unsorted||[]).length) return;
@@ -1175,15 +1197,16 @@
       if(!cat.enabled && !cat.poolCount) return;
       var ratio = czRatioFor(cat), setPc = czSetPieces(ratio);
       var sec = document.createElement('div'); sec.className='catsec czcard'; sec.setAttribute('data-cat', cat.category);
-      var body = document.createElement('div'); body.className='czcardbody'; var catTotal = 0;
+      var body = document.createElement('div'); body.className='czcardbody'; var catTotal = 0, catCost = 0;
 
       (cat.fits||[]).forEach(function(f){
         if(!f.designs || !f.designs.length) return;   // the bill lists only real photos to buy
-        var fitTotal = 0; var rowsWrap = document.createElement('div');
+        var fitTotal = 0, fitCost = 0; var rowsWrap = document.createElement('div');
         f.designs.forEach(function(c){
           var sets = czSetsFor(c.id);
           var qty = czQtyMap(c, cat);
           var total = czQtyTotal(qty); fitTotal += total; catTotal += total;
+          var price = czPriceFor(c.id), rowCost = total * price; fitCost += rowCost; catCost += rowCost;
           var sizeStr = ratio.map(function(r){ return r[0]+':'+(qty[r[0]]||0); }).filter(function(s){ return +s.split(':')[1] > 0; }).join(',');
           // Every size in the set curve is shown with its own editable qty box.
           var szHtml = ratio.map(function(r){ var q = qty[r[0]]||0;
@@ -1201,6 +1224,11 @@
                 '<button class="posetbtn" type="button" data-op="+">+</button>'+
                 '<span class="posetx">fills the '+setPc+'-pc curve · edit any size below</span></div>'+
               '<div class="posizes">'+szHtml+'</div>'+
+              '<div class="poprice"><label>Unit ₹</label>'+
+                '<span class="popin"><span class="cur">₹</span><input class="popricein" type="number" min="0" step="1" placeholder="0" value="'+(price?price:'')+'" data-id="'+c.id+'"></span>'+
+                '<span class="posetx">actual vendor price · used only for budget, never exported</span>'+
+                (czPriced ? '<span class="pocost'+(rowCost?'':' none')+'">= ₹'+fmtINR(rowCost)+'</span>' : '')+
+              '</div>'+
             '</div>';
           // Set stepper / input → regenerate the whole curve (ratio × sets).
           function applySets(n){ n = Math.max(0, n); czSets[c.id] = n; var m = {}; ratio.forEach(function(r){ m[r[0]] = r[1]*n; }); czQty[c.id] = m; czRenderPlan(czLastPlan); }
@@ -1210,19 +1238,24 @@
           Array.prototype.forEach.call(row.querySelectorAll('.pobzin'), function(inp){
             inp.addEventListener('change', function(){ var v = parseInt(inp.value,10); if(!isFinite(v)||v<0) v=0; czEnsureQty(c, cat)[inp.getAttribute('data-size')] = v; czRenderPlan(czLastPlan); });
           });
+          // Manual unit price → store it; if already re-analysed, re-render to refresh the money rollups.
+          row.querySelector('.popricein').addEventListener('change', function(){ var v = parseFloat(this.value); czPrice[c.id] = (isFinite(v)&&v>=0)?v:0; if(czPriced) czRenderPlan(czLastPlan); });
           rowsWrap.appendChild(row);
         });
         var fh = document.createElement('div'); fh.className='czpo-fit';
         fh.innerHTML = '<h4>'+escapeHtml(f.label)+'</h4><span class="m">'+
           (f.unassignedFit ? (f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit')
-            : (f.photoCount+' design'+(f.photoCount===1?'':'s')+' · <b>'+fmtINR(fitTotal)+' pc</b> · budget ₹'+fmtINR(f.budget)))+'</span>';
+            : (f.photoCount+' design'+(f.photoCount===1?'':'s')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
+               (czPriced ? 'actual spend <b>₹'+fmtINR(fitCost)+'</b>' : 'budget ₹'+fmtINR(f.budget))))+'</span>';
         body.appendChild(fh); body.appendChild(rowsWrap);
       });
 
       var hd = document.createElement('div'); hd.className='czcardhd';
       hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
         '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+'</div></div>'+
-        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(catTotal)+' pc</b></div>' : '');
+        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(catTotal)+' pc</b></div>'+
+          (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Actual spend<b>₹'+fmtINR(catCost)+'</b></div>'+
+            (cat.budget ? '<span class="cztag '+(catCost>cat.budget?'over':'ok')+'">'+(catCost>cat.budget?'Over by ₹'+fmtINR(catCost-cat.budget):'₹'+fmtINR(cat.budget-catCost)+' left')+'</span>' : '') : '') : '');
       sec.insertBefore(hd, sec.firstChild);
       sec.appendChild(body);
       host.appendChild(sec);
@@ -1284,8 +1317,18 @@
     if(!d || !d.categories){ return; }
     czLastPlan = d;
     el('czPlanPanel').style.display = '';
-    el('czPlanSummary').innerHTML = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per size. Colours are read from your photos.';
+    var summary = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per size. Colours are read from your photos.';
+    if(czPriced){
+      var grandCost = 0;
+      (d.categories||[]).forEach(function(cat){ if(!cat.enabled) return; (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){ grandCost += czRowCost(c, cat); }); }); });
+      var delta = (d.totalBudget||0) - grandCost;
+      summary += '<br><b style="color:#065f46">Re-analysed with actual vendor prices:</b> real spend <b>₹'+fmtINR(grandCost)+'</b> vs budget ₹'+fmtINR(d.totalBudget||0)+
+        ' — <b style="color:'+(delta<0?'#b91c1c':'#065f46')+'">'+(delta<0?('over by ₹'+fmtINR(-delta)):('₹'+fmtINR(delta)+' left'))+'</b>. Fill any blank unit prices, then Re-analyse again.';
+    }
+    el('czPlanSummary').innerHTML = summary;
     el('czExportBtn').style.display = 'inline-block';
+    el('czRepriceBtn').style.display = 'inline-block';
+    el('czRepriceBtn').textContent = czPriced ? '↻ Re-analyse budget (actual prices)' : '↻ Re-analyse budget (enter actual prices)';
     var host = el('czPlan'); host.innerHTML = '';
     czRenderPO(d, host);
   }
@@ -1300,6 +1343,7 @@
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);
   el('czExportBtn').addEventListener('click', czExportPO);
+  el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });
   Array.prototype.forEach.call(document.querySelectorAll('#czModes input[name=czmode]'), function(r){
     r.addEventListener('change', function(){ if(!czSettings) return; czSettings.budgetMode = r.value; czRenderBudget(); czRenderCats(); czSaveSettings(); });
   });
