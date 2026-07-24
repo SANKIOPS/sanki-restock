@@ -39,6 +39,7 @@ const fs      = require('fs');
 const crypto  = require('crypto');
 const multer  = require('multer');
 let Jimp = null; try { Jimp = require('jimp'); } catch { /* dedup degrades to off */ }
+let XLSX = null; try { XLSX = require('xlsx'); } catch { /* Excel invoice parsing degrades to off */ }
 
 const router = express.Router();
 
@@ -289,6 +290,14 @@ function cleanIntMap(m) {
   if (m && typeof m === 'object') Object.keys(m).forEach(k => { const n = parseInt(m[k], 10); if (isFinite(n) && n > 0) out[k] = n; });
   return out;
 }
+// Sanitize a { fitKey: unitRupees } map into positive numbers — the real
+// vendor unit ₹ (from the uploaded invoice) for stock already on order. Used to
+// value the freed budget accurately and to pre-fill matching new-design prices.
+function cleanMoneyMap(m) {
+  const out = {};
+  if (m && typeof m === 'object') Object.keys(m).forEach(k => { const n = Math.round(Number(m[k])); if (isFinite(n) && n > 0) out[k] = n; });
+  return out;
+}
 
 function settingsWithDefaults(s) {
   const saved = (s && s.settings) || {};
@@ -313,6 +322,8 @@ function settingsWithDefaults(s) {
       colours: mergePct(colDef, sc.colours),
       // Per-fit units already ordered / in transit (open-to-buy netting).
       onOrder: cleanIntMap(sc.onOrder),
+      // Per-fit real vendor unit ₹ for that on-order stock (from the invoice).
+      onOrderCost: cleanMoneyMap(sc.onOrderCost),
       // Extra fit / size / colour ROWS the founder added (label + key), beyond the spec.
       extraFits:    Array.isArray(sc.extraFits) ? sc.extraFits.filter(x => x && x.key) : [],
       extraSizes:   Array.isArray(sc.extraSizes) ? sc.extraSizes.filter(x => x && x.key) : [],
@@ -433,6 +444,87 @@ async function scoreBatch(items) {
   return out;
 }
 
+// ── Invoice ingest: read a supplier bill → already-ordered line items ────
+// The founder uploads the vendor's invoice (photo, PDF or Excel) for stock
+// that is ALREADY ordered / on the way. We read it and return line items so
+// the buyer can review + confirm, then apply them as open-to-buy `onOrder`
+// (units) and `onOrderCost` (real unit ₹) per category/fit. Nothing here
+// touches Shopify or the design photo pool.
+const invoiceUpload = multer({
+  storage: multer.memoryStorage(),   // parsed in-memory then discarded — bills aren't kept
+  limits: { fileSize: 25 * 1024 * 1024, files: 20 },
+  fileFilter: (req, file, cb) => {
+    const ok = /^image\//.test(file.mimetype) ||
+      file.mimetype === 'application/pdf' ||
+      /sheet|excel|csv|officedocument|ms-excel/i.test(file.mimetype) ||
+      /\.(xlsx|xls|csv|pdf|png|jpe?g|webp|gif)$/i.test(file.originalname || '');
+    cb(null, ok);
+  }
+});
+function runInvoiceUpload(req, res) {
+  return new Promise((resolve) => {
+    invoiceUpload.array('files', 20)(req, res, (err) => {
+      if (err) {
+        const map = { LIMIT_FILE_SIZE: 'A file is larger than 25 MB — compress it and retry.',
+          LIMIT_FILE_COUNT: 'Too many files at once (max 20).', LIMIT_UNEXPECTED_FILE: 'Unexpected upload field.' };
+        resolve({ ok: false, error: map[err.code] || ('Upload error: ' + (err.message || err.code || 'unknown')) });
+      } else resolve({ ok: true });
+    });
+  });
+}
+// Turn an Excel/CSV buffer into a compact text table Claude can read as an
+// invoice. Every sheet is dumped as CSV so column headers stay intact.
+function excelToText(buffer) {
+  if (!XLSX) return '';
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    return wb.SheetNames.map(name => 'SHEET: ' + name + '\n' + XLSX.utils.sheet_to_csv(wb.Sheets[name])).join('\n\n').slice(0, 60000);
+  } catch { return ''; }
+}
+// One Claude call: read whatever invoice content we gathered (images, PDFs,
+// text tables) and return normalised garment line items.
+async function scoreInvoice(content) {
+  const catList = 'Trousers, Shirts, T-Shirts & Polos';
+  content.push({ type: 'text', text:
+`The blocks above are one or more supplier INVOICES / bills for casual clothing already ordered by an Indian premium-casual brand. Extract EVERY garment line item you can see.\n\n` +
+`For each line item report:\n` +
+`1) "description" — the item text as printed (max 12 words).\n` +
+`2) "category" — EXACTLY one of: ${catList}. A collared button-up = Shirts; a round-neck/polo knit top = T-Shirts & Polos; any lower-body pant/chino/trouser/jean = Trousers. If it is clearly none of these apparel types, use "Other".\n` +
+`3) "size" — the size as printed (e.g. "M", "32", or "" if none).\n` +
+`4) "colour" — the colour word if shown, else "".\n` +
+`5) "qty" — INTEGER quantity ordered for that line (default 1 if a line clearly means one unit).\n` +
+`6) "unitPrice" — the per-unit price in the invoice's currency as a NUMBER (no symbols). If only a line total + qty are shown, divide to get the unit price. If unknown, use 0.\n\n` +
+`Ignore non-garment lines (freight, GST/tax rows, subtotals, totals, discounts). Do NOT invent items.\n` +
+`Return STRICT JSON ONLY: {"items":[{"description":"..","category":"..","size":"..","colour":"..","qty":1,"unitPrice":0}, ...]}.` });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let r;
+  try {
+    r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 4000, temperature: 0, messages: [{ role: 'user', content }] }),
+      signal: ctrl.signal
+    });
+  } finally { clearTimeout(timer); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
+  const parsed = extractJson((j.content || []).map(c => c.text || '').join(''));
+  const arr = parsed && Array.isArray(parsed.items) ? parsed.items : [];
+  return arr.map(o => {
+    let qty = parseInt(o.qty, 10); if (!isFinite(qty) || qty < 0) qty = 0;
+    let price = Number(o.unitPrice); if (!isFinite(price) || price < 0) price = 0;
+    return {
+      description: String(o.description || '').trim().slice(0, 120),
+      category: normCasualCategory(o.category),          // → 'Trouser' | 'Shirt' | 'T-shirt' | null
+      size: String(o.size || '').trim().slice(0, 12),
+      colour: String(o.colour || '').trim().slice(0, 40),
+      qty, unitPrice: Math.round(price),
+      fit: null                                          // the buyer picks the fit in the review table
+    };
+  }).filter(x => x.qty > 0 || x.description);
+}
+
 // ── Hierarchy-wise allocation ────────────────────────────────────
 // Largest-remainder integer split of `n` units across weighted buckets so the
 // parts always sum back to n.
@@ -530,13 +622,17 @@ function buildPlan(cands, settings) {
       // is what still needs sourcing; `freedBudget` is the rupees the on-order
       // stock covers (redirectable to under-covered fits).
       const onOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[fr.key]) || 0) : 0;
+      // Real invoice unit ₹ for the on-order stock, when we have it — else the
+      // soft avg-cost estimate. This values the freed budget accurately and
+      // seeds the price for new designs of this same fit at Re-analyse.
+      const orderedCost = Math.max(0, (cfg.onOrderCost && cfg.onOrderCost[fr.key]) || 0);
       const netUnits = Math.max(0, fitEst - onOrder);
-      const freedBudget = enabled ? Math.round(Math.min(onOrder, fitEst) * expPrice) : 0;
+      const freedBudget = enabled ? Math.round(Math.min(onOrder, fitEst) * (orderedCost > 0 ? orderedCost : expPrice)) : 0;
 
       return {
         key: fr.key, label: fr.label, pct: fr.pct, share: fr.share,
         budget: fb, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
-        target: fitEst, onOrder, netUnits, freedBudget,
+        target: fitEst, onOrder, orderedCost, netUnits, freedBudget,
         photoCount: photos.length, includedCount: incPhotos.length, designs, colours, unassignedFit: false
       };
     });
@@ -601,6 +697,7 @@ router.post('/api/casuals/settings', (req, res) => {
       sizes: pickPct(inc.sizes, c.sizes),
       colours: pickPct(inc.colours, c.colours),
       onOrder: cleanIntMap(inc.onOrder != null ? inc.onOrder : c.onOrder),
+      onOrderCost: cleanMoneyMap(inc.onOrderCost != null ? inc.onOrderCost : c.onOrderCost),
       extraFits: Array.isArray(inc.extraFits) ? inc.extraFits.filter(x => x && x.key) : c.extraFits,
       extraSizes: Array.isArray(inc.extraSizes) ? inc.extraSizes.filter(x => x && x.key) : c.extraSizes,
       extraColours: Array.isArray(inc.extraColours) ? inc.extraColours.filter(x => x && x.key) : c.extraColours
@@ -774,6 +871,96 @@ router.post('/api/casuals/analyze', async (req, res) => {
     if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'Segregation timed out. Try again — sorted photos are saved.' });
     res.status(502).json({ success: false, error: 'Segregation failed: ' + (err.message || 'unknown') });
   }
+});
+
+// Read an uploaded supplier invoice (photo / PDF / Excel) and return garment
+// line items for the founder to review. Nothing is saved here — apply is a
+// separate, confirmed step.
+router.post('/api/casuals/invoice/parse', async (req, res) => {
+  try {
+    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI reading is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
+    const r = await runInvoiceUpload(req, res);
+    if (res.headersSent) return;
+    if (!r.ok) return res.status(400).json({ success: false, error: r.error });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ success: false, error: 'No invoice files received' });
+    const content = [];
+    files.forEach((f, i) => {
+      const name = f.originalname || ('file' + (i + 1));
+      const isPdf = f.mimetype === 'application/pdf' || /\.pdf$/i.test(name);
+      const isImg = /^image\//.test(f.mimetype) || /\.(png|jpe?g|webp|gif)$/i.test(name);
+      const isXls = /sheet|excel|csv|officedocument|ms-excel/i.test(f.mimetype) || /\.(xlsx|xls|csv)$/i.test(name);
+      content.push({ type: 'text', text: 'FILE ' + (i + 1) + ' (' + name + '):' });
+      if (isImg) {
+        content.push({ type: 'image', source: { type: 'base64', media_type: /^image\//.test(f.mimetype) ? f.mimetype : 'image/jpeg', data: f.buffer.toString('base64') } });
+      } else if (isPdf) {
+        content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.buffer.toString('base64') } });
+      } else if (isXls) {
+        const txt = excelToText(f.buffer);
+        content.push({ type: 'text', text: txt || '(could not read spreadsheet)' });
+      } else {
+        content.push({ type: 'text', text: f.buffer.toString('utf8').slice(0, 40000) });
+      }
+    });
+    const items = await scoreInvoice(content);
+    // Fit options per category (spec + any custom fits) for the review dropdowns.
+    const merged = settingsWithDefaults(loadStore());
+    const fits = {};
+    CAT_KEYS.forEach(k => {
+      const cfg = merged.categories[k];
+      const labelOf = key => { const sp = CAT_BY_KEY[k].fits.find(f => f.key === key); if (sp) return sp.label; const ex = (cfg.extraFits || []).find(f => f.key === key); return ex ? ex.label : key; };
+      fits[k] = Object.keys(cfg.fits).map(fk => ({ key: fk, label: labelOf(fk) }));
+    });
+    res.json({ success: true, items, fits, cats: CAT_KEYS.map(k => ({ key: k, label: CAT_BY_KEY[k].label })) });
+  } catch (err) {
+    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'Reading the invoice timed out — try fewer/smaller files.' });
+    res.status(502).json({ success: false, error: 'Could not read the invoice: ' + (err.message || 'unknown') });
+  }
+});
+
+// Apply the reviewed invoice lines: add their quantities to each category/fit's
+// open-to-buy `onOrder`, and blend the real unit ₹ into `onOrderCost`. Returns a
+// fresh plan so the buy sheet re-nets immediately.
+router.post('/api/casuals/invoice/apply', (req, res) => {
+  const s = loadStore();
+  const merged = settingsWithDefaults(s);
+  const items = (req.body && Array.isArray(req.body.items)) ? req.body.items : [];
+  const agg = {};   // catKey → fitKey → { qty, priceQty }
+  let applied = 0, skipped = 0;
+  items.forEach(it => {
+    const cat = CAT_KEYS.includes(it && it.category) ? it.category : null;
+    const cfg = cat ? merged.categories[cat] : null;
+    const fit = (cfg && it.fit && (it.fit in cfg.fits)) ? it.fit : null;
+    let qty = parseInt(it && it.qty, 10); if (!isFinite(qty) || qty <= 0) qty = 0;
+    let price = Number(it && it.unitPrice); if (!isFinite(price) || price < 0) price = 0;
+    if (!cat || !fit || !qty) { skipped++; return; }
+    const a = (agg[cat] = agg[cat] || {}); const f = (a[fit] = a[fit] || { qty: 0, priceQty: 0 });
+    f.qty += qty; f.priceQty += price * qty; applied++;
+  });
+  Object.keys(agg).forEach(cat => {
+    const cfg = merged.categories[cat];
+    if (!cfg.onOrder) cfg.onOrder = {};
+    if (!cfg.onOrderCost) cfg.onOrderCost = {};
+    Object.keys(agg[cat]).forEach(fit => {
+      const add = agg[cat][fit];
+      const prevQty = Math.max(0, cfg.onOrder[fit] || 0);
+      const prevCost = Math.max(0, cfg.onOrderCost[fit] || 0);
+      cfg.onOrder[fit] = prevQty + add.qty;                       // accumulate units
+      const addAvg = add.qty > 0 ? add.priceQty / add.qty : 0;    // avg unit ₹ of this apply
+      // Unit-weighted blend of the old and new unit prices, ignoring sides with no price.
+      const totQty = (prevCost > 0 ? prevQty : 0) + (addAvg > 0 ? add.qty : 0);
+      const totMoney = (prevCost > 0 ? prevQty * prevCost : 0) + (addAvg > 0 ? add.qty * addAvg : 0);
+      if (totQty > 0) cfg.onOrderCost[fit] = Math.round(totMoney / totQty);
+    });
+  });
+  s.settings = merged;
+  saveStore(s);
+  const settings = settingsWithDefaults(s);
+  const active = activeCands(s);
+  markDuplicates(active);
+  res.json({ success: true, applied, skipped, analysed: active.some(c => c.category),
+    settings, categories: categoryCounts(active), batches: batchList(s), activeBatch: s.activeBatch,
+    ...buildPlan(active, settings) });
 });
 
 router.get('/api/casuals/plan', (req, res) => {
