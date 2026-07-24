@@ -108,10 +108,15 @@ function cleanChart(raw, fields) {
 //   ok(field)   = |diff| <= tol
 //   dist        = Σ |diff| over shared fields (unshared target fields penalised)
 // A vendor size "fits" a target when every target field is present AND within tol.
-function compareChartToTarget(targetChart, vendorChart, fields, tol) {
+function compareChartToTarget(targetChart, vendorChart, fields, tol, unit) {
   const results = [];
   const targetSizes = Object.keys(targetChart);
   const vendorSizes = Object.keys(vendorChart);
+  // Storage & math are always in CENTIMETRES. `unit` only controls how numbers
+  // are FORMATTED for display back to the buyer (cm ↔ inches). tol is in cm.
+  const U = unit === 'in' ? 'in' : 'cm';
+  const F = U === 'in' ? (1 / 2.54) : 1;
+  const disp = (cm) => cm == null ? null : Math.round(cm * F * 10) / 10;
 
   targetSizes.forEach(tSize => {
     const T = targetChart[tSize];
@@ -123,12 +128,12 @@ function compareChartToTarget(targetChart, vendorChart, fields, tol) {
       let dist = 0, missing = 0, allOk = true;
       const diffs = {};
       tFields.forEach(f => {
-        if (V[f] == null) { missing++; allOk = false; diffs[f] = { v: null, t: T[f], d: null, ok: false }; return; }
-        const d = Math.round((V[f] - T[f]) * 10) / 10;
-        const ok = Math.abs(d) <= tol;
+        if (V[f] == null) { missing++; allOk = false; diffs[f] = { v: null, t: disp(T[f]), d: null, ok: false }; return; }
+        const rawD = Math.round((V[f] - T[f]) * 10) / 10;   // cm — used for the fit test
+        const ok = Math.abs(rawD) <= tol;
         if (!ok) allOk = false;
-        dist += Math.abs(d);
-        diffs[f] = { v: V[f], t: T[f], d, ok };
+        dist += Math.abs(rawD);
+        diffs[f] = { v: disp(V[f]), t: disp(T[f]), d: disp(rawD), ok };  // displayed in chosen unit
       });
       // Penalise vendor sizes that don't cover all target fields so they rank last.
       dist += missing * 999;
@@ -137,23 +142,24 @@ function compareChartToTarget(targetChart, vendorChart, fields, tol) {
 
     const best = scored[0] || null;
     const sameLabel = scored.find(s => s.label === tSize) || null;
+    const dtol = disp(tol);
 
     // Decide the recommendation.
     let verdict, source = null, status;
     if (!best || !vendorSizes.length) {
       verdict = 'No vendor chart entered for a comparison yet.'; status = 'none';
     } else if (sameLabel && sameLabel.fits) {
-      verdict = '✓ Source China ' + tSize + ' — it matches your ' + tSize + ' within ±' + tol + 'cm.';
+      verdict = '✓ Source China ' + tSize + ' — it matches your ' + tSize + ' within ±' + dtol + U + '.';
       source = tSize; status = 'match';
     } else if (best.fits) {
-      verdict = '⚠ Re-map: China ' + tSize + ' does not match — source China ' + best.label + ' for your ' + tSize + ' (it fits within ±' + tol + 'cm).';
+      verdict = '⚠ Re-map: China ' + tSize + ' does not match — source China ' + best.label + ' for your ' + tSize + ' (it fits within ±' + dtol + U + ').';
       source = best.label; status = 'remap';
     } else {
-      // Nothing fits. Report the closest and the worst offending field.
+      // Nothing fits. Report the closest and the worst offending field (in display unit).
       let worst = null;
       Object.entries(best.diffs).forEach(([f, o]) => { if (o.d != null && (!worst || Math.abs(o.d) > Math.abs(worst.d))) worst = { field: f, d: o.d }; });
-      const off = worst ? (Math.abs(worst.d) + 'cm on ' + worst.field + (worst.d > 0 ? ' (China bigger)' : ' (China smaller)')) : 'measurements incomplete';
-      verdict = '✗ No China size fits your ' + tSize + ' within ±' + tol + 'cm. Closest is China ' + best.label + ', off by ' + off + '. Ask the vendor to adjust, or drop this size.';
+      const off = worst ? (Math.abs(worst.d) + U + ' on ' + worst.field + (worst.d > 0 ? ' (China bigger)' : ' (China smaller)')) : 'measurements incomplete';
+      verdict = '✗ No China size fits your ' + tSize + ' within ±' + dtol + U + '. Closest is China ' + best.label + ', off by ' + off + '. Ask the vendor to adjust, or drop this size.';
       status = 'nofit';
     }
 
@@ -163,7 +169,7 @@ function compareChartToTarget(targetChart, vendorChart, fields, tol) {
   // Summary: which China sizes to actually order, and which desired sizes have no match.
   const toSource = results.filter(r => r.source).map(r => ({ desired: r.size, china: r.source, remap: r.status === 'remap' }));
   const unmatched = results.filter(r => r.status === 'nofit').map(r => r.size);
-  return { tolerance: tol, results, toSource, unmatched, hasTarget: targetSizes.length > 0, hasVendor: vendorSizes.length > 0 };
+  return { tolerance: disp(tol), unit: U, results, toSource, unmatched, hasTarget: targetSizes.length > 0, hasVendor: vendorSizes.length > 0 };
 }
 
 // ── Vision: read a size-chart photo into a { size: { field: cm } } chart ──
@@ -293,8 +299,15 @@ router.post('/api/sizetracker/compare', (req, res) => {
     targetChart = filtered;
   }
   const vendorChart = cleanChart(b.vendor, fields);
-  const tol = (() => { const t = parseFloat(b.tolerance); return isFinite(t) && t >= 0 ? Math.round(t * 10) / 10 : s.tolerance; })();
-  const cmp = compareChartToTarget(targetChart, vendorChart, fields, tol);
+  const unit = b.unit === 'in' ? 'in' : 'cm';
+  // Tolerance arrives in the chosen display unit; normalise it to cm for the math.
+  const tol = (() => {
+    let t = parseFloat(b.tolerance);
+    if (!(isFinite(t) && t >= 0)) return s.tolerance;
+    if (unit === 'in') t = t * 2.54;
+    return Math.round(t * 10) / 10;
+  })();
+  const cmp = compareChartToTarget(targetChart, vendorChart, fields, tol, unit);
   res.json({ success: true, category, fit, fields, ...cmp });
 });
 

@@ -41,6 +41,14 @@
   .saved-flash { color:var(--ok); font-size:12.5px; font-weight:600; margin-left:10px; opacity:0; transition:opacity .2s; }
   .saved-flash.show { opacity:1; }
   .empty { text-align:center; color:var(--muted); padding:28px 0; font-size:13.5px; }
+  .unitbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 14px; background:#fff; border:1px solid var(--line);
+        border-radius:12px; padding:12px 16px; margin:0 0 22px; }
+  .unitlbl { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#888; font-weight:700; }
+  .unitseg { display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+  .uopt { background:#fff; color:var(--ink); padding:8px 14px; font-size:13px; font-weight:600; border:none; cursor:pointer; }
+  .uopt + .uopt { border-left:1px solid var(--line); }
+  .uopt.on { background:var(--accent); color:#fff; }
+  .unithint { font-size:12px; color:var(--muted); }
   .btn.up { background:#fff; color:var(--accent); border:1px dashed var(--accent); font-size:13px; padding:9px 13px; }
   .btn.up:hover { background:#f5f9ff; }
   .upnote { font-size:12px; color:var(--muted); margin:2px 0 0; }
@@ -91,6 +99,15 @@
   <h1>📏 Size Tracker</h1>
   <p class="sub">Feed SANKI's <b>target</b> body/garment measurements once per category &amp; fit. Then at order time, paste the vendor's (China) size chart and we'll tell you <b>which China size to actually source</b> for each of your sizes — because China's "M" may really be your "S".</p>
 
+  <div class="unitbar">
+    <span class="unitlbl">Measurement unit</span>
+    <div class="unitseg" id="unitSeg">
+      <button type="button" class="uopt on" data-unit="cm">Centimetres (cm)</button>
+      <button type="button" class="uopt" data-unit="in">Inches (in)</button>
+    </div>
+    <span class="unithint">Enter every chart in this unit — we convert &amp; compare automatically.</span>
+  </div>
+
   <!-- ── Section 1: Target charts ─────────────────────────────── -->
   <div class="card">
     <div class="cardhead"><span class="num">1</span><h2>Feed SANKI target size charts</h2></div>
@@ -131,7 +148,7 @@
         <select id="cFit"></select>
       </div>
       <div class="field">
-        <label>Tolerance (± cm)</label>
+        <label>Tolerance (± <span id="cTolUnit">cm</span>)</label>
         <input type="number" class="tolin" id="cTol" step="0.1" min="0" value="1.5">
       </div>
       <button class="btn up" id="cPhotoBtn" type="button">📷 Read China chart from photo</button>
@@ -159,7 +176,13 @@
 <script>
 (function () {
   var CFG = { categories: [], tolerance: 1.5 };
-  var TARGETS = {};            // { cat: { fit: { SIZE: {field:val} } } }
+  var TARGETS = {};            // { cat: { fit: { SIZE: {field:val} } } } — always stored in CM
+  var UNIT = 'cm';            // display/entry unit: 'cm' | 'in'
+  try { var su = localStorage.getItem('sanki_sizetracker_unit'); if (su === 'in' || su === 'cm') UNIT = su; } catch (e) {}
+  // Convert between the chosen display unit and the canonical centimetres.
+  function toCm(v) { var n = parseFloat(v); if (!isFinite(n)) return null; return UNIT === 'in' ? Math.round(n * 2.54 * 10) / 10 : Math.round(n * 10) / 10; }
+  function fromCm(cm) { if (cm == null || !isFinite(cm)) return ''; return UNIT === 'in' ? Math.round(cm / 2.54 * 10) / 10 : Math.round(cm * 10) / 10; }
+  function unitLabel() { return UNIT === 'in' ? 'in' : 'cm'; }
   var el = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); }
@@ -215,7 +238,7 @@
       var meas = chart[sz] || {};
       Object.keys(meas).forEach(function (f) {
         var inp = wrap.querySelector('input.meas[data-size="' + sz + '"][data-field="' + f + '"]');
-        if (inp) { inp.value = meas[f]; inp.classList.add('filled'); }
+        if (inp) { inp.value = fromCm(meas[f]); inp.classList.add('filled'); }
       });
     });
   }
@@ -228,13 +251,13 @@
     var fields = c.fields, sizes = c.sizes;
     var saved = (TARGETS[cat] && TARGETS[cat][fit]) || {};
     var html = '<table><thead><tr><th>Size</th>';
-    fields.forEach(function (f) { html += '<th>' + esc(f) + '<br><span style="font-weight:400;color:#aaa">cm</span></th>'; });
+    fields.forEach(function (f) { html += '<th>' + esc(f) + '<br><span class="unittag" style="font-weight:400;color:#aaa">' + unitLabel() + '</span></th>'; });
     html += '</tr></thead><tbody>';
     sizes.forEach(function (sz) {
       var row = saved[sz] || {};
       html += '<tr><td class="sizecell">' + esc(sz) + '</td>';
       fields.forEach(function (f) {
-        var v = (row[f] != null) ? row[f] : '';
+        var v = (row[f] != null) ? fromCm(row[f]) : '';
         html += '<td><input class="meas' + (v !== '' ? ' filled' : '') + '" data-size="' + esc(sz) +
                 '" data-field="' + esc(f) + '" type="number" step="0.1" min="0" value="' + esc(v) + '"></td>';
       });
@@ -255,8 +278,9 @@
     el('tGridWrap').querySelectorAll('input.meas').forEach(function (inp) {
       var v = inp.value.trim(); if (v === '') return;
       var sz = inp.getAttribute('data-size'), f = inp.getAttribute('data-field');
+      var cm = toCm(v); if (cm == null) return;
       if (!chart[sz]) chart[sz] = {};
-      chart[sz][f] = parseFloat(v);
+      chart[sz][f] = cm;   // always store centimetres
     });
     return chart;
   }
@@ -288,7 +312,7 @@
     var fields = c.fields;
     if (!vendorRows.length) seedVendorRows();
     var html = '<table><thead><tr><th>China size</th>';
-    fields.forEach(function (f) { html += '<th>' + esc(f) + '<br><span style="font-weight:400;color:#aaa">cm</span></th>'; });
+    fields.forEach(function (f) { html += '<th>' + esc(f) + '<br><span class="unittag" style="font-weight:400;color:#aaa">' + unitLabel() + '</span></th>'; });
     html += '<th></th></tr></thead><tbody>';
     vendorRows.forEach(function (r, i) {
       html += '<tr><td><input type="text" class="vlabel" data-i="' + i + '" value="' + esc(r.label) +
@@ -336,8 +360,8 @@
     vendorRows.forEach(function (r) {
       var lbl = String(r.label || '').trim().toUpperCase(); if (!lbl) return;
       var row = {};
-      Object.keys(r.meas).forEach(function (f) { if (r.meas[f] != null && isFinite(r.meas[f])) row[f] = r.meas[f]; });
-      if (Object.keys(row).length) out[lbl] = row;
+      Object.keys(r.meas).forEach(function (f) { if (r.meas[f] != null && isFinite(r.meas[f])) { var cm = toCm(r.meas[f]); if (cm != null) row[f] = cm; } });
+      if (Object.keys(row).length) out[lbl] = row;   // always centimetres to the server
     });
     return out;
   }
@@ -346,7 +370,7 @@
   function applyChartToVendorGrid(chart) {
     var c = catObj(el('cCat').value), fields = (c && c.fields) || [];
     vendorRows = Object.keys(chart).map(function (sz) {
-      var meas = {}; fields.forEach(function (f) { if (chart[sz][f] != null) meas[f] = chart[sz][f]; });
+      var meas = {}; fields.forEach(function (f) { if (chart[sz][f] != null) meas[f] = fromCm(chart[sz][f]); });
       return { label: sz, meas: meas };
     });
     if (!vendorRows.length) seedVendorRows();
@@ -394,7 +418,7 @@
     el('cCompare').disabled = true; el('cCompare').textContent = 'Comparing…';
     fetch('/api/sizetracker/compare', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category: cat, fit: fit, vendor: vendor, tolerance: tol, wanted: wanted })
+      body: JSON.stringify({ category: cat, fit: fit, vendor: vendor, tolerance: tol, wanted: wanted, unit: UNIT })
     }).then(function (r) { return r.json(); }).then(function (j) {
       el('cCompare').disabled = false; el('cCompare').textContent = 'Compare';
       if (j && j.success) renderResults(j);
@@ -406,7 +430,7 @@
     var wrap = el('resultWrap');
     if (!j.hasTarget) { wrap.innerHTML = '<div class="card"><div class="empty">No target chart saved for this fit yet — fill Section 1 first.</div></div>'; wrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     var html = '<div class="card"><div class="cardhead"><h2>Sourcing plan — ' + esc(j.category) + ' · ' + esc(fitLabel(j.category, j.fit)) + '</h2></div>';
-    html += '<p class="cardsub" style="margin-left:0">Matched within ±' + esc(j.tolerance) + 'cm on every measured field.</p>';
+    html += '<p class="cardsub" style="margin-left:0">Matched within ±' + esc(j.tolerance) + esc(j.unit || 'cm') + ' on every measured field.</p>';
 
     // Summary
     html += '<div class="summary"><h3>Order these China sizes</h3>';
@@ -436,7 +460,7 @@
         html += '<table class="difftbl"><thead><tr><th>Field</th><th>Your ' + esc(r.size) + '</th><th>China ' + esc(r.best.label) + '</th><th>Δ</th></tr></thead><tbody>';
         (r.fields || []).forEach(function (f) {
           var d = r.best.diffs[f]; if (!d) return;
-          var dv = (d.d == null) ? '—' : ((d.d > 0 ? '+' : '') + d.d + 'cm');
+          var dv = (d.d == null) ? '—' : ((d.d > 0 ? '+' : '') + d.d + (j.unit || 'cm'));
           html += '<tr><td>' + esc(f) + '</td><td>' + esc(d.t) + '</td><td>' + (d.v == null ? '<i style="color:#aaa">missing</i>' : esc(d.v)) +
                   '</td><td class="' + (d.ok ? 'diff-ok' : 'diff-bad') + '">' + dv + '</td></tr>';
         });
@@ -448,6 +472,34 @@
     html += '</div>';
     wrap.innerHTML = html;
     wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ── Unit toggle (cm ↔ inches) ───────────────────────────────
+  // Reflect the current unit on the segmented control + tolerance label.
+  function applyUnitUI() {
+    Array.prototype.forEach.call(el('unitSeg').querySelectorAll('.uopt'), function (b) {
+      b.classList.toggle('on', b.getAttribute('data-unit') === UNIT);
+    });
+    var tu = el('cTolUnit'); if (tu) tu.textContent = unitLabel();
+  }
+  // Switch unit. Converts every value already typed (both grids + tolerance) in
+  // place so nothing is lost — canonical storage stays in cm regardless.
+  function setUnit(u) {
+    u = (u === 'in') ? 'in' : 'cm';
+    if (u === UNIT) return;
+    var factor = (UNIT === 'cm' && u === 'in') ? (1 / 2.54) : (UNIT === 'in' && u === 'cm') ? 2.54 : 1;
+    var round1 = function (n) { return Math.round(n * 10) / 10; };
+    document.querySelectorAll('#tGridWrap input.meas, #cGridWrap input.meas').forEach(function (inp) {
+      var v = parseFloat(inp.value); if (isFinite(v)) inp.value = round1(v * factor);
+    });
+    vendorRows.forEach(function (r) { Object.keys(r.meas).forEach(function (f) {
+      if (r.meas[f] != null && isFinite(r.meas[f])) r.meas[f] = round1(r.meas[f] * factor);
+    }); });
+    var tv = parseFloat(el('cTol').value); if (isFinite(tv)) el('cTol').value = round1(tv * factor);
+    UNIT = u;
+    try { localStorage.setItem('sanki_sizetracker_unit', u); } catch (e) {}
+    document.querySelectorAll('.unittag').forEach(function (s) { s.textContent = unitLabel(); });
+    applyUnitUI();
   }
 
   // ── Wiring ──────────────────────────────────────────────────
@@ -464,7 +516,11 @@
 
       fillCatSelect(el('tCat')); fillFitSelect(el('tCat').value, el('tFit')); renderTargetGrid();
       fillCatSelect(el('cCat')); fillFitSelect(el('cCat').value, el('cFit'));
-      el('cTol').value = CFG.tolerance;
+      el('cTol').value = fromCm(CFG.tolerance);
+      applyUnitUI();
+      Array.prototype.forEach.call(el('unitSeg').querySelectorAll('.uopt'), function (b) {
+        b.addEventListener('click', function () { setUnit(b.getAttribute('data-unit')); });
+      });
       seedVendorRows(); renderVendorGrid(); updateTargetNote();
 
       el('tCat').addEventListener('change', function () { fillFitSelect(el('tCat').value, el('tFit')); renderTargetGrid(); });
