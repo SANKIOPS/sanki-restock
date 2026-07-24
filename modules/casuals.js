@@ -283,6 +283,13 @@ function extractJson(text) {
 const DEFAULT_TOTAL_BUDGET = 1000000;
 function pctMapFromList(list) { const m = {}; list.forEach(x => { m[x.key] = x.pct; }); return m; }
 function cleanPct(v, fallback) { const n = Number(v); return isFinite(n) && n >= 0 ? n : fallback; }
+// Sanitize a { fitKey: units } map into positive integers — the per-fit
+// "already on order / on the way" quantities used for open-to-buy netting.
+function cleanIntMap(m) {
+  const out = {};
+  if (m && typeof m === 'object') Object.keys(m).forEach(k => { const n = parseInt(m[k], 10); if (isFinite(n) && n > 0) out[k] = n; });
+  return out;
+}
 
 function settingsWithDefaults(s) {
   const saved = (s && s.settings) || {};
@@ -305,6 +312,8 @@ function settingsWithDefaults(s) {
       fits:    mergePct(fitDef, sc.fits),
       sizes:   mergePct(sizeDef, sc.sizes),
       colours: mergePct(colDef, sc.colours),
+      // Per-fit units already ordered / in transit (open-to-buy netting).
+      onOrder: cleanIntMap(sc.onOrder),
       // Extra fit / size / colour ROWS the founder added (label + key), beyond the spec.
       extraFits:    Array.isArray(sc.extraFits) ? sc.extraFits.filter(x => x && x.key) : [],
       extraSizes:   Array.isArray(sc.extraSizes) ? sc.extraSizes.filter(x => x && x.key) : [],
@@ -495,9 +504,18 @@ function buildPlan(cands, settings) {
       const colours = Object.keys(fitColMap).map(col => ({ key: col, label: col, budget: fitColMap[col].budget, estUnits: fitColMap[col].estUnits, photos: fitColMap[col].photos }))
         .sort((a, b) => b.budget - a.budget);
 
+      // OPEN-TO-BUY: `target` is what this fit's budget can buy (revived soft
+      // estimate); `onOrder` is what is already ordered/in transit; `netUnits`
+      // is what still needs sourcing; `freedBudget` is the rupees the on-order
+      // stock covers (redirectable to under-covered fits).
+      const onOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[fr.key]) || 0) : 0;
+      const netUnits = Math.max(0, fitEst - onOrder);
+      const freedBudget = enabled ? Math.round(Math.min(onOrder, fitEst) * expPrice) : 0;
+
       return {
         key: fr.key, label: fr.label, pct: fr.pct, share: fr.share,
         budget: fb, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
+        target: fitEst, onOrder, netUnits, freedBudget,
         photoCount: photos.length, designs, colours, unassignedFit: false
       };
     });
@@ -509,9 +527,14 @@ function buildPlan(cands, settings) {
     const colours = Object.keys(catColourAgg).map(col => ({ key: col, label: col, budget: catColourAgg[col].budget, estUnits: catColourAgg[col].estUnits, photos: catColourAgg[col].photos }))
       .sort((a, b) => b.budget - a.budget);
 
+    const onOrderTotal = fits.reduce((s, f) => s + (f.onOrder || 0), 0);
+    const freedBudgetTotal = fits.reduce((s, f) => s + (f.freedBudget || 0), 0);
+    const netUnitsTotal = fits.reduce((s, f) => s + (f.netUnits != null ? f.netUnits : 0), 0);
+
     return {
       category: catKey, label: spec.label, designNote: spec.designNote,
       enabled, budget, expPrice, estUnits, poolCount: pool.length,
+      onOrder: onOrderTotal, freedBudget: freedBudgetTotal, netUnits: netUnitsTotal,
       fits,
       // Size ladder is still a decided % (rolled up from the design runs).
       sizes: sizePctRows.map(r => ({ ...r, units: catSizeAgg[r.key] || 0 })),
@@ -558,6 +581,7 @@ router.post('/api/casuals/settings', (req, res) => {
       fits: pickPct(inc.fits, c.fits),
       sizes: pickPct(inc.sizes, c.sizes),
       colours: pickPct(inc.colours, c.colours),
+      onOrder: cleanIntMap(inc.onOrder != null ? inc.onOrder : c.onOrder),
       extraFits: Array.isArray(inc.extraFits) ? inc.extraFits.filter(x => x && x.key) : c.extraFits,
       extraSizes: Array.isArray(inc.extraSizes) ? inc.extraSizes.filter(x => x && x.key) : c.extraSizes,
       extraColours: Array.isArray(inc.extraColours) ? inc.extraColours.filter(x => x && x.key) : c.extraColours

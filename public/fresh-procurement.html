@@ -214,6 +214,14 @@
     .czpo-fit{ display:flex; align-items:baseline; gap:10px; margin:16px 0 4px; padding-bottom:6px; border-bottom:1px solid var(--line); }
     .czpo-fit h4{ margin:0; font-size:14px; }
     .czpo-fit .m{ font-size:12px; color:var(--muted); }
+    /* Open-to-buy netting row (per fit) — "already on the way" vs target */
+    .czotb{ display:flex; align-items:center; flex-wrap:wrap; gap:6px 14px; margin:6px 0 10px; padding:7px 11px; font-size:12px; color:#374151; background:#f8fafc; border:1px solid var(--line); border-radius:9px; }
+    .czotb .k{ color:var(--muted); font-weight:600; margin-right:3px; }
+    .czotb b{ color:#111827; }
+    .czotb input{ width:62px; padding:3px 6px; border:1px solid var(--line); border-radius:6px; font-size:12px; text-align:right; }
+    .czotb .net{ font-weight:800; color:#111827; }
+    .czotb .free{ color:#b45309; font-weight:700; }
+    .czotb .cov{ color:#065f46; font-weight:700; }
     .czporow{ display:flex; gap:14px; align-items:stretch; padding:12px 0; border-bottom:1px dashed var(--line); }
     .czporow:last-child{ border-bottom:none; }
     .czporow .cand{ flex:0 0 auto; width:96px; height:120px; border-radius:10px; overflow:hidden; position:relative; background:#eee; }
@@ -1419,12 +1427,36 @@
           (f.unassignedFit ? (f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit')
             : (f.photoCount+' design'+(f.photoCount===1?'':'s')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
                (czPriced ? 'actual spend <b>₹'+fmtINR(fitCost)+'</b>' : 'budget ₹'+fmtINR(f.budget))))+'</span>';
-        body.appendChild(fh); body.appendChild(rowsWrap);
+        body.appendChild(fh);
+        // Open-to-buy: net the fit's budget target against what's already ordered.
+        if(cat.enabled && !f.unassignedFit){
+          var target = f.target||0, onWay = f.onOrder||0, freed = f.freedBudget||0;
+          var net = (f.netUnits!=null) ? f.netUnits : Math.max(0, target - onWay);
+          var otb = document.createElement('div'); otb.className='czotb';
+          otb.innerHTML =
+            '<span><span class="k">On the way</span><input type="number" min="0" step="1" value="'+(onWay||'')+'" placeholder="0"> pc</span>'+
+            '<span><span class="k">Target</span>~<b>'+fmtINR(target)+'</b> pc</span>'+
+            '<span><span class="k">Net to source</span><span class="net">'+fmtINR(net)+' pc</span></span>'+
+            (onWay>0 ? (net===0
+              ? '<span class="cov">✓ already covered — free ₹'+fmtINR(freed)+' to another fit</span>'
+              : '<span class="free">frees ₹'+fmtINR(freed)+'</span>') : '');
+          otb.querySelector('input').addEventListener('change', function(){
+            var v = parseInt(this.value,10); if(!isFinite(v)||v<0) v=0;
+            var cc = czSettings.categories[cat.category]; if(!cc.onOrder) cc.onOrder = {}; cc.onOrder[f.key] = v;
+            czSaveSettings();
+            f.onOrder = v; f.netUnits = Math.max(0, target - v); f.freedBudget = Math.round(Math.min(v, target) * (cat.expPrice||1));
+            cat.onOrder = cat.fits.reduce(function(s,x){ return s + (x.onOrder||0); }, 0);
+            cat.freedBudget = cat.fits.reduce(function(s,x){ return s + (x.freedBudget||0); }, 0);
+            czRenderPlan(czLastPlan);
+          });
+          body.appendChild(otb);
+        }
+        body.appendChild(rowsWrap);
       });
 
       var hd = document.createElement('div'); hd.className='czcardhd'; hd.style.cursor='pointer'; hd.style.userSelect='none';
       hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
-        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+' · <b>'+(open?'tap to collapse':'tap to see photos, fits &amp; sizes')+'</b></div></div>'+
+        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+(cat.onOrder ? ' · <b style="color:#b45309">'+fmtINR(cat.onOrder)+' pc on the way (frees ₹'+fmtINR(cat.freedBudget||0)+')</b>' : '')+' · <b>'+(open?'tap to collapse':'tap to see photos, fits &amp; sizes')+'</b></div></div>'+
         (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(catTotal)+' pc</b></div>'+
           (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Actual spend<b>₹'+fmtINR(catCost)+'</b></div>'+
             (cat.budget ? '<span class="cztag '+(catCost>cat.budget?'over':'ok')+'">'+(catCost>cat.budget?'Over by ₹'+fmtINR(catCost-cat.budget):'₹'+fmtINR(cat.budget-catCost)+' left')+'</span>' : '') : '') : '')+
