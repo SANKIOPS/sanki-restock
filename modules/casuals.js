@@ -85,6 +85,14 @@ const CASUALS_SPEC = [
       { key: 'Black', pct: 20 }, { key: 'Off White', pct: 20 }, { key: 'White', pct: 5 },
       { key: 'Charcoal Grey', pct: 10 }, { key: 'Olive Green', pct: 15 }, { key: 'Beige', pct: 15 }, { key: 'Sky Blue', pct: 10 }
     ],
+    // Print-type split (Shirts & T-shirts only) — an EXTRA manual dimension on
+    // top of fit. Solid ≈ half; the rest divided between prints/embroidery and
+    // checks/stripes. Fully editable in the UI.
+    printTypes: [
+      { key: 'solid',   label: 'Solid (plain / logo)',    pct: 50 },
+      { key: 'printed', label: 'Printed / Embroidered',   pct: 30 },
+      { key: 'checks',  label: 'Checks / Stripes & rest', pct: 20 }
+    ],
     avgCost: 650
   },
   {
@@ -103,6 +111,12 @@ const CASUALS_SPEC = [
     colours: [
       { key: 'Black', pct: 25 }, { key: 'Off White', pct: 20 }, { key: 'White', pct: 15 },
       { key: 'Charcoal Grey', pct: 15 }, { key: 'Olive Green', pct: 15 }, { key: 'Beige', pct: 5 }, { key: 'Navy Blue', pct: 5 }
+    ],
+    // Print-type split (Shirts & T-shirts only) — solid-heavy for tees.
+    printTypes: [
+      { key: 'solid',   label: 'Solid (plain / logo)',    pct: 65 },
+      { key: 'printed', label: 'Printed / Embroidered',   pct: 15 },
+      { key: 'checks',  label: 'Checks / Stripes & rest', pct: 20 }
     ],
     avgCost: 400
   }
@@ -124,6 +138,27 @@ function normCasualCategory(raw) {
   if (/trouser|pant|chino|cargo|jean|denim|bottom/.test(t)) return 'Trouser';
   return null;
 }
+// Print-type buckets (Shirts & T-shirts). The vision pass returns a raw
+// `pattern` (solid/texture/stripes/checks/print) which we fold into these three
+// manual-%-split buckets. Trousers have no print-type dimension.
+const PRINT_TYPES = [
+  { key: 'solid',   label: 'Solid (plain / logo)' },
+  { key: 'printed', label: 'Printed / Embroidered' },
+  { key: 'checks',  label: 'Checks / Stripes & rest' }
+];
+const PRINT_BY_KEY = PRINT_TYPES.reduce((m, p) => (m[p.key] = p, m), {});
+function catHasPrintTypes(catKey) { const c = CAT_BY_KEY[catKey]; return !!(c && Array.isArray(c.printTypes) && c.printTypes.length); }
+// Fold a raw vision pattern into one of the three print-type buckets.
+//   solid → solid · print/embroidered → printed · everything else (checks,
+//   stripes, texture, unknown) → the "checks / stripes & rest" bucket.
+function printBucket(pattern) {
+  const t = String(pattern || '').toLowerCase();
+  if (!t) return null;
+  if (t === 'solid' || t === 'plain') return 'solid';
+  if (/print|embroid|graphic/.test(t)) return 'printed';
+  return 'checks';
+}
+
 // Match a detected fit phrase to one of a category's canonical fits by keyword.
 function normFit(catKey, raw) {
   const cat = CAT_BY_KEY[catKey];
@@ -306,6 +341,7 @@ function settingsWithDefaults(s) {
   CASUALS_SPEC.forEach(spec => {
     const sc = savedCats[spec.key] || {};
     const fitDef = pctMapFromList(spec.fits), sizeDef = pctMapFromList(spec.sizes), colDef = pctMapFromList(spec.colours);
+    const printDef = pctMapFromList(spec.printTypes || []);   // {} for Trousers
     // Merge %s: start from defaults, apply any saved edits, keep unknown custom keys the founder added.
     const mergePct = (defMap, savedMap) => {
       const out = {};
@@ -320,6 +356,9 @@ function settingsWithDefaults(s) {
       fits:    mergePct(fitDef, sc.fits),
       sizes:   mergePct(sizeDef, sc.sizes),
       colours: mergePct(colDef, sc.colours),
+      // Print-type % split — only populated for categories that support it
+      // (Shirts, T-shirts); an empty {} for Trousers.
+      printTypes: mergePct(printDef, sc.printTypes),
       // Per-fit units already ordered / in transit (open-to-buy netting).
       onOrder: cleanIntMap(sc.onOrder),
       // Per-fit real vendor unit ₹ for that on-order stock (from the invoice).
@@ -493,9 +532,10 @@ async function scoreInvoice(content) {
 `3) "size" — the size as printed (e.g. "M", "32", or "" if none).\n` +
 `4) "colour" — the colour word if shown, else "".\n` +
 `5) "qty" — INTEGER quantity ordered for that line (default 1 if a line clearly means one unit).\n` +
-`6) "unitPrice" — the per-unit price in the invoice's currency as a NUMBER (no symbols). If only a line total + qty are shown, divide to get the unit price. If unknown, use 0.\n\n` +
+`6) "unitPrice" — the per-unit price in the invoice's currency as a NUMBER (no symbols). If only a line total + qty are shown, divide to get the unit price. If unknown, use 0.\n` +
+`7) "print" — for Shirts / T-Shirts only, the surface type if the text makes it clear: "solid" (plain colour), "printed" (print/graphic/embroidered), or "checks" (checks/stripes/other patterns). If unclear or a Trouser, use "".\n\n` +
 `Ignore non-garment lines (freight, GST/tax rows, subtotals, totals, discounts). Do NOT invent items.\n` +
-`Return STRICT JSON ONLY: {"items":[{"description":"..","category":"..","size":"..","colour":"..","qty":1,"unitPrice":0}, ...]}.` });
+`Return STRICT JSON ONLY: {"items":[{"description":"..","category":"..","size":"..","colour":"..","qty":1,"unitPrice":0,"print":".."}, ...]}.` });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   let r;
@@ -520,7 +560,8 @@ async function scoreInvoice(content) {
       size: String(o.size || '').trim().slice(0, 12),
       colour: String(o.colour || '').trim().slice(0, 40),
       qty, unitPrice: Math.round(price),
-      fit: null                                          // the buyer picks the fit in the review table
+      fit: null,                                         // the buyer picks the fit in the review table
+      printType: printBucket(o.print) || null            // pre-fill print bucket for uppers when the invoice says so
     };
   }).filter(x => x.qty > 0 || x.description);
 }
@@ -577,15 +618,18 @@ function buildPlan(cands, settings) {
     const pool = byCat[catKey] || [];
     const catColourAgg = {};        // observed colour → {budget, estUnits, photos}
     const catSizeAgg = {}; Object.keys(cfg.sizes).forEach(k => catSizeAgg[k] = 0);
+    // Uppers (Shirts/T-shirts) carry a PRINT-TYPE level ABOVE fit: the category
+    // budget first splits by print-type %, then each print-type's slice splits by
+    // fit %. Trousers keep the flat category→fit split.
+    const hasPrint = catHasPrintTypes(catKey);
 
-    const fits = fitRows.map(fr => {
-      const fb = fitBudget[fr.key] || 0;
-      const photos = pool.filter(c => c.fit === fr.key);
+    // Build ONE fit block. `fb` is this fit's rupee budget, `photos` its designs,
+    // `otbKey` the open-to-buy key (composite "print::fit" for uppers, bare fit
+    // key for trousers — so legacy trouser onOrder data still resolves).
+    const buildFit = (fr, fb, photos, otbKey) => {
       const fitEst = enabled && expPrice > 0 ? Math.round(fb / expPrice) : 0;
-
-      // HIERARCHY step 2 — the fit's BUDGET is spread evenly across the designs
-      // the CURATION GATE keeps in (rating ≥ gate, or manually included). Designs
-      // the AI/founder excluded get ₹0 so the money concentrates on what we buy.
+      // The fit's BUDGET is spread evenly across the designs the CURATION GATE
+      // keeps in (rating ≥ gate, or manually included). Excluded designs get ₹0.
       const incPhotos = photos.filter(isIncluded);
       const idWeights = {}; incPhotos.forEach(p => idWeights[p.id] = 1);
       const designBud = incPhotos.length ? splitInts(fb, idWeights) : {};
@@ -594,11 +638,9 @@ function buildPlan(cands, settings) {
         const inc = isIncluded(p);
         const db = inc ? (designBud[p.id] || 0) : 0;
         const du = inc && enabled && expPrice > 0 ? Math.round(db / expPrice) : 0;
-        // HIERARCHY step 3 — a design's own est units fan out over the SIZE
-        // ladder (editable %). This is the per-photo size run shown on the card.
+        // A design's est units fan out over the SIZE ladder (editable %).
         const sizeUnits = splitInts(du, cfg.sizes);
         const sizes = sizePctRows.map(s => ({ key: s.key, label: s.label, share: s.share, units: sizeUnits[s.key] || 0 })).filter(s => s.units > 0);
-        // COLOUR comes ONLY from the photo itself — no preset colour list.
         const colour = (p.colour && String(p.colour).trim()) || 'Unspecified';
         if (inc) {
           Object.keys(sizeUnits).forEach(sk => { catSizeAgg[sk] += sizeUnits[sk] || 0; });
@@ -607,38 +649,64 @@ function buildPlan(cands, settings) {
         }
         return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes });
       });
-      // Show the strongest designs first: included (best rating first), then the
-      // excluded ones (also best-first) so the founder scans the "maybe" pile top-down.
       designs.sort((a, b) => (b.included ? 1 : 0) - (a.included ? 1 : 0) || (b.rating || 0) - (a.rating || 0));
 
-      // Colour roll-up WITHIN this fit — again purely observed from its photos.
       const fitColMap = {};
       designs.forEach(dz => { const m = fitColMap[dz.colour] = fitColMap[dz.colour] || { budget: 0, estUnits: 0, photos: 0 }; m.budget += dz.budget; m.estUnits += dz.estUnits; m.photos += 1; });
       const colours = Object.keys(fitColMap).map(col => ({ key: col, label: col, budget: fitColMap[col].budget, estUnits: fitColMap[col].estUnits, photos: fitColMap[col].photos }))
         .sort((a, b) => b.budget - a.budget);
 
-      // OPEN-TO-BUY: `target` is what this fit's budget can buy (revived soft
-      // estimate); `onOrder` is what is already ordered/in transit; `netUnits`
-      // is what still needs sourcing; `freedBudget` is the rupees the on-order
-      // stock covers (redirectable to under-covered fits).
-      const onOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[fr.key]) || 0) : 0;
-      // Real invoice unit ₹ for the on-order stock, when we have it — else the
-      // soft avg-cost estimate. This values the freed budget accurately and
-      // seeds the price for new designs of this same fit at Re-analyse.
-      const orderedCost = Math.max(0, (cfg.onOrderCost && cfg.onOrderCost[fr.key]) || 0);
+      // OPEN-TO-BUY netting, keyed by otbKey so uppers net per print-type × fit.
+      const onOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[otbKey]) || 0) : 0;
+      const orderedCost = Math.max(0, (cfg.onOrderCost && cfg.onOrderCost[otbKey]) || 0);
       const netUnits = Math.max(0, fitEst - onOrder);
       const freedBudget = enabled ? Math.round(Math.min(onOrder, fitEst) * (orderedCost > 0 ? orderedCost : expPrice)) : 0;
 
       return {
-        key: fr.key, label: fr.label, pct: fr.pct, share: fr.share,
+        key: fr.key, label: fr.label, pct: fr.pct, share: fr.share, otbKey,
         budget: fb, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
         target: fitEst, onOrder, orderedCost, netUnits, freedBudget,
         photoCount: photos.length, includedCount: incPhotos.length, designs, colours, unassignedFit: false
       };
-    });
+    };
+
+    let fits = [], printGroups = null;
+    if (hasPrint) {
+      // Step 1 — category budget → print-type %.
+      const printRows = pctRows(cfg.printTypes, k => (PRINT_BY_KEY[k] || { label: k }).label);
+      const printBudget = splitInts(budget, cfg.printTypes);
+      printGroups = printRows.map(pr => {
+        const pb = printBudget[pr.key] || 0;
+        const groupPool = pool.filter(c => c.fit && printBucket(c.pattern) === pr.key);
+        // Step 2 — this print-type's slice → fit %.
+        const fitBudgetG = splitInts(pb, cfg.fits);
+        const gfits = fitRows.map(fr => buildFit(fr, fitBudgetG[fr.key] || 0, groupPool.filter(c => c.fit === fr.key), pr.key + '::' + fr.key));
+        fits = fits.concat(gfits);   // flat list too, for export / roll-ups
+        return {
+          key: pr.key, label: pr.label, pct: pr.pct, share: pr.share, budget: pb,
+          target: enabled && expPrice > 0 ? Math.round(pb / expPrice) : 0,
+          estUnits: gfits.reduce((s, f) => s + f.estUnits, 0),
+          onOrder: gfits.reduce((s, f) => s + (f.onOrder || 0), 0),
+          freedBudget: gfits.reduce((s, f) => s + (f.freedBudget || 0), 0),
+          netUnits: gfits.reduce((s, f) => s + (f.netUnits || 0), 0),
+          photoCount: groupPool.length, fits: gfits
+        };
+      });
+    } else {
+      const fitBudget = splitInts(budget, cfg.fits);
+      fits = fitRows.map(fr => buildFit(fr, fitBudget[fr.key] || 0, pool.filter(c => c.fit === fr.key), fr.key));
+    }
+
+    // Designs the AI couldn't assign a fit to — shown at the end so the founder
+    // can still tag them. Kept in flat `fits` (export sees it) and rendered
+    // outside the print groups for uppers.
     const noFit = pool.filter(c => !c.fit);
-    if (noFit.length) fits.push({ key: '_unassigned', label: 'Fit not detected', pct: 0, share: 0, budget: 0, estUnits: 0, photoCount: noFit.length,
-      designs: noFit.map(p => Object.assign(publicCandidate(p), { budget: 0, estUnits: 0, colour: (p.colour && String(p.colour).trim()) || 'Unspecified', sizes: [] })), colours: [], unassignedFit: true });
+    let unassigned = null;
+    if (noFit.length) {
+      unassigned = { key: '_unassigned', label: 'Fit not detected', pct: 0, share: 0, budget: 0, estUnits: 0, photoCount: noFit.length,
+        designs: noFit.map(p => Object.assign(publicCandidate(p), { budget: 0, estUnits: 0, colour: (p.colour && String(p.colour).trim()) || 'Unspecified', sizes: [] })), colours: [], unassignedFit: true };
+      fits.push(unassigned);
+    }
 
     // Category colour roll-up — observed across all fits (nothing preset).
     const colours = Object.keys(catColourAgg).map(col => ({ key: col, label: col, budget: catColourAgg[col].budget, estUnits: catColourAgg[col].estUnits, photos: catColourAgg[col].photos }))
@@ -650,9 +718,9 @@ function buildPlan(cands, settings) {
 
     return {
       category: catKey, label: spec.label, designNote: spec.designNote,
-      enabled, budget, expPrice, estUnits, poolCount: pool.length,
+      enabled, budget, expPrice, estUnits, poolCount: pool.length, hasPrint,
       onOrder: onOrderTotal, freedBudget: freedBudgetTotal, netUnits: netUnitsTotal,
-      fits,
+      fits, printGroups, unassigned,
       // Size ladder is still a decided % (rolled up from the design runs).
       sizes: sizePctRows.map(r => ({ ...r, units: catSizeAgg[r.key] || 0 })),
       colours   // observed colours only
@@ -696,6 +764,7 @@ router.post('/api/casuals/settings', (req, res) => {
       fits: pickPct(inc.fits, c.fits),
       sizes: pickPct(inc.sizes, c.sizes),
       colours: pickPct(inc.colours, c.colours),
+      printTypes: pickPct(inc.printTypes, c.printTypes),
       onOrder: cleanIntMap(inc.onOrder != null ? inc.onOrder : c.onOrder),
       onOrderCost: cleanMoneyMap(inc.onOrderCost != null ? inc.onOrderCost : c.onOrderCost),
       extraFits: Array.isArray(inc.extraFits) ? inc.extraFits.filter(x => x && x.key) : c.extraFits,
@@ -911,7 +980,11 @@ router.post('/api/casuals/invoice/parse', async (req, res) => {
       const labelOf = key => { const sp = CAT_BY_KEY[k].fits.find(f => f.key === key); if (sp) return sp.label; const ex = (cfg.extraFits || []).find(f => f.key === key); return ex ? ex.label : key; };
       fits[k] = Object.keys(cfg.fits).map(fk => ({ key: fk, label: labelOf(fk) }));
     });
-    res.json({ success: true, items, fits, cats: CAT_KEYS.map(k => ({ key: k, label: CAT_BY_KEY[k].label })) });
+    // Print-type options per category (only uppers have them) so the review
+    // table can show a print dropdown alongside the fit dropdown.
+    const prints = {};
+    CAT_KEYS.forEach(k => { prints[k] = catHasPrintTypes(k) ? PRINT_TYPES.map(p => ({ key: p.key, label: p.label })) : []; });
+    res.json({ success: true, items, fits, prints, cats: CAT_KEYS.map(k => ({ key: k, label: CAT_BY_KEY[k].label })) });
   } catch (err) {
     if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'Reading the invoice timed out — try fewer/smaller files.' });
     res.status(502).json({ success: false, error: 'Could not read the invoice: ' + (err.message || 'unknown') });
@@ -925,32 +998,36 @@ router.post('/api/casuals/invoice/apply', (req, res) => {
   const s = loadStore();
   const merged = settingsWithDefaults(s);
   const items = (req.body && Array.isArray(req.body.items)) ? req.body.items : [];
-  const agg = {};   // catKey → fitKey → { qty, priceQty }
+  const agg = {};   // catKey → otbKey → { qty, priceQty }   (otbKey = "print::fit" for uppers, else fit)
   let applied = 0, skipped = 0;
   items.forEach(it => {
     const cat = CAT_KEYS.includes(it && it.category) ? it.category : null;
     const cfg = cat ? merged.categories[cat] : null;
     const fit = (cfg && it.fit && (it.fit in cfg.fits)) ? it.fit : null;
+    // Uppers also need a print type so the line nets against the right print::fit cell.
+    const hasP = cat ? catHasPrintTypes(cat) : false;
+    const pt = (hasP && cfg && it.printType && (it.printType in cfg.printTypes)) ? it.printType : null;
     let qty = parseInt(it && it.qty, 10); if (!isFinite(qty) || qty <= 0) qty = 0;
     let price = Number(it && it.unitPrice); if (!isFinite(price) || price < 0) price = 0;
-    if (!cat || !fit || !qty) { skipped++; return; }
-    const a = (agg[cat] = agg[cat] || {}); const f = (a[fit] = a[fit] || { qty: 0, priceQty: 0 });
+    if (!cat || !fit || !qty || (hasP && !pt)) { skipped++; return; }
+    const otbKey = hasP ? (pt + '::' + fit) : fit;
+    const a = (agg[cat] = agg[cat] || {}); const f = (a[otbKey] = a[otbKey] || { qty: 0, priceQty: 0 });
     f.qty += qty; f.priceQty += price * qty; applied++;
   });
   Object.keys(agg).forEach(cat => {
     const cfg = merged.categories[cat];
     if (!cfg.onOrder) cfg.onOrder = {};
     if (!cfg.onOrderCost) cfg.onOrderCost = {};
-    Object.keys(agg[cat]).forEach(fit => {
-      const add = agg[cat][fit];
-      const prevQty = Math.max(0, cfg.onOrder[fit] || 0);
-      const prevCost = Math.max(0, cfg.onOrderCost[fit] || 0);
-      cfg.onOrder[fit] = prevQty + add.qty;                       // accumulate units
+    Object.keys(agg[cat]).forEach(key => {
+      const add = agg[cat][key];
+      const prevQty = Math.max(0, cfg.onOrder[key] || 0);
+      const prevCost = Math.max(0, cfg.onOrderCost[key] || 0);
+      cfg.onOrder[key] = prevQty + add.qty;                       // accumulate units
       const addAvg = add.qty > 0 ? add.priceQty / add.qty : 0;    // avg unit ₹ of this apply
       // Unit-weighted blend of the old and new unit prices, ignoring sides with no price.
       const totQty = (prevCost > 0 ? prevQty : 0) + (addAvg > 0 ? add.qty : 0);
       const totMoney = (prevCost > 0 ? prevQty * prevCost : 0) + (addAvg > 0 ? add.qty * addAvg : 0);
-      if (totQty > 0) cfg.onOrderCost[fit] = Math.round(totMoney / totQty);
+      if (totQty > 0) cfg.onOrderCost[key] = Math.round(totMoney / totQty);
     });
   });
   s.settings = merged;

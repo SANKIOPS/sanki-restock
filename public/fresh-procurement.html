@@ -222,6 +222,12 @@
     .czpo-fit{ display:flex; align-items:baseline; gap:10px; margin:16px 0 4px; padding-bottom:6px; border-bottom:1px solid var(--line); }
     .czpo-fit h4{ margin:0; font-size:14px; }
     .czpo-fit .m{ font-size:12px; color:var(--muted); }
+    /* Print-type group header (uppers) — the level ABOVE fit */
+    .czpo-print{ display:flex; align-items:baseline; gap:10px; margin:22px 0 2px; padding:6px 10px; border-radius:8px; background:var(--chip,#f1f5f9); border-left:3px solid #6366f1; }
+    .czpo-print h4{ margin:0; font-size:14px; font-weight:700; letter-spacing:.2px; }
+    .czpo-print .m{ font-size:12px; color:var(--muted); }
+    .czpo-print + .czpo-fit{ margin-top:8px; }
+    .czpo-empty{ font-size:12px; color:var(--muted); margin:4px 0 2px; padding-left:12px; font-style:italic; }
     /* Open-to-buy netting row (per fit) — "already on the way" vs target */
     .czotb{ display:flex; align-items:center; flex-wrap:wrap; gap:6px 14px; margin:6px 0 10px; padding:7px 11px; font-size:12px; color:#374151; background:#f8fafc; border:1px solid var(--line); border-radius:9px; }
     .czotb .k{ color:var(--muted); font-weight:600; margin-right:3px; }
@@ -286,6 +292,7 @@
     .czitab input.qty, .czitab input.price{ width:70px; text-align:right; }
     .czitab select.needfit{ border-color:#f59e0b; background:#fffbeb; }
     .czidesc{ font-size:12px; color:#374151; max-width:190px; }
+    .czidash{ color:var(--muted); }
     .czirm{ border:none; background:transparent; color:#b91c1c; font-size:15px; cursor:pointer; }
     .cztag{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:20px; margin-left:8px; }
     .cztag.ok{ background:#ecfdf5; color:#065f46; }
@@ -1059,8 +1066,9 @@
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
     // No piece-count estimate here (it needed a per-unit price we don't trust
     // until PO). Each row just shows its normalised share of the budget.
-    ['fits','sizes'].forEach(function(kind){
-      var map = c[kind], tot = czSum(map) || 1;
+    ['fits','sizes','printTypes'].forEach(function(kind){
+      var map = c[kind]; if(!map) return;
+      var tot = czSum(map) || 1;
       Array.prototype.forEach.call(card.querySelectorAll('[data-kind="'+kind+'"] .czdrow'), function(row){
         var key = row.getAttribute('data-key'); var pct = Math.max(0, parseInt(map[key])||0);
         var u = row.querySelector('[data-u]'); if(u) u.textContent = Math.round(pct/tot*100)+'%';
@@ -1077,6 +1085,10 @@
     'T-shirt':{ oversizedround:'Oversized Round Neck', relaxedround:'Relaxed Round Neck', boxyround:'Boxy Round Neck', classictee:'Classic Regular Tee' }
   };
   function czFitLabel(catKey, key){ return (FIT_LABELS[catKey] && FIT_LABELS[catKey][key]) || key; }
+  // Print-type dimension (Shirts & T-shirts only) — fixed 3 buckets.
+  var CZ_PRINT_CATS = ['Shirt','T-shirt'];
+  var CZ_PRINT_KEYS = ['solid','printed','checks'];
+  var PRINT_LABELS = { solid:'Solid (plain / logo)', printed:'Printed / Embroidered', checks:'Checks / Stripes & rest' };
 
   var czOpenCards = {};
   function czRenderCats(){
@@ -1108,10 +1120,29 @@
       pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div>';
       body.appendChild(pills);
 
-      // Only FIT and SIZE are decided by %. COLOUR is observed from the photos
-      // you upload, so there is no colour % editor here.
+      // Print-type mix % — an extra manual split (Shirts & T-shirts only) that
+      // sits ABOVE fit in the hierarchy, so it is edited FIRST. Fixed 3 buckets.
+      if(CZ_PRINT_CATS.indexOf(catKey) >= 0 && c.printTypes){
+        var psub = document.createElement('div'); psub.className = 'czsub'; psub.textContent = '① Print type mix % — editable (split first)';
+        body.appendChild(psub);
+        var pwrap = document.createElement('div'); pwrap.className = 'czdist'; pwrap.setAttribute('data-kind', 'printTypes');
+        CZ_PRINT_KEYS.forEach(function(pk){
+          if(c.printTypes[pk] == null) c.printTypes[pk] = 0;
+          var pr = czDistRow(catKey, 'printTypes', pk, PRINT_LABELS[pk], c.printTypes[pk], false);
+          pr.setAttribute('data-key', pk); pwrap.appendChild(pr);
+        });
+        body.appendChild(pwrap);
+        var pnote = document.createElement('div'); pnote.className = 'czsub';
+        pnote.style.textTransform = 'none'; pnote.style.letterSpacing = '0';
+        pnote.innerHTML = '<span style="color:var(--muted)">Solid = plain colour (with or without logo). Printed/Embroidered combined. Checks / stripes &amp; everything else. Fit % below is applied <b>within</b> each print type.</span>';
+        body.appendChild(pnote);
+      }
+
+      // FIT and SIZE are decided by %. COLOUR is observed from the photos you
+      // upload, so there is no colour % editor here.
+      var isUpper = CZ_PRINT_CATS.indexOf(catKey) >= 0;
       ['fits','sizes'].forEach(function(kind){
-        var title = kind === 'fits' ? 'Fit mix %' : 'Size mix %';
+        var title = kind === 'fits' ? (isUpper ? '② Fit mix % — within each print type' : 'Fit mix %') : 'Size mix %';
         var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
         body.appendChild(sub);
         var wrap = document.createElement('div'); wrap.className = 'czdist'; wrap.setAttribute('data-kind', kind);
@@ -1475,8 +1506,10 @@
       var sec = document.createElement('div'); sec.className='catsec czcard'+(open?' open':''); sec.setAttribute('data-cat', cat.category);
       var body = document.createElement('div'); body.className='czcardbody'; body.style.display = open ? '' : 'none'; var catTotal = 0, catCost = 0;
 
-      (cat.fits||[]).forEach(function(f){
-        if(!f.designs || !f.designs.length) return;   // the bill lists only real photos to buy
+      // Render ONE fit block (its design rows + fit header + OTB strip) into
+      // `into`, returning the fit's piece + cost totals for roll-up.
+      function renderFit(f, into){
+        if(!f.designs || !f.designs.length) return { fitTotal:0, fitCost:0 };   // the bill lists only real photos to buy
         var fitTotal = 0, fitCost = 0; var rowsWrap = document.createElement('div');
         var excludedShown = false;
         f.designs.forEach(function(c){
@@ -1554,7 +1587,7 @@
           (f.unassignedFit ? (f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit')
             : ((f.includedCount!=null?f.includedCount:f.photoCount)+' in PO'+(heldBack>0?(' · <b style="color:#b45309">'+heldBack+' held back</b>'):'')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
                (czPriced ? 'actual spend <b>₹'+fmtINR(fitCost)+'</b>' : 'budget ₹'+fmtINR(f.budget))))+'</span>';
-        body.appendChild(fh);
+        into.appendChild(fh);
         // Open-to-buy: net the fit's budget target against what's already ordered.
         if(cat.enabled && !f.unassignedFit){
           var target = f.target||0, onWay = f.onOrder||0, freed = f.freedBudget||0, ordCost = f.orderedCost||0;
@@ -1570,17 +1603,38 @@
               : '<span class="free">frees ₹'+fmtINR(freed)+'</span>') : '');
           otb.querySelector('input').addEventListener('change', function(){
             var v = parseInt(this.value,10); if(!isFinite(v)||v<0) v=0;
-            var cc = czSettings.categories[cat.category]; if(!cc.onOrder) cc.onOrder = {}; cc.onOrder[f.key] = v;
+            // Uppers net per print::fit cell — write to the composite otbKey.
+            var cc = czSettings.categories[cat.category]; if(!cc.onOrder) cc.onOrder = {}; cc.onOrder[f.otbKey||f.key] = v;
             czSaveSettings();
             f.onOrder = v; f.netUnits = Math.max(0, target - v); f.freedBudget = Math.round(Math.min(v, target) * (ordCost>0?ordCost:(cat.expPrice||1)));
-            cat.onOrder = cat.fits.reduce(function(s,x){ return s + (x.onOrder||0); }, 0);
-            cat.freedBudget = cat.fits.reduce(function(s,x){ return s + (x.freedBudget||0); }, 0);
+            cat.onOrder = (cat.fits||[]).reduce(function(s,x){ return s + (x.onOrder||0); }, 0);
+            cat.freedBudget = (cat.fits||[]).reduce(function(s,x){ return s + (x.freedBudget||0); }, 0);
             czRenderPlan(czLastPlan);
           });
-          body.appendChild(otb);
+          into.appendChild(otb);
         }
-        body.appendChild(rowsWrap);
-      });
+        into.appendChild(rowsWrap);
+        return { fitTotal:fitTotal, fitCost:fitCost };
+      }
+
+      if(cat.printGroups && cat.printGroups.length){
+        // Uppers: category budget is split by PRINT TYPE first, then fit % inside
+        // each. Render a group header per print type, then its fit blocks.
+        cat.printGroups.forEach(function(g){
+          var gfits = g.fits || [];
+          var anyDesigns = gfits.some(function(f){ return f.designs && f.designs.length; });
+          var gOnOrder = gfits.reduce(function(s,x){ return s + (x.onOrder||0); }, 0);
+          var gh = document.createElement('div'); gh.className='czpo-print';
+          gh.innerHTML = '<h4>'+escapeHtml(g.label)+'</h4><span class="m">'+g.share+'% of budget · ₹'+fmtINR(g.budget)+' · target ~'+fmtINR(g.target||0)+' pc'+
+            (gOnOrder ? (' · <b style="color:#b45309">'+fmtINR(gOnOrder)+' on the way</b>') : '')+'</span>';
+          body.appendChild(gh);
+          if(!anyDesigns){ var em = document.createElement('div'); em.className='czpo-empty'; em.textContent = 'No '+g.label.toLowerCase()+' photos in this batch yet.'; body.appendChild(em); }
+          gfits.forEach(function(f){ var t = renderFit(f, body); catTotal += t.fitTotal; catCost += t.fitCost; });
+        });
+        if(cat.unassigned){ var tu = renderFit(cat.unassigned, body); catTotal += tu.fitTotal; catCost += tu.fitCost; }
+      } else {
+        (cat.fits||[]).forEach(function(f){ var t = renderFit(f, body); catTotal += t.fitTotal; catCost += t.fitCost; });
+      }
 
       var hd = document.createElement('div'); hd.className='czcardhd'; hd.style.cursor='pointer'; hd.style.userSelect='none';
       hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
@@ -1670,7 +1724,7 @@
 
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
   //    review the line items → apply as open-to-buy "on the way" stock. ──
-  var czInv = { items: [], fits: {}, cats: [] };
+  var czInv = { items: [], fits: {}, prints: {}, cats: [] };
   function czInvOpen(){ el('czInvoiceInput').click(); }
   function czInvUpload(files){
     if(!files || !files.length) return;
@@ -1682,7 +1736,7 @@
     el('czInvFoot').textContent = ''; el('czInvApply').disabled = true;
     fetch('/api/casuals/invoice/parse', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.success){ el('czInvBody').innerHTML=''; el('czInvSub').textContent = (d && d.error) || 'Could not read the invoice.'; return; }
-      czInv.fits = d.fits||{}; czInv.cats = d.cats||[];
+      czInv.fits = d.fits||{}; czInv.prints = d.prints||{}; czInv.cats = d.cats||[];
       czInv.items = (d.items||[]).map(function(it, i){ it._id = 'r'+i; it.include = (it.qty>0); return it; });
       czInvRender();
     }).catch(function(){ el('czInvBody').innerHTML=''; el('czInvSub').textContent = 'Network error reading the invoice.'; });
@@ -1690,17 +1744,23 @@
   function czInvGet(id){ return (czInv.items||[]).filter(function(x){ return x._id===id; })[0]; }
   function czInvCatOptions(sel){ return '<option value="">— skip —</option>' + (czInv.cats||[]).map(function(c){ return '<option value="'+c.key+'"'+(c.key===sel?' selected':'')+'>'+escapeHtml(c.label)+'</option>'; }).join(''); }
   function czInvFitOptions(cat, sel){ return '<option value="">— pick fit —</option>' + ((czInv.fits[cat])||[]).map(function(f){ return '<option value="'+f.key+'"'+(f.key===sel?' selected':'')+'>'+escapeHtml(f.label)+'</option>'; }).join(''); }
-  function czInvReady(){ return (czInv.items||[]).filter(function(it){ return it.include && it.category && it.fit && it.qty>0; }); }
+  function czInvIsUpper(cat){ return !!(cat && (czInv.prints[cat]||[]).length); }
+  function czInvPrintOptions(cat, sel){ return '<option value="">— type —</option>' + ((czInv.prints[cat])||[]).map(function(p){ return '<option value="'+p.key+'"'+(p.key===sel?' selected':'')+'>'+escapeHtml(p.label)+'</option>'; }).join(''); }
+  // A line is ready when included, has a category, fit, qty, and — for uppers — a print type.
+  function czInvReady(){ return (czInv.items||[]).filter(function(it){ return it.include && it.category && it.fit && it.qty>0 && (!czInvIsUpper(it.category) || it.printType); }); }
   function czInvRender(){
     var items = czInv.items||[];
     if(!items.length){ el('czInvBody').innerHTML = '<div class="sub" style="padding:24px 4px">No garment line items found. Try a clearer photo/PDF, or an Excel with one row per item.</div>'; el('czInvSub').textContent=''; el('czInvApply').disabled=true; el('czInvFoot').textContent=''; return; }
-    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Pick a <b>fit</b> for each, fix anything wrong, then add them as already-ordered.';
+    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Pick a <b>print type</b> (shirts/tees) &amp; <b>fit</b> for each, fix anything wrong, then add them as already-ordered.';
     var rows = items.map(function(it){
+      var upper = czInvIsUpper(it.category);
       var needFit = it.include && it.category && !it.fit;
+      var needPrint = it.include && upper && !it.printType;
       return '<tr data-id="'+it._id+'"'+(it.include?'':' class="off"')+'>'+
         '<td><input type="checkbox" class="cz-inc"'+(it.include?' checked':'')+'></td>'+
         '<td><div class="czidesc">'+escapeHtml(it.description||'—')+'</div></td>'+
         '<td><select class="cz-cat">'+czInvCatOptions(it.category)+'</select></td>'+
+        '<td>'+(upper ? ('<select class="cz-print'+(needPrint?' needfit':'')+'">'+czInvPrintOptions(it.category, it.printType)+'</select>') : '<span class="czidash">—</span>')+'</td>'+
         '<td><select class="cz-fit'+(needFit?' needfit':'')+'"'+(it.category?'':' disabled')+'>'+czInvFitOptions(it.category, it.fit)+'</select></td>'+
         '<td><input class="cz-size" value="'+escapeHtml(it.size||'')+'" style="width:56px"></td>'+
         '<td><input class="cz-qty qty" type="number" min="0" step="1" value="'+(it.qty||0)+'"></td>'+
@@ -1708,11 +1768,13 @@
         '<td><button class="czirm" title="Remove line">🗑</button></td>'+
       '</tr>';
     }).join('');
-    el('czInvBody').innerHTML = '<table class="czitab"><thead><tr><th>Buy</th><th>Item</th><th>Category</th><th>Fit</th><th>Size</th><th>Qty</th><th>Unit ₹</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el('czInvBody').innerHTML = '<table class="czitab"><thead><tr><th>Buy</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Size</th><th>Qty</th><th>Unit ₹</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
     Array.prototype.forEach.call(el('czInvBody').querySelectorAll('tr[data-id]'), function(tr){
       var id = tr.getAttribute('data-id'), it = czInvGet(id); if(!it) return;
       tr.querySelector('.cz-inc').addEventListener('change', function(){ it.include = this.checked; czInvRender(); });
-      tr.querySelector('.cz-cat').addEventListener('change', function(){ it.category = this.value||null; it.fit = null; czInvRender(); });
+      tr.querySelector('.cz-cat').addEventListener('change', function(){ it.category = this.value||null; it.fit = null; if(!czInvIsUpper(it.category)) it.printType = null; czInvRender(); });
+      var pr = tr.querySelector('.cz-print');
+      if(pr) pr.addEventListener('change', function(){ it.printType = this.value||null; czInvSyncFoot(); pr.classList.toggle('needfit', it.include && czInvIsUpper(it.category) && !it.printType); });
       tr.querySelector('.cz-fit').addEventListener('change', function(){ it.fit = this.value||null; czInvSyncFoot(); tr.querySelector('.cz-fit').classList.toggle('needfit', it.include && it.category && !it.fit); });
       tr.querySelector('.cz-size').addEventListener('change', function(){ it.size = this.value; });
       tr.querySelector('.cz-qty').addEventListener('change', function(){ var v=parseInt(this.value,10); it.qty = (isFinite(v)&&v>0)?v:0; czInvSyncFoot(); });
@@ -1725,16 +1787,16 @@
     var ready = czInvReady();
     var units = ready.reduce(function(s,it){ return s + it.qty; }, 0);
     var spend = ready.reduce(function(s,it){ return s + it.qty*(it.unitPrice||0); }, 0);
-    var needFit = (czInv.items||[]).filter(function(it){ return it.include && it.category && !it.fit; }).length;
+    var needFit = (czInv.items||[]).filter(function(it){ return it.include && it.category && (!it.fit || (czInvIsUpper(it.category) && !it.printType)); }).length;
     el('czInvFoot').innerHTML = ready.length
-      ? ('<b>'+ready.length+'</b> line'+(ready.length===1?'':'s')+' · <b>'+fmtINR(units)+'</b> pc on the way · ₹'+fmtINR(spend)+(needFit?(' · <b style="color:#b45309">'+needFit+' still need a fit</b>'):''))
-      : (needFit?('<b style="color:#b45309">'+needFit+' line'+(needFit===1?'':'s')+' need a fit selected</b>'):'Nothing selected yet.');
+      ? ('<b>'+ready.length+'</b> line'+(ready.length===1?'':'s')+' · <b>'+fmtINR(units)+'</b> pc on the way · ₹'+fmtINR(spend)+(needFit?(' · <b style="color:#b45309">'+needFit+' still need print/fit</b>'):''))
+      : (needFit?('<b style="color:#b45309">'+needFit+' line'+(needFit===1?'':'s')+' need print type / fit selected</b>'):'Nothing selected yet.');
     el('czInvApply').disabled = ready.length===0;
   }
   function czInvApply(){
     var ready = czInvReady(); if(!ready.length) return;
     el('czInvApply').disabled = true; el('czInvApply').textContent = 'Adding…';
-    var payload = { items: ready.map(function(it){ return { category: it.category, fit: it.fit, qty: it.qty, unitPrice: it.unitPrice||0 }; }) };
+    var payload = { items: ready.map(function(it){ return { category: it.category, fit: it.fit, printType: it.printType||null, qty: it.qty, unitPrice: it.unitPrice||0 }; }) };
     fetch('/api/casuals/invoice/apply', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(payload) }).then(function(r){ return r.json(); }).then(function(d){
       el('czInvApply').textContent = 'Add to already-ordered';
       if(d && d.success){ if(d.settings) czSettings = d.settings; czInvClose(); czRenderPlan(d); }
