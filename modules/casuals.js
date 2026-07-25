@@ -670,22 +670,21 @@ function buildPlan(cands, settings) {
     // fit %. Trousers keep the flat category→fit split.
     const hasPrint = catHasPrintTypes(catKey);
 
-    // PER-FIT variety selection. Decides WHICH designs are included, honouring
-    // colour % NESTED under each fit:
-    //   • each fit's cap = the number of designs actually uploaded to it (so the
-    //     numbers always trace back to what the buyer sent — no batch-wide share).
-    //   • colour % → splits THAT fit's cap into per-colour targets.
-    // Within each fit we take the best-rated designs of each colour up to that
-    // colour's target. A colour with MORE uploads than its target has the extras
-    // held back (excludedReason 'variety'); a colour with FEWER uploads than its
-    // target leaves the gap UNMET (recorded as a stage-1 sourcing shortfall — we
-    // never swap in another colour and never invent a colour that wasn't uploaded).
-    // Manual pins are always in. `keyOf` maps a design to its fit key (bare fit for
-    // trousers, "print::fit" for uppers). `stage1Short` collects, per fit key, the
-    // "N more <colour> needed" gaps so the frontend can flag what to source.
+    // PER-FIT selection. EVERY uploaded photo the buyer sent for a fit is bought —
+    // an upload IS the buyer's intent to buy that design. Colour % NO LONGER drops
+    // photos; it is only a SOURCING TARGET that flags what's missing:
+    //   • each fit's cap = the number of designs uploaded to it.
+    //   • colour % → splits that cap into per-colour targets, used ONLY to report a
+    //     shortfall (a colour the mix wants more of than was uploaded) as a stage-1
+    //     "needs sourcing" flag. A colour is never dropped for being over its target,
+    //     and colours you didn't upload never reserve slots away from what you sent.
+    // Manual excludes (includeOverride === false) still hold a photo out; manual pins
+    // (includeOverride === true) force one in. `keyOf` maps a design to its fit key
+    // (bare fit for trousers, "print::fit" for uppers). `stage1Short` collects, per
+    // fit key, the "N more <colour> needed" gaps so the frontend can flag what to source.
     let includedIds = new Set();
     let stage1Short = {};   // fit key → [{ key, label, have, want, need }]
-    let excludeInfo = {};   // design id → { colour, kept, have, target, offList } for held designs
+    let excludeInfo = {};   // retained for shape compat; no variety drops populate it now
     const selectIncluded = (keyOf) => {
       const assigned = pool.filter(c => c.fit && isIncluded(c));
       const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
@@ -695,34 +694,21 @@ function buildPlan(cands, settings) {
       excludeInfo = {};
       Object.keys(byKey).forEach(k => {
         const cap = byKey[k].length;                  // upload-based: this fit's own uploads
-        // Group this fit's uploads by (canon) colour, best-rated first.
+        // Keep EVERY uploaded photo — the buyer uploaded exactly what they want to buy.
+        byKey[k].forEach(c => inc.add(c.id));
+        // Group this fit's uploads by (canon) colour, only to measure the sourcing gap.
         const byCol = {};
         byKey[k].forEach(c => { const ck = canonColour(c.colour, colKeys); (byCol[ck] = byCol[ck] || []).push(c); });
-        Object.keys(byCol).forEach(ck => byCol[ck].sort((a, b) => (b.rating || 0) - (a.rating || 0)));
-        // Split the cap over the FULL colour list — NOT just the colours present
-        // in this fit. This keeps each colour's TRUE % (30% means 30% of the cap),
-        // instead of an inflated share renormalised over only what was uploaded.
-        // A colour you set a % for but didn't upload reserves its slots and surfaces
-        // as a sourcing gap; a colour you over-sent has its extras held back.
+        // Split the cap over the FULL colour list to get each colour's target count,
+        // then report where uploads fall SHORT of that target (never drop the surplus).
         const fullW = {};
         colKeys.forEach(ck => { fullW[ck] = Math.max(0, +cfg.colours[ck] || 0); });
         if (Object.values(fullW).reduce((s, v) => s + v, 0) <= 0) colKeys.forEach(ck => fullW[ck] = 1);
         const colTarget = splitInts(cap, fullW);
         const shorts = [];
         Object.keys(colTarget).forEach(ck => {
-          const want = colTarget[ck] || 0, list = byCol[ck] || [], have = list.length;
-          const take = Math.min(want, have);
-          for (let i = 0; i < take; i++) inc.add(list[i].id);
-          // The best `take` win their colour's slots; the rest are the overshoot,
-          // held back with a reason the buyer can read ("kept best 3 of 4").
-          for (let i = take; i < have; i++) excludeInfo[list[i].id] = { colour: ck, kept: take, have, target: want };
+          const want = colTarget[ck] || 0, have = (byCol[ck] || []).length;
           if (want > have && ck !== 'Other') shorts.push({ key: ck, label: ck, have, want, need: want - have });
-        });
-        // Colours present in the fit but NOT in your colour-% list (e.g. 'Other',
-        // an unrecognised shade) get no slots — all held, flagged as off-list.
-        Object.keys(byCol).forEach(ck => {
-          if (colTarget[ck] != null) return;
-          byCol[ck].forEach(c => { excludeInfo[c.id] = { colour: ck, kept: 0, have: byCol[ck].length, target: 0, offList: true }; });
         });
         if (shorts.length) stage1Short[k] = shorts.sort((a, b) => b.need - a.need);
       });
