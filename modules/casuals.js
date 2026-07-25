@@ -377,14 +377,12 @@ function settingsWithDefaults(s) {
   };
 }
 
-// Curation gate: designs the AI rates this high (or better) are sourced by
-// default. The founder can still manually include/exclude any design, which is
-// stored per-candidate as `includeOverride` (true/false) and wins over the gate.
-const RATING_GATE = 8;
+// Curation: the AI rating is NO LONGER an inclusion factor — every design is
+// sourced by default. The founder can still manually include/exclude any design,
+// stored per-candidate as `includeOverride` (true/false).
 function isIncluded(c) {
-  if (c.includeOverride === true) return true;
   if (c.includeOverride === false) return false;
-  return c.rating != null ? c.rating >= RATING_GATE : true; // un-rated → keep in
+  return true; // rating gate DISABLED — include everything unless manually removed
 }
 
 // Public shape of a candidate (never leak the disk path).
@@ -585,17 +583,6 @@ function splitInts(n, weights) {
     .forEach((o, i) => { if (i < rem) base[o.k]++; });
   return base;
 }
-// Approx pieces in ONE design's baseline run — the size curve scaled to ~12,
-// mirroring the frontend "set". Lets a fit's budget decide HOW MANY designs it
-// funds (best-first) instead of spreading the money thinly across all of them.
-const RUN_BASE = 12;
-function runUnitsFor(sizesPct) {
-  const keys = Object.keys(sizesPct || {}).filter(k => (+sizesPct[k] || 0) > 0);
-  if (!keys.length) return RUN_BASE;
-  const tot = keys.reduce((s, k) => s + Math.max(0, +sizesPct[k] || 0), 0) || 1;
-  let sum = 0; keys.forEach(k => { sum += Math.max(1, Math.round((+sizesPct[k] || 0) / tot * RUN_BASE)); });
-  return sum || RUN_BASE;
-}
 // Turn a merged pct map into a normalised {key,label,pct,share} list for display.
 function pctRows(map, labelFor) {
   const tot = Object.values(map).reduce((s, v) => s + Math.max(0, +v || 0), 0) || 1;
@@ -624,9 +611,6 @@ function buildPlan(cands, settings) {
     // replaced by the vendor's real quote at PO time.
     const expPrice = Math.max(1, cfg.avgCost || spec.avgCost);
     const estUnits = enabled ? Math.round(budget / expPrice) : 0;
-    // Baseline pieces per design run — used to price a single design so each
-    // fit's budget can fund the best designs first and exclude the rest.
-    const runUnits = runUnitsFor(cfg.sizes);
 
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
@@ -656,22 +640,14 @@ function buildPlan(cands, settings) {
       // Budget left for NEW designs = fit budget MINUS what existing POs cost.
       const availBudget = Math.max(0, fb - freedBudget);
 
-      // BUDGET-DRIVEN CURATION. Rank the gate-passing designs best-first (manual
-      // force-ins always first), then fund them one standard run at a time until
-      // availBudget is exhausted. Designs the money can't reach drop into
-      // exclusions ("budget: fit full") — a fuller budget buys more variety, a
-      // tighter one keeps only the best. runCost ≈ one size-set at est price.
-      const runCost = Math.max(1, Math.round(expPrice * runUnits));
+      // INCLUDE EVERYTHING. No rating gate, no budget-based dropping: every design
+      // that isn't manually removed is sourced, and the fit's budget just splits
+      // across them by the size percentages. (Sorting by rating only orders the
+      // display, it never includes or excludes.)
       const gatePassed = photos.filter(isIncluded);
-      const ranked = gatePassed.slice().sort((a, b) => {
-        const fa = a.includeOverride === true ? 1 : 0, fb2 = b.includeOverride === true ? 1 : 0;
-        if (fa !== fb2) return fb2 - fa;                                      // forced-in first
-        const ra = a.rating != null ? a.rating : RATING_GATE, rb = b.rating != null ? b.rating : RATING_GATE;
-        return rb - ra;                                                       // then best rating
-      });
-      const affordable = enabled ? (runCost > 0 ? Math.floor(availBudget / runCost) : ranked.length) : 0;
+      const ranked = gatePassed.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
       const budgetIn = {};
-      ranked.forEach((p, i) => { if (i < affordable || p.includeOverride === true) budgetIn[p.id] = true; });
+      ranked.forEach(p => { if (enabled || p.includeOverride === true) budgetIn[p.id] = true; });
 
       // The KEPT designs share availBudget evenly; excluded designs get ₹0.
       const incList = ranked.filter(p => budgetIn[p.id]);
@@ -692,11 +668,10 @@ function buildPlan(cands, settings) {
           const ca = catColourAgg[colour] = catColourAgg[colour] || { budget: 0, estUnits: 0, photos: 0 };
           ca.budget += db; ca.estUnits += du; ca.photos += 1;
         }
-        // Why a design is out: manual pull, below the rating gate, or the fit's
-        // budget filled up before we reached it. Drives the frontend's label.
+        // A design is only ever out now if the founder pulled it, or its whole
+        // category is turned off. Rating never excludes. Drives the frontend label.
         const excludedReason = inc ? null
-          : (p.includeOverride === false ? 'manual'
-            : (!passedGate ? 'rating' : 'budget'));
+          : (p.includeOverride === false ? 'manual' : 'budget');
         return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes, included: inc, excludedReason });
       });
       designs.sort((a, b) => (b.included ? 1 : 0) - (a.included ? 1 : 0) || (b.rating || 0) - (a.rating || 0));
