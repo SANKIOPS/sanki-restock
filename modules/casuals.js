@@ -665,10 +665,42 @@ function buildPlan(cands, settings) {
     // fit %. Trousers keep the flat category→fit split.
     const hasPrint = catHasPrintTypes(catKey);
 
+    // CATEGORY-LEVEL variety selection. Decides WHICH designs are included across
+    // the whole category, honouring two axes at once:
+    //   • fit % → how many designs each fit may source (capByKey, a per-fit-key count)
+    //   • colour % → the colour mix across the WHOLE category (top level)
+    // Best-rated designs win; manual pins are always in. A colour target that
+    // can't be placed (no room in the fits holding that colour) is left unmet —
+    // we never invent a colour that wasn't uploaded. `keyOf` maps a design to its
+    // fit key (bare fit for trousers, "print::fit" for uppers).
+    let includedIds = new Set();
+    const selectIncluded = (keyOf, capByKey) => {
+      const assigned = pool.filter(c => c.fit && isIncluded(c));
+      const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
+      const capRem = {}; Object.keys(byKey).forEach(k => { capRem[k] = Math.min(capByKey[k] || 0, byKey[k].length); });
+      const totalT = Object.values(capRem).reduce((s, v) => s + v, 0);   // total designs we'll buy
+      // Category colour targets, over the colours actually present.
+      const colKeys = Object.keys(cfg.colours || {});
+      const presentW = {};
+      assigned.forEach(c => { const ck = canonColour(c.colour, colKeys); if (presentW[ck] == null) presentW[ck] = (ck === 'Other') ? 0 : Math.max(0, +cfg.colours[ck] || 0); });
+      if (Object.values(presentW).reduce((s, v) => s + v, 0) <= 0) Object.keys(presentW).forEach(k => presentW[k] = 1);
+      const colTarget = splitInts(totalT, presentW);
+      const inc = new Set();
+      const allRanked = assigned.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      // Pass 1 — best-rated first; take a design only if its fit still has room
+      // AND its colour is still under target. This shapes the category colour mix.
+      allRanked.forEach(c => { const k = keyOf(c), ck = canonColour(c.colour, colKeys); if ((capRem[k] || 0) > 0 && (colTarget[ck] || 0) > 0) { inc.add(c.id); capRem[k]--; colTarget[ck]--; } });
+      // Pass 2 — fill any fit slots still open (their preferred colours ran out),
+      // best-rated first, ignoring the colour target so fits still hit their count.
+      allRanked.forEach(c => { const k = keyOf(c); if (!inc.has(c.id) && (capRem[k] || 0) > 0) { inc.add(c.id); capRem[k]--; } });
+      pool.forEach(c => { if (c.includeOverride === true) inc.add(c.id); });
+      return inc;
+    };
+
     // Build ONE fit block. `fb` is this fit's rupee budget, `photos` its designs,
     // `otbKey` the open-to-buy key (composite "print::fit" for uppers, bare fit
     // key for trousers — so legacy trouser onOrder data still resolves).
-    const buildFit = (fr, fb, photos, otbKey, varietyCap) => {
+    const buildFit = (fr, fb, photos, otbKey) => {
       const fitEst = enabled && expPrice > 0 ? Math.round(fb / expPrice) : 0;
       // OPEN-TO-BUY: existing POs for this exact fit — units already on the way
       // and the money they've already consumed. Keyed by otbKey so uppers net
@@ -679,39 +711,17 @@ function buildPlan(cands, settings) {
       // Budget left for NEW designs = fit budget MINUS what existing POs cost.
       const availBudget = Math.max(0, fb - freedBudget);
 
-      // VARIETY BY PERCENTAGE. The fit % now controls how many DESIGNS (variety)
-      // this fit sources: varietyCap = its share of the category's design count.
-      // We keep the best-rated designs up to that cap and hold the rest back.
-      // Manually forced designs (includeOverride === true) are always kept, even
-      // beyond the cap. Rating only ranks WHICH designs win the limited slots.
+      // VARIETY inclusion is decided ONCE at the CATEGORY level (see
+      // selectIncluded below): fit % sets how many designs each fit sources, and
+      // colour % sets the colour mix across the WHOLE category. Here we just read
+      // that decision. Manual pins (includeOverride === true) are always in.
       const gatePassed = photos.filter(isIncluded);
       const ranked = gatePassed.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
-      const cap = (varietyCap == null) ? ranked.length : varietyCap;
       const budgetIn = {};
-      // Manual pins are always in and don't consume the variety cap.
-      ranked.forEach(p => { if (p.includeOverride === true) budgetIn[p.id] = true; });
-      if (enabled) {
-        // Neutral designs compete for this fit's `cap` variety slots. The slots
-        // split ACROSS COLOURS by colour % (same idea as fit %), but ONLY over the
-        // colours actually present here — so a fit with only black uploads puts all
-        // its slots on black instead of leaving them empty.
-        const neutral = ranked.filter(p => p.includeOverride !== true);
-        const colourKeys = Object.keys(cfg.colours || {});
-        const canonOf = p => canonColour(p.colour, colourKeys);
-        const presentW = {};
-        neutral.forEach(p => { const ck = canonOf(p); if (presentW[ck] == null) presentW[ck] = (ck === 'Other') ? 0 : Math.max(0, +cfg.colours[ck] || 0); });
-        if (Object.values(presentW).reduce((s, v) => s + v, 0) <= 0) Object.keys(presentW).forEach(k => presentW[k] = 1);
-        const colourSlots = splitInts(cap, presentW);
-        const byColour = {}; neutral.forEach(p => { const ck = canonOf(p); (byColour[ck] = byColour[ck] || []).push(p); }); // best-first within colour
-        let kept = 0;
-        Object.keys(colourSlots).forEach(ck => {
-          let n = colourSlots[ck]; const arr = byColour[ck] || [];
-          for (let i = 0; i < arr.length && n > 0; i++) { budgetIn[arr[i].id] = true; kept++; n--; }
-        });
-        // Colours that ran out of designs free up slots — hand them to the next
-        // best-rated designs regardless of colour, so the fit still fills its share.
-        for (let i = 0, left = cap - kept; i < neutral.length && left > 0; i++) { if (!budgetIn[neutral[i].id]) { budgetIn[neutral[i].id] = true; left--; } }
-      }
+      ranked.forEach(p => {
+        if (p.includeOverride === true) { budgetIn[p.id] = true; return; }   // founder pinned it
+        if (enabled && includedIds && includedIds.has(p.id)) budgetIn[p.id] = true;
+      });
 
       // The KEPT designs share availBudget evenly; excluded designs get ₹0.
       const incList = ranked.filter(p => budgetIn[p.id]);
@@ -770,12 +780,14 @@ function buildPlan(cands, settings) {
         comboWeights[pr.key + '::' + fr.key] = (+cfg.printTypes[pr.key] || 0) * (+cfg.fits[fr.key] || 0);
       }));
       const comboVariety = splitInts(assignedCount, comboWeights);
+      // Decide inclusion category-wide: fit slots per print×fit combo, colour % across the category.
+      includedIds = selectIncluded(c => printBucket(c.pattern) + '::' + c.fit, comboVariety);
       printGroups = printRows.map(pr => {
         const pb = printBudget[pr.key] || 0;
         const groupPool = pool.filter(c => c.fit && printBucket(c.pattern) === pr.key);
         // Step 2 — this print-type's slice → fit %.
         const fitBudgetG = splitInts(pb, cfg.fits);
-        const gfits = fitRows.map(fr => buildFit(fr, fitBudgetG[fr.key] || 0, groupPool.filter(c => c.fit === fr.key), pr.key + '::' + fr.key, comboVariety[pr.key + '::' + fr.key] || 0));
+        const gfits = fitRows.map(fr => buildFit(fr, fitBudgetG[fr.key] || 0, groupPool.filter(c => c.fit === fr.key), pr.key + '::' + fr.key));
         fits = fits.concat(gfits);   // flat list too, for export / roll-ups
         return {
           key: pr.key, label: pr.label, pct: pr.pct, share: pr.share, budget: pb,
@@ -792,7 +804,9 @@ function buildPlan(cands, settings) {
       // VARIETY: the category's assigned designs are split across fits by fit %.
       const assignedCount = pool.filter(c => c.fit).length;
       const fitVariety = splitInts(assignedCount, cfg.fits);
-      fits = fitRows.map(fr => buildFit(fr, fitBudget[fr.key] || 0, pool.filter(c => c.fit === fr.key), fr.key, fitVariety[fr.key] || 0));
+      // Decide inclusion category-wide: fit slots per fit, colour % across the category.
+      includedIds = selectIncluded(c => c.fit, fitVariety);
+      fits = fitRows.map(fr => buildFit(fr, fitBudget[fr.key] || 0, pool.filter(c => c.fit === fr.key), fr.key));
     }
 
     // Designs the AI couldn't assign a fit to — shown at the end so the founder
