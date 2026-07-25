@@ -80,6 +80,9 @@
   .difftbl th:first-child, .difftbl td:first-child { text-align:left; }
   .diff-ok { color:var(--ok); font-weight:600; }
   .diff-bad { color:var(--bad); font-weight:600; }
+  .basisnote { background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:11px 14px; margin:0 0 14px; font-size:13px; color:#3730a3; }
+  .basisnote ul { margin:6px 0 0; padding-left:18px; }
+  .basisnote li { margin:3px 0; }
   .summary { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:16px; }
   .summary h3 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.5px; color:#888; }
   .srclist { display:flex; flex-wrap:wrap; gap:8px; }
@@ -431,6 +434,11 @@
     if (!j.hasTarget) { wrap.innerHTML = '<div class="card"><div class="empty">No target chart saved for this fit yet — fill Section 1 first.</div></div>'; wrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     var html = '<div class="card"><div class="cardhead"><h2>Sourcing plan — ' + esc(j.category) + ' · ' + esc(fitLabel(j.category, j.fit)) + '</h2></div>';
     html += '<p class="cardsub" style="margin-left:0">Matched within ±' + esc(j.tolerance) + esc(j.unit || 'cm') + ' on every measured field.</p>';
+    if (j.basisNotes && j.basisNotes.length) {
+      html += '<div class="basisnote">⚙ Auto-adjusted the China chart so it lines up with your measuring method:<ul>';
+      j.basisNotes.forEach(function (n) { html += '<li>' + esc(n.note) + '</li>'; });
+      html += '</ul></div>';
+    }
 
     // Summary
     html += '<div class="summary"><h3>Order these China sizes</h3>';

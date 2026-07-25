@@ -102,6 +102,45 @@ function cleanChart(raw, fields) {
   return out;
 }
 
+// Median of a numeric list (used to compare the overall scale of two charts).
+function median(arr) {
+  const a = arr.filter(v => v != null && isFinite(v)).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+// Chinese vendor charts often give a body measurement measured AROUND the whole
+// body (full circumference / "2 sides") — e.g. chest 100-116cm — while SANKI's
+// target chart may be stored FLAT / one-side (pit-to-pit ≈ half of that). That
+// makes every diff ~2× and nothing matches. Detect this per field by comparing
+// the two charts' median values: a ratio near 2 (or 0.5) is a measurement-basis
+// mismatch, not a real size gap, so rescale the VENDOR onto the target's basis.
+// Returns a NEW vendor chart plus notes describing what was auto-converted.
+function normaliseVendorBasis(targetChart, vendorChart, fields) {
+  const out = {};
+  Object.keys(vendorChart).forEach(s => { out[s] = Object.assign({}, vendorChart[s]); });
+  const notes = [];
+  const tSizes = Object.keys(targetChart), vSizes = Object.keys(out);
+  fields.forEach(f => {
+    const tVals = tSizes.map(s => targetChart[s] && targetChart[s][f]).filter(v => v != null);
+    const vVals = vSizes.map(s => out[s] && out[s][f]).filter(v => v != null);
+    const tMed = median(tVals), vMed = median(vVals);
+    if (!tMed || !vMed || tMed <= 0 || vMed <= 0) return;
+    const ratio = vMed / tMed;
+    // Bands sit tightly around 2 and 0.5 so a genuine cm↔inch mixup (~2.54×)
+    // or a real size gap is NOT mistaken for a one-side/two-side difference.
+    if (ratio >= 1.7 && ratio <= 2.35) {
+      vSizes.forEach(s => { if (out[s][f] != null) out[s][f] = Math.round((out[s][f] / 2) * 10) / 10; });
+      notes.push({ field: f, action: 'halved', note: f + ': China chart looks measured around the full body (2 sides). Auto-halved to match your flat/one-side target before comparing.' });
+    } else if (ratio >= 0.425 && ratio <= 0.588) {
+      vSizes.forEach(s => { if (out[s][f] != null) out[s][f] = Math.round((out[s][f] * 2) * 10) / 10; });
+      notes.push({ field: f, action: 'doubled', note: f + ': China chart looks measured flat/one-side while your target is a full-circumference. Auto-doubled China to match before comparing.' });
+    }
+  });
+  return { vendorChart: out, notes };
+}
+
 // ── Comparison engine ─────────────────────────────────────────────
 // For a target size T and a vendor size V, over the fields the TARGET defines:
 //   diff(field) = V - T   (positive = China runs bigger)
@@ -109,6 +148,10 @@ function cleanChart(raw, fields) {
 //   dist        = Σ |diff| over shared fields (unshared target fields penalised)
 // A vendor size "fits" a target when every target field is present AND within tol.
 function compareChartToTarget(targetChart, vendorChart, fields, tol, unit) {
+  // First reconcile measurement BASIS (one-side/flat vs full-circumference) so a
+  // 2× "big diff" doesn't wrongly read as a no-fit. Works on the target's basis.
+  const basis = normaliseVendorBasis(targetChart, vendorChart, fields);
+  vendorChart = basis.vendorChart;
   const results = [];
   const targetSizes = Object.keys(targetChart);
   const vendorSizes = Object.keys(vendorChart);
@@ -169,7 +212,7 @@ function compareChartToTarget(targetChart, vendorChart, fields, tol, unit) {
   // Summary: which China sizes to actually order, and which desired sizes have no match.
   const toSource = results.filter(r => r.source).map(r => ({ desired: r.size, china: r.source, remap: r.status === 'remap' }));
   const unmatched = results.filter(r => r.status === 'nofit').map(r => r.size);
-  return { tolerance: disp(tol), unit: U, results, toSource, unmatched, hasTarget: targetSizes.length > 0, hasVendor: vendorSizes.length > 0 };
+  return { tolerance: disp(tol), unit: U, results, toSource, unmatched, basisNotes: basis.notes, hasTarget: targetSizes.length > 0, hasVendor: vendorSizes.length > 0 };
 }
 
 // ── Vision: read a size-chart photo into a { size: { field: cm } } chart ──
