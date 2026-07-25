@@ -1038,6 +1038,56 @@ router.post('/api/casuals/invoice/parse', async (req, res) => {
   }
 });
 
+// Classify one product photo PER invoice line (buyer-uploaded, since bills rarely
+// carry images). Reuses the Fresh-Procurement vision brain so a line gets its
+// category / fit / print / colour auto-filled just like a design photo. Field
+// name 'images', parallel `ids[]` line the results back up to the review rows.
+function runInvoiceClassifyUpload(req, res) {
+  return new Promise((resolve) => {
+    invoiceUpload.array('images', 20)(req, res, (err) => {
+      if (err) {
+        const map = { LIMIT_FILE_SIZE: 'An image is larger than 25 MB — compress it and retry.',
+          LIMIT_FILE_COUNT: 'Too many images at once (max 20).', LIMIT_UNEXPECTED_FILE: 'Unexpected upload field.' };
+        resolve({ ok: false, error: map[err.code] || ('Upload error: ' + (err.message || err.code || 'unknown')) });
+      } else resolve({ ok: true });
+    });
+  });
+}
+router.post('/api/casuals/invoice/classify', async (req, res) => {
+  try {
+    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI reading is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
+    const r = await runInvoiceClassifyUpload(req, res);
+    if (res.headersSent) return;
+    if (!r.ok) return res.status(400).json({ success: false, error: r.error });
+    const files = (req.files || []).filter(f => /^image\//.test(f.mimetype) || /\.(png|jpe?g|webp|gif)$/i.test(f.originalname || ''));
+    if (!files.length) return res.status(400).json({ success: false, error: 'No product images received' });
+    // Line ids run parallel to the uploaded images (multer keeps field order).
+    let ids = req.body && req.body.ids;
+    if (typeof ids === 'string') ids = [ids];
+    ids = Array.isArray(ids) ? ids : [];
+    const results = {};
+    for (let i = 0; i < files.length; i += VISION_BATCH) {
+      const slice = files.slice(i, i + VISION_BATCH);
+      const items = slice.map((f, k) => ({ id: ids[i + k] || ('img' + (i + k)), buffer: f.buffer, mediaType: mediaTypeForFile(f.originalname || '') }));
+      const map = await scoreBatch(items);
+      items.forEach(it => {
+        const o = map[it.id]; if (!o) return;
+        const cat = o.category;
+        results[it.id] = {
+          category: cat,
+          fit: cat ? o.fit : null,
+          colour: o.colour || '',
+          printType: (cat && catHasPrintTypes(cat)) ? (printBucket(o.pattern) || null) : null
+        };
+      });
+    }
+    res.json({ success: true, results });
+  } catch (err) {
+    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'Reading the images timed out — try fewer at once.' });
+    res.status(502).json({ success: false, error: 'Could not analyze the images: ' + (err.message || 'unknown') });
+  }
+});
+
 // Apply the reviewed invoice lines: add their quantities to each category/fit's
 // open-to-buy `onOrder`, and blend the real unit ₹ into `onOrderCost`. Returns a
 // fresh plan so the buy sheet re-nets immediately.

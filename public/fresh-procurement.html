@@ -308,6 +308,16 @@
     .czidesc{ font-size:12px; color:#374151; max-width:190px; }
     .czidash{ color:var(--muted); }
     .czirm{ border:none; background:transparent; color:#b91c1c; font-size:15px; cursor:pointer; }
+    .czimgbtn{ display:flex; align-items:center; justify-content:center; width:46px; height:46px; border:1px dashed var(--line); border-radius:8px; cursor:pointer; overflow:hidden; background:#fafafa; font-size:16px; color:var(--muted); }
+    .czimgbtn:hover{ border-color:#6366f1; color:#6366f1; }
+    .czimgbtn img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .cziprice{ display:flex; align-items:center; gap:4px; }
+    .czipct{ font-size:11px; color:var(--muted); white-space:nowrap; }
+    .czfxbar{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:9px 12px; margin:2px 0 10px; font-size:13px; }
+    .czfxbar b{ color:#3730a3; }
+    .czfxbar input{ width:80px; font-size:13px; padding:4px 6px; border:1px solid #c7d2fe; border-radius:7px; text-align:right; }
+    .czianalyze{ border:1px solid #6366f1; background:#eef2ff; color:#3730a3; font-weight:800; font-size:12px; padding:7px 12px; border-radius:8px; cursor:pointer; }
+    .czianalyze:disabled{ opacity:.45; cursor:not-allowed; }
     .cztag{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:20px; margin-left:8px; }
     .cztag.ok{ background:#ecfdf5; color:#065f46; }
     .cztag.over{ background:#fef2f2; color:#b91c1c; }
@@ -1858,6 +1868,11 @@
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
   //    review the line items → apply as open-to-buy "on the way" stock. ──
   var czInv = { items: [], fits: {}, prints: {}, cats: [] };
+  // ¥→₹ rate: bills come from China, so line prices are read in yuan and
+  // converted here. Remembered across uploads so the founder sets it once.
+  function czFxGet(){ var v = parseFloat(localStorage.getItem('sanki_cz_fx')); return (isFinite(v) && v>0) ? v : 12; }
+  function czFxSet(v){ if(isFinite(v) && v>0){ localStorage.setItem('sanki_cz_fx', String(v)); } }
+  var czFx = czFxGet();
   function czInvOpen(){ el('czInvoiceInput').click(); }
   function czInvUpload(files){
     if(!files || !files.length) return;
@@ -1870,7 +1885,7 @@
     fetch('/api/casuals/invoice/parse', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.success){ el('czInvBody').innerHTML=''; el('czInvSub').textContent = (d && d.error) || 'Could not read the invoice.'; return; }
       czInv.fits = d.fits||{}; czInv.prints = d.prints||{}; czInv.cats = d.cats||[];
-      czInv.items = (d.items||[]).map(function(it, i){ it._id = 'r'+i; it.include = (it.qty>0); return it; });
+      czInv.items = (d.items||[]).map(function(it, i){ it._id = 'r'+i; it.include = (it.qty>0); it._img = null; it._imgUrl = null; return it; });
       czInvRender();
     }).catch(function(){ el('czInvBody').innerHTML=''; el('czInvSub').textContent = 'Network error reading the invoice.'; });
   }
@@ -1884,59 +1899,88 @@
   function czInvRender(){
     var items = czInv.items||[];
     if(!items.length){ el('czInvBody').innerHTML = '<div class="sub" style="padding:24px 4px">No garment line items found. Try a clearer photo/PDF, or an Excel with one row per item.</div>'; el('czInvSub').textContent=''; el('czInvApply').disabled=true; el('czInvFoot').textContent=''; return; }
-    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Pick a <b>print type</b> (shirts/tees) &amp; <b>fit</b> for each, fix anything wrong, then add them as already-ordered.';
+    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Add a <b>product photo</b> per line then <b>Analyze photos</b> to auto-fill, or pick category / print / fit yourself. Set the <b>¥→₹ rate</b> so prices land in rupees.';
+    var fxBar = '<div class="czfxbar">China bill — exchange rate <b>1&nbsp;¥ =</b> <input id="czInvFx" type="number" min="0" step="0.01" value="'+czFx+'"> <b>₹</b> <span class="sub" style="margin-left:auto">Prices below are read in ¥ and converted to ₹ using this rate.</span></div>';
     var rows = items.map(function(it){
       var upper = czInvIsUpper(it.category);
       var needFit = it.include && it.category && !it.fit;
       var needPrint = it.include && upper && !it.printType;
+      var rupee = Math.round((it.unitPrice||0)*czFx);
+      var thumb = it._imgUrl ? ('<img src="'+it._imgUrl+'" alt="">') : '📷';
       return '<tr data-id="'+it._id+'"'+(it.include?'':' class="off"')+'>'+
         '<td><input type="checkbox" class="cz-inc"'+(it.include?' checked':'')+'></td>'+
+        '<td><label class="czimgbtn" title="Add product photo">'+thumb+'<input type="file" class="cz-imgin" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></td>'+
         '<td><div class="czidesc">'+escapeHtml(it.description||'—')+'</div></td>'+
         '<td><select class="cz-cat">'+czInvCatOptions(it.category)+'</select></td>'+
         '<td>'+(upper ? ('<select class="cz-print'+(needPrint?' needfit':'')+'">'+czInvPrintOptions(it.category, it.printType)+'</select>') : '<span class="czidash">—</span>')+'</td>'+
         '<td><select class="cz-fit'+(needFit?' needfit':'')+'"'+(it.category?'':' disabled')+'>'+czInvFitOptions(it.category, it.fit)+'</select></td>'+
+        '<td><input class="cz-colour" value="'+escapeHtml(it.colour||'')+'" placeholder="colour" style="width:80px"></td>'+
         '<td><input class="cz-size" value="'+escapeHtml(it.size||'')+'" style="width:56px"></td>'+
         '<td><input class="cz-qty qty" type="number" min="0" step="1" value="'+(it.qty||0)+'"></td>'+
-        '<td><input class="cz-price price" type="number" min="0" step="1" value="'+(it.unitPrice||0)+'"></td>'+
+        '<td><div class="cziprice"><input class="cz-price price" type="number" min="0" step="0.01" value="'+(it.unitPrice||0)+'"><span class="czipct" data-rupee>= ₹'+fmtINR(rupee)+'</span></div></td>'+
         '<td><button class="czirm" title="Remove line">🗑</button></td>'+
       '</tr>';
     }).join('');
-    el('czInvBody').innerHTML = '<table class="czitab"><thead><tr><th>Buy</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Size</th><th>Qty</th><th>Unit ₹</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el('czInvBody').innerHTML = fxBar + '<table class="czitab"><thead><tr><th>Buy</th><th>Photo</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Colour</th><th>Size</th><th>Qty</th><th>Unit ¥</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el('czInvFx').addEventListener('change', function(){ var v=parseFloat(this.value); if(isFinite(v)&&v>0){ czFx=v; czFxSet(v); } this.value=czFx; czInvRender(); });
     Array.prototype.forEach.call(el('czInvBody').querySelectorAll('tr[data-id]'), function(tr){
       var id = tr.getAttribute('data-id'), it = czInvGet(id); if(!it) return;
       tr.querySelector('.cz-inc').addEventListener('change', function(){ it.include = this.checked; czInvRender(); });
+      tr.querySelector('.cz-imgin').addEventListener('change', function(){ var f=this.files&&this.files[0]; if(!f) return; if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } it._img=f; it._imgUrl=URL.createObjectURL(f); czInvRender(); });
       tr.querySelector('.cz-cat').addEventListener('change', function(){ it.category = this.value||null; it.fit = null; if(!czInvIsUpper(it.category)) it.printType = null; czInvRender(); });
       var pr = tr.querySelector('.cz-print');
       if(pr) pr.addEventListener('change', function(){ it.printType = this.value||null; czInvSyncFoot(); pr.classList.toggle('needfit', it.include && czInvIsUpper(it.category) && !it.printType); });
       tr.querySelector('.cz-fit').addEventListener('change', function(){ it.fit = this.value||null; czInvSyncFoot(); tr.querySelector('.cz-fit').classList.toggle('needfit', it.include && it.category && !it.fit); });
+      tr.querySelector('.cz-colour').addEventListener('change', function(){ it.colour = this.value; });
       tr.querySelector('.cz-size').addEventListener('change', function(){ it.size = this.value; });
       tr.querySelector('.cz-qty').addEventListener('change', function(){ var v=parseInt(this.value,10); it.qty = (isFinite(v)&&v>0)?v:0; czInvSyncFoot(); });
-      tr.querySelector('.cz-price').addEventListener('change', function(){ var v=parseFloat(this.value); it.unitPrice = (isFinite(v)&&v>=0)?Math.round(v):0; });
-      tr.querySelector('.czirm').addEventListener('click', function(){ czInv.items = czInv.items.filter(function(x){ return x._id!==id; }); czInvRender(); });
+      tr.querySelector('.cz-price').addEventListener('change', function(){ var v=parseFloat(this.value); it.unitPrice = (isFinite(v)&&v>=0)?v:0; var rp=tr.querySelector('[data-rupee]'); if(rp) rp.textContent='= ₹'+fmtINR(Math.round(it.unitPrice*czFx)); czInvSyncFoot(); });
+      tr.querySelector('.czirm').addEventListener('click', function(){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } czInv.items = czInv.items.filter(function(x){ return x._id!==id; }); czInvRender(); });
     });
     czInvSyncFoot();
+  }
+  // Send every line that has a product photo to the vision brain; auto-fill
+  // category / print / fit / colour just like Fresh Procurement does.
+  function czInvAnalyze(){
+    var withImg = (czInv.items||[]).filter(function(it){ return it._img; });
+    if(!withImg.length) return;
+    var btn = el('czInvAnalyzeBtn'); if(btn){ btn.disabled=true; btn.textContent='Analyzing…'; }
+    var fd = new FormData();
+    withImg.forEach(function(it){ fd.append('images', it._img); fd.append('ids', it._id); });
+    fetch('/api/casuals/invoice/classify', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
+      if(btn){ btn.disabled=false; btn.textContent='✨ Analyze photos'; }
+      if(!d || !d.success){ el('czInvFoot').textContent = (d&&d.error)||'Could not analyze photos.'; return; }
+      var res = d.results||{};
+      Object.keys(res).forEach(function(rid){ var it=czInvGet(rid); if(!it) return; var o=res[rid];
+        if(o.category){ it.category=o.category; it.fit=o.fit||null; it.printType = czInvIsUpper(o.category) ? (o.printType||null) : null; }
+        if(o.colour && !it.colour) it.colour=o.colour; });
+      czInvRender();
+    }).catch(function(){ if(btn){ btn.disabled=false; btn.textContent='✨ Analyze photos'; } el('czInvFoot').textContent='Network error analyzing photos.'; });
   }
   function czInvSyncFoot(){
     var ready = czInvReady();
     var units = ready.reduce(function(s,it){ return s + it.qty; }, 0);
-    var spend = ready.reduce(function(s,it){ return s + it.qty*(it.unitPrice||0); }, 0);
+    var spend = ready.reduce(function(s,it){ return s + it.qty*Math.round((it.unitPrice||0)*czFx); }, 0);
     var needFit = (czInv.items||[]).filter(function(it){ return it.include && it.category && (!it.fit || (czInvIsUpper(it.category) && !it.printType)); }).length;
-    el('czInvFoot').innerHTML = ready.length
-      ? ('<b>'+ready.length+'</b> line'+(ready.length===1?'':'s')+' · <b>'+fmtINR(units)+'</b> pc on the way · ₹'+fmtINR(spend)+(needFit?(' · <b style="color:#b45309">'+needFit+' still need print/fit</b>'):''))
+    var withImg = (czInv.items||[]).filter(function(it){ return it._img; }).length;
+    var totals = ready.length
+      ? ('<b>'+ready.length+'</b> line'+(ready.length===1?'':'s')+' · total <b>'+fmtINR(units)+'</b> pc · <b>₹'+fmtINR(spend)+'</b>'+(needFit?(' · <b style="color:#b45309">'+needFit+' still need print/fit</b>'):''))
       : (needFit?('<b style="color:#b45309">'+needFit+' line'+(needFit===1?'':'s')+' need print type / fit selected</b>'):'Nothing selected yet.');
+    el('czInvFoot').innerHTML = '<button class="czianalyze" id="czInvAnalyzeBtn"'+(withImg?'':' disabled')+'>✨ Analyze photos'+(withImg?(' ('+withImg+')'):'')+'</button> <span style="margin-left:10px">'+totals+'</span>';
+    var ab = el('czInvAnalyzeBtn'); if(ab) ab.addEventListener('click', czInvAnalyze);
     el('czInvApply').disabled = ready.length===0;
   }
   function czInvApply(){
     var ready = czInvReady(); if(!ready.length) return;
     el('czInvApply').disabled = true; el('czInvApply').textContent = 'Adding…';
-    var payload = { items: ready.map(function(it){ return { category: it.category, fit: it.fit, printType: it.printType||null, qty: it.qty, unitPrice: it.unitPrice||0 }; }) };
+    var payload = { items: ready.map(function(it){ return { category: it.category, fit: it.fit, printType: it.printType||null, qty: it.qty, unitPrice: Math.round((it.unitPrice||0)*czFx) }; }) };
     fetch('/api/casuals/invoice/apply', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(payload) }).then(function(r){ return r.json(); }).then(function(d){
       el('czInvApply').textContent = 'Add to already-ordered';
       if(d && d.success){ if(d.settings) czSettings = d.settings; czInvClose(); czRenderPlan(d); }
       else { el('czInvApply').disabled=false; el('czInvFoot').textContent = (d&&d.error)||'Could not apply.'; }
     }).catch(function(){ el('czInvApply').disabled=false; el('czInvApply').textContent='Add to already-ordered'; el('czInvFoot').textContent='Network error applying.'; });
   }
-  function czInvClose(){ el('czInvModal').classList.remove('show'); czInv = { items:[], fits:{}, cats:[] }; }
+  function czInvClose(){ (czInv.items||[]).forEach(function(it){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } }); el('czInvModal').classList.remove('show'); czInv = { items:[], fits:{}, prints:{}, cats:[] }; }
 
   function czLoadPlan(){ return fetch('/api/casuals/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.analysed) czRenderPlan(d); }).catch(function(){}); }
 
