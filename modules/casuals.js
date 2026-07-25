@@ -431,6 +431,7 @@ function publicCandidate(c) {
     pattern: c.pattern || null, aiFit: c.aiFit || null, dupeOf: c.dupeOf || null,
     rating: (c.rating != null ? c.rating : null), ratingReason: c.ratingReason || null,
     includeOverride: (c.includeOverride === true || c.includeOverride === false) ? c.includeOverride : null,
+    fitOverride: c.fitOverride === true, colourOverride: c.colourOverride === true,
     included: isIncluded(c),
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
@@ -680,12 +681,14 @@ function buildPlan(cands, settings) {
     // "N more <colour> needed" gaps so the frontend can flag what to source.
     let includedIds = new Set();
     let stage1Short = {};   // fit key → [{ key, label, have, want, need }]
+    let excludeInfo = {};   // design id → { colour, kept, have, target, offList } for held designs
     const selectIncluded = (keyOf) => {
       const assigned = pool.filter(c => c.fit && isIncluded(c));
       const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
       const colKeys = Object.keys(cfg.colours || {});
       const inc = new Set();
       stage1Short = {};
+      excludeInfo = {};
       Object.keys(byKey).forEach(k => {
         const cap = byKey[k].length;                  // upload-based: this fit's own uploads
         // Group this fit's uploads by (canon) colour, best-rated first.
@@ -706,7 +709,16 @@ function buildPlan(cands, settings) {
           const want = colTarget[ck] || 0, list = byCol[ck] || [], have = list.length;
           const take = Math.min(want, have);
           for (let i = 0; i < take; i++) inc.add(list[i].id);
+          // The best `take` win their colour's slots; the rest are the overshoot,
+          // held back with a reason the buyer can read ("kept best 3 of 4").
+          for (let i = take; i < have; i++) excludeInfo[list[i].id] = { colour: ck, kept: take, have, target: want };
           if (want > have && ck !== 'Other') shorts.push({ key: ck, label: ck, have, want, need: want - have });
+        });
+        // Colours present in the fit but NOT in your colour-% list (e.g. 'Other',
+        // an unrecognised shade) get no slots — all held, flagged as off-list.
+        Object.keys(byCol).forEach(ck => {
+          if (colTarget[ck] != null) return;
+          byCol[ck].forEach(c => { excludeInfo[c.id] = { colour: ck, kept: 0, have: byCol[ck].length, target: 0, offList: true }; });
         });
         if (shorts.length) stage1Short[k] = shorts.sort((a, b) => b.need - a.need);
       });
@@ -763,7 +775,8 @@ function buildPlan(cands, settings) {
         // Drives the frontend "not included" label.
         const excludedReason = inc ? null
           : (p.includeOverride === false ? 'manual' : (enabled ? 'variety' : 'budget'));
-        return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes, included: inc, excludedReason });
+        const excludedDetail = (excludedReason === 'variety') ? (excludeInfo[p.id] || null) : null;
+        return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes, included: inc, excludedReason, excludedDetail });
       });
       designs.sort((a, b) => (b.included ? 1 : 0) - (a.included ? 1 : 0) || (b.rating || 0) - (a.rating || 0));
 
@@ -1020,6 +1033,34 @@ router.post('/api/casuals/candidate/:id/include', (req, res) => {
     ...buildPlan(active, settings) });
 });
 
+// Manual FIT / COLOUR correction for one design — the AI vision sometimes tags a
+// wide-leg as relaxed, or reads a grey as black, which skews the fit split and the
+// colour mix. body.fit (a valid fit key for the design's category, or '' to revert
+// to the AI's read) and/or body.colour (a preset colour key, or '' to revert). A
+// corrected value is flagged (fitOverride / colourOverride) so a future re-analyse
+// won't clobber it.
+router.post('/api/casuals/candidate/:id/tag', (req, res) => {
+  const s = loadStore();
+  const c = s.candidates.find(x => x.id === req.params.id);
+  if (!c) return res.status(404).json({ success: false, error: 'Not found' });
+  const b = req.body || {};
+  const spec = CAT_BY_KEY[c.category];
+  if (typeof b.fit === 'string') {
+    if (!b.fit) { c.fit = spec ? normFit(c.category, c.aiFit) : null; delete c.fitOverride; }   // back to AI
+    else if (spec && spec.fits.some(f => f.key === b.fit)) { c.fit = b.fit; c.fitOverride = true; }
+  }
+  if (typeof b.colour === 'string') {
+    if (!b.colour) { delete c.colourOverride; }   // revert flag; AI colour re-applies on next analyse
+    else { c.colour = b.colour.trim(); c.colourOverride = true; }
+  }
+  saveStore(s);
+  const settings = settingsWithDefaults(s);
+  const active = activeCands(s);
+  markDuplicates(active);
+  res.json({ success: true, settings, categories: categoryCounts(active),
+    batches: batchList(s), activeBatch: s.activeBatch, ...buildPlan(active, settings) });
+});
+
 // Clear only the ACTIVE batch's photos (the batch itself stays, now empty).
 router.post('/api/casuals/candidates/clear', (req, res) => {
   const s = loadStore();
@@ -1050,7 +1091,12 @@ router.post('/api/casuals/analyze', async (req, res) => {
       const map = await scoreBatch(items);
       slice.forEach(c => {
         const r = map[c.id];
-        if (r) { c.category = r.category; c.fit = r.fit; c.aiFit = r.aiFit; c.colour = r.colour; c.pattern = r.pattern; c.rating = r.rating; c.ratingReason = r.reason; classified++; }
+        if (r) {
+          c.category = r.category;
+          if (!c.fitOverride) { c.fit = r.fit; c.aiFit = r.aiFit; }   // keep a manual fit correction
+          if (!c.colourOverride) c.colour = r.colour;                 // keep a manual colour correction
+          c.pattern = r.pattern; c.rating = r.rating; c.ratingReason = r.reason; classified++;
+        }
       });
       saveStore(s);
     }

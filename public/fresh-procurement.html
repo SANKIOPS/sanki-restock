@@ -242,6 +242,25 @@
     .czotb .net{ font-weight:800; color:#111827; }
     .czotb .free{ color:#b45309; font-weight:700; }
     .czotb .cov{ color:#065f46; font-weight:700; }
+    /* Stage 1 — segregation review (fix fits/colours before planning) */
+    .czsegcat{ border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin:0 0 14px; background:#fff; }
+    .czsegcathd{ display:flex; align-items:baseline; gap:10px; margin:0 0 6px; }
+    .czsegcathd b{ font-size:16px; }
+    .czsegcathd .m{ font-size:12px; color:var(--muted); }
+    .czseggrp{ margin:10px 0 4px; padding:8px 0 2px; border-top:1px dashed var(--line); }
+    .czseggrp.un{ background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:8px 10px; }
+    .czseggrphd{ display:flex; align-items:baseline; gap:8px; font-weight:800; font-size:13px; margin:0 0 8px; color:#334155; }
+    .czseggrp.un .czseggrphd{ color:#b45309; }
+    .czseggrphd .m{ font-size:11px; font-weight:700; color:#fff; background:#94a3b8; border-radius:20px; padding:1px 8px; }
+    .czseggrp.un .czseggrphd .m{ background:#d97706; }
+    .czseggrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+    .czsegcell{ border:1px solid var(--line); border-radius:10px; padding:8px; display:flex; flex-direction:column; gap:6px; background:#fafafa; }
+    .czsegimg{ width:100%; aspect-ratio:3/4; border-radius:8px; overflow:hidden; background:#eee; }
+    .czsegimg img{ width:100%; height:100%; object-fit:cover; display:block; cursor:zoom-in; }
+    .czsegv{ font-size:12px; font-weight:700; color:#444; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .czsegl{ font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:#888; font-weight:700; display:flex; flex-direction:column; gap:3px; }
+    .czsegl select{ width:100%; padding:5px 6px; border:1px solid var(--line); border-radius:7px; font-size:13px; font-weight:600; color:var(--ink); background:#fff; text-transform:none; letter-spacing:0; }
+    .czsegfx{ color:#059669; font-weight:800; }
     .czporow{ display:flex; gap:14px; align-items:stretch; padding:12px 0; border-bottom:1px dashed var(--line); }
     .czporow:last-child{ border-bottom:none; }
     .czporow .cand{ flex:0 0 auto; width:96px; height:120px; border-radius:10px; overflow:hidden; position:relative; background:#eee; }
@@ -332,6 +351,24 @@
     .lbsz{ font-size:13px; font-weight:700; color:#fff; background:rgba(255,255,255,.12); border-radius:8px; padding:4px 9px; }
     .lbsz b{ color:#7dd3fc; margin-left:3px; }
     .lbpos{ margin-top:10px; font-size:11px; color:rgba(255,255,255,.5); }
+    /* Category summary block — headline budget/products/pieces + per-fit lines + expanders */
+    .czcatsum{ border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:0 0 12px; background:#fbfdfb; }
+    .czcatsum-h{ display:flex; flex-wrap:wrap; gap:10px; }
+    .czcatsum-h .cs{ display:flex; flex-direction:column; gap:1px; background:#fff; border:1px solid var(--line); border-radius:9px; padding:6px 11px; min-width:76px; }
+    .czcatsum-h .cs i{ font-style:normal; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; font-weight:700; }
+    .czcatsum-h .cs b{ font-size:15px; font-weight:800; color:var(--ink); }
+    .czcatsum-h .cs.over{ background:#fef2f2; border-color:#fecaca; } .czcatsum-h .cs.over b{ color:#b91c1c; }
+    .czcatsum-h .cs.ok{ background:#ecfdf5; border-color:#a7f3d0; } .czcatsum-h .cs.ok b{ color:#065f46; }
+    .czcatsum-h .cs.muted b{ color:#94a3b8; font-size:12px; font-weight:700; }
+    .czcatsum-fits{ margin-top:10px; display:flex; flex-direction:column; gap:4px; }
+    .czcatsum-fits .csf{ font-size:12px; color:#475569; } .czcatsum-fits .csf b{ color:var(--ink); }
+    .czexp{ margin-top:8px; border-radius:9px; padding:2px 4px; }
+    .czexp>summary{ cursor:pointer; font-size:12px; font-weight:800; padding:6px 8px; border-radius:8px; list-style:none; }
+    .czexp.need>summary{ background:#eff6ff; color:#1d4ed8; } .czexp.over>summary{ background:#fef2f2; color:#b91c1c; }
+    .czexp>summary::-webkit-details-marker{ display:none; }
+    .czexp .csrow{ font-size:12px; color:#475569; padding:5px 10px; } .czexp .csrow b{ color:var(--ink); }
+    .czexp .csneeds{ margin-top:3px; display:flex; flex-wrap:wrap; gap:5px; }
+    .czexp .csneed{ font-size:11px; font-weight:700; background:#dbeafe; color:#1e40af; border-radius:20px; padding:2px 8px; }
   </style>
 </head>
 <body>
@@ -478,7 +515,7 @@
       <div class="panel">
         <div class="czhead">
           <h2>① The Casual Feed — upload everything together</h2>
-          <p class="sub">Trousers, shirts and tees all in one pile. On <b>Segregate &amp; plan</b> the app sorts every photo into its <b>category</b> and then its <b>fit</b>.</p>
+          <p class="sub">Trousers, shirts and tees all in one pile. On <b>Segregate</b> the app sorts every photo into its <b>category</b> and <b>fit</b> — you review &amp; fix any wrong fits/colours, then <b>build the plan</b>.</p>
         </div>
         <div class="czbatchbar" id="czBatchBar">
           <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to open it; drop photos &amp; plan inside the open batch</span></div>
@@ -514,9 +551,20 @@
       <div id="czCats"></div>
 
       <div style="text-align:center; margin:22px 0">
-        <button class="btn lg" id="czAnalyzeBtn">▶ Segregate &amp; plan</button>
-        <div class="sub" style="margin-top:6px">AI sorts each photo into category &amp; fit, then distributes each category's budget hierarchy-wise: fit → size → colour.</div>
+        <button class="btn lg" id="czAnalyzeBtn">▶ Segregate photos</button>
+        <div class="sub" style="margin-top:6px">AI sorts each photo into category &amp; fit. You review &amp; fix the fits/colours, then build the buy plan.</div>
         <div id="czAnalyzeStatus" class="sub" style="margin-top:8px"></div>
+      </div>
+
+      <!-- Stage 1: segregation review — fix AI fit/colour tags before planning -->
+      <div id="czSegPanel" style="display:none">
+        <h2 style="margin:0 0 4px">Review segregation — fix fits &amp; colours</h2>
+        <p class="sub" id="czSegSummary">The AI sorted your photos by fit. Wherever it guessed wrong, correct the <b>fit</b> or <b>colour</b> — your fixes are final and won't be overwritten if you re-segregate. When it looks right, build the buy plan.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
+          <button class="btn lg" id="czPlanFromSegBtn" type="button">✓ Confirm &amp; build plan →</button>
+          <button class="btn ghost" id="czReSegBtn" type="button">↻ Re-segregate (keeps your fixes)</button>
+        </div>
+        <div id="czSeg"></div>
       </div>
 
       <!-- Plan -->
@@ -1122,7 +1170,8 @@
       // products sit INSIDE this same card, below its mix %s.
       var planCat = czLastPlan && (czLastPlan.categories||[]).filter(function(pc){ return pc.category===catKey; })[0];
       var planWrap = null, planTot = { catTotal:0, catCost:0 };
-      if(planCat){ planWrap = document.createElement('div'); planWrap.setAttribute('data-catplan',''); planWrap.style.marginTop='10px'; planTot = czCatProducts(planCat, planWrap); }
+      if(planCat){ planWrap = document.createElement('div'); planWrap.setAttribute('data-catplan',''); planWrap.style.marginTop='10px'; planTot = czCatProducts(planCat, planWrap);
+        if(c.enabled){ planWrap.insertBefore(czCatSummary(c, planTot), planWrap.firstChild); } }
       var pills = (planCat && c.enabled)
         ? '<div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(planTot.catTotal)+' pc</b></div>'+
           (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Spend<b>₹'+fmtINR(planTot.catCost)+'</b></div>'+
@@ -1446,9 +1495,9 @@
       .then(function(r){ return r.json(); }).then(function(d){
         btn.disabled = false;
         if(!d.success){ el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Failed')+'</span>'; return; }
-        var msg = '✓ Sorted '+d.classified+' photo'+(d.classified===1?'':'s'); if(d.dupes) msg += ' · '+d.dupes+' near-dupe'+(d.dupes===1?'':'s')+' set aside';
+        var msg = '✓ Sorted '+d.classified+' photo'+(d.classified===1?'':'s')+' — review the fits below, fix any wrong ones, then confirm'; if(d.dupes) msg += ' · '+d.dupes+' near-dupe'+(d.dupes===1?'':'s')+' set aside';
         el('czAnalyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">'+msg+'</span>';
-        czLoadCandidates(); czRenderPlan(d);
+        czLoadCandidates(); czRenderSegregation(d);
       }).catch(function(){ btn.disabled = false; el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">Segregation failed — try again.</span>'; });
   }
 
@@ -1551,9 +1600,10 @@
       // Render ONE fit block (its design rows + fit header + OTB strip) into
       // `into`, returning the fit's piece + cost totals for roll-up.
       function renderFit(f, into){
-        if(!f.designs || !f.designs.length) return { fitTotal:0, fitCost:0 };   // the bill lists only real photos to buy
+        if(!f.designs || !f.designs.length) return { fitTotal:0, fitCost:0, label:f.label, products:0, pieces:0, budget:f.budget||0, colCount:{}, moreProd:0, colourShort:[], overMoney:0, unassigned:!!f.unassignedFit };   // the bill lists only real photos to buy
         var fitTotal = 0, fitCost = 0; var rowsWrap = document.createElement('div');
         var excludedShown = false;
+        var incCount = 0, colCount = {};   // included design count + colour→design-count map, for the category summary
         f.designs.forEach(function(c){
           var inc = (c.included !== false);
           // ── Designs the curation gate holds BACK: shown greyed, not bought,
@@ -1564,10 +1614,16 @@
               dv.textContent = 'Not included (tap ＋ Include to add to the PO)';
               rowsWrap.appendChild(dv);
             }
-            var exReason = c.excludedReason==='variety' ? '<span class="czexwhy budget">beyond this fit\u2019s colour mix</span>'
-              : c.excludedReason==='budget' ? '<span class="czexwhy budget">fit budget full</span>'
-              : c.excludedReason==='manual' ? '<span class="czexwhy">removed by you</span>'
-              : '<span class="czexwhy">below 8/10</span>';
+            var exd = c.excludedDetail; var exReason;
+            if(c.excludedReason==='variety' && exd){
+              // Exact, plain-English reason from the backend colour-mix maths.
+              exReason = exd.offList
+                ? '<span class="czexwhy budget">'+escapeHtml(exd.colour)+' isn\u2019t in your colour mix (0%)</span>'
+                : '<span class="czexwhy budget">'+escapeHtml(exd.colour)+' over mix — kept best '+exd.target+' of '+exd.have+'</span>';
+            } else if(c.excludedReason==='variety'){ exReason = '<span class="czexwhy budget">beyond this fit\u2019s colour mix</span>'; }
+            else if(c.excludedReason==='budget'){ exReason = '<span class="czexwhy budget">fit budget full</span>'; }
+            else if(c.excludedReason==='manual'){ exReason = '<span class="czexwhy">removed by you</span>'; }
+            else { exReason = '<span class="czexwhy">held back</span>'; }
             var xrow = document.createElement('div'); xrow.className='czporow czexcl';
             xrow.innerHTML =
               '<div class="cand"'+czCandAttrs(c, cat.label, f.label, '')+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
@@ -1585,10 +1641,11 @@
           //    ✕ button to pull them out of the PO. ──
           var sets = czSetsFor(c.id);
           var qty = czQtyMap(c, cat);
-          var total = czQtyTotal(qty); fitTotal += total; catTotal += total;
+          var total = czQtyTotal(qty); fitTotal += total;   // catTotal rolled up via renderFit return (not here) to avoid double-count
+          incCount++; var _ck = c.colour||'—'; colCount[_ck] = (colCount[_ck]||0) + 1;
           // Unit ₹ stays blank until the buyer types the actual vendor price —
           // never auto-seeded from an invoice cost.
-          var price = czPriceFor(c.id), rowCost = total * price; fitCost += rowCost; catCost += rowCost;
+          var price = czPriceFor(c.id), rowCost = total * price; fitCost += rowCost;   // catCost rolled up via return
           var sizeStr = ratio.map(function(r){ return r[0]+':'+(qty[r[0]]||0); }).filter(function(s){ return +s.split(':')[1] > 0; }).join(',');
           // Every size in the set curve is shown with its own editable qty box.
           var szHtml = ratio.map(function(r){ var q = qty[r[0]]||0;
@@ -1678,9 +1735,15 @@
           into.appendChild(otb);
         }
         into.appendChild(rowsWrap);
-        return { fitTotal:fitTotal, fitCost:fitCost };
+        return { fitTotal:fitTotal, fitCost:fitCost, label:f.label, unassigned:!!f.unassignedFit,
+          products:incCount, pieces:fitTotal, budget:f.budget||0, colCount:colCount,
+          moreProd:(cat.enabled && !f.unassignedFit && typeof moreProd==='number' && moreProd>0) ? moreProd : 0,
+          colourShort:f.colourShort||[],
+          overMoney:(czPriced ? Math.max(0, fitCost - (f.budget||0)) : 0) };
       }
 
+      var fitSums = [];   // per-fit roll-ups feeding the category summary block
+      function collect(t){ if(t){ catTotal += t.fitTotal; catCost += t.fitCost; if(!t.unassigned) fitSums.push(t); } }
       if(cat.printGroups && cat.printGroups.length){
         // Uppers: category budget is split by PRINT TYPE first, then fit % inside
         // each. Render a group header per print type, then its fit blocks.
@@ -1693,14 +1756,88 @@
             (gOnOrder ? (' · <b style="color:#b45309">'+fmtINR(gOnOrder)+' on the way</b>') : '')+'</span>';
           body.appendChild(gh);
           if(!anyDesigns){ var em = document.createElement('div'); em.className='czpo-empty'; em.textContent = 'No '+g.label.toLowerCase()+' photos in this batch yet.'; body.appendChild(em); }
-          gfits.forEach(function(f){ var t = renderFit(f, body); catTotal += t.fitTotal; catCost += t.fitCost; });
+          gfits.forEach(function(f){ collect(renderFit(f, body)); });
         });
-        if(cat.unassigned){ var tu = renderFit(cat.unassigned, body); catTotal += tu.fitTotal; catCost += tu.fitCost; }
+        if(cat.unassigned){ collect(renderFit(cat.unassigned, body)); }
       } else {
-        (cat.fits||[]).forEach(function(f){ var t = renderFit(f, body); catTotal += t.fitTotal; catCost += t.fitCost; });
+        (cat.fits||[]).forEach(function(f){ collect(renderFit(f, body)); });
       }
 
-      return { catTotal: catTotal, catCost: catCost };
+      // Uppers repeat each fit label across print groups — merge same-label fits
+      // so the summary shows one line per fit (products/pieces/colours summed).
+      var merged = {}, order = [];
+      fitSums.forEach(function(t){
+        if(!t.products && !t.moreProd && !(t.colourShort||[]).length && !t.overMoney) return;   // skip truly-empty fits
+        var m = merged[t.label];
+        if(!m){ m = merged[t.label] = { label:t.label, products:0, pieces:0, budget:0, colCount:{}, moreProd:0, colourShort:[], overMoney:0 }; order.push(t.label); }
+        m.products += t.products; m.pieces += t.pieces; m.budget += t.budget; m.moreProd += t.moreProd; m.overMoney += t.overMoney;
+        Object.keys(t.colCount).forEach(function(k){ m.colCount[k] = (m.colCount[k]||0) + t.colCount[k]; });
+        (t.colourShort||[]).forEach(function(s){ m.colourShort.push(s); });
+      });
+      var fitSummary = order.map(function(l){ return merged[l]; });
+      return { catTotal: catTotal, catCost: catCost, fitSummary: fitSummary, setPc: setPc };
+  }
+
+  // ── Category summary card (sits at the TOP of a category's products) ──
+  //   Headline: allocated vs consumed budget (over/under), # products, # pieces.
+  //   Per-fit:  "Wide Leg — 3 products · 36 pcs · Black ×2, White ×1".
+  //   Two expanders: ➕ how many more products the budget can still fund (which
+  //   fits + which colours to source), and ⚠ where the plan is over budget.
+  function czCatSummary(c, planTot){
+    var wrap = document.createElement('div'); wrap.className = 'czcatsum';
+    var alloc = c.budget||0, consumed = planTot.catCost||0, pieces = planTot.catTotal||0;
+    var sums = planTot.fitSummary || [];
+    var products = sums.reduce(function(s,f){ return s + f.products; }, 0);
+    var head = '<div class="czcatsum-h">'+
+      '<span class="cs"><i>Allocated</i><b>₹'+fmtINR(alloc)+'</b></span>'+
+      (czPriced
+        ? '<span class="cs"><i>Consumed</i><b>₹'+fmtINR(consumed)+'</b></span>'+
+          (alloc ? (consumed>alloc
+             ? '<span class="cs over"><i>Overspent</i><b>₹'+fmtINR(consumed-alloc)+'</b></span>'
+             : '<span class="cs ok"><i>Left</i><b>₹'+fmtINR(alloc-consumed)+'</b></span>') : '')
+        : '<span class="cs muted"><i>Consumed</i><b>add unit ₹</b></span>')+
+      '<span class="cs"><i>Products</i><b>'+products+'</b></span>'+
+      '<span class="cs"><i>Pieces</i><b>'+fmtINR(pieces)+'</b></span>'+
+    '</div>';
+    wrap.innerHTML = head;
+    if(sums.length){
+      var lines = document.createElement('div'); lines.className='czcatsum-fits'; var any=false;
+      sums.forEach(function(f){
+        if(!f.products) return; any=true;
+        var cols = Object.keys(f.colCount).sort(function(a,b){ return f.colCount[b]-f.colCount[a]; })
+          .map(function(k){ return escapeHtml(k)+' ×'+f.colCount[k]; }).join(', ');
+        var d = document.createElement('div'); d.className='csf';
+        d.innerHTML = '<b>'+escapeHtml(f.label)+'</b> — '+f.products+' product'+(f.products===1?'':'s')+' · '+fmtINR(f.pieces)+' pcs'+(cols?(' · '+cols):'');
+        lines.appendChild(d);
+      });
+      if(any) wrap.appendChild(lines);
+    }
+    // #5 — more products the budget can still fund → which fits + colours.
+    var totMore = sums.reduce(function(s,f){ return s + (f.moreProd||0); }, 0);
+    var needFits = sums.filter(function(f){ return (f.moreProd||0)>0 || (f.colourShort||[]).length; });
+    if(totMore>0 || needFits.length){
+      var d1 = document.createElement('details'); d1.className='czexp need';
+      var inner = needFits.map(function(f){
+        var cs = (f.colourShort||[]).map(function(s){ return '<span class="csneed">'+escapeHtml(s.label)+' +'+s.need+'</span>'; }).join('');
+        return '<div class="csrow"><b>'+escapeHtml(f.label)+'</b>'+((f.moreProd||0)>0?(' — room for ~'+f.moreProd+' more'):'')+(cs?('<div class="csneeds">'+cs+'</div>'):'')+'</div>';
+      }).join('');
+      var d1sum = totMore>0 ? ('➕ Need ~'+totMore+' more product'+(totMore===1?'':'s')+' to use this budget') : '➕ Colour mix — gaps to source';
+      d1.innerHTML = '<summary>'+d1sum+'</summary>'+inner;
+      wrap.appendChild(d1);
+    }
+    // #6 — where the plan is over budget (priced only).
+    if(czPriced){
+      var totOver = Math.max(0, consumed - alloc);
+      if(totOver>0){
+        var overFits = sums.filter(function(f){ return (f.overMoney||0)>0; });
+        var d2 = document.createElement('details'); d2.className='czexp over';
+        var inner2 = overFits.map(function(f){ return '<div class="csrow"><b>'+escapeHtml(f.label)+'</b> — over by ₹'+fmtINR(f.overMoney)+'</div>'; }).join('')
+          || '<div class="csrow">Spread across fits — trim sets or lower unit prices.</div>';
+        d2.innerHTML = '<summary>⚠ Over budget by ₹'+fmtINR(totOver)+'</summary>'+inner2;
+        wrap.appendChild(d2);
+      }
+    }
+    return wrap;
   }
 
   // ── Export a printable PO, grouped by vendor, with photos + sizes + qty ──
@@ -1774,6 +1911,86 @@
     // re-render the category cards; the old standalone plan list stays empty.
     var host = el('czPlan'); if(host) host.innerHTML = '';
     czRenderCats();
+  }
+
+  // ── STAGE 1 · Segregation review ─────────────────────────────────────────
+  //   The AI's fit reads are unreliable (a wide-leg often lands under relaxed),
+  //   so before any budget maths we regroup every photo BY FIT and let the buyer
+  //   correct the fit / colour. Corrections hit /tag (flagged as overrides so a
+  //   re-segregate won't clobber them). Only on "Confirm & build plan" do we run
+  //   czRenderPlan and show the buy sheet.
+  function czSegFitBuckets(cat){
+    // → { buckets:[{label,unassigned,designs}], opts:{fitKey:label} }
+    var buckets = [], opts = {};
+    function add(f, printLabel){
+      if(!f) return;
+      if(f.key && f.label && !f.unassignedFit) opts[f.key] = f.label;
+      buckets.push({ label: (printLabel? printLabel+' · ':'') + (f.unassignedFit ? 'Fit not detected — pick one' : (f.label||'—')),
+        unassigned: !!f.unassignedFit, designs: f.designs||[] });
+    }
+    if(cat.printGroups && cat.printGroups.length){
+      cat.printGroups.forEach(function(g){ (g.fits||[]).forEach(function(f){ add(f, g.label); }); });
+      if(cat.unassigned) add(cat.unassigned, '');           // uppers: unassigned lives outside the print groups
+    } else {
+      (cat.fits||[]).forEach(function(f){ add(f, ''); });   // non-uppers: cat.fits already ends with the unassigned bucket
+    }
+    return { buckets: buckets, opts: opts };
+  }
+  function czSegFitOpts(opts, cur){
+    var html = '<option value=""'+(cur?'':' selected')+'>— unassigned —</option>';
+    Object.keys(opts).forEach(function(k){ html += '<option value="'+escapeHtml(k)+'"'+(k===cur?' selected':'')+'>'+escapeHtml(opts[k])+'</option>'; });
+    return html;
+  }
+  function czSegColourOpts(catKey, cur){
+    var cols = (czSettings && czSettings.categories[catKey] && czSettings.categories[catKey].colours) || {};
+    var keys = Object.keys(cols), has = false, html = '';
+    keys.forEach(function(k){ if(k===cur) has = true; html += '<option value="'+escapeHtml(k)+'"'+(k===cur?' selected':'')+'>'+escapeHtml(k)+'</option>'; });
+    if(cur && !has) html = '<option value="'+escapeHtml(cur)+'" selected>'+escapeHtml(cur)+' (AI)</option>' + html;   // keep the AI's read even if off-preset
+    if(!cur) html = '<option value="" selected>— colour —</option>' + html;
+    return html;
+  }
+  function czSetTag(id, patch){
+    return fetch('/api/casuals/candidate/'+encodeURIComponent(id)+'/tag', {
+      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(patch)
+    }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.success){ czRenderSegregation(d); } });
+  }
+  function czRenderSegregation(d){
+    if(!d || !d.categories){ return; }
+    czLastPlan = d;
+    if(d.settings) czSettings = d.settings;
+    el('czSegPanel').style.display = '';
+    el('czPlanPanel').style.display = 'none';
+    var host = el('czSeg'); host.innerHTML = ''; var anyCat = false;
+    (d.categories||[]).forEach(function(cat){
+      if(!cat.enabled) return; anyCat = true;
+      var bb = czSegFitBuckets(cat);
+      var totalPhotos = bb.buckets.reduce(function(s,b){ return s + b.designs.length; }, 0);
+      var card = document.createElement('div'); card.className = 'czsegcat';
+      card.innerHTML = '<div class="czsegcathd"><b>'+escapeHtml(cat.label)+'</b><span class="m">'+totalPhotos+' photo'+(totalPhotos===1?'':'s')+'</span></div>';
+      if(!totalPhotos){ var em = document.createElement('div'); em.className='sub'; em.style.padding='4px 2px 8px'; em.textContent='No photos in this category yet.'; card.appendChild(em); }
+      bb.buckets.forEach(function(b){
+        if(!b.designs.length) return;
+        var grp = document.createElement('div'); grp.className = 'czseggrp'+(b.unassigned?' un':'');
+        grp.innerHTML = '<div class="czseggrphd">'+escapeHtml(b.label)+'<span class="m">'+b.designs.length+'</span></div>';
+        var grid = document.createElement('div'); grid.className = 'czseggrid';
+        b.designs.forEach(function(c){
+          var cell = document.createElement('div'); cell.className = 'czsegcell';
+          cell.innerHTML =
+            '<div class="czsegimg"><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
+            '<div class="czsegv">'+escapeHtml(c.vendor||'Vendor —')+'</div>'+
+            '<label class="czsegl">Fit'+(c.fitOverride?' <span class="czsegfx">✓ fixed</span>':'')+
+              '<select class="czsegfit">'+czSegFitOpts(bb.opts, c.fit||'')+'</select></label>'+
+            '<label class="czsegl">Colour'+(c.colourOverride?' <span class="czsegfx">✓ fixed</span>':'')+
+              '<select class="czsegcol">'+czSegColourOpts(cat.category, c.colour||'')+'</select></label>';
+          cell.querySelector('.czsegfit').addEventListener('change', function(){ czSetTag(c.id, { fit: this.value }); });
+          cell.querySelector('.czsegcol').addEventListener('change', function(){ czSetTag(c.id, { colour: this.value }); });
+          grid.appendChild(cell);
+        });
+        grp.appendChild(grid); card.appendChild(grp);
+      });
+      host.appendChild(card);
+    });
+    if(!anyCat){ host.innerHTML = '<p class="sub" style="margin:0">No categories enabled — enable a category and set its budget above, then segregate.</p>'; }
   }
 
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
@@ -1902,6 +2119,8 @@
   ['dragleave','drop'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.remove('drag'); }); });
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);
+  el('czReSegBtn').addEventListener('click', czAnalyze);
+  el('czPlanFromSegBtn').addEventListener('click', function(){ el('czSegPanel').style.display = 'none'; czRenderPlan(czLastPlan); });
   el('czExportBtn').addEventListener('click', czExportPO);
   el('czNewBatch').addEventListener('click', czCreateBatch);
   el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });
