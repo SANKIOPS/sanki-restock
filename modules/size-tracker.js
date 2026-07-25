@@ -141,6 +141,50 @@ function normaliseVendorBasis(targetChart, vendorChart, fields) {
   return { vendorChart: out, notes };
 }
 
+// ── Fit auto-detection ────────────────────────────────────────────
+// The buyer often doesn't know which fit a China chart is until they see it.
+// So instead of forcing them to pick, score the vendor chart against EVERY
+// saved target fit for the category and pick the closest. For one candidate
+// fit: reconcile measurement basis, then for each target size take the nearest
+// vendor size's total |diff| over the fields the target defines, and average
+// that across all target sizes/fields. The fit with the smallest average gap is
+// the one the China chart really is. Returns fits ranked best-first.
+function scoreFitMatch(targetChart, vendorChart, fields) {
+  const basis = normaliseVendorBasis(targetChart, vendorChart, fields);
+  const vend = basis.vendorChart;
+  const tSizes = Object.keys(targetChart), vSizes = Object.keys(vend);
+  if (!tSizes.length || !vSizes.length) return null;
+  let total = 0, count = 0, sizesScored = 0;
+  tSizes.forEach(ts => {
+    const T = targetChart[ts];
+    const tf = fields.filter(f => T[f] != null);
+    if (!tf.length) return;
+    let best = Infinity;
+    vSizes.forEach(vs => {
+      const V = vend[vs];
+      let d = 0, present = 0;
+      tf.forEach(f => { if (V[f] != null) { d += Math.abs(V[f] - T[f]); present++; } });
+      if (present > 0 && d < best) best = d;
+    });
+    if (isFinite(best)) { total += best; count += tf.length; sizesScored++; }
+  });
+  if (!sizesScored || !count) return null;
+  return { avgPerField: Math.round((total / count) * 10) / 10, sizesScored };
+}
+// Rank every fit in this category that has a saved target chart.
+function detectFit(category, vendorChart, fields, targets) {
+  const cat = (targets && targets[category]) || {};
+  const ranked = [];
+  Object.keys(cat).forEach(fk => {
+    if (!fitExists(category, fk)) return;
+    if (!Object.keys(cat[fk] || {}).length) return;
+    const sc = scoreFitMatch(cat[fk], vendorChart, fields);
+    if (sc) ranked.push({ fit: fk, avgPerField: sc.avgPerField, sizesScored: sc.sizesScored });
+  });
+  ranked.sort((a, b) => a.avgPerField - b.avgPerField);
+  return ranked;
+}
+
 // ── Comparison engine ─────────────────────────────────────────────
 // For a target size T and a vendor size V, over the fields the TARGET defines:
 //   diff(field) = V - T   (positive = China runs bigger)
@@ -352,15 +396,31 @@ router.post('/api/sizetracker/tolerance', (req, res) => {
   res.json({ success: true, tolerance: s.tolerance });
 });
 
-// Compare a vendor's (China) chart to the stored target for (category, fit).
+// Compare a vendor's (China) chart to the stored target. The buyer no longer
+// picks the fit: if `fit` is omitted we AUTO-DETECT which saved fit the China
+// chart matches best (scored across every fit's target) and compare against it.
 router.post('/api/sizetracker/compare', (req, res) => {
   const b = req.body || {};
   const category = String(b.category || '').trim();
-  const fit = String(b.fit || '').trim();
   if (!catExists(category)) return res.status(400).json({ success: false, error: 'Unknown category' });
-  if (!fitExists(category, fit)) return res.status(400).json({ success: false, error: 'Unknown fit for this category' });
   const s = loadStore();
   const fields = fieldsFor(category);
+  const vendorChart = cleanChart(b.vendor, fields);
+
+  // Resolve the fit — either the one the caller pinned, or auto-detected.
+  let fit = String(b.fit || '').trim();
+  let detectedFit = null, fitRanking = null;
+  if (fit) {
+    if (!fitExists(category, fit)) return res.status(400).json({ success: false, error: 'Unknown fit for this category' });
+  } else {
+    if (!Object.keys(vendorChart).length) return res.status(400).json({ success: false, error: 'Enter the vendor chart so we can detect the fit.' });
+    const ranking = detectFit(category, vendorChart, fields, s.targets);
+    if (!ranking.length) return res.status(400).json({ success: false, error: 'No target charts saved for this category yet — feed at least one fit in Section 1 first.' });
+    detectedFit = ranking[0].fit;
+    fit = detectedFit;
+    fitRanking = ranking;
+  }
+
   let targetChart = (s.targets[category] && s.targets[category][fit]) || {};
   // Optional: only compare the India sizes the buyer actually wants this PO.
   if (Array.isArray(b.wanted) && b.wanted.length) {
@@ -369,7 +429,6 @@ router.post('/api/sizetracker/compare', (req, res) => {
     Object.keys(targetChart).forEach(k => { if (want.has(k)) filtered[k] = targetChart[k]; });
     targetChart = filtered;
   }
-  const vendorChart = cleanChart(b.vendor, fields);
   const unit = b.unit === 'in' ? 'in' : 'cm';
   // Tolerance arrives in the chosen display unit; normalise it to cm for the math.
   const tol = (() => {
@@ -379,7 +438,7 @@ router.post('/api/sizetracker/compare', (req, res) => {
     return Math.round(t * 10) / 10;
   })();
   const cmp = compareChartToTarget(targetChart, vendorChart, fields, tol, unit);
-  res.json({ success: true, category, fit, fields, ...cmp });
+  res.json({ success: true, category, fit, detectedFit, fitRanking, fields, ...cmp });
 });
 
 module.exports = { router, compareChartToTarget, fieldsFor, buildConfig };

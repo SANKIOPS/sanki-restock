@@ -139,16 +139,12 @@
   <!-- ── Section 2: Compare a vendor chart ────────────────────── -->
   <div class="card">
     <div class="cardhead"><span class="num">2</span><h2>Compare a vendor (China) chart for a PO</h2></div>
-    <p class="cardsub">Ask the vendor for their size chart, paste their measurements here, then hit Compare. We line every China size up against your saved target and tell you which one to source per desired size.</p>
+    <p class="cardsub">Ask the vendor for their size chart, paste their measurements here, then hit Compare. You don't pick the fit — we auto-detect which of your fits the China chart matches, then tell you which China size to source per desired size.</p>
 
     <div class="row">
       <div class="field">
         <label>Category</label>
         <select id="cCat"></select>
-      </div>
-      <div class="field">
-        <label>Fit</label>
-        <select id="cFit"></select>
       </div>
       <div class="field">
         <label>Tolerance (± <span id="cTolUnit">cm</span>)</label>
@@ -161,12 +157,7 @@
     </div>
     <p class="upnote" id="cPhotoNote">Upload the vendor's size-chart image under here and we'll read their China measurements into the grid automatically.</p>
 
-    <div id="cGridWrap"><div class="empty">Choose a category and fit to enter the vendor's chart.</div></div>
-
-    <div class="pickwrap" id="cPickWrap" style="display:none">
-      <span class="pklabel">India sizes to buy this PO</span>
-      <div class="picks" id="cPicks"></div>
-    </div>
+    <div id="cGridWrap"><div class="empty">Choose a category to enter the vendor's chart.</div></div>
 
     <p class="hint" id="cTargetNote"></p>
   </div>
@@ -311,7 +302,7 @@
   function renderVendorGrid() {
     var cat = el('cCat').value, c = catObj(cat);
     var wrap = el('cGridWrap');
-    if (!c) { wrap.innerHTML = '<div class="empty">Choose a category and fit.</div>'; el('cCompare').disabled = true; return; }
+    if (!c) { wrap.innerHTML = '<div class="empty">Choose a category.</div>'; el('cCompare').disabled = true; return; }
     var fields = c.fields;
     if (!vendorRows.length) seedVendorRows();
     var html = '<table><thead><tr><th>China size</th>';
@@ -380,48 +371,29 @@
     renderVendorGrid();
   }
 
-  // ── India sizes-to-buy picker (from the saved target chart) ──
-  function renderPicks() {
-    var cat = el('cCat').value, fit = el('cFit').value;
-    var chart = (TARGETS[cat] && TARGETS[cat][fit]) || {};
-    var sizes = Object.keys(chart);
-    var wrap = el('cPickWrap'), picks = el('cPicks');
-    if (!sizes.length) { wrap.style.display = 'none'; picks.innerHTML = ''; return; }
-    wrap.style.display = '';
-    picks.innerHTML = sizes.map(function (sz) {
-      return '<label class="pick on"><input type="checkbox" class="pkbox" value="' + esc(sz) + '" checked>' + esc(sz) + '</label>';
-    }).join('');
-    picks.querySelectorAll('.pkbox').forEach(function (b) {
-      b.addEventListener('change', function () { b.closest('.pick').classList.toggle('on', b.checked); });
-    });
-  }
-  function collectWanted() {
-    var out = [];
-    el('cPicks').querySelectorAll('.pkbox').forEach(function (b) { if (b.checked) out.push(b.value); });
-    return out;
-  }
-
+  // ── Target-charts-on-file note (fit is now auto-detected) ────
   function updateTargetNote() {
-    var cat = el('cCat').value, fit = el('cFit').value;
-    var chart = (TARGETS[cat] && TARGETS[cat][fit]) || {};
-    var n = Object.keys(chart).length;
+    var cat = el('cCat').value;
+    var fitsObj = TARGETS[cat] || {};
+    var withCharts = Object.keys(fitsObj).filter(function (fk) { return Object.keys(fitsObj[fk] || {}).length; });
     var note = el('cTargetNote');
-    if (n) note.innerHTML = '✓ Target chart on file for <b>' + esc(fitLabel(cat, fit)) + '</b>: ' + n + ' size' + (n > 1 ? 's' : '') + ' (' + esc(Object.keys(chart).join(', ')) + ').';
-    else note.innerHTML = '⚠ No target chart saved yet for <b>' + esc(fitLabel(cat, fit)) + '</b>. Fill it in Section 1 first, or Compare will have nothing to match against.';
-    renderPicks();
+    if (withCharts.length) {
+      var parts = withCharts.map(function (fk) { return esc(fitLabel(cat, fk)) + ' (' + Object.keys(fitsObj[fk]).length + ')'; });
+      note.innerHTML = '✓ We\'ll auto-detect the fit. Target charts on file for this category: <b>' + parts.join(', ') + '</b>. Just upload the China chart and hit Compare — no need to pick a fit.';
+    } else {
+      note.innerHTML = '⚠ No target charts saved for this category yet. Fill at least one fit in Section 1 first, or Compare has nothing to match against.';
+    }
   }
 
   function compare() {
-    var cat = el('cCat').value, fit = el('cFit').value;
+    var cat = el('cCat').value;
     var tol = parseFloat(el('cTol').value);
     var vendor = collectVendorChart();
     if (!Object.keys(vendor).length) { alert('Enter at least one China size with measurements.'); return; }
-    var wanted = collectWanted();
-    if (el('cPickWrap').style.display !== 'none' && !wanted.length) { alert('Tick at least one India size you want to buy.'); return; }
     el('cCompare').disabled = true; el('cCompare').textContent = 'Comparing…';
     fetch('/api/sizetracker/compare', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category: cat, fit: fit, vendor: vendor, tolerance: tol, wanted: wanted, unit: UNIT })
+      body: JSON.stringify({ category: cat, vendor: vendor, tolerance: tol, unit: UNIT })
     }).then(function (r) { return r.json(); }).then(function (j) {
       el('cCompare').disabled = false; el('cCompare').textContent = 'Compare';
       if (j && j.success) renderResults(j);
@@ -434,6 +406,16 @@
     if (!j.hasTarget) { wrap.innerHTML = '<div class="card"><div class="empty">No target chart saved for this fit yet — fill Section 1 first.</div></div>'; wrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     var html = '<div class="card"><div class="cardhead"><h2>Sourcing plan — ' + esc(j.category) + ' · ' + esc(fitLabel(j.category, j.fit)) + '</h2></div>';
     html += '<p class="cardsub" style="margin-left:0">Matched within ±' + esc(j.tolerance) + esc(j.unit || 'cm') + ' on every measured field.</p>';
+    if (j.detectedFit) {
+      var uf = (j.unit === 'in') ? (1 / 2.54) : 1;
+      var fmtGap = function (cm) { return (Math.round(cm * uf * 10) / 10) + (j.unit || 'cm'); };
+      html += '<div class="basisnote" style="background:#f0fdf4;border-color:#bbf7d0;color:#14532d">🎯 Auto-detected fit: <b>' + esc(fitLabel(j.category, j.detectedFit)) + '</b> — this China chart matches this fit of yours most closely.';
+      if (j.fitRanking && j.fitRanking.length > 1) {
+        html += '<div style="font-size:12px;margin-top:6px;color:#3f6212">Closeness across your fits (avg gap per measurement, smaller = closer): ' +
+                j.fitRanking.map(function (r, i) { var s = esc(fitLabel(j.category, r.fit)) + ' ' + fmtGap(r.avgPerField); return i === 0 ? '<b>' + s + '</b>' : s; }).join(' · ') + '</div>';
+      }
+      html += '</div>';
+    }
     if (j.basisNotes && j.basisNotes.length) {
       html += '<div class="basisnote">⚙ Auto-adjusted the China chart so it lines up with your measuring method:<ul>';
       j.basisNotes.forEach(function (n) { html += '<li>' + esc(n.note) + '</li>'; });
@@ -523,7 +505,7 @@
       if (!CFG.categories.length) { document.querySelector('.wrap').insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">No categories configured. Set up Casuals first.</div></div>'); return; }
 
       fillCatSelect(el('tCat')); fillFitSelect(el('tCat').value, el('tFit')); renderTargetGrid();
-      fillCatSelect(el('cCat')); fillFitSelect(el('cCat').value, el('cFit'));
+      fillCatSelect(el('cCat'));
       el('cTol').value = fromCm(CFG.tolerance);
       applyUnitUI();
       Array.prototype.forEach.call(el('unitSeg').querySelectorAll('.uopt'), function (b) {
@@ -541,8 +523,7 @@
         el('tPhoto').value = '';
       });
 
-      el('cCat').addEventListener('change', function () { fillFitSelect(el('cCat').value, el('cFit')); vendorRows = []; renderVendorGrid(); updateTargetNote(); });
-      el('cFit').addEventListener('change', updateTargetNote);
+      el('cCat').addEventListener('change', function () { vendorRows = []; renderVendorGrid(); updateTargetNote(); });
       el('cAddRow').addEventListener('click', addVendorRow);
       el('cCompare').addEventListener('click', compare);
       el('cPhotoBtn').addEventListener('click', function () { el('cPhoto').click(); });
