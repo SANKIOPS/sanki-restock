@@ -666,38 +666,41 @@ function buildPlan(cands, settings) {
     const hasPrint = catHasPrintTypes(catKey);
 
     // PER-FIT variety selection. Decides WHICH designs are included, honouring
-    // two axes NESTED — colour sits UNDER fit:
-    //   • fit % → how many designs each fit may source (capByKey, a per-fit-key count)
-    //   • colour % → splits THAT fit's cap into per-colour targets
+    // colour % NESTED under each fit:
+    //   • each fit's cap = the number of designs actually uploaded to it (so the
+    //     numbers always trace back to what the buyer sent — no batch-wide share).
+    //   • colour % → splits THAT fit's cap into per-colour targets.
     // Within each fit we take the best-rated designs of each colour up to that
     // colour's target. A colour with MORE uploads than its target has the extras
-    // held back; a colour with FEWER uploads than its target leaves the gap UNMET
-    // (recorded as a stage-1 sourcing shortfall — we never swap in another colour
-    // and never invent a colour that wasn't uploaded). Manual pins are always in.
-    // `keyOf` maps a design to its fit key (bare fit for trousers, "print::fit"
-    // for uppers). `stage1Short` collects, per fit key, the "N more <colour>
-    // needed" gaps so the frontend can tell the buyer what still needs sourcing.
+    // held back (excludedReason 'variety'); a colour with FEWER uploads than its
+    // target leaves the gap UNMET (recorded as a stage-1 sourcing shortfall — we
+    // never swap in another colour and never invent a colour that wasn't uploaded).
+    // Manual pins are always in. `keyOf` maps a design to its fit key (bare fit for
+    // trousers, "print::fit" for uppers). `stage1Short` collects, per fit key, the
+    // "N more <colour> needed" gaps so the frontend can flag what to source.
     let includedIds = new Set();
     let stage1Short = {};   // fit key → [{ key, label, have, want, need }]
-    const selectIncluded = (keyOf, capByKey) => {
+    const selectIncluded = (keyOf) => {
       const assigned = pool.filter(c => c.fit && isIncluded(c));
       const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
       const colKeys = Object.keys(cfg.colours || {});
       const inc = new Set();
       stage1Short = {};
       Object.keys(byKey).forEach(k => {
-        const cap = capByKey[k] || 0;                 // this fit's variety target
+        const cap = byKey[k].length;                  // upload-based: this fit's own uploads
         // Group this fit's uploads by (canon) colour, best-rated first.
         const byCol = {};
         byKey[k].forEach(c => { const ck = canonColour(c.colour, colKeys); (byCol[ck] = byCol[ck] || []).push(c); });
         Object.keys(byCol).forEach(ck => byCol[ck].sort((a, b) => (b.rating || 0) - (a.rating || 0)));
-        // Colour weights over the colours actually present in THIS fit.
-        const presentW = {};
-        Object.keys(byCol).forEach(ck => { presentW[ck] = (ck === 'Other') ? 0 : Math.max(0, +cfg.colours[ck] || 0); });
-        if (Object.values(presentW).reduce((s, v) => s + v, 0) <= 0) Object.keys(presentW).forEach(ck => presentW[ck] = 1);
-        // Split the fit cap into per-colour design targets, then keep best-rated
-        // up to each colour's target; deficient colours record a shortfall.
-        const colTarget = splitInts(cap, presentW);
+        // Split the cap over the FULL colour list — NOT just the colours present
+        // in this fit. This keeps each colour's TRUE % (30% means 30% of the cap),
+        // instead of an inflated share renormalised over only what was uploaded.
+        // A colour you set a % for but didn't upload reserves its slots and surfaces
+        // as a sourcing gap; a colour you over-sent has its extras held back.
+        const fullW = {};
+        colKeys.forEach(ck => { fullW[ck] = Math.max(0, +cfg.colours[ck] || 0); });
+        if (Object.values(fullW).reduce((s, v) => s + v, 0) <= 0) colKeys.forEach(ck => fullW[ck] = 1);
+        const colTarget = splitInts(cap, fullW);
         const shorts = [];
         Object.keys(colTarget).forEach(ck => {
           const want = colTarget[ck] || 0, list = byCol[ck] || [], have = list.length;
@@ -787,16 +790,10 @@ function buildPlan(cands, settings) {
       // Step 1 — category budget → print-type %.
       const printRows = pctRows(cfg.printTypes, k => (PRINT_BY_KEY[k] || { label: k }).label);
       const printBudget = splitInts(budget, cfg.printTypes);
-      // VARIETY: the category's assigned designs split across print×fit combos by
-      // (print % × fit %), so each combo sources its share of the total variety.
-      const assignedCount = pool.filter(c => c.fit).length;
-      const comboWeights = {};
-      printRows.forEach(pr => fitRows.forEach(fr => {
-        comboWeights[pr.key + '::' + fr.key] = (+cfg.printTypes[pr.key] || 0) * (+cfg.fits[fr.key] || 0);
-      }));
-      const comboVariety = splitInts(assignedCount, comboWeights);
-      // Decide inclusion category-wide: fit slots per print×fit combo, colour % across the category.
-      includedIds = selectIncluded(c => printBucket(c.pattern) + '::' + c.fit, comboVariety);
+      // VARIETY: each print×fit cell sources exactly the designs uploaded to it;
+      // colour % then enforces the mix within that cell (drop overshoot, flag
+      // shortfall). Print % / fit % drive the money split, not the design count.
+      includedIds = selectIncluded(c => printBucket(c.pattern) + '::' + c.fit);
       printGroups = printRows.map(pr => {
         const pb = printBudget[pr.key] || 0;
         const groupPool = pool.filter(c => c.fit && printBucket(c.pattern) === pr.key);
@@ -816,11 +813,9 @@ function buildPlan(cands, settings) {
       });
     } else {
       const fitBudget = splitInts(budget, cfg.fits);
-      // VARIETY: the category's assigned designs are split across fits by fit %.
-      const assignedCount = pool.filter(c => c.fit).length;
-      const fitVariety = splitInts(assignedCount, cfg.fits);
-      // Decide inclusion category-wide: fit slots per fit, colour % across the category.
-      includedIds = selectIncluded(c => c.fit, fitVariety);
+      // VARIETY: each fit sources exactly the designs uploaded to it; colour % then
+      // enforces the mix within that fit. Fit % drives the money split, not the count.
+      includedIds = selectIncluded(c => c.fit);
       fits = fitRows.map(fr => buildFit(fr, fitBudget[fr.key] || 0, pool.filter(c => c.fit === fr.key), fr.key));
     }
 
