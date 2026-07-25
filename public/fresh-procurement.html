@@ -283,6 +283,8 @@
     .czporow.czexcl{ opacity:.6; }
     .czporow.czexcl .cand img{ filter:grayscale(.6); }
     .czexnote{ font-size:12px; color:var(--muted); margin:4px 0 7px; font-style:italic; }
+    .czexwhy{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.3px; color:#6b7280; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:20px; padding:2px 8px; margin-left:6px; }
+    .czexwhy.budget{ color:#3730a3; background:#eef2ff; border-color:#c7d2fe; }
     .czinclbtn{ background:#065f46; color:#fff; border:0; border-radius:8px; padding:5px 12px; font-size:12px; font-weight:700; cursor:pointer; }
     .czinclbtn:hover{ background:#047857; }
     .czexclbtn{ background:transparent; border:1px solid var(--line); color:#b91c1c; border-radius:7px; padding:1px 8px; font-size:12px; font-weight:800; cursor:pointer; margin-left:6px; line-height:1.5; }
@@ -1646,14 +1648,17 @@
           if(!inc){
             if(!excludedShown){ excludedShown = true;
               var dv = document.createElement('div'); dv.className='czexhead';
-              dv.textContent = 'Not included — below 8/10 (tap ＋ Include to add to the PO)';
+              dv.textContent = 'Not included (tap ＋ Include to add to the PO)';
               rowsWrap.appendChild(dv);
             }
+            var exReason = c.excludedReason==='budget' ? '<span class="czexwhy budget">fit budget full</span>'
+              : c.excludedReason==='manual' ? '<span class="czexwhy">removed by you</span>'
+              : '<span class="czexwhy">below 8/10</span>';
             var xrow = document.createElement('div'); xrow.className='czporow czexcl';
             xrow.innerHTML =
               '<div class="cand"'+czCandAttrs(c, cat.label, f.label, '')+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
               '<div class="poinfo">'+
-                '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+'</div>'+
+                '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+exReason+'</div>'+
                 '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
                 (c.ratingReason ? '<div class="czexnote">“'+escapeHtml(c.ratingReason)+'”</div>' : '')+
                 '<button class="czinclbtn" type="button">＋ Include in PO</button>'+
@@ -1712,7 +1717,7 @@
         var fh = document.createElement('div'); fh.className='czpo-fit';
         fh.innerHTML = '<h4>'+escapeHtml(f.label)+'</h4><span class="m">'+
           (f.unassignedFit ? (f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit')
-            : ((f.includedCount!=null?f.includedCount:f.photoCount)+' in PO'+(heldBack>0?(' · <b style="color:#b45309">'+heldBack+' held back</b>'):'')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
+            : ((f.includedCount!=null?f.includedCount:f.photoCount)+' in PO'+(heldBack>0?(' · <b style="color:#b45309">'+heldBack+' held back</b>'+(f.budgetHeld>0?(' ('+f.budgetHeld+' by budget)'):'')):'')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
                (czPriced ? 'actual spend <b>₹'+fmtINR(fitCost)+'</b>' : 'budget ₹'+fmtINR(f.budget))))+'</span>';
         into.appendChild(fh);
         // Open-to-buy: net the fit's budget target against what's already ordered.

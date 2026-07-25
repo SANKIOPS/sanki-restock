@@ -585,6 +585,17 @@ function splitInts(n, weights) {
     .forEach((o, i) => { if (i < rem) base[o.k]++; });
   return base;
 }
+// Approx pieces in ONE design's baseline run — the size curve scaled to ~12,
+// mirroring the frontend "set". Lets a fit's budget decide HOW MANY designs it
+// funds (best-first) instead of spreading the money thinly across all of them.
+const RUN_BASE = 12;
+function runUnitsFor(sizesPct) {
+  const keys = Object.keys(sizesPct || {}).filter(k => (+sizesPct[k] || 0) > 0);
+  if (!keys.length) return RUN_BASE;
+  const tot = keys.reduce((s, k) => s + Math.max(0, +sizesPct[k] || 0), 0) || 1;
+  let sum = 0; keys.forEach(k => { sum += Math.max(1, Math.round((+sizesPct[k] || 0) / tot * RUN_BASE)); });
+  return sum || RUN_BASE;
+}
 // Turn a merged pct map into a normalised {key,label,pct,share} list for display.
 function pctRows(map, labelFor) {
   const tot = Object.values(map).reduce((s, v) => s + Math.max(0, +v || 0), 0) || 1;
@@ -613,6 +624,9 @@ function buildPlan(cands, settings) {
     // replaced by the vendor's real quote at PO time.
     const expPrice = Math.max(1, cfg.avgCost || spec.avgCost);
     const estUnits = enabled ? Math.round(budget / expPrice) : 0;
+    // Baseline pieces per design run — used to price a single design so each
+    // fit's budget can fund the best designs first and exclude the rest.
+    const runUnits = runUnitsFor(cfg.sizes);
 
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
@@ -633,14 +647,40 @@ function buildPlan(cands, settings) {
     // key for trousers — so legacy trouser onOrder data still resolves).
     const buildFit = (fr, fb, photos, otbKey) => {
       const fitEst = enabled && expPrice > 0 ? Math.round(fb / expPrice) : 0;
-      // The fit's BUDGET is spread evenly across the designs the CURATION GATE
-      // keeps in (rating ≥ gate, or manually included). Excluded designs get ₹0.
-      const incPhotos = photos.filter(isIncluded);
-      const idWeights = {}; incPhotos.forEach(p => idWeights[p.id] = 1);
-      const designBud = incPhotos.length ? splitInts(fb, idWeights) : {};
+      // OPEN-TO-BUY: existing POs for this exact fit — units already on the way
+      // and the money they've already consumed. Keyed by otbKey so uppers net
+      // per print-type × fit.
+      const onOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[otbKey]) || 0) : 0;
+      const orderedCost = Math.max(0, (cfg.onOrderCost && cfg.onOrderCost[otbKey]) || 0);
+      const freedBudget = enabled ? Math.round(Math.min(onOrder, fitEst) * (orderedCost > 0 ? orderedCost : expPrice)) : 0;
+      // Budget left for NEW designs = fit budget MINUS what existing POs cost.
+      const availBudget = Math.max(0, fb - freedBudget);
+
+      // BUDGET-DRIVEN CURATION. Rank the gate-passing designs best-first (manual
+      // force-ins always first), then fund them one standard run at a time until
+      // availBudget is exhausted. Designs the money can't reach drop into
+      // exclusions ("budget: fit full") — a fuller budget buys more variety, a
+      // tighter one keeps only the best. runCost ≈ one size-set at est price.
+      const runCost = Math.max(1, Math.round(expPrice * runUnits));
+      const gatePassed = photos.filter(isIncluded);
+      const ranked = gatePassed.slice().sort((a, b) => {
+        const fa = a.includeOverride === true ? 1 : 0, fb2 = b.includeOverride === true ? 1 : 0;
+        if (fa !== fb2) return fb2 - fa;                                      // forced-in first
+        const ra = a.rating != null ? a.rating : RATING_GATE, rb = b.rating != null ? b.rating : RATING_GATE;
+        return rb - ra;                                                       // then best rating
+      });
+      const affordable = enabled ? (runCost > 0 ? Math.floor(availBudget / runCost) : ranked.length) : 0;
+      const budgetIn = {};
+      ranked.forEach((p, i) => { if (i < affordable || p.includeOverride === true) budgetIn[p.id] = true; });
+
+      // The KEPT designs share availBudget evenly; excluded designs get ₹0.
+      const incList = ranked.filter(p => budgetIn[p.id]);
+      const idWeights = {}; incList.forEach(p => idWeights[p.id] = 1);
+      const designBud = incList.length ? splitInts(availBudget, idWeights) : {};
 
       const designs = photos.map(p => {
-        const inc = isIncluded(p);
+        const passedGate = isIncluded(p);
+        const inc = passedGate && !!budgetIn[p.id];
         const db = inc ? (designBud[p.id] || 0) : 0;
         const du = inc && enabled && expPrice > 0 ? Math.round(db / expPrice) : 0;
         // A design's est units fan out over the SIZE ladder (editable %).
@@ -652,26 +692,28 @@ function buildPlan(cands, settings) {
           const ca = catColourAgg[colour] = catColourAgg[colour] || { budget: 0, estUnits: 0, photos: 0 };
           ca.budget += db; ca.estUnits += du; ca.photos += 1;
         }
-        return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes });
+        // Why a design is out: manual pull, below the rating gate, or the fit's
+        // budget filled up before we reached it. Drives the frontend's label.
+        const excludedReason = inc ? null
+          : (p.includeOverride === false ? 'manual'
+            : (!passedGate ? 'rating' : 'budget'));
+        return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes, included: inc, excludedReason });
       });
       designs.sort((a, b) => (b.included ? 1 : 0) - (a.included ? 1 : 0) || (b.rating || 0) - (a.rating || 0));
 
       const fitColMap = {};
-      designs.forEach(dz => { const m = fitColMap[dz.colour] = fitColMap[dz.colour] || { budget: 0, estUnits: 0, photos: 0 }; m.budget += dz.budget; m.estUnits += dz.estUnits; m.photos += 1; });
+      designs.forEach(dz => { if (!dz.included) return; const m = fitColMap[dz.colour] = fitColMap[dz.colour] || { budget: 0, estUnits: 0, photos: 0 }; m.budget += dz.budget; m.estUnits += dz.estUnits; m.photos += 1; });
       const colours = Object.keys(fitColMap).map(col => ({ key: col, label: col, budget: fitColMap[col].budget, estUnits: fitColMap[col].estUnits, photos: fitColMap[col].photos }))
         .sort((a, b) => b.budget - a.budget);
 
-      // OPEN-TO-BUY netting, keyed by otbKey so uppers net per print-type × fit.
-      const onOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[otbKey]) || 0) : 0;
-      const orderedCost = Math.max(0, (cfg.onOrderCost && cfg.onOrderCost[otbKey]) || 0);
       const netUnits = Math.max(0, fitEst - onOrder);
-      const freedBudget = enabled ? Math.round(Math.min(onOrder, fitEst) * (orderedCost > 0 ? orderedCost : expPrice)) : 0;
 
       return {
         key: fr.key, label: fr.label, pct: fr.pct, share: fr.share, otbKey,
-        budget: fb, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
+        budget: fb, availBudget, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
         target: fitEst, onOrder, orderedCost, netUnits, freedBudget,
-        photoCount: photos.length, includedCount: incPhotos.length, designs, colours, unassignedFit: false
+        budgetHeld: gatePassed.length - incList.length,
+        photoCount: photos.length, includedCount: incList.length, designs, colours, unassignedFit: false
       };
     };
 
