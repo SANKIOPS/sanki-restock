@@ -1582,6 +1582,8 @@
   // (czPriced) AND both a trouser and an upper category are enabled.
   function czRenderCouple(d){
     var host = el('czCouple'); if(!host) return;
+    // TEMPORARILY DISABLED — coupling panel hidden while its calculations are reviewed.
+    host.style.display = 'none'; host.innerHTML = ''; return;
     var hasT = (d && d.categories || []).some(function(c){ return c.category === 'Trouser' && c.enabled; });
     var hasU = (d && d.categories || []).some(function(c){ return CZ_UPPERS.indexOf(c.category) >= 0 && c.enabled; });
     if(!czPriced || !hasT || !hasU){ host.style.display = 'none'; host.innerHTML = ''; return; }
