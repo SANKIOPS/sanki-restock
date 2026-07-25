@@ -201,6 +201,45 @@ async function computeSignature(filePath) {
 }
 function hamming(a, b) { if (!a || !b || a.length !== b.length) return 999; let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; }
 function colourDist(a, b) { if (!a || !b) return 999; return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2); }
+// Vision returns a FREE-FORM colour word ("Cream", "Charcoal", "Army Green"),
+// but the buy plan's colour % is a fixed preset list per category. This maps an
+// observed word to the nearest preset key so colour % can shape the buy the same
+// way fit % does. Returns 'Other' when nothing sensible matches (weight 0 — such
+// designs only fill leftover slots). `keys` = this category's preset colour keys.
+const COLOUR_SYN = [
+  { canon: 'black',        toks: ['black', 'jet', 'onyx'] },
+  { canon: 'off white',    toks: ['off white', 'offwhite', 'cream', 'ecru', 'ivory', 'bone', 'oatmeal', 'chalk'] },
+  { canon: 'white',        toks: ['white', 'optic'] },
+  { canon: 'charcoal grey',toks: ['charcoal', 'grey', 'gray', 'graphite', 'slate', 'ash', 'gunmetal'] },
+  { canon: 'olive green',  toks: ['olive', 'army', 'military', 'fatigue', 'moss', 'forest', 'sage', 'green'] },
+  { canon: 'beige',        toks: ['beige', 'khaki', 'sand', 'tan', 'camel', 'biscuit', 'stone', 'nude'] },
+  { canon: 'brown',        toks: ['brown', 'coffee', 'chocolate', 'mocha', 'walnut', 'tobacco', 'rust', 'maroon'] },
+  { canon: 'navy blue',    toks: ['navy', 'midnight', 'indigo'] },
+  { canon: 'sky blue',     toks: ['sky', 'powder blue', 'baby blue', 'light blue'] },
+  { canon: 'blue',         toks: ['blue', 'denim', 'cobalt', 'royal', 'teal'] }
+];
+function canonColour(observed, keys) {
+  if (!Array.isArray(keys) || !keys.length) return 'Other';
+  const o = String(observed || '').toLowerCase().trim();
+  if (!o) return 'Other';
+  const lk = keys.map(k => ({ key: k, low: k.toLowerCase() }));
+  const findKey = concept => {                        // concept is a lowercase colour word
+    let m = lk.find(k => k.low === concept); if (m) return m.key;
+    m = lk.find(k => k.low.includes(concept) || concept.includes(k.low)); if (m) return m.key;
+    return null;
+  };
+  const direct = lk.find(k => o === k.low || o.includes(k.low)); if (direct) return direct.key;
+  let concept = null;
+  for (const s of COLOUR_SYN) { if (s.toks.some(t => o.includes(t))) { concept = s.canon; break; } }
+  if (concept) {
+    let hit = findKey(concept); if (hit) return hit;
+    // concept known but this category lacks that exact key — bridge close cousins.
+    const alt = { 'olive green': 'olive', 'olive': 'olive green', 'white': 'off white', 'off white': 'white', 'blue': 'navy blue', 'navy blue': 'sky blue' }[concept];
+    if (alt) { hit = findKey(alt); if (hit) return hit; }
+  }
+  const tokHit = lk.find(k => k.low.split(/\s+/).some(t => o.includes(t))); if (tokHit) return tokHit.key;
+  return 'Other';
+}
 // Two candidates are duplicates only if they are the SAME picture: identical
 // file bytes (sha) OR a pixel-identical re-encode (phash matches exactly with
 // no colour drift). Anything less — a similar style, another colourway, a
@@ -649,12 +688,30 @@ function buildPlan(cands, settings) {
       const ranked = gatePassed.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
       const cap = (varietyCap == null) ? ranked.length : varietyCap;
       const budgetIn = {};
-      let kept = 0;
-      ranked.forEach(p => {
-        if (p.includeOverride === true) { budgetIn[p.id] = true; return; } // founder pinned it
-        if (!enabled) return;                                              // category off
-        if (kept < cap) { budgetIn[p.id] = true; kept++; }                 // best-rated within share
-      });
+      // Manual pins are always in and don't consume the variety cap.
+      ranked.forEach(p => { if (p.includeOverride === true) budgetIn[p.id] = true; });
+      if (enabled) {
+        // Neutral designs compete for this fit's `cap` variety slots. The slots
+        // split ACROSS COLOURS by colour % (same idea as fit %), but ONLY over the
+        // colours actually present here — so a fit with only black uploads puts all
+        // its slots on black instead of leaving them empty.
+        const neutral = ranked.filter(p => p.includeOverride !== true);
+        const colourKeys = Object.keys(cfg.colours || {});
+        const canonOf = p => canonColour(p.colour, colourKeys);
+        const presentW = {};
+        neutral.forEach(p => { const ck = canonOf(p); if (presentW[ck] == null) presentW[ck] = (ck === 'Other') ? 0 : Math.max(0, +cfg.colours[ck] || 0); });
+        if (Object.values(presentW).reduce((s, v) => s + v, 0) <= 0) Object.keys(presentW).forEach(k => presentW[k] = 1);
+        const colourSlots = splitInts(cap, presentW);
+        const byColour = {}; neutral.forEach(p => { const ck = canonOf(p); (byColour[ck] = byColour[ck] || []).push(p); }); // best-first within colour
+        let kept = 0;
+        Object.keys(colourSlots).forEach(ck => {
+          let n = colourSlots[ck]; const arr = byColour[ck] || [];
+          for (let i = 0; i < arr.length && n > 0; i++) { budgetIn[arr[i].id] = true; kept++; n--; }
+        });
+        // Colours that ran out of designs free up slots — hand them to the next
+        // best-rated designs regardless of colour, so the fit still fills its share.
+        for (let i = 0, left = cap - kept; i < neutral.length && left > 0; i++) { if (!budgetIn[neutral[i].id]) { budgetIn[neutral[i].id] = true; left--; } }
+      }
 
       // The KEPT designs share availBudget evenly; excluded designs get ₹0.
       const incList = ranked.filter(p => budgetIn[p.id]);
