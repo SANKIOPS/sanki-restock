@@ -1556,9 +1556,8 @@
           var sets = czSetsFor(c.id);
           var qty = czQtyMap(c, cat);
           var total = czQtyTotal(qty); fitTotal += total; catTotal += total;
-          // Auto-pricing: if this fit has a real invoice unit ₹ (from already-ordered
-          // stock) and the buyer hasn't typed a price yet, seed it as the default.
-          if(czPrice[c.id]==null && f.orderedCost>0) czPrice[c.id] = f.orderedCost;
+          // Unit ₹ stays blank until the buyer types the actual vendor price —
+          // never auto-seeded from an invoice cost.
           var price = czPriceFor(c.id), rowCost = total * price; fitCost += rowCost; catCost += rowCost;
           var sizeStr = ratio.map(function(r){ return r[0]+':'+(qty[r[0]]||0); }).filter(function(s){ return +s.split(':')[1] > 0; }).join(',');
           // Every size in the set curve is shown with its own editable qty box.
