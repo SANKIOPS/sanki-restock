@@ -298,6 +298,7 @@
     .czexnote{ font-size:12px; color:var(--muted); margin:4px 0 7px; font-style:italic; }
     .czexwhy{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.3px; color:#6b7280; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:20px; padding:2px 8px; margin-left:6px; }
     .czexwhy.budget{ color:#3730a3; background:#eef2ff; border-color:#c7d2fe; }
+    .czexnote2{ display:block; font-size:11.5px; line-height:1.45; color:#4b5563; margin:5px 0 2px; }
     .czinclbtn{ background:#065f46; color:#fff; border:0; border-radius:8px; padding:5px 12px; font-size:12px; font-weight:700; cursor:pointer; }
     .czinclbtn:hover{ background:#047857; }
     .czexclbtn{ background:transparent; border:1px solid var(--line); color:#b91c1c; border-radius:7px; padding:1px 8px; font-size:12px; font-weight:800; cursor:pointer; margin-left:6px; line-height:1.5; }
@@ -1015,6 +1016,17 @@
     else { cap.classList.remove('rich'); cap.textContent = (it.cap||'')+'  ('+(lbIdx+1)+' / '+lbList.length+')'; }
   }
   function openLightbox(img){
+    // Segregation-review photos (.czsegimg img) aren't `.cand` cells, so give
+    // them their own scope + caption path — scroll through the whole review card.
+    var segCell = img.closest('.czsegcell');
+    if(segCell){
+      var sscope = img.closest('.czsegcat') || document.getElementById('czSeg') || document.body;
+      var simgs = Array.prototype.slice.call(sscope.querySelectorAll('.czsegimg img'));
+      lbList = simgs.map(function(im){ var cell = im.closest('.czsegcell');
+        var vt = cell && cell.querySelector('.czsegv'); return { src: im.getAttribute('src'), cap: (vt?vt.textContent:''), rich:false, d:null }; });
+      lbIdx = Math.max(0, simgs.indexOf(img));
+      lbShow(); el('lightbox').classList.add('show'); return;
+    }
     // Scope scrolling to ONE category section when we're inside the plan grid;
     // otherwise fall back to the whole grid (candidate feed / buy sheet).
     var scope = img.closest('.catsec') || img.closest('.candGrid, #candGrid, #planGrid, #buySheet') || img.closest('body');
@@ -1029,7 +1041,7 @@
   function closeLightbox(){ el('lightbox').classList.remove('show'); el('lbImg').src=''; lbList=[]; }
   function lbStep(d){ if(!lbList.length) return; lbIdx = (lbIdx + d + lbList.length) % lbList.length; lbShow(); }
   document.addEventListener('click', function(e){
-    var img = e.target.closest ? e.target.closest('.cand img') : null;
+    var img = e.target.closest ? e.target.closest('.cand img, .czsegimg img') : null;
     if(!img) return;
     openLightbox(img);
   });
@@ -1617,9 +1629,18 @@
             var exd = c.excludedDetail; var exReason;
             if(c.excludedReason==='variety' && exd){
               // Exact, plain-English reason from the backend colour-mix maths.
-              exReason = exd.offList
-                ? '<span class="czexwhy budget">'+escapeHtml(exd.colour)+' isn\u2019t in your colour mix (0%)</span>'
-                : '<span class="czexwhy budget">'+escapeHtml(exd.colour)+' over mix — kept best '+exd.target+' of '+exd.have+'</span>';
+              // Spell out WHY so the buyer isn't left guessing what "over mix" means.
+              var _c = escapeHtml(exd.colour);
+              if(exd.offList){
+                exReason = '<span class="czexwhy budget">'+_c+' held back</span>'+
+                  '<span class="czexnote2">'+_c+' isn\u2019t one of this category\u2019s colour-mix colours, so it wasn\u2019t bought. Set a % for it in the colour mix, or tap ＋ Include to buy it anyway.</span>';
+              } else if(exd.target===0){
+                exReason = '<span class="czexwhy budget">'+_c+' held back</span>'+
+                  '<span class="czexnote2">Your colour mix leaves no room for '+_c+' in this fit (kept 0 of '+exd.have+'). Raise '+_c+'\u2019s % or tap ＋ Include to buy it anyway.</span>';
+              } else {
+                exReason = '<span class="czexwhy budget">'+_c+' held back ('+(exd.have-exd.target)+' extra)</span>'+
+                  '<span class="czexnote2">Your colour mix wants '+exd.target+' '+_c+' in this fit but you sent '+exd.have+'. Kept the '+exd.target+' best-rated; the other '+(exd.have-exd.target)+' are held. Tap ＋ Include to buy anyway.</span>';
+              }
             } else if(c.excludedReason==='variety'){ exReason = '<span class="czexwhy budget">beyond this fit\u2019s colour mix</span>'; }
             else if(c.excludedReason==='budget'){ exReason = '<span class="czexwhy budget">fit budget full</span>'; }
             else if(c.excludedReason==='manual'){ exReason = '<span class="czexwhy">removed by you</span>'; }
@@ -1941,6 +1962,16 @@
     Object.keys(opts).forEach(function(k){ html += '<option value="'+escapeHtml(k)+'"'+(k===cur?' selected':'')+'>'+escapeHtml(opts[k])+'</option>'; });
     return html;
   }
+  // Print-type labels (Shirts & T-shirts). Mirrors PRINT_TYPES in casuals.js.
+  var CZ_PRINT_LABELS = { solid:'Solid (plain / logo)', printed:'Printed / Embroidered', checks:'Checks / Stripes & rest' };
+  function czSegPrintOpts(catKey, cur){
+    var pts = (czSettings && czSettings.categories[catKey] && czSettings.categories[catKey].printTypes) || {};
+    var keys = Object.keys(pts), has = false, html = '';
+    keys.forEach(function(k){ if(k===cur) has = true; html += '<option value="'+escapeHtml(k)+'"'+(k===cur?' selected':'')+'>'+escapeHtml(CZ_PRINT_LABELS[k]||k)+'</option>'; });
+    if(cur && !has) html = '<option value="'+escapeHtml(cur)+'" selected>'+escapeHtml(CZ_PRINT_LABELS[cur]||cur)+' (AI)</option>' + html;   // keep the AI's read even if off-preset
+    if(!cur) html = '<option value="" selected>— print —</option>' + html;
+    return html;
+  }
   function czSegColourOpts(catKey, cur){
     var cols = (czSettings && czSettings.categories[catKey] && czSettings.categories[catKey].colours) || {};
     var keys = Object.keys(cols), has = false, html = '';
@@ -1978,12 +2009,16 @@
           cell.innerHTML =
             '<div class="czsegimg"><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
             '<div class="czsegv">'+escapeHtml(c.vendor||'Vendor —')+'</div>'+
+            (cat.hasPrint ? '<label class="czsegl">Print'+(c.printOverride?' <span class="czsegfx">✓ fixed</span>':'')+
+              '<select class="czsegprint">'+czSegPrintOpts(cat.category, c.printKey||'')+'</select></label>' : '')+
             '<label class="czsegl">Fit'+(c.fitOverride?' <span class="czsegfx">✓ fixed</span>':'')+
               '<select class="czsegfit">'+czSegFitOpts(bb.opts, c.fit||'')+'</select></label>'+
             '<label class="czsegl">Colour'+(c.colourOverride?' <span class="czsegfx">✓ fixed</span>':'')+
               '<select class="czsegcol">'+czSegColourOpts(cat.category, c.colour||'')+'</select></label>';
           cell.querySelector('.czsegfit').addEventListener('change', function(){ czSetTag(c.id, { fit: this.value }); });
           cell.querySelector('.czsegcol').addEventListener('change', function(){ czSetTag(c.id, { colour: this.value }); });
+          var _pf = cell.querySelector('.czsegprint');
+          if(_pf) _pf.addEventListener('change', function(){ czSetTag(c.id, { print: this.value }); });
           grid.appendChild(cell);
         });
         grp.appendChild(grid); card.appendChild(grp);

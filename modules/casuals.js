@@ -158,6 +158,9 @@ function printBucket(pattern) {
   if (/print|embroid|graphic/.test(t)) return 'printed';
   return 'checks';
 }
+// Effective print bucket for a candidate: a manual segregation fix (printOverride)
+// wins over the AI's pattern read, mirroring how fitOverride / colourOverride work.
+function printKeyOf(c) { return (c && c.printOverride && c.printType) ? c.printType : printBucket(c && c.pattern); }
 
 // Match a detected fit phrase to one of a category's canonical fits by keyword.
 function normFit(catKey, raw) {
@@ -432,6 +435,7 @@ function publicCandidate(c) {
     rating: (c.rating != null ? c.rating : null), ratingReason: c.ratingReason || null,
     includeOverride: (c.includeOverride === true || c.includeOverride === false) ? c.includeOverride : null,
     fitOverride: c.fitOverride === true, colourOverride: c.colourOverride === true,
+    printKey: printKeyOf(c), printOverride: c.printOverride === true,
     included: isIncluded(c),
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
@@ -806,10 +810,10 @@ function buildPlan(cands, settings) {
       // VARIETY: each print×fit cell sources exactly the designs uploaded to it;
       // colour % then enforces the mix within that cell (drop overshoot, flag
       // shortfall). Print % / fit % drive the money split, not the design count.
-      includedIds = selectIncluded(c => printBucket(c.pattern) + '::' + c.fit);
+      includedIds = selectIncluded(c => printKeyOf(c) + '::' + c.fit);
       printGroups = printRows.map(pr => {
         const pb = printBudget[pr.key] || 0;
-        const groupPool = pool.filter(c => c.fit && printBucket(c.pattern) === pr.key);
+        const groupPool = pool.filter(c => c.fit && printKeyOf(c) === pr.key);
         // Step 2 — this print-type's slice → fit %.
         const fitBudgetG = splitInts(pb, cfg.fits);
         const gfits = fitRows.map(fr => buildFit(fr, fitBudgetG[fr.key] || 0, groupPool.filter(c => c.fit === fr.key), pr.key + '::' + fr.key));
@@ -1052,6 +1056,10 @@ router.post('/api/casuals/candidate/:id/tag', (req, res) => {
   if (typeof b.colour === 'string') {
     if (!b.colour) { delete c.colourOverride; }   // revert flag; AI colour re-applies on next analyse
     else { c.colour = b.colour.trim(); c.colourOverride = true; }
+  }
+  if (typeof b.print === 'string' && catHasPrintTypes(c.category)) {
+    if (!b.print) { delete c.printType; delete c.printOverride; }   // back to the AI's pattern read
+    else if (spec.printTypes.some(p => p.key === b.print)) { c.printType = b.print; c.printOverride = true; }
   }
   saveStore(s);
   const settings = settingsWithDefaults(s);
