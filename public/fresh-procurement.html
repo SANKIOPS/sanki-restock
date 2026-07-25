@@ -1535,7 +1535,8 @@
               dv.textContent = 'Not included (tap ＋ Include to add to the PO)';
               rowsWrap.appendChild(dv);
             }
-            var exReason = c.excludedReason==='budget' ? '<span class="czexwhy budget">fit budget full</span>'
+            var exReason = c.excludedReason==='variety' ? '<span class="czexwhy budget">beyond this fit’s share</span>'
+              : c.excludedReason==='budget' ? '<span class="czexwhy budget">fit budget full</span>'
               : c.excludedReason==='manual' ? '<span class="czexwhy">removed by you</span>'
               : '<span class="czexwhy">below 8/10</span>';
             var xrow = document.createElement('div'); xrow.className='czporow czexcl';
@@ -1600,7 +1601,7 @@
         var fh = document.createElement('div'); fh.className='czpo-fit';
         fh.innerHTML = '<h4>'+escapeHtml(f.label)+'</h4><span class="m">'+
           (f.unassignedFit ? (f.photoCount+' photo'+(f.photoCount===1?'':'s')+' — assign a fit')
-            : ((f.includedCount!=null?f.includedCount:f.photoCount)+' in PO'+(heldBack>0?(' · <b style="color:#b45309">'+heldBack+' held back</b>'+(f.budgetHeld>0?(' ('+f.budgetHeld+' by budget)'):'')):'')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
+            : ((f.includedCount!=null?f.includedCount:f.photoCount)+' in PO'+(heldBack>0?(' · <b style="color:#b45309">'+heldBack+' beyond share</b>'):'')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
                (czPriced ? 'actual spend <b>₹'+fmtINR(fitCost)+'</b>' : 'budget ₹'+fmtINR(f.budget))))+'</span>';
         into.appendChild(fh);
         // Open-to-buy: net the fit's budget target against what's already ordered.

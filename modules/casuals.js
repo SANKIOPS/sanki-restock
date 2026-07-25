@@ -629,7 +629,7 @@ function buildPlan(cands, settings) {
     // Build ONE fit block. `fb` is this fit's rupee budget, `photos` its designs,
     // `otbKey` the open-to-buy key (composite "print::fit" for uppers, bare fit
     // key for trousers — so legacy trouser onOrder data still resolves).
-    const buildFit = (fr, fb, photos, otbKey) => {
+    const buildFit = (fr, fb, photos, otbKey, varietyCap) => {
       const fitEst = enabled && expPrice > 0 ? Math.round(fb / expPrice) : 0;
       // OPEN-TO-BUY: existing POs for this exact fit — units already on the way
       // and the money they've already consumed. Keyed by otbKey so uppers net
@@ -640,14 +640,21 @@ function buildPlan(cands, settings) {
       // Budget left for NEW designs = fit budget MINUS what existing POs cost.
       const availBudget = Math.max(0, fb - freedBudget);
 
-      // INCLUDE EVERYTHING. No rating gate, no budget-based dropping: every design
-      // that isn't manually removed is sourced, and the fit's budget just splits
-      // across them by the size percentages. (Sorting by rating only orders the
-      // display, it never includes or excludes.)
+      // VARIETY BY PERCENTAGE. The fit % now controls how many DESIGNS (variety)
+      // this fit sources: varietyCap = its share of the category's design count.
+      // We keep the best-rated designs up to that cap and hold the rest back.
+      // Manually forced designs (includeOverride === true) are always kept, even
+      // beyond the cap. Rating only ranks WHICH designs win the limited slots.
       const gatePassed = photos.filter(isIncluded);
       const ranked = gatePassed.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      const cap = (varietyCap == null) ? ranked.length : varietyCap;
       const budgetIn = {};
-      ranked.forEach(p => { if (enabled || p.includeOverride === true) budgetIn[p.id] = true; });
+      let kept = 0;
+      ranked.forEach(p => {
+        if (p.includeOverride === true) { budgetIn[p.id] = true; return; } // founder pinned it
+        if (!enabled) return;                                              // category off
+        if (kept < cap) { budgetIn[p.id] = true; kept++; }                 // best-rated within share
+      });
 
       // The KEPT designs share availBudget evenly; excluded designs get ₹0.
       const incList = ranked.filter(p => budgetIn[p.id]);
@@ -668,10 +675,11 @@ function buildPlan(cands, settings) {
           const ca = catColourAgg[colour] = catColourAgg[colour] || { budget: 0, estUnits: 0, photos: 0 };
           ca.budget += db; ca.estUnits += du; ca.photos += 1;
         }
-        // A design is only ever out now if the founder pulled it, or its whole
-        // category is turned off. Rating never excludes. Drives the frontend label.
+        // A design is out because: the founder pulled it ('manual'), it fell
+        // outside this fit's variety share ('variety'), or the category is off.
+        // Drives the frontend "not included" label.
         const excludedReason = inc ? null
-          : (p.includeOverride === false ? 'manual' : 'budget');
+          : (p.includeOverride === false ? 'manual' : (enabled ? 'variety' : 'budget'));
         return Object.assign(publicCandidate(p), { budget: db, estUnits: du, colour, sizes, included: inc, excludedReason });
       });
       designs.sort((a, b) => (b.included ? 1 : 0) - (a.included ? 1 : 0) || (b.rating || 0) - (a.rating || 0));
@@ -697,12 +705,20 @@ function buildPlan(cands, settings) {
       // Step 1 — category budget → print-type %.
       const printRows = pctRows(cfg.printTypes, k => (PRINT_BY_KEY[k] || { label: k }).label);
       const printBudget = splitInts(budget, cfg.printTypes);
+      // VARIETY: the category's assigned designs split across print×fit combos by
+      // (print % × fit %), so each combo sources its share of the total variety.
+      const assignedCount = pool.filter(c => c.fit).length;
+      const comboWeights = {};
+      printRows.forEach(pr => fitRows.forEach(fr => {
+        comboWeights[pr.key + '::' + fr.key] = (+cfg.printTypes[pr.key] || 0) * (+cfg.fits[fr.key] || 0);
+      }));
+      const comboVariety = splitInts(assignedCount, comboWeights);
       printGroups = printRows.map(pr => {
         const pb = printBudget[pr.key] || 0;
         const groupPool = pool.filter(c => c.fit && printBucket(c.pattern) === pr.key);
         // Step 2 — this print-type's slice → fit %.
         const fitBudgetG = splitInts(pb, cfg.fits);
-        const gfits = fitRows.map(fr => buildFit(fr, fitBudgetG[fr.key] || 0, groupPool.filter(c => c.fit === fr.key), pr.key + '::' + fr.key));
+        const gfits = fitRows.map(fr => buildFit(fr, fitBudgetG[fr.key] || 0, groupPool.filter(c => c.fit === fr.key), pr.key + '::' + fr.key, comboVariety[pr.key + '::' + fr.key] || 0));
         fits = fits.concat(gfits);   // flat list too, for export / roll-ups
         return {
           key: pr.key, label: pr.label, pct: pr.pct, share: pr.share, budget: pb,
@@ -716,7 +732,10 @@ function buildPlan(cands, settings) {
       });
     } else {
       const fitBudget = splitInts(budget, cfg.fits);
-      fits = fitRows.map(fr => buildFit(fr, fitBudget[fr.key] || 0, pool.filter(c => c.fit === fr.key), fr.key));
+      // VARIETY: the category's assigned designs are split across fits by fit %.
+      const assignedCount = pool.filter(c => c.fit).length;
+      const fitVariety = splitInts(assignedCount, cfg.fits);
+      fits = fitRows.map(fr => buildFit(fr, fitBudget[fr.key] || 0, pool.filter(c => c.fit === fr.key), fr.key, fitVariety[fr.key] || 0));
     }
 
     // Designs the AI couldn't assign a fit to — shown at the end so the founder
