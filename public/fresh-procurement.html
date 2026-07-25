@@ -45,6 +45,18 @@
     .czbchip.spend{ background:#ecfdf3; border-color:#a7e3c3; color:#065f46; }
     .czbchip.warn{ background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
     .czbchip.muted{ background:#f6f7f6; color:var(--muted); }
+    .czcpl{ background:#eef2ff; border:1px solid #c7d2fe; border-radius:12px; padding:14px 16px; margin:0 0 14px; }
+    .czcpl h4{ margin:0 0 4px; font-size:14px; color:#3730a3; }
+    .czcpl .cx{ display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin-top:10px; }
+    .czcpl .cf{ display:flex; align-items:center; gap:6px; font-size:13px; color:#3730a3; }
+    .czcpl input{ width:78px; padding:6px 8px; border:1px solid #c7d2fe; border-radius:8px; font-size:14px; text-align:right; }
+    .czcpl input.rat{ width:64px; }
+    .czcpl button{ background:#4f46e5; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+    .czcpl button.gh{ background:#fff; color:#4f46e5; border:1px solid #c7d2fe; }
+    .czcpl .out{ margin-top:10px; font-size:13px; color:#1e293b; }
+    .czcpl .out b{ color:#3730a3; }
+    .czcpl .warn{ color:#b91c1c; font-weight:600; }
+    .czcpl .ok{ color:#065f46; font-weight:600; }
     .czbcaret{ flex:0 0 auto; font-size:12px; color:var(--muted); width:14px; text-align:center; }
     .czbbody{ border-top:1px solid var(--line); padding:12px 14px; background:#fbfdfb; }
     .czphotos-tog{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:#374151;
@@ -505,6 +517,7 @@
       <div id="czPlanPanel" style="display:none">
         <h2 style="margin:0 0 4px">Casual buy plan</h2>
         <p class="sub" id="czPlanSummary"></p>
+        <div id="czCouple" style="display:none"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
           <button class="btn" id="czExportBtn" type="button" style="display:none">⤓ Export PO</button>
           <button class="btn ghost" id="czRepriceBtn" type="button" style="display:none">↻ Re-analyse budget (actual prices)</button>
@@ -1466,6 +1479,120 @@
   function czPriceFor(id){ var v = czPrice[id]; return (v==null||v<0)?0:v; }
   function czRowCost(c, cat){ return czQtyTotal(czQtyMap(c, cat)) * czPriceFor(c.id); }
 
+  // ── Trouser ↔ Upper unit coupling (PO stage, after real prices) ──────
+  // We sell trousers + uppers as SETS. So trouser units should track upper
+  // units at a fixed ratio (Uppers = Trousers × ratio; default 1.4 = 40% extra
+  // uppers for solo sale). The buyer sets units on ONE side; the other auto-
+  // fills at the ratio. The RATIO IS SACRED — never bent to fit money. If real-
+  // price spend blows past budget + ₹20k, BOTH sides scale down together (same
+  // factor ⇒ ratio unchanged) until back inside the ±₹20k band. Under budget is
+  // left alone (just shows ₹ left). Works purely on client-side czQty — no
+  // server round-trip — then re-renders the plan.
+  var CZ_UPPERS = ['Shirt', 'T-shirt'];
+  var CZ_BAND = 20000;
+  var czCpl = { ratio: 1.4, anchor: 'trouser', units: '', note: '' };
+
+  // Sum included designs' current pieces across one or more categories.
+  function czCatUnits(catKeys){
+    var d = czLastPlan, tot = 0;
+    (d && d.categories || []).forEach(function(cat){
+      if(catKeys.indexOf(cat.category) < 0) return;
+      (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){
+        if(c.included === false) return; tot += czQtyTotal(czQtyMap(c, cat));
+      }); });
+    });
+    return tot;
+  }
+  // Total real-price spend across the whole included plan.
+  function czTotalSpend(){
+    var d = czLastPlan, spend = 0;
+    (d && d.categories || []).forEach(function(cat){
+      if(!cat.enabled) return;
+      (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){
+        if(c.included === false) return; spend += czRowCost(c, cat);
+      }); });
+    });
+    return spend;
+  }
+  // Multiply every included design's per-size qty in these categories by factor.
+  function czScaleCats(catKeys, factor){
+    if(!(factor >= 0) || factor === 1) { if(factor === 1) return; }
+    (czLastPlan && czLastPlan.categories || []).forEach(function(cat){
+      if(catKeys.indexOf(cat.category) < 0) return;
+      (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){
+        if(c.included === false) return;
+        var cur = czQtyMap(c, cat), m = {};
+        Object.keys(cur).forEach(function(sz){ m[sz] = Math.max(0, Math.round((cur[sz]||0) * factor)); });
+        czQty[c.id] = m;
+      }); });
+    });
+  }
+  function czCoupleApply(){
+    var ratio = parseFloat(el('czCplRatio').value);
+    if(!(ratio > 0)){ czCpl.note = '<span class="warn">Enter a ratio greater than 0 (e.g. 1.4).</span>'; czRenderCouple(czLastPlan); return; }
+    var anchor = el('czCplAnchor').value === 'upper' ? 'upper' : 'trouser';
+    var target = parseInt(el('czCplUnits').value, 10);
+    if(!isFinite(target) || target < 0){ czCpl.note = '<span class="warn">Enter how many units to set on the anchor side.</span>'; czRenderCouple(czLastPlan); return; }
+    czCpl.ratio = ratio; czCpl.anchor = anchor; czCpl.units = String(target);
+
+    // 1) Derive both category targets from the anchor at the sacred ratio.
+    var trouserTarget, upperTarget;
+    if(anchor === 'trouser'){ trouserTarget = target; upperTarget = Math.round(target * ratio); }
+    else { upperTarget = target; trouserTarget = Math.round(target / ratio); }
+
+    // 2) Scale each side from its current pieces to its target.
+    var curT = czCatUnits(['Trouser']), curU = czCatUnits(CZ_UPPERS);
+    if(curT > 0 && trouserTarget >= 0) czScaleCats(['Trouser'], trouserTarget / curT);
+    if(curU > 0 && upperTarget >= 0) czScaleCats(CZ_UPPERS, upperTarget / curU);
+
+    // 3) Budget guard — only the OVER side of the ±band. Spend scales linearly
+    //    with qty, so k = (budget+band)/spend lands us on the band's top edge.
+    //    Scaling BOTH sides by the same k keeps the ratio exactly.
+    var budget = (czLastPlan && czLastPlan.totalBudget) || 0;
+    var spend = czTotalSpend(), scaled = false, k = 1;
+    if(budget > 0 && spend > budget + CZ_BAND){
+      k = (budget + CZ_BAND) / spend;
+      czScaleCats(['Trouser'].concat(CZ_UPPERS), k);
+      scaled = true; spend = czTotalSpend();
+    }
+
+    // 4) Report the ACTUAL landed numbers (rounding/scaling may shift slightly).
+    var finT = czCatUnits(['Trouser']), finU = czCatUnits(CZ_UPPERS);
+    var live = finT > 0 ? (finU / finT) : 0;
+    var delta = budget - spend;
+    var msg = 'Set <b>'+fmtINR(finT)+'</b> trousers · <b>'+fmtINR(finU)+'</b> uppers (ratio '+(live?live.toFixed(2):'—')+').';
+    if(scaled) msg += ' <span class="warn">Over budget by >₹'+fmtINR(CZ_BAND)+' — scaled both sides ×'+k.toFixed(3)+' (ratio kept) to fit.</span>';
+    if(budget > 0) msg += ' Spend <b>₹'+fmtINR(spend)+'</b> vs budget ₹'+fmtINR(budget)+' — <span class="'+(delta<0?'warn':'ok')+'">'+(delta<0?('over by ₹'+fmtINR(-delta)):('₹'+fmtINR(delta)+' left'))+'</span>.';
+    czCpl.note = msg;
+    czRenderCouple(czLastPlan);   // refresh panel (prefill + note)
+  }
+  // Render the coupling control. Only meaningful once real prices are in
+  // (czPriced) AND both a trouser and an upper category are enabled.
+  function czRenderCouple(d){
+    var host = el('czCouple'); if(!host) return;
+    var hasT = (d && d.categories || []).some(function(c){ return c.category === 'Trouser' && c.enabled; });
+    var hasU = (d && d.categories || []).some(function(c){ return CZ_UPPERS.indexOf(c.category) >= 0 && c.enabled; });
+    if(!czPriced || !hasT || !hasU){ host.style.display = 'none'; host.innerHTML = ''; return; }
+    host.style.display = '';
+    var curT = czCatUnits(['Trouser']), curU = czCatUnits(CZ_UPPERS);
+    var ratio = czCpl.ratio, anchor = czCpl.anchor;
+    host.innerHTML =
+      '<div class="czcpl"><h4>⇄ Match trouser &amp; upper units (sets)</h4>'+
+      '<div class="sub" style="margin:0;color:#4338ca">Sold as sets. Set units on one side; the other fills at the ratio (Uppers = Trousers × ratio). Ratio stays fixed — if spend runs >₹'+fmtINR(CZ_BAND)+' over budget, both sides scale down together.</div>'+
+      '<div class="sub" style="margin:6px 0 0;color:#4338ca">Now: <b>'+fmtINR(curT)+'</b> trousers · <b>'+fmtINR(curU)+'</b> uppers.</div>'+
+      '<div class="cx">'+
+        '<span class="cf">Set units on'+
+          '<select id="czCplAnchor"><option value="trouser"'+(anchor==='trouser'?' selected':'')+'>Trousers</option><option value="upper"'+(anchor==='upper'?' selected':'')+'>Uppers</option></select></span>'+
+        '<span class="cf">= <input id="czCplUnits" type="number" min="0" step="1" placeholder="units" value="'+escapeHtml(czCpl.units||'')+'"> pc</span>'+
+        '<span class="cf">Ratio (Uppers ÷ Trousers) <input class="rat" id="czCplRatio" type="number" min="0.1" step="0.1" value="'+ratio+'"></span>'+
+        '<button id="czCplApply" type="button">Apply</button>'+
+        '<button class="gh" id="czCplReset" type="button">Reset</button>'+
+      '</div>'+
+      (czCpl.note ? '<div class="out">'+czCpl.note+'</div>' : '');
+    el('czCplApply').addEventListener('click', czCoupleApply);
+    el('czCplReset').addEventListener('click', function(){ czQty = {}; czSets = {}; czCpl.units = ''; czCpl.note = ''; czRenderPlan(czLastPlan); });
+  }
+
   // Shared "Unsorted" block for both views.
   function czUnsorted(d, host){
     if(!(d.unsorted||[]).length) return;
@@ -1720,6 +1847,7 @@
     el('czRepriceBtn').textContent = czPriced ? '↻ Re-analyse budget (actual prices)' : '↻ Re-analyse budget (enter actual prices)';
     var host = el('czPlan'); host.innerHTML = '';
     czRenderPO(d, host);
+    czRenderCouple(d);
   }
 
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
