@@ -665,34 +665,48 @@ function buildPlan(cands, settings) {
     // fit %. Trousers keep the flat category→fit split.
     const hasPrint = catHasPrintTypes(catKey);
 
-    // CATEGORY-LEVEL variety selection. Decides WHICH designs are included across
-    // the whole category, honouring two axes at once:
+    // PER-FIT variety selection. Decides WHICH designs are included, honouring
+    // two axes NESTED — colour sits UNDER fit:
     //   • fit % → how many designs each fit may source (capByKey, a per-fit-key count)
-    //   • colour % → the colour mix across the WHOLE category (top level)
-    // Best-rated designs win; manual pins are always in. A colour target that
-    // can't be placed (no room in the fits holding that colour) is left unmet —
-    // we never invent a colour that wasn't uploaded. `keyOf` maps a design to its
-    // fit key (bare fit for trousers, "print::fit" for uppers).
+    //   • colour % → splits THAT fit's cap into per-colour targets
+    // Within each fit we take the best-rated designs of each colour up to that
+    // colour's target. A colour with MORE uploads than its target has the extras
+    // held back; a colour with FEWER uploads than its target leaves the gap UNMET
+    // (recorded as a stage-1 sourcing shortfall — we never swap in another colour
+    // and never invent a colour that wasn't uploaded). Manual pins are always in.
+    // `keyOf` maps a design to its fit key (bare fit for trousers, "print::fit"
+    // for uppers). `stage1Short` collects, per fit key, the "N more <colour>
+    // needed" gaps so the frontend can tell the buyer what still needs sourcing.
     let includedIds = new Set();
+    let stage1Short = {};   // fit key → [{ key, label, have, want, need }]
     const selectIncluded = (keyOf, capByKey) => {
       const assigned = pool.filter(c => c.fit && isIncluded(c));
       const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
-      const capRem = {}; Object.keys(byKey).forEach(k => { capRem[k] = Math.min(capByKey[k] || 0, byKey[k].length); });
-      const totalT = Object.values(capRem).reduce((s, v) => s + v, 0);   // total designs we'll buy
-      // Category colour targets, over the colours actually present.
       const colKeys = Object.keys(cfg.colours || {});
-      const presentW = {};
-      assigned.forEach(c => { const ck = canonColour(c.colour, colKeys); if (presentW[ck] == null) presentW[ck] = (ck === 'Other') ? 0 : Math.max(0, +cfg.colours[ck] || 0); });
-      if (Object.values(presentW).reduce((s, v) => s + v, 0) <= 0) Object.keys(presentW).forEach(k => presentW[k] = 1);
-      const colTarget = splitInts(totalT, presentW);
       const inc = new Set();
-      const allRanked = assigned.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
-      // Pass 1 — best-rated first; take a design only if its fit still has room
-      // AND its colour is still under target. This shapes the category colour mix.
-      allRanked.forEach(c => { const k = keyOf(c), ck = canonColour(c.colour, colKeys); if ((capRem[k] || 0) > 0 && (colTarget[ck] || 0) > 0) { inc.add(c.id); capRem[k]--; colTarget[ck]--; } });
-      // Pass 2 — fill any fit slots still open (their preferred colours ran out),
-      // best-rated first, ignoring the colour target so fits still hit their count.
-      allRanked.forEach(c => { const k = keyOf(c); if (!inc.has(c.id) && (capRem[k] || 0) > 0) { inc.add(c.id); capRem[k]--; } });
+      stage1Short = {};
+      Object.keys(byKey).forEach(k => {
+        const cap = capByKey[k] || 0;                 // this fit's variety target
+        // Group this fit's uploads by (canon) colour, best-rated first.
+        const byCol = {};
+        byKey[k].forEach(c => { const ck = canonColour(c.colour, colKeys); (byCol[ck] = byCol[ck] || []).push(c); });
+        Object.keys(byCol).forEach(ck => byCol[ck].sort((a, b) => (b.rating || 0) - (a.rating || 0)));
+        // Colour weights over the colours actually present in THIS fit.
+        const presentW = {};
+        Object.keys(byCol).forEach(ck => { presentW[ck] = (ck === 'Other') ? 0 : Math.max(0, +cfg.colours[ck] || 0); });
+        if (Object.values(presentW).reduce((s, v) => s + v, 0) <= 0) Object.keys(presentW).forEach(ck => presentW[ck] = 1);
+        // Split the fit cap into per-colour design targets, then keep best-rated
+        // up to each colour's target; deficient colours record a shortfall.
+        const colTarget = splitInts(cap, presentW);
+        const shorts = [];
+        Object.keys(colTarget).forEach(ck => {
+          const want = colTarget[ck] || 0, list = byCol[ck] || [], have = list.length;
+          const take = Math.min(want, have);
+          for (let i = 0; i < take; i++) inc.add(list[i].id);
+          if (want > have && ck !== 'Other') shorts.push({ key: ck, label: ck, have, want, need: want - have });
+        });
+        if (shorts.length) stage1Short[k] = shorts.sort((a, b) => b.need - a.need);
+      });
       pool.forEach(c => { if (c.includeOverride === true) inc.add(c.id); });
       return inc;
     };
@@ -711,10 +725,9 @@ function buildPlan(cands, settings) {
       // Budget left for NEW designs = fit budget MINUS what existing POs cost.
       const availBudget = Math.max(0, fb - freedBudget);
 
-      // VARIETY inclusion is decided ONCE at the CATEGORY level (see
-      // selectIncluded below): fit % sets how many designs each fit sources, and
-      // colour % sets the colour mix across the WHOLE category. Here we just read
-      // that decision. Manual pins (includeOverride === true) are always in.
+      // VARIETY inclusion is decided by selectIncluded: fit % sets how many
+      // designs this fit sources, and colour % splits that within the fit. Here
+      // we just read that decision. Manual pins (includeOverride === true) are in.
       const gatePassed = photos.filter(isIncluded);
       const ranked = gatePassed.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0));
       const budgetIn = {};
@@ -763,7 +776,9 @@ function buildPlan(cands, settings) {
         budget: fb, availBudget, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
         target: fitEst, onOrder, orderedCost, netUnits, freedBudget,
         budgetHeld: gatePassed.length - incList.length,
-        photoCount: photos.length, includedCount: incList.length, designs, colours, unassignedFit: false
+        photoCount: photos.length, includedCount: incList.length, designs, colours, unassignedFit: false,
+        // Stage-1 sourcing gaps: colours this fit is short of, per the colour mix.
+        colourShort: (enabled && stage1Short[otbKey]) ? stage1Short[otbKey] : []
       };
     };
 

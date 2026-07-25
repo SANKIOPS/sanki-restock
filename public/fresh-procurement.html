@@ -228,6 +228,12 @@
     .czpo-print .m{ font-size:12px; color:var(--muted); }
     .czpo-print + .czpo-fit{ margin-top:8px; }
     .czpo-empty{ font-size:12px; color:var(--muted); margin:4px 0 2px; padding-left:12px; font-style:italic; }
+    /* Sourcing-gap line under a fit: what still needs buying (mix + budget room) */
+    .czgap{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:3px 0 8px; font-size:11px; }
+    .czgapk{ font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:.3px; font-size:10px; }
+    .czgapk + .czgapk{ margin-left:6px; }
+    .czneed{ background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:6px; padding:1px 7px; font-weight:600; }
+    .czneed.money{ background:#eff6ff; border-color:#bfdbfe; color:#1e40af; }
     /* Open-to-buy netting row (per fit) — "already on the way" vs target */
     .czotb{ display:flex; align-items:center; flex-wrap:wrap; gap:6px 14px; margin:6px 0 10px; padding:7px 11px; font-size:12px; color:#374151; background:#f8fafc; border:1px solid var(--line); border-radius:9px; }
     .czotb .k{ color:var(--muted); font-weight:600; margin-right:3px; }
@@ -1078,7 +1084,7 @@
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
     // No piece-count estimate here (it needed a per-unit price we don't trust
     // until PO). Each row just shows its normalised share of the budget.
-    ['fits','sizes','printTypes'].forEach(function(kind){
+    ['fits','sizes','printTypes','colours'].forEach(function(kind){
       var map = c[kind]; if(!map) return;
       var tot = czSum(map) || 1;
       Array.prototype.forEach.call(card.querySelectorAll('[data-kind="'+kind+'"] .czdrow'), function(row){
@@ -1107,14 +1113,27 @@
     var host = el('czCats'); host.innerHTML = '';
     CAT_KEYS.forEach(function(catKey){
       var c = czSettings.categories[catKey];
-      var open = czOpenCards[catKey] !== false; // default open
+      var open = !!czOpenCards[catKey]; // default COLLAPSED — opening a batch shows just the category list
       var card = document.createElement('div');
       card.className = 'czcard' + (c.enabled ? '' : ' off'); card.setAttribute('data-cat', catKey);
+
+      // If a plan exists, render THIS category's products (the bill) into a
+      // detached block now, so its header can show Buy / Spend pills and the
+      // products sit INSIDE this same card, below its mix %s.
+      var planCat = czLastPlan && (czLastPlan.categories||[]).filter(function(pc){ return pc.category===catKey; })[0];
+      var planWrap = null, planTot = { catTotal:0, catCost:0 };
+      if(planCat){ planWrap = document.createElement('div'); planWrap.setAttribute('data-catplan',''); planWrap.style.marginTop='10px'; planTot = czCatProducts(planCat, planWrap); }
+      var pills = (planCat && c.enabled)
+        ? '<div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(planTot.catTotal)+' pc</b></div>'+
+          (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Spend<b>₹'+fmtINR(planTot.catCost)+'</b></div>'+
+            (c.budget ? '<span class="cztag '+(planTot.catCost>c.budget?'over':'ok')+'">'+(planTot.catCost>c.budget?'Over ₹'+fmtINR(planTot.catCost-c.budget):'₹'+fmtINR(c.budget-planTot.catCost)+' left')+'</span>' : '') : '')
+        : '';
 
       var hd = document.createElement('div'); hd.className = 'czcardhd';
       hd.innerHTML =
         '<label class="czsw" title="Buy this category this cycle"><input type="checkbox" '+(c.enabled?'checked':'')+' /><span class="tk"></span></label>'+
         '<div class="grow"><h3>'+escapeHtml(CAT_LABEL[catKey])+'</h3><div class="note" data-note></div></div>'+
+        pills+
         '<span class="caret">'+(open?'▾':'▸')+'</span>';
       card.appendChild(hd);
 
@@ -1150,11 +1169,14 @@
         body.appendChild(pnote);
       }
 
-      // FIT and SIZE are decided by %. COLOUR is observed from the photos you
-      // upload, so there is no colour % editor here.
+      // FIT, SIZE and COLOUR are each decided by %. Colour % is the TARGET mix
+      // WITHIN each fit; the plan matches it when it must hold designs back and
+      // flags any colour it is short of as "needs sourcing".
       var isUpper = CZ_PRINT_CATS.indexOf(catKey) >= 0;
-      ['fits','sizes'].forEach(function(kind){
-        var title = kind === 'fits' ? (isUpper ? '② Fit mix % — within each print type' : 'Fit mix %') : 'Size mix %';
+      ['fits','sizes','colours'].forEach(function(kind){
+        var title = kind === 'fits' ? (isUpper ? '② Fit mix % — within each print type' : 'Fit mix %')
+                  : kind === 'sizes' ? 'Size mix %'
+                  : 'Colour mix % — within each fit';
         var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
         body.appendChild(sub);
         var wrap = document.createElement('div'); wrap.className = 'czdist'; wrap.setAttribute('data-kind', kind);
@@ -1178,8 +1200,14 @@
 
       var colNote = document.createElement('div'); colNote.className = 'czsub';
       colNote.style.textTransform = 'none'; colNote.style.letterSpacing = '0';
-      colNote.innerHTML = '<span style="font-weight:600;color:var(--muted)">Colour mix</span> — read automatically from the photos you upload (only the colours actually present are used). No colour % to set.';
+      colNote.innerHTML = '<span style="color:var(--muted)">Colour % is the target mix <b>within each fit</b>. Only colours you actually upload are used — best-rated win each colour\'s slots, extras are held back, and a colour you\'re short of is flagged as “needs sourcing”. It never invents a colour you didn\'t send.</span>';
       body.appendChild(colNote);
+
+      // The category's products (bill) live INSIDE this card, under its mix %s.
+      if(planWrap){
+        var pdiv = document.createElement('div'); pdiv.className='czsub'; pdiv.textContent = 'Products & sourcing — this category';
+        body.appendChild(pdiv); body.appendChild(planWrap);
+      }
 
       card.appendChild(body);
       host.appendChild(card);
@@ -1199,6 +1227,8 @@
 
       czRecalcCard(catKey);
     });
+    // Photos the AI couldn't sort into a casual category — shown once, after the cards.
+    if(czLastPlan) czUnsorted(czLastPlan, host);
   }
   // Spec size/colour keys are considered custom if not in the default set (so ✕ shows only for founder-added ones).
   var CZ_DEFAULT = {
@@ -1266,7 +1296,7 @@
   // The uploader + the whole budget/plan workflow only exist while a batch is
   // opened. In the collapsed list view nothing but the batch rows is shown.
   function czSetWorkflow(show){ var w = el('czWorkflow'); if(w) w.style.display = show ? '' : 'none'; var u = el('czUploader'); if(u) u.style.display = show ? '' : 'none'; }
-  function czOpenBatch(id){ czExpanded = true; czPlanOpen = {}; if(id === czActiveBatch){ czRenderBatches(); czRenderCandidates(czLastCands, czLastCats); return Promise.resolve(); } return czSetActiveBatch(id); }
+  function czOpenBatch(id){ czExpanded = true; czOpenCards = {}; if(id === czActiveBatch){ czRenderBatches(); czRenderCandidates(czLastCands, czLastCats); return Promise.resolve(); } return czSetActiveBatch(id); }
 
   // Total actual spend across the current plan (only meaningful after prices
   // are entered + Re-analyse). Used for the batch-row "actual ₹" chip.
@@ -1423,7 +1453,6 @@
   }
 
   var czLastPlan = null;
-  var czPlanOpen = {};     // which plan category is expanded (collapsed by default)
   var czSets = {};         // per-design set count (default 1), editable per design/colour
 
   // A "set" = a fixed size curve bought as one unit. e.g. a trouser set =
@@ -1511,13 +1540,13 @@
     }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.success){ czRenderPlan(d); } });
   }
 
-  function czRenderPO(d, host){
-    (d.categories||[]).forEach(function(cat){
-      if(!cat.enabled && !cat.poolCount) return;
+  // Render ONE category's fits/products "bill" into `into`. Returns the roll-up
+  // piece + cost totals so the caller (the merged category card) can show its
+  // Buy / Actual-spend pills. The %-editors + this bill now live in the SAME
+  // card, so opening a category shows its mix AND its products together.
+  function czCatProducts(cat, into){
       var ratio = czRatioFor(cat), setPc = czSetPieces(ratio);
-      var open = !!czPlanOpen[cat.category];
-      var sec = document.createElement('div'); sec.className='catsec czcard'+(open?' open':''); sec.setAttribute('data-cat', cat.category);
-      var body = document.createElement('div'); body.className='czcardbody'; body.style.display = open ? '' : 'none'; var catTotal = 0, catCost = 0;
+      var body = into; var catTotal = 0, catCost = 0;
 
       // Render ONE fit block (its design rows + fit header + OTB strip) into
       // `into`, returning the fit's piece + cost totals for roll-up.
@@ -1535,7 +1564,7 @@
               dv.textContent = 'Not included (tap ＋ Include to add to the PO)';
               rowsWrap.appendChild(dv);
             }
-            var exReason = c.excludedReason==='variety' ? '<span class="czexwhy budget">beyond the planned mix</span>'
+            var exReason = c.excludedReason==='variety' ? '<span class="czexwhy budget">beyond this fit\u2019s colour mix</span>'
               : c.excludedReason==='budget' ? '<span class="czexwhy budget">fit budget full</span>'
               : c.excludedReason==='manual' ? '<span class="czexwhy">removed by you</span>'
               : '<span class="czexwhy">below 8/10</span>';
@@ -1604,6 +1633,25 @@
             : ((f.includedCount!=null?f.includedCount:f.photoCount)+' in PO'+(heldBack>0?(' · <b style="color:#b45309">'+heldBack+' held back</b>'):'')+' · <b>'+fmtINR(fitTotal)+' pc</b> · '+
                (czPriced ? 'actual spend <b>₹'+fmtINR(fitCost)+'</b>' : 'budget ₹'+fmtINR(f.budget))))+'</span>';
         into.appendChild(fh);
+        // ── SOURCING GAPS: what still needs buying to finish this fit. ──
+        //   ① mix needs  — colours the colour-% mix is short of (from the plan).
+        //   ② budget room — money left over that could buy ~N more designs at the
+        //                   current depth (set curve × est/actual unit price).
+        if(cat.enabled && !f.unassignedFit){
+          var gapHtml = '';
+          if((f.colourShort||[]).length){
+            gapHtml += '<span class="czgapk">① mix needs</span>' +
+              f.colourShort.map(function(s){ return '<span class="czneed">'+escapeHtml(s.label)+' +'+s.need+'</span>'; }).join('');
+          }
+          // Stage 2 — budget vs what the sourced designs actually spend.
+          var unitPrice = (czPriced && fitTotal>0) ? (fitCost/fitTotal) : (cat.expPrice||0);
+          var afford = unitPrice>0 ? Math.round((f.budget||0)/unitPrice) : 0;
+          var moreProd = setPc>0 ? Math.floor((afford - fitTotal)/setPc) : 0;
+          if(moreProd>0){
+            gapHtml += '<span class="czgapk">② budget room</span><span class="czneed money">~'+moreProd+' more design'+(moreProd===1?'':'s')+'</span>';
+          }
+          if(gapHtml){ var gv=document.createElement('div'); gv.className='czgap'; gv.innerHTML=gapHtml; into.appendChild(gv); }
+        }
         // Open-to-buy: net the fit's budget target against what's already ordered.
         if(cat.enabled && !f.unassignedFit){
           var target = f.target||0, onWay = f.onOrder||0, freed = f.freedBudget||0, ordCost = f.orderedCost||0;
@@ -1652,19 +1700,7 @@
         (cat.fits||[]).forEach(function(f){ var t = renderFit(f, body); catTotal += t.fitTotal; catCost += t.fitCost; });
       }
 
-      var hd = document.createElement('div'); hd.className='czcardhd'; hd.style.cursor='pointer'; hd.style.userSelect='none';
-      hd.innerHTML = '<div class="grow"><h3>'+escapeHtml(cat.label)+(cat.enabled?'':' <span class="muted" style="font-size:12px;font-weight:600">(not buying)</span>')+'</h3>'+
-        '<div class="note">'+escapeHtml(cat.designNote||'')+' · '+cat.poolCount+' photo'+(cat.poolCount===1?'':'s')+(cat.onOrder ? ' · <b style="color:#b45309">'+fmtINR(cat.onOrder)+' pc on the way (frees ₹'+fmtINR(cat.freedBudget||0)+')</b>' : '')+' · <b>'+(open?'tap to collapse':'tap to see photos, fits &amp; sizes')+'</b></div></div>'+
-        (cat.enabled ? '<div class="czpill" style="margin:0">Budget<b>₹'+fmtINR(cat.budget)+'</b></div><div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(catTotal)+' pc</b></div>'+
-          (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Actual spend<b>₹'+fmtINR(catCost)+'</b></div>'+
-            (cat.budget ? '<span class="cztag '+(catCost>cat.budget?'over':'ok')+'">'+(catCost>cat.budget?'Over by ₹'+fmtINR(catCost-cat.budget):'₹'+fmtINR(cat.budget-catCost)+' left')+'</span>' : '') : '') : '')+
-        '<span class="catcaret" style="margin-left:12px;font-size:14px">'+(open?'▾':'▸')+'</span>';
-      hd.addEventListener('click', function(){ czPlanOpen[cat.category] = !open; czRenderPlan(czLastPlan); });
-      sec.insertBefore(hd, sec.firstChild);
-      sec.appendChild(body);
-      host.appendChild(sec);
-    });
-    czUnsorted(d, host);
+      return { catTotal: catTotal, catCost: catCost };
   }
 
   // ── Export a printable PO, grouped by vendor, with photos + sizes + qty ──
@@ -1734,8 +1770,10 @@
     el('czExportBtn').style.display = 'inline-block';
     el('czRepriceBtn').style.display = 'inline-block';
     el('czRepriceBtn').textContent = czPriced ? '↻ Re-analyse budget (actual prices)' : '↻ Re-analyse budget (enter actual prices)';
-    var host = el('czPlan'); host.innerHTML = '';
-    czRenderPO(d, host);
+    // Products now live INSIDE each category card (merged with its mix %s), so
+    // re-render the category cards; the old standalone plan list stays empty.
+    var host = el('czPlan'); if(host) host.innerHTML = '';
+    czRenderCats();
   }
 
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
