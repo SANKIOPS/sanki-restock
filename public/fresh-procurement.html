@@ -261,18 +261,22 @@
     .czsegl{ font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:#888; font-weight:700; display:flex; flex-direction:column; gap:3px; }
     .czsegl select{ width:100%; padding:5px 6px; border:1px solid var(--line); border-radius:7px; font-size:13px; font-weight:600; color:var(--ink); background:#fff; text-transform:none; letter-spacing:0; }
     .czsegfx{ color:#059669; font-weight:800; }
-    .czporow{ display:flex; gap:14px; align-items:stretch; padding:12px 0; border-bottom:1px dashed var(--line); }
-    .czporow:last-child{ border-bottom:none; }
-    .czporow .cand{ flex:0 0 auto; width:96px; height:120px; border-radius:10px; overflow:hidden; position:relative; background:#eee; }
+    /* Buy sheet = a responsive CARD GRID (was one full-width row per product).
+       Photos are zoomable so we keep the thumbnail small and pack many designs
+       side-by-side to see the whole fit at a glance. */
+    .czpogrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; margin-top:10px; align-items:start; }
+    .czpogrid .czexhead{ grid-column:1/-1; }
+    .czporow{ display:flex; gap:11px; align-items:flex-start; padding:11px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+    .czporow .cand{ flex:0 0 auto; width:76px; height:96px; border-radius:10px; overflow:hidden; position:relative; background:#eee; }
     .czporow .cand img{ width:100%; height:100%; object-fit:cover; cursor:zoom-in; display:block; }
-    .poinfo{ flex:1; display:flex; flex-direction:column; gap:8px; min-width:0; }
+    .poinfo{ flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
     .potop{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; }
     .pov{ font-size:15px; font-weight:800; }
     .pomoney{ font-size:14px; font-weight:800; color:#0369a1; white-space:nowrap; }
     .pometa{ display:flex; flex-wrap:wrap; gap:6px; }
     .potag{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; background:#f1f3f5; color:#333; }
     .potag.col{ background:#eef6ff; color:#0369a1; }
-    .poset{ display:flex; align-items:center; gap:7px; }
+    .poset{ display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
     .poset label{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#888; font-weight:700; }
     .posetbtn{ width:26px; height:26px; border:1px solid var(--line); background:#fff; border-radius:7px; font-size:16px; font-weight:700; line-height:1; cursor:pointer; color:var(--ink); }
     .posetbtn:hover{ background:#f1f3f5; }
@@ -335,10 +339,10 @@
     .cztag{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:20px; margin-left:8px; }
     .cztag.ok{ background:#ecfdf5; color:#065f46; }
     .cztag.over{ background:#fef2f2; color:#b91c1c; }
-    .posizes{ display:flex; flex-wrap:wrap; gap:6px; }
-    .pobz{ display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700; padding:3px 6px 3px 9px; border-radius:8px; background:#fff; border:1px solid var(--line); }
+    .posizes{ display:flex; flex-wrap:wrap; gap:5px; }
+    .pobz{ display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:700; padding:3px 5px 3px 7px; border-radius:8px; background:#fff; border:1px solid var(--line); }
     .pobz .pobzk{ color:#333; }
-    .pobzin{ width:44px; text-align:center; padding:3px 4px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-weight:700; color:#0369a1; }
+    .pobzin{ width:38px; text-align:center; padding:3px 3px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-weight:700; color:#0369a1; }
     .pobzin.z{ color:#bbb; }
     /* ── Rich lightbox detail card ───────────────────────────── */
     .lightbox .lbcap.rich{ bottom:18px; left:18px; right:auto; text-align:left; max-width:min(430px,88vw); }
@@ -1660,7 +1664,7 @@
       // `into`, returning the fit's piece + cost totals for roll-up.
       function renderFit(f, into){
         if(!f.designs || !f.designs.length) return { fitTotal:0, fitCost:0, label:f.label, products:0, pieces:0, budget:f.budget||0, colCount:{}, moreProd:0, colourShort:[], overMoney:0, unassigned:!!f.unassignedFit };   // the bill lists only real photos to buy
-        var fitTotal = 0, fitCost = 0; var rowsWrap = document.createElement('div');
+        var fitTotal = 0, fitCost = 0; var rowsWrap = document.createElement('div'); rowsWrap.className = 'czpogrid';
         var excludedShown = false;
         var incCount = 0, colCount = {};   // included design count + colour→design-count map, for the category summary
         f.designs.forEach(function(c){
