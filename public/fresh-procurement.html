@@ -1135,13 +1135,22 @@
 
   // Sum-aware helper: total of a pct map.
   function czSum(map){ return Object.keys(map).reduce(function(s,k){ return s + (Math.max(0,parseInt(map[k])||0)); }, 0); }
+  // Resolve a category's (notional) budget for BOTH sizing modes: cost mode uses
+  // the entered budget; units mode back-solves budget = target units × est ₹/pc.
+  function czBudgetOf(c){ if(!c) return 0; if(c.sizeMode === 'units'){ var ep = Math.max(1, c.avgCost||0); return Math.round((c.targetUnits||0) * ep); } return c.budget||0; }
 
   // Recompute the live "units" hints on a category card after any edit.
   function czRecalcCard(catKey){
     var card = document.querySelector('.czcard[data-cat="'+catKey+'"]'); if(!card) return;
     var c = czSettings.categories[catKey];
-    var budget = c.budget||0;
+    // Both sizing modes resolve to a (notional) budget AND a piece target so the
+    // pills read the same either way. cost → units = budget ÷ est ₹/pc; units →
+    // budget = units × est ₹/pc (a back-solved notional figure, firmed up at PO).
+    var expPrice = Math.max(1, c.avgCost||0);
+    var budget = (c.sizeMode === 'units') ? Math.round((c.targetUnits||0) * expPrice) : (c.budget||0);
+    var tUnits = (c.sizeMode === 'units') ? (c.targetUnits||0) : Math.round(budget / expPrice);
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
+    var up = card.querySelector('[data-unitspill]'); if(up) up.textContent = fmtINR(tUnits)+' pc';
     // No piece-count estimate here (it needed a per-unit price we don't trust
     // until PO). Each row just shows its normalised share of the budget.
     ['fits','sizes','printTypes','colours'].forEach(function(kind){
@@ -1187,7 +1196,7 @@
       var pills = (planCat && c.enabled)
         ? '<div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(planTot.catTotal)+' pc</b></div>'+
           (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Spend<b>₹'+fmtINR(planTot.catCost)+'</b></div>'+
-            (c.budget ? '<span class="cztag '+(planTot.catCost>c.budget?'over':'ok')+'">'+(planTot.catCost>c.budget?'Over ₹'+fmtINR(planTot.catCost-c.budget):'₹'+fmtINR(c.budget-planTot.catCost)+' left')+'</span>' : '') : '')
+            (czBudgetOf(c) ? '<span class="cztag '+(planTot.catCost>czBudgetOf(c)?'over':'ok')+'">'+(planTot.catCost>czBudgetOf(c)?'Over ₹'+fmtINR(planTot.catCost-czBudgetOf(c)):'₹'+fmtINR(czBudgetOf(c)-planTot.catCost)+' left')+'</span>' : '') : '')
         : '';
 
       var hd = document.createElement('div'); hd.className = 'czcardhd';
@@ -1204,12 +1213,25 @@
       // were removed: the per-unit price is only a soft guess that changes
       // nothing about the rupee plan — real units are decided at PO from the
       // vendor's actual quote. We keep the money, drop the fake piece counts.
+      // TWO sizing modes the founder picks per category. 'cost' anchors the buy
+      // on a rupee budget (÷ est ₹/pc → pieces); 'units' lets the founder type the
+      // piece target directly (real prices only exist AFTER photos go to the
+      // vendor). Either way the total cascades down the SAME fit/print/colour %s.
+      if(c.sizeMode !== 'units') c.sizeMode = 'cost';
+      var isUnits = c.sizeMode === 'units';
       var row = document.createElement('div'); row.className = 'czrow';
-      row.innerHTML = '<div class="fld" style="min-width:150px"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>';
+      row.innerHTML =
+        '<div class="fld" style="min-width:170px"><label>Plan this category by</label>'
+        + '<select data-sizemode>'
+        + '<option value="cost"'+(isUnits?'':' selected')+'>Estimated budget ₹</option>'
+        + '<option value="units"'+(isUnits?' selected':'')+'>Number of units</option>'
+        + '</select></div>'
+        + '<div class="fld" data-costfld style="min-width:150px;'+(isUnits?'display:none':'')+'"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>'
+        + '<div class="fld" data-unitfld style="min-width:150px;'+(isUnits?'':'display:none')+'"><label>Target units (this category)</label><input data-units inputmode="numeric" value="'+fmtINR(c.targetUnits||0)+'" /></div>';
       body.appendChild(row);
 
       var pills = document.createElement('div'); pills.className = 'czpills';
-      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div>';
+      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">Target units<b data-unitspill>0</b></div>';
       body.appendChild(pills);
 
       // Print-type mix % — an extra manual split (Shirts & T-shirts only) that
@@ -1261,7 +1283,7 @@
 
       var colNote = document.createElement('div'); colNote.className = 'czsub';
       colNote.style.textTransform = 'none'; colNote.style.letterSpacing = '0';
-      colNote.innerHTML = '<span style="color:var(--muted)">Colour % is the target mix <b>within each fit</b>. Only colours you actually upload are used — best-rated win each colour\'s slots, extras are held back, and a colour you\'re short of is flagged as “needs sourcing”. It never invents a colour you didn\'t send.</span>';
+      colNote.innerHTML = '<span style="color:var(--muted)">You upload every vendor photo unselected — the app <b>curates a balanced buy</b> toward these %s within your '+(c.sizeMode==='units'?'target units':'budget')+'. The total splits down '+(isUpper?'print → fit → colour':'fit → colour')+': in each colour slot the best designs win (your pins first, then AI rating), extras are held as “overfilled”, colours not in your mix are held as “add it to your % to buy”, and a colour you’re <b>short</b> of is flagged “needs sourcing” with that budget <b>reserved</b> — never poured into another colour or fit.</span>';
       body.appendChild(colNote);
 
       // The category's products (bill) live INSIDE this card, under its mix %s.
@@ -1282,6 +1304,18 @@
 
       var bud = body.querySelector('[data-budget]');
       if(bud) bud.addEventListener('change', function(){ c.budget = parseInt((bud.value||'').replace(/[^\d]/g,''))||0; bud.value = fmtINR(c.budget); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+
+      var uni = body.querySelector('[data-units]');
+      if(uni) uni.addEventListener('change', function(){ c.targetUnits = parseInt((uni.value||'').replace(/[^\d]/g,''))||0; uni.value = fmtINR(c.targetUnits); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+
+      var smode = body.querySelector('[data-sizemode]');
+      if(smode) smode.addEventListener('change', function(){
+        c.sizeMode = (smode.value === 'units') ? 'units' : 'cost';
+        var cf = body.querySelector('[data-costfld]'), uf = body.querySelector('[data-unitfld]');
+        if(cf) cf.style.display = (c.sizeMode === 'units') ? 'none' : '';
+        if(uf) uf.style.display = (c.sizeMode === 'units') ? '' : 'none';
+        CAT_KEYS.forEach(czRecalcCard); czSaveSettings();
+      });
 
       // design note
       var note = hd.querySelector('[data-note]'); note.textContent = CZ_NOTE[catKey] || '';
@@ -1378,7 +1412,7 @@
     } else if(b.count){
       out.push('<span class="czbchip muted">not segregated yet</span>');
     }
-    var bud = czSettings ? CAT_KEYS.reduce(function(s,k){ var c=czSettings.categories[k]; return s + ((c&&c.enabled)?(c.budget||0):0); }, 0) : 0;
+    var bud = czSettings ? CAT_KEYS.reduce(function(s,k){ var c=czSettings.categories[k]; return s + ((c&&c.enabled)?czBudgetOf(c):0); }, 0) : 0;
     if(bud) out.push('<span class="czbchip bud">est. budget ₹'+fmtINR(bud)+'</span>');
     if(isActive && czPriced && czLastPlan){
       var sp = czPlanSpend();

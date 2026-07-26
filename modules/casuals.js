@@ -395,6 +395,12 @@ function settingsWithDefaults(s) {
       enabled: sc.enabled != null ? !!sc.enabled : true,
       budget: sc.budget != null ? Math.max(0, parseInt(sc.budget) || 0) : 0,
       avgCost: sc.avgCost != null ? Math.max(1, parseInt(sc.avgCost) || spec.avgCost) : spec.avgCost,
+      // SIZING MODE — how the category's total piece target is set:
+      //   'cost'  → pieces = budget ÷ avgCost (money-anchored estimate).
+      //   'units' → founder types the piece target directly (no price guess;
+      //             real prices only exist AFTER photos are sent to the vendor).
+      sizeMode: (sc.sizeMode === 'units') ? 'units' : 'cost',
+      targetUnits: sc.targetUnits != null ? Math.max(0, parseInt(sc.targetUnits) || 0) : 0,
       fits:    mergePct(fitDef, sc.fits),
       sizes:   mergePct(sizeDef, sc.sizes),
       colours: mergePct(colDef, sc.colours),
@@ -648,13 +654,25 @@ function buildPlan(cands, settings) {
     const spec = CAT_BY_KEY[catKey];
     const cfg = settings.categories[catKey];
     const enabled = enabledKeys.includes(catKey);
-    const budget = catBudget[catKey] || 0;
+    let budget = catBudget[catKey] || 0;
     // MONEY is the anchor. We never need a real article price to plan — the
     // whole tree is a % split of rupees. `expPrice` is only an EDITABLE
     // ESTIMATE used to turn a rupee budget into a soft piece-count; it is
     // replaced by the vendor's real quote at PO time.
     const expPrice = Math.max(1, cfg.avgCost || spec.avgCost);
-    const estUnits = enabled ? Math.round(budget / expPrice) : 0;
+    // Category PIECE target — TWO sizing modes the founder can pick per category:
+    //   'cost'  → pieces = budget ÷ est price (money-anchored).
+    //   'units' → founder typed the piece target directly (real prices only exist
+    //             AFTER photos are sent to the vendor). Back-solve a notional budget
+    //             (= units × est price) so the whole rupee cascade below still
+    //             yields exactly that many pieces per fit/colour cell.
+    const catUnits = !enabled ? 0
+      : (cfg.sizeMode === 'units' ? Math.max(0, cfg.targetUnits || 0) : Math.round(budget / expPrice));
+    if (enabled && cfg.sizeMode === 'units') budget = catUnits * expPrice;
+    const estUnits = catUnits;
+    // Pieces assumed per design when converting a colour cell's piece target into a
+    // design count (≈ one size-curve "set"; matches the frontend CZ_SET_BASE = 12).
+    const DEPTH_PER_DESIGN = 12;
 
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
@@ -670,45 +688,81 @@ function buildPlan(cands, settings) {
     // fit %. Trousers keep the flat category→fit split.
     const hasPrint = catHasPrintTypes(catKey);
 
-    // PER-FIT selection. EVERY uploaded photo the buyer sent for a fit is bought —
-    // an upload IS the buyer's intent to buy that design. Colour % NO LONGER drops
-    // photos; it is only a SOURCING TARGET that flags what's missing:
-    //   • each fit's cap = the number of designs uploaded to it.
-    //   • colour % → splits that cap into per-colour targets, used ONLY to report a
-    //     shortfall (a colour the mix wants more of than was uploaded) as a stage-1
-    //     "needs sourcing" flag. A colour is never dropped for being over its target,
-    //     and colours you didn't upload never reserve slots away from what you sent.
-    // Manual excludes (includeOverride === false) still hold a photo out; manual pins
-    // (includeOverride === true) force one in. `keyOf` maps a design to its fit key
-    // (bare fit for trousers, "print::fit" for uppers). `stage1Short` collects, per
-    // fit key, the "N more <colour> needed" gaps so the frontend can flag what to source.
+    // BALANCED-GRID selection. The uploads are the vendor's FULL option set, not a
+    // shortlist — so the app CURATES a balanced buy toward the %s, within the piece
+    // target. The category piece target cascades down the SAME %s the money uses
+    // → each fit-cell (print::fit for uppers, fit for trousers) gets a NET piece
+    // target (after existing POs), which then splits by colour % into per-colour
+    // cells. In each colour cell we keep the BEST designs (manual pins first, then
+    // AI rating) up to that cell's design count; extras are held ('overfilled'),
+    // colours not in the mix are held ('offlist'), and a colour we're SHORT of is
+    // flagged ("needs sourcing") with its unfilled budget RESERVED — never poured
+    // into another colour/fit/print. Manual excludes hold out; manual pins force in.
+    const keyTargetUnits = {};   // fit-cell key → gross piece target (before onOrder)
+    if (hasPrint) {
+      const pbU = splitInts(budget, cfg.printTypes);
+      Object.keys(pbU).forEach(pk => {
+        const fbU = splitInts(pbU[pk], cfg.fits);
+        Object.keys(fbU).forEach(fk => { keyTargetUnits[pk + '::' + fk] = expPrice > 0 ? Math.round(fbU[fk] / expPrice) : 0; });
+      });
+    } else {
+      const fbU = splitInts(budget, cfg.fits);
+      Object.keys(fbU).forEach(fk => { keyTargetUnits[fk] = expPrice > 0 ? Math.round(fbU[fk] / expPrice) : 0; });
+    }
+
     let includedIds = new Set();
-    let stage1Short = {};   // fit key → [{ key, label, have, want, need }]
-    let excludeInfo = {};   // retained for shape compat; no variety drops populate it now
+    let stage1Short = {};   // fit key → [{ key, label, want, have, need }] colours short
+    let excludeInfo = {};   // design id → { colour, offList, have, target } for held designs
     const selectIncluded = (keyOf) => {
-      const assigned = pool.filter(c => c.fit && isIncluded(c));
-      const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
-      const colKeys = Object.keys(cfg.colours || {});
       const inc = new Set();
       stage1Short = {};
       excludeInfo = {};
+      const colKeys = Object.keys(cfg.colours || {});
+      const haveMix = colKeys.length > 0;
+      // Colour weights for the mix (fall back to even if every colour % is 0).
+      const colW = {}; let cwTot = 0;
+      colKeys.forEach(ck => { colW[ck] = Math.max(0, +cfg.colours[ck] || 0); cwTot += colW[ck]; });
+      if (haveMix && cwTot <= 0) colKeys.forEach(ck => colW[ck] = 1);
+
+      const assigned = pool.filter(c => c.fit && isIncluded(c));   // not manually excluded
+      const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
+
       Object.keys(byKey).forEach(k => {
-        const cap = byKey[k].length;                  // upload-based: this fit's own uploads
-        // Keep EVERY uploaded photo — the buyer uploaded exactly what they want to buy.
-        byKey[k].forEach(c => inc.add(c.id));
-        // Group this fit's uploads by (canon) colour, only to measure the sourcing gap.
+        const list = byKey[k];
+        // No colour mix configured → can't balance by colour, keep every design.
+        if (!haveMix) { list.forEach(c => inc.add(c.id)); return; }
+        // Net piece target for NEW designs in this cell, then split across colours.
+        const onOrd = (enabled && cfg.onOrder && cfg.onOrder[k]) ? Math.max(0, cfg.onOrder[k]) : 0;
+        const netU = Math.max(0, (keyTargetUnits[k] || 0) - onOrd);
+        const colU = splitInts(netU, colW);            // pieces the mix wants per colour
+        // Bucket this cell's photos by (canon) colour; unmappable colours are off-list.
         const byCol = {};
-        byKey[k].forEach(c => { const ck = canonColour(c.colour, colKeys); (byCol[ck] = byCol[ck] || []).push(c); });
-        // Split the cap over the FULL colour list to get each colour's target count,
-        // then report where uploads fall SHORT of that target (never drop the surplus).
-        const fullW = {};
-        colKeys.forEach(ck => { fullW[ck] = Math.max(0, +cfg.colours[ck] || 0); });
-        if (Object.values(fullW).reduce((s, v) => s + v, 0) <= 0) colKeys.forEach(ck => fullW[ck] = 1);
-        const colTarget = splitInts(cap, fullW);
+        list.forEach(c => {
+          const ck = canonColour(c.colour, colKeys);
+          if (colKeys.indexOf(ck) < 0) {               // colour not in the mix at all
+            if (c.includeOverride === true) { inc.add(c.id); return; }   // pin overrides
+            excludeInfo[c.id] = { colour: (c.colour && String(c.colour).trim()) || 'Unspecified', offList: true, have: 1, target: 0 };
+            return;
+          }
+          (byCol[ck] = byCol[ck] || []).push(c);
+        });
         const shorts = [];
-        Object.keys(colTarget).forEach(ck => {
-          const want = colTarget[ck] || 0, have = (byCol[ck] || []).length;
-          if (want > have && ck !== 'Other') shorts.push({ key: ck, label: ck, have, want, need: want - have });
+        colKeys.forEach(ck => {
+          // Pieces → design count for this colour (≥1 design if the mix funds it at all).
+          const want = colU[ck] > 0 ? Math.max(1, Math.round(colU[ck] / DEPTH_PER_DESIGN)) : 0;
+          const bucket = byCol[ck] || [];
+          const have = bucket.length;
+          // Pins first, then best AI rating — keep the top `want`, hold the rest.
+          const ranked = bucket.slice().sort((a, b) =>
+            ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
+            ((b.rating || 0) - (a.rating || 0)));
+          ranked.forEach((c, i) => {
+            if (i < want || c.includeOverride === true) inc.add(c.id);
+            else excludeInfo[c.id] = { colour: ck, offList: false, have: have, target: want };
+          });
+          // SHORT: the mix wants more of this colour than were uploaded — flag it,
+          // and (by NOT reassigning slots) leave that budget unspent on purpose.
+          if (want > have && ck !== 'Other') shorts.push({ key: ck, label: ck, have: have, want: want, need: want - have });
         });
         if (shorts.length) stage1Short[k] = shorts.sort((a, b) => b.need - a.need);
       });
@@ -844,6 +898,7 @@ function buildPlan(cands, settings) {
     return {
       category: catKey, label: spec.label, designNote: spec.designNote,
       enabled, budget, expPrice, estUnits, poolCount: pool.length, hasPrint,
+      sizeMode: cfg.sizeMode, targetUnits: cfg.targetUnits,
       onOrder: onOrderTotal, freedBudget: freedBudgetTotal, netUnits: netUnitsTotal,
       fits, printGroups, unassigned,
       // Size ladder is still a decided % (rolled up from the design runs).
@@ -886,6 +941,8 @@ router.post('/api/casuals/settings', (req, res) => {
       enabled: inc.enabled != null ? !!inc.enabled : c.enabled,
       budget: inc.budget != null ? Math.max(0, parseInt(String(inc.budget).replace(/[^\d]/g, '')) || 0) : c.budget,
       avgCost: inc.avgCost != null ? Math.max(1, parseInt(inc.avgCost) || c.avgCost) : c.avgCost,
+      sizeMode: inc.sizeMode != null ? (inc.sizeMode === 'units' ? 'units' : 'cost') : c.sizeMode,
+      targetUnits: inc.targetUnits != null ? Math.max(0, parseInt(String(inc.targetUnits).replace(/[^\d]/g, '')) || 0) : c.targetUnits,
       fits: pickPct(inc.fits, c.fits),
       sizes: pickPct(inc.sizes, c.sizes),
       colours: pickPct(inc.colours, c.colours),
