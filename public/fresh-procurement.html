@@ -2202,7 +2202,10 @@
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);
   el('czReSegBtn').addEventListener('click', czAnalyze);
-  el('czPlanFromSegBtn').addEventListener('click', function(){ el('czSegPanel').style.display = 'none'; czRenderPlan(czLastPlan); });
+  // Confirm & build plan: fetch a FRESHLY-computed plan from the server so any
+  // settings edited after segregation (size curve → set/designs, %s, budget) are
+  // applied. Re-rendering the stale in-memory czLastPlan would ignore them.
+  el('czPlanFromSegBtn').addEventListener('click', function(){ el('czSegPanel').style.display = 'none'; czLoadPlan(); });
   el('czExportBtn').addEventListener('click', czExportPO);
   el('czNewBatch').addEventListener('click', czCreateBatch);
   el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });
