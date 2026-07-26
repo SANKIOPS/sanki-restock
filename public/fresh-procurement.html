@@ -1120,10 +1120,13 @@
 
   // One editable %-row (fit / size / colour). `removable` custom rows show ✕.
   function czDistRow(catKey, kind, key, label, pct, removable){
+    // Sizes carry ABSOLUTE per-set quantities (pieces in one design); fits, prints
+    // and colours stay as mix %s.
+    var unit = (kind === 'sizes') ? 'pc' : '%';
     var d = document.createElement('div'); d.className = 'czdrow';
     d.innerHTML = '<span class="lbl">'+escapeHtml(label)+'</span>'+
       '<input type="number" min="0" step="1" value="'+(pct||0)+'" />'+
-      '<span style="font-size:12px;color:var(--muted)">%</span>'+
+      '<span style="font-size:12px;color:var(--muted)">'+unit+'</span>'+
       '<span class="u" data-u></span>'+
       (removable ? '<span class="rm" title="Remove">✕</span>' : '');
     var inp = d.querySelector('input');
@@ -1151,14 +1154,21 @@
     var tUnits = (c.sizeMode === 'units') ? (c.targetUnits||0) : Math.round(budget / expPrice);
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
     var up = card.querySelector('[data-unitspill]'); if(up) up.textContent = fmtINR(tUnits)+' pc';
-    // No piece-count estimate here (it needed a per-unit price we don't trust
-    // until PO). Each row just shows its normalised share of the budget.
+    // SET = the per-design size run the founder typed (sum of S–XXXL quantities).
+    // DESIGNS = total pieces ÷ SET — this is the number the colour % lands on.
+    var setPc = czSum(c.sizes || {});
+    var designs = setPc > 0 ? Math.round(tUnits / setPc) : 0;
+    var sp = card.querySelector('[data-setpill]'); if(sp) sp.textContent = fmtINR(setPc)+' pc';
+    var dp = card.querySelector('[data-designpill]'); if(dp) dp.textContent = fmtINR(designs);
+    // fit/print/colour rows show their normalised % share; SIZE rows show the raw
+    // piece count typed (they ARE the set curve, not a percentage).
     ['fits','sizes','printTypes','colours'].forEach(function(kind){
       var map = c[kind]; if(!map) return;
       var tot = czSum(map) || 1;
       Array.prototype.forEach.call(card.querySelectorAll('[data-kind="'+kind+'"] .czdrow'), function(row){
-        var key = row.getAttribute('data-key'); var pct = Math.max(0, parseInt(map[key])||0);
-        var u = row.querySelector('[data-u]'); if(u) u.textContent = Math.round(pct/tot*100)+'%';
+        var key = row.getAttribute('data-key'); var v = Math.max(0, parseInt(map[key])||0);
+        var u = row.querySelector('[data-u]');
+        if(u) u.textContent = (kind === 'sizes') ? (v + ' pc') : (Math.round(v/tot*100)+'%');
       });
     });
   }
@@ -1231,7 +1241,7 @@
       body.appendChild(row);
 
       var pills = document.createElement('div'); pills.className = 'czpills';
-      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">Target units<b data-unitspill>0</b></div>';
+      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">Target pieces<b data-unitspill>0</b></div><div class="czpill">Set size<b data-setpill>0 pc</b></div><div class="czpill">→ Designs<b data-designpill>0</b></div>';
       body.appendChild(pills);
 
       // Print-type mix % — an extra manual split (Shirts & T-shirts only) that
@@ -1258,7 +1268,7 @@
       var isUpper = CZ_PRINT_CATS.indexOf(catKey) >= 0;
       ['fits','sizes','colours'].forEach(function(kind){
         var title = kind === 'fits' ? (isUpper ? '② Fit mix % — within each print type' : 'Fit mix %')
-                  : kind === 'sizes' ? 'Size mix %'
+                  : kind === 'sizes' ? 'Pieces per set — one design’s S–XXXL run (SUM = set size)'
                   : 'Colour mix % — within each fit';
         var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
         body.appendChild(sub);
@@ -1563,20 +1573,23 @@
   // boxes: the %s are scaled to a compact integer curve (≈12 pcs), sizes at 0%
   // drop out. Falls back to the old fixed curve only if no size mix is set.
   var CZ_SET_BASE = 12;
+  // The size mix is now ABSOLUTE quantities per set (the founder types how many
+  // S / M / L / XL / XXL / XXXL make ONE design's run). czRatioFor returns that
+  // exact curve — NOT rescaled — so a design on the buy sheet = the set the plan
+  // used, and total pieces = designs × set. Sizes at 0 drop out.
   function czRatioFor(cat){
     var key = cat.category;
     var pairs = [];
     // Prefer the LIVE edited settings so changes reflect without a re-analyse…
-    var pctMap = czSettings && czSettings.categories && czSettings.categories[key] && czSettings.categories[key].sizes;
-    if(pctMap){ Object.keys(pctMap).forEach(function(sz){ var p = +pctMap[sz]||0; if(p>0) pairs.push([sz, p]); }); }
-    // …else the %s baked into the plan.
-    if(!pairs.length && cat.sizes){ cat.sizes.forEach(function(s){ var p = +(s.pct!=null?s.pct:s.share)||0; if(p>0) pairs.push([s.key||s, p]); }); }
+    var qMap = czSettings && czSettings.categories && czSettings.categories[key] && czSettings.categories[key].sizes;
+    if(qMap){ Object.keys(qMap).forEach(function(sz){ var q = Math.max(0, Math.round(+qMap[sz]||0)); if(q>0) pairs.push([sz, q]); }); }
+    // …else the quantities baked into the plan.
+    if(!pairs.length && cat.sizes){ cat.sizes.forEach(function(s){ var q = Math.max(0, Math.round(+(s.pct!=null?s.pct:s.share)||0)); if(q>0) pairs.push([s.key||s, q]); }); }
     if(!pairs.length){
       if(CZ_SETRATIO[key]) return CZ_SETRATIO[key];
       return ((cat && cat.sizes) || []).map(function(s){ return [s.key||s, 1]; });
     }
-    var tot = pairs.reduce(function(a,r){ return a + r[1]; }, 0) || 1;
-    return pairs.map(function(r){ return [r[0], Math.max(1, Math.round(r[1] / tot * CZ_SET_BASE))]; });
+    return pairs;   // exact per-size quantities = one set
   }
   function czSetPieces(ratio){ return ratio.reduce(function(a,r){ return a + r[1]; }, 0); }
   function czSetsFor(id){ var v = czSets[id]; return (v == null || v < 0) ? 1 : v; }

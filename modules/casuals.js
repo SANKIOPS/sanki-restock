@@ -670,9 +670,13 @@ function buildPlan(cands, settings) {
       : (cfg.sizeMode === 'units' ? Math.max(0, cfg.targetUnits || 0) : Math.round(budget / expPrice));
     if (enabled && cfg.sizeMode === 'units') budget = catUnits * expPrice;
     const estUnits = catUnits;
-    // Pieces assumed per design when converting a colour cell's piece target into a
-    // design count (≈ one size-curve "set"; matches the frontend CZ_SET_BASE = 12).
-    const DEPTH_PER_DESIGN = 12;
+    // SET = pieces in ONE design's size run. The founder now types ABSOLUTE
+    // per-size quantities (S/M/L/XL/XXL/XXXL); their SUM is the set size. A design
+    // therefore = SET pieces. Total DESIGNS = total pieces ÷ SET — this is the
+    // number that cascades down print → fit → colour, so colour % lands on the
+    // count of designs (impactful), not on a piece count that collapses to 1.
+    const SET = Math.max(1, Object.keys(cfg.sizes || {}).reduce((a, k) => a + Math.max(0, +cfg.sizes[k] || 0), 0));
+    const catDesigns = Math.round(catUnits / SET);
 
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
@@ -731,10 +735,13 @@ function buildPlan(cands, settings) {
         const list = byKey[k];
         // No colour mix configured → can't balance by colour, keep every design.
         if (!haveMix) { list.forEach(c => inc.add(c.id)); return; }
-        // Net piece target for NEW designs in this cell, then split across colours.
+        // Net target for NEW designs in this cell. keyTargetUnits is in PIECES; a
+        // design = SET pieces, so convert to a DESIGN count, then split THAT across
+        // colours — the colour % now decides how many designs of each colour.
         const onOrd = (enabled && cfg.onOrder && cfg.onOrder[k]) ? Math.max(0, cfg.onOrder[k]) : 0;
-        const netU = Math.max(0, (keyTargetUnits[k] || 0) - onOrd);
-        const colU = splitInts(netU, colW);            // pieces the mix wants per colour
+        const netU = Math.max(0, (keyTargetUnits[k] || 0) - onOrd);   // pieces
+        const netD = Math.round(netU / SET);                          // designs
+        const colU = splitInts(netD, colW);            // DESIGNS the mix wants per colour
         // Bucket this cell's photos by (canon) colour; unmappable colours are off-list.
         const byCol = {};
         list.forEach(c => {
@@ -748,8 +755,9 @@ function buildPlan(cands, settings) {
         });
         const shorts = [];
         colKeys.forEach(ck => {
-          // Pieces → design count for this colour (≥1 design if the mix funds it at all).
-          const want = colU[ck] > 0 ? Math.max(1, Math.round(colU[ck] / DEPTH_PER_DESIGN)) : 0;
+          // colU is already a DESIGN count for this colour (colour % of the cell's
+          // designs). No piece→design division here any more.
+          const want = Math.max(0, colU[ck] || 0);
           const bucket = byCol[ck] || [];
           const have = bucket.length;
           // Pins first, then best AI rating — keep the top `want`, hold the rest.
@@ -834,7 +842,7 @@ function buildPlan(cands, settings) {
       return {
         key: fr.key, label: fr.label, pct: fr.pct, share: fr.share, otbKey,
         budget: fb, availBudget, estUnits: photos.length ? designs.reduce((s, d) => s + d.estUnits, 0) : fitEst,
-        target: fitEst, onOrder, orderedCost, netUnits, freedBudget,
+        target: fitEst, designsTarget: Math.round(fitEst / SET), set: SET, onOrder, orderedCost, netUnits, freedBudget,
         budgetHeld: gatePassed.length - incList.length,
         photoCount: photos.length, includedCount: incList.length, designs, colours, unassignedFit: false,
         // Stage-1 sourcing gaps: colours this fit is short of, per the colour mix.
@@ -898,7 +906,7 @@ function buildPlan(cands, settings) {
     return {
       category: catKey, label: spec.label, designNote: spec.designNote,
       enabled, budget, expPrice, estUnits, poolCount: pool.length, hasPrint,
-      sizeMode: cfg.sizeMode, targetUnits: cfg.targetUnits,
+      sizeMode: cfg.sizeMode, targetUnits: cfg.targetUnits, set: SET, designsTarget: catDesigns,
       onOrder: onOrderTotal, freedBudget: freedBudgetTotal, netUnits: netUnitsTotal,
       fits, printGroups, unassigned,
       // Size ladder is still a decided % (rolled up from the design runs).
