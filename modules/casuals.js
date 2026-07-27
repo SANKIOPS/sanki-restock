@@ -786,15 +786,20 @@ function buildPlan(cands, settings) {
     let stage1Short = {};   // fit key → [] (per-fit colour shorts — retired, kept for shape)
     let excludeInfo = {};   // design id → { colour, offList, have, target } for held designs
     let catColourShort = [];// CATEGORY-level colour gaps: [{ key,label,have,want,need }]
-    // CATEGORY-LEVEL colour balance. Colour is NOT structural to a fit/print cell —
-    // a colour can live in any fit — so we balance the colour mix across the WHOLE
-    // category's design pool, not inside each tiny print×fit cell (where a 15%
-    // colour would round to 0 in a 2-design cell and get wrongly zeroed). Fit &
-    // print %s still split the MONEY/pieces (that's structural); this only decides
-    // WHICH already-coloured photos we buy so the aggregate mix matches the %s.
-    const selectIncluded = (keyOf) => {
+    // CATEGORY-LEVEL, COLOUR-FIRST balance. Colour is NOT structural to a fit/print
+    // cell — a colour can live in any fit — and per-cell piece caps were starving
+    // colours whose photos happened to pile into the same small cell (holding a
+    // colour AND asking to source more of it at the same time). So colour is now
+    // balanced across the WHOLE category: each colour buys its best-rated photos up
+    // to its category target (colour % of the budget-bound design count). Fit &
+    // print %s still drive the MONEY / size split and the reporting — they are a
+    // soft guide here, not a hard cap that overrides the colour mix. Total stays
+    // bounded by the budget because the colour targets sum to the category's design
+    // target. A colour is EITHER over target (extras held) OR under target (source
+    // more) — never both, so the messaging can't contradict itself.
+    const selectIncluded = () => {
       const inc = new Set();
-      stage1Short = {};
+      stage1Short = {};        // per-fit colour shorts retired (colour is category-wide)
       excludeInfo = {};
       catColourShort = [];
       const colKeys = Object.keys(cfg.colours || {});
@@ -806,19 +811,6 @@ function buildPlan(cands, settings) {
 
       const assigned = pool.filter(c => c.fit && isIncluded(c));   // not manually excluded
 
-      // Per-cell DESIGN capacity — how many designs each fit×print cell may buy,
-      // from its piece target (net of existing POs). This still caps every cell so
-      // no fit/print overshoots its own piece budget; colour just decides which of
-      // that cell's photos win the slots.
-      const capLeft = {}; let totalCap = 0;
-      const byKey = {}; assigned.forEach(c => { const k = keyOf(c); (byKey[k] = byKey[k] || []).push(c); });
-      Object.keys(byKey).forEach(k => {
-        const onOrd = enabled ? (Math.max(0, (cfg.onOrder && cfg.onOrder[k]) || 0) + orderedQtyOf(k)) : 0;
-        const netU = Math.max(0, (keyTargetUnits[k] || 0) - onOrd);   // pieces
-        capLeft[k] = Math.round(netU / SET);                          // designs
-        totalCap += capLeft[k];
-      });
-
       // No colour mix configured → can't balance by colour, keep every design.
       if (!haveMix) {
         assigned.forEach(c => inc.add(c.id));
@@ -826,15 +818,10 @@ function buildPlan(cands, settings) {
         return inc;
       }
 
-      // How many DESIGNS of each colour to buy across the WHOLE category. Scaled to
-      // the category's FULL design target (catDesigns), NOT just the cells that
-      // happen to have photos — otherwise colours whose photos sit in a couple of
-      // small cells get starved. At ~17 designs a 15% colour lands on ~2-3 (not 0).
-      // Placement is still capped per cell (capLeft) so no fit busts its piece
-      // budget; whatever can't be placed (too few photos / cell full) becomes a
-      // "source more <colour>" gap.
-      const quota0 = splitInts(Math.max(totalCap, catDesigns), colW);
-      const colQuota = Object.assign({}, quota0);
+      // How many DESIGNS of each colour to buy across the category = colour % of the
+      // budget-bound design target (catDesigns). Sums to catDesigns, so total buy
+      // stays within budget.
+      const colTarget = splitInts(catDesigns, colW);
 
       // Bucket every design by canonical colour; off-list colours are held.
       const haveByCol = {};
@@ -848,55 +835,21 @@ function buildPlan(cands, settings) {
         (haveByCol[ck] = haveByCol[ck] || []).push(c);
       });
 
-      // Pins first — force them in; they consume their cell's capacity + colour quota.
-      const pinsByCol = {};
-      assigned.forEach(c => {
-        if (c.includeOverride !== true) return;
-        const ck = canonColour(c.colour, colKeys);
-        if (colKeys.indexOf(ck) < 0) return;           // off-list pin already handled
-        inc.add(c.id);
-        const k = keyOf(c); if (capLeft[k] > 0) capLeft[k]--;
-        if ((colQuota[ck] || 0) > 0) colQuota[ck]--;
-        pinsByCol[ck] = (pinsByCol[ck] || 0) + 1;
-      });
-
-      // Each colour's remaining (non-pin) designs, best-rated first.
-      const rankedByCol = {};
+      // Per colour: buy the best-rated up to its target (pins first, always in);
+      // hold the extras. If you have fewer photos than the target → "source more".
       colKeys.forEach(ck => {
-        rankedByCol[ck] = (haveByCol[ck] || [])
-          .filter(c => c.includeOverride !== true && !inc.has(c.id))
-          .sort((a, b) => (b.rating || 0) - (a.rating || 0));
-      });
-
-      // GREEDY proportional fill: repeatedly serve the colour that is most "owed"
-      // (largest remaining quota) by placing its best design into a cell that still
-      // has capacity. Balances the category colour mix while never busting a cell's
-      // piece target.
-      const placed = {}; colKeys.forEach(ck => placed[ck] = 0);
-      let guard = totalCap + 5;
-      while (guard-- > 0) {
-        let best = null, bestQ = 0;
-        colKeys.forEach(ck => {
-          if ((colQuota[ck] || 0) <= 0) return;
-          const d = rankedByCol[ck].find(c => !inc.has(c.id) && capLeft[keyOf(c)] > 0);
-          if (!d) return;
-          if ((colQuota[ck] || 0) > bestQ) { bestQ = colQuota[ck]; best = ck; }
+        const bucket = (haveByCol[ck] || []).slice().sort((a, b) =>
+          ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
+          ((b.rating || 0) - (a.rating || 0)));
+        const have = bucket.length;
+        const want = Math.max(0, colTarget[ck] || 0);
+        let kept = 0;
+        bucket.forEach(c => {
+          if (kept < want || c.includeOverride === true) { inc.add(c.id); kept++; }
+          else excludeInfo[c.id] = { colour: ck, offList: false, have: have, target: want };
         });
-        if (!best) break;
-        const d = rankedByCol[best].find(c => !inc.has(c.id) && capLeft[keyOf(c)] > 0);
-        inc.add(d.id); placed[best]++; colQuota[best]--; capLeft[keyOf(d)]--;
-      }
-
-      // Held designs + category shortfall bookkeeping.
-      colKeys.forEach(ck => {
-        const haveN = (haveByCol[ck] || []).length;                 // uploaded (on-list)
-        const keptN = placed[ck] + (pinsByCol[ck] || 0);            // bought of this colour
-        (rankedByCol[ck] || []).forEach(c => {
-          if (inc.has(c.id)) return;
-          excludeInfo[c.id] = { colour: ck, offList: false, have: haveN, target: keptN };
-        });
-        const wantN = quota0[ck] || 0;
-        if (wantN > keptN && ck !== 'Other') catColourShort.push({ key: ck, label: ck, have: haveN, want: wantN, need: wantN - keptN });
+        // Source more: fewer photos of this colour than its target → upload more.
+        if (want > have && ck !== 'Other') catColourShort.push({ key: ck, label: ck, have: have, want: want, need: want - have });
       });
       catColourShort.sort((a, b) => b.need - a.need);
 
