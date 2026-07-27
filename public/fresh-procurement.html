@@ -1730,10 +1730,10 @@
                   '<span class="czexnote2">'+_c+' isn\u2019t one of this category\u2019s colour-mix colours, so it wasn\u2019t bought. Set a % for it in the colour mix, or tap ＋ Include to buy it anyway.</span>';
               } else if(exd.target===0){
                 exReason = '<span class="czexwhy budget">'+_c+' held back</span>'+
-                  '<span class="czexnote2">Your colour mix leaves no room for '+_c+' in this fit (kept 0 of '+exd.have+'). Raise '+_c+'\u2019s % or tap ＋ Include to buy it anyway.</span>';
+                  '<span class="czexnote2">Your colour mix leaves no room for '+_c+' in this buy (kept 0 of '+exd.have+'). Raise '+_c+'\u2019s % or tap ＋ Include to buy it anyway.</span>';
               } else {
                 exReason = '<span class="czexwhy budget">'+_c+' held back ('+(exd.have-exd.target)+' extra)</span>'+
-                  '<span class="czexnote2">Your colour mix wants '+exd.target+' '+_c+' in this fit but you sent '+exd.have+'. Kept the '+exd.target+' best-rated; the other '+(exd.have-exd.target)+' are held. Tap ＋ Include to buy anyway.</span>';
+                  '<span class="czexnote2">Your colour mix wants '+exd.target+' '+_c+' across this category but you sent '+exd.have+'. Kept the '+exd.target+' best-rated; the other '+(exd.have-exd.target)+' are held. Tap ＋ Include to buy anyway.</span>';
               }
             } else if(c.excludedReason==='variety'){ exReason = '<span class="czexwhy budget">beyond this fit\u2019s colour mix</span>'; }
             else if(c.excludedReason==='budget'){ exReason = '<span class="czexwhy budget">fit budget full</span>'; }
@@ -1965,6 +1965,21 @@
       note.innerHTML = 'Your photos cover <b>'+fmtINR(inPO)+' pc</b>'+(onWay>0?(' and <b>'+fmtINR(onWay)+' pc</b> is on the way'):'')+
         ' — upload ~<b>'+fmtINR(shortPc)+' pc</b> more of photos to reach the <b>'+fmtINR(toSrc)+' pc</b> you still need.';
       wrap.appendChild(note);
+    }
+    // FIRST-LEVEL colour breakdown — colour balance is category-wide, so show it
+    // here: how many designs are SELECTED per colour, and how many MORE each colour
+    // still needs sourced. (Colour is balanced across the whole category, not per fit.)
+    if(c.enabled && ((c.colours||[]).length || (c.colourShort||[]).length)){
+      var chipCss = 'display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;font-size:12px;';
+      var sel = (c.colours||[]).slice().filter(function(k){ return (k.photos||0)>0; })
+        .sort(function(a,b){ return (b.photos||0)-(a.photos||0); })
+        .map(function(k){ return '<span style="'+chipCss+'background:#dcfce7;color:#065f46">'+escapeHtml(k.label)+' <b>×'+(k.photos||0)+'</b></span>'; }).join('');
+      var need = (c.colourShort||[]).map(function(s){ return '<span style="'+chipCss+'background:#fef3c7;color:#92400e">'+escapeHtml(s.label)+' <b>+'+s.need+'</b> more</span>'; }).join('');
+      var colWrap = document.createElement('div'); colWrap.className='czcatsum-cols'; colWrap.style.cssText='margin-top:8px';
+      colWrap.innerHTML =
+        (sel  ? '<div style="margin-bottom:4px"><i style="color:#6b7280;font-size:12px;margin-right:6px">Designs selected by colour</i>'+sel+'</div>' : '')+
+        (need ? '<div><i style="color:#6b7280;font-size:12px;margin-right:6px">Colours to source more</i>'+need+'</div>' : '');
+      wrap.appendChild(colWrap);
     }
     if(sums.length){
       var lines = document.createElement('div'); lines.className='czcatsum-fits'; var any=false;
