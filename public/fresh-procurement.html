@@ -1830,14 +1830,14 @@
             oc.innerHTML =
               '<div class="cand"'+czCandAttrs(o, cat.label, f.label, sz)+'>'+thumb+'</div>'+
               '<div class="poinfo">'+
-                '<div class="potop"><span class="czowbadge">✓ ordered</span>'+
+                '<div class="potop"><span class="pov">'+escapeHtml(o.vendor||o.colour||'Ordered product')+'</span><span class="czowbadge">✓ ordered</span>'+
                   '<button class="czowdel" type="button" title="Remove from ordered">✕ Remove</button>'+
                   '<span class="pomoney">'+fmtINR(o.qty||0)+' pc</span></div>'+
                 '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(o.colour||'—')+'</span>'+
                   (o.cost>0 ? ('<span class="potag">₹'+fmtINR(o.cost)+'/pc</span>') : '')+'</div>'+
                 '<div class="poset"><label>Sizes</label><span class="posetx">'+escapeHtml(sz)+'</span></div>'+
               '</div>';
-            oc.querySelector('.czowdel').addEventListener('click', function(){ czOrderedDelete(o.id); });
+            oc.querySelector('.czowdel').addEventListener('click', function(){ czOrderedDelete(o.ids||[o.id]); });
             owGrid.appendChild(oc);
           });
           into.appendChild(owGrid);
@@ -2240,8 +2240,12 @@
   }
   // Pull an already-ordered member back out of the batch (deletes the candidate),
   // then re-fetch a fresh plan so its box re-nets.
-  function czOrderedDelete(id){
-    fetch('/api/casuals/candidate/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){ czLoadPlan(); });
+  // A merged ordered card can stand for several bill rows (one per size), so
+  // delete EVERY underlying candidate id, then refresh once.
+  function czOrderedDelete(ids){
+    var list = Array.isArray(ids) ? ids : [ids];
+    Promise.all(list.map(function(id){ return fetch('/api/casuals/candidate/'+encodeURIComponent(id),{method:'DELETE'}).catch(function(){}); }))
+      .then(function(){ czLoadPlan(); });
   }
   function czInvClose(){ (czInv.items||[]).forEach(function(it){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } }); el('czInvModal').classList.remove('show'); czInv = { items:[], fits:{}, prints:{}, cats:[] }; }
 

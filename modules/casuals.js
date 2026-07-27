@@ -445,6 +445,34 @@ function publicCandidate(c) {
     included: isIncluded(c),
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
+// Collapse already-ordered PO line items into product cards. A supplier bill
+// lists ONE product across several size rows (Black L, Black XL, …), so each row
+// arrives as its own candidate. Merge rows that share the same product identity
+// (colour · vendor · unit ₹) into a single card whose size run is the SUM of its
+// rows — matching how a batch product is shown (one photo, one size ladder). The
+// card keeps every underlying candidate id so a single "Remove" deletes them all.
+function mergeOrderedItems(items) {
+  const groups = {}; const order = [];
+  (items || []).forEach(c => {
+    const colour = (c.colour && String(c.colour).trim()) || 'Unspecified';
+    const cost = Math.max(0, c.orderedCost || 0);
+    const gk = colour.toLowerCase() + '|' + String(c.vendor || '').trim().toLowerCase() + '|' + cost;
+    let g = groups[gk];
+    if (!g) { g = groups[gk] = { ids: [], repr: c, colour, cost, vendor: c.vendor || '', qty: 0, sizeMap: {} }; order.push(gk); }
+    if (!g.repr.file && c.file) g.repr = c;            // prefer a member that actually has a photo
+    g.ids.push(c.id);
+    g.qty += Math.max(0, c.orderedQty || 0);
+    Object.keys(c.orderedSizes || {}).forEach(k => { const u = Math.max(0, c.orderedSizes[k] || 0); if (u > 0) g.sizeMap[k] = (g.sizeMap[k] || 0) + u; });
+  });
+  return order.map(gk => {
+    const g = groups[gk];
+    return {
+      id: g.repr.id, ids: g.ids, url: '/api/casuals/candidate/' + g.repr.id, hasImg: !!g.repr.file,
+      vendor: g.vendor, colour: g.colour, qty: g.qty, cost: g.cost,
+      sizes: Object.keys(g.sizeMap).map(k => ({ key: k, units: g.sizeMap[k] })).filter(x => x.units > 0)
+    };
+  });
+}
 function categoryCounts(cands) {
   const active = cands.filter(c => !c.dupeOf && !c.ordered);
   const by = {};
@@ -871,12 +899,11 @@ function buildPlan(cands, settings) {
         budgetHeld: gatePassed.length - incList.length,
         photoCount: photos.length, includedCount: incList.length, designs, colours, unassignedFit: false,
         // Already-ordered PO members that live in THIS cell — read-only cards.
-        ordered: orderedCell ? orderedCell.items.map(c => ({
-          id: c.id, url: '/api/casuals/candidate/' + c.id, hasImg: !!c.file,
-          vendor: c.vendor || '', colour: (c.colour && String(c.colour).trim()) || 'Unspecified',
-          qty: Math.max(0, c.orderedQty || 0), cost: Math.max(0, c.orderedCost || 0),
-          sizes: Object.keys(c.orderedSizes || {}).map(k => ({ key: k, units: c.orderedSizes[k] })).filter(x => x.units > 0)
-        })) : [],
+        // A bill lists the SAME product across several size rows, so merge lines
+        // that share (colour · vendor · unit ₹) into ONE product card whose size
+        // run is the sum of its rows — exactly how a batch product is shown. Each
+        // card carries every underlying candidate id so "Remove" can drop them all.
+        ordered: mergeOrderedItems(orderedCell ? orderedCell.items : []),
         // Stage-1 sourcing gaps: colours this fit is short of, per the colour mix.
         colourShort: (enabled && stage1Short[otbKey]) ? stage1Short[otbKey] : []
       };
