@@ -646,6 +646,41 @@ router.get('/api/procurement/photo/:file', (req, res) => {
   if (!fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp)) return res.status(404).end();
   res.sendFile(fp);
 });
+// Disk reclaim: every AI-image generation writes a NEW random-named file and
+// never deletes the version it replaced, so regenerated images pile up on the
+// /data volume as orphans no PO references. Collect every photo filename still
+// referenced across all POs (aiImages urls, backRefs, line photoUrls) and
+// report/delete the rest. Dry-run by default; ?apply=1 actually deletes.
+// Admin-only — it touches the shared volume.
+function collectReferencedPhotos(s) {
+  const keep = new Set();
+  const add = url => { const n = path.basename(String(url || '')); if (n) keep.add(n); };
+  Object.values(s.pos || {}).forEach(po => {
+    Object.values(po.aiImages || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
+    Object.values(po.backRefs || {}).forEach(add);
+    (po.lines || []).forEach(l => add(l && l.photoUrl));
+  });
+  return keep;
+}
+router.post('/api/procurement/photos/sweep', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  const apply = String((req.query && req.query.apply) || '') === '1';
+  const s = loadStore();
+  const keep = collectReferencedPhotos(s);
+  let files = []; try { files = fs.readdirSync(PHOTO_DIR); } catch {}
+  let orphanBytes = 0, orphanCount = 0, keptCount = 0, removed = 0, freed = 0;
+  files.forEach(fn => {
+    const fp = path.join(PHOTO_DIR, fn);
+    let size = 0; try { const st = fs.statSync(fp); if (!st.isFile()) return; size = st.size; } catch { return; }
+    if (keep.has(fn)) { keptCount++; return; }
+    orphanCount++; orphanBytes += size;
+    if (apply) { try { fs.unlinkSync(fp); removed++; freed += size; } catch {} }
+  });
+  res.json({ success: true, applied: apply, totalFiles: files.length,
+    referenced: keep.size, keptOnDisk: keptCount,
+    orphanCount, orphanMB: +(orphanBytes / 1048576).toFixed(2),
+    removed, freedMB: +(freed / 1048576).toFixed(2) });
+});
 // Attach (or clear) a real BACK-view reference photo for a product group so the
 // "Product back" shot is generated from the true reverse instead of guessing.
 // The image itself is uploaded via /api/procurement/photo first; we just store
