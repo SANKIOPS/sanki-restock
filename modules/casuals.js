@@ -1230,6 +1230,22 @@ router.post('/api/casuals/candidates/sweep', (req, res) => {
   res.json({ success: true, removed, freedKB: Math.round(freed / 1024) });
 });
 
+// Disk diagnostic: report the size of every top-level entry on the /data volume
+// so we can see exactly what's consuming space before resizing. Read-only.
+router.get('/api/casuals/disk', (req, res) => {
+  const dirSize = p => { let t = 0; try { for (const e of fs.readdirSync(p, { withFileTypes: true })) { const fp = path.join(p, e.name); try { t += e.isDirectory() ? dirSize(fp) : fs.statSync(fp).size; } catch {} } } catch {} return t; };
+  const out = [];
+  try {
+    for (const e of fs.readdirSync(DATA_DIR, { withFileTypes: true })) {
+      const fp = path.join(DATA_DIR, e.name);
+      let bytes = 0; try { bytes = e.isDirectory() ? dirSize(fp) : fs.statSync(fp).size; } catch {}
+      out.push({ name: e.name + (e.isDirectory() ? '/' : ''), MB: +(bytes / 1048576).toFixed(2) });
+    }
+  } catch (err) { return res.status(500).json({ success: false, error: String(err) }); }
+  out.sort((a, b) => b.MB - a.MB);
+  res.json({ success: true, dataDir: DATA_DIR, totalMB: +(out.reduce((s, x) => s + x.MB, 0)).toFixed(2), entries: out });
+});
+
 router.post('/api/casuals/analyze', async (req, res) => {
   try {
     if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI segregation is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
