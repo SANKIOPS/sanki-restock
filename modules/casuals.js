@@ -446,7 +446,7 @@ function publicCandidate(c) {
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 function categoryCounts(cands) {
-  const active = cands.filter(c => !c.dupeOf);
+  const active = cands.filter(c => !c.dupeOf && !c.ordered);
   const by = {};
   active.forEach(c => { const k = c.category || 'Unsorted'; by[k] = (by[k] || 0) + 1; });
   return CAT_KEYS.concat(['Unsorted']).map(k => ({ category: k, label: (CAT_BY_KEY[k] && CAT_BY_KEY[k].label) || 'Unsorted', count: by[k] || 0 }))
@@ -684,13 +684,32 @@ function buildPlan(cands, settings) {
     const fitBudget = splitInts(budget, cfg.fits);
     const sizePctRows = pctRows(cfg.sizes, k => k);
 
-    const pool = byCat[catKey] || [];
+    // The batch pool splits in two: FRESH photos to curate into new buys, and
+    // ALREADY-ORDERED members imported from a supplier PO. Ordered items are not
+    // curated — they're already bought; they just NET this category's targets and
+    // render as read-only "already ordered" cards inside their own fit box.
+    const allPool = byCat[catKey] || [];
+    const pool = allPool.filter(c => !c.ordered);
+    const orderedPool = allPool.filter(c => c.ordered);
     const catColourAgg = {};        // observed colour → {budget, estUnits, photos}
     const catSizeAgg = {}; Object.keys(cfg.sizes).forEach(k => catSizeAgg[k] = 0);
     // Uppers (Shirts/T-shirts) carry a PRINT-TYPE level ABOVE fit: the category
     // budget first splits by print-type %, then each print-type's slice splits by
     // fit %. Trousers keep the flat category→fit split.
     const hasPrint = catHasPrintTypes(catKey);
+
+    // Already-ordered PO members, bucketed by the SAME cell key the buy plan uses
+    // ("print::fit" for uppers, bare fit for trousers). Each cell's ordered qty
+    // nets its piece target; the items list renders as read-only cards below.
+    const orderedByCell = {};
+    orderedPool.forEach(c => {
+      const key = hasPrint ? (printKeyOf(c) + '::' + c.fit) : c.fit;
+      if (!key) return;
+      const o = orderedByCell[key] = orderedByCell[key] || { qty: 0, priceQty: 0, items: [] };
+      const q = Math.max(0, c.orderedQty || 0);
+      o.qty += q; o.priceQty += Math.max(0, c.orderedCost || 0) * q; o.items.push(c);
+    });
+    const orderedQtyOf = k => (orderedByCell[k] ? orderedByCell[k].qty : 0);
 
     // BALANCED-GRID selection. The uploads are the vendor's FULL option set, not a
     // shortlist — so the app CURATES a balanced buy toward the %s, within the piece
@@ -738,7 +757,7 @@ function buildPlan(cands, settings) {
         // Net target for NEW designs in this cell. keyTargetUnits is in PIECES; a
         // design = SET pieces, so convert to a DESIGN count, then split THAT across
         // colours — the colour % now decides how many designs of each colour.
-        const onOrd = (enabled && cfg.onOrder && cfg.onOrder[k]) ? Math.max(0, cfg.onOrder[k]) : 0;
+        const onOrd = enabled ? (Math.max(0, (cfg.onOrder && cfg.onOrder[k]) || 0) + orderedQtyOf(k)) : 0;
         const netU = Math.max(0, (keyTargetUnits[k] || 0) - onOrd);   // pieces
         const netD = Math.round(netU / SET);                          // designs
         const colU = splitInts(netD, colW);            // DESIGNS the mix wants per colour
@@ -786,8 +805,14 @@ function buildPlan(cands, settings) {
       // OPEN-TO-BUY: existing POs for this exact fit — units already on the way
       // and the money they've already consumed. Keyed by otbKey so uppers net
       // per print-type × fit.
-      const onOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[otbKey]) || 0) : 0;
-      const orderedCost = Math.max(0, (cfg.onOrderCost && cfg.onOrderCost[otbKey]) || 0);
+      // On-the-way = a hand-typed OTB number (cfg.onOrder) PLUS every already-
+      // ordered PO member imported into this exact cell.
+      const manualOnOrder = enabled ? Math.max(0, (cfg.onOrder && cfg.onOrder[otbKey]) || 0) : 0;
+      const orderedCell = orderedByCell[otbKey] || null;
+      const onOrder = enabled ? (manualOnOrder + (orderedCell ? orderedCell.qty : 0)) : 0;
+      const orderedCost = (orderedCell && orderedCell.qty > 0)
+        ? Math.round(orderedCell.priceQty / orderedCell.qty)
+        : Math.max(0, (cfg.onOrderCost && cfg.onOrderCost[otbKey]) || 0);
       const freedBudget = enabled ? Math.round(Math.min(onOrder, fitEst) * (orderedCost > 0 ? orderedCost : expPrice)) : 0;
       // Budget left for NEW designs = fit budget MINUS what existing POs cost.
       const availBudget = Math.max(0, fb - freedBudget);
@@ -845,6 +870,13 @@ function buildPlan(cands, settings) {
         target: fitEst, designsTarget: Math.round(fitEst / SET), set: SET, onOrder, orderedCost, netUnits, freedBudget,
         budgetHeld: gatePassed.length - incList.length,
         photoCount: photos.length, includedCount: incList.length, designs, colours, unassignedFit: false,
+        // Already-ordered PO members that live in THIS cell — read-only cards.
+        ordered: orderedCell ? orderedCell.items.map(c => ({
+          id: c.id, url: '/api/casuals/candidate/' + c.id, hasImg: !!c.file,
+          vendor: c.vendor || '', colour: (c.colour && String(c.colour).trim()) || 'Unspecified',
+          qty: Math.max(0, c.orderedQty || 0), cost: Math.max(0, c.orderedCost || 0),
+          sizes: Object.keys(c.orderedSizes || {}).map(k => ({ key: k, units: c.orderedSizes[k] })).filter(x => x.units > 0)
+        })) : [],
         // Stage-1 sourcing gaps: colours this fit is short of, per the colour mix.
         colourShort: (enabled && stage1Short[otbKey]) ? stage1Short[otbKey] : []
       };
@@ -971,8 +1003,9 @@ router.get('/api/casuals/candidates', (req, res) => {
   const s = loadStore();
   const active = activeCands(s);
   markDuplicates(active);
-  res.json({ success: true, candidates: active.map(publicCandidate),
-    categories: categoryCounts(active), total: active.length,
+  const fresh = active.filter(c => !c.ordered);   // ordered PO members aren't segregation photos
+  res.json({ success: true, candidates: fresh.map(publicCandidate),
+    categories: categoryCounts(active), total: fresh.length,
     batches: batchList(s), activeBatch: s.activeBatch });
 });
 
@@ -1140,7 +1173,7 @@ router.post('/api/casuals/analyze', async (req, res) => {
     const dupes = markDuplicates(cands);
     // Re-score anything not yet categorised OR still missing an AI rating — so
     // batches segregated before the rating feature existed get rated on next run.
-    const todo = cands.filter(c => !c.dupeOf && (force || !c.category || c.rating == null));
+    const todo = cands.filter(c => !c.dupeOf && !c.ordered && (force || !c.category || c.rating == null));
     let classified = 0;
     for (let i = 0; i < todo.length; i += VISION_BATCH) {
       const slice = todo.slice(i, i + VISION_BATCH);
@@ -1268,46 +1301,80 @@ router.post('/api/casuals/invoice/classify', async (req, res) => {
   }
 });
 
-// Apply the reviewed invoice lines: add their quantities to each category/fit's
-// open-to-buy `onOrder`, and blend the real unit ₹ into `onOrderCost`. Returns a
-// fresh plan so the buy sheet re-nets immediately.
-router.post('/api/casuals/invoice/apply', (req, res) => {
+// Apply the reviewed invoice lines. Each line becomes a REAL "already-ordered"
+// member of the active batch: its product photo + colour + size run + qty + unit ₹
+// are saved as a candidate flagged `ordered`. buildPlan then slots it into its
+// own category → (print) → fit box, nets that cell's target, and renders it as a
+// read-only card — so the founder SEES what's on the way, and re-uploading a bill
+// can't silently double a running total (the members are visible & deletable).
+// Multipart: `meta` = JSON array of lines; `images` files + parallel `ids[]` map
+// a product photo to a line by its review-row id.
+function runOrderedUpload(req, res) {
+  return new Promise((resolve) => {
+    invoiceUpload.array('images', 20)(req, res, (err) => {
+      if (err) {
+        const map = { LIMIT_FILE_SIZE: 'A product photo is larger than 25 MB — compress it and retry.',
+          LIMIT_FILE_COUNT: 'Too many photos at once (max 20).', LIMIT_UNEXPECTED_FILE: 'Unexpected upload field.' };
+        resolve({ ok: false, error: map[err.code] || ('Upload error: ' + (err.message || err.code || 'unknown')) });
+      } else resolve({ ok: true });
+    });
+  });
+}
+router.post('/api/casuals/invoice/apply', async (req, res) => {
+  const r = await runOrderedUpload(req, res);
+  if (res.headersSent) return;
+  if (!r.ok) return res.status(400).json({ success: false, error: r.error });
   const s = loadStore();
   const merged = settingsWithDefaults(s);
-  const items = (req.body && Array.isArray(req.body.items)) ? req.body.items : [];
-  const agg = {};   // catKey → otbKey → { qty, priceQty }   (otbKey = "print::fit" for uppers, else fit)
+  // The PO lands in whatever batch is being planned right now (creating one if the
+  // store somehow has none) — "upload a PO into THIS batch".
+  let target = s.batches.find(b => b.id === s.activeBatch) || newBatch(s);
+  s.activeBatch = target.id;
+  let lines = [];
+  try { lines = JSON.parse((req.body && req.body.meta) || '[]'); } catch { lines = []; }
+  if (!Array.isArray(lines)) lines = [];
+  // Photos run parallel to ids[] (multer preserves field order).
+  let ids = req.body && req.body.ids; if (typeof ids === 'string') ids = [ids];
+  ids = Array.isArray(ids) ? ids : [];
+  const files = (req.files || []);
+  const photoByLine = {}; files.forEach((f, i) => { const id = ids[i]; if (id) photoByLine[id] = f; });
+
+  const SIZE_KEYS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '3XL', '4XL', '5XL', '28', '30', '32', '34', '36', '38', '40', '42'];
+  const normSize = tok => { const t = String(tok || '').toUpperCase().replace(/\s+/g, ''); const hit = SIZE_KEYS.find(k => k === t); return hit || (t || '—'); };
   let applied = 0, skipped = 0;
-  items.forEach(it => {
+  lines.forEach(it => {
     const cat = CAT_KEYS.includes(it && it.category) ? it.category : null;
     const cfg = cat ? merged.categories[cat] : null;
     const fit = (cfg && it.fit && (it.fit in cfg.fits)) ? it.fit : null;
-    // Uppers also need a print type so the line nets against the right print::fit cell.
     const hasP = cat ? catHasPrintTypes(cat) : false;
     const pt = (hasP && cfg && it.printType && (it.printType in cfg.printTypes)) ? it.printType : null;
     let qty = parseInt(it && it.qty, 10); if (!isFinite(qty) || qty <= 0) qty = 0;
     let price = Number(it && it.unitPrice); if (!isFinite(price) || price < 0) price = 0;
     if (!cat || !fit || !qty || (hasP && !pt)) { skipped++; return; }
-    const otbKey = hasP ? (pt + '::' + fit) : fit;
-    const a = (agg[cat] = agg[cat] || {}); const f = (a[otbKey] = a[otbKey] || { qty: 0, priceQty: 0 });
-    f.qty += qty; f.priceQty += price * qty; applied++;
-  });
-  Object.keys(agg).forEach(cat => {
-    const cfg = merged.categories[cat];
-    if (!cfg.onOrder) cfg.onOrder = {};
-    if (!cfg.onOrderCost) cfg.onOrderCost = {};
-    Object.keys(agg[cat]).forEach(key => {
-      const add = agg[cat][key];
-      const prevQty = Math.max(0, cfg.onOrder[key] || 0);
-      const prevCost = Math.max(0, cfg.onOrderCost[key] || 0);
-      cfg.onOrder[key] = prevQty + add.qty;                       // accumulate units
-      const addAvg = add.qty > 0 ? add.priceQty / add.qty : 0;    // avg unit ₹ of this apply
-      // Unit-weighted blend of the old and new unit prices, ignoring sides with no price.
-      const totQty = (prevCost > 0 ? prevQty : 0) + (addAvg > 0 ? add.qty : 0);
-      const totMoney = (prevCost > 0 ? prevQty * prevCost : 0) + (addAvg > 0 ? add.qty * addAvg : 0);
-      if (totQty > 0) cfg.onOrderCost[key] = Math.round(totMoney / totQty);
+    // Size run: prefer an explicit per-size object; else fold the whole qty under the
+    // line's single size token (best-effort — bills often list one size per row).
+    const orderedSizes = {};
+    if (it && it.sizes && typeof it.sizes === 'object') {
+      Object.keys(it.sizes).forEach(k => { const v = parseInt(it.sizes[k], 10); if (isFinite(v) && v > 0) orderedSizes[normSize(k)] = (orderedSizes[normSize(k)] || 0) + v; });
+    }
+    if (!Object.keys(orderedSizes).length) orderedSizes[normSize(it && it.size)] = qty;
+    // Product photo (optional) → persist to the candidate pool so the card shows it.
+    const pf = photoByLine[it && it._id];
+    let file = null;
+    if (pf && pf.buffer && (/^image\//.test(pf.mimetype) || /\.(png|jpe?g|webp|gif)$/i.test(pf.originalname || ''))) {
+      const ext = ((path.extname(pf.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '')) || '.jpg';
+      const fn = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + ext;
+      try { fs.writeFileSync(path.join(CAND_DIR, fn), pf.buffer); file = fn; } catch { file = null; }
+    }
+    s.candidates.push({
+      id: crypto.randomBytes(8).toString('hex'), file, vendor: String((it && it.vendor) || '').trim(),
+      batch: target.id, category: cat, fit, colour: (it && it.colour) ? String(it.colour).trim() : null,
+      pattern: null, printType: pt || null, printOverride: !!pt,
+      ordered: true, orderedQty: qty, orderedSizes, orderedCost: Math.round(price),
+      uploadedAt: new Date().toISOString(), sha: null, phash: null, avg: null, dupeOf: null
     });
+    applied++;
   });
-  s.settings = merged;
   saveStore(s);
   const settings = settingsWithDefaults(s);
   const active = activeCands(s);
