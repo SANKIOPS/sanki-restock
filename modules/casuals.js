@@ -287,6 +287,27 @@ function loadStore() {
 }
 function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
 
+// Reclaim leaked photos: multer writes each upload to disk BEFORE the handler
+// records it, so an aborted/failed upload leaves a file on the volume that no
+// candidate references and that batch-delete never cleans. Sweep any file in
+// CAND_DIR that isn't referenced by a live candidate. Returns bytes freed.
+function sweepOrphanCandidates() {
+  let freed = 0, removed = 0;
+  try {
+    const s = loadStore();
+    const keep = new Set((s.candidates || []).map(c => c.file).filter(Boolean));
+    for (const fn of fs.readdirSync(CAND_DIR)) {
+      if (keep.has(fn)) continue;
+      const fp = path.join(CAND_DIR, fn);
+      try { const st = fs.statSync(fp); if (st.isFile()) { fs.unlinkSync(fp); freed += st.size; removed++; } } catch {}
+    }
+  } catch {}
+  if (removed) console.log('[casuals] swept ' + removed + ' orphan photo(s), freed ' + Math.round(freed / 1024) + ' KB');
+  return { removed, freed };
+}
+// Run once at boot so leaked space is reclaimed on the next deploy.
+try { sweepOrphanCandidates(); } catch {}
+
 // ── Batches ──────────────────────────────────────────────────────
 // Photos live in named batches (e.g. "Batch 1 · 24 Jul 2026, 4:25 PM"). The
 // plan, segregation and dupe check all run on the ACTIVE batch only, so a new
@@ -1085,8 +1106,11 @@ router.delete('/api/casuals/batches/:id', (req, res) => {
 
 router.post('/api/casuals/candidates', async (req, res) => {
   const r = await runCandidateUpload(req, res);
-  if (res.headersSent) return;
-  if (!r.ok) return res.status(400).json({ success: false, error: r.error });
+  // Any file multer already wrote to disk must be removed if we don't go on to
+  // record it — otherwise a failed/aborted upload leaks an untracked photo.
+  const discardFiles = () => (req.files || []).forEach(f => { try { fs.unlinkSync(path.join(CAND_DIR, f.filename)); } catch {} });
+  if (res.headersSent) { discardFiles(); return; }
+  if (!r.ok) { discardFiles(); return res.status(400).json({ success: false, error: r.error }); }
   const files = req.files || [];
   if (!files.length) return res.status(400).json({ success: false, error: 'No photos received' });
   const vendor = String((req.body && req.body.vendor) || '').trim();
@@ -1197,6 +1221,13 @@ router.post('/api/casuals/candidates/clear', (req, res) => {
   saveStore(s);
   res.json({ success: true, total: 0, categories: categoryCounts([]),
     batches: batchList(s), activeBatch: s.activeBatch });
+});
+
+// Reclaim disk: delete any photo file on the volume not referenced by a live
+// candidate (orphans from aborted uploads). Safe to run any time.
+router.post('/api/casuals/candidates/sweep', (req, res) => {
+  const { removed, freed } = sweepOrphanCandidates();
+  res.json({ success: true, removed, freedKB: Math.round(freed / 1024) });
 });
 
 router.post('/api/casuals/analyze', async (req, res) => {
