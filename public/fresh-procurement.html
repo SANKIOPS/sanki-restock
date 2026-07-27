@@ -627,6 +627,27 @@
     GREY:'#6b7280', MAROON:'#7f1d1d', ORANGE:'#ea580c', PINK:'#ec4899', PURPLE:'#7c3aed', RED:'#dc2626',
     WHITE:'#f8fafc', YELLOW:'#eab308', BEIGE:'#e7d9bf', 'SKY BLUE':'#38bdf8', OLIVE:'#5b6b4e',
     KHAKI:'#b8a980', GOLDEN:'#d4af37', SILVER:'#c0c0c0' };
+  // China bills print colours in Chinese — translate to English for display so
+  // ordered cards read like the rest (黑色 → Black). Unknown text passes through.
+  var CZ_COLOUR_EN = {
+    '黑':'Black','黑色':'Black','白':'White','白色':'White','米白':'Off White','象牙白':'Ivory',
+    '灰':'Grey','灰色':'Grey','深灰':'Charcoal','浅灰':'Light Grey','花灰':'Heather Grey',
+    '红':'Red','红色':'Red','大红':'Red','酒红':'Wine','枣红':'Maroon',
+    '蓝':'Blue','蓝色':'Blue','深蓝':'Navy','藏蓝':'Navy','藏青':'Navy','藏青色':'Navy','天蓝':'Sky Blue','宝蓝':'Royal Blue','浅蓝':'Light Blue',
+    '绿':'Green','绿色':'Green','军绿':'Army Green','墨绿':'Dark Green','橄榄绿':'Olive',
+    '黄':'Yellow','黄色':'Yellow','姜黄':'Mustard','杏色':'Apricot',
+    '米色':'Beige','卡其':'Khaki','卡其色':'Khaki','驼色':'Camel','裸色':'Nude',
+    '棕':'Brown','棕色':'Brown','咖啡':'Coffee','咖啡色':'Coffee','巧克力':'Chocolate',
+    '粉':'Pink','粉色':'Pink','粉红':'Pink','紫':'Purple','紫色':'Purple',
+    '橙':'Orange','橙色':'Orange','桔色':'Orange','银':'Silver','金':'Gold',
+    '花色':'Assorted','均色':'Assorted','杂色':'Assorted','彩色':'Multicolour','深色':'Dark','浅色':'Light' };
+  function czColourEN(s){
+    s = String(s==null?'':s).trim();
+    if(!s) return s;
+    if(CZ_COLOUR_EN[s]) return CZ_COLOUR_EN[s];
+    var best=''; Object.keys(CZ_COLOUR_EN).forEach(function(k){ if(s.indexOf(k)>=0 && k.length>best.length) best=k; });
+    return best ? CZ_COLOUR_EN[best] : s;
+  }
   var settings = null, savedTimer = null;
 
   function fmtINR(n){ return Number(n||0).toLocaleString('en-IN'); }
@@ -1832,10 +1853,10 @@
             oc.innerHTML =
               '<div class="cand"'+czCandAttrs(o, cat.label, f.label, sz)+'>'+thumb+'</div>'+
               '<div class="poinfo">'+
-                '<div class="potop"><span class="pov">'+escapeHtml(o.vendor||o.colour||'Ordered product')+'</span><span class="czowbadge">✓ ordered</span>'+
+                '<div class="potop"><span class="pov">'+escapeHtml(o.vendor||czColourEN(o.colour)||'Ordered product')+'</span><span class="czowbadge">✓ ordered</span>'+
                   '<button class="czowdel" type="button" title="Remove from ordered">✕ Remove</button>'+
                   '<span class="pomoney">'+fmtINR(o.qty||0)+' pc</span></div>'+
-                '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(o.colour||'—')+'</span>'+
+                '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(czColourEN(o.colour)||'—')+'</span>'+
                   (o.cost>0 ? ('<span class="potag">₹'+fmtINR(o.cost)+'/pc</span>') : '')+'</div>'+
                 '<div class="poset"><label>Sizes</label><span class="posetx">'+escapeHtml(sz)+'</span></div>'+
               '</div>';
@@ -2143,7 +2164,7 @@
 
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
   //    review the line items → apply as open-to-buy "on the way" stock. ──
-  var czInv = { items: [], fits: {}, prints: {}, cats: [] };
+  var czInv = { items: [], fits: {}, prints: {}, cats: [], vendor: '' };
   // ¥→₹ rate: bills come from China, so line prices are read in yuan and
   // converted here. Remembered across uploads so the founder sets it once.
   function czFxGet(){ var v = parseFloat(localStorage.getItem('sanki_cz_fx')); return (isFinite(v) && v>0) ? v : 12; }
@@ -2161,7 +2182,7 @@
     fetch('/api/casuals/invoice/parse', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.success){ el('czInvBody').innerHTML=''; el('czInvSub').textContent = (d && d.error) || 'Could not read the invoice.'; return; }
       czInv.fits = d.fits||{}; czInv.prints = d.prints||{}; czInv.cats = d.cats||[];
-      czInv.items = (d.items||[]).map(function(it, i){ it._id = 'r'+i; it.include = (it.qty>0); it._img = null; it._imgUrl = null; return it; });
+      czInv.items = (d.items||[]).map(function(it, i){ it._id = 'r'+i; it.include = (it.qty>0); it._img = null; it._imgUrl = null; it.colour = czColourEN(it.colour); return it; });
       czInvRender();
     }).catch(function(){ el('czInvBody').innerHTML=''; el('czInvSub').textContent = 'Network error reading the invoice.'; });
   }
@@ -2176,6 +2197,7 @@
     var items = czInv.items||[];
     if(!items.length){ el('czInvBody').innerHTML = '<div class="sub" style="padding:24px 4px">No garment line items found. Try a clearer photo/PDF, or an Excel with one row per item.</div>'; el('czInvSub').textContent=''; el('czInvApply').disabled=true; el('czInvFoot').textContent=''; return; }
     el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Add a <b>product photo</b> per line then <b>Analyze photos</b> to auto-fill, or pick category / print / fit yourself. Set the <b>¥→₹ rate</b> so prices land in rupees.';
+    var vendBar = '<div class="czfxbar"><b>Vendor</b> <input id="czInvVendor" type="text" value="'+escapeHtml(czInv.vendor||'')+'" placeholder="e.g. CHAOUFI" style="min-width:180px"> <span class="sub" style="margin-left:auto">Which supplier this bill is from — shown as the name on every ordered card.</span></div>';
     var fxBar = '<div class="czfxbar">China bill — exchange rate <b>1&nbsp;¥ =</b> <input id="czInvFx" type="number" min="0" step="0.01" value="'+czFx+'"> <b>₹</b> <span class="sub" style="margin-left:auto">Prices below are read in ¥ and converted to ₹ using this rate.</span></div>';
     var rows = items.map(function(it){
       var upper = czInvIsUpper(it.category);
@@ -2197,7 +2219,8 @@
         '<td><button class="czirm" title="Remove line">🗑</button></td>'+
       '</tr>';
     }).join('');
-    el('czInvBody').innerHTML = fxBar + '<table class="czitab"><thead><tr><th>Buy</th><th>Photo</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Colour</th><th>Size</th><th>Qty</th><th>Unit ¥</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el('czInvBody').innerHTML = vendBar + fxBar + '<table class="czitab"><thead><tr><th>Buy</th><th>Photo</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Colour</th><th>Size</th><th>Qty</th><th>Unit ¥</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el('czInvVendor').addEventListener('input', function(){ czInv.vendor = this.value; czInvSyncFoot(); });
     el('czInvFx').addEventListener('change', function(){ var v=parseFloat(this.value); if(isFinite(v)&&v>0){ czFx=v; czFxSet(v); } this.value=czFx; czInvRender(); });
     Array.prototype.forEach.call(el('czInvBody').querySelectorAll('tr[data-id]'), function(tr){
       var id = tr.getAttribute('data-id'), it = czInvGet(id); if(!it) return;
@@ -2229,7 +2252,7 @@
       var res = d.results||{};
       Object.keys(res).forEach(function(rid){ var it=czInvGet(rid); if(!it) return; var o=res[rid];
         if(o.category){ it.category=o.category; it.fit=o.fit||null; it.printType = czInvIsUpper(o.category) ? (o.printType||null) : null; }
-        if(o.colour && !it.colour) it.colour=o.colour; });
+        if(o.colour && !it.colour) it.colour=czColourEN(o.colour); });
       czInvRender();
     }).catch(function(){ if(btn){ btn.disabled=false; btn.textContent='✨ Analyze photos'; } el('czInvFoot').textContent='Network error analyzing photos.'; });
   }
@@ -2244,7 +2267,9 @@
       : (needFit?('<b style="color:#b45309">'+needFit+' line'+(needFit===1?'':'s')+' need print type / fit selected</b>'):'Nothing selected yet.');
     el('czInvFoot').innerHTML = '<button class="czianalyze" id="czInvAnalyzeBtn"'+(withImg?'':' disabled')+'>✨ Analyze photos'+(withImg?(' ('+withImg+')'):'')+'</button> <span style="margin-left:10px">'+totals+'</span>';
     var ab = el('czInvAnalyzeBtn'); if(ab) ab.addEventListener('click', czInvAnalyze);
-    el('czInvApply').disabled = ready.length===0;
+    var noVendor = !((czInv.vendor||'').trim());
+    if(ready.length && noVendor){ el('czInvFoot').innerHTML += ' <b style="color:#b45309">· enter a vendor name above</b>'; }
+    el('czInvApply').disabled = ready.length===0 || noVendor;
   }
   function czInvApply(){
     var ready = czInvReady(); if(!ready.length) return;
@@ -2254,7 +2279,7 @@
     // real "already-ordered" member of this batch.
     var fd = new FormData();
     fd.append('meta', JSON.stringify(ready.map(function(it){
-      return { _id: it._id, category: it.category, fit: it.fit, printType: it.printType||null,
+      return { _id: it._id, vendor: (czInv.vendor||'').trim(), category: it.category, fit: it.fit, printType: it.printType||null,
         colour: it.colour||'', size: it.size||'', qty: it.qty, unitPrice: Math.round((it.unitPrice||0)*czFx) };
     })));
     ready.forEach(function(it){ if(it._img){ fd.append('images', it._img); fd.append('ids', it._id); } });
@@ -2273,7 +2298,7 @@
     Promise.all(list.map(function(id){ return fetch('/api/casuals/candidate/'+encodeURIComponent(id),{method:'DELETE'}).catch(function(){}); }))
       .then(function(){ czLoadPlan(); });
   }
-  function czInvClose(){ (czInv.items||[]).forEach(function(it){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } }); el('czInvModal').classList.remove('show'); czInv = { items:[], fits:{}, prints:{}, cats:[] }; }
+  function czInvClose(){ (czInv.items||[]).forEach(function(it){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } }); el('czInvModal').classList.remove('show'); czInv = { items:[], fits:{}, prints:{}, cats:[], vendor:'' }; }
 
   function czLoadPlan(){ return fetch('/api/casuals/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.analysed) czRenderPlan(d); }).catch(function(){}); }
 
