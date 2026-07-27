@@ -374,6 +374,8 @@
     .czcatsum-h .cs.over{ background:#fef2f2; border-color:#fecaca; } .czcatsum-h .cs.over b{ color:#b91c1c; }
     .czcatsum-h .cs.ok{ background:#ecfdf5; border-color:#a7f3d0; } .czcatsum-h .cs.ok b{ color:#065f46; }
     .czcatsum-h .cs.muted b{ color:#94a3b8; font-size:12px; font-weight:700; }
+    .czcatsum-note{ margin-top:9px; font-size:12px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:7px 10px; line-height:1.5; }
+    .czcatsum-note b{ color:#78350f; }
     .czcatsum-fits{ margin-top:10px; display:flex; flex-direction:column; gap:4px; }
     .czcatsum-fits .csf{ font-size:12px; color:#475569; } .czcatsum-fits .csf b{ color:var(--ink); }
     .czexp{ margin-top:8px; border-radius:9px; padding:2px 4px; }
@@ -1896,6 +1898,18 @@
     var alloc = c.budget||0, consumed = planTot.catCost||0, pieces = planTot.catTotal||0;
     var sums = planTot.fitSummary || [];
     var products = sums.reduce(function(s,f){ return s + f.products; }, 0);
+    // Piece reconciliation (the numbers people actually reason about):
+    //   Target      = category piece goal (budget ÷ est ₹, or the typed units).
+    //   On the way  = pieces already ordered (imported POs) — count toward target.
+    //   To source   = target − on the way (what still needs buying).
+    //   In PO now    = pieces your UPLOADED photos currently add up to (designs ×
+    //                 set). This is NOT target-fill — it's how much you've sourced
+    //                 so far, so it can sit far below "To source" until you upload
+    //                 more photos. Keeping these distinct stops the classic
+    //                 "why did my total drop when I added an existing PO?" confusion.
+    var tgt = c.estUnits||0, onWay = c.onOrder||0;
+    var toSrc = (c.netUnits!=null) ? c.netUnits : Math.max(0, tgt - onWay);
+    var inPO = pieces, shortPc = Math.max(0, toSrc - inPO);
     var head = '<div class="czcatsum-h">'+
       '<span class="cs"><i>Allocated</i><b>₹'+fmtINR(alloc)+'</b></span>'+
       (czPriced
@@ -1904,10 +1918,21 @@
              ? '<span class="cs over"><i>Overspent</i><b>₹'+fmtINR(consumed-alloc)+'</b></span>'
              : '<span class="cs ok"><i>Left</i><b>₹'+fmtINR(alloc-consumed)+'</b></span>') : '')
         : '<span class="cs muted"><i>Consumed</i><b>add unit ₹</b></span>')+
+      (c.enabled ? (
+        '<span class="cs"><i>Target</i><b>'+fmtINR(tgt)+' pc</b></span>'+
+        (onWay>0 ? '<span class="cs ok"><i>On the way</i><b>'+fmtINR(onWay)+' pc</b></span>' : '')+
+        '<span class="cs"><i>To source</i><b>'+fmtINR(toSrc)+' pc</b></span>'
+      ) : '')+
       '<span class="cs"><i>Products</i><b>'+products+'</b></span>'+
-      '<span class="cs"><i>Pieces</i><b>'+fmtINR(pieces)+'</b></span>'+
+      '<span class="cs" title="Pieces your uploaded photos add up to so far — not the target"><i>In PO now</i><b>'+fmtINR(inPO)+' pc</b></span>'+
     '</div>';
     wrap.innerHTML = head;
+    if(c.enabled && shortPc>0){
+      var note = document.createElement('div'); note.className='czcatsum-note';
+      note.innerHTML = 'Your photos cover <b>'+fmtINR(inPO)+' pc</b>'+(onWay>0?(' and <b>'+fmtINR(onWay)+' pc</b> is on the way'):'')+
+        ' — upload ~<b>'+fmtINR(shortPc)+' pc</b> more of photos to reach the <b>'+fmtINR(toSrc)+' pc</b> you still need.';
+      wrap.appendChild(note);
+    }
     if(sums.length){
       var lines = document.createElement('div'); lines.className='czcatsum-fits'; var any=false;
       sums.forEach(function(f){
