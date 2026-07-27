@@ -1564,10 +1564,14 @@
     all.forEach(function(f){ var sz=f.size||0; if(cur.length && (curBytes+sz > BATCH_BYTES || cur.length >= BATCH_MAX)){ chunks.push(cur); cur=[]; curBytes=0; } cur.push(f); curBytes+=sz; });
     if(cur.length) chunks.push(cur);
     var done=0, addedTotal=0, total=0;
-    function send(idx){
+    // Phone-photo chunks (~35 MB) can drop on a flaky connection or a proxy
+    // timeout — retry a failed chunk up to twice before giving up, and always
+    // refresh the count on failure so the already-saved photos aren't hidden.
+    function send(idx, attempt){
+      attempt = attempt || 1;
       if(idx >= chunks.length){ el('czUploadStatus').innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+addedTotal+' — total '+total+'</span>'; czPhotosOpen = true; czLoadCandidates(); return; }
       var fd = new FormData(); chunks[idx].forEach(function(f){ fd.append('photos', f); }); fd.append('vendor', vendor); fd.append('batch', batchTarget);
-      el('czUploadStatus').textContent = 'Uploading '+(done+1)+'–'+(done+chunks[idx].length)+' of '+all.length+'…';
+      el('czUploadStatus').textContent = 'Uploading '+(done+1)+'–'+(done+chunks[idx].length)+' of '+all.length+'…'+(attempt>1?(' (retry '+(attempt-1)+')'):'');
       fetch('/api/casuals/candidates', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
         if(d.success){
           // First chunk may have created a fresh batch — pin the rest to it so
@@ -1575,9 +1579,13 @@
           if(d.batch && d.batch.id) batchTarget = d.batch.id;
           addedTotal += d.added.length; total = d.total; done += chunks[idx].length; send(idx+1); }
         else el('czUploadStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Upload failed')+'</span>';
-      }).catch(function(){ el('czUploadStatus').innerHTML = '<span style="color:var(--err)">Upload failed after '+done+' of '+all.length+'.</span>'; });
+      }).catch(function(){
+        if(attempt < 3){ setTimeout(function(){ send(idx, attempt+1); }, 1500*attempt); return; }
+        czLoadCandidates();
+        el('czUploadStatus').innerHTML = '<span style="color:var(--err)">Upload stopped after '+done+' of '+all.length+' — the '+done+' saved are safe. Re-drop the remaining '+(all.length-done)+' to add them to this batch.</span>';
+      });
     }
-    send(0);
+    send(0, 1);
   }
 
   function czAnalyze(){
