@@ -825,9 +825,18 @@ function buildPlan(cands, settings) {
         colKeys.forEach(ck => {
           // colU is already a DESIGN count for this colour (colour % of the cell's
           // designs). No piece→design division here any more.
-          const want = Math.max(0, colU[ck] || 0);
           const bucket = byCol[ck] || [];
           const have = bucket.length;
+          // FLOOR: any on-list colour the founder actually uploaded gets at least
+          // ONE design in this cell, even if its % rounded down to 0 in a small
+          // cell — "we need at least those colours". This can push the cell a
+          // little over its piece target when more colours were uploaded than the
+          // cell's design count. Colours with 0 uploads keep their computed want
+          // (they don't get a floor), so the SHORT flag still fires → reserve +
+          // "source more <colour>", never silently auto-refilled from elsewhere.
+          const want = have > 0
+            ? Math.max(1, colU[ck] || 0)
+            : Math.max(0, colU[ck] || 0);
           // Pins first, then best AI rating — keep the top `want`, hold the rest.
           const ranked = bucket.slice().sort((a, b) =>
             ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
