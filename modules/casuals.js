@@ -826,10 +826,14 @@ function buildPlan(cands, settings) {
         return inc;
       }
 
-      // How many DESIGNS of each colour to buy across the WHOLE category. At ~17
-      // designs a 15% colour lands on ~2-3 (not 0), so uploaded on-list colours
-      // stop getting wrongly zeroed.
-      const quota0 = splitInts(totalCap, colW);
+      // How many DESIGNS of each colour to buy across the WHOLE category. Scaled to
+      // the category's FULL design target (catDesigns), NOT just the cells that
+      // happen to have photos — otherwise colours whose photos sit in a couple of
+      // small cells get starved. At ~17 designs a 15% colour lands on ~2-3 (not 0).
+      // Placement is still capped per cell (capLeft) so no fit busts its piece
+      // budget; whatever can't be placed (too few photos / cell full) becomes a
+      // "source more <colour>" gap.
+      const quota0 = splitInts(Math.max(totalCap, catDesigns), colW);
       const colQuota = Object.assign({}, quota0);
 
       // Bucket every design by canonical colour; off-list colours are held.
