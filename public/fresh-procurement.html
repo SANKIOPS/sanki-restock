@@ -996,8 +996,11 @@
   // Upload in small batches. Railway's edge drops requests over ~50–100 MB, so
   // we chunk by TOTAL BYTES (not file count) — vendor phone photos run 5–10 MB
   // each, so a fixed count of 20 could hit 200 MB and never reach the server.
-  // Cap each POST at ~35 MB (well under the proven-good 50 MB) and 30 files.
-  var BATCH_BYTES = 35 * 1024 * 1024, BATCH_MAX = 30;
+  // Keep each POST small (~10 MB / 6 files) so it finishes fast and stays well
+  // under Railway's edge/proxy timeout — big 35 MB chunks were dying in transit
+  // on slower uplinks before ever reaching the app (a fetch-level drop, no
+  // server error), and a smaller chunk also loses less if one does fail.
+  var BATCH_BYTES = 10 * 1024 * 1024, BATCH_MAX = 6;
   function uploadFiles(files){
     if(!files || !files.length) return;
     var vendor = (el('candVendor').value||'').trim();
