@@ -1217,7 +1217,7 @@
       var planCat = czLastPlan && (czLastPlan.categories||[]).filter(function(pc){ return pc.category===catKey; })[0];
       var planWrap = null, planTot = { catTotal:0, catCost:0 };
       if(planCat){ planWrap = document.createElement('div'); planWrap.setAttribute('data-catplan',''); planWrap.style.marginTop='10px'; planTot = czCatProducts(planCat, planWrap);
-        if(c.enabled){ planWrap.insertBefore(czCatSummary(c, planTot), planWrap.firstChild); } }
+        if(c.enabled){ planWrap.insertBefore(czCatSummary(c, planTot, planCat), planWrap.firstChild); } }
       var pills = (planCat && c.enabled)
         ? '<div class="czpill" style="margin:0 0 0 8px">Buy<b>'+fmtINR(planTot.catTotal)+' pc</b></div>'+
           (czPriced ? '<div class="czpill" style="margin:0 0 0 8px">Spend<b>₹'+fmtINR(planTot.catCost)+'</b></div>'+
@@ -1893,9 +1893,10 @@
   //   Per-fit:  "Wide Leg — 3 products · 36 pcs · Black ×2, White ×1".
   //   Two expanders: ➕ how many more products the budget can still fund (which
   //   fits + which colours to source), and ⚠ where the plan is over budget.
-  function czCatSummary(c, planTot){
+  function czCatSummary(c, planTot, planCat){
     var wrap = document.createElement('div'); wrap.className = 'czcatsum';
-    var alloc = c.budget||0, consumed = planTot.catCost||0, pieces = planTot.catTotal||0;
+    var pc = planCat || {};
+    var alloc = (pc.budget!=null ? pc.budget : (c.budget||0)), consumed = planTot.catCost||0, pieces = planTot.catTotal||0;
     var sums = planTot.fitSummary || [];
     var products = sums.reduce(function(s,f){ return s + f.products; }, 0);
     // Piece reconciliation (the numbers people actually reason about):
@@ -1907,8 +1908,8 @@
     //                 so far, so it can sit far below "To source" until you upload
     //                 more photos. Keeping these distinct stops the classic
     //                 "why did my total drop when I added an existing PO?" confusion.
-    var tgt = c.estUnits||0, onWay = c.onOrder||0;
-    var toSrc = (c.netUnits!=null) ? c.netUnits : Math.max(0, tgt - onWay);
+    var tgt = pc.estUnits||0, onWay = pc.onOrder||0;
+    var toSrc = (pc.netUnits!=null) ? pc.netUnits : Math.max(0, tgt - onWay);
     var inPO = pieces, shortPc = Math.max(0, toSrc - inPO);
     var head = '<div class="czcatsum-h">'+
       '<span class="cs"><i>Allocated</i><b>₹'+fmtINR(alloc)+'</b></span>'+
