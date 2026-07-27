@@ -925,13 +925,15 @@ function buildPlan(cands, settings) {
         const fitBudgetG = splitInts(pb, cfg.fits);
         const gfits = fitRows.map(fr => buildFit(fr, fitBudgetG[fr.key] || 0, groupPool.filter(c => c.fit === fr.key), pr.key + '::' + fr.key));
         fits = fits.concat(gfits);   // flat list too, for export / roll-ups
+        const grpTarget = enabled && expPrice > 0 ? Math.round(pb / expPrice) : 0;
+        const grpOrderedTowardTarget = gfits.reduce((s, f) => s + Math.min(Math.max(0, f.onOrder || 0), Math.max(0, f.target || 0)), 0);
         return {
           key: pr.key, label: pr.label, pct: pr.pct, share: pr.share, budget: pb,
-          target: enabled && expPrice > 0 ? Math.round(pb / expPrice) : 0,
+          target: grpTarget,
           estUnits: gfits.reduce((s, f) => s + f.estUnits, 0),
           onOrder: gfits.reduce((s, f) => s + (f.onOrder || 0), 0),
           freedBudget: gfits.reduce((s, f) => s + (f.freedBudget || 0), 0),
-          netUnits: gfits.reduce((s, f) => s + (f.netUnits || 0), 0),
+          netUnits: Math.max(0, grpTarget - grpOrderedTowardTarget),
           photoCount: groupPool.length, fits: gfits
         };
       });
@@ -960,7 +962,14 @@ function buildPlan(cands, settings) {
 
     const onOrderTotal = fits.reduce((s, f) => s + (f.onOrder || 0), 0);
     const freedBudgetTotal = fits.reduce((s, f) => s + (f.freedBudget || 0), 0);
-    const netUnitsTotal = fits.reduce((s, f) => s + (f.netUnits != null ? f.netUnits : 0), 0);
+    // "To source" anchors to the AUTHORITATIVE category target (estUnits), not to
+    // the sum of per-fit rounded targets — otherwise independent per-fit rounding
+    // makes Target and To source drift apart (e.g. 154 vs 156) even with nothing
+    // ordered. Ordered units only count toward the target up to each fit's OWN
+    // target: a fit ordered past its target can't shrink another fit (the "never
+    // move budget between boxes" rule).
+    const orderedTowardTarget = fits.reduce((s, f) => s + Math.min(Math.max(0, f.onOrder || 0), Math.max(0, f.target || 0)), 0);
+    const netUnitsTotal = Math.max(0, estUnits - orderedTowardTarget);
 
     return {
       category: catKey, label: spec.label, designNote: spec.designNote,
