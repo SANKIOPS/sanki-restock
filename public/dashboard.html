@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Sanki Business OS</title>
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+  <meta name="theme-color" content="#0F5132" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="SANKI" />
   <style>
     :root { --ink:#1a1a1a; --muted:#6b7280; --line:rgba(0,0,0,.09); --brand:#185FA5; --bg:#f6f7f9; }
     * { box-sizing: border-box; }
@@ -37,6 +43,13 @@
     .empty .big { font-size:40px; margin-bottom:10px; }
     .empty h3 { margin:0 0 6px; color:var(--ink); font-size:16px; }
     .empty p { margin:0; font-size:13.5px; line-height:1.5; }
+    @media (max-width:680px) {
+      .wrap { padding:24px 14px calc(72px + env(safe-area-inset-bottom)); }
+      .head { margin-bottom:20px; }
+      .head h1 { font-size:22px; }
+      .grid { grid-template-columns:1fr; gap:10px; }
+      .tile { min-height:96px; padding:16px; }
+    }
   </style>
 </head>
 <body>
@@ -110,6 +123,11 @@
         .then(function(data){ if(data) render(data); })
         .catch(function(){ renderEmpty(); });
     })();
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () { navigator.serviceWorker.register('/sw.js').catch(function () {}); });
+    }
   </script>
 </body>
 </html>

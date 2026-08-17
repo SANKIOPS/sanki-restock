@@ -45,6 +45,7 @@
     .czbchip.spend{ background:#ecfdf3; border-color:#a7e3c3; color:#065f46; }
     .czbchip.warn{ background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
     .czbchip.muted{ background:#f6f7f6; color:var(--muted); }
+    .czbchip.cat{ background:#f5f0ff; border-color:#ddd0f5; color:#6d28d9; }
     .czbcaret{ flex:0 0 auto; font-size:12px; color:var(--muted); width:14px; text-align:center; }
     .czbbody{ border-top:1px solid var(--line); padding:12px 14px; background:#fbfdfb; }
     .czphotos-tog{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:#374151;
@@ -174,6 +175,9 @@
     .czcatchip .n{ margin-left:5px; opacity:.6; }
     .czcard{ border:1px solid var(--line); border-radius:14px; padding:0; margin:14px 0; overflow:hidden; }
     .czcard.off{ opacity:.55; }
+    .czcatopt{ display:inline-flex; align-items:center; gap:7px; padding:8px 14px; border:1px solid var(--line); border-radius:10px; cursor:pointer; font-weight:600; font-size:14px; user-select:none; background:#fff; }
+    .czcatopt:hover{ background:#f6faf6; }
+    .czcatopt input{ width:16px; height:16px; cursor:pointer; }
     .czcardhd{ display:flex; align-items:center; gap:12px; padding:14px 16px; background:#fbfdfb; border-bottom:1px solid var(--line); cursor:pointer; }
     .czcardhd h3{ margin:0; font-size:16px; }
     .czcardhd .note{ font-size:11px; color:var(--muted); margin-top:2px; }
@@ -199,6 +203,33 @@
     .czdrow .rm{ cursor:pointer; color:var(--err); font-weight:700; opacity:.5; }
     .czdrow .rm:hover{ opacity:1; }
     .czaddrow{ font-size:12px; font-weight:700; color:#0369a1; cursor:pointer; padding:6px 2px; display:inline-block; }
+    /* Design-wise upload mode */
+    .czmodebtn{ font-size:12px; font-weight:700; padding:6px 12px; border-radius:20px; border:1px solid var(--line); background:#fff; color:#475569; cursor:pointer; }
+    .czmodebtn.on{ background:#0f172a; color:#fff; border-color:#0f172a; }
+    .czdesign{ border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:10px 0; background:#fbfdfb; }
+    .czdesign .dsum{ display:flex; align-items:center; gap:10px; cursor:pointer; }
+    .czdesign .dsum .caret{ font-size:12px; color:var(--muted); width:14px; flex:none; }
+    .czdesign .dsum .dsumname{ font-size:14px; }
+    .czdesign .dsum .dsummeta{ font-size:12px; color:var(--muted); font-weight:500; }
+    .czdesign .dbody{ margin-top:10px; }
+    .czdesign .dh{ display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:8px; }
+    .czdesign .dh .fld{ min-width:150px; }
+    .czdesign .drm{ margin-left:auto; cursor:pointer; color:var(--err); font-weight:700; font-size:12px; opacity:.6; }
+    .czdesign .drm:hover{ opacity:1; }
+    .czcols{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
+    .czcol{ border:1px solid var(--line); border-radius:10px; padding:8px; background:#fff; text-align:center; }
+    .czcol .cph{ width:100%; height:112px; border-radius:8px; border:1px dashed #cbd5e1; display:flex; align-items:center; justify-content:center; font-size:11px; color:#94a3b8; cursor:pointer; overflow:hidden; background:#f8fafc; }
+    .czcol .cph img{ width:100%; height:100%; object-fit:cover; }
+    .czcol select{ width:100%; margin-top:6px; font-size:12px; }
+    .czcol .crm{ font-size:11px; color:var(--err); cursor:pointer; margin-top:4px; display:inline-block; opacity:.6; }
+    .czcol .crm:hover{ opacity:1; }
+    .czcol .cph{ cursor:default; }
+    .czdaddphotos{ display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; padding:7px 12px; border-radius:8px; border:1px dashed #94a3b8; background:#f8fafc; color:#475569; cursor:pointer; margin-bottom:8px; }
+    .czdaddphotos:hover{ background:#eef2f7; border-color:#64748b; }
+    .czdetect{ display:block; font-size:11px; color:#b45309; margin-top:6px; font-weight:700; }
+    .czdok{ display:block; font-size:11px; color:var(--emerald-d); margin-top:6px; font-weight:700; }
+    .czdmiss{ display:block; font-size:11px; color:#b45309; margin-top:6px; font-weight:700; }
+    .czcustomcol{ width:100%; margin-top:4px; font-size:12px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; }
     .czfit{ border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:10px 0; }
     .czfit .fh{ display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
     .czfit .fh h4{ margin:0; font-size:14px; }
@@ -264,30 +295,32 @@
     /* Buy sheet = a responsive CARD GRID (was one full-width row per product).
        Photos are zoomable so we keep the thumbnail small and pack many designs
        side-by-side to see the whole fit at a glance. */
-    .czpogrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; margin-top:10px; align-items:start; }
+    .czpogrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(195px,1fr)); gap:7px; margin-top:10px; align-items:start; }
     .czpogrid .czexhead{ grid-column:1/-1; }
-    .czporow{ display:flex; gap:11px; align-items:flex-start; padding:11px; border:1px solid var(--line); border-radius:12px; background:#fff; }
-    .czporow .cand{ flex:0 0 auto; width:76px; height:96px; border-radius:10px; overflow:hidden; position:relative; background:#eee; }
+    .czporow{ display:flex; gap:7px; align-items:flex-start; padding:6px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+    .czporow .cand{ flex:0 0 auto; width:48px; height:62px; border-radius:10px; overflow:hidden; position:relative; background:#eee; }
     .czporow .cand img{ width:100%; height:100%; object-fit:cover; cursor:zoom-in; display:block; }
-    .poinfo{ flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
-    .potop{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; }
+    .poinfo{ flex:1; display:flex; flex-direction:column; gap:2px; min-width:0; }
+    .potop{ display:flex; justify-content:space-between; align-items:baseline; gap:5px; flex-wrap:wrap; }
     .pov{ font-size:15px; font-weight:800; }
     .pomoney{ font-size:14px; font-weight:800; color:#0369a1; white-space:nowrap; }
-    .pometa{ display:flex; flex-wrap:wrap; gap:6px; }
-    .potag{ font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; background:#f1f3f5; color:#333; }
+    .pometa{ display:flex; flex-wrap:wrap; gap:4px; }
+    .potag{ font-size:9px; font-weight:700; padding:1px 5px; border-radius:20px; background:#f1f3f5; color:#333; }
     .potag.col{ background:#eef6ff; color:#0369a1; }
-    .poset{ display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
-    .poset label{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#888; font-weight:700; }
+    .poset{ display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+    .poset label{ font-size:9px; text-transform:uppercase; letter-spacing:.5px; color:#888; font-weight:700; }
     .posetbtn{ width:26px; height:26px; border:1px solid var(--line); background:#fff; border-radius:7px; font-size:16px; font-weight:700; line-height:1; cursor:pointer; color:var(--ink); }
     .posetbtn:hover{ background:#f1f3f5; }
-    .posetin{ width:56px; text-align:center; padding:5px 4px; border:1px solid var(--line); border-radius:7px; font-size:14px; font-weight:700; }
+    .posetin{ width:34px; text-align:center; padding:5px 4px; border:1px solid var(--line); border-radius:7px; font-size:14px; font-weight:700; }
     .posetx{ font-size:12px; color:var(--muted); }
     .posetx b{ color:#0369a1; }
-    .poprice{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-    .poprice label{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#888; font-weight:700; }
+    .poset .posetx{ display:none; }
+    .poprice .posetx{ display:none; }
+    .poprice{ display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+    .poprice label{ font-size:9px; text-transform:uppercase; letter-spacing:.5px; color:#888; font-weight:700; }
     .popin{ display:inline-flex; align-items:center; gap:3px; border:1px solid var(--line); border-radius:7px; padding:0 4px 0 8px; background:#fff; }
     .popin .cur{ font-size:13px; font-weight:700; color:#888; }
-    .popricein{ width:74px; text-align:right; padding:6px 4px; border:none; font-size:14px; font-weight:700; color:#0369a1; background:transparent; }
+    .popricein{ width:52px; text-align:right; padding:2px 3px; border:none; font-size:12px; font-weight:700; color:#0369a1; background:transparent; }
     .popricein:focus{ outline:none; }
     .pocost{ font-size:13px; font-weight:800; color:#065f46; }
     .pocost.none{ color:#bbb; font-weight:600; }
@@ -308,6 +341,17 @@
     .czownoimg span{ font-size:9px; }
     .czowdel{ background:none; border:1px solid var(--line); color:#6b7280; font-size:11px; padding:2px 7px; border-radius:7px; cursor:pointer; }
     .czowdel:hover{ border-color:#ef4444; color:#ef4444; }
+    /* By-design bill — one card per uploaded design, its colour rows inside */
+    .czdcard{ border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:10px 0; background:#fbfdff; }
+    .czdcardhd{ display:flex; align-items:baseline; gap:10px; margin:0 0 8px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+    .czdcardhd h4{ margin:0; font-size:14px; }
+    .czdcardhd .m{ font-size:12px; color:var(--muted); }
+    .czduncov{ margin-top:8px; font-size:12px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:6px 10px; line-height:1.5; }
+    .czuchip{ display:inline-block; background:#fef3c7; color:#78350f; font-weight:700; font-size:11px; padding:1px 7px; border-radius:9px; margin:0 2px; }
+    .czdleft{ margin:12px 0 4px; font-size:12px; color:#334155; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:9px 12px; line-height:1.6; }
+    .czdleft .czdleftk{ display:inline-block; background:#065f46; color:#fff; font-weight:800; font-size:11px; text-transform:uppercase; letter-spacing:.4px; padding:2px 8px; border-radius:999px; margin-right:6px; }
+    .czdungrp{ margin-top:14px; padding-top:10px; border-top:1px dashed var(--line); }
+    .czdungrphd{ font-size:12px; color:#475569; margin-bottom:6px; }
     .czexnote{ font-size:12px; color:var(--muted); margin:4px 0 7px; font-style:italic; }
     .czexwhy{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.3px; color:#6b7280; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:20px; padding:2px 8px; margin-left:6px; }
     .czexwhy.budget{ color:#3730a3; background:#eef2ff; border-color:#c7d2fe; }
@@ -343,15 +387,39 @@
     .czfxbar{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:9px 12px; margin:2px 0 10px; font-size:13px; }
     .czfxbar b{ color:#3730a3; }
     .czfxbar input{ width:80px; font-size:13px; padding:4px 6px; border:1px solid #c7d2fe; border-radius:7px; text-align:right; }
+    .czcurtog{ display:inline-flex; border:1px solid #c7d2fe; border-radius:8px; overflow:hidden; }
+    .czcurbtn{ border:0; background:#fff; color:#3730a3; font-weight:700; font-size:12px; padding:5px 11px; cursor:pointer; }
+    .czcurbtn+.czcurbtn{ border-left:1px solid #c7d2fe; }
+    .czcurbtn.on{ background:#4f46e5; color:#fff; }
+    .czsrcrow{ display:flex; gap:12px; flex-wrap:wrap; }
+    .czsrcopt{ flex:1; min-width:220px; display:flex; flex-direction:column; align-items:flex-start; gap:4px; text-align:left; background:#fff; border:1.5px solid var(--line); border-radius:12px; padding:16px 16px; cursor:pointer; transition:border-color .12s, box-shadow .12s; }
+    .czsrcopt:hover{ border-color:#6366f1; box-shadow:0 6px 18px rgba(99,102,241,.14); }
+    .czsrcopt b{ font-size:14px; }
+    .czsrcopt .sub{ font-size:12px; }
+    .czsrcico{ font-size:22px; }
+    .czporow{ display:flex; align-items:center; gap:12px; width:100%; text-align:left; background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:0 0 8px; cursor:pointer; transition:border-color .12s, background .12s; }
+    .czporow:hover{ border-color:#6366f1; background:#f5f7ff; }
+    .czporow .poid{ font-weight:800; font-size:13px; min-width:78px; }
+    .czporow .povend{ font-weight:700; font-size:13px; }
+    .czporow .pometa{ margin-left:auto; text-align:right; font-size:12px; color:#6b7280; }
+    .czpotag{ font-size:10px; font-weight:800; padding:2px 7px; border-radius:20px; text-transform:capitalize; }
+    .czpotag.funky{ background:#fef3c7; color:#92400e; }
+    .czpotag.casuals{ background:#e0e7ff; color:#3730a3; }
+    .czpotag.none{ background:#f3f4f6; color:#6b7280; }
+    .czporow.imported{ border-color:#a7f3d0; background:#f0fdf4; }
+    .czimpdone{ font-size:11px; font-weight:800; color:#065f46; background:#dcfce7; border-radius:999px; padding:2px 8px; margin-left:6px; }
+    .czimpundo{ font-size:11px; font-weight:700; color:#b91c1c; background:#fff; border:1px solid #fca5a5; border-radius:8px; padding:4px 10px; margin-left:8px; cursor:pointer; }
+    .czimpundo:hover{ background:#fef2f2; }
+    .czimpundo:disabled{ opacity:.5; cursor:default; }
     .czianalyze{ border:1px solid #6366f1; background:#eef2ff; color:#3730a3; font-weight:800; font-size:12px; padding:7px 12px; border-radius:8px; cursor:pointer; }
     .czianalyze:disabled{ opacity:.45; cursor:not-allowed; }
     .cztag{ font-size:11px; font-weight:800; padding:3px 9px; border-radius:20px; margin-left:8px; }
     .cztag.ok{ background:#ecfdf5; color:#065f46; }
     .cztag.over{ background:#fef2f2; color:#b91c1c; }
-    .posizes{ display:flex; flex-wrap:wrap; gap:5px; }
-    .pobz{ display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:700; padding:3px 5px 3px 7px; border-radius:8px; background:#fff; border:1px solid var(--line); }
+    .posizes{ display:flex; flex-wrap:wrap; gap:2px; }
+    .pobz{ display:inline-flex; align-items:center; gap:1px; font-size:10px; font-weight:700; padding:1px 2px 1px 4px; border-radius:8px; background:#fff; border:1px solid var(--line); }
     .pobz .pobzk{ color:#333; }
-    .pobzin{ width:38px; text-align:center; padding:3px 3px; border:1px solid var(--line); border-radius:6px; font-size:12px; font-weight:700; color:#0369a1; }
+    .pobzin{ width:26px; text-align:center; padding:1px 1px; border:1px solid var(--line); border-radius:6px; font-size:10px; font-weight:700; color:#0369a1; }
     .pobzin.z{ color:#bbb; }
     /* ── Rich lightbox detail card ───────────────────────────── */
     .lightbox .lbcap.rich{ bottom:18px; left:18px; right:auto; text-align:left; max-width:min(430px,88vw); }
@@ -366,7 +434,15 @@
     .lbsz b{ color:#7dd3fc; margin-left:3px; }
     .lbpos{ margin-top:10px; font-size:11px; color:rgba(255,255,255,.5); }
     /* Category summary block — headline budget/products/pieces + per-fit lines + expanders */
-    .czcatsum{ border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:0 0 12px; background:#fbfdfb; }
+    .czcatsum{ border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:0 0 12px; background:#fbfdfb;
+      position:sticky; top:8px; z-index:30; box-shadow:0 2px 10px rgba(15,23,42,.06); }
+    .czmwrap{ display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; }
+    .czmlvl{ flex:1 1 200px; min-width:180px; background:#fff; border:1px solid var(--line); border-radius:9px; padding:8px 10px; }
+    .czmh{ font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:#94a3b8; font-weight:800; margin-bottom:5px; }
+    .czmrow{ font-size:12.5px; color:#475569; line-height:1.7; }
+    .czmrow .czmk{ display:inline-block; min-width:74px; color:var(--ink); font-weight:600; }
+    .czmrow .czmp{ display:inline-block; min-width:34px; color:#1e40af; font-weight:700; }
+    .czmrow b{ color:var(--ink); }
     .czcatsum-h{ display:flex; flex-wrap:wrap; gap:10px; }
     .czcatsum-h .cs{ display:flex; flex-direction:column; gap:1px; background:#fff; border:1px solid var(--line); border-radius:9px; padding:6px 11px; min-width:76px; }
     .czcatsum-h .cs i{ font-style:normal; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; font-weight:700; }
@@ -537,20 +613,49 @@
           <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to open it; drop photos &amp; plan inside the open batch</span></div>
           <button class="btn ghost sm" id="czNewBatch" type="button">＋ New batch</button>
         </div>
+        <!-- Category picker — a batch spans ONE OR MORE categories. Shown when ＋ New
+             batch is clicked; tick every category this vendor's photos include, then
+             Create opens each chosen category's spec card (specs first, photos after). -->
+        <div id="czCatPick" style="display:none;margin:12px 0 4px">
+          <div style="font-weight:700;font-size:14px;margin:0 0 4px">Start a new batch — which categories?</div>
+          <div class="muted" style="font-size:12px;margin:0 0 10px">Pick every category this batch includes (one, any two, or all three). Each is planned independently.</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+            <label class="czcatopt"><input type="checkbox" data-catpick="Trouser"> 👖 Trouser</label>
+            <label class="czcatopt"><input type="checkbox" data-catpick="Shirt"> 👔 Shirt</label>
+            <label class="czcatopt"><input type="checkbox" data-catpick="T-shirt"> 👕 T-shirt</label>
+            <button class="btn" type="button" id="czCatPickCreate">Create batch</button>
+            <button class="btn ghost sm" type="button" id="czCatPickCancel">Cancel</button>
+          </div>
+        </div>
         <div id="czBatchList"></div>
         <!-- Uploader lives here as a persistent sibling of the batch list; it is
              only shown while a batch is opened (see czSetWorkflow), and shows
              right under the single open batch row. -->
         <div id="czUploader" style="display:none">
-          <div style="font-weight:700;font-size:13px;margin:12px 0 8px">⬆ Drop more photos into this batch</div>
+          <div style="font-weight:700;font-size:13px;margin:12px 0 8px">⬆ Add photos to this batch</div>
           <div style="display:flex;gap:8px;margin:0 0 8px;flex-wrap:wrap;align-items:flex-end">
             <div class="fld" style="min-width:170px"><label>Vendor (tags this batch)</label><input id="czVendor" placeholder="e.g. CHAOUFI" /></div>
           </div>
-          <div class="drop" style="margin-top:4px" id="czDrop">
-            <div style="font-size:32px">⬆</div>
-            <div><b>Drop casual-wear photos here</b> or click to browse</div>
-            <div style="font-size:12px; margin-top:4px">Mix trousers, shirts &amp; tees freely — up to 200 per batch.</div>
-            <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
+          <!-- Two upload modes. PILE: drop a mixed heap, AI segregates. BY DESIGN:
+               build each design, one photo per colourway — no AI needed, the
+               order sheet's design slots fill themselves. Same plan math either way. -->
+          <div class="czmodetog" style="display:flex;gap:6px;margin:0 0 10px">
+            <button type="button" class="czmodebtn on" id="czModePile">🗂 Pile &amp; segregate</button>
+            <button type="button" class="czmodebtn" id="czModeDesign">🎨 By design</button>
+          </div>
+          <div id="czPileMode">
+            <div class="drop" style="margin-top:4px" id="czDrop">
+              <div style="font-size:32px">⬆</div>
+              <div><b>Drop casual-wear photos here</b> or click to browse</div>
+              <div style="font-size:12px; margin-top:4px">One mixed pile — the AI sorts each photo into category &amp; fit.</div>
+              <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
+            </div>
+          </div>
+          <div id="czDesignMode" style="display:none">
+            <div class="muted" style="font-size:12px;margin:0 0 8px">For each design, set the category (if this batch has more than one), fit &amp; name, then upload <b>all its colour photos at once</b> — the AI auto-detects each colour. Every colour becomes its own SKU with its real photo; the buy plan &amp; budget are calculated exactly the same as the pile flow.</div>
+            <div id="czDesignList"></div>
+            <div style="margin-top:10px"><button type="button" class="btn ghost sm" id="czAddDesign">＋ Add design</button>
+              <button type="button" class="btn sm" id="czSaveDesigns" style="margin-left:8px">⬆ Upload these designs</button></div>
           </div>
           <div id="czUploadStatus" class="muted" style="font-size:12px; margin-top:6px"></div>
         </div>
@@ -617,6 +722,24 @@
           <button class="btn ghost" id="czInvCancel" type="button">Cancel</button>
           <button class="btn" id="czInvApply" type="button" disabled>Add to already-ordered</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Source chooser — pick where the already-ordered bill comes from:
+       (1) upload a fresh China bill, or (2) import a PO already entered in Purchases. -->
+  <div class="czmodal" id="czSrcModal">
+    <div class="czmbox" style="max-width:660px">
+      <div class="czmhd">
+        <div><h3 style="margin:0">Add already-ordered invoice</h3><div class="sub" style="margin:2px 0 0">Where is this bill coming from?</div></div>
+        <button class="czmx" id="czSrcClose" type="button">✕</button>
+      </div>
+      <div class="czmbody">
+        <div class="czsrcrow">
+          <button class="czsrcopt" id="czSrcUpload" type="button"><span class="czsrcico">📄</span><b>Upload China bill</b><span class="sub">Photo / PDF / Excel of the supplier invoice — read it fresh.</span></button>
+          <button class="czsrcopt" id="czSrcFromPo" type="button"><span class="czsrcico">📥</span><b>Import an existing PO</b><span class="sub">Pull a purchase already entered in Purchases (on the way) into this plan.</span></button>
+        </div>
+        <div id="czSrcPoList" style="display:none;margin-top:14px"></div>
       </div>
     </div>
   </div>
@@ -1137,13 +1260,17 @@
   function czSlug(s){ return String(s||'').trim().replace(/\s+/g,' '); }
 
   function czSaveSettings(now){
-    if(!czSettings) return;
+    if(!czSettings) return Promise.resolve();
     clearTimeout(czSaveTimer);
     var doSave = function(){
-      fetch('/api/casuals/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(czSettings) })
+      return fetch('/api/casuals/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(czSettings) })
         .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czSettings = d.settings; flashSaved(); } });
     };
-    if(now) doSave(); else czSaveTimer = setTimeout(doSave, 500);
+    // Return a promise so callers (e.g. the Trouser Apply button) can wait for the
+    // save to land before reloading the plan — otherwise the grid is computed from
+    // stale settings. Debounced saves resolve once the queued save actually runs.
+    if(now) return doSave();
+    return new Promise(function(res){ czSaveTimer = setTimeout(function(){ doSave().then(res, res); }, 500); });
   }
 
   function czLoadSettings(){
@@ -1177,9 +1304,18 @@
 
   // Sum-aware helper: total of a pct map.
   function czSum(map){ return Object.keys(map).reduce(function(s,k){ return s + (Math.max(0,parseInt(map[k])||0)); }, 0); }
+  // SET = per-design size run, counting ONLY the keys of the chosen size system. The
+  // saved sizes map can hold both an alpha and a numeric key set, so a numeric key
+  // (matches /^\d+$/) counts only when sizeSystem==='numeric', else alpha keys count.
+  function czSetOf(c){ if(!c||!c.sizes) return 0; var num = (c.sizeSystem==='numeric');
+    return Object.keys(c.sizes).reduce(function(s,k){ var isNum=/^\d+$/.test(k);
+      return (num?isNum:!isNum) ? s + Math.max(0,parseInt(c.sizes[k])||0) : s; }, 0); }
   // Resolve a category's (notional) budget for BOTH sizing modes: cost mode uses
   // the entered budget; units mode back-solves budget = target units × est ₹/pc.
-  function czBudgetOf(c){ if(!c) return 0; if(c.sizeMode === 'units'){ var ep = Math.max(1, c.avgCost||0); return Math.round((c.targetUnits||0) * ep); } return c.budget||0; }
+  function czBudgetOf(c){ if(!c) return 0; var ep = Math.max(1, c.avgCost||0);
+    if(c.sizeMode === 'units'){ return Math.round((c.targetUnits||0) * ep); }
+    if(c.sizeMode === 'designs'){ return Math.round((c.designs||0) * czSetOf(c) * ep); }
+    return c.budget||0; }
 
   // Recompute the live "units" hints on a category card after any edit.
   function czRecalcCard(catKey){
@@ -1189,14 +1325,17 @@
     // pills read the same either way. cost → units = budget ÷ est ₹/pc; units →
     // budget = units × est ₹/pc (a back-solved notional figure, firmed up at PO).
     var expPrice = Math.max(1, c.avgCost||0);
-    var budget = (c.sizeMode === 'units') ? Math.round((c.targetUnits||0) * expPrice) : (c.budget||0);
-    var tUnits = (c.sizeMode === 'units') ? (c.targetUnits||0) : Math.round(budget / expPrice);
+    // SET = the per-design size run the founder typed (sum of ACTIVE-system sizes).
+    var setPc = czSetOf(c);
+    // DESIGNS-mode: units = designs × set (no price needed). Otherwise as before.
+    var tUnits = (c.sizeMode === 'designs') ? Math.round((c.designs||0) * setPc)
+               : (c.sizeMode === 'units') ? (c.targetUnits||0)
+               : Math.round((c.budget||0) / expPrice);
+    var budget = (c.sizeMode === 'designs' || c.sizeMode === 'units') ? Math.round(tUnits * expPrice) : (c.budget||0);
     var bp = card.querySelector('[data-budgetpill]'); if(bp) bp.textContent = '₹'+fmtINR(budget);
     var up = card.querySelector('[data-unitspill]'); if(up) up.textContent = fmtINR(tUnits)+' pc';
-    // SET = the per-design size run the founder typed (sum of S–XXXL quantities).
-    // DESIGNS = total pieces ÷ SET — this is the number the colour % lands on.
-    var setPc = czSum(c.sizes || {});
-    var designs = setPc > 0 ? Math.round(tUnits / setPc) : 0;
+    // DESIGNS = total pieces ÷ SET — the number the colour/fit % lands on.
+    var designs = (c.sizeMode === 'designs') ? (c.designs||0) : (setPc > 0 ? Math.round(tUnits / setPc) : 0);
     var sp = card.querySelector('[data-setpill]'); if(sp) sp.textContent = fmtINR(setPc)+' pc';
     var dp = card.querySelector('[data-designpill]'); if(dp) dp.textContent = fmtINR(designs);
     // fit/print/colour rows show their normalised % share; SIZE rows show the raw
@@ -1216,20 +1355,30 @@
   var CAT_LABEL = { 'Trouser':'Trousers', 'Shirt':'Shirts', 'T-shirt':'T-Shirts & Polos' };
   // Human labels for the spec fit keys (so the editor reads nicely).
   var FIT_LABELS = {
-    'Trouser':{ wideleg:'Wide-leg / Controlled Baggy', relaxedstraight:'Relaxed Straight', koreanpleated:'Korean Pleated', flared:'Flared / Bootcut', tapered:'Tapered / Chino' },
-    'Shirt':{ oversized:'Oversized / Drop Shoulder', relaxedregular:'Relaxed Regular', boxy:'Boxy', cuban:'Cuban / Resort Collar' },
-    'T-shirt':{ oversizedround:'Oversized Round Neck', relaxedround:'Relaxed Round Neck', boxyround:'Boxy Round Neck', classictee:'Classic Regular Tee' }
+    'Trouser':{ baggy:'Baggy', normal:'Normal' },
+    'Shirt':{ oversized:'Oversized / Drop Shoulder', relaxedregular:'Relaxed Regular' },
+    'T-shirt':{ oversizedround:'Oversized Round Neck', relaxedround:'Relaxed Round Neck' }
+  };
+  // Trousers offer TWO size systems the founder can switch between at intake.
+  var CZ_TROUSER_SIZES = {
+    alpha:   ['XS','S','M','L','XL','XXL','XXXL','XXXXL'],
+    numeric: ['26','28','30','32','34','36','38','40']
   };
   function czFitLabel(catKey, key){ return (FIT_LABELS[catKey] && FIT_LABELS[catKey][key]) || key; }
-  // Print-type dimension (Shirts & T-shirts only) — fixed 3 buckets.
+  // Print-type dimension (Shirts & T-shirts only) — fixed 2 buckets.
   var CZ_PRINT_CATS = ['Shirt','T-shirt'];
-  var CZ_PRINT_KEYS = ['solid','printed','checks'];
-  var PRINT_LABELS = { solid:'Solid (plain / logo)', printed:'Printed / Embroidered', checks:'Checks / Stripes & rest' };
+  var CZ_PRINT_KEYS = ['solid','others'];
+  var PRINT_LABELS = { solid:'Solid (plain / logo)', others:'Others' };
 
   var czOpenCards = {};
   function czRenderCats(){
     var host = el('czCats'); host.innerHTML = '';
-    CAT_KEYS.forEach(function(catKey){
+    // A batch spans one or more categories: show a spec card for each category the
+    // batch was created with. Legacy batches (no category set) show all 3.
+    var actB = czActiveBatchObj();
+    var actCats = czBatchCats(actB);
+    var catList = actCats.length ? CAT_KEYS.filter(function(k){ return actCats.indexOf(k) >= 0; }) : CAT_KEYS;
+    catList.forEach(function(catKey){
       var c = czSettings.categories[catKey];
       var open = !!czOpenCards[catKey]; // default COLLAPSED — opening a batch shows just the category list
       var card = document.createElement('div');
@@ -1266,21 +1415,38 @@
       // on a rupee budget (÷ est ₹/pc → pieces); 'units' lets the founder type the
       // piece target directly (real prices only exist AFTER photos go to the
       // vendor). Either way the total cascades down the SAME fit/print/colour %s.
-      if(c.sizeMode !== 'units') c.sizeMode = 'cost';
+      if(c.sizeMode !== 'units' && c.sizeMode !== 'designs') c.sizeMode = 'cost';
+      var isTrouser = (catKey === 'Trouser');
+      // Trouser is ALWAYS spec-driven (designs mode) — the founder is asked #designs
+      // up front, no budget/units picker. Force it so the wizard shows straight away.
+      if(isTrouser) c.sizeMode = 'designs';
       var isUnits = c.sizeMode === 'units';
+      var isDesigns = c.sizeMode === 'designs';
       var row = document.createElement('div'); row.className = 'czrow';
-      row.innerHTML =
-        '<div class="fld" style="min-width:170px"><label>Plan this category by</label>'
-        + '<select data-sizemode>'
-        + '<option value="cost"'+(isUnits?'':' selected')+'>Estimated budget ₹</option>'
-        + '<option value="units"'+(isUnits?' selected':'')+'>Number of units</option>'
-        + '</select></div>'
-        + '<div class="fld" data-costfld style="min-width:150px;'+(isUnits?'display:none':'')+'"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>'
-        + '<div class="fld" data-unitfld style="min-width:150px;'+(isUnits?'':'display:none')+'"><label>Target units (this category)</label><input data-units inputmode="numeric" value="'+fmtINR(c.targetUnits||0)+'" /></div>';
+      if(isTrouser){
+        // Trouser wizard — step ① is just the number of designs. Size system moves
+        // into step ②, budget/units are gone (optional cost lives at PO stage 2).
+        row.innerHTML =
+          '<div class="fld" style="min-width:180px"><label>① Number of designs</label><input data-designs inputmode="numeric" value="'+fmtINR(c.designs||0)+'" placeholder="e.g. 10" /></div>'
+          + '<div class="fld" data-costfld2 style="min-width:160px"><label>Est ₹/piece (optional)</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
+      } else {
+        row.innerHTML =
+          '<div class="fld" style="min-width:170px"><label>Plan this category by</label>'
+          + '<select data-sizemode>'
+          + '<option value="designs"'+(isDesigns?' selected':'')+'>Number of designs</option>'
+          + '<option value="units"'+(isUnits?' selected':'')+'>Number of units</option>'
+          + '<option value="cost"'+((isUnits||isDesigns)?'':' selected')+'>Estimated budget ₹</option>'
+          + '</select></div>'
+          + '<div class="fld" data-designfld style="min-width:150px;'+(isDesigns?'':'display:none')+'"><label>Number of designs</label><input data-designs inputmode="numeric" value="'+fmtINR(c.designs||0)+'" /></div>'
+          + '<div class="fld" data-costfld style="min-width:150px;'+((isUnits||isDesigns)?'display:none':'')+'"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>'
+          + '<div class="fld" data-unitfld style="min-width:150px;'+(isUnits?'':'display:none')+'"><label>Target units (this category)</label><input data-units inputmode="numeric" value="'+fmtINR(c.targetUnits||0)+'" /></div>'
+          + '<div class="fld" data-costfld2 style="min-width:150px;'+(isDesigns?'':'display:none')+'"><label>Est ₹/piece (optional)</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
+      }
       body.appendChild(row);
 
       var pills = document.createElement('div'); pills.className = 'czpills';
-      pills.innerHTML = '<div class="czpill">Budget<b data-budgetpill>₹0</b></div><div class="czpill">Target pieces<b data-unitspill>0</b></div><div class="czpill">Set size<b data-setpill>0 pc</b></div><div class="czpill">→ Designs<b data-designpill>0</b></div>';
+      pills.innerHTML = '<div class="czpill">Target pieces<b data-unitspill>0</b></div><div class="czpill">Set size<b data-setpill>0 pc</b></div><div class="czpill">→ Designs<b data-designpill>0</b></div>'
+        + (isTrouser ? '' : '<div class="czpill">Budget<b data-budgetpill>₹0</b></div>');
       body.appendChild(pills);
 
       // Print-type mix % — an extra manual split (Shirts & T-shirts only) that
@@ -1297,7 +1463,7 @@
         body.appendChild(pwrap);
         var pnote = document.createElement('div'); pnote.className = 'czsub';
         pnote.style.textTransform = 'none'; pnote.style.letterSpacing = '0';
-        pnote.innerHTML = '<span style="color:var(--muted)">Solid = plain colour (with or without logo). Printed/Embroidered combined. Checks / stripes &amp; everything else. Fit % below is applied <b>within</b> each print type.</span>';
+        pnote.innerHTML = '<span style="color:var(--muted)">Solid = plain colour (with or without logo). Others = everything else (prints, embroidery, checks, stripes). Fit % below is applied <b>within</b> each print type.</span>';
         body.appendChild(pnote);
       }
 
@@ -1305,15 +1471,38 @@
       // WITHIN each fit; the plan matches it when it must hold designs back and
       // flags any colour it is short of as "needs sourcing".
       var isUpper = CZ_PRINT_CATS.indexOf(catKey) >= 0;
-      ['fits','sizes','colours'].forEach(function(kind){
-        var title = kind === 'fits' ? (isUpper ? '② Fit mix % — within each print type' : 'Fit mix %')
-                  : kind === 'sizes' ? 'Pieces per set — one design’s S–XXXL run (SUM = set size)'
-                  : 'Colour mix % — within each fit';
+      // Trouser wizard order: ② Sizes → ③ Colours → ④ Fit (Baggy/Normal). Other
+      // categories keep the original fit → size → colour order.
+      var kinds = isTrouser ? ['sizes','colours','fits'] : ['fits','sizes','colours'];
+      kinds.forEach(function(kind){
+        var title = isTrouser
+          ? (kind === 'sizes' ? '② Size run — quantity per size (SUM = one design’s set)'
+            : kind === 'colours' ? '③ Colour mix %'
+            : '④ Fit — Baggy vs Normal %')
+          : (kind === 'fits' ? (isUpper ? '② Fit mix % — within each print type' : 'Fit mix %')
+            : kind === 'sizes' ? 'Pieces per set — one design’s S–XXXL run (SUM = set size)'
+            : 'Colour mix % — within each fit');
         var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
         body.appendChild(sub);
+        // Trouser: the size-system dropdown (alpha 26–40 / S–XXXXL) leads the Sizes step.
+        if(isTrouser && kind === 'sizes'){
+          var sysrow = document.createElement('div'); sysrow.className = 'czrow'; sysrow.style.margin = '0 0 6px';
+          sysrow.innerHTML = '<div class="fld" style="min-width:200px"><label>Size system</label><select data-sizesystem>'
+            + '<option value="alpha"'+((c.sizeSystem!=='numeric')?' selected':'')+'>Alpha (XS – 4XL)</option>'
+            + '<option value="numeric"'+((c.sizeSystem==='numeric')?' selected':'')+'>Numeric (26 – 40)</option>'
+            + '</select></div>';
+          body.appendChild(sysrow);
+        }
         var wrap = document.createElement('div'); wrap.className = 'czdist'; wrap.setAttribute('data-kind', kind);
         var map = c[kind];
-        Object.keys(map).forEach(function(key){
+        var mapKeys = Object.keys(map);
+        // Trouser sizes: the saved map can hold BOTH alpha and numeric keys at once,
+        // so show ONLY the keys of the chosen size system (a numeric key is all digits).
+        if(isTrouser && kind === 'sizes'){
+          var wantNum = (c.sizeSystem === 'numeric');
+          mapKeys = mapKeys.filter(function(k){ return /^\d+$/.test(k) === wantNum; });
+        }
+        mapKeys.forEach(function(key){
           var label = (kind === 'fits') ? czFitLabel(catKey, key) : key;
           var spec = (kind === 'fits') ? !!(FIT_LABELS[catKey] && FIT_LABELS[catKey][key]) : true; // spec size/colour keys are their own labels
           var isCustom = (kind === 'fits') ? !spec : false; // only fits track custom vs spec cleanly
@@ -1330,9 +1519,28 @@
         body.appendChild(add);
       });
 
+      // Trouser: an explicit APPLY button. Founder edits any spec value, clicks
+      // Apply, and the colour×fit calculation + source-more list refresh with the
+      // new numbers — nothing recomputes silently on every keystroke.
+      if(isTrouser){
+        var applyRow = document.createElement('div');
+        applyRow.style.cssText = 'display:flex;gap:10px;align-items:center;margin:14px 0 4px;flex-wrap:wrap';
+        applyRow.innerHTML = '<button class="btn" type="button" data-czapply>✓ Apply — calculate what to buy</button>'
+          + '<span class="muted" style="font-size:12px">Change any value above, then Apply to refresh the plan below.</span>';
+        body.appendChild(applyRow);
+        applyRow.querySelector('[data-czapply]').addEventListener('click', function(){
+          var b = applyRow.querySelector('[data-czapply]'); b.disabled = true; b.textContent = '… calculating';
+          // Wait for the settings save to LAND before reloading the plan — else the
+          // grid is computed from stale specs (designs/sizes/colours/fits).
+          czSaveSettings(true).then(function(){ return czLoadPlan(); }).then(function(){ czRenderCats(); });
+        });
+      }
+
       var colNote = document.createElement('div'); colNote.className = 'czsub';
       colNote.style.textTransform = 'none'; colNote.style.letterSpacing = '0';
-      colNote.innerHTML = '<span style="color:var(--muted)">You upload every vendor photo unselected — the app <b>curates a balanced buy</b> toward these %s within your '+(c.sizeMode==='units'?'target units':'budget')+'. The total splits down '+(isUpper?'print → fit → colour':'fit → colour')+': in each colour slot the best designs win (your pins first, then AI rating), extras are held as “overfilled”, colours not in your mix are held as “add it to your % to buy”, and a colour you’re <b>short</b> of is flagged “needs sourcing” with that budget <b>reserved</b> — never poured into another colour or fit.</span>';
+      colNote.innerHTML = isTrouser
+        ? '<span style="color:var(--muted)">The plan below is a <b>colour × fit grid</b> — both are <b>HARD caps</b>. Each cell shows designs to buy (raw → rounded), and the <b>Source more</b> list is your exact shopping list per colour × fit. Upload photos <b>after</b> this — the app fills the grid and never backfills a gap from another colour or fit.</span>'
+        : '<span style="color:var(--muted)">You upload every vendor photo unselected — the app <b>curates a balanced buy</b> toward these %s within your '+(c.sizeMode==='units'?'target units':'budget')+'. '+(isUpper?'<b>Print</b> and <b>colour</b> are HARD caps':'<b>Colour</b> is a HARD cap')+' (a colour never exceeds its %, surplus is “held over target”), while <b>fit</b> fills in parallel from any '+(isUpper?'print/':'')+'colour so nothing is stranded. Best designs win each slot (your pins first, then AI rating); colours not in your mix are held as “add it to your % to buy”; and anything you’re <b>short</b> of is flagged “needs sourcing” — budget <b>reserved</b>, never poured into another colour'+(isUpper?', print':'')+' or fit.</span>';
       body.appendChild(colNote);
 
       // The category's products (bill) live INSIDE this card, under its mix %s.
@@ -1357,12 +1565,31 @@
       var uni = body.querySelector('[data-units]');
       if(uni) uni.addEventListener('change', function(){ c.targetUnits = parseInt((uni.value||'').replace(/[^\d]/g,''))||0; uni.value = fmtINR(c.targetUnits); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
 
+      var dsg = body.querySelector('[data-designs]');
+      if(dsg) dsg.addEventListener('change', function(){ c.designs = parseInt((dsg.value||'').replace(/[^\d]/g,''))||0; dsg.value = fmtINR(c.designs); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+
+      var avc = body.querySelector('[data-avgcost]');
+      if(avc) avc.addEventListener('change', function(){ c.avgCost = Math.max(0, parseInt((avc.value||'').replace(/[^\d]/g,''))||0); avc.value = fmtINR(c.avgCost); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+
+      // Size-system toggle (Trousers): swap the size run between alpha and numeric.
+      var sys = body.querySelector('[data-sizesystem]');
+      if(sys) sys.addEventListener('change', function(){
+        c.sizeSystem = (sys.value === 'numeric') ? 'numeric' : 'alpha';
+        var keys = CZ_TROUSER_SIZES[c.sizeSystem] || [];
+        var oldMap = c.sizes || {}; var oldVals = Object.keys(oldMap).map(function(k){ return oldMap[k]; });
+        var next = {}; keys.forEach(function(k, i){ next[k] = (oldVals[i] != null ? oldVals[i] : (oldMap[k] != null ? oldMap[k] : 0)); });
+        c.sizes = next; czRenderCats(); czSaveSettings(true);
+      });
+
       var smode = body.querySelector('[data-sizemode]');
       if(smode) smode.addEventListener('change', function(){
-        c.sizeMode = (smode.value === 'units') ? 'units' : 'cost';
-        var cf = body.querySelector('[data-costfld]'), uf = body.querySelector('[data-unitfld]');
-        if(cf) cf.style.display = (c.sizeMode === 'units') ? 'none' : '';
+        c.sizeMode = (smode.value === 'units' || smode.value === 'designs') ? smode.value : 'cost';
+        var cf = body.querySelector('[data-costfld]'), uf = body.querySelector('[data-unitfld]'),
+            df = body.querySelector('[data-designfld]'), cf2 = body.querySelector('[data-costfld2]');
+        if(cf) cf.style.display = (c.sizeMode === 'cost') ? '' : 'none';
         if(uf) uf.style.display = (c.sizeMode === 'units') ? '' : 'none';
+        if(df) df.style.display = (c.sizeMode === 'designs') ? '' : 'none';
+        if(cf2) cf2.style.display = (c.sizeMode === 'designs') ? '' : 'none';
         CAT_KEYS.forEach(czRecalcCard); czSaveSettings();
       });
 
@@ -1376,7 +1603,7 @@
   }
   // Spec size/colour keys are considered custom if not in the default set (so ✕ shows only for founder-added ones).
   var CZ_DEFAULT = {
-    'Trouser':{ sizes:['26','28','30','32','34','36'], colours:['Black','Beige','Charcoal Grey','Olive','Brown','Navy Blue','Off White'] },
+    'Trouser':{ sizes:['XS','S','M','L','XL','XXL','XXXL','XXXXL','26','28','30','32','34','36','38','40'], colours:['Black','Beige','Charcoal Grey','Olive','Brown','Navy Blue','Off White'] },
     'Shirt':{ sizes:['XS','S','M','L','XL','XXL'], colours:['Black','Off White','White','Charcoal Grey','Olive Green','Beige','Sky Blue'] },
     'T-shirt':{ sizes:['XS','S','M','L','XL','XXL'], colours:['Black','Off White','White','Charcoal Grey','Olive Green','Beige','Navy Blue'] }
   };
@@ -1437,10 +1664,17 @@
   var czBatches = [], czActiveBatch = null, czPhotosOpen = false, czExpanded = false;
   var czLastCands = [], czLastCats = [];
   function czActiveBatchObj(){ return czBatches.filter(function(b){ return b.id === czActiveBatch; })[0] || null; }
+  // The category SET a batch spans: prefer the multi-category list, fall back to the
+  // legacy single `.category`. Empty = legacy/unconstrained batch (show all 3 cards).
+  function czBatchCats(b){
+    if(!b) return [];
+    var raw = (b.batchCategories && b.batchCategories.length) ? b.batchCategories : (b.category ? [b.category] : []);
+    return raw.filter(function(k){ return CAT_KEYS.indexOf(k) >= 0; });
+  }
   // The uploader + the whole budget/plan workflow only exist while a batch is
   // opened. In the collapsed list view nothing but the batch rows is shown.
   function czSetWorkflow(show){ var w = el('czWorkflow'); if(w) w.style.display = show ? '' : 'none'; var u = el('czUploader'); if(u) u.style.display = show ? '' : 'none'; }
-  function czOpenBatch(id){ czExpanded = true; czOpenCards = {}; if(id === czActiveBatch){ czRenderBatches(); czRenderCandidates(czLastCands, czLastCats); return Promise.resolve(); } return czSetActiveBatch(id); }
+  function czOpenBatch(id){ czExpanded = true; czOpenCards = {}; czDesigns = []; czSetMode(false); if(id === czActiveBatch){ czRenderBatches(); czRenderCats(); czRenderCandidates(czLastCands, czLastCats); return Promise.resolve(); } return czSetActiveBatch(id).then(function(){ czRenderCats(); }); }
 
   // Total actual spend across the current plan (only meaningful after prices
   // are entered + Re-analyse). Used for the batch-row "actual ₹" chip.
@@ -1455,6 +1689,10 @@
   // the real spend.
   function czBatchChips(b, isActive){
     var out = ['<span class="czbchip">'+b.count+' photo'+(b.count===1?'':'s')+'</span>'];
+    var spans = czBatchCats(b);
+    // The categories this batch spans — shown even before any photo is segregated,
+    // so an empty new batch still displays what it's for.
+    if(spans.length){ spans.forEach(function(k){ out.push('<span class="czbchip cat">'+escapeHtml(CAT_LABEL[k]||k)+'</span>'); }); }
     if(b.categories && b.categories.length){
       b.categories.forEach(function(c){ out.push('<span class="czbchip">'+escapeHtml(c.label)+' '+c.count+'</span>'); });
       if(b.pieces) out.push('<span class="czbchip pcs">~'+fmtINR(b.pieces)+' pc</span>');
@@ -1539,9 +1777,32 @@
     return fetch('/api/casuals/batches/active',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:id})})
       .then(function(r){ return r.json(); }).then(function(){ return czLoadCandidates().then(czLoadPlan); });
   }
-  function czCreateBatch(){
-    return fetch('/api/casuals/batches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({})})
-      .then(function(r){ return r.json(); }).then(function(){ czExpanded = true; czPhotosOpen = false; return czLoadCandidates().then(czLoadPlan); });
+  // ＋ New batch no longer creates a batch straight away — it asks WHICH categories
+  // first (a batch spans one or more), then czCreateBatchFor makes the batch.
+  function czShowCatPick(show){
+    var p = el('czCatPick'); if(!p) return;
+    if(show){ [].slice.call(p.querySelectorAll('[data-catpick]')).forEach(function(cb){ cb.checked = false; }); }
+    p.style.display = show ? '' : 'none';
+  }
+  function czCreateBatch(){ czShowCatPick(true); return Promise.resolve(); }
+  // Create a batch spanning `cats` (array of category keys). Enables & opens every
+  // chosen category so all their spec cards (incl. "number of designs") show together.
+  function czCreateBatchFor(cats){
+    if(typeof cats === 'string') cats = [cats];
+    cats = (cats||[]).filter(function(k){ return CAT_KEYS.indexOf(k) >= 0; });
+    if(!cats.length){ alert('Pick at least one category for this batch.'); return Promise.resolve(); }
+    czShowCatPick(false);
+    return fetch('/api/casuals/batches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({categories:cats})})
+      .then(function(r){ return r.json(); }).then(function(){
+        czExpanded = true; czPhotosOpen = false; czOpenCards = {};
+        var changed = false;
+        cats.forEach(function(cat){
+          if(czSettings && czSettings.categories[cat]){ czOpenCards[cat] = true; if(!czSettings.categories[cat].enabled){ czSettings.categories[cat].enabled = true; changed = true; } }
+        });
+        if(changed) czSaveSettings();
+        // Re-render the cards NOW so the batch's category filter applies — czLoadPlan
+        // only re-renders cards once photos are analysed, which an empty batch has none of.
+        return czLoadCandidates().then(function(){ czRenderCats(); return czLoadPlan(); }); });
   }
   function czDeleteBatch(){
     var act = czActiveBatchObj(); if(!act) return;
@@ -1591,6 +1852,219 @@
     send(0, 1);
   }
 
+  // ── DESIGN-WISE upload mode ─────────────────────────────────────
+  // The founder builds each design (a fit + a name) and drops ONE photo per
+  // colourway. On save every colour becomes a candidate carrying category / fit /
+  // colour as human overrides + a designId — so it flows into the SAME grid,
+  // staircase and budget math as a tagged pile photo, and the order-sheet slots
+  // fill themselves from the real photos. No AI segregation needed.
+  var czDMode = false;                 // false = pile, true = by-design
+  var czDesigns = [];                  // [{id, name, cat, fit, cols:[{id, colour, file, url, detecting}]}]
+  var czDSeq = 0;
+  // The categories this batch spans (multi-category aware). czDCat = the DEFAULT
+  // category for a new design (the batch's sole/first category).
+  function czDCats(){ return czBatchCats(czActiveBatchObj()); }
+  function czDCat(){ var cs = czDCats(); return cs[0] || null; }
+  // A design's own category — falls back to the batch's default. Fits & colours are
+  // read from whichever category the design belongs to.
+  function czDCatOf(d){ var cats = czDCats(); if(d && d.cat && cats.indexOf(d.cat) >= 0) return d.cat; return czDCat(); }
+  function czDFits(cat){ var m = (czSettings && czSettings.categories[cat] && czSettings.categories[cat].fits) || {}; return Object.keys(m); }
+  function czDColours(cat){ var m = (czSettings && czSettings.categories[cat] && czSettings.categories[cat].colours) || {}; return Object.keys(m); }
+  function czSetMode(design){
+    czDMode = !!design;
+    var mp = el('czModePile'), md = el('czModeDesign'), pm = el('czPileMode'), dm = el('czDesignMode');
+    if(mp) mp.classList.toggle('on', !czDMode); if(md) md.classList.toggle('on', czDMode);
+    if(pm) pm.style.display = czDMode ? 'none' : ''; if(dm) dm.style.display = czDMode ? '' : 'none';
+    if(czDMode && !czDesigns.length) czDAddDesign();
+  }
+  function czDAddDesign(){
+    var cat = czDCat();
+    var fits = czDFits(cat);
+    // Collapse existing designs so the list stays compact; open only the new one.
+    czDesigns.forEach(function(x){ x.collapsed = true; });
+    czDesigns.push({ id: ++czDSeq, name: '', cat: cat, fit: fits[0] || '', cols: [], collapsed: false });
+    czDRender();
+  }
+  // Match an AI-detected colour string to one of THIS category's plan colours
+  // (case-insensitive, English-normalised). Returns '' if none fits — the founder
+  // then picks it from the dropdown. Keeps the colour on-plan so the grid nets it.
+  function czDMatchColour(cat, raw){
+    var cols = czDColours(cat);
+    var en = czColourEN(raw); var lo = String(en||'').toLowerCase().trim();
+    if(!lo) return '';
+    var exact = cols.filter(function(k){ return k.toLowerCase()===lo; })[0];
+    if(exact) return exact;
+    var part = cols.filter(function(k){ var kl=k.toLowerCase(); return lo.indexOf(kl)>=0 || kl.indexOf(lo)>=0; })[0];
+    return part || '';
+  }
+  // A design's photos are uploaded in ONE shot; each becomes a colour slot and the
+  // AI names the colour. Sends the whole batch to /invoice/classify (same vision
+  // brain the pile + invoice flows use), then maps each result to a plan colour.
+  function czDAddPhotos(did, files){
+    var d = czDesigns.filter(function(x){ return x.id === did; })[0]; if(!d || !files || !files.length) return;
+    var cat = czDCatOf(d);
+    var fresh = [];
+    Array.prototype.forEach.call(files, function(f){
+      if(!/^image\//.test(f.type)) return;
+      var cl = { id: ++czDSeq, colour: '', file: f, url: URL.createObjectURL(f), detecting: true };
+      d.cols.push(cl); fresh.push(cl);
+    });
+    if(!fresh.length) return;
+    czDRender();
+    var fd = new FormData();
+    fresh.forEach(function(cl){ fd.append('images', cl.file); fd.append('ids', 'c'+cl.id); });
+    fetch('/api/casuals/invoice/classify', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(res){
+      var map = (res && res.results) || {};
+      fresh.forEach(function(cl){ var o = map['c'+cl.id]; cl.detecting = false;
+        if(o && o.colour){
+          // Prefer an on-plan colour; if the AI's read isn't one of this category's
+          // plan colours, keep it anyway as an OFF-PLAN custom colour (the grid nets
+          // off-list colours) instead of leaving the slot blank — a blank slot is
+          // silently skipped on upload, which surprises the founder.
+          cl.colour = czDMatchColour(cat, o.colour) || czColourEN(o.colour) || String(o.colour).trim() || '';
+          cl._aiColour = o.colour;
+        } });
+      czDRender();
+    }).catch(function(){ fresh.forEach(function(cl){ cl.detecting = false; }); czDRender(); });
+  }
+  function czDRender(){
+    var host = el('czDesignList'); if(!host) return;
+    var batchCats = czDCats();
+    if(!batchCats.length){ host.innerHTML = '<div class="muted" style="font-size:12px">This batch has no category set — by-design upload needs one.</div>'; return; }
+    var multiCat = batchCats.length > 1;   // show a per-design category picker only when the batch spans >1
+    host.innerHTML = '';
+    czDesigns.forEach(function(d, di){
+      var cat = czDCatOf(d);
+      var fits = czDFits(cat), cols = czDColours(cat);
+      var card = document.createElement('div'); card.className = 'czdesign';
+      // Collapsible: designs collapse to a one-line summary so a long list stays
+      // compact; click the header (or caret) to expand and edit / add photos.
+      var open = (d.collapsed !== true);
+      var fitOpts = fits.map(function(f){ return '<option value="'+escapeHtml(f)+'"'+(f===d.fit?' selected':'')+'>'+escapeHtml(czFitLabel(cat, f))+'</option>'; }).join('');
+      var catFld = multiCat
+        ? '<div class="fld" style="min-width:130px"><label>Category</label><select data-dcat>'+batchCats.map(function(k){ return '<option value="'+escapeHtml(k)+'"'+(k===cat?' selected':'')+'>'+escapeHtml(CAT_LABEL[k]||k)+'</option>'; }).join('')+'</select></div>'
+        : '';
+      // Collapsed summary: design name (or #), its category, fit and colour count.
+      var nPhotos = d.cols.filter(function(cl){ return cl.file; }).length;
+      var sumBits = [];
+      if(multiCat) sumBits.push(escapeHtml(CAT_LABEL[cat]||cat));
+      if(d.fit) sumBits.push(escapeHtml(czFitLabel(cat, d.fit)));
+      sumBits.push(nPhotos ? (nPhotos+' colour'+(nPhotos===1?'':'s')) : 'no photos yet');
+      card.innerHTML =
+        '<div class="dsum" data-dtoggle>'+
+          '<span class="caret">'+(open?'▾':'▸')+'</span>'+
+          '<b class="dsumname">'+escapeHtml(d.name||('Design '+(di+1)))+'</b>'+
+          '<span class="dsummeta">'+sumBits.join(' · ')+'</span>'+
+          '<span class="drm" data-drm>✕ remove</span>'+
+        '</div>'+
+        '<div class="dbody"'+(open?'':' style="display:none"')+'>'+
+          '<div class="dh">'+
+            catFld+
+            '<div class="fld" style="min-width:120px"><label>Fit</label><select data-fit>'+fitOpts+'</select></div>'+
+            '<div class="fld" style="flex:1;min-width:150px"><label>Design name (optional)</label><input data-name placeholder="e.g. Cargo Pocket" value="'+escapeHtml(d.name||'')+'" /></div>'+
+          '</div>'+
+          '<label class="czdaddphotos" data-addlabel><span data-addtxt>⬆ Upload all photos for this design</span>'+
+            '<input type="file" accept="image/*" multiple data-photos style="display:none" /></label>'+
+        '</div>';
+      var dbody = card.querySelector('.dbody');
+      var grid = document.createElement('div'); grid.className = 'czcols';
+      d.cols.forEach(function(cl){
+        // Custom = a colour the founder typed that isn't one of the category's plan
+        // colours (an off-plan extra). It still becomes a real SKU, tagged with that name.
+        var isCustom = !!(cl.colour && cols.indexOf(cl.colour) < 0);
+        var colOpts = '<option value="">— colour —</option>'+cols.map(function(k){ return '<option value="'+escapeHtml(k)+'"'+(k===cl.colour?' selected':'')+'>'+escapeHtml(k)+'</option>'; }).join('')+
+          '<option value="__custom__"'+(isCustom?' selected':'')+'>Other — type colour</option>';
+        var cell = document.createElement('div'); cell.className = 'czcol';
+        var badge = cl.detecting ? '<span class="czdetect">detecting…</span>'
+          : (cl.colour ? '<span class="czdok">🎯 '+escapeHtml(cl.colour)+'</span>'
+            : '<span class="czdmiss">'+ (cl._aiColour ? ('“'+escapeHtml(cl._aiColour)+'” — pick colour') : 'pick colour') +'</span>');
+        cell.innerHTML =
+          '<div class="cph">'+(cl.url ? '<img src="'+cl.url+'" />' : '📷')+'</div>'+
+          badge+
+          '<select data-colour'+(cl.detecting?' disabled':'')+'>'+colOpts+'</select>'+
+          '<input data-colcustom class="czcustomcol" placeholder="type colour name" value="'+escapeHtml(isCustom?cl.colour:'')+'" style="'+(isCustom?'':'display:none')+'" />'+
+          '<span class="crm" data-crm>remove</span>';
+        var csel = cell.querySelector('[data-colour]'), ccust = cell.querySelector('[data-colcustom]');
+        csel.addEventListener('change', function(){
+          if(this.value==='__custom__'){ ccust.style.display=''; cl.colour = ccust.value.trim(); ccust.focus(); }
+          else { ccust.style.display='none'; cl.colour = this.value; }
+          cl._aiColour = null;
+        });
+        ccust.addEventListener('input', function(){ cl.colour = this.value.trim(); });
+        cell.querySelector('[data-crm]').addEventListener('click', function(){ if(cl.url) try{ URL.revokeObjectURL(cl.url); }catch(e){} d.cols = d.cols.filter(function(x){ return x.id !== cl.id; }); czDRender(); });
+        grid.appendChild(cell);
+      });
+      dbody.appendChild(grid);
+      // Collapse/expand: clicking the summary header toggles this design's body.
+      card.querySelector('[data-dtoggle]').addEventListener('click', function(e){
+        if(e.target.closest('[data-drm]')) return;   // remove button handled separately
+        d.collapsed = (d.collapsed !== true); czDRender();
+      });
+      // wire design-level inputs
+      var catSel = card.querySelector('[data-dcat]');
+      if(catSel) catSel.addEventListener('change', function(){
+        d.cat = this.value;
+        // Category changed → its fit list & plan colours differ, so reset the design's
+        // fit to the new category's first fit and clear each colour slot's mapping.
+        var nf = czDFits(d.cat); d.fit = nf[0] || '';
+        d.cols.forEach(function(cl){ cl.colour = ''; cl._aiColour = null; });
+        czDRender();
+      });
+      card.querySelector('[data-fit]').addEventListener('change', function(){ d.fit = this.value; });
+      card.querySelector('[data-name]').addEventListener('input', function(){ d.name = this.value; });
+      card.querySelector('[data-drm]').addEventListener('click', function(){ czDesigns = czDesigns.filter(function(x){ return x.id !== d.id; }); if(!czDesigns.length) czDAddDesign(); else czDRender(); });
+      var pin = card.querySelector('[data-photos]');
+      // COPY the FileList to a real array FIRST — this.files is LIVE, so resetting
+      // this.value='' would empty it before czDAddPhotos reads it (→ 0 photos added).
+      pin.addEventListener('change', function(){ var fl = Array.prototype.slice.call(this.files); this.value=''; czDAddPhotos(d.id, fl); });
+      host.appendChild(card);
+    });
+  }
+  function czSaveDesigns(){
+    var st = el('czUploadStatus');
+    var vendor = (el('czVendor').value||'').trim();
+    if(!vendor){ st.innerHTML = '<span style="color:var(--err)">Enter a vendor name first.</span>'; el('czVendor').focus(); return; }
+    // If the AI is still naming colours, don't skip those slots — ask to wait.
+    var stillDetecting = 0;
+    czDesigns.forEach(function(d){ d.cols.forEach(function(cl){ if(cl.file && cl.detecting) stillDetecting++; }); });
+    if(stillDetecting){ st.innerHTML = '<span style="color:var(--err)">Still detecting colours on '+stillDetecting+' photo'+(stillDetecting===1?'':'s')+' — give it a moment, then click Upload again.</span>'; return; }
+    // Flatten to files + parallel meta; skip empty colour slots (no photo yet).
+    var files = [], meta = [], missingCol = 0;
+    czDesigns.forEach(function(d, di){
+      var dnum = di + 1;
+      d.cols.forEach(function(cl){
+        if(!cl.file) return;                        // a photo-less slot is ignored
+        if(!cl.colour){ missingCol++; return; }     // photo but no colour → flag, skip
+        files.push(cl.file);
+        meta.push({ designId: 'd'+d.id, designName: (d.name||('Design '+dnum)), category: czDCatOf(d), fit: d.fit, colour: cl.colour });
+      });
+    });
+    if(!files.length){
+      var totalPhotos = 0; czDesigns.forEach(function(d){ d.cols.forEach(function(cl){ if(cl.file) totalPhotos++; }); });
+      st.innerHTML = totalPhotos
+        ? '<span style="color:var(--err)">'+totalPhotos+' photo'+(totalPhotos===1?'':'s')+' uploaded but no colour set on any — pick a colour under each photo (or type one via “Other”), then click Upload.</span>'
+        : '<span style="color:var(--err)">Add at least one photo, then a colour will be detected for it.</span>';
+      return;
+    }
+    var act = czActiveBatchObj();
+    var batchTarget = act ? act.id : 'new';
+    var fd = new FormData();
+    files.forEach(function(f){ fd.append('photos', f); });
+    fd.append('vendor', vendor); fd.append('batch', batchTarget); fd.append('meta', JSON.stringify(meta));
+    st.textContent = 'Uploading '+files.length+' colour photo'+(files.length===1?'':'s')+'…'+(missingCol?(' ('+missingCol+' skipped — no colour)'):'');
+    el('czSaveDesigns').disabled = true;
+    fetch('/api/casuals/candidates', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
+      el('czSaveDesigns').disabled = false;
+      if(!d.success){ st.innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Upload failed')+'</span>'; return; }
+      var nDesigns = Object.keys(meta.reduce(function(set,m){ set[m.designId]=1; return set; },{})).length;
+      st.innerHTML = '<span style="color:var(--emerald-d)">✓ Added '+d.added.length+' colour SKU'+(d.added.length===1?'':'s')+' across '+nDesigns+' design'+(nDesigns===1?'':'s')+'. Build the plan below.</span>';
+      // Design-wise photos are already tagged — clear the builder, jump straight to plan.
+      czDesigns = []; czDMode = false;
+      czPhotosOpen = true;
+      czLoadCandidates().then(czLoadPlan);
+    }).catch(function(){ el('czSaveDesigns').disabled = false; st.innerHTML = '<span style="color:var(--err)">Upload failed — try again.</span>'; });
+  }
+
   function czAnalyze(){
     var btn = el('czAnalyzeBtn'); btn.disabled = true;
     el('czAnalyzeStatus').innerHTML = '<span class="muted">Segregating photos by category &amp; fit…</span>';
@@ -1627,11 +2101,17 @@
   function czRatioFor(cat){
     var key = cat.category;
     var pairs = [];
+    // The saved sizes map can hold BOTH the alpha and numeric key sets at once
+    // (a system swap leaves the retired keys behind). Count ONLY the active
+    // system's keys, or the set doubles (S/M/L… PLUS 26/28/…). numeric = /^\d+$/.
+    var cfg = czSettings && czSettings.categories && czSettings.categories[key];
+    var wantNum = ((cfg && cfg.sizeSystem) || cat.sizeSystem) === 'numeric';
+    var active = function(k){ return /^\d+$/.test(k) === wantNum; };
     // Prefer the LIVE edited settings so changes reflect without a re-analyse…
-    var qMap = czSettings && czSettings.categories && czSettings.categories[key] && czSettings.categories[key].sizes;
-    if(qMap){ Object.keys(qMap).forEach(function(sz){ var q = Math.max(0, Math.round(+qMap[sz]||0)); if(q>0) pairs.push([sz, q]); }); }
+    var qMap = cfg && cfg.sizes;
+    if(qMap){ Object.keys(qMap).forEach(function(sz){ if(!active(sz)) return; var q = Math.max(0, Math.round(+qMap[sz]||0)); if(q>0) pairs.push([sz, q]); }); }
     // …else the quantities baked into the plan.
-    if(!pairs.length && cat.sizes){ cat.sizes.forEach(function(s){ var q = Math.max(0, Math.round(+(s.pct!=null?s.pct:s.share)||0)); if(q>0) pairs.push([s.key||s, q]); }); }
+    if(!pairs.length && cat.sizes){ cat.sizes.forEach(function(s){ var sk = s.key||s; if(!active(sk)) return; var q = Math.max(0, Math.round(+(s.pct!=null?s.pct:s.share)||0)); if(q>0) pairs.push([sk, q]); }); }
     if(!pairs.length){
       if(CZ_SETRATIO[key]) return CZ_SETRATIO[key];
       return ((cat && cat.sizes) || []).map(function(s){ return [s.key||s, 1]; });
@@ -1695,11 +2175,245 @@
     }).then(function(r){ return r.json(); }).then(function(d){ if(d && d.success){ czRenderPlan(d); } });
   }
 
+  // ── DESIGN-WISE VIEW ─────────────────────────────────────────────────
+  //   When a batch was uploaded "by design" (each photo carries a designName),
+  //   the buyer thinks in DESIGNS, not fits: "Design A — 1pc each of S,M,L,XL,XXL
+  //   across its colours; what's left to source". So for those batches we REPLACE
+  //   the per-fit product rows with a design-grouped bill. The category summary
+  //   header + colour×fit grid + source-more + order sheet (all in czCatSummary)
+  //   stay exactly as-is — only the product listing regroups by design name.
+  function czFlatFits(cat){
+    var fits = [];
+    if(cat.printGroups && cat.printGroups.length){
+      cat.printGroups.forEach(function(g){ (g.fits||[]).forEach(function(f){ fits.push(f); }); });
+      if(cat.unassigned) fits.push(cat.unassigned);
+    } else { (cat.fits||[]).forEach(function(f){ fits.push(f); }); }
+    return fits;
+  }
+  function czCatIsDesignWise(cat){
+    return czFlatFits(cat).some(function(f){ return (f.designs||[]).some(function(c){ return c.designName && String(c.designName).trim(); }); });
+  }
+  // Compute-only per-fit roll-ups (mirrors renderFit's return, no DOM) so the
+  // by-design view can still feed czCatSummary the exact same numbers.
+  function czFitSums(f, cat, ratio){
+    var fitTotal = 0, fitCost = 0, incCount = 0, colCount = {};
+    (f.designs||[]).forEach(function(c){
+      if(c.included === false) return;
+      var total = czQtyTotal(czQtyMap(c, cat)); fitTotal += total; incCount++;
+      var _ck = c.colour||'—'; colCount[_ck] = (colCount[_ck]||0) + 1;
+      fitCost += total * czPriceFor(c.id);
+    });
+    var unitPrice = (czPriced && fitTotal>0) ? (fitCost/fitTotal) : (cat.expPrice||0);
+    var afford = unitPrice>0 ? Math.round((f.budget||0)/unitPrice) : 0;
+    var setPc = czSetPieces(ratio);
+    var moreProd = setPc>0 ? Math.floor((afford - fitTotal)/setPc) : 0;
+    return { fitTotal:fitTotal, fitCost:fitCost, label:f.label, unassigned:!!f.unassignedFit,
+      products:incCount, pieces:fitTotal, budget:f.budget||0, colCount:colCount,
+      moreProd:(cat.enabled && !f.unassignedFit && moreProd>0) ? moreProd : 0,
+      colourShort:f.colourShort||[], overMoney:(czPriced ? Math.max(0, fitCost - (f.budget||0)) : 0) };
+  }
+  // Build ONE editable buy-row (photo + sizes + sets + price). Same DOM & wiring
+  // as renderFit's included branch, so edits update the plan identically.
+  function czBuildBuyRow(c, cat, ratio, setPc, fitLabel){
+    var sets = czSetsFor(c.id);
+    var qty = czQtyMap(c, cat);
+    var total = czQtyTotal(qty);
+    var price = czPriceFor(c.id), rowCost = total * price;
+    var sizeStr = ratio.map(function(r){ return r[0]+':'+(qty[r[0]]||0); }).filter(function(s){ return +s.split(':')[1] > 0; }).join(',');
+    var szHtml = ratio.map(function(r){ var q = qty[r[0]]||0;
+      return '<span class="pobz"><span class="pobzk">'+escapeHtml(r[0])+'</span><input class="pobzin'+(q?'':' z')+'" type="number" min="0" step="1" value="'+q+'" data-id="'+c.id+'" data-size="'+escapeHtml(r[0])+'"></span>'; }).join('');
+    var row = document.createElement('div'); row.className='czporow';
+    row.innerHTML =
+      '<div class="cand"'+czCandAttrs(c, cat.label, fitLabel, sizeStr)+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
+      '<div class="poinfo">'+
+        '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+
+          '<button class="czexclbtn" type="button" title="Remove from PO">✕ Exclude</button>'+
+          '<span class="pomoney">'+fmtINR(total)+' pc</span></div>'+
+        '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(fitLabel)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
+        '<div class="poset"><label>Sets</label>'+
+          '<button class="posetbtn" type="button" data-op="-">–</button>'+
+          '<input class="posetin" type="number" min="0" step="1" value="'+sets+'">'+
+          '<button class="posetbtn" type="button" data-op="+">+</button>'+
+          '<span class="posetx">fills the '+setPc+'-pc curve · edit any size below</span></div>'+
+        '<div class="posizes">'+szHtml+'</div>'+
+        '<div class="poprice"><label>Unit ₹</label>'+
+          '<span class="popin"><span class="cur">₹</span><input class="popricein" type="number" min="0" step="1" placeholder="0" value="'+(price?price:'')+'" data-id="'+c.id+'"></span>'+
+          '<span class="posetx">actual vendor price · used only for budget, never exported</span>'+
+          (czPriced ? '<span class="pocost'+(rowCost?'':' none')+'">= ₹'+fmtINR(rowCost)+'</span>' : '')+
+        '</div>'+
+      '</div>';
+    row.querySelector('.czexclbtn').addEventListener('click', function(){ czSetInclude(c.id, false); });
+    function applySets(n){ n = Math.max(0, n); czSets[c.id] = n; var m = {}; ratio.forEach(function(r){ m[r[0]] = r[1]*n; }); czQty[c.id] = m; czRenderPlan(czLastPlan); }
+    row.querySelector('.posetin').addEventListener('change', function(){ var v = parseInt(this.value,10); applySets(isFinite(v)?v:0); });
+    Array.prototype.forEach.call(row.querySelectorAll('.posetbtn'), function(b){ b.addEventListener('click', function(){ applySets(czSetsFor(c.id) + (b.getAttribute('data-op')==='+'?1:-1)); }); });
+    Array.prototype.forEach.call(row.querySelectorAll('.pobzin'), function(inp){
+      inp.addEventListener('change', function(){ var v = parseInt(inp.value,10); if(!isFinite(v)||v<0) v=0; czEnsureQty(c, cat)[inp.getAttribute('data-size')] = v; czRenderPlan(czLastPlan); });
+    });
+    row.querySelector('.popricein').addEventListener('change', function(){ var v = parseFloat(this.value); czPrice[c.id] = (isFinite(v)&&v>=0)?v:0; if(czPriced) czRenderPlan(czLastPlan); });
+    return { row: row, total: total, cost: rowCost, qty: qty };
+  }
+  // A held-back design row (greyed, ₹0, ＋Include). Compact reason text.
+  function czBuildExclRow(c, cat, fitLabel){
+    var xrow = document.createElement('div'); xrow.className='czporow czexcl';
+    var reason = (c.excludedReason==='manual') ? 'removed by you'
+      : (c.excludedReason==='budget') ? 'fit budget full'
+      : (c.excludedReason==='variety') ? 'beyond this fit’s colour mix' : 'held back';
+    xrow.innerHTML =
+      '<div class="cand"'+czCandAttrs(c, cat.label, fitLabel, '')+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
+      '<div class="poinfo">'+
+        '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+'<span class="czexwhy">'+escapeHtml(reason)+'</span></div>'+
+        '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(fitLabel)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
+        '<button class="czinclbtn" type="button">＋ Include in PO</button>'+
+      '</div>';
+    xrow.querySelector('.czinclbtn').addEventListener('click', function(){ czSetInclude(c.id, true); });
+    return xrow;
+  }
+  // Render the design-grouped bill. Returns the same roll-up shape czCatProducts
+  // returns, so the caller (czRenderCats + czCatSummary) is unchanged.
+  function czCatProductsByDesign(cat, into){
+    var ratio = czRatioFor(cat), setPc = czSetPieces(ratio);
+    var body = into, catTotal = 0, catCost = 0;
+    var allFits = czFlatFits(cat);
+
+    // Roll-ups (compute-only) → catTotal / catCost / fitSummary.
+    var fitSums = [];
+    allFits.forEach(function(f){ var t = czFitSums(f, cat, ratio); catTotal += t.fitTotal; catCost += t.fitCost; if(!t.unassigned) fitSums.push(t); });
+    var merged = {}, order = [];
+    fitSums.forEach(function(t){
+      if(!t.products && !t.moreProd && !(t.colourShort||[]).length && !t.overMoney) return;
+      var m = merged[t.label];
+      if(!m){ m = merged[t.label] = { label:t.label, products:0, pieces:0, budget:0, colCount:{}, moreProd:0, colourShort:[], overMoney:0 }; order.push(t.label); }
+      m.products += t.products; m.pieces += t.pieces; m.budget += t.budget; m.moreProd += t.moreProd; m.overMoney += t.overMoney;
+      Object.keys(t.colCount).forEach(function(k){ m.colCount[k] = (m.colCount[k]||0) + t.colCount[k]; });
+      (t.colourShort||[]).forEach(function(s){ m.colourShort.push(s); });
+    });
+    var fitSummary = order.map(function(l){ return merged[l]; });
+
+    // Group candidates by design name; nameless (pile) photos fall to "ungrouped".
+    var groups = {}, gorder = [], ungrouped = [];
+    allFits.forEach(function(f){
+      (f.designs||[]).forEach(function(c){
+        var dn = (c.designName||'').trim();
+        if(!dn){ ungrouped.push({ c:c, f:f }); return; }
+        if(!groups[dn]){ groups[dn] = { name:dn, items:[] }; gorder.push(dn); }
+        groups[dn].items.push({ c:c, f:f });
+      });
+    });
+
+    var intro = document.createElement('div'); intro.className='czsub'; intro.style.textTransform='none'; intro.style.letterSpacing='0';
+    intro.innerHTML = '<b>By design</b> — each uploaded design with its colour photos and the size set each buys. Edit any size / set / price inline. Under each design: sizes with no coverage. Below all designs: budget &amp; pieces still to source, then any ungrouped / already-ordered photos.';
+    body.appendChild(intro);
+
+    gorder.forEach(function(dn){
+      var grp = groups[dn];
+      var incItems = grp.items.filter(function(w){ return w.c.included !== false; });
+      var excItems = grp.items.filter(function(w){ return w.c.included === false; });
+      var card = document.createElement('div'); card.className='czdcard';
+      var dTotal = 0, sizeAgg = {}; ratio.forEach(function(r){ sizeAgg[r[0]] = 0; });
+      var rowsWrap = document.createElement('div'); rowsWrap.className='czpogrid';
+      incItems.forEach(function(w){
+        var built = czBuildBuyRow(w.c, cat, ratio, setPc, w.f.label);
+        dTotal += built.total;
+        ratio.forEach(function(r){ sizeAgg[r[0]] += (built.qty[r[0]]||0); });
+        rowsWrap.appendChild(built.row);
+      });
+      var colours = {}; incItems.forEach(function(w){ colours[w.c.colour||'—'] = 1; });
+      var nCol = Object.keys(colours).length;
+      var hd = document.createElement('div'); hd.className='czdcardhd';
+      hd.innerHTML = '<h4>'+escapeHtml(dn)+'</h4><span class="m">'+incItems.length+' photo'+(incItems.length===1?'':'s')+' · '+nCol+' colour'+(nCol===1?'':'s')+' · <b>'+fmtINR(dTotal)+' pc</b></span>';
+      card.appendChild(hd);
+      card.appendChild(rowsWrap);
+      if(excItems.length){
+        var xh = document.createElement('div'); xh.className='czexhead'; xh.textContent = 'Not included (tap ＋ Include to add to the PO)'; card.appendChild(xh);
+        var xw = document.createElement('div'); xw.className='czpogrid';
+        excItems.forEach(function(w){ xw.appendChild(czBuildExclRow(w.c, cat, w.f.label)); });
+        card.appendChild(xw);
+      }
+      // (1) sizes with NO coverage across this design's colours.
+      var uncovered = ratio.filter(function(r){ return (sizeAgg[r[0]]||0) === 0; }).map(function(r){ return r[0]; });
+      if(incItems.length && uncovered.length){
+        var uc = document.createElement('div'); uc.className='czduncov';
+        uc.innerHTML = '<b>No coverage:</b> '+uncovered.map(function(s){ return '<span class="czuchip">'+escapeHtml(s)+'</span>'; }).join(' ')+
+          ' — no colour in this design carries '+(uncovered.length===1?'this size':'these sizes')+'. Add the size on a row above, or upload a photo that covers it.';
+        card.appendChild(uc);
+      }
+      body.appendChild(card);
+    });
+
+    if(!gorder.length){
+      var em = document.createElement('div'); em.className='czpo-empty'; em.textContent = 'No named designs in this batch yet.'; body.appendChild(em);
+    }
+
+    // (2) LEFT — budget & pieces still to source, category-wide.
+    if(cat.enabled){
+      var alloc = (cat.budget!=null ? cat.budget : 0);
+      var leftBudget = czPriced ? (alloc - catCost) : null;
+      var tgt = cat.estUnits||0, onWay = cat.onOrder||0;
+      var toSrc = (cat.netUnits!=null) ? cat.netUnits : Math.max(0, tgt - onWay);
+      var leftPc = Math.max(0, toSrc - catTotal);
+      var bits = [];
+      if(leftBudget!=null) bits.push('budget <b style="color:'+(leftBudget<0?'#b91c1c':'#065f46')+'">'+(leftBudget<0?('over ₹'+fmtINR(-leftBudget)):('₹'+fmtINR(leftBudget)+' left'))+'</b>');
+      else if(alloc) bits.push('<b>₹'+fmtINR(alloc)+'</b> budget allocated <span style="color:var(--muted)">(add unit ₹ to track spend)</span>');
+      bits.push('<b>'+fmtINR(catTotal)+' pc</b> in the PO now');
+      if(onWay>0) bits.push('<b>'+fmtINR(onWay)+' pc</b> already on the way');
+      if(leftPc>0) bits.push('~<b style="color:#b45309">'+fmtINR(leftPc)+' pc</b> still to source to hit '+fmtINR(toSrc)+' pc target');
+      else if(toSrc>0) bits.push('<b style="color:#065f46">target '+fmtINR(toSrc)+' pc covered</b>');
+      var lb = document.createElement('div'); lb.className='czdleft';
+      lb.innerHTML = '<span class="czdleftk">What’s left</span> '+bits.join(' · ');
+      body.appendChild(lb);
+    }
+
+    // (3) UNGROUPED / OFF-PLAN — nameless photos + already-ordered (imported PO).
+    var orderedFits = allFits.filter(function(f){ return (f.ordered||[]).length; });
+    if(ungrouped.length || orderedFits.length){
+      var uh = document.createElement('div'); uh.className='czdungrp';
+      uh.innerHTML = '<div class="czdungrphd"><b>Ungrouped / off-plan</b> — photos with no design name, plus anything already ordered (imported POs).</div>';
+      body.appendChild(uh);
+      if(ungrouped.length){
+        var ug = document.createElement('div'); ug.className='czpogrid';
+        ungrouped.forEach(function(w){
+          if(w.c.included === false){ ug.appendChild(czBuildExclRow(w.c, cat, w.f.label)); return; }
+          ug.appendChild(czBuildBuyRow(w.c, cat, ratio, setPc, w.f.label).row);
+        });
+        uh.appendChild(ug);
+      }
+      orderedFits.forEach(function(f){
+        var owPc = f.ordered.reduce(function(s,o){ return s + (o.qty||0); }, 0);
+        var owHead = document.createElement('div'); owHead.className='czoword-head';
+        owHead.innerHTML = '<span class="czowbadge">✓ Already ordered</span> <b>'+fmtINR(owPc)+' pc</b> on the way in <b>'+escapeHtml(f.label)+'</b> — netted against the target';
+        uh.appendChild(owHead);
+        var owGrid = document.createElement('div'); owGrid.className='czpogrid';
+        f.ordered.forEach(function(o){
+          var sz = (o.sizes||[]).map(function(x){ return escapeHtml(x.key)+':'+x.units; }).join(' · ') || ((o.qty||0)+' pc');
+          var thumb = o.hasImg ? ('<img src="'+o.url+'" loading="lazy" alt=""/>') : '<div class="czownoimg">📷<span>no photo</span></div>';
+          var oc = document.createElement('div'); oc.className='czporow czoword';
+          oc.innerHTML =
+            '<div class="cand"'+czCandAttrs(o, cat.label, f.label, sz)+'>'+thumb+'</div>'+
+            '<div class="poinfo">'+
+              '<div class="potop"><span class="pov">'+escapeHtml(o.vendor||czColourEN(o.colour)||'Ordered product')+'</span><span class="czowbadge">✓ ordered</span>'+
+                '<button class="czowdel" type="button" title="Remove from ordered">✕ Remove</button>'+
+                '<span class="pomoney">'+fmtINR(o.qty||0)+' pc</span></div>'+
+              '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(f.label)+'</span><span class="potag col">'+escapeHtml(czColourEN(o.colour)||'—')+'</span>'+
+                (o.cost>0 ? ('<span class="potag">₹'+fmtINR(o.cost)+'/pc</span>') : '')+'</div>'+
+              '<div class="poset"><label>Sizes</label><span class="posetx">'+escapeHtml(sz)+'</span></div>'+
+            '</div>';
+          oc.querySelector('.czowdel').addEventListener('click', function(){ czOrderedDelete(o.ids||[o.id]); });
+          owGrid.appendChild(oc);
+        });
+        uh.appendChild(owGrid);
+      });
+    }
+
+    return { catTotal: catTotal, catCost: catCost, fitSummary: fitSummary, setPc: setPc };
+  }
+
   // Render ONE category's fits/products "bill" into `into`. Returns the roll-up
   // piece + cost totals so the caller (the merged category card) can show its
   // Buy / Actual-spend pills. The %-editors + this bill now live in the SAME
   // card, so opening a category shows its mix AND its products together.
   function czCatProducts(cat, into){
+      // Design-wise batches regroup the bill BY DESIGN NAME (see czCatProductsByDesign).
+      if(czCatIsDesignWise(cat)) return czCatProductsByDesign(cat, into);
       var ratio = czRatioFor(cat), setPc = czSetPieces(ratio);
       var body = into; var catTotal = 0, catCost = 0;
 
@@ -1725,15 +2439,20 @@
               // Exact, plain-English reason from the backend colour-mix maths.
               // Spell out WHY so the buyer isn't left guessing what "over mix" means.
               var _c = escapeHtml(exd.colour);
-              if(exd.offList){
+              var _p = (exd.print && exd.print!=='_all') ? escapeHtml(exd.print.charAt(0).toUpperCase()+exd.print.slice(1)) : '';
+              var _pIn = _p ? ('the '+_p+' print') : 'this buy';
+              if(exd.offListPrint){
+                exReason = '<span class="czexwhy budget">'+_c+' held back</span>'+
+                  '<span class="czexnote2">Its print '+(_p||'type')+' isn\u2019t one of this category\u2019s print-mix types, so it wasn\u2019t bought. Add a % for that print, or tap ＋ Include to buy it anyway.</span>';
+              } else if(exd.offList){
                 exReason = '<span class="czexwhy budget">'+_c+' held back</span>'+
                   '<span class="czexnote2">'+_c+' isn\u2019t one of this category\u2019s colour-mix colours, so it wasn\u2019t bought. Set a % for it in the colour mix, or tap ＋ Include to buy it anyway.</span>';
               } else if(exd.target===0){
                 exReason = '<span class="czexwhy budget">'+_c+' held back</span>'+
-                  '<span class="czexnote2">Your colour mix leaves no room for '+_c+' in this buy (kept 0 of '+exd.have+'). Raise '+_c+'\u2019s % or tap ＋ Include to buy it anyway.</span>';
+                  '<span class="czexnote2">Your colour mix leaves no room for '+_c+' in '+_pIn+' (kept 0 of '+exd.have+'). Raise '+_c+'\u2019s % or tap ＋ Include to buy it anyway.</span>';
               } else {
                 exReason = '<span class="czexwhy budget">'+_c+' held back ('+(exd.have-exd.target)+' extra)</span>'+
-                  '<span class="czexnote2">Your colour mix wants '+exd.target+' '+_c+' across this category but you sent '+exd.have+'. Kept the '+exd.target+' best-rated; the other '+(exd.have-exd.target)+' are held. Tap ＋ Include to buy anyway.</span>';
+                  '<span class="czexnote2">'+_pIn.charAt(0).toUpperCase()+_pIn.slice(1)+' wants '+exd.target+' '+_c+' but you sent '+exd.have+'. Kept the '+exd.target+' best-rated; the other '+(exd.have-exd.target)+' are held. Tap ＋ Include to buy anyway.</span>';
               }
             } else if(c.excludedReason==='variety'){ exReason = '<span class="czexwhy budget">beyond this fit\u2019s colour mix</span>'; }
             else if(c.excludedReason==='budget'){ exReason = '<span class="czexwhy budget">fit budget full</span>'; }
@@ -1813,16 +2532,23 @@
           var gapHtml = '';
           if((f.colourShort||[]).length){
             gapHtml += '<span class="czgapk">① mix needs</span>' +
-              f.colourShort.map(function(s){ return '<span class="czneed">'+escapeHtml(s.label)+' +'+s.need+'</span>'; }).join('');
+              f.colourShort.map(function(s){
+                var why = '<b>'+escapeHtml(f.label)+'</b> still needs <b>+'+s.need+'</b> '+escapeHtml(s.label)+'.<br>This fit\u2019s colour mix wants more '+escapeHtml(s.label)+' than the uploaded photos supply. Upload <b>'+s.need+'</b> more '+escapeHtml(s.label)+' photo'+(s.need===1?'':'s')+' in this fit — the plan won\u2019t backfill it from another colour.';
+                return czWhyTag('<span class="czneed">'+escapeHtml(s.label)+' +'+s.need+'</span>', why);
+              }).join('');
           }
           // Stage 2 — budget vs what the sourced designs actually spend.
           var unitPrice = (czPriced && fitTotal>0) ? (fitCost/fitTotal) : (cat.expPrice||0);
           var afford = unitPrice>0 ? Math.round((f.budget||0)/unitPrice) : 0;
           var moreProd = setPc>0 ? Math.floor((afford - fitTotal)/setPc) : 0;
           if(moreProd>0){
-            gapHtml += '<span class="czgapk">② budget room</span><span class="czneed money">~'+moreProd+' more design'+(moreProd===1?'':'s')+'</span>';
+            var brWhy = '<b>'+escapeHtml(f.label)+'</b> — the leftover budget can fund about <b>'+moreProd+'</b> more design'+(moreProd===1?'':'s')+'.<br>'+
+              'Budget <b>\u20B9'+fmtINR(f.budget||0)+'</b> \u00F7 unit \u20B9'+fmtINR(Math.round(unitPrice))+' \u2248 <b>'+fmtINR(afford)+' pc</b> you can afford.<br>'+
+              'You\u2019ve sourced <b>'+fmtINR(fitTotal)+' pc</b> so far. ('+fmtINR(afford)+' \u2212 '+fmtINR(fitTotal)+') \u00F7 set '+setPc+' pc = <b>'+moreProd+'</b> more design'+(moreProd===1?'':'s')+'.<br>'+
+              'Upload more '+escapeHtml(f.label)+' photos to put that budget to work.';
+            gapHtml += '<span class="czgapk">② budget room</span>'+czWhyTag('<span class="czneed money">~'+moreProd+' more design'+(moreProd===1?'':'s')+'</span>', brWhy);
           }
-          if(gapHtml){ var gv=document.createElement('div'); gv.className='czgap'; gv.innerHTML=gapHtml; into.appendChild(gv); }
+          if(gapHtml){ var gv=document.createElement('div'); gv.className='czgap'; gv.innerHTML=gapHtml; into.appendChild(gv); czAttachWhy(gv); }
         }
         // Open-to-buy: net the fit's budget target against what's already ordered.
         if(cat.enabled && !f.unassignedFit){
@@ -1920,6 +2646,98 @@
       return { catTotal: catTotal, catCost: catCost, fitSummary: fitSummary, setPc: setPc };
   }
 
+  // ── Clickable "why & how" explainers ────────────────────────────────
+  //   Every headline number (a colour/print/fit selected count, a shortfall,
+  //   an over-target hold, the budget-room figure) can be clicked to reveal the
+  //   exact math behind it. We stash the explanation HTML in CZ_WHY keyed by a
+  //   generated id (avoids attribute-escaping), tag the chip with data-whyid,
+  //   and one delegated listener toggles an inline box under the clicked chip.
+  var CZ_WHY = {}, czWhySeq = 0;
+  function czWhyId(html){ var id = 'w'+(czWhySeq++); CZ_WHY[id] = html; return id; }
+  // Append data-whyid + a little ⓘ affordance to an already-built chip string.
+  //   chip = '<span style="…">inner</span>' → the same span, now clickable.
+  function czWhyTag(chip, why){
+    if(!why) return chip;
+    var id = czWhyId(why);
+    return chip.replace(/^\s*<span /, '<span data-whyid="'+id+'" title="Click to see why &amp; how" ')
+               .replace(/<\/span>\s*$/, ' <b style="opacity:.45;font-weight:700">ⓘ</b></span>');
+  }
+  function czAttachWhy(root){
+    if(!root || root.__whyBound) return; root.__whyBound = true;
+    root.addEventListener('click', function(ev){
+      var t = ev.target; while(t && t!==root && !(t.getAttribute && t.getAttribute('data-whyid'))) t = t.parentNode;
+      if(!t || t===root) return;
+      ev.stopPropagation(); ev.preventDefault();
+      var nb = t.nextSibling;
+      if(nb && nb.nodeType===1 && nb.className==='czwhybox'){ nb.parentNode.removeChild(nb); return; }
+      var box = document.createElement('div'); box.className = 'czwhybox';
+      box.style.cssText = 'flex-basis:100%;margin:4px 0 8px;padding:8px 10px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;font-size:12px;line-height:1.55;color:#334155;max-width:560px';
+      box.innerHTML = CZ_WHY[t.getAttribute('data-whyid')] || '';
+      t.parentNode.insertBefore(box, t.nextSibling);
+    });
+  }
+
+  // ── Design order-sheet photo picker ─────────────────────────────────
+  // The founder tags ONE uploaded photo per base-design slot (A/B/C…) so the
+  // order sheet carries a reference image for each common design. Tags persist
+  // per batch (POST /api/casuals/design-tags {key:"<fitKey>|<slot>", candidateId}).
+  function czOsSaveTag(key, candidateId){
+    return fetch('/api/casuals/design-tags', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ key:key, candidateId:candidateId }) })
+      .then(function(r){ return r.json(); }).then(function(d){
+        if(d.success && czLastPlan){ czLastPlan.designTags = d.designTags||{}; czRenderCats(); }
+      });
+  }
+  // Full-screen zoom for a single picker photo — sits ABOVE the picker modal
+  // (z 10001 > 9999). Click anywhere to dismiss and return to the gallery.
+  function czOsZoom(src){
+    var z = document.createElement('div');
+    z.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:10001;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:24px';
+    var im = document.createElement('img'); im.src = src;
+    im.style.cssText = 'max-width:92vw;max-height:92vh;object-fit:contain;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,.5)';
+    z.appendChild(im); document.body.appendChild(z);
+    z.addEventListener('click', function(){ if(z.parentNode) document.body.removeChild(z); });
+  }
+  function czOsOpenPicker(fitKey, slotKey, designs){
+    var slot = (slotKey.split('|')[1]||'');
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:80vh;overflow:auto;padding:18px;box-shadow:0 20px 50px rgba(0,0,0,.3)';
+    var h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+      + '<div style="font-weight:700;color:#0f172a">Tag a photo for Design '+escapeHtml(slot)+'</div>'
+      + '<button type="button" class="czosx" style="border:none;background:none;font-size:22px;cursor:pointer;color:#64748b;line-height:1">&times;</button></div>';
+    if(!(designs||[]).length){
+      h += '<div style="font-size:13px;color:#64748b;margin-top:8px">No uploaded photos for this fit yet. Upload photos first, then tag one here.</div>';
+    } else {
+      h += '<div style="font-size:12px;color:#64748b;margin-bottom:10px"><b>Click</b> a photo to zoom · <b>double-click</b> to add it as this design.</div>';
+      h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px">';
+      designs.forEach(function(d){
+        h += '<div class="czoscand" data-id="'+escapeHtml(String(d.id))+'" style="cursor:zoom-in;border:2px solid transparent;border-radius:8px;padding:2px" title="Click to zoom · double-click to add">'
+          + '<img src="'+escapeHtml(d.url)+'" style="width:100%;height:110px;object-fit:cover;border-radius:6px;display:block">'
+          + '<div style="font-size:10px;color:#64748b;text-align:center;margin-top:2px">'+escapeHtml(d.colour||'')+'</div></div>';
+      });
+      h += '</div>';
+    }
+    box.innerHTML = h; ov.appendChild(box); document.body.appendChild(ov);
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); }
+    ov.addEventListener('click', function(e){ if(e.target===ov) close(); });
+    box.querySelector('.czosx').addEventListener('click', close);
+    // Single click zooms the photo; double click tags it. A short timer lets the
+    // dblclick pre-empt the single-click zoom so the two don't fight.
+    [].forEach.call(box.querySelectorAll('.czoscand'), function(cd){
+      var timer = null;
+      cd.addEventListener('click', function(){
+        if(timer) return;
+        var src = cd.querySelector('img').getAttribute('src');
+        timer = setTimeout(function(){ timer = null; czOsZoom(src); }, 220);
+      });
+      cd.addEventListener('dblclick', function(){
+        if(timer){ clearTimeout(timer); timer = null; }
+        czOsSaveTag(slotKey, cd.getAttribute('data-id')); close();
+      });
+    });
+  }
+
   // ── Category summary card (sits at the TOP of a category's products) ──
   //   Headline: allocated vs consumed budget (over/under), # products, # pieces.
   //   Per-fit:  "Wide Leg — 3 products · 36 pcs · Black ×2, White ×1".
@@ -1930,6 +2748,35 @@
     var pc = planCat || {};
     var alloc = (pc.budget!=null ? pc.budget : (c.budget||0)), consumed = planTot.catCost||0, pieces = planTot.catTotal||0;
     var sums = planTot.fitSummary || [];
+    // Calc lookups (from the engine's transparent-math object) so each chip can
+    // explain how its number was derived: target = pct% × base designs.
+    var cc = pc.calc || {}, cbase = cc.base || 0;
+    var lkOf = function(arr){ var m = {}; (arr||[]).forEach(function(r){ m[r.label] = r; }); return m; };
+    var lkPrint = lkOf(cc.prints), lkCol = lkOf(cc.colours), lkFit = lkOf(cc.fits);
+    var tgtLine = function(r){ return (r && r.pct!=null) ? (r.pct+'% × '+cbase+' base = <b>'+r.target+'</b> design'+(r.target===1?'':'s')) : 'target unavailable'; };
+    var whySel = function(dim, label, n, hard){
+      var r = (dim==='colour'?lkCol:dim==='print'?lkPrint:lkFit)[label] || {};
+      return '<b>'+escapeHtml(label)+'</b> — <b>'+n+'</b> design'+(n===1?'':'s')+' selected.<br>Target = '+tgtLine(r)+
+        (r.have!=null ? ('. Uploaded <b>'+r.have+'</b> photo'+(r.have===1?'':'s')+' of this '+dim+'.') : '.')+
+        '<br>'+ (hard ? ('<b>'+dim.charAt(0).toUpperCase()+dim.slice(1)+' is a HARD cap</b> — the plan never fills one '+dim+' past its %, so any surplus is held, not poured into another '+dim+'.')
+                      : ('Fit fills in <b>parallel</b> from any print/colour, so nothing gets stranded.'));
+    };
+    var whyShort = function(dim, label, need, hard){
+      var r = (dim==='colour'?lkCol:dim==='print'?lkPrint:lkFit)[label] || {};
+      return '<b>'+escapeHtml(label)+'</b> is short by <b>'+need+'</b>.<br>Target = '+tgtLine(r)+
+        (r.have!=null ? ('. You uploaded only <b>'+r.have+'</b>.') : '.')+
+        '<br>Upload <b>'+need+'</b> more '+escapeHtml(label)+' photo'+(need===1?'':'s')+' — '+
+        (dim==='print' ? 'print can fall short when the only photos left are of already-full colours.' :
+         hard ? 'the plan will NOT fill this gap from another '+dim+' (hard cap).' : 'so this fit reaches its share.');
+    };
+    var whyOver = function(s){
+      var r = lkCol[s.label] || {};
+      return '<b>'+escapeHtml(s.label)+'</b> — target '+s.target+', selected '+s.selected+
+        (s.held>0 ? (', <b>'+s.held+' held</b> above the cap.') : (s.over>0 ? (', <b>+'+s.over+' over</b>.') : '.'))+
+        '<br>Target = '+tgtLine(r)+
+        (r.have!=null ? ('. You uploaded <b>'+r.have+'</b>, so the surplus is held.') : '.')+
+        '<br><b>Colour is a HARD cap</b> — surplus is never poured into another colour. Raise this colour\u2019s % (or lower others) to buy the held photos.';
+    };
     var products = sums.reduce(function(s,f){ return s + f.products; }, 0);
     // Piece reconciliation (the numbers people actually reason about):
     //   Target      = category piece goal (budget ÷ est ₹, or the typed units).
@@ -1966,20 +2813,297 @@
         ' — upload ~<b>'+fmtINR(shortPc)+' pc</b> more of photos to reach the <b>'+fmtINR(toSrc)+' pc</b> you still need.';
       wrap.appendChild(note);
     }
+    // TROUSER COLOUR × FIT HARD GRID — the headline for a fit-hard category. Every
+    // cell = designs to buy, shown raw → rounded (largest-remainder, re-sums to the
+    // exact total), with uploaded/selected and a "source more" badge. Both colour
+    // AND fit are hard caps: a gap is a shopping instruction, never a backfill.
+    if(c.enabled && pc.grid && (pc.grid.cells||[]).length){
+      var g = pc.grid, fitsG = g.fits||[], colsG = g.colours||[];
+      var cellOf = {}; (g.cells||[]).forEach(function(cl){ cellOf[cl.colour+'||'+cl.fit] = cl; });
+      var th = 'padding:5px 8px;border:1px solid #e2e8f0;text-align:center;font-weight:600;background:#f8fafc;color:#334155';
+      var td = 'padding:5px 8px;border:1px solid #e2e8f0;text-align:center;vertical-align:top';
+      var gh = '<div class="czsub" style="text-transform:none;letter-spacing:0;margin-top:10px"><b>Colour × Fit plan</b> — both are <b>HARD caps</b>. Each cell shows designs to buy (raw → rounded). '+g.base+' designs × '+fmtINR(g.set)+' pc/set = <b>'+fmtINR(g.catUnits)+' pc</b>.</div>';
+      // Totals split — money already SPENT on imported POs (actual ₹, paid) vs what
+      // still needs sourcing (estimate ₹). Only shown once something is bought.
+      if(g.split && (g.split.bought.designs>0)){
+        var sp = g.split;
+        gh += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0">'
+          + '<div style="flex:1;min-width:160px;padding:8px 12px;border:1px solid #86efac;background:#f0fdf4;border-radius:8px;font-size:12px;color:#065f46">✓ <b>Bought</b> (paid) — <b>'+sp.bought.designs+'</b> design'+(sp.bought.designs===1?'':'s')+' · '+fmtINR(sp.bought.pieces)+' pc · <b>₹'+fmtINR(sp.bought.cost)+'</b> actual</div>'
+          + '<div style="flex:1;min-width:160px;padding:8px 12px;border:1px solid #fcd34d;background:#fffbeb;border-radius:8px;font-size:12px;color:#92400e">◻ <b>Still to source</b> — <b>'+sp.toSource.designs+'</b> design'+(sp.toSource.designs===1?'':'s')+' · '+fmtINR(sp.toSource.pieces)+' pc · <b>~₹'+fmtINR(sp.toSource.cost)+'</b> est</div>'
+          + '</div>';
+      }
+      gh += '<div style="overflow-x:auto"><table class="czgrid" style="border-collapse:collapse;margin-top:6px;font-size:12px;min-width:340px"><thead><tr><th style="'+th+'"></th>';
+      fitsG.forEach(function(f){ gh += '<th style="'+th+'">'+escapeHtml(f.label)+'<br><span style="color:#94a3b8;font-weight:400">'+f.pct+'%</span></th>'; });
+      gh += '<th style="'+th+'">Total</th></tr></thead><tbody>';
+      colsG.forEach(function(col){
+        gh += '<tr><th style="'+th+';text-align:left">'+escapeHtml(col.label)+' <span style="color:#94a3b8;font-weight:400">'+col.pct+'%</span></th>';
+        var rowTot = 0;
+        fitsG.forEach(function(f){
+          var cl = cellOf[col.key+'||'+f.key] || { rounded:0, raw:0, have:0, selected:0, sourceMore:0 };
+          rowTot += (cl.rounded||0);
+          var need = cl.sourceMore||0;
+          var paidD = cl.orderedDesigns||0;
+          var why = '<b>'+escapeHtml(col.label)+' · '+escapeHtml(f.label)+'</b> — target = '+col.pct+'% colour × '+f.pct+'% fit × '+g.base+' designs = raw <b>'+(cl.raw!=null?cl.raw:0)+'</b> → <b>'+(cl.rounded||0)+'</b> design'+((cl.rounded===1)?'':'s')+'.<br>Uploaded <b>'+(cl.have||0)+'</b>, selected <b>'+(cl.selected||0)+'</b>.'+
+            (paidD>0 ? ('<br>✓ <b>'+paidD+' already bought</b> (paid) — '+fmtINR(cl.orderedPieces||0)+' pc, ₹'+fmtINR(cl.orderedCost||0)+' actual.') : '')+
+            (need>0 ? ('<br><b>Source '+need+' more</b> '+escapeHtml(col.label)+' · '+escapeHtml(f.label)+' ('+fmtINR(need*(g.set||0))+' pc) — the plan will NOT fill this from another colour or fit (hard cap).') : ((cl.held>0)?('<br><b>'+cl.held+' held</b> above the cap (surplus not bought).'):''));
+          var big = '<b style="font-size:15px;color:'+(need>0?'#92400e':'#0f172a')+'">'+(cl.rounded||0)+'</b>';
+          var sub = '<div style="color:#94a3b8;font-size:10px">'+(cl.raw!=null?cl.raw:0)+' → '+(cl.rounded||0)+'</div>';
+          var paid = paidD>0 ? ('<div style="color:#059669;font-size:10px;font-weight:700">✓'+paidD+' paid'+((cl.orderedPieces)?(' · '+fmtINR(cl.orderedPieces)+' pc'):'')+'</div>') : '';
+          var have = '<div style="color:#64748b;font-size:10px">have '+(cl.have||0)+(need>0?(' · <b style="color:#b45309">+'+need+'</b>'):'')+'</div>';
+          gh += '<td style="'+td+'">'+czWhyTag(big+sub+paid+have, why)+'</td>';
+        });
+        gh += '<td style="'+td+';font-weight:600">'+rowTot+'</td></tr>';
+      });
+      gh += '</tbody></table></div>';
+      var gwrap = document.createElement('div'); gwrap.className='czgridwrap'; gwrap.innerHTML = gh;
+      wrap.appendChild(gwrap); czAttachWhy(gwrap);
+      // OFF-PLAN already-bought rows — an imported PO line whose colour/fit isn't in
+      // this batch's desired mix. Shown separately as paid extras (no target, never
+      // netted into a planned cell, never added to the source-more list).
+      if((g.offPlan||[]).length){
+        var otdc = 'padding:5px 10px;border-bottom:1px solid #e0e7ff;font-size:12px;color:#3730a3';
+        var oh = '<div style="margin-top:10px;padding:10px 12px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:8px">'
+          + '<div style="font-size:12px;color:#3730a3;font-weight:600;margin-bottom:4px">Already bought — not in this desired plan <span style="color:#6366f1;font-weight:400">(off-plan colour/fit · paid · no target · not backfilled)</span></div>'
+          + '<table style="border-collapse:collapse;width:100%;max-width:480px"><thead><tr>'
+          + '<th style="'+otdc+';text-align:left;color:#6366f1;font-weight:600">Colour</th>'
+          + '<th style="'+otdc+';text-align:left;color:#6366f1;font-weight:600">Fit</th>'
+          + '<th style="'+otdc+';text-align:right;color:#6366f1;font-weight:600">Designs</th>'
+          + '<th style="'+otdc+';text-align:right;color:#6366f1;font-weight:600">Pieces</th>'
+          + '<th style="'+otdc+';text-align:right;color:#6366f1;font-weight:600">₹ paid</th></tr></thead><tbody>';
+        g.offPlan.forEach(function(o){
+          oh += '<tr><td style="'+otdc+';text-align:left"><b>'+escapeHtml(o.colour)+'</b></td>'
+            + '<td style="'+otdc+';text-align:left">'+escapeHtml(o.fitLabel||o.fit||'—')+'</td>'
+            + '<td style="'+otdc+';text-align:right;font-weight:700">'+o.orderedDesigns+'</td>'
+            + '<td style="'+otdc+';text-align:right">'+fmtINR(o.orderedPieces)+' pc</td>'
+            + '<td style="'+otdc+';text-align:right;color:#059669;font-weight:700">₹'+fmtINR(o.orderedCost)+'</td></tr>';
+        });
+        oh += '</tbody></table></div>';
+        var owrap = document.createElement('div'); owrap.innerHTML = oh; wrap.appendChild(owrap);
+      }
+      // Detailed SOURCE-MORE shopping list — shown as one TAB PER FIT (Baggy /
+      // Normal). Pick a fit and see exactly how many designs to source per colour,
+      // biggest gap first. Cleaner than a flat colour×fit list the founder has to scan.
+      if((pc.sourceMore||[]).length){
+        var smFits = (g.fits||[]);
+        var byFit = {};                                   // fitKey → [needs], desc by need
+        (pc.sourceMore||[]).forEach(function(s){ (byFit[s.fit] = byFit[s.fit] || []).push(s); });
+        Object.keys(byFit).forEach(function(fk){ byFit[fk].sort(function(a,b){ return b.need - a.need; }); });
+        var smwrap = document.createElement('div'); smwrap.style.marginTop = '10px';
+        var tabBase = 'border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer';
+        var tabOn   = 'border:1px solid #059669;background:#059669;color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer';
+        var h = '<div class="czsub" style="text-transform:none;letter-spacing:0"><b>Source more</b> — exact gaps to fill from your other vendors (no backfill). Pick a fit:</div>';
+        h += '<div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">';
+        smFits.forEach(function(f, i){
+          var needTot = (byFit[f.key]||[]).reduce(function(a,s){ return a + s.need; }, 0);
+          var pcTot   = (byFit[f.key]||[]).reduce(function(a,s){ return a + s.needPieces; }, 0);
+          h += '<button type="button" class="czsmtab" data-fit="'+escapeHtml(f.key)+'" style="'+(i===0?tabOn:tabBase)+'">'
+            + escapeHtml(f.label)+' — <b>'+needTot+'</b> design'+(needTot===1?'':'s')+' <span style="opacity:.75;font-weight:400">('+fmtINR(pcTot)+' pc)</span></button>';
+        });
+        h += '</div>';
+        var tdc = 'padding:5px 10px;border-bottom:1px solid #eef2f7;font-size:12px;color:#334155';
+        smFits.forEach(function(f, i){
+          h += '<div class="czsmpanel" data-fit="'+escapeHtml(f.key)+'" style="display:'+(i===0?'':'none')+'">';
+          var list = byFit[f.key] || [];
+          if(!list.length){
+            h += '<div style="font-size:12px;color:#64748b;padding:4px 0">Nothing to source for <b>'+escapeHtml(f.label)+'</b> — every colour is covered.</div>';
+          } else {
+            h += '<table style="border-collapse:collapse;width:100%;max-width:460px"><thead><tr>'
+              + '<th style="'+tdc+';text-align:left;color:#64748b;font-weight:600">Colour</th>'
+              + '<th style="'+tdc+';text-align:right;color:#64748b;font-weight:600">Designs to source</th>'
+              + '<th style="'+tdc+';text-align:right;color:#64748b;font-weight:600">Pieces</th>'
+              + '<th style="'+tdc+';text-align:right;color:#64748b;font-weight:600">Have</th></tr></thead><tbody>';
+            list.forEach(function(s){
+              h += '<tr><td style="'+tdc+';text-align:left"><b>'+escapeHtml(s.colour)+'</b></td>'
+                + '<td style="'+tdc+';text-align:right;color:#b45309;font-weight:700">'+s.need+'</td>'
+                + '<td style="'+tdc+';text-align:right;color:#64748b">'+fmtINR(s.needPieces)+' pc</td>'
+                + '<td style="'+tdc+';text-align:right;color:#64748b">'+s.have+'</td></tr>';
+            });
+            h += '</tbody></table>';
+          }
+          h += '</div>';
+        });
+        smwrap.innerHTML = h;
+        wrap.appendChild(smwrap);
+        // Wire the fit tabs: clicking one shows its panel, highlights its button.
+        var smTabs = smwrap.querySelectorAll('.czsmtab');
+        [].forEach.call(smTabs, function(btn){
+          btn.addEventListener('click', function(){
+            var fk = btn.getAttribute('data-fit');
+            [].forEach.call(smwrap.querySelectorAll('.czsmpanel'), function(p){ p.style.display = (p.getAttribute('data-fit')===fk) ? '' : 'none'; });
+            [].forEach.call(smTabs, function(b){ b.setAttribute('style', b===btn ? tabOn : tabBase); });
+          });
+        });
+      }
+      // COMMON-DESIGN ORDER SHEET (staircase) — collapse the colour×fit plan into
+      // the minimum set of base designs, each printed across several colours. Slot
+      // A carries the most colours (every colour still needed), B the next tier and
+      // so on, so each colour's column adds up to its target. Imported-PO designs
+      // are subtracted first and listed separately as "already bought". The founder
+      // tags one uploaded photo per base slot as the design reference.
+      if(pc.orderSheet && (pc.orderSheet.fits||[]).length){
+        var os = pc.orderSheet;
+        var osTags = (czLastPlan && czLastPlan.designTags) || {};
+        var designsByFit = {}; (pc.fits||[]).forEach(function(f){ designsByFit[f.key] = f.designs || []; });
+        var oswrap = document.createElement('div'); oswrap.className='czordersheet'; oswrap.style.marginTop='12px';
+        var osh = '<div class="czsub" style="text-transform:none;letter-spacing:0"><b>Design order sheet</b> — the common designs to source. Each <b>base design</b> is printed across the colours listed under it (biggest-coverage design first), so every colour column adds up to its target. Imported-PO designs are subtracted first and shown as already bought. Tag one uploaded photo per design as its reference.</div>';
+        osh += '<div style="display:flex;flex-direction:column;gap:12px;margin-top:8px">';
+        os.fits.forEach(function(f){
+          osh += '<div class="czosfit" data-fit="'+escapeHtml(f.key)+'" style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;background:#fff">';
+          osh += '<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">'
+            + '<div style="font-weight:700;color:#0f172a">'+escapeHtml(f.label)+'</div>'
+            + '<div style="font-size:12px;color:#64748b"><b>'+f.toSourceDesigns+'</b> base design'+(f.toSourceDesigns===1?'':'s')
+            + ' · <b>'+f.toSourceSkus+'</b> colour-SKU'+(f.toSourceSkus===1?'':'s')
+            + ' · <b>'+fmtINR(f.toSourcePieces)+'</b> pc to source</div></div>';
+          if(f.bought && f.bought.length){
+            var bList = f.bought.map(function(b){ return escapeHtml(b.colour)+' <b>&times;'+b.designs+'</b> ('+fmtINR(b.pieces)+' pc)'; }).join(', ');
+            osh += '<div style="margin-top:6px;font-size:12px;color:#065f46;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:6px 10px">&#10003; Already bought (imported POs), subtracted first: '+bList+'</div>';
+          }
+          if(!f.slots.length){
+            osh += '<div style="margin-top:8px;font-size:12px;color:#64748b">Nothing left to source for this fit — every colour is covered by imported POs.</div>';
+          } else {
+            osh += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">';
+            // Auto-photo: uploaded design photos for this fit, used as a visual default
+            // so each slot SHOWS what design it is without manual tagging. A manual tag
+            // still overrides; the auto pick round-robins so slots show distinct photos.
+            var fitPhotos = (designsByFit[f.key]||[]).filter(function(d){ return d && d.url; });
+            f.slots.forEach(function(sl, si){
+              var skey = f.key+'|'+sl.slot;
+              var cid = osTags[skey] || '';
+              var photo = cid ? (designsByFit[f.key]||[]).filter(function(d){ return String(d.id)===String(cid); })[0] : null;
+              var auto = false;
+              if(!photo && fitPhotos.length){ photo = fitPhotos[si % fitPhotos.length]; auto = true; }   // fallback reference image
+              var thumb = photo
+                ? '<img class="czospick" src="'+escapeHtml(photo.url)+'" data-key="'+escapeHtml(skey)+'" data-fit="'+escapeHtml(f.key)+'" style="width:64px;height:80px;object-fit:cover;border-radius:8px;border:1px solid '+(auto?'#e2e8f0':'#cbd5e1')+';cursor:pointer;display:block'+(auto?';opacity:.9':'')+'" title="'+(auto?'Auto reference — click to pick a different photo':'Change photo')+'">'
+                : '<div class="czospick" data-key="'+escapeHtml(skey)+'" data-fit="'+escapeHtml(f.key)+'" style="width:64px;height:80px;border-radius:8px;border:1px dashed #cbd5e1;background:#f8fafc;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:11px;text-align:center;cursor:pointer;line-height:1.2">Tag<br>photo</div>';
+              var chips = sl.colours.map(function(cl){ return '<span style="display:inline-block;margin:2px 3px 0 0;padding:1px 7px;border-radius:9px;font-size:11px;background:#eef2ff;color:#3730a3">'+escapeHtml(cl)+'</span>'; }).join('');
+              osh += '<div class="czosslot" style="border:1px solid #e2e8f0;border-radius:9px;padding:8px;width:172px;background:#fbfcfe">'
+                + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+                + '<span style="font-weight:700;color:#0f172a">Design '+escapeHtml(sl.slot)+'</span>'
+                + '<span style="font-size:11px;color:#64748b">'+sl.colours.length+' colour'+(sl.colours.length===1?'':'s')+' · '+fmtINR(sl.pieces)+' pc</span></div>'
+                + thumb
+                + (auto ? '<div style="margin-top:4px;font-size:10px;color:#94a3b8">auto reference</div>' : '')
+                + '<div style="margin-top:6px">'+chips+'</div>'
+                + (cid ? '<button type="button" class="czosclear" data-key="'+escapeHtml(skey)+'" style="margin-top:6px;border:none;background:none;color:#dc2626;font-size:11px;cursor:pointer;padding:0">Remove photo</button>' : '')
+                + '</div>';
+            });
+            osh += '</div>';
+          }
+          osh += '</div>';
+        });
+        osh += '</div>';
+        oswrap.innerHTML = osh;
+        wrap.appendChild(oswrap);
+        // Wire pickers — clicking a slot's photo / placeholder opens a gallery of
+        // THIS fit's uploaded photos; picking one tags it. "Remove photo" clears it.
+        [].forEach.call(oswrap.querySelectorAll('.czospick'), function(pk){
+          pk.addEventListener('click', function(){ czOsOpenPicker(pk.getAttribute('data-fit'), pk.getAttribute('data-key'), designsByFit[pk.getAttribute('data-fit')]||[]); });
+        });
+        [].forEach.call(oswrap.querySelectorAll('.czosclear'), function(cb){
+          cb.addEventListener('click', function(e){ e.stopPropagation(); czOsSaveTag(cb.getAttribute('data-key'), ''); });
+        });
+      }
+      // Zero-coverage nudge — colours that carry a % but the buy is too small to give
+      // them even one design. Tell the founder the exact extra designs to source in
+      // those colours specifically (no backfill; bumping the total just re-rounds them
+      // back to zero, so this is an "source these colours" instruction, not a total).
+      if(pc.coverage && (pc.coverage.colours||[]).length){
+        var cv = pc.coverage;
+        var names = cv.colours.map(function(z){ return escapeHtml(z.colour); });
+        var nameList = names.length===1 ? names[0] : names.slice(0,-1).join(', ')+' &amp; '+names[names.length-1];
+        var cvh = '<div style="margin-top:10px;padding:10px 12px;border:1px solid #fcd34d;background:#fffbeb;border-radius:8px;font-size:12px;color:#92400e;line-height:1.6">'
+          + '<b>⚠ '+cv.colours.length+' colour'+(cv.colours.length===1?'':'s')+' didn\u2019t fit this buy</b> — '+nameList+' round'+(cv.colours.length===1?'s':'')+' to <b>0</b> designs at your current total. '
+          + '<b>Add '+cv.addDesigns+' more design'+(cv.addDesigns===1?'':'s')+'</b> ('+fmtINR(cv.addPieces)+' pc) — source <b>1 design in each</b> of these colours from your other vendors to include them. '
+          + '<span style="color:#b45309">Bumping the design total won\u2019t help: the split just rounds them back to 0 — you have to buy these colours on purpose.</span>'
+          + '</div>';
+        var cvwrap = document.createElement('div'); cvwrap.innerHTML = cvh; wrap.appendChild(cvwrap);
+      }
+    }
     // FIRST-LEVEL colour breakdown — colour balance is category-wide, so show it
     // here: how many designs are SELECTED per colour, and how many MORE each colour
     // still needs sourced. (Colour is balanced across the whole category, not per fit.)
-    if(c.enabled && ((c.colours||[]).length || (c.colourShort||[]).length)){
+    if(c.enabled && !pc.fitHard && ((pc.colours||[]).length || (pc.colourShort||[]).length || (pc.colourOver||[]).length)){
       var chipCss = 'display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;font-size:12px;';
-      var sel = (c.colours||[]).slice().filter(function(k){ return (k.photos||0)>0; })
+      var sel = (pc.colours||[]).slice().filter(function(k){ return (k.photos||0)>0; })
         .sort(function(a,b){ return (b.photos||0)-(a.photos||0); })
-        .map(function(k){ return '<span style="'+chipCss+'background:#dcfce7;color:#065f46">'+escapeHtml(k.label)+' <b>×'+(k.photos||0)+'</b></span>'; }).join('');
-      var need = (c.colourShort||[]).map(function(s){ return '<span style="'+chipCss+'background:#fef3c7;color:#92400e">'+escapeHtml(s.label)+' <b>+'+s.need+'</b> more</span>'; }).join('');
+        .map(function(k){ return czWhyTag('<span style="'+chipCss+'background:#dcfce7;color:#065f46">'+escapeHtml(k.label)+' <b>×'+(k.photos||0)+'</b></span>', whySel('colour', k.label, k.photos||0, true)); }).join('');
+      var need = (pc.colourShort||[]).map(function(s){ return czWhyTag('<span style="'+chipCss+'background:#fef3c7;color:#92400e">'+escapeHtml(s.label)+' <b>+'+s.need+'</b> more</span>', whyShort('colour', s.label, s.need, true)); }).join('');
+      // OVER-SUPPLY — colour is hard-capped at its % target, so surplus uploads are
+      // HELD. Show target · selected · (pin excess "+N over" | capped surplus "N held").
+      var over = (pc.colourOver||[]).map(function(s){
+        var tail = (s.over>0) ? ('<b>+'+s.over+' over</b>') : ('<b>'+s.held+' held</b> over target');
+        return czWhyTag('<span style="'+chipCss+'background:#ffe4e6;color:#9f1239">'+escapeHtml(s.label)+' target '+s.target+' · selected '+s.selected+' · '+tail+'</span>', whyOver(s));
+      }).join('');
       var colWrap = document.createElement('div'); colWrap.className='czcatsum-cols'; colWrap.style.cssText='margin-top:8px';
       colWrap.innerHTML =
         (sel  ? '<div style="margin-bottom:4px"><i style="color:#6b7280;font-size:12px;margin-right:6px">Designs selected by colour</i>'+sel+'</div>' : '')+
+        (over ? '<div style="margin-bottom:4px"><i style="color:#6b7280;font-size:12px;margin-right:6px">Colours over target</i>'+over+'</div>' : '')+
         (need ? '<div><i style="color:#6b7280;font-size:12px;margin-right:6px">Colours to source more</i>'+need+'</div>' : '');
-      wrap.appendChild(colWrap);
+      wrap.appendChild(colWrap); czAttachWhy(colWrap);
+    }
+    // FIRST-LEVEL print breakdown — print is the first cut (solid/printed/checks),
+    // so show how many designs are SELECTED per print and which prints need more.
+    if(c.enabled && ((pc.printGroups||[]).length || (pc.printShort||[]).length)){
+      var pchip = 'display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;font-size:12px;';
+      var psel = (pc.printGroups||[]).map(function(pg){
+          var n = (pg.fits||[]).reduce(function(s,f){ return s+(f.includedCount||0); },0);
+          return { label: pg.label, n: n };
+        }).filter(function(p){ return p.n>0; })
+        .sort(function(a,b){ return b.n-a.n; })
+        .map(function(p){ return czWhyTag('<span style="'+pchip+'background:#dbeafe;color:#1e40af">'+escapeHtml(p.label)+' <b>×'+p.n+'</b></span>', whySel('print', p.label, p.n, true)); }).join('');
+      var pneed = (pc.printShort||[]).map(function(s){ return czWhyTag('<span style="'+pchip+'background:#fef3c7;color:#92400e">'+escapeHtml(s.label)+' <b>+'+s.need+'</b> more</span>', whyShort('print', s.label, s.need, true)); }).join('');
+      if(psel || pneed){
+        var pWrap = document.createElement('div'); pWrap.className='czcatsum-prints'; pWrap.style.cssText='margin-top:8px';
+        pWrap.innerHTML =
+          (psel  ? '<div style="margin-bottom:4px"><i style="color:#6b7280;font-size:12px;margin-right:6px">Designs selected by print</i>'+psel+'</div>' : '')+
+          (pneed ? '<div><i style="color:#6b7280;font-size:12px;margin-right:6px">Prints to source more</i>'+pneed+'</div>' : '');
+        wrap.appendChild(pWrap); czAttachWhy(pWrap);
+      }
+    }
+    // FIRST-LEVEL fit breakdown — fit is category-wide too (filled from any print),
+    // so show designs SELECTED per fit and which fits still need photos sourced.
+    if(c.enabled && ((sums||[]).some(function(f){ return f.products>0; }) || (pc.fitShort||[]).length)){
+      var fchip = 'display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;font-size:12px;';
+      var fsel = (sums||[]).filter(function(f){ return f.products>0; })
+        .sort(function(a,b){ return b.products-a.products; })
+        .map(function(f){ return czWhyTag('<span style="'+fchip+'background:#ede9fe;color:#5b21b6">'+escapeHtml(f.label)+' <b>×'+f.products+'</b></span>', whySel('fit', f.label, f.products, false)); }).join('');
+      var fneed = (pc.fitShort||[]).map(function(s){ return czWhyTag('<span style="'+fchip+'background:#fef3c7;color:#92400e">'+escapeHtml(s.label)+' <b>+'+s.need+'</b> more</span>', whyShort('fit', s.label, s.need, false)); }).join('');
+      if(fsel || fneed){
+        var fWrap = document.createElement('div'); fWrap.className='czcatsum-fitsel'; fWrap.style.cssText='margin-top:8px';
+        fWrap.innerHTML =
+          (fsel  ? '<div style="margin-bottom:4px"><i style="color:#6b7280;font-size:12px;margin-right:6px">Designs selected by fit</i>'+fsel+'</div>' : '')+
+          (fneed ? '<div><i style="color:#6b7280;font-size:12px;margin-right:6px">Fits to source more</i>'+fneed+'</div>' : '');
+        wrap.appendChild(fWrap); czAttachWhy(fWrap);
+      }
+    }
+    // TRANSPARENT MATH — how each level's % becomes a target qty, so the numbers
+    // can be hand-checked. base = designs the %s split (catUnits ÷ set); each row
+    // shows  label — pct% × base = target  · uploaded (supply on hand).
+    if(c.enabled && pc.calc){
+      var cc = pc.calc;
+      var calcLevel = function(title, rows, showTarget){
+        if(!rows || !rows.length) return '';
+        var body = rows.map(function(r){
+          var tgt = showTarget
+            ? (' × '+cc.base+' = <b>'+r.target+'</b> design'+(r.target===1?'':'s')
+               +(r.have!=null ? (' <span style="color:#94a3b8">· '+r.have+' uploaded</span>') : ''))
+            : '';
+          return '<div class="czmrow"><span class="czmk">'+escapeHtml(r.label)+'</span>'
+            +'<span class="czmp">'+r.pct+'%</span>'+tgt+'</div>';
+        }).join('');
+        return '<div class="czmlvl"><div class="czmh">'+title+'</div>'+body+'</div>';
+      };
+      var mBody =
+        calcLevel('Print', cc.prints, true)+
+        calcLevel('Colour', cc.colours, true)+
+        calcLevel('Fit', cc.fits, true)+
+        calcLevel('Size (splits each design\u2019s pieces)', cc.sizes, false);
+      if(mBody){
+        var dM = document.createElement('details'); dM.className='czexp calc';
+        dM.innerHTML = '<summary>\uD83E\uDDEE Show the math — '+cc.base+' designs ('
+          +fmtINR(cc.catUnits)+' pc \u00F7 set '+cc.set+'), '+cc.totalUploaded+' photos uploaded</summary>'
+          +'<div class="czmwrap">'+mBody+'</div>';
+        wrap.appendChild(dM);
+      }
     }
     if(sums.length){
       var lines = document.createElement('div'); lines.className='czcatsum-fits'; var any=false;
@@ -2123,7 +3247,7 @@
     return html;
   }
   // Print-type labels (Shirts & T-shirts). Mirrors PRINT_TYPES in casuals.js.
-  var CZ_PRINT_LABELS = { solid:'Solid (plain / logo)', printed:'Printed / Embroidered', checks:'Checks / Stripes & rest' };
+  var CZ_PRINT_LABELS = { solid:'Solid (plain / logo)', others:'Others' };
   function czSegPrintOpts(catKey, cur){
     var pts = (czSettings && czSettings.categories[catKey] && czSettings.categories[catKey].printTypes) || {};
     var keys = Object.keys(pts), has = false, html = '';
@@ -2190,15 +3314,145 @@
 
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
   //    review the line items → apply as open-to-buy "on the way" stock. ──
-  var czInv = { items: [], fits: {}, prints: {}, cats: [], vendor: '' };
+  // currency: which currency THIS bill's unit prices are in — 'CNY' (¥, converted
+  // to ₹ by czFx) or 'INR' (₹, taken as-is). China bills default ¥; an imported PO
+  // inherits its own origin (india PO = ₹). Toggle in the modal changes it anytime.
+  var czInv = { items: [], fits: {}, prints: {}, cats: [], vendor: '', currency: 'CNY', sourcePo: null };
+  // Unit price → ₹, honouring the current currency mode.
+  function czToINR(unit){ return Math.round((Number(unit)||0) * (czInv.currency==='INR' ? 1 : czFx)); }
   // ¥→₹ rate: bills come from China, so line prices are read in yuan and
   // converted here. Remembered across uploads so the founder sets it once.
   function czFxGet(){ var v = parseFloat(localStorage.getItem('sanki_cz_fx')); return (isFinite(v) && v>0) ? v : 12; }
   function czFxSet(v){ if(isFinite(v) && v>0){ localStorage.setItem('sanki_cz_fx', String(v)); } }
   var czFx = czFxGet();
   function czInvOpen(){ el('czInvoiceInput').click(); }
+  // ── Source chooser: upload a fresh China bill, OR import a PO already entered
+  // in Purchases (the ones "on the way"). Both routes end in the same review modal. ──
+  function czSrcOpen(){ el('czSrcPoList').style.display='none'; el('czSrcPoList').innerHTML=''; el('czSrcModal').classList.add('show'); }
+  function czSrcClose(){ el('czSrcModal').classList.remove('show'); }
+  // Loose-match a procurement garment-type / fit string onto a casuals option key
+  // (exact key/label first, then a substring either-way; null = founder picks it).
+  function czNorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'').replace(/s$/,''); }
+  function czMatchOpt(opts, val){
+    var v=czNorm(val); if(!v || !opts || !opts.length) return null;
+    var hit=opts.filter(function(o){ return czNorm(o.key)===v || czNorm(o.label)===v; })[0];
+    if(hit) return hit.key;
+    hit=opts.filter(function(o){ var k=czNorm(o.key), l=czNorm(o.label);
+      return (k && (k.indexOf(v)>=0 || v.indexOf(k)>=0)) || (l && (l.indexOf(v)>=0 || v.indexOf(l)>=0)); })[0];
+    return hit ? hit.key : null;
+  }
+  // Procurement POs never record a print type (Solid vs Printed) — that field
+  // isn't captured at purchase time. So on import we GUESS it from the item's
+  // name and fall back to "Solid", the overwhelmingly common case. Only applies
+  // to categories that actually carry print types (uppers); returns null otherwise.
+  function czGuessPrint(cat, desc){
+    var opts = (cat && czInv.prints[cat]) || [];
+    if(!opts.length) return null;                 // not an upper → no print type
+    var m = czMatchOpt(opts, desc);               // e.g. "printed tee" → Printed
+    if(m) return m;
+    var solid = opts.filter(function(o){ return czNorm(o.label)==='solid' || czNorm(o.key)==='solid'; })[0];
+    return solid ? solid.key : opts[0].key;        // default Solid, else first option
+  }
+  var czPoCache = {};
+  // List POs already in Purchases that are still on the way (not yet posted to
+  // Shopify) — those are the bills that can be pulled into this plan.
+  function czSrcLoadPos(){
+    var box=el('czSrcPoList'); box.style.display='block';
+    box.innerHTML='<div class="sub" style="padding:14px 2px">⏳ Loading purchases…</div>';
+    // Load the on-the-way POs AND which ones are already imported into this batch,
+    // so each row shows either "Import" or an "Undo import" control.
+    Promise.all([
+      fetch('/api/procurement/pos?status=advance,received,awaiting_approval,posted').then(function(r){ return r.json(); }),
+      fetch('/api/casuals/imported-pos').then(function(r){ return r.json(); }).catch(function(){ return {pos:[]}; })
+    ]).then(function(res){
+      var d=res[0]||{}, imp=res[1]||{};
+      if(!d || !d.success){ box.innerHTML='<div class="sub" style="padding:14px 2px">Could not load purchases.</div>'; return; }
+      var impMap={}; (imp.pos||[]).forEach(function(x){ impMap[x.poId]=x; });
+      var pos=(d.pos||[]).slice();
+      if(!pos.length){ box.innerHTML='<div class="sub" style="padding:14px 2px">No purchases to import yet. Create one under Purchases → New advance purchase.</div>'; return; }
+      czPoCache={};
+      var rows=pos.map(function(p){
+        czPoCache[p.id]=p;
+        var pcs=(p.lines||[]).reduce(function(a,l){ return a+(parseInt(l.qty,10)||0); },0);
+        var tag=(p.line==='funky'||p.line==='casuals')?p.line:'none';
+        var tagLbl=tag==='none'?'untagged':tag;
+        var when=String(p.datePurchase||p.createdAt||'').slice(0,10);
+        var done=impMap[p.id];
+        var action=done
+          ? '<span class="czimpdone">✓ imported</span><button class="czimpundo" data-undo="'+escapeHtml(p.id)+'" title="Remove this PO from the plan">↩ Undo import</button>'
+          : '';
+        return '<div class="czporow'+(done?' imported':'')+'" data-po="'+escapeHtml(p.id)+'">'+
+          '<span class="poid">'+escapeHtml(p.id)+'</span>'+
+          '<span class="povend">'+escapeHtml(p.vendor||'—')+'</span>'+
+          '<span class="czpotag '+tag+'">'+escapeHtml(tagLbl)+'</span>'+
+          '<span class="pometa">'+pcs+' pc'+(pcs===1?'':'s')+' · '+escapeHtml(p.status)+(when?(' · '+escapeHtml(when)):'')+'</span>'+
+          action+
+          '</div>';
+      }).join('');
+      box.innerHTML='<div class="sub" style="margin:0 0 8px">Pick a purchase to pull in. Its lines land in the review table — confirm category / fit, then add. Already-imported POs can be undone here.</div>'+rows;
+      Array.prototype.forEach.call(box.querySelectorAll('.czporow'), function(row){
+        row.addEventListener('click', function(e){
+          if(e.target && e.target.getAttribute && e.target.getAttribute('data-undo')) return; // handled below
+          czPoImport(row.getAttribute('data-po'));
+        });
+      });
+      Array.prototype.forEach.call(box.querySelectorAll('.czimpundo'), function(btn){
+        btn.addEventListener('click', function(e){ e.stopPropagation(); czUndoImportedPo(btn.getAttribute('data-undo'), btn); });
+      });
+    }).catch(function(){ box.innerHTML='<div class="sub" style="padding:14px 2px">Network error loading purchases.</div>'; });
+  }
+  // Undo a whole imported PO — confirm, delete every candidate that came from it,
+  // refresh the plan, and re-render the picker so the row flips back to importable.
+  function czUndoImportedPo(poId, btn){
+    if(!poId) return;
+    if(!window.confirm('Remove '+poId+' from this plan? Its imported lines will be deleted and the budget will re-net. You can re-import it afterwards.')) return;
+    if(btn){ btn.disabled=true; btn.textContent='Removing…'; }
+    fetch('/api/casuals/imported-po/'+encodeURIComponent(poId), { method:'DELETE' }).then(function(r){ return r.json(); }).then(function(d){
+      if(d && d.success){ czRenderPlan(d); czSrcLoadPos(); }
+      else { if(btn){ btn.disabled=false; btn.textContent='↩ Undo import'; } window.alert((d&&d.error)||'Could not undo.'); }
+    }).catch(function(){ if(btn){ btn.disabled=false; btn.textContent='↩ Undo import'; } window.alert('Network error undoing import.'); });
+  }
+  // Map a chosen procurement PO onto the SAME review rows a parsed bill produces,
+  // then open the review modal so it's confirmed & applied identically. Prices are
+  // the PO's per-piece ¥ — the modal's ¥→₹ rate turns them into ₹ like any bill.
+  function czPoImport(id){
+    var po=czPoCache[id]; if(!po) return;
+    fetch('/api/casuals/invoice/meta').then(function(r){ return r.json(); }).then(function(m){
+      if(!m || !m.success){ el('czSrcPoList').innerHTML='<div class="sub" style="padding:14px 2px">Could not load categories.</div>'; return; }
+      czInv.fits=m.fits||{}; czInv.prints=m.prints||{}; czInv.cats=m.cats||[];
+      czInv.vendor=String(po.vendor||'').trim();
+      czInv.sourcePo=id;   // remember which PO this is — sent on apply so the whole import can be undone
+      // Inherit the PO's own currency: an india PO's per-piece price is already ₹;
+      // a china PO's is ¥ — pre-load its own exchange rate so the ₹ preview matches
+      // what the PO computed (session-only; the saved default rate is untouched).
+      var isIndia = (po.origin === 'india');
+      czInv.currency = isIndia ? 'INR' : 'CNY';
+      if(!isIndia){ var er=parseFloat(po.exRate); if(isFinite(er)&&er>0) czFx=er; }
+      czInv.items=(po.lines||[]).map(function(l,i){
+        var cat=czMatchOpt(czInv.cats, l.productType);
+        var fit=cat ? czMatchOpt(czInv.fits[cat], l.fit) : null;
+        var desc=String(l.designName||l.designCode||'').trim();
+        // Reuse the PO's own supplier photo (no re-upload): pass its URL straight
+        // to the modal thumbnail and carry it to apply as a photoRef.
+        var poPhoto=String(l.photoUrl||'').trim()||null;
+        return { _id:'r'+i, include:(parseInt(l.qty,10)||0)>0, _img:null, _imgUrl:poPhoto, photoRef:poPhoto,
+          description:desc,
+          category:cat, fit:fit, printType:czGuessPrint(cat, desc),
+          colour:czColourEN(l.colour||'')||String(l.colour||'').trim()||'',
+          size:String(l.sizeLabel||'').trim(),
+          qty:(parseInt(l.qty,10)||0),
+          unitPrice:(parseFloat(l.perPcsYuan)||0) };
+      });
+      czSrcClose();
+      el('czInvModal').classList.add('show');
+      el('czInvSub').textContent='';
+      czInvRender();
+    }).catch(function(){ el('czSrcPoList').innerHTML='<div class="sub" style="padding:14px 2px">Network error importing PO.</div>'; });
+  }
   function czInvUpload(files){
     if(!files || !files.length) return;
+    czInv.currency = 'CNY';   // uploaded bills are Chinese by default — toggle to ₹ if not
+    czInv.sourcePo = null;    // a fresh upload is not tied to any procurement PO
     var fd = new FormData();
     Array.prototype.forEach.call(files, function(f){ fd.append('files', f); });
     el('czInvModal').classList.add('show');
@@ -2213,24 +3467,60 @@
     }).catch(function(){ el('czInvBody').innerHTML=''; el('czInvSub').textContent = 'Network error reading the invoice.'; });
   }
   function czInvGet(id){ return (czInv.items||[]).filter(function(x){ return x._id===id; })[0]; }
+  // Same-product lines = same (non-empty) description. A bill lists one product
+  // across several size rows; the founder should fill category / print / fit /
+  // colour / price ONCE and have the sibling size rows inherit it. Size & qty are
+  // per-row and never propagated.
+  function czInvSiblings(it){ var key=String((it&&it.description)||'').trim().toLowerCase();
+    if(!key) return [];
+    return (czInv.items||[]).filter(function(x){ return x!==it && String(x.description||'').trim().toLowerCase()===key; }); }
+  function czInvFill(it, fields){ czInvSiblings(it).forEach(function(s){ fields.forEach(function(f){ s[f]=it[f]; }); }); }
   function czInvCatOptions(sel){ return '<option value="">— skip —</option>' + (czInv.cats||[]).map(function(c){ return '<option value="'+c.key+'"'+(c.key===sel?' selected':'')+'>'+escapeHtml(c.label)+'</option>'; }).join(''); }
   function czInvFitOptions(cat, sel){ return '<option value="">— pick fit —</option>' + ((czInv.fits[cat])||[]).map(function(f){ return '<option value="'+f.key+'"'+(f.key===sel?' selected':'')+'>'+escapeHtml(f.label)+'</option>'; }).join(''); }
   function czInvIsUpper(cat){ return !!(cat && (czInv.prints[cat]||[]).length); }
+  // Trousers run a colour×fit HARD grid — so the PO import asks WHICH grid colour
+  // each line fills (dropdown of this batch's colour mix), with an explicit
+  // "Other — off-plan" escape that lands the line as an already-bought extra row.
+  function czInvHasColours(cat){ return !!(cat && czSettings && czSettings.categories && czSettings.categories[cat] && czSettings.categories[cat].colours && Object.keys(czSettings.categories[cat].colours).length); }
+  function czInvColourPicker(cat){ return czInvHasColours(cat) && !czInvIsUpper(cat); }
   function czInvPrintOptions(cat, sel){ return '<option value="">— type —</option>' + ((czInv.prints[cat])||[]).map(function(p){ return '<option value="'+p.key+'"'+(p.key===sel?' selected':'')+'>'+escapeHtml(p.label)+'</option>'; }).join(''); }
   // A line is ready when included, has a category, fit, qty, and — for uppers — a print type.
   function czInvReady(){ return (czInv.items||[]).filter(function(it){ return it.include && it.category && it.fit && it.qty>0 && (!czInvIsUpper(it.category) || it.printType); }); }
   function czInvRender(){
     var items = czInv.items||[];
     if(!items.length){ el('czInvBody').innerHTML = '<div class="sub" style="padding:24px 4px">No garment line items found. Try a clearer photo/PDF, or an Excel with one row per item.</div>'; el('czInvSub').textContent=''; el('czInvApply').disabled=true; el('czInvFoot').textContent=''; return; }
-    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Add a <b>product photo</b> per line then <b>Analyze photos</b> to auto-fill, or pick category / print / fit yourself. Set the <b>¥→₹ rate</b> so prices land in rupees.';
+    var isINR = (czInv.currency==='INR');
+    var curSym = isINR ? '₹' : '¥';
+    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Add a <b>product photo</b> per line then <b>Analyze photos</b> to auto-fill, or pick category / print / fit yourself. '+(isINR?'Prices are read in <b>₹</b>.':'Set the <b>¥→₹ rate</b> so prices land in rupees.');
     var vendBar = '<div class="czfxbar"><b>Vendor</b> <input id="czInvVendor" type="text" value="'+escapeHtml(czInv.vendor||'')+'" placeholder="e.g. CHAOUFI" style="min-width:180px"> <span class="sub" style="margin-left:auto">Which supplier this bill is from — shown as the name on every ordered card.</span></div>';
-    var fxBar = '<div class="czfxbar">China bill — exchange rate <b>1&nbsp;¥ =</b> <input id="czInvFx" type="number" min="0" step="0.01" value="'+czFx+'"> <b>₹</b> <span class="sub" style="margin-left:auto">Prices below are read in ¥ and converted to ₹ using this rate.</span></div>';
+    var fxBar = '<div class="czfxbar"><b>Bill currency</b> '+
+      '<span class="czcurtog"><button type="button" class="czcurbtn'+(!isINR?' on':'')+'" data-cur="CNY">¥ Yuan</button>'+
+      '<button type="button" class="czcurbtn'+(isINR?' on':'')+'" data-cur="INR">₹ Rupees</button></span>'+
+      (isINR
+        ? ' <span class="sub" style="margin-left:auto">Prices below are already in ₹ — no conversion applied.</span>'
+        : ' &nbsp;·&nbsp; <b>1&nbsp;¥ =</b> <input id="czInvFx" type="number" min="0" step="0.01" value="'+czFx+'"> <b>₹</b> <span class="sub" style="margin-left:auto">¥ prices are converted to ₹ using this rate.</span>')+
+      '</div>';
     var rows = items.map(function(it){
       var upper = czInvIsUpper(it.category);
       var needFit = it.include && it.category && !it.fit;
       var needPrint = it.include && upper && !it.printType;
-      var rupee = Math.round((it.unitPrice||0)*czFx);
+      var rupee = czToINR(it.unitPrice);
       var thumb = it._imgUrl ? ('<img src="'+it._imgUrl+'" alt="">') : '📷';
+      var colTd;
+      if(czInvColourPicker(it.category)){
+        var cols = Object.keys((czSettings.categories[it.category]||{}).colours||{});
+        var selLow = String(it.colour||'').toLowerCase().trim();
+        var matched = cols.filter(function(c){ return c.toLowerCase()===selLow; })[0] || '';
+        var isOff = !!(it.colour && !matched);
+        colTd = '<select class="cz-colsel'+((it.include && it.fit && !it.colour)?' needfit':'')+'" style="width:112px">'+
+            '<option value="">— pick colour —</option>'+
+            cols.map(function(c){ return '<option value="'+escapeHtml(c)+'"'+(c===matched?' selected':'')+'>'+escapeHtml(c)+'</option>'; }).join('')+
+            '<option value="__off__"'+(isOff?' selected':'')+'>Other — off-plan</option>'+
+          '</select>'+
+          '<input class="cz-coloff" value="'+escapeHtml(isOff?it.colour:'')+'" placeholder="colour name" style="width:96px;margin-top:3px;'+(isOff?'':'display:none')+'">';
+      } else {
+        colTd = '<input class="cz-colour" value="'+escapeHtml(it.colour||'')+'" placeholder="colour" style="width:80px">';
+      }
       return '<tr data-id="'+it._id+'"'+(it.include?'':' class="off"')+'>'+
         '<td><input type="checkbox" class="cz-inc"'+(it.include?' checked':'')+'></td>'+
         '<td><label class="czimgbtn" title="Add product photo">'+thumb+'<input type="file" class="cz-imgin" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></td>'+
@@ -2238,28 +3528,44 @@
         '<td><select class="cz-cat">'+czInvCatOptions(it.category)+'</select></td>'+
         '<td>'+(upper ? ('<select class="cz-print'+(needPrint?' needfit':'')+'">'+czInvPrintOptions(it.category, it.printType)+'</select>') : '<span class="czidash">—</span>')+'</td>'+
         '<td><select class="cz-fit'+(needFit?' needfit':'')+'"'+(it.category?'':' disabled')+'>'+czInvFitOptions(it.category, it.fit)+'</select></td>'+
-        '<td><input class="cz-colour" value="'+escapeHtml(it.colour||'')+'" placeholder="colour" style="width:80px"></td>'+
+        '<td>'+colTd+'</td>'+
         '<td><input class="cz-size" value="'+escapeHtml(it.size||'')+'" style="width:56px"></td>'+
         '<td><input class="cz-qty qty" type="number" min="0" step="1" value="'+(it.qty||0)+'"></td>'+
-        '<td><div class="cziprice"><input class="cz-price price" type="number" min="0" step="0.01" value="'+(it.unitPrice||0)+'"><span class="czipct" data-rupee>= ₹'+fmtINR(rupee)+'</span></div></td>'+
+        '<td><div class="cziprice"><input class="cz-price price" type="number" min="0" step="0.01" value="'+(it.unitPrice||0)+'">'+(isINR?'':'<span class="czipct" data-rupee>= ₹'+fmtINR(rupee)+'</span>')+'</div></td>'+
         '<td><button class="czirm" title="Remove line">🗑</button></td>'+
       '</tr>';
     }).join('');
-    el('czInvBody').innerHTML = vendBar + fxBar + '<table class="czitab"><thead><tr><th>Buy</th><th>Photo</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Colour</th><th>Size</th><th>Qty</th><th>Unit ¥</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el('czInvBody').innerHTML = vendBar + fxBar + '<table class="czitab"><thead><tr><th>Buy</th><th>Photo</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Colour</th><th>Size</th><th>Qty</th><th>Unit '+curSym+'</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
     el('czInvVendor').addEventListener('input', function(){ czInv.vendor = this.value; czInvSyncFoot(); });
-    el('czInvFx').addEventListener('change', function(){ var v=parseFloat(this.value); if(isFinite(v)&&v>0){ czFx=v; czFxSet(v); } this.value=czFx; czInvRender(); });
+    Array.prototype.forEach.call(el('czInvBody').querySelectorAll('.czcurbtn'), function(b){
+      b.addEventListener('click', function(){ czInv.currency = (this.getAttribute('data-cur')==='INR') ? 'INR' : 'CNY'; czInvRender(); });
+    });
+    var fxIn = el('czInvFx');
+    if(fxIn) fxIn.addEventListener('change', function(){ var v=parseFloat(this.value); if(isFinite(v)&&v>0){ czFx=v; czFxSet(v); } this.value=czFx; czInvRender(); });
     Array.prototype.forEach.call(el('czInvBody').querySelectorAll('tr[data-id]'), function(tr){
       var id = tr.getAttribute('data-id'), it = czInvGet(id); if(!it) return;
       tr.querySelector('.cz-inc').addEventListener('change', function(){ it.include = this.checked; czInvRender(); });
       tr.querySelector('.cz-imgin').addEventListener('change', function(){ var f=this.files&&this.files[0]; if(!f) return; if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } it._img=f; it._imgUrl=URL.createObjectURL(f); czInvRender(); });
-      tr.querySelector('.cz-cat').addEventListener('change', function(){ it.category = this.value||null; it.fit = null; if(!czInvIsUpper(it.category)) it.printType = null; czInvRender(); });
+      tr.querySelector('.cz-cat').addEventListener('change', function(){ it.category = this.value||null; it.fit = null; if(!czInvIsUpper(it.category)) it.printType = null; czInvFill(it, ['category','fit','printType']); czInvRender(); });
       var pr = tr.querySelector('.cz-print');
-      if(pr) pr.addEventListener('change', function(){ it.printType = this.value||null; czInvSyncFoot(); pr.classList.toggle('needfit', it.include && czInvIsUpper(it.category) && !it.printType); });
-      tr.querySelector('.cz-fit').addEventListener('change', function(){ it.fit = this.value||null; czInvSyncFoot(); tr.querySelector('.cz-fit').classList.toggle('needfit', it.include && it.category && !it.fit); });
-      tr.querySelector('.cz-colour').addEventListener('change', function(){ it.colour = this.value; });
+      if(pr) pr.addEventListener('change', function(){ it.printType = this.value||null; czInvFill(it, ['printType']); czInvRender(); });
+      tr.querySelector('.cz-fit').addEventListener('change', function(){ it.fit = this.value||null; czInvFill(it, ['fit']); czInvRender(); });
+      var colSel = tr.querySelector('.cz-colsel');
+      if(colSel){
+        var coff = tr.querySelector('.cz-coloff');
+        colSel.addEventListener('change', function(){
+          if(this.value==='__off__'){ if(coff){ coff.style.display=''; it.colour = coff.value||''; } }
+          else { if(coff) coff.style.display='none'; it.colour = this.value||''; }
+          czInvFill(it, ['colour']);
+          czInvRender();
+        });
+        if(coff) coff.addEventListener('input', function(){ if(colSel.value==='__off__') it.colour = this.value; czInvFill(it, ['colour']); colSel.classList.toggle('needfit', it.include && it.fit && !it.colour); });
+      } else {
+        var ci = tr.querySelector('.cz-colour'); if(ci) ci.addEventListener('change', function(){ it.colour = this.value; czInvFill(it, ['colour']); });
+      }
       tr.querySelector('.cz-size').addEventListener('change', function(){ it.size = this.value; });
       tr.querySelector('.cz-qty').addEventListener('change', function(){ var v=parseInt(this.value,10); it.qty = (isFinite(v)&&v>0)?v:0; czInvSyncFoot(); });
-      tr.querySelector('.cz-price').addEventListener('change', function(){ var v=parseFloat(this.value); it.unitPrice = (isFinite(v)&&v>=0)?v:0; var rp=tr.querySelector('[data-rupee]'); if(rp) rp.textContent='= ₹'+fmtINR(Math.round(it.unitPrice*czFx)); czInvSyncFoot(); });
+      tr.querySelector('.cz-price').addEventListener('change', function(){ var v=parseFloat(this.value); it.unitPrice = (isFinite(v)&&v>=0)?v:0; czInvFill(it, ['unitPrice']); czInvRender(); });
       tr.querySelector('.czirm').addEventListener('click', function(){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } czInv.items = czInv.items.filter(function(x){ return x._id!==id; }); czInvRender(); });
     });
     czInvSyncFoot();
@@ -2285,7 +3591,7 @@
   function czInvSyncFoot(){
     var ready = czInvReady();
     var units = ready.reduce(function(s,it){ return s + it.qty; }, 0);
-    var spend = ready.reduce(function(s,it){ return s + it.qty*Math.round((it.unitPrice||0)*czFx); }, 0);
+    var spend = ready.reduce(function(s,it){ return s + it.qty*czToINR(it.unitPrice); }, 0);
     var needFit = (czInv.items||[]).filter(function(it){ return it.include && it.category && (!it.fit || (czInvIsUpper(it.category) && !it.printType)); }).length;
     var withImg = (czInv.items||[]).filter(function(it){ return it._img; }).length;
     var totals = ready.length
@@ -2295,18 +3601,37 @@
     var ab = el('czInvAnalyzeBtn'); if(ab) ab.addEventListener('click', czInvAnalyze);
     var noVendor = !((czInv.vendor||'').trim());
     if(ready.length && noVendor){ el('czInvFoot').innerHTML += ' <b style="color:#b45309">· enter a vendor name above</b>'; }
-    el('czInvApply').disabled = ready.length===0 || noVendor;
+    // Keep the button CLICKABLE even when not ready — a disabled button that does
+    // nothing reads as "Import PO is broken". czInvApply() surfaces exactly what's
+    // still missing instead of silently ignoring the click.
+    el('czInvApply').disabled = false;
   }
   function czInvApply(){
-    var ready = czInvReady(); if(!ready.length) return;
+    // Explain WHY nothing imports rather than sitting inert. Blockers: no vendor,
+    // no ready lines, or lines still missing category / fit / (upper) print type.
+    var ready = czInvReady();
+    var noVendor = !((czInv.vendor||'').trim());
+    if(!ready.length || noVendor){
+      var incomplete = (czInv.items||[]).filter(function(it){ return it.include && it.qty>0 && (!it.category || !it.fit || (czInvIsUpper(it.category) && !it.printType)); }).length;
+      var msg = [];
+      if(noVendor) msg.push('enter a <b>vendor name</b> at the top');
+      if(!ready.length){
+        if(incomplete) msg.push('<b>'+incomplete+'</b> line'+(incomplete===1?'':'s')+' still need category / fit'+((czInv.items||[]).some(function(it){return czInvIsUpper(it.category);})?' / print type':''));
+        else msg.push('tick <b>Buy</b> and set a <b>qty</b> on at least one line');
+      }
+      el('czInvFoot').innerHTML = '<b style="color:#b45309">Can\u2019t import yet — '+msg.join(', and ')+'.</b>';
+      return;
+    }
     el('czInvApply').disabled = true; el('czInvApply').textContent = 'Adding…';
     // Multipart: line meta (prices already ₹, converted from ¥) + each line's
     // product photo mapped back by its row id. The server turns every line into a
     // real "already-ordered" member of this batch.
     var fd = new FormData();
+    if(czInv.sourcePo) fd.append('sourcePo', czInv.sourcePo);
     fd.append('meta', JSON.stringify(ready.map(function(it){
       return { _id: it._id, vendor: (czInv.vendor||'').trim(), category: it.category, fit: it.fit, printType: it.printType||null,
-        colour: it.colour||'', size: it.size||'', qty: it.qty, unitPrice: Math.round((it.unitPrice||0)*czFx) };
+        colour: it.colour||'', size: it.size||'', qty: it.qty, unitPrice: czToINR(it.unitPrice),
+        photoRef: it.photoRef||null };   // reuse the PO's supplier photo when no local file is added
     })));
     ready.forEach(function(it){ if(it._img){ fd.append('images', it._img); fd.append('ids', it._id); } });
     fetch('/api/casuals/invoice/apply', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(d){
@@ -2324,9 +3649,15 @@
     Promise.all(list.map(function(id){ return fetch('/api/casuals/candidate/'+encodeURIComponent(id),{method:'DELETE'}).catch(function(){}); }))
       .then(function(){ czLoadPlan(); });
   }
-  function czInvClose(){ (czInv.items||[]).forEach(function(it){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } }); el('czInvModal').classList.remove('show'); czInv = { items:[], fits:{}, prints:{}, cats:[], vendor:'' }; }
+  function czInvClose(){ (czInv.items||[]).forEach(function(it){ if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } }); el('czInvModal').classList.remove('show'); czInv = { items:[], fits:{}, prints:{}, cats:[], vendor:'', currency:'CNY', sourcePo:null }; }
 
-  function czLoadPlan(){ return fetch('/api/casuals/plan').then(function(r){ return r.json(); }).then(function(d){ if(d.success && d.analysed) czRenderPlan(d); }).catch(function(){}); }
+  function czLoadPlan(){ return fetch('/api/casuals/plan').then(function(r){ return r.json(); }).then(function(d){
+    // Render once photos are analysed OR when a spec-driven grid exists (Trouser
+    // designs mode): the colour×fit source-more grid must show BEFORE photos so the
+    // founder knows what to source, even with zero uploads (have=0 everywhere).
+    var hasSpecGrid = d.success && (d.categories||[]).some(function(c){ return c.enabled && c.grid && c.grid.cells && c.grid.cells.length; });
+    if(d.success && (d.analysed || hasSpecGrid)) czRenderPlan(d);
+  }).catch(function(){}); }
 
   // Wiring (casuals)
   el('czDrop').addEventListener('click', function(){ el('czInput').click(); });
@@ -2334,6 +3665,10 @@
   ['dragover','dragenter'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.add('drag'); }); });
   ['dragleave','drop'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.remove('drag'); }); });
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
+  el('czModePile').addEventListener('click', function(){ czSetMode(false); });
+  el('czModeDesign').addEventListener('click', function(){ czSetMode(true); czDRender(); });
+  el('czAddDesign').addEventListener('click', czDAddDesign);
+  el('czSaveDesigns').addEventListener('click', czSaveDesigns);
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);
   el('czReSegBtn').addEventListener('click', czAnalyze);
   // Confirm & build plan: fetch a FRESHLY-computed plan from the server so any
@@ -2342,8 +3677,17 @@
   el('czPlanFromSegBtn').addEventListener('click', function(){ el('czSegPanel').style.display = 'none'; czLoadPlan(); });
   el('czExportBtn').addEventListener('click', czExportPO);
   el('czNewBatch').addEventListener('click', czCreateBatch);
+  el('czCatPickCreate').addEventListener('click', function(){
+    var cats = [].slice.call(document.querySelectorAll('#czCatPick [data-catpick]:checked')).map(function(cb){ return cb.getAttribute('data-catpick'); });
+    czCreateBatchFor(cats);
+  });
+  el('czCatPickCancel').addEventListener('click', function(){ czShowCatPick(false); });
   el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });
-  el('czInvoiceBtn').addEventListener('click', czInvOpen);
+  el('czInvoiceBtn').addEventListener('click', czSrcOpen);
+  el('czSrcClose').addEventListener('click', czSrcClose);
+  el('czSrcUpload').addEventListener('click', function(){ czSrcClose(); czInvOpen(); });
+  el('czSrcFromPo').addEventListener('click', czSrcLoadPos);
+  el('czSrcModal').addEventListener('click', function(e){ if(e.target === el('czSrcModal')) czSrcClose(); });
   el('czInvoiceInput').addEventListener('change', function(){ czInvUpload(el('czInvoiceInput').files); el('czInvoiceInput').value=''; });
   el('czInvClose').addEventListener('click', czInvClose);
   el('czInvCancel').addEventListener('click', czInvClose);

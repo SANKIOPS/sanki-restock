@@ -53,6 +53,11 @@
     .thumb{ width:38px; height:38px; object-fit:cover; border-radius:7px; border:1px solid var(--line); background:#f4f4f2; display:block; cursor:zoom-in; transition:transform .08s ease; }
     .thumb:hover{ transform:scale(1.06); border-color:var(--emerald); }
     .thumb-lg{ width:84px; height:84px; border-radius:9px; }   /* bigger, clearer preview in the advance-purchase lines */
+    /* Post-order discrepancy: a receiving-grid field whose value no longer matches what was ordered */
+    .rcell{ width:100%; box-sizing:border-box; font-size:12px; padding:3px 5px; }
+    .diffcell{ background:#fef9c3 !important; border:1px solid #f59e0b !important; border-radius:6px; }
+    .diffdot{ color:#b45309; font-weight:800; cursor:help; }
+    .diffnote{ background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px; padding:6px 10px; font-size:12px; margin-top:8px; }
     /* Frozen PO/vendor bar — stays pinned to the top while doing photos & weights in Audit Purchases */
     .po-sticky{ position:sticky; top:0; z-index:30; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;
       background:var(--ivory,#fbfaf7); border:1px solid var(--line); border-radius:11px; padding:9px 14px; margin-bottom:10px; box-shadow:0 4px 14px rgba(12,20,16,.08); }
@@ -110,6 +115,7 @@
     <div class="tabs">
       <div class="tab active" id="tabAdvance">① New advance purchase</div>
       <div class="tab" id="tabReceive">② Audit Purchases</div>
+      <div class="tab" id="tabSummary">③ Purchases Summary</div>
     </div>
 
     <!-- ══════════ VIEW 1: ADVANCE ══════════ -->
@@ -143,6 +149,7 @@
         <h2 style="margin-top:0">Vendor bill <span class="muted" style="font-size:12px;font-weight:400">— saved with this advance purchase</span></h2>
         <div class="settingsgrid">
           <div class="fld"><label>Vendor <span style="color:var(--err)">*</span></label><select id="b_vendor"><option value="">Select vendor…</option><option value="__new__">+ Add new vendor…</option></select></div>
+          <div class="fld"><label>Line <span style="color:var(--err)">*</span></label><select id="b_line"><option value="">Which line?…</option><option value="funky">SANKI Funky</option><option value="casuals">SANKI Casuals</option></select></div>
           <div class="fld"><label>Bill number <span style="color:var(--err)">*</span></label><input id="b_billNo" placeholder="vendor invoice no." /></div>
           <div class="fld"><label>Date of purchase <span style="color:var(--err)">*</span></label><input id="b_datePurchase" type="date" /></div>
           <div class="fld"><label>Lead time (days) <span class="muted" style="font-weight:400;text-transform:none">China→India</span></label><input id="b_leadTime" type="number" min="0" step="1" placeholder="e.g. 10" /></div>
@@ -199,13 +206,26 @@
         <div class="settingsgrid" id="poFilterBar" style="margin-top:6px">
           <div class="fld"><label>Search <span class="muted" style="font-weight:400;text-transform:none">PO / vendor / bill / design</span></label><input id="poSearch" type="search" placeholder="Type to filter…" autocomplete="off"></div>
           <div class="fld"><label>Vendor</label><select id="poVendorFilter"><option value="">All vendors</option></select></div>
-          <div class="fld"><label>Status</label><select id="poStatusFilter"><option value="open">Open (not posted)</option><option value="all">All</option><option value="advance">Advance</option><option value="received">Received</option><option value="awaiting_approval">Awaiting approval</option><option value="posted">Posted</option></select></div>
+          <div class="fld"><label>Status</label><select id="poStatusFilter"><option value="all" selected>All</option><option value="open">Open (not posted)</option><option value="advance">Advance</option><option value="received">Received</option><option value="awaiting_approval">Awaiting approval</option><option value="posted">Posted</option></select></div>
           <div class="fld"><label>Source</label><select id="poOriginFilter"><option value="">Any source</option><option value="china">China</option><option value="india">India</option></select></div>
         </div>
         <p class="sub" id="poFilterNote" style="margin:4px 2px 0"></p>
         <div id="poListHost" class="polist" style="margin-top:10px"></div>
       </div>
       <div id="poDetailHost"></div>
+    </div>
+
+    <!-- ══════════ VIEW 3: PURCHASES SUMMARY ══════════ -->
+    <div id="viewSummary" class="hidden">
+      <div class="panel">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="margin:0">What we've bought</h2>
+          <button class="btn ghost sm" id="refreshSummary">Refresh</button>
+        </div>
+        <p class="sub">Every purchase rolled up — <b>tap a stat card</b> (Done / In-process / Grand total) to filter the list, switch <b>Group by Category ↔ Vendor</b>, and tap a row to see the individual buys with zoomable photos. <b>Done</b> = posted &amp; live on Shopify; <b>In process</b> = advance / receiving / awaiting approval, plus Casuals queued. ₹ = landed cost (freight is added once goods are weighed, so in-process value is goods-only until then).</p>
+        <div id="sumTotals" style="margin-top:10px"></div>
+        <div id="sumHost" style="margin-top:14px"></div>
+      </div>
     </div>
   </div>
 
@@ -294,12 +314,189 @@
     // ── tabs ──
     el('tabAdvance').onclick=function(){ setTab('advance'); };
     el('tabReceive').onclick=function(){ setTab('receive'); loadPos(); };
+    el('tabSummary').onclick=function(){ setTab('summary'); loadSummary(); };
     function setTab(which){
-      var adv = which==='advance';
-      el('tabAdvance').classList.toggle('active', adv);
-      el('tabReceive').classList.toggle('active', !adv);
-      el('viewAdvance').classList.toggle('hidden', !adv);
-      el('viewReceive').classList.toggle('hidden', adv);
+      el('tabAdvance').classList.toggle('active', which==='advance');
+      el('tabReceive').classList.toggle('active', which==='receive');
+      el('tabSummary').classList.toggle('active', which==='summary');
+      el('viewAdvance').classList.toggle('hidden', which!=='advance');
+      el('viewReceive').classList.toggle('hidden', which!=='receive');
+      el('viewSummary').classList.toggle('hidden', which!=='summary');
+    }
+
+    // ── purchases summary ──
+    el('refreshSummary').onclick=loadSummary;
+    var sumData=null;               // last /summary response (re-rendered on filter/group change)
+    var sumFilter='all';            // 'all' | 'done' | 'pending' — driven by clicking a stat card
+    var sumGroup='category';        // 'category' | 'vendor'
+    var sumLine='all';              // 'all' (Both) | 'funky' | 'casuals' — product-line filter
+    function sumLineMatch(it){ return sumLine==='all' || (it.line||'')===sumLine; }
+    function sumChip(txt){ return '<span style="background:#f1f5f9;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;color:#334155">'+txt+'</span>'; }
+    // Roll a group's size-level items up into a design-wise view (one row per
+    // design name) + counts of distinct designs / colours / vendor codes.
+    function sumStats(items){
+      var designs={}, colours={}, codes={};
+      (items||[]).forEach(function(it){
+        var dn=(it.name||'—');
+        var d=designs[dn]||(designs[dn]={name:dn,codes:{},colours:{},pcs:0,cost:0});
+        d.pcs+=Number(it.qty)||0; d.cost+=Number(it.cost)||0;
+        if(it.code){ d.codes[it.code]=1; codes[it.code]=1; }
+        if(it.colour){ d.colours[it.colour]=1; colours[it.colour]=1; }
+      });
+      return { designs:Object.keys(designs).map(function(k){return designs[k];}),
+        nDesigns:Object.keys(designs).length, nColours:Object.keys(colours).length, nCodes:Object.keys(codes).length };
+    }
+    function sumStatCard(key, label, o, accent){
+      var on = (sumFilter===key) || (key==='all' && sumFilter==='all');
+      return '<div data-sumstat="'+key+'" style="flex:1;min-width:160px;cursor:pointer;background:'+(on?'#f8fafc':'#fff')+';border:1px solid '+(on?accent:'var(--line)')+';border-left:4px solid '+accent+';border-radius:12px;padding:12px 14px;box-shadow:'+(on?'0 0 0 2px '+accent+'22':'none')+'">'+
+        '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">'+esc(label)+(on?' <span style="color:'+accent+'">● showing</span>':'')+'</div>'+
+        '<div style="font-size:22px;font-weight:800;margin-top:4px" class="money">'+money(o.cost)+'</div>'+
+        '<div class="muted" style="font-size:12px">'+(Number(o.pieces)||0).toLocaleString('en-IN')+' pieces</div>'+
+      '</div>';
+    }
+    function loadSummary(){
+      el('sumTotals').innerHTML='<p class="sub">Loading…</p>'; el('sumHost').innerHTML='';
+      fetch('/api/procurement/summary').then(function(r){return r.json();}).then(function(d){
+        if(!d.success){ el('sumTotals').innerHTML='<div class="banner err">'+esc(d.error||'Failed to load')+'</div>'; return; }
+        sumData=d; renderSummary();
+      }).catch(function(e){ el('sumTotals').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+    }
+    function renderSummary(){
+      var d=sumData; if(!d) return;
+      // Totals are recomputed from the line-filtered items (not d.totals) so the
+      // Funky / Casuals / Both switch flows straight into the Done/In-process cards.
+      var allItems=[]; (d.categories||[]).forEach(function(c){ (c.items||[]).forEach(function(it){ if(sumLineMatch(it)) allItems.push(it); }); });
+      var t={done:{pieces:0,cost:0},pending:{pieces:0,cost:0}};
+      var unclPieces=0;
+      allItems.forEach(function(it){ var b=it.bucket==='done'?'done':'pending'; t[b].pieces+=Number(it.qty)||0; t[b].cost+=Number(it.cost)||0;
+        if(sumLine==='all' && !(it.line||'') && it.source!=='casuals') unclPieces+=Number(it.qty)||0; });
+      var grand={pieces:(t.done.pieces||0)+(t.pending.pieces||0), cost:(t.done.cost||0)+(t.pending.cost||0)};
+      var lineBtn=function(key,label){ var on=sumLine===key;
+        return '<button data-sumline="'+key+'" class="btn ghost sm" style="border:0;border-radius:0;'+(on?'background:#7c3aed;color:#fff':'')+'">'+label+'</button>'; };
+      el('sumTotals').innerHTML=
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;flex-wrap:wrap">'+
+        '<span class="muted">Line</span>'+
+        '<div style="display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden">'+
+          lineBtn('funky','SANKI Funky')+lineBtn('casuals','SANKI Casuals')+lineBtn('all','Both')+
+        '</div>'+
+        (unclPieces?'<span class="muted" style="margin-left:6px">'+unclPieces.toLocaleString('en-IN')+' pcs unclassified — tag them under <b>Audit Purchases</b></span>':'')+
+      '</div>'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+        sumStatCard('done','Done — live on Shopify', t.done, '#10b981')+
+        sumStatCard('pending','In process / queued', t.pending, '#f59e0b')+
+        sumStatCard('all','Grand total', grand, '#334155')+
+      '</div>'+
+      '<div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px">'+
+        '<span class="muted">Group by</span>'+
+        '<div style="display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden">'+
+          '<button data-sumgroup="category" class="btn ghost sm" style="border:0;border-radius:0;'+(sumGroup==='category'?'background:#334155;color:#fff':'')+'">Category</button>'+
+          '<button data-sumgroup="vendor" class="btn ghost sm" style="border:0;border-radius:0;'+(sumGroup==='vendor'?'background:#334155;color:#fff':'')+'">Vendor</button>'+
+        '</div>'+
+        (sumFilter!=='all'?'<span class="muted" style="margin-left:6px">showing <b>'+(sumFilter==='done'?'Done':'In-process')+'</b> only — <a href="#" data-sumstat="all" style="color:#0369a1">clear</a></span>':'')+
+      '</div>';
+      // wire line switch + stat cards + group buttons
+      Array.prototype.forEach.call(el('sumTotals').querySelectorAll('[data-sumline]'), function(node){
+        node.addEventListener('click', function(){ sumLine=node.getAttribute('data-sumline'); renderSummary(); });
+      });
+      Array.prototype.forEach.call(el('sumTotals').querySelectorAll('[data-sumstat]'), function(node){
+        node.addEventListener('click', function(e){ e.preventDefault(); sumFilter=node.getAttribute('data-sumstat'); renderSummary(); });
+      });
+      Array.prototype.forEach.call(el('sumTotals').querySelectorAll('[data-sumgroup]'), function(node){
+        node.addEventListener('click', function(){ sumGroup=node.getAttribute('data-sumgroup'); renderSummary(); });
+      });
+      var groups=(sumGroup==='vendor'? d.vendors : d.categories)||[];
+      // apply the bucket filter to each group's rows + recompute the shown totals
+      groups=groups.map(function(g){
+        var items=(g.items||[]).filter(function(it){ return (sumFilter==='all' || it.bucket===sumFilter) && sumLineMatch(it); });
+        var pieces=items.reduce(function(a,it){return a+(Number(it.qty)||0);},0);
+        var cost=items.reduce(function(a,it){return a+(Number(it.cost)||0);},0);
+        var ordD=items.map(function(it){return it.date;}).filter(Boolean).sort();
+        var recD=items.map(function(it){return it.dateReceive;}).filter(Boolean).sort();
+        return { type:g.type, done:g.done, pending:g.pending, items:items,
+          shownPieces:pieces, shownCost:cost, total:g.total,
+          ordFrom:ordD[0]||'', ordTo:ordD[ordD.length-1]||'',
+          recFrom:recD[0]||'', recTo:recD[recD.length-1]||'', recCount:recD.length };
+      }).filter(function(g){ return g.items.length; });
+      if(!groups.length){ el('sumHost').innerHTML='<p class="sub">No '+(sumFilter==='all'?'purchases recorded yet — save an advance purchase to see it here.':(sumFilter==='done'?'Done (live on Shopify)':'in-process')+' purchases to show.')+'</p>'; return; }
+      el('sumHost').innerHTML = groups.map(function(c,i){ return sumCatRow(c,i); }).join('');
+      Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-sumcat]'), function(hd){
+        hd.addEventListener('click', function(){
+          var mid=el('sumMid'+hd.getAttribute('data-sumcat'));
+          if(mid){ mid.classList.toggle('hidden');
+            var car=hd.querySelector('.sumcaret'); if(car) car.textContent = mid.classList.contains('hidden')?'▸':'▾'; }
+        });
+      });
+      Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-sumdetail]'), function(btn){
+        btn.addEventListener('click', function(){
+          var body=el('sumBody'+btn.getAttribute('data-sumdetail'));
+          if(body){ body.classList.toggle('hidden');
+            btn.textContent = (body.classList.contains('hidden')?'▸ Show':'▾ Hide')+' every individual buy (size-level)'; }
+        });
+      });
+    }
+    function sumDateRange(from,to){ if(!from) return '<span class="muted">—</span>'; return from===to?esc(from):esc(from)+' → '+esc(to); }
+    function sumCatRow(c,i){
+      var recCell = c.recCount ? sumDateRange(c.recFrom,c.recTo) : '<span class="muted">not yet</span>';
+      var head='<div data-sumcat="'+i+'" style="display:flex;align-items:center;gap:10px;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 14px;margin-bottom:8px">'+
+        '<span class="sumcaret" style="color:var(--muted)">▸</span>'+
+        '<b style="flex:1">'+esc(c.type)+'</b>'+
+        '<span style="min-width:210px;font-size:11px;line-height:1.5">'+
+          '<div><span class="muted" style="text-transform:uppercase;letter-spacing:.4px">Ordered</span> '+sumDateRange(c.ordFrom,c.ordTo)+'</div>'+
+          '<div><span class="muted" style="text-transform:uppercase;letter-spacing:.4px">Received</span> '+recCell+'</div>'+
+        '</span>'+
+        '<span class="money" style="font-weight:700">'+(Number(c.shownPieces)||0).toLocaleString('en-IN')+' pcs</span>'+
+        '<span class="money" style="min-width:96px;text-align:right;font-weight:700">'+money(c.shownCost)+'</span>'+
+        (sumFilter==='all'?'<span style="min-width:250px;text-align:right;font-size:12px">'+
+          '<span style="color:#059669">✓ '+(Number(c.done.pieces)||0)+' · '+money(c.done.cost)+'</span> &nbsp;<span class="muted">·</span>&nbsp; '+
+          '<span style="color:#b45309">⏳ '+(Number(c.pending.pieces)||0)+' · '+money(c.pending.cost)+'</span>'+
+        '</span>':'<span style="min-width:250px"></span>')+
+      '</div>';
+      var showVendorCol=(sumGroup!=='vendor');
+      var rows=(c.items||[]).map(function(it){
+        var tag = it.bucket==='done'
+          ? '<span style="background:#dcfce7;color:#065f46;border-radius:8px;padding:1px 7px;font-size:11px">Done</span>'
+          : (it.source==='casuals'
+             ? '<span style="background:#e0e7ff;color:#3730a3;border-radius:8px;padding:1px 7px;font-size:11px">Queued</span>'
+             : '<span style="background:#fef3c7;color:#92400e;border-radius:8px;padding:1px 7px;font-size:11px">'+esc(String(it.status||'').replace(/_/g,' '))+'</span>');
+        var sizeTok = it.size
+          ? (esc(it.size)+(it.chinaSize?(' <span class="muted">(CN '+esc(it.chinaSize)+')</span>'):''))
+          : (it.chinaSize?('<span class="muted">CN '+esc(it.chinaSize)+'</span>'):'');
+        var meta=[it.colour,it.fit,sizeTok].filter(Boolean).join(' · ');
+        if(sumGroup==='vendor' && it.category) meta=[esc(it.category)].concat(meta?[meta]:[]).join(' · ');
+        var img = it.photoUrl
+          ? '<img class="thumb" src="'+esc(it.photoUrl)+'" style="width:38px;height:48px;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid var(--line)">'
+          : '<div style="width:38px;height:48px;border-radius:6px;background:#f1f3f5;border:1px solid var(--line)"></div>';
+        return '<tr><td style="width:44px">'+img+'</td><td>'+tag+'</td><td><b>'+esc(it.name)+'</b>'+(meta?'<div class="muted" style="font-size:11px">'+meta+'</div>':'')+'</td>'+
+          (showVendorCol?'<td>'+esc(it.vendor||'—')+'</td>':'')+'<td>'+(it.poId?esc(it.poId):'—')+'</td>'+
+          '<td class="money">'+(Number(it.qty)||0)+'</td><td class="money">'+money(it.perPc)+'</td><td class="money">'+money(it.cost)+'</td>'+
+          '<td>'+(it.date?esc(it.date):'—')+'</td>'+
+          '<td>'+(it.dateReceive?esc(it.dateReceive):'<span class="muted">not yet</span>')+'</td></tr>';
+      }).join('');
+      // ── middle layer: design-wise summary (shown first on click) ──
+      var st=sumStats(c.items);
+      var chips='<div style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px">'+
+        sumChip('<b>'+st.nDesigns+'</b> design'+(st.nDesigns===1?'':'s'))+
+        sumChip('<b>'+st.nColours+'</b> colour'+(st.nColours===1?'':'s'))+
+        sumChip('<b>'+st.nCodes+'</b> vendor code'+(st.nCodes===1?'':'s'))+
+        sumChip('<b>'+(Number(c.shownPieces)||0).toLocaleString('en-IN')+'</b> pcs')+
+        sumChip('<b>'+money(c.shownCost)+'</b>')+
+      '</div>';
+      var dRows=st.designs.sort(function(a,b){return b.pcs-a.pcs;}).map(function(dz){
+        var codes=Object.keys(dz.codes); var cols=Object.keys(dz.colours);
+        return '<tr><td><b>'+esc(dz.name)+'</b></td>'+
+          '<td>'+(codes.length?codes.map(esc).join(', '):'<span class="muted">—</span>')+'</td>'+
+          '<td>'+(cols.length?cols.map(esc).join(', '):'<span class="muted">—</span>')+'</td>'+
+          '<td class="money">'+(Number(dz.pcs)||0)+'</td>'+
+          '<td class="money">'+money(dz.cost)+'</td></tr>';
+      }).join('');
+      var mid='<div id="sumMid'+i+'" class="hidden" style="margin:-4px 0 12px;padding:2px 6px">'+chips+
+        '<table style="font-size:12px"><thead><tr><th>Design</th><th>Vendor code(s)</th><th>Colour(s)</th><th class="money">Pcs</th><th class="money">₹ total</th></tr></thead><tbody>'+dRows+'</tbody></table>'+
+        '<div style="margin:8px 0 2px"><button data-sumdetail="'+i+'" class="btn ghost sm">▸ Show every individual buy (size-level)</button></div>'+
+        '<div id="sumBody'+i+'" class="hidden" style="margin:6px 0 0">'+
+          '<table style="font-size:12px"><thead><tr><th></th><th></th><th>Design</th>'+(showVendorCol?'<th>Vendor</th>':'')+'<th>PO</th><th class="money">Qty</th><th class="money">₹/pc</th><th class="money">₹ total</th><th>Ordered</th><th>Received</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+        '</div>'+
+      '</div>';
+      return head+mid;
     }
 
     // ── boot ──
@@ -567,6 +764,7 @@
     el('saveAdvanceBtn').onclick=function(){
       if(!lines.length){ alert('Add at least one line.'); return; }
       if(!el('b_vendor').value.trim()){ alert('Pick or add a vendor name before saving the PO.'); el('b_vendor').focus(); return; }
+      if(!el('b_line').value){ alert('Pick the Line — SANKI Funky or SANKI Casuals — before saving the PO.'); el('b_line').focus(); return; }
       var noPhoto=lines.filter(function(l){ return !(l.photoUrl||'').trim(); }).length;
       if(noPhoto){ alert(noPhoto+' line(s) have no product photo. Add a photo to every line before saving.'); return; }
       var unappr=lines.filter(function(l){ return (l.photoUrl||'').trim() && !l.photoApproved; }).length;
@@ -575,7 +773,7 @@
       fetch('/api/procurement/advance',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ lines:lines, exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
           leadTimeDays:el('b_leadTime').value, origin:advOrigin(), transportTotal:el('b_transportTotal').value,
-          vendor:el('b_vendor').value.trim().toUpperCase(), billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
+          vendor:el('b_vendor').value.trim().toUpperCase(), line:el('b_line').value, billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save advance purchase →';
         if(!d.success){ el('advanceResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
@@ -602,6 +800,7 @@
       el('b_transportTotal').value=(po.transportTotal!=null?po.transportTotal:'');
       syncOrigin();
       ensureVendorOption(po.vendor||'');
+      el('b_line').value=po.line||'';
       el('b_billNo').value=po.billNo||'';
       el('b_datePurchase').value=po.datePurchase||'';
       el('b_leadTime').value=(po.leadTimeDays!=null?po.leadTimeDays:'');
@@ -636,7 +835,7 @@
       if(!lines.length){ alert('A PO needs at least one line. Cancel edit to delete the PO instead.'); return; }
       var id=editingPoId, btn=el('updatePoBtn'); btn.disabled=true; btn.textContent='Updating…';
       fetch('/api/procurement/pos/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ vendor:el('b_vendor').value.trim().toUpperCase(), billNo:el('b_billNo').value.trim(),
+        body:JSON.stringify({ vendor:el('b_vendor').value.trim().toUpperCase(), line:el('b_line').value, billNo:el('b_billNo').value.trim(),
           datePurchase:el('b_datePurchase').value, leadTimeDays:el('b_leadTime').value,
           exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
           origin:advOrigin(), transportTotal:el('b_transportTotal').value, lines:lines })
@@ -786,7 +985,7 @@
       }
       var vf=el('poVendorFilter')&&el('poVendorFilter').value; if(vf && (p.vendor||'').toUpperCase()!==vf) return false;
       var of=el('poOriginFilter')&&el('poOriginFilter').value; if(of && (p.origin==='india'?'india':'china')!==of) return false;
-      var sf=(el('poStatusFilter')&&el('poStatusFilter').value)||'open';
+      var sf=(el('poStatusFilter')&&el('poStatusFilter').value)||'all';
       if(sf==='open'){ if(p.status==='posted') return false; }
       else if(sf!=='all'){ if(p.status!==sf) return false; }
       return true;
@@ -816,6 +1015,17 @@
         r.onclick=function(e){ if(e.target && (e.target.classList.contains('poCheck')||e.target.tagName==='LABEL')) return; openPo(r.getAttribute('data-po')); };
       });
       Array.prototype.forEach.call(el('poListHost').querySelectorAll('.poCheck'),function(c){ c.onclick=function(e){ e.stopPropagation(); }; c.onchange=updateBulkBar; });
+      // Per-row Line tagging (Funky / Casuals) — posts immediately, no page reload.
+      Array.prototype.forEach.call(el('poListHost').querySelectorAll('.poLineSel'),function(sel){
+        sel.onclick=function(e){ e.stopPropagation(); };
+        sel.onchange=function(e){ e.stopPropagation(); var id=sel.getAttribute('data-po'), v=sel.value; sel.disabled=true;
+          fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/line',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({line:v})})
+            .then(function(r){return r.json();}).then(function(d){ sel.disabled=false;
+              if(d&&d.success){ if(poIndex[id]) poIndex[id].line=d.line; sel.style.background=(d.line==='funky'?'#ede9fe':(d.line==='casuals'?'#dcfce7':'#fff')); }
+              else { alert((d&&d.error)||'Could not tag line'); }
+            }).catch(function(err){ sel.disabled=false; alert(err.message); });
+        };
+      });
       updateBulkBar();
       markOpenRow();
     }
@@ -838,8 +1048,14 @@
       }
       var chk = p.status!=='posted' ? '<input type="checkbox" class="poCheck" data-po="'+esc(p.id)+'" title="Select" style="margin-right:10px;transform:scale(1.15)">' : '';
       var purch = p.datePurchase ? (' · purchased '+esc(fmtDate(p.datePurchase))) : '';
+      var lineBg = p.line==='funky'?'#ede9fe':(p.line==='casuals'?'#dcfce7':'#fff');
+      var lineSel='<select class="poLineSel" data-po="'+esc(p.id)+'" title="Product line — Funky or Casuals" style="font-size:11px;padding:2px 6px;border:1px solid var(--line);border-radius:7px;margin-right:8px;background:'+lineBg+'">'+
+        '<option value=""'+(!p.line?' selected':'')+'>Unclassified</option>'+
+        '<option value="funky"'+(p.line==='funky'?' selected':'')+'>SANKI Funky</option>'+
+        '<option value="casuals"'+(p.line==='casuals'?' selected':'')+'>SANKI Casuals</option>'+
+      '</select>';
       return '<div class="porow" data-po="'+esc(p.id)+'"><div style="display:flex;align-items:center">'+chk+'<div><b>'+esc(p.id)+'</b> <span class="muted">· '+esc(p.vendor||'—')+(p.billNo?(' · bill '+esc(p.billNo)):'')+purch+' · '+n+' line(s)</span>'+eta+'</div></div>'+
-        '<span class="pill '+m[0]+'">'+esc(m[1])+'</span></div>';
+        '<div style="display:flex;align-items:center">'+lineSel+'<span class="pill '+m[0]+'">'+esc(m[1])+'</span></div></div>';
     }
     // bulk edit / delete (delegated — the buttons live inside poListHost)
     el('poListHost').addEventListener('click',function(e){
@@ -871,6 +1087,28 @@
       });
     }
     var currentPo=null;
+    // ── Post-order discrepancy helpers ──
+    // A line's `ordered` snapshot is the frozen at-purchase baseline. Any tracked
+    // field that now differs is a discrepancy we highlight in the receiving grid.
+    function ordVal(l,f){ return (l&&l.ordered&&l.ordered[f]!=null)?String(l.ordered[f]):''; }
+    function isDiff(l,f){ if(!l||!l.ordered) return false; return ordVal(l,f)!==String(l[f]==null?'':l[f]); }
+    function diffTitle(l,f){ if(!isDiff(l,f)) return '';
+      var meta=(l.editedBy?(' · by '+l.editedBy):'')+(l.editedAt?(' on '+String(l.editedAt).slice(0,10)):'');
+      return 'Ordered: '+(ordVal(l,f)||'—')+'  →  now '+(String(l[f]==null?'':l[f])||'—')+meta; }
+    // Editable receiving-grid cell builders — inputs/selects tagged data-f (field)
+    // + data-i (line index), auto-highlighted (.diffcell + tooltip) when they differ
+    // from what was ordered.
+    function edInput(l,f,i,o){ o=o||{};
+      var cls='rcell'+(o.mono?' mono':'')+(isDiff(l,f)?' diffcell':'');
+      var t=isDiff(l,f)?(' title="'+esc(diffTitle(l,f))+'"'):'';
+      return '<input class="'+cls+'"'+t+' data-f="'+f+'" data-i="'+i+'" value="'+esc(l[f]==null?'':l[f])+'"'+
+        (o.ph?(' placeholder="'+esc(o.ph)+'"'):'')+(o.style?(' style="'+o.style+'"'):'')+'>'; }
+    function edSelect(l,f,i,optionsHtml,o){ o=o||{};
+      var cls='rcell'+(isDiff(l,f)?' diffcell':'');
+      var t=isDiff(l,f)?(' title="'+esc(diffTitle(l,f))+'"'):'';
+      return '<select class="'+cls+'"'+t+' data-f="'+f+'" data-i="'+i+'"'+(o.style?(' style="'+o.style+'"'):'')+'>'+optionsHtml+'</select>'; }
+    // Count of lines with any discrepancy vs what was ordered.
+    function poDiffCount(po){ return (po.lines||[]).filter(function(l){ return l&&l.ordered && ['qty','colour','productType','sizeLabel','chinaSize','designName','designCode','sku','fit'].some(function(f){return isDiff(l,f);}); }).length; }
     function renderPoDetail(po){
       lastReceive=null; currentPo=po;
       var posted = po.status==='posted';
@@ -918,12 +1156,27 @@
             (backUrl?'<img class="thumb" src="'+esc(backUrl)+'" title="Back reference — the AI back photo is built from this">':'<span class="muted" style="font-size:10px">back: none</span>')+
             '<div style="margin-top:2px"><label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">'+(backUrl?'replace back':'add back photo')+' <span style="opacity:.7">(optional)</span><input type="file" accept="image/*" data-lineback="'+i+'" data-gk="'+esc(gk)+'" style="display:none"></label></div></div>';
         }
+        // Editable design / sku / product·colour·size cells while the PO isn't posted;
+        // read-only once posted. Each edited-away-from-ordered field self-highlights.
+        var designCellRO = esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'');
+        var designCell = posted ? designCellRO
+          : edInput(l,'designName',i,{ph:'design name'})+edInput(l,'designCode',i,{mono:true,ph:'vendor code',style:'margin-top:3px'});
+        var skuCell = posted ? esc(l.sku||l.skuError||'—')
+          : edInput(l,'sku',i,{mono:true,ph:'SKU'});
+        var pcsCell = posted ? (esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell)
+          : edSelect(l,'productType',i,objOpts(lookups.products,l.productType))+
+            edSelect(l,'colour',i,objOpts(lookups.colours,l.colour),{style:'margin-top:3px'})+
+            '<div style="display:flex;gap:4px;margin-top:3px">'+
+              edSelect(l,'sizeLabel',i,optList(sizesFor(l.productType),l.sizeLabel),{style:'flex:1'})+
+              edSelect(l,'chinaSize',i,'<option value="">CN</option>'+optList(CHINA_SIZES,l.chinaSize),{style:'flex:1'})+
+            '</div>';
+        var qtyDiff = (!posted && isDiff(l,'qty'));
         h+='<tr>'+
           '<td>'+photoCell+'</td>'+
-          '<td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
-          '<td class="mono">'+esc(l.sku||l.skuError||'—')+'</td>'+
-          '<td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'</td><td>'+cls+'</td>'+
-          '<td>'+(posted?esc(l.qty):'<input type="number" min="0" step="1" data-q="'+i+'" value="'+(Number(l.qty)||0)+'" style="width:70px" title="Actual received qty — edit if it differs from ordered">')+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
+          '<td style="min-width:150px">'+designCell+'</td>'+
+          '<td class="mono" style="min-width:120px">'+skuCell+'</td>'+
+          '<td style="min-width:150px">'+pcsCell+'</td><td>'+cls+'</td>'+
+          '<td>'+(posted?esc(l.qty):'<input type="number" min="0" step="1" data-q="'+i+'" value="'+(Number(l.qty)||0)+'" class="rcell'+(qtyDiff?' diffcell':'')+'" style="width:70px"'+(qtyDiff?(' title="'+esc(diffTitle(l,'qty'))+'"'):' title="Actual received qty — edit if it differs from ordered"')+'>')+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
           '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" data-qty="'+(Number(l.qty)||0)+'" value="'+(l.weightGrams||'')+'" style="width:90px"'+(india?' placeholder="optional"':'')+'>')+'</td>'+
           '<td class="money" data-lw="'+i+'">'+(lw?(lw.toLocaleString('en-IN')+' g'):'—')+'</td></tr>';
       });
@@ -931,12 +1184,15 @@
       var tq=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.qty)||0); },0);
       h+='<tr class="totalrow"><td colspan="5" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600" id="totQty">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
       h+='</tbody></table>';
+      var nDiff=poDiffCount(po);
+      if(nDiff) h+='<div class="diffnote">⚠ <b>'+nDiff+' line'+(nDiff===1?'':'s')+'</b> differ'+(nDiff===1?'s':'')+' from what was ordered — the highlighted cells were corrected after ordering. Hover a highlighted cell to see the original value.</div>';
       if(!posted){
         var recvCtl = po.status==='advance'
           ? '<button class="btn ghost" id="markRecvBtn">📦 Mark goods received</button>'
           : '<span class="pill rec">✓ Received'+(po.dateReceive?(' · '+esc(fmtDate(po.dateReceive))):'')+'</span> <button class="btn ghost sm" id="undoRecvBtn" title="Undo — set back to Advance">↩ Undo received</button>';
         h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
-          '<button class="btn" id="computeBtn">Save weights &amp; preview landed cost</button>'+
+          '<button class="btn" id="saveCorrBtn" title="Save colour / SKU / category / size / design / qty corrections — differences from what was ordered stay highlighted for future audits">💾 Save corrections</button>'+
+          '<button class="btn ghost" id="computeBtn">Save weights &amp; preview landed cost</button>'+
           recvCtl+
           '<span class="muted" style="align-self:center;font-size:12px">Preview only — this no longer marks the PO received. Use “Mark goods received” when stock physically arrives.</span>'+
         '</div>';
@@ -955,6 +1211,18 @@
       if(me.isAdmin && !posted) initStudioFor(po.id);
       if(!posted){
         el('computeBtn').onclick=function(){ computeReceive(po.id); };
+        var scb=el('saveCorrBtn'); if(scb) scb.onclick=function(){ saveCorrections(po.id); };
+        // live-highlight a field the moment it's edited away from what was ordered
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-f]'),function(inp){
+          inp.oninput=inp.onchange=function(){
+            var i=+inp.getAttribute('data-i'), f=inp.getAttribute('data-f');
+            var l=(currentPo.lines||[])[i]; if(!l) return;
+            var was=(l.ordered&&l.ordered[f]!=null)?String(l.ordered[f]):'';
+            var now=f==='sku'?inp.value.toUpperCase():inp.value;
+            var diff=(l.ordered!=null)&&(was!==String(now));
+            inp.classList.toggle('diffcell', diff);
+          };
+        });
         var mrb=el('markRecvBtn'); if(mrb) mrb.onclick=function(){ markReceived(po.id,false); };
         var urb=el('undoRecvBtn'); if(urb) urb.onclick=function(){ markReceived(po.id,true); };
         // per-line raw-photo replace/upload (feeds the AI studio)
@@ -1007,6 +1275,28 @@
       var q={};
       Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-q]'),function(inp){ q[inp.getAttribute('data-q')]=inp.value; });
       return q;
+    }
+    // Gather the inline field corrections (colour / sku / category / size / design)
+    // keyed by line index, for POST /line-edits.
+    function collectEdits(){
+      var e={};
+      Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-f]'),function(inp){
+        var i=inp.getAttribute('data-i'), f=inp.getAttribute('data-f');
+        (e[i]||(e[i]={}))[f]=inp.value;
+      });
+      return e;
+    }
+    // Persist inline corrections + received qty. Differences from what was ordered
+    // are frozen server-side and stay highlighted for future audits. Re-renders the
+    // grid so the saved highlights + discrepancy banner appear immediately.
+    function saveCorrections(id){
+      var btn=el('saveCorrBtn'); if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/line-edits',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ edits:collectEdits(), qtys:collectQtys() })})
+        .then(readJson).then(function(d){
+          if(!d.success){ if(btn){ btn.disabled=false; btn.textContent='💾 Save corrections'; } alert(d.error||'Could not save corrections.'); return; }
+          loadPos(); openPoId=null; openPo(id);   // refresh list + re-render detail with highlights
+        }).catch(function(e){ if(btn){ btn.disabled=false; btn.textContent='💾 Save corrections'; } alert(e.message); });
     }
     function computeReceive(id){
       var btn=el('computeBtn'); btn.disabled=true; btn.textContent='Computing…';

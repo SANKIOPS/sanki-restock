@@ -174,10 +174,14 @@
     document.getElementById('tableBody').innerHTML = '<tr class="empty-row"><td colspan="10">Loading inventory…</td></tr>';
     try {
       const [pj, srv] = await Promise.all([
-        fetch('/api/products').then(r => r.json()),
+        fetch('/api/products').then(async r => {
+          const j = await r.json();
+          if (!r.ok || j.success === false) throw new Error(j.error || `Products request failed (${r.status})`);
+          return j;
+        }),
         fetch('/api/data/load').then(r => r.json()).catch(() => ({}))
       ]);
-      _products = pj.products || pj || [];
+      _products = Array.isArray(pj.products) ? pj.products : (Array.isArray(pj) ? pj : []);
       const serverPOs = (srv && srv.data && srv.data.pos) || [];
       const localPOs = JSON.parse(localStorage.getItem('sanki_pos') || '[]');
       const map = {};

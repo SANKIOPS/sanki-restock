@@ -169,13 +169,15 @@
   async function loadProducts(){
     if (_cache.products) return _cache.products;
     const r = await fetch('/api/products'); const j = await r.json();
-    _cache.products = j.products || j || [];
+    if (!r.ok || j.success === false) throw new Error(j.error || 'Products request failed ('+r.status+')');
+    _cache.products = Array.isArray(j.products) ? j.products : (Array.isArray(j) ? j : []);
     return _cache.products;
   }
   async function loadOrders(){
     if (_cache.orders) return _cache.orders;
     const r = await fetch('/api/orders?days=180'); const j = await r.json();
-    _cache.orders = j.orders || j || [];
+    if (!r.ok || j.success === false) throw new Error(j.error || 'Orders request failed ('+r.status+')');
+    _cache.orders = Array.isArray(j.orders) ? j.orders : (Array.isArray(j) ? j : []);
     return _cache.orders;
   }
   async function loadCollections(){
@@ -472,7 +474,14 @@
     document.getElementById('anaRefresh').addEventListener('click', () => { _cache = { products:null, orders:null, collections:null }; render(); });
     document.getElementById('stockoutPeriod').addEventListener('change', render);
     document.getElementById('anaGrowth').addEventListener('change', render);
-    render();
+    render().catch(e => {
+      const area = document.getElementById('contentArea');
+      area.innerHTML = '';
+      const error = document.createElement('div');
+      error.className = 'p-12 text-center text-red-600';
+      error.textContent = 'Failed to load analytics: ' + e.message;
+      area.appendChild(error);
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

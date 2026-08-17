@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Accounting · SANKI Business OS</title>
+  <!-- PWA: installable, fullscreen home-screen app -->
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+  <meta name="theme-color" content="#0F5132" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="SANKI" />
+  <style>
+    :root { --blue:#185FA5; --green:#047857; --red:#b42318; --ink:#1a1a1a; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f6f7f9; color:var(--ink); }
+    .wrap { max-width:1080px; margin:0 auto; padding:22px 20px 80px; }
+    h1 { font-size:22px; margin:0 0 2px; font-weight:800; }
+    .sub { color:#6b7280; font-size:13px; margin:0 0 18px; }
+
+    .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:16px; }
+    .controls .fld { display:flex; flex-direction:column; }
+    label { font-size:11px; font-weight:600; color:#374151; margin:0 0 4px; }
+    input[type=date] { font-size:13px; padding:8px 10px; border:1px solid #d1d5db; border-radius:7px; outline:none; background:#fff; }
+    input:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(24,95,165,.13); }
+    .quick { display:flex; gap:6px; flex-wrap:wrap; }
+    .quick button { font-size:12px; padding:8px 12px; border:1px solid #d1d5db; background:#fff; border-radius:7px; cursor:pointer; font-weight:600; color:#374151; }
+    .quick button:hover { border-color:var(--blue); color:var(--blue); }
+    .quick button.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+
+    .stats { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:18px; }
+    .stat { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:12px 16px; min-width:150px; flex:1; }
+    .stat .k { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#9ca3af; }
+    .stat .v { font-size:22px; font-weight:800; margin-top:2px; }
+
+    .card { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:0; overflow:hidden; }
+    table.pl { width:100%; border-collapse:collapse; font-size:14px; }
+    table.pl th, table.pl td { padding:12px 16px; text-align:right; border-bottom:1px solid #eef0f2; }
+    table.pl th:first-child, table.pl td:first-child { text-align:left; }
+    table.pl thead th { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#6b7280; background:#fafbfc; font-weight:700; }
+    table.pl th.combined, table.pl td.combined { background:#f5f8ff; }
+    table.pl .rowlabel { font-weight:600; }
+    table.pl .pct { font-size:11px; color:#9ca3af; font-weight:500; display:block; }
+    tr.sales td { font-weight:700; }
+    tr.sub-ex td { color:#6b7280; font-size:12.5px; padding-top:6px; padding-bottom:6px; }
+    tr.sub-ex td:first-child { padding-left:28px; }
+    tr.gross td { border-top:2px solid #e5e7eb; font-weight:800; color:var(--green); }
+    tr.net td { border-top:2px solid #1a1a1a; font-size:16px; font-weight:800; }
+    tr.pending td { color:#9ca3af; font-style:italic; }
+    tr.pending td:first-child::after { content:' · next step'; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:#c4c9d0; font-style:normal; }
+    .neg { color:var(--red); }
+    .cogs-edit { width:58px; padding:4px 6px; font-size:12px; text-align:right; border:1px solid #d1d5db; border-radius:6px; }
+    .note { font-size:12px; color:#6b7280; margin:14px 2px 0; line-height:1.5; }
+    .msg { font-size:12px; min-height:16px; margin:6px 2px; }
+    .msg.ok { color:var(--green); } .msg.err { color:var(--red); }
+    .loading { color:#9ca3af; font-size:13px; padding:30px; text-align:center; }
+
+    .tabs { display:flex; gap:6px; margin:0 0 16px; border-bottom:1px solid #e5e7eb; }
+    .tabs button { font-size:13px; padding:9px 16px; border:none; background:none; cursor:pointer; font-weight:700; color:#6b7280; border-bottom:2px solid transparent; margin-bottom:-1px; }
+    .tabs button.on { color:var(--blue); border-bottom-color:var(--blue); }
+
+    tr.ue-in td { color:#6b7280; }
+    tr.ue-in td:first-child { padding-left:28px; font-weight:500; }
+    tr.net td.pos, tr.gross td.pos { text-align:right; }
+    tr.contrib td { border-top:2px solid #1a1a1a; font-size:16px; font-weight:800; }
+    td.posv { color:var(--green); font-weight:700; }
+    td.negv { color:var(--red); font-weight:700; }
+    .assume { padding:18px 16px; }
+    .assume h3 { margin:0 0 4px; font-size:15px; }
+    .assume .sub2 { color:#6b7280; font-size:12.5px; margin:0 0 14px; }
+    .agrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; }
+    .agrid .fld { display:flex; flex-direction:column; min-width:0; }   /* min-width:0 lets grid tracks shrink below input intrinsic width */
+    .controls .fld { min-width:0; }
+    .agrid label { font-size:11px; font-weight:600; color:#374151; margin:0 0 4px; }
+    .agrid .hint { font-size:10.5px; color:#9ca3af; font-weight:400; }
+    .agrid input { font-size:13px; padding:8px 10px; border:1px solid #d1d5db; border-radius:7px; outline:none; width:100%; min-width:0; }
+    .agrid input:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(24,95,165,.13); }
+    .save-row { margin-top:14px; }
+    .btn { font-size:13px; padding:9px 16px; border:none; border-radius:8px; cursor:pointer; font-weight:700; background:var(--blue); color:#fff; }
+
+    @media (max-width:680px){
+      .wrap { padding:16px 12px 80px; }
+      h1 { font-size:20px; }
+      .controls { gap:8px; }
+      .controls .fld { flex:1 1 46%; }
+      input[type=date] { width:100%; font-size:16px; }        /* 16px stops iOS zoom-on-focus */
+      .quick { flex:1 1 100%; }
+      .quick button { flex:1 1 auto; font-size:13px; padding:9px 10px; }
+      .stat { min-width:44%; padding:11px 13px; }
+      .stat .v { font-size:19px; }
+      .tabs button { flex:1; padding:11px 8px; font-size:13px; }
+      /* 4-column P&L / UE matrices don't stack — let the card scroll sideways. */
+      .card { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+      table.pl { font-size:12.5px; min-width:520px; }
+      table.pl th, table.pl td { padding:9px 10px; }
+      tr.sub-ex td:first-child, tr.ue-in td:first-child { padding-left:16px; }
+      .cogs-edit { width:52px; }
+      .assume { padding:14px 12px; }
+      .agrid { grid-template-columns:1fr 1fr; }
+      .agrid input { font-size:16px; }
+      .btn { width:100%; padding:12px; font-size:15px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Accounting</h1>
+    <p class="sub">Live P&amp;L from your Shopify sales — split POS · Website · Combined. Replaces the "Till Date P&amp;L" sheet.</p>
+
+    <div class="controls">
+      <div class="fld"><label>From</label><input type="date" id="from" /></div>
+      <div class="fld"><label>To</label><input type="date" id="to" /></div>
+      <div class="quick" id="quick">
+        <button data-q="thismonth" class="on">This month</button>
+        <button data-q="lastmonth">Last month</button>
+        <button data-q="today">Today</button>
+        <button data-q="thisyear">This year</button>
+      </div>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button data-v="pl" class="on">P&amp;L</button>
+      <button data-v="ue">Unit Economics</button>
+    </div>
+
+    <div id="view-pl">
+      <div class="stats" id="stats"></div>
+      <div class="card">
+        <div id="tableHost"><div class="loading">Loading…</div></div>
+      </div>
+      <div class="msg" id="msg"></div>
+      <p class="note" id="note"></p>
+    </div>
+
+    <div id="view-ue" hidden>
+      <div class="card" style="margin-bottom:16px">
+        <div id="ueHost"><div class="loading">Loading…</div></div>
+      </div>
+      <div class="card">
+        <div class="assume">
+          <h3>Assumptions <span style="font-weight:400;color:#9ca3af;font-size:12px">(optional — fill when you have the numbers)</span></h3>
+          <p class="sub2">These are the only estimates in the waterfall. Everything else is real, from your Shopify sales + logged expenses. Each stays ₹0 until you set it.</p>
+          <div class="agrid" id="ueForm"></div>
+          <div class="save-row"><button class="btn" id="ueSave">Save assumptions</button></div>
+        </div>
+      </div>
+      <div class="msg" id="msgUe"></div>
+      <p class="note" id="noteUe"></p>
+    </div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script>
+    var el = function(id){ return document.getElementById(id); };
+    var fmt = function(n){ return '₹' + (n||0).toLocaleString('en-IN'); };
+    var pctS = function(f){ return (f*100).toFixed(1) + '%'; };
+    var state = { from:'', to:'', quick:'thismonth', view:'pl' };
+
+    function pad(n){ return String(n).padStart(2,'0'); }
+    function istNow(){ return new Date(Date.now() + 5.5*3600*1000); }
+    function ymd(d){ return d.getUTCFullYear()+'-'+pad(d.getUTCMonth()+1)+'-'+pad(d.getUTCDate()); }
+
+    function rangeFor(q){
+      var n = istNow(), y = n.getUTCFullYear(), m = n.getUTCMonth();
+      if (q==='today'){ var t = ymd(n); return { from:t, to:t }; }
+      if (q==='thismonth'){ var last = new Date(Date.UTC(y,m+1,0)).getUTCDate(); return { from:y+'-'+pad(m+1)+'-01', to:y+'-'+pad(m+1)+'-'+pad(last) }; }
+      if (q==='lastmonth'){ var lm = m===0?11:m-1, ly = m===0?y-1:y; var last2 = new Date(Date.UTC(ly,lm+1,0)).getUTCDate(); return { from:ly+'-'+pad(lm+1)+'-01', to:ly+'-'+pad(lm+1)+'-'+pad(last2) }; }
+      if (q==='thisyear'){ return { from:y+'-01-01', to:y+'-12-31' }; }
+      return { from:'', to:'' };
+    }
+
+    function setQuick(q){
+      state.quick = q;
+      var r = rangeFor(q);
+      state.from = r.from; state.to = r.to;
+      el('from').value = r.from; el('to').value = r.to;
+      Array.prototype.forEach.call(el('quick').children, function(b){ b.classList.toggle('on', b.dataset.q===q); });
+      load();
+    }
+
+    el('quick').addEventListener('click', function(e){ if(e.target.dataset.q) setQuick(e.target.dataset.q); });
+    el('from').addEventListener('change', function(){ state.from=this.value; state.quick=''; Array.prototype.forEach.call(el('quick').children,function(b){b.classList.remove('on');}); load(); });
+    el('to').addEventListener('change', function(){ state.to=this.value; state.quick=''; Array.prototype.forEach.call(el('quick').children,function(b){b.classList.remove('on');}); load(); });
+
+    // Tab switch between P&L and Unit Economics (both share the date range).
+    el('tabs').addEventListener('click', function(e){
+      if(!e.target.dataset.v) return;
+      state.view = e.target.dataset.v;
+      Array.prototype.forEach.call(el('tabs').children, function(b){ b.classList.toggle('on', b.dataset.v===state.view); });
+      el('view-pl').hidden = state.view!=='pl';
+      el('view-ue').hidden = state.view!=='ue';
+      load();
+    });
+
+    // Dispatch to whichever view is active.
+    function load(){ if(state.view==='ue') loadUEView(); else loadPL(); }
+
+    function num(n){ var cls = n<0 ? ' class="neg"' : ''; return '<span'+cls+'>'+fmt(n)+'</span>'; }
+    // A cost row: shows expenses as a negative deduction. Greyed only if zero
+    // everywhere (nothing logged yet in Expenses).
+    function costRow(label, key, p, w, c){
+      var pv=p[key]||0, wv=w[key]||0, cv=c[key]||0;
+      var cls = (pv||wv||cv) ? '' : ' class="pending"';
+      var cell = function(v){ return v ? fmt(-v) : '—'; };
+      return '<tr'+cls+'><td class="rowlabel">'+label+'</td><td>'+cell(pv)+'</td><td>'+cell(wv)+'</td><td class="combined">'+cell(cv)+'</td></tr>';
+    }
+
+    function render(d){
+      var p = d.channels.POS, w = d.channels.Website, c = d.combined;
+      // stat cards
+      var retLine = (c.returned||c.refunds) ? '<div class="stat"><div class="k">Returns / RTO</div><div class="v">'+(c.returned||0)+' · '+fmt(c.refunds||0)+'</div></div>' : '';
+      var cov = c.coverage || { unitPct:0 };
+      el('stats').innerHTML =
+        '<div class="stat"><div class="k">Sales incl GST</div><div class="v">'+fmt(c.sales)+'</div></div>'+
+        '<div class="stat"><div class="k">Gross Profit</div><div class="v">'+fmt(c.grossProfit)+'</div></div>'+
+        '<div class="stat"><div class="k">Gross Margin</div><div class="v">'+pctS(c.grossMargin)+'</div></div>'+
+        '<div class="stat"><div class="k">COGS actual</div><div class="v">'+pctS(cov.unitPct||0)+'</div></div>'+
+        retLine;
+
+      // COGS is ACTUAL landed cost where the SKU was bought in Purchases; the
+      // editable % is only a FALLBACK for the uncovered slice.
+      function cogsCell(ch, o){
+        var covc = o.coverage || { unitPct:0 };
+        var breakdown = (o.cogsActual||0) > 0
+          ? '<span class="pct">actual '+fmt(o.cogsActual)+' · est '+fmt(o.cogsEstimated)+' ('+pctS(covc.unitPct||0)+' actual)</span>'
+          : '';
+        return '<td>'+num(o.cogs)+'<span class="pct">'+pctS(o.cogsEffPct||0)+' eff · fallback <input class="cogs-edit" data-ch="'+ch+'" value="'+(o.cogsPct*100).toFixed(1)+'" />%</span>'+breakdown+'</td>';
+      }
+      var h = ''+
+        '<table class="pl"><thead><tr>'+
+          '<th>Line</th><th>POS</th><th>Website</th><th class="combined">Combined</th>'+
+        '</tr></thead><tbody>'+
+        '<tr class="sales"><td class="rowlabel">Sales <span class="pct">incl GST · net of returns</span></td><td>'+fmt(p.sales)+'</td><td>'+fmt(w.sales)+'</td><td class="combined">'+fmt(c.sales)+'</td></tr>'+
+        '<tr class="sub-ex"><td class="rowlabel">— less GST</td><td>'+fmt(-p.gst)+'</td><td>'+fmt(-w.gst)+'</td><td class="combined">'+fmt(-c.gst)+'</td></tr>'+
+        '<tr class="sub-ex"><td class="rowlabel">Net Sales (ex GST)</td><td>'+fmt(p.salesExGst)+'</td><td>'+fmt(w.salesExGst)+'</td><td class="combined">'+fmt(c.salesExGst)+'</td></tr>'+
+        '<tr><td class="rowlabel">COGS <span class="pct">actual landed cost · % fills the rest</span></td>'+cogsCell('POS',p)+cogsCell('Website',w)+'<td class="combined">'+num(c.cogs)+'<span class="pct">'+pctS(c.cogsEffPct)+' eff</span><span class="pct">actual '+fmt(c.cogsActual)+' · est '+fmt(c.cogsEstimated)+'</span></td></tr>'+
+        '<tr class="gross"><td class="rowlabel">Gross Profit</td>'+
+          '<td>'+fmt(p.grossProfit)+'<span class="pct">'+pctS(p.grossMargin)+'</span></td>'+
+          '<td>'+fmt(w.grossProfit)+'<span class="pct">'+pctS(w.grossMargin)+'</span></td>'+
+          '<td class="combined">'+fmt(c.grossProfit)+'<span class="pct">'+pctS(c.grossMargin)+'</span></td></tr>'+
+        costRow('Fixed Cost', 'fixedCost', p, w, c)+
+        costRow('Running Cost', 'runningCost', p, w, c)+
+        costRow('Variable Cost (expenses)', 'variableCost', p, w, c)+
+        costRow('Marketing', 'marketing', p, w, c)+
+        '<tr class="net"><td class="rowlabel">Net Profit</td>'+
+          '<td>'+num(p.netProfit)+'</td><td>'+num(w.netProfit)+'</td><td class="combined">'+num(c.netProfit)+'</td></tr>'+
+        '</tbody></table>';
+      el('tableHost').innerHTML = h;
+      el('note').textContent = d.meta.note;
+
+      // wire COGS % inline editors
+      Array.prototype.forEach.call(document.querySelectorAll('.cogs-edit'), function(inp){
+        inp.addEventListener('change', function(){
+          var body = { cogsPct: {} }; body.cogsPct[this.dataset.ch] = parseFloat(this.value);
+          el('msg').className='msg'; el('msg').textContent='Saving…';
+          fetch('/api/pl/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+            .then(function(r){ return r.json(); })
+            .then(function(){ el('msg').className='msg ok'; el('msg').textContent='COGS % updated.'; load(); })
+            .catch(function(){ el('msg').className='msg err'; el('msg').textContent='Could not save.'; });
+        });
+      });
+    }
+
+    function loadPL(){
+      if(!state.from || !state.to) return;
+      el('msg').textContent='';
+      fetch('/api/pl/summary?from='+state.from+'&to='+state.to)
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if(d && d.success) render(d); else { el('tableHost').innerHTML='<div class="loading">No data.</div>'; } })
+        .catch(function(){ el('tableHost').innerHTML='<div class="loading">Could not load P&amp;L.</div>'; });
+    }
+
+    // ── Unit Economics ──
+    // A deduction row: shows a per-order cost as a negative. Greyed (dim) when
+    // it's an assumption still sitting at ₹0 across the board (not logged yet).
+    function ueRow(label, key, p, w, c, note){
+      var pv=p[key]||0, wv=w[key]||0, cv=c[key]||0;
+      var cell = function(v){ return v ? fmt(-v) : '—'; };
+      var lab = label + (note ? ' <span class="pct">'+note+'</span>' : '');
+      return '<tr class="ue-in"><td class="rowlabel">'+lab+'</td><td>'+cell(pv)+'</td><td>'+cell(wv)+'</td><td class="combined">'+cell(cv)+'</td></tr>';
+    }
+    function signedCell(v){ var cls = v<0?'negv':'posv'; return '<td class="'+cls+'">'+fmt(v)+'</td>'; }
+    function renderUE(d){
+      var p=d.channels.POS, w=d.channels.Website, c=d.combined;
+      var h = '<table class="pl"><thead><tr>'+
+          '<th>Per average order</th>'+
+          '<th>POS<span class="pct">'+(p.orders||0)+' orders</span></th>'+
+          '<th>Website<span class="pct">'+(w.orders||0)+' orders</span></th>'+
+          '<th class="combined">Combined<span class="pct">'+(c.orders||0)+' orders</span></th>'+
+        '</tr></thead><tbody>'+
+        '<tr class="sales"><td class="rowlabel">Avg selling price <span class="pct">incl GST</span></td><td>'+fmt(p.avgSale)+'</td><td>'+fmt(w.avgSale)+'</td><td class="combined">'+fmt(c.avgSale)+'</td></tr>'+
+        '<tr class="sub-ex"><td class="rowlabel">— less GST</td><td>'+fmt(-p.gst)+'</td><td>'+fmt(-w.gst)+'</td><td class="combined">'+fmt(-c.gst)+'</td></tr>'+
+        '<tr class="sub-ex"><td class="rowlabel">Net revenue (ex GST)</td><td>'+fmt(p.netRevenue)+'</td><td>'+fmt(w.netRevenue)+'</td><td class="combined">'+fmt(c.netRevenue)+'</td></tr>'+
+        ueRow('COGS','cogs',p,w,c,'landed cost')+
+        '<tr class="gross"><td class="rowlabel">Gross contribution</td><td>'+fmt(p.grossContribution)+'</td><td>'+fmt(w.grossContribution)+'</td><td class="combined">'+fmt(c.grossContribution)+'</td></tr>'+
+        ueRow('Forward shipping','ship',p,w,c,'assumption')+
+        ueRow('Packaging','pack',p,w,c,'assumption')+
+        ueRow('Payment / COD fee','gatewayFee',p,w,c,'assumption')+
+        ueRow('Return / RTO provision','returnProvision',p,w,c,'assumption')+
+        ueRow('CAC (marketing ÷ orders)','cac',p,w,c,'real')+
+        ueRow('Allocated overhead','overhead',p,w,c,'real')+
+        '<tr class="contrib"><td class="rowlabel">Contribution / order</td>'+
+          signedCell(p.contribution)+signedCell(w.contribution)+
+          '<td class="combined '+(c.contribution<0?'negv':'posv')+'">'+fmt(c.contribution)+'<span class="pct">'+pctS(c.contributionPct||0)+' of price</span></td></tr>'+
+        '</tbody></table>';
+      el('ueHost').innerHTML = h;
+      el('noteUe').textContent = d.meta.note;
+      renderUEForm(d.ue);
+    }
+    function renderUEForm(ue){
+      el('ueForm').innerHTML =
+        fld('Forward shipping · POS (₹/order)','ship_POS',ue.shipPerOrder.POS,'usually ₹0 — walk-in')+
+        fld('Forward shipping · Website (₹/order)','ship_Website',ue.shipPerOrder.Website,'courier per parcel')+
+        fld('Packaging (₹/order)','packPerOrder',ue.packPerOrder,'polybag/box/label')+
+        fld('Payment / COD fee (%)','gatewayPct',Math.round(ue.gatewayPct*10000)/100,'gateway / GoKwik fee')+
+        fld('Return / RTO rate (%)','rtoPct',Math.round(ue.rtoPct*10000)/100,'~14% online typical');
+    }
+    function fld(label,id,val,hint){
+      return '<div class="fld"><label>'+label+' <span class="hint">'+hint+'</span></label>'+
+        '<input id="ue_'+id+'" type="number" min="0" step="0.01" value="'+(val||0)+'" /></div>';
+    }
+    function saveUE(){
+      var v = function(id){ return parseFloat(el('ue_'+id).value)||0; };
+      var body = {
+        shipPerOrder: { POS: v('ship_POS'), Website: v('ship_Website') },
+        packPerOrder: v('packPerOrder'),
+        gatewayPct: v('gatewayPct'),
+        rtoPct: v('rtoPct')
+      };
+      el('msgUe').className='msg'; el('msgUe').textContent='Saving…';
+      fetch('/api/pl/ue-settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+        .then(function(r){ return r.json(); })
+        .then(function(){ el('msgUe').className='msg ok'; el('msgUe').textContent='Assumptions saved.'; loadUEView(); })
+        .catch(function(){ el('msgUe').className='msg err'; el('msgUe').textContent='Could not save.'; });
+    }
+    function loadUEView(){
+      if(!state.from || !state.to) return;
+      el('msgUe').textContent='';
+      fetch('/api/pl/unit-economics?from='+state.from+'&to='+state.to)
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if(d && d.success) renderUE(d); else { el('ueHost').innerHTML='<div class="loading">No data.</div>'; } })
+        .catch(function(){ el('ueHost').innerHTML='<div class="loading">Could not load unit economics.</div>'; });
+    }
+    document.addEventListener('click', function(e){ if(e.target && e.target.id==='ueSave') saveUE(); });
+
+    setQuick('thismonth');
+  </script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () { navigator.serviceWorker.register('/sw.js').catch(function () {}); });
+    }
+  </script>
+</body>
+</html>

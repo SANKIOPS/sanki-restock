@@ -271,13 +271,21 @@ const State = {
 
 async function loadAll() {
   document.getElementById('loadingDetail').textContent = 'Fetching /api/products…';
-  const pResp = await fetch('/api/products').then(r=>r.json());
-  State.rawProducts = pResp.products || [];
+  const pResp = await fetch('/api/products').then(async r => {
+    const j = await r.json();
+    if (!r.ok || j.success === false) throw new Error(j.error || `Products request failed (${r.status})`);
+    return j;
+  });
+  State.rawProducts = Array.isArray(pResp.products) ? pResp.products : [];
   document.getElementById('loadingDetail').textContent = `Got ${State.rawProducts.length} products. Fetching /api/orders?days=180…`;
 
   const fetchDays = Math.max(180, State.windowDays * 6);
-  const oResp = await fetch('/api/orders?days='+fetchDays).then(r=>r.json());
-  State.rawOrders = oResp.orders || [];
+  const oResp = await fetch('/api/orders?days='+fetchDays).then(async r => {
+    const j = await r.json();
+    if (!r.ok || j.success === false) throw new Error(j.error || `Orders request failed (${r.status})`);
+    return j;
+  });
+  State.rawOrders = Array.isArray(oResp.orders) ? oResp.orders : [];
   document.getElementById('loadingDetail').textContent = `Got ${State.rawOrders.length} orders. Computing scores…`;
   await new Promise(r=>setTimeout(r, 50));
 

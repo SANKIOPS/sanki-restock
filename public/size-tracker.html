@@ -38,6 +38,16 @@
   td input.meas { width:74px; text-align:center; padding:7px 6px; font-size:13px; }
   td input.meas.filled { border-color:var(--accent); background:#f5f9ff; }
   .hint { font-size:12px; color:var(--muted); margin:10px 0 0; }
+  /* Section 2 — "which sizes to source" picker */
+  .sizepick { margin:6px 0 4px; }
+  .sizepick .splbl { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:#888; font-weight:700; margin:0 0 8px; }
+  .sizechips { display:flex; flex-wrap:wrap; gap:8px; }
+  .szchip { font-size:13px; font-weight:700; padding:7px 14px; border-radius:20px; border:1px solid var(--line);
+        background:#fff; color:#555; cursor:pointer; user-select:none; transition:all .12s; }
+  .szchip.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .sizepick .spactions { margin-top:8px; }
+  .splink { font-size:12px; color:var(--accent); cursor:pointer; font-weight:600; }
+  .splink + .splink { margin-left:12px; }
   .saved-flash { color:var(--ok); font-size:12.5px; font-weight:600; margin-left:10px; opacity:0; transition:opacity .2s; }
   .saved-flash.show { opacity:1; }
   .empty { text-align:center; color:var(--muted); padding:28px 0; font-size:13.5px; }
@@ -139,7 +149,7 @@
   <!-- ── Section 2: Compare a vendor chart ────────────────────── -->
   <div class="card">
     <div class="cardhead"><span class="num">2</span><h2>Compare a vendor (China) chart for a PO</h2></div>
-    <p class="cardsub">Ask the vendor for their size chart, paste their measurements here, then hit Compare. You don't pick the fit — we auto-detect which of your fits the China chart matches, then tell you which China size to source per desired size.</p>
+    <p class="cardsub">Pick the category, tick <b>which sizes you want to source</b>, then upload the vendor's (China) size chart and hit Compare. You don't pick the fit — we auto-detect which of your fits the China chart matches, then tell you which China size to source for each size you want.</p>
 
     <div class="row">
       <div class="field">
@@ -156,6 +166,8 @@
       <button class="btn" id="cCompare" disabled>Compare</button>
     </div>
     <p class="upnote" id="cPhotoNote">Upload the vendor's size-chart image under here and we'll read their China measurements into the grid automatically.</p>
+
+    <div id="cSizePick" class="sizepick"></div>
 
     <div id="cGridWrap"><div class="empty">Choose a category to enter the vendor's chart.</div></div>
 
@@ -344,6 +356,39 @@
     vendorRows = sizes.map(function (s) { return { label: s, meas: {} }; });
   }
 
+  // ── "Which sizes do you want to source?" picker ─────────────
+  // A row of toggle chips of the category's full size run. Only the ticked
+  // sizes are compared + sourced; the rest are ignored. Default = all ON.
+  var wantedSizes = {};   // { SIZE: true|false }
+  function resetWantedSizes() {
+    var c = catObj(el('cCat').value);
+    wantedSizes = {};
+    (c && c.sizes ? c.sizes : []).forEach(function (s) { wantedSizes[String(s).toUpperCase()] = true; });
+  }
+  function wantedList() {
+    return Object.keys(wantedSizes).filter(function (s) { return wantedSizes[s]; });
+  }
+  function renderSizePick() {
+    var host = el('cSizePick'); if (!host) return;
+    var c = catObj(el('cCat').value);
+    if (!c || !c.sizes || !c.sizes.length) { host.innerHTML = ''; return; }
+    var chips = c.sizes.map(function (s) {
+      var key = String(s).toUpperCase(), on = !!wantedSizes[key];
+      return '<span class="szchip' + (on ? ' on' : '') + '" data-sz="' + esc(key) + '">' + esc(s) + '</span>';
+    }).join('');
+    host.innerHTML = '<div class="splbl">Which sizes do you want to source?</div>' +
+      '<div class="sizechips">' + chips + '</div>' +
+      '<div class="spactions"><span class="splink" data-spall>Select all</span>' +
+      '<span class="splink" data-spnone>Clear all</span></div>';
+    host.querySelectorAll('.szchip').forEach(function (ch) {
+      ch.addEventListener('click', function () {
+        var k = ch.getAttribute('data-sz'); wantedSizes[k] = !wantedSizes[k]; ch.classList.toggle('on', wantedSizes[k]);
+      });
+    });
+    host.querySelector('[data-spall]').addEventListener('click', function () { Object.keys(wantedSizes).forEach(function (k) { wantedSizes[k] = true; }); renderSizePick(); });
+    host.querySelector('[data-spnone]').addEventListener('click', function () { Object.keys(wantedSizes).forEach(function (k) { wantedSizes[k] = false; }); renderSizePick(); });
+  }
+
   function addVendorRow() {
     vendorRows.push({ label: '', meas: {} });
     renderVendorGrid();
@@ -390,10 +435,12 @@
     var tol = parseFloat(el('cTol').value);
     var vendor = collectVendorChart();
     if (!Object.keys(vendor).length) { alert('Enter at least one China size with measurements.'); return; }
+    var wanted = wantedList();
+    if (!wanted.length) { alert('Tick at least one size you want to source.'); return; }
     el('cCompare').disabled = true; el('cCompare').textContent = 'Comparing…';
     fetch('/api/sizetracker/compare', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category: cat, vendor: vendor, tolerance: tol, unit: UNIT })
+      body: JSON.stringify({ category: cat, vendor: vendor, tolerance: tol, unit: UNIT, wanted: wanted })
     }).then(function (r) { return r.json(); }).then(function (j) {
       el('cCompare').disabled = false; el('cCompare').textContent = 'Compare';
       if (j && j.success) renderResults(j);
@@ -435,6 +482,14 @@
       html += '<h3 style="margin-top:14px">No China size fits</h3><div class="srclist">';
       j.unmatched.forEach(function (sz) { html += '<span class="srcpill none">' + esc(sz) + '</span>'; });
       html += '</div>';
+    }
+    // A size you wanted but never fed a target chart for can't be compared — flag it.
+    var covered = {}; (j.results || []).forEach(function (r) { covered[String(r.size).toUpperCase()] = true; });
+    var noTarget = wantedList().filter(function (s) { return !covered[s]; });
+    if (noTarget.length) {
+      html += '<h3 style="margin-top:14px">No target chart on file</h3><div class="srclist">';
+      noTarget.forEach(function (sz) { html += '<span class="srcpill none">' + esc(sz) + '</span>'; });
+      html += '</div><p class="hint" style="margin-top:6px">Feed these sizes for the detected fit in Section 1 so they can be matched.</p>';
     }
     html += '</div>';
 
@@ -511,7 +566,7 @@
       Array.prototype.forEach.call(el('unitSeg').querySelectorAll('.uopt'), function (b) {
         b.addEventListener('click', function () { setUnit(b.getAttribute('data-unit')); });
       });
-      seedVendorRows(); renderVendorGrid(); updateTargetNote();
+      resetWantedSizes(); renderSizePick(); seedVendorRows(); renderVendorGrid(); updateTargetNote();
 
       el('tCat').addEventListener('change', function () { fillFitSelect(el('tCat').value, el('tFit')); renderTargetGrid(); });
       el('tFit').addEventListener('change', renderTargetGrid);
@@ -523,7 +578,7 @@
         el('tPhoto').value = '';
       });
 
-      el('cCat').addEventListener('change', function () { vendorRows = []; renderVendorGrid(); updateTargetNote(); });
+      el('cCat').addEventListener('change', function () { vendorRows = []; resetWantedSizes(); renderSizePick(); renderVendorGrid(); updateTargetNote(); });
       el('cAddRow').addEventListener('click', addVendorRow);
       el('cCompare').addEventListener('click', compare);
       el('cPhotoBtn').addEventListener('click', function () { el('cPhoto').click(); });
