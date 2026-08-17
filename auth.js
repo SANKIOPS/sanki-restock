@@ -37,7 +37,7 @@ const { verifySession, userCanAccessPath, rolesOf, landingFor } = require('./mod
 
 // Static asset extensions any logged-in user may fetch regardless of role
 // (JS/CSS/images the shared pages need). Page/navigation requests are gated.
-const ASSET_EXT = new Set(['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.map', '.webp']);
+const ASSET_EXT = new Set(['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.map', '.webp', '.webmanifest']);
 function isAssetPath(p) {
   const m = p.match(/\.[a-z0-9]+$/i);
   return m ? ASSET_EXT.has(m[0].toLowerCase()) : false;
@@ -85,6 +85,55 @@ function checkApiKey(req) {
   return provided.length > 0 && safeEqual(provided, KEY);
 }
 
+// API authorization is deliberately centralized here so adding a page cannot
+// accidentally expose its backend to every logged-in employee. Rules are
+// checked in order; more-specific paths must come before broader prefixes.
+const API_ROLE_RULES = [
+  { path: '/api/auth/me',                 roles: '*' },
+  { path: '/api/modules',                 roles: '*' },
+  { prefix: '/api/admin',                 roles: ['admin'] },
+  { prefix: '/api/setup/',                roles: ['admin'] },
+  { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'claimant'] },
+  { prefix: '/api/pl/',                   roles: ['admin', 'accounting', 'revenue'] },
+  { prefix: '/api/procurement/',          roles: ['admin', 'procurement'] },
+  { prefix: '/api/fresh/',                roles: ['admin', 'procurement'] },
+  { prefix: '/api/casuals/',              roles: ['admin', 'procurement'] },
+  { prefix: '/api/sizetracker/',          roles: ['admin', 'procurement'] },
+  { prefix: '/api/sales',                 roles: ['admin', 'sales'] },
+  { prefix: '/api/racks',                 roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
+  { prefix: '/api/stock-search',          roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
+  { prefix: '/api/showroom/',             roles: ['admin', 'inventory', 'warehouse'] },
+  { prefix: '/api/velocity/',             roles: ['admin', 'sales'] },
+  { prefix: '/api/orders-ledger',         roles: ['admin', 'sales', 'revenue', 'warehouse'] },
+  { prefix: '/api/orders',                roles: ['admin', 'sales', 'revenue', 'warehouse'] },
+  { path: '/api/shopify/customers',       roles: ['admin', 'sales'] },
+  { path: '/api/inventory/adjust',        roles: ['admin', 'inventory', 'warehouse'] },
+  { prefix: '/api/whatsapp/',             roles: ['admin', 'sales'] },
+  { path: '/api/data/save',               roles: ['admin', 'inventory'] },
+  { path: '/api/data/load',               roles: ['admin', 'inventory', 'warehouse'] },
+  { path: '/api/products',                roles: ['admin', 'inventory', 'sales', 'procurement', 'warehouse', 'stocksearch'] },
+  { path: '/api/inventory',               roles: ['admin', 'inventory', 'sales', 'warehouse', 'stocksearch'] },
+  { path: '/api/collections',             roles: ['admin', 'inventory', 'sales', 'procurement'] },
+  { path: '/api/identify-product',        roles: ['admin', 'inventory', 'procurement'] },
+  { path: '/api/health/full',             roles: ['admin'] }
+];
+
+function apiRuleFor(p) {
+  return API_ROLE_RULES.find(rule =>
+    (rule.path && p === rule.path) ||
+    (rule.prefix && p.startsWith(rule.prefix))
+  ) || null;
+}
+
+function apiAllowedForUser(user, p) {
+  const userRoles = rolesOf(user);
+  if (userRoles.includes('admin')) return true;
+  const rule = apiRuleFor(p);
+  if (!rule) return false; // new APIs must opt in instead of silently opening
+  if (rule.roles === '*') return true;
+  return rule.roles.some(role => userRoles.includes(role));
+}
+
 function gate(req, res, next) {
   // Decide on the NORMALIZED path so encoded/`..` traversal can't bypass the gate.
   const p = normalizedPath(req);
@@ -121,15 +170,14 @@ function gate(req, res, next) {
   }
   req.user = user;
 
-  // Admin-only management APIs.
-  if (p.startsWith('/api/admin')) {
-    if (!rolesOf(user).includes('admin')) return res.status(403).json({ success: false, error: 'Admin only' });
+  // API permissions are enforced independently of page visibility. Unknown
+  // endpoints fail closed for non-admin users until a rule is added above.
+  if (p.startsWith('/api/')) {
+    if (!apiAllowedForUser(user, p)) {
+      return res.status(403).json({ success: false, error: 'Forbidden for this role' });
+    }
     return next();
   }
-
-  // Other APIs: any authenticated user for now (Phase 0). Sensitive future
-  // modules (revenue/accounts) will add their own per-role checks.
-  if (p.startsWith('/api/')) return next();
 
   // ── Page/navigation gating by role (admin sees everything) ──
   if (rolesOf(user).includes('admin')) return next();
@@ -140,4 +188,4 @@ function gate(req, res, next) {
   return res.redirect(302, landingFor(user.role));
 }
 
-module.exports = { gate };
+module.exports = { gate, apiRuleFor, apiAllowedForUser };

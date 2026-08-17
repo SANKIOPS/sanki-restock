@@ -8,6 +8,7 @@ const fs      = require('fs');
 const crypto  = require('crypto');
 const multer  = require('multer');
 const { gate } = require('./auth');
+const { shopifyClient } = require('./modules/shopify-client');
 require('dotenv').config();
 
 // Multer — memory storage for remittance Excel upload (no disk needed)
@@ -62,21 +63,24 @@ const SELF_URL               = process.env.SELF_URL
                              || process.env.RENDER_EXTERNAL_URL
                              || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null)
                              || `http://localhost:${PORT}`;
+const RUNTIME_DATA_DIR       = process.env.DATA_PATH
+                             ? path.dirname(process.env.DATA_PATH)
+                             : __dirname;
 
 // ── Webhook authentication ────────────────────────────────────────
 // Shopify signs every webhook with HMAC-SHA256(rawBody, secret) in the
 // X-Shopify-Hmac-Sha256 header. We verify it timing-safely over the RAW
-// request body (express.raw gives us the Buffer). If SHOPIFY_WEBHOOK_SECRET
-// is unset we log a loud warning and allow the request through so ingestion
-// doesn't break before the secret is configured — set it in Railway to enforce.
+// request body (express.raw gives us the Buffer). Production webhooks fail
+// closed when their secret is missing; accepting unsigned operational events
+// is more dangerous than temporarily disabling ingestion.
 let __webhookWarned = false;
 function verifyShopifyWebhook(req) {
   if (!SHOPIFY_WEBHOOK_SECRET) {
     if (!__webhookWarned) {
-      console.warn('[webhook] SHOPIFY_WEBHOOK_SECRET is NOT set — webhooks are UNVERIFIED. Set it in Railway to enforce HMAC.');
+      console.error('[webhook] SHOPIFY_WEBHOOK_SECRET is NOT set — Shopify webhooks are disabled.');
       __webhookWarned = true;
     }
-    return true; // fail-open ONLY when no secret configured (so we can ship without breaking ingestion)
+    return false;
   }
   const provided = req.get('X-Shopify-Hmac-Sha256') || '';
   if (!provided) return false;
@@ -89,10 +93,10 @@ function verifyShopifyWebhook(req) {
   try { return crypto.timingSafeEqual(a, b); } catch { return false; }
 }
 
-// Velocity has no documented HMAC scheme. If VELOCITY_WEBHOOK_TOKEN is set we
-// require it as ?token= or x-webhook-token; otherwise (unset) we allow through.
+// Velocity has no documented HMAC scheme, so require a shared token as
+// ?token= or x-webhook-token. Missing configuration disables the webhook.
 function verifyVelocityWebhook(req) {
-  if (!VELOCITY_WEBHOOK_TOKEN) return true;
+  if (!VELOCITY_WEBHOOK_TOKEN) return false;
   const provided = req.get('x-webhook-token') || req.query.token || '';
   if (!provided) return false;
   const a = Buffer.from(String(provided));
@@ -202,7 +206,7 @@ function normalizeVelStatus(raw) {
 // ════════════════════════════════════════════════════════════════
 //  VELOCITY CACHE  (AWB → shipment data, persisted to disk)
 // ════════════════════════════════════════════════════════════════
-const VEL_CACHE_PATH = path.join(__dirname, 'velocity_cache.json');
+const VEL_CACHE_PATH = path.join(RUNTIME_DATA_DIR, 'velocity_cache.json');
 // shipments: { [awb]: { awb, status, internalStatus, currentLocation, deliveredDate,
 //              pickupDate, isCod, codAmount, ndrReason, rtoReason, activities[], lastUpdated } }
 let velCache = { shipments: {}, lastSync: null, syncing: false };
@@ -442,9 +446,9 @@ async function syncVelocityShipments() {
 // ════════════════════════════════════════════════════════════════
 //  SHOPIFY CACHE + BACKGROUND SYNC
 // ════════════════════════════════════════════════════════════════
-const CACHE_PATH = path.join(__dirname, 'sanki_cache.json');
+const CACHE_PATH = path.join(RUNTIME_DATA_DIR, 'sanki_cache.json');
 const DATA_PATH  = process.env.DATA_PATH || path.join(__dirname, 'sanki_data.json');
-const META_PATH  = path.join(__dirname, 'sanki_order_meta.json');
+const META_PATH  = path.join(RUNTIME_DATA_DIR, 'sanki_order_meta.json');
 
 let ordersCache = { orders: [], lastSync: null, syncing: false };
 let productsCache = { products: null, lastSync: null };
@@ -469,9 +473,7 @@ function saveCache() {
 }
 
 async function shopifyFetch(fetch, url) {
-  return fetch(url, {
-    headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' }
-  });
+  return shopifyClient.request(url);
 }
 
 async function shopifyFetchAll(fetch, startUrl) {
@@ -637,7 +639,7 @@ app.get('/api/setup/webhooks', async (req, res) => {
     const results = [];
     for (const topic of topics) {
       if (existing.includes(topic)) { results.push({ topic, status: 'already_exists' }); continue; }
-      const cr = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
+      const cr = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
         method: 'POST',
         headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ webhook: { topic, address: webhookUrl, format: 'json' } })
@@ -961,7 +963,7 @@ app.get('/api/velocity/remittance', async (req, res) => {
 // ── Velocity Remittance: Upload Excel from Velocity portal ──────────────────
 // Velocity portal → Billing → Passbook → Export → upload that file here
 // Auto-matches AWB/Order ID to your COD orders and marks them settled
-const REMITTANCE_PATH = path.join(__dirname, 'velocity_remittance.json');
+const REMITTANCE_PATH = path.join(RUNTIME_DATA_DIR, 'velocity_remittance.json');
 let remittanceData = { entries: [], lastImport: null };
 function loadRemittance() {
   try { if (fs.existsSync(REMITTANCE_PATH)) remittanceData = JSON.parse(fs.readFileSync(REMITTANCE_PATH, 'utf8')); }
@@ -1330,7 +1332,7 @@ app.post('/api/inventory/adjust', async (req, res) => {
     const lvls = ld.inventory_levels || [];
     if (!lvls.length) return res.json({ success: false, error: 'No inventory level found' });
     const locId = lvls[0].location_id;
-    const ar = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+    const ar = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
       method:  'POST',
       headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
       body:    JSON.stringify({ location_id: locId, inventory_item_id: inventoryItemId, available_adjustment: Number(adjustment) })
@@ -1632,14 +1634,14 @@ app.post('/api/showroom/seed/run', async (req, res) => {
     const results = [];
     const __sleep = (ms) => new Promise(r => setTimeout(r, ms));
     async function adjust(locId, iid, delta) {
-      return fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+      return shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
         method: 'POST',
         headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ location_id: Number(locId), inventory_item_id: Number(iid), available_adjustment: delta })
       });
     }
     async function connect(locId, iid) {
-      return fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/connect.json`, {
+      return shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/connect.json`, {
         method: 'POST',
         headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ location_id: Number(locId), inventory_item_id: Number(iid) })
@@ -1940,7 +1942,7 @@ app.post('/api/showroom/queue/move', async (req, res) => {
 
     // Ensure front location is connected to this inventory item (idempotent)
     try {
-      await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/connect.json`, {
+      await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/connect.json`, {
         method: 'POST',
         headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ location_id: Number(settings.frontLocationId), inventory_item_id: Number(item.inventoryItemId) })
@@ -1948,7 +1950,7 @@ app.post('/api/showroom/queue/move', async (req, res) => {
     } catch (e) { /* 422 already connected is fine */ }
 
     // 1) Decrement at back
-    const r1 = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+    const r1 = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
       method: 'POST',
       headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ location_id: Number(settings.backLocationId), inventory_item_id: Number(item.inventoryItemId), available_adjustment: -moveQty })
@@ -1958,14 +1960,14 @@ app.post('/api/showroom/queue/move', async (req, res) => {
       return res.json({ success: false, error: `back-decrement ${r1.status}: ${eb.slice(0,200)}` });
     }
     // 2) Increment at front
-    const r2 = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+    const r2 = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
       method: 'POST',
       headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ location_id: Number(settings.frontLocationId), inventory_item_id: Number(item.inventoryItemId), available_adjustment: moveQty })
     });
     if (!r2.ok) {
       // rollback back-decrement
-      await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+      await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
         method: 'POST',
         headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ location_id: Number(settings.backLocationId), inventory_item_id: Number(item.inventoryItemId), available_adjustment: moveQty })
@@ -2020,7 +2022,7 @@ app.post('/api/showroom/webhook/setup', async (req, res) => {
     const ld = await lr.json();
     const existing = (ld.webhooks || []).find(w => w.address === webhookUrl);
     if (existing) return res.json({ success: true, webhookId: existing.id, status: 'already registered', address: webhookUrl });
-    const r = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
+    const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
       method: 'POST',
       headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ webhook: { topic: 'orders/paid', address: webhookUrl, format: 'json' } })
@@ -2376,7 +2378,7 @@ async function ensureOrdersPaidWebhook() {
     const ld = await lr.json();
     const existing = (ld.webhooks || []).find(w => w.address === webhookUrl);
     if (existing) { console.log(`[showroom-wh] orders/paid already registered → ${webhookUrl}`); return; }
-    const r = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
+    const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/webhooks.json`, {
       method: 'POST',
       headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ webhook: { topic: 'orders/paid', address: webhookUrl, format: 'json' } })
@@ -2532,6 +2534,8 @@ app.use(require('./modules/procurement').router);
 app.use(require('./modules/fresh-procurement').router);
 app.use(require('./modules/casuals').router);
 app.use(require('./modules/size-tracker').router);
+app.use(require('./modules/expenses').router);
+app.use(require('./modules/pl').router);
 app.use(require('./modules/module-registry').router);
 
 app.get('*', (req, res) => {

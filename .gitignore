@@ -1,4 +1,30 @@
 node_modules/
 .env
+.env.*
+!.env.example
 *.log
 .DS_Store
+
+# Runtime data and authentication material must stay on the Railway volume.
+users.json
+session_secret.key
+casuals.json
+size-tracker.json
+velocity_cache.json
+velocity_remittance.json
+sanki_cache.json
+sanki_data.json
+sanki_order_meta.json
+orders.json
+rack_locations.json
+sales.json
+showroom-settings.json
+showroom-audit.json
+showroom-queue.json
+expenses.json
+pl.json
+data/
+
+# Local development/assistant configuration.
+.claude/
+.railway/
