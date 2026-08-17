@@ -50,17 +50,18 @@ const router = express.Router();
 const CASUALS_SPEC = [
   {
     key: 'Trouser', label: 'Trousers',
-    designNote: 'Mostly solids; texture / checks as accents',
+    designNote: 'Baggy vs Normal; colour + fit are HARD caps',
+    fitHard: true,   // Trousers run a colour×fit HARD grid (see selectIncluded)
+    // Trousers run a 2-fit HARD grid (Baggy / Normal). Both fit AND colour are
+    // hard caps: the colour×fit grid targets are largest-remainder rounded and a
+    // cell that can't be filled becomes a "source more" instruction (no backfill).
     fits: [
-      { key: 'wideleg',        label: 'Wide-leg / Controlled Baggy', pct: 30, kw: ['wide', 'baggy', 'wide leg', 'wide-leg', 'controlled baggy', 'loose'] },
-      { key: 'relaxedstraight', label: 'Relaxed Straight',           pct: 30, kw: ['relaxed straight', 'straight', 'regular fit', 'relaxed'] },
-      { key: 'koreanpleated',  label: 'Korean Pleated',              pct: 20, kw: ['pleat', 'pleated', 'korean', 'korean pleated'] },
-      { key: 'flared',         label: 'Flared / Bootcut',            pct: 10, kw: ['flare', 'flared', 'bootcut', 'boot cut', 'boot-cut'] },
-      { key: 'tapered',        label: 'Tapered / Chino',             pct: 10, kw: ['taper', 'tapered', 'chino', 'carrot', 'slim'] }
+      { key: 'baggy',  label: 'Baggy',  pct: 50, kw: ['baggy', 'wide', 'wide leg', 'wide-leg', 'loose', 'oversized', 'controlled baggy', 'balloon', 'parachute'] },
+      { key: 'normal', label: 'Normal', pct: 50, kw: ['normal', 'regular', 'straight', 'relaxed straight', 'relaxed', 'slim', 'tapered', 'chino', 'fitted', 'classic', 'pleated', 'flared'] }
     ],
     sizes: [
-      { key: '26', pct: 10 }, { key: '28', pct: 20 }, { key: '30', pct: 20 },
-      { key: '32', pct: 20 }, { key: '34', pct: 20 }, { key: '36', pct: 10 }
+      { key: 'XS', pct: 1 }, { key: 'S', pct: 2 }, { key: 'M', pct: 2 }, { key: 'L', pct: 2 },
+      { key: 'XL', pct: 2 }, { key: 'XXL', pct: 1 }, { key: 'XXXL', pct: 1 }, { key: 'XXXXL', pct: 0 }
     ],
     colours: [
       { key: 'Black', pct: 25 }, { key: 'Beige', pct: 20 }, { key: 'Charcoal Grey', pct: 15 },
@@ -72,10 +73,8 @@ const CASUALS_SPEC = [
     key: 'Shirt', label: 'Shirts',
     designNote: 'Solid ≈ 50%, rest prints / textures',
     fits: [
-      { key: 'oversized',      label: 'Oversized / Drop Shoulder', pct: 15, kw: ['oversize', 'oversized', 'drop shoulder', 'drop-shoulder'] },
-      { key: 'relaxedregular', label: 'Relaxed Regular',           pct: 50, kw: ['relaxed regular', 'relaxed', 'regular', 'classic'] },
-      { key: 'boxy',           label: 'Boxy',                      pct: 25, kw: ['boxy', 'box fit', 'box'] },
-      { key: 'cuban',          label: 'Cuban / Resort Collar',     pct: 10, kw: ['cuban', 'resort', 'camp collar', 'revere', 'bowling'] }
+      { key: 'oversized',      label: 'Oversized / Drop Shoulder', pct: 40, kw: ['oversize', 'oversized', 'drop shoulder', 'drop-shoulder', 'boxy', 'box fit', 'box'] },
+      { key: 'relaxedregular', label: 'Relaxed Regular',           pct: 60, kw: ['relaxed regular', 'relaxed', 'regular', 'classic', 'cuban', 'resort', 'camp collar', 'revere', 'bowling'] }
     ],
     sizes: [
       { key: 'XS', pct: 6 }, { key: 'S', pct: 28 }, { key: 'M', pct: 28 },
@@ -89,9 +88,8 @@ const CASUALS_SPEC = [
     // top of fit. Solid ≈ half; the rest divided between prints/embroidery and
     // checks/stripes. Fully editable in the UI.
     printTypes: [
-      { key: 'solid',   label: 'Solid (plain / logo)',    pct: 50 },
-      { key: 'printed', label: 'Printed / Embroidered',   pct: 30 },
-      { key: 'checks',  label: 'Checks / Stripes & rest', pct: 20 }
+      { key: 'solid',  label: 'Solid (plain / logo)', pct: 50 },
+      { key: 'others', label: 'Others',               pct: 50 }
     ],
     avgCost: 650
   },
@@ -99,10 +97,8 @@ const CASUALS_SPEC = [
     key: 'T-shirt', label: 'T-Shirts & Polos',
     designNote: 'Solid 60–70%, texture / stripes / checks 25–30%',
     fits: [
-      { key: 'oversizedround', label: 'Oversized Round Neck', pct: 35, kw: ['oversize', 'oversized', 'drop shoulder', 'oversized round'] },
-      { key: 'relaxedround',   label: 'Relaxed Round Neck',   pct: 35, kw: ['relaxed round', 'relaxed', 'regular round'] },
-      { key: 'boxyround',      label: 'Boxy Round Neck',      pct: 15, kw: ['boxy', 'box fit', 'box'] },
-      { key: 'classictee',     label: 'Classic Regular Tee',  pct: 15, kw: ['classic', 'regular tee', 'regular', 'polo', 'slim'] }
+      { key: 'oversizedround', label: 'Oversized Round Neck', pct: 50, kw: ['oversize', 'oversized', 'drop shoulder', 'oversized round', 'boxy', 'box fit', 'box'] },
+      { key: 'relaxedround',   label: 'Relaxed Round Neck',   pct: 50, kw: ['relaxed round', 'relaxed', 'regular round', 'classic', 'regular tee', 'regular', 'polo', 'slim'] }
     ],
     sizes: [
       { key: 'XS', pct: 10 }, { key: 'S', pct: 20 }, { key: 'M', pct: 20 },
@@ -114,9 +110,8 @@ const CASUALS_SPEC = [
     ],
     // Print-type split (Shirts & T-shirts only) — solid-heavy for tees.
     printTypes: [
-      { key: 'solid',   label: 'Solid (plain / logo)',    pct: 65 },
-      { key: 'printed', label: 'Printed / Embroidered',   pct: 15 },
-      { key: 'checks',  label: 'Checks / Stripes & rest', pct: 20 }
+      { key: 'solid',  label: 'Solid (plain / logo)', pct: 65 },
+      { key: 'others', label: 'Others',               pct: 35 }
     ],
     avgCost: 400
   }
@@ -142,21 +137,24 @@ function normCasualCategory(raw) {
 // `pattern` (solid/texture/stripes/checks/print) which we fold into these three
 // manual-%-split buckets. Trousers have no print-type dimension.
 const PRINT_TYPES = [
-  { key: 'solid',   label: 'Solid (plain / logo)' },
-  { key: 'printed', label: 'Printed / Embroidered' },
-  { key: 'checks',  label: 'Checks / Stripes & rest' }
+  { key: 'solid',  label: 'Solid (plain / logo)' },
+  { key: 'others', label: 'Others' }
 ];
 const PRINT_BY_KEY = PRINT_TYPES.reduce((m, p) => (m[p.key] = p, m), {});
+// Fits / print-types we removed from the spec but that OLD saved settings may
+// still carry (mergePct keeps unknown saved keys). Prune these on load so the
+// model stays at the current 2-fit / Solid+Others shape.
+const RETIRED_FITS = { Shirt: ['boxy', 'cuban'], 'T-shirt': ['boxyround', 'classictee'], Trouser: ['wideleg', 'relaxedstraight', 'koreanpleated', 'flared', 'tapered'] };
+const RETIRED_PRINTS = ['printed', 'checks'];
 function catHasPrintTypes(catKey) { const c = CAT_BY_KEY[catKey]; return !!(c && Array.isArray(c.printTypes) && c.printTypes.length); }
-// Fold a raw vision pattern into one of the three print-type buckets.
-//   solid → solid · print/embroidered → printed · everything else (checks,
-//   stripes, texture, unknown) → the "checks / stripes & rest" bucket.
+// Fold a raw vision pattern into one of the two print-type buckets.
+//   solid → solid · everything else (print, embroidery, checks, stripes,
+//   texture, unknown) → the "others" bucket.
 function printBucket(pattern) {
   const t = String(pattern || '').toLowerCase();
   if (!t) return null;
   if (t === 'solid' || t === 'plain') return 'solid';
-  if (/print|embroid|graphic/.test(t)) return 'printed';
-  return 'checks';
+  return 'others';
 }
 // Effective print bucket for a candidate: a manual segregation fix (printOverride)
 // wins over the AI's pattern read, mirroring how fitOverride / colourOverride work.
@@ -320,10 +318,26 @@ function batchDateName(num, iso) {
   } catch { stamp = d.toISOString(); }
   return 'Batch ' + num + ' · ' + stamp;
 }
-function newBatch(s, name) {
+// The categories a batch spans. New batches store a `categories[]` set (any combo
+// of Trouser / Shirt / T-shirt); legacy batches carry a single `.category` string.
+// This reads either shape into a clean, de-duped array of valid category keys.
+function batchCats(b) {
+  if (!b) return [];
+  const raw = Array.isArray(b.categories) ? b.categories : (b.category ? [b.category] : []);
+  const out = [];
+  raw.forEach(k => { if (CAT_BY_KEY[k] && out.indexOf(k) < 0) out.push(k); });
+  return out;
+}
+function newBatch(s, name, category) {
   const num = (s.batches.reduce((m, b) => Math.max(m, b.num || 0), 0)) + 1;
   const createdAt = new Date().toISOString();
-  const b = { id: crypto.randomBytes(6).toString('hex'), num, name: (name && String(name).trim()) || batchDateName(num, createdAt), createdAt };
+  // A batch spans one OR MORE categories, chosen up-front on New batch. `category`
+  // may arrive as a single key (legacy) or an array of keys (multi-select).
+  const rawCats = Array.isArray(category) ? category : (category ? [category] : []);
+  const cats = [];
+  rawCats.forEach(k => { if (CAT_BY_KEY[k] && cats.indexOf(k) < 0) cats.push(k); });
+  const b = { id: crypto.randomBytes(6).toString('hex'), num, name: (name && String(name).trim()) || batchDateName(num, createdAt), createdAt,
+    categories: cats, category: cats.length === 1 ? cats[0] : null };   // keep .category for single-cat back-compat
   s.batches.push(b);
   return b;
 }
@@ -355,7 +369,8 @@ function batchList(s) {
     const categories = CAT_KEYS.filter(k => by[k]).map(k => ({ category: k, label: CAT_BY_KEY[k].label, count: by[k] }));
     // Soft pieces-coming estimate = one default set per categorised photo.
     const pieces = Object.keys(by).reduce((sum, k) => sum + by[k] * (SET_PIECES[k] || 10), 0);
-    return { id: b.id, num: b.num, name: b.name, createdAt: b.createdAt,
+    return { id: b.id, num: b.num, name: b.name, createdAt: b.createdAt, category: b.category || null,
+      batchCategories: batchCats(b),   // the category SET this batch spans (multi-category); [] = legacy/unconstrained
       count: cs.length, analysed, categories, pieces };
   });
 }
@@ -417,11 +432,20 @@ function settingsWithDefaults(s) {
       budget: sc.budget != null ? Math.max(0, parseInt(sc.budget) || 0) : 0,
       avgCost: sc.avgCost != null ? Math.max(1, parseInt(sc.avgCost) || spec.avgCost) : spec.avgCost,
       // SIZING MODE — how the category's total piece target is set:
-      //   'cost'  → pieces = budget ÷ avgCost (money-anchored estimate).
-      //   'units' → founder types the piece target directly (no price guess;
-      //             real prices only exist AFTER photos are sent to the vendor).
-      sizeMode: (sc.sizeMode === 'units') ? 'units' : 'cost',
+      //   'cost'    → pieces = budget ÷ avgCost (money-anchored estimate).
+      //   'units'   → founder types the piece target directly (no price guess).
+      //   'designs' → founder types the NUMBER OF DESIGNS + a per-design size run;
+      //               pieces = designs × SET(size run). Budget/avgCost are optional
+      //               here (they firm up at the PO stage). This is the spec-first
+      //               Trouser intake: vendor → designs → size run → colours% → fit%.
+      sizeMode: (sc.sizeMode === 'units' || sc.sizeMode === 'designs') ? sc.sizeMode : 'cost',
       targetUnits: sc.targetUnits != null ? Math.max(0, parseInt(sc.targetUnits) || 0) : 0,
+      // Number of designs (used when sizeMode === 'designs').
+      designs: sc.designs != null ? Math.max(0, parseInt(sc.designs) || 0) : 0,
+      // Size-label system for this category's size run: 'alpha' (S/M/L/XL/XXL/XXXL)
+      // or 'numeric' (26/28/30…). Only a UI hint — the engine reads whatever keys
+      // are in `sizes`. Defaults to alpha for Trousers, else keeps prior behaviour.
+      sizeSystem: (sc.sizeSystem === 'numeric' || sc.sizeSystem === 'alpha') ? sc.sizeSystem : (spec.key === 'Trouser' ? 'alpha' : 'alpha'),
       fits:    mergePct(fitDef, sc.fits),
       sizes:   mergePct(sizeDef, sc.sizes),
       colours: mergePct(colDef, sc.colours),
@@ -437,6 +461,13 @@ function settingsWithDefaults(s) {
       extraSizes:   Array.isArray(sc.extraSizes) ? sc.extraSizes.filter(x => x && x.key) : [],
       extraColours: Array.isArray(sc.extraColours) ? sc.extraColours.filter(x => x && x.key) : []
     };
+    // RETIRED-KEY PRUNE — mergePct keeps any saved key not in the spec defaults,
+    // which would resurrect fits/prints we deliberately removed (older saved
+    // settings still carry them). Strip those retired keys so the model stays at
+    // the current 2-fit / Solid+Others shape.
+    const retFits = RETIRED_FITS[spec.key];
+    if (retFits) retFits.forEach(k => { delete categories[spec.key].fits[k]; });
+    if (categories[spec.key].printTypes) RETIRED_PRINTS.forEach(k => { delete categories[spec.key].printTypes[k]; });
   });
   return {
     // Budget is ALWAYS entered per category (Trouser / Shirt / T-shirt) — the
@@ -464,6 +495,7 @@ function publicCandidate(c) {
     fitOverride: c.fitOverride === true, colourOverride: c.colourOverride === true,
     printKey: printKeyOf(c), printOverride: c.printOverride === true,
     included: isIncluded(c),
+    designId: c.designId || null, designName: c.designName || null,
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 // Collapse already-ordered PO line items into product cards. A supplier bill
@@ -480,7 +512,8 @@ function mergeOrderedItems(items) {
     const gk = colour.toLowerCase() + '|' + String(c.vendor || '').trim().toLowerCase() + '|' + cost;
     let g = groups[gk];
     if (!g) { g = groups[gk] = { ids: [], repr: c, colour, cost, vendor: c.vendor || '', qty: 0, sizeMap: {} }; order.push(gk); }
-    if (!g.repr.file && c.file) g.repr = c;            // prefer a member that actually has a photo
+    const reprHasImg = !!(g.repr.file || g.repr.photoRef);
+    if (!reprHasImg && (c.file || c.photoRef)) g.repr = c;   // prefer a member that actually has a photo (local file OR PO photoRef)
     g.ids.push(c.id);
     g.qty += Math.max(0, c.orderedQty || 0);
     Object.keys(c.orderedSizes || {}).forEach(k => { const u = Math.max(0, c.orderedSizes[k] || 0); if (u > 0) g.sizeMap[k] = (g.sizeMap[k] || 0) + u; });
@@ -488,7 +521,7 @@ function mergeOrderedItems(items) {
   return order.map(gk => {
     const g = groups[gk];
     return {
-      id: g.repr.id, ids: g.ids, url: '/api/casuals/candidate/' + g.repr.id, hasImg: !!g.repr.file,
+      id: g.repr.id, ids: g.ids, url: '/api/casuals/candidate/' + g.repr.id, hasImg: !!(g.repr.file || g.repr.photoRef),
       vendor: g.vendor, colour: g.colour, qty: g.qty, cost: g.cost,
       sizes: Object.keys(g.sizeMap).map(k => ({ key: k, units: g.sizeMap[k] })).filter(x => x.units > 0)
     };
@@ -529,13 +562,32 @@ function runCandidateUpload(req, res) {
 
 // ── Vision: category + fit + colour + pattern per photo ──────────
 const VISION_BATCH = 10;
+// Anthropic rejects any single request over ~32 MB. Full-resolution phone photos
+// (often 3–8 MB each) blow past that in a batch of 10 — the "Request exceeds the
+// maximum size" error. Anthropic already downscales anything over ~1568 px on its
+// side, so we resize to that long edge and re-encode as JPEG(80) before sending:
+// the same visual detail the model would see, at ~10–20× smaller payload.
+const VISION_MAX_EDGE = 1568;
+async function shrinkForVision(buffer, mediaType) {
+  if (!Jimp) return { data: buffer.toString('base64'), mediaType };
+  try {
+    const img = await Jimp.read(buffer);
+    const long = Math.max(img.getWidth(), img.getHeight());
+    if (long > VISION_MAX_EDGE) img.scale(VISION_MAX_EDGE / long);
+    img.quality(80);
+    const out = await img.getBufferAsync(Jimp.MIME_JPEG);
+    return { data: out.toString('base64'), mediaType: 'image/jpeg' };
+  } catch { return { data: buffer.toString('base64'), mediaType }; }
+}
 async function scoreBatch(items) {
   // items: [{id, buffer, mediaType}] → map id→{category, fit, colour, pattern}
   const content = [];
-  items.forEach((it, i) => {
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
     content.push({ type: 'text', text: 'IMAGE ' + (i + 1) + ':' });
-    content.push({ type: 'image', source: { type: 'base64', media_type: it.mediaType, data: it.buffer.toString('base64') } });
-  });
+    const enc = await shrinkForVision(it.buffer, it.mediaType);
+    content.push({ type: 'image', source: { type: 'base64', media_type: enc.mediaType, data: enc.data } });
+  }
   const fitGuide = CASUALS_SPEC.map(c => '   • ' + c.label + ' fits: ' + c.fits.map(f => f.label).join(' | ')).join('\n');
   content.push({ type: 'text', text:
 `You are a buyer for an Indian premium-casual clothing brand. For EACH image, identify a plain everyday garment and report six fields. Judge each image on its own.\n\n` +
@@ -635,7 +687,7 @@ async function scoreInvoice(content) {
 `4) "colour" — the colour word if shown, else "".\n` +
 `5) "qty" — INTEGER quantity ordered for that line (default 1 if a line clearly means one unit).\n` +
 `6) "unitPrice" — the per-unit price in the invoice's currency as a NUMBER (no symbols). If only a line total + qty are shown, divide to get the unit price. If unknown, use 0.\n` +
-`7) "print" — for Shirts / T-Shirts only, the surface type if the text makes it clear: "solid" (plain colour), "printed" (print/graphic/embroidered), or "checks" (checks/stripes/other patterns). If unclear or a Trouser, use "".\n\n` +
+`7) "print" — for Shirts / T-Shirts only, the surface type if the text makes it clear: "solid" (plain colour) or "others" (any print / graphic / embroidery / checks / stripes / pattern). If unclear or a Trouser, use "".\n\n` +
 `Ignore non-garment lines (freight, GST/tax rows, subtotals, totals, discounts). Do NOT invent items.\n` +
 `Return STRICT JSON ONLY: {"items":[{"description":"..","category":"..","size":"..","colour":"..","qty":1,"unitPrice":0,"print":".."}, ...]}.` });
   const ctrl = new AbortController();
@@ -682,6 +734,30 @@ function splitInts(n, weights) {
     .forEach((o, i) => { if (i < rem) base[o.k]++; });
   return base;
 }
+// 2-D LARGEST-REMAINDER grid. Splits `total` across a rows×cols grid where each
+// cell's share = (rowW[r]/ΣrowW) × (colW[c]/ΣcolW). Returns the raw fractional
+// target per cell AND an integer rounding whose cells ALWAYS re-sum to `total`
+// (leftover pieces go to the cells with the biggest fractions). This is what lets
+// the Trouser colour×fit grid show "0.41 → 0" while the whole plan stays exact.
+function lrGrid(total, rowW, colW) {
+  const rKeys = Object.keys(rowW), cKeys = Object.keys(colW);
+  const rTot = rKeys.reduce((s, k) => s + Math.max(0, +rowW[k] || 0), 0) || 1;
+  const cTot = cKeys.reduce((s, k) => s + Math.max(0, +colW[k] || 0), 0) || 1;
+  const raw = {}, rounded = {}, cells = [];
+  rKeys.forEach(r => {
+    raw[r] = {}; rounded[r] = {};
+    cKeys.forEach(c => {
+      const frac = Math.max(0, total) * (Math.max(0, +rowW[r] || 0) / rTot) * (Math.max(0, +colW[c] || 0) / cTot);
+      raw[r][c] = frac; rounded[r][c] = Math.floor(frac);
+      cells.push({ r, c, rem: frac - Math.floor(frac) });
+    });
+  });
+  let used = 0; rKeys.forEach(r => cKeys.forEach(c => { used += rounded[r][c]; }));
+  let rem = Math.max(0, Math.round(total) - used);
+  cells.sort((a, b) => b.rem - a.rem);
+  for (let i = 0; i < cells.length && rem > 0; i++, rem--) rounded[cells[i].r][cells[i].c]++;
+  return { raw, rounded };
+}
 // Turn a merged pct map into a normalised {key,label,pct,share} list for display.
 function pctRows(map, labelFor) {
   const tot = Object.values(map).reduce((s, v) => s + Math.max(0, +v || 0), 0) || 1;
@@ -709,29 +785,47 @@ function buildPlan(cands, settings) {
     // ESTIMATE used to turn a rupee budget into a soft piece-count; it is
     // replaced by the vendor's real quote at PO time.
     const expPrice = Math.max(1, cfg.avgCost || spec.avgCost);
-    // Category PIECE target — TWO sizing modes the founder can pick per category:
-    //   'cost'  → pieces = budget ÷ est price (money-anchored).
-    //   'units' → founder typed the piece target directly (real prices only exist
-    //             AFTER photos are sent to the vendor). Back-solve a notional budget
-    //             (= units × est price) so the whole rupee cascade below still
-    //             yields exactly that many pieces per fit/colour cell.
+    // SET = pieces in ONE design's size run. The founder types ABSOLUTE per-size
+    // quantities (alpha S/M/L/XL/XXL/XXXL or numeric 26/28/…); their SUM is the set
+    // size. A design therefore = SET pieces. The saved `sizes` map can hold BOTH an
+    // alpha and a numeric key set at once (seed defaults + system swaps), so we count
+    // ONLY the keys belonging to the chosen sizeSystem — a numeric key matches /^\d+$/.
+    const sizeIsNumeric = k => /^\d+$/.test(k);
+    const activeSizeKeys = Object.keys(cfg.sizes || {}).filter(k =>
+      cfg.sizeSystem === 'numeric' ? sizeIsNumeric(k) : !sizeIsNumeric(k));
+    const SET = Math.max(1, activeSizeKeys.reduce((a, k) => a + Math.max(0, +cfg.sizes[k] || 0), 0));
+    // The saved `sizes` map can hold BOTH the alpha and numeric key sets at once
+    // (seed defaults + a later system swap leaves the retired keys behind). Every
+    // place that enumerates sizes — the % breakdown, the size aggregate, the
+    // per-design size fan-out — must use ONLY the active system's keys, or the
+    // pieces get counted twice (once as S/M/L, once as 26/28/…). `activeSizes`
+    // is `cfg.sizes` pruned to just the active-system keys.
+    const activeSizes = {};
+    activeSizeKeys.forEach(k => { activeSizes[k] = cfg.sizes[k]; });
+    // Category PIECE target — THREE sizing modes the founder can pick per category:
+    //   'cost'    → pieces = budget ÷ est price (money-anchored).
+    //   'units'   → founder typed the piece target directly.
+    //   'designs' → founder typed the NUMBER OF DESIGNS; pieces = designs × SET.
+    //               This is the spec-first Trouser intake — no price needed (real
+    //               prices only exist AFTER photos are sent to the vendor). We
+    //               back-solve a notional budget so the rupee cascade below still
+    //               lands on the right piece counts per fit cell.
     const catUnits = !enabled ? 0
-      : (cfg.sizeMode === 'units' ? Math.max(0, cfg.targetUnits || 0) : Math.round(budget / expPrice));
-    if (enabled && cfg.sizeMode === 'units') budget = catUnits * expPrice;
+      : (cfg.sizeMode === 'designs' ? Math.max(0, cfg.designs || 0) * SET
+        : cfg.sizeMode === 'units' ? Math.max(0, cfg.targetUnits || 0)
+        : Math.round(budget / expPrice));
+    if (enabled && (cfg.sizeMode === 'units' || cfg.sizeMode === 'designs')) budget = catUnits * expPrice;
     const estUnits = catUnits;
-    // SET = pieces in ONE design's size run. The founder now types ABSOLUTE
-    // per-size quantities (S/M/L/XL/XXL/XXXL); their SUM is the set size. A design
-    // therefore = SET pieces. Total DESIGNS = total pieces ÷ SET — this is the
-    // number that cascades down print → fit → colour, so colour % lands on the
-    // count of designs (impactful), not on a piece count that collapses to 1.
-    const SET = Math.max(1, Object.keys(cfg.sizes || {}).reduce((a, k) => a + Math.max(0, +cfg.sizes[k] || 0), 0));
-    const catDesigns = Math.round(catUnits / SET);
+    // Total DESIGNS = the number that cascades down print → fit → colour, so colour
+    // % lands on the count of designs (impactful), not a piece count that collapses
+    // to 1. In 'designs' mode it's exactly what the founder typed.
+    const catDesigns = (cfg.sizeMode === 'designs') ? Math.max(0, cfg.designs || 0) : Math.round(catUnits / SET);
 
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
     // HIERARCHY step 1 — category BUDGET flows to the fits by fit %.
     const fitBudget = splitInts(budget, cfg.fits);
-    const sizePctRows = pctRows(cfg.sizes, k => k);
+    const sizePctRows = pctRows(activeSizes, k => k);
 
     // The batch pool splits in two: FRESH photos to curate into new buys, and
     // ALREADY-ORDERED members imported from a supplier PO. Ordered items are not
@@ -741,11 +835,14 @@ function buildPlan(cands, settings) {
     const pool = allPool.filter(c => !c.ordered);
     const orderedPool = allPool.filter(c => c.ordered);
     const catColourAgg = {};        // observed colour → {budget, estUnits, photos}
-    const catSizeAgg = {}; Object.keys(cfg.sizes).forEach(k => catSizeAgg[k] = 0);
+    const catSizeAgg = {}; Object.keys(activeSizes).forEach(k => catSizeAgg[k] = 0);
     // Uppers (Shirts/T-shirts) carry a PRINT-TYPE level ABOVE fit: the category
     // budget first splits by print-type %, then each print-type's slice splits by
     // fit %. Trousers keep the flat category→fit split.
     const hasPrint = catHasPrintTypes(catKey);
+    // Trousers run a colour×fit HARD grid: fit is a hard cap too (not the soft
+    // category-wide guide the tops use). Flag comes from the spec.
+    const fitHard = !!spec.fitHard;
 
     // Already-ordered PO members, bucketed by the SAME cell key the buy plan uses
     // ("print::fit" for uppers, bare fit for trousers). Each cell's ordered qty
@@ -786,72 +883,424 @@ function buildPlan(cands, settings) {
     let stage1Short = {};   // fit key → [] (per-fit colour shorts — retired, kept for shape)
     let excludeInfo = {};   // design id → { colour, offList, have, target } for held designs
     let catColourShort = [];// CATEGORY-level colour gaps: [{ key,label,have,want,need }]
-    // CATEGORY-LEVEL, COLOUR-FIRST balance. Colour is NOT structural to a fit/print
-    // cell — a colour can live in any fit — and per-cell piece caps were starving
-    // colours whose photos happened to pile into the same small cell (holding a
-    // colour AND asking to source more of it at the same time). So colour is now
-    // balanced across the WHOLE category: each colour buys its best-rated photos up
-    // to its category target (colour % of the budget-bound design count). Fit &
-    // print %s still drive the MONEY / size split and the reporting — they are a
-    // soft guide here, not a hard cap that overrides the colour mix. Total stays
-    // bounded by the budget because the colour targets sum to the category's design
-    // target. A colour is EITHER over target (extras held) OR under target (source
-    // more) — never both, so the messaging can't contradict itself.
+    let catColourOver = []; // CATEGORY-level colour OVERSHOOTS: [{ key,label,target,selected,over }]
+    let catPrintShort = []; // CATEGORY-level print gaps: [{ key,label,have,want,need }]
+    let catFitShort = [];   // CATEGORY-level fit gaps: [{ key,label,have,want,need }]
+    let catGrid = null;     // TROUSER colour×fit HARD grid: { colours, fits, cells:[{colour,fit,raw,rounded,have,selected,sourceMore,held}] }
+    let catSourceMore = []; // TROUSER detailed shopping list: [{ colour,fit,fitLabel,need,needPieces,have }]
+    let catCoverage = null; // TROUSER zero-coverage nudge: colours with a % that the buy is too small to include → source 1 design each. { colours:[{colour,pct}], addDesigns }
+    let catOrderSheet = null; // TROUSER common-design order sheet (staircase): { set, fits:[{key,label,slots:[{slot,colours[],pieces}], bought:[{colour,designs,pieces}], toSourceDesigns, toSourceSkus, toSourcePieces, boughtDesigns}] }
+    let catCalc = null;     // TRANSPARENT math: how each %/level turns into a target qty
+    // NESTED BALANCE: PRINT (hard) → COLOUR (hard) → FIT (adaptive) → size.
+    //   1. PRINT is the first cut: the category's design count splits by print %
+    //      (solid/printed/checks). A print with fewer photos than its share buys
+    //      what it has and flags "source more"; a print with more holds the extras.
+    //      Budget never leaks between prints — this is what stops a 12-photo checks
+    //      pile from swamping a 50%-target solid line.
+    //   2. COLOUR is balanced INSIDE each print: that print's design count splits by
+    //      colour %. Same over/under discipline, per colour, per print.
+    //   3. FIT is ADAPTIVE: a print×colour cell only spreads across fits when it is
+    //      big enough that every fit could get ≥1 design (cell target ≥ #fits).
+    //      Below that threshold the grid would fragment to zero, so fit becomes a
+    //      SOFT guide and we just keep the best-rated designs in the cell regardless
+    //      of fit. As category volume grows, cells cross the threshold and fit
+    //      balancing switches on by itself — no manual toggle.
+    // Pins (includeOverride === true) are always kept; manual excludes always held.
+
     const selectIncluded = () => {
       const inc = new Set();
-      stage1Short = {};        // per-fit colour shorts retired (colour is category-wide)
+      stage1Short = {};
       excludeInfo = {};
       catColourShort = [];
+      catColourOver = [];
+      catPrintShort = [];
+      catFitShort = [];
+      catGrid = null;
+      catSourceMore = [];
+      catCoverage = null;
+      catOrderSheet = null;
+      catCalc = null;
       const colKeys = Object.keys(cfg.colours || {});
       const haveMix = colKeys.length > 0;
-      // Colour weights for the mix (fall back to even if every colour % is 0).
       const colW = {}; let cwTot = 0;
       colKeys.forEach(ck => { colW[ck] = Math.max(0, +cfg.colours[ck] || 0); cwTot += colW[ck]; });
       if (haveMix && cwTot <= 0) colKeys.forEach(ck => colW[ck] = 1);
 
+      const fitKeys = Object.keys(cfg.fits || {});
+      const fitW = {}; let fwTot = 0;
+      fitKeys.forEach(fk => { fitW[fk] = Math.max(0, +cfg.fits[fk] || 0); fwTot += fitW[fk]; });
+      if (fitKeys.length && fwTot <= 0) fitKeys.forEach(fk => fitW[fk] = 1);
+
       const assigned = pool.filter(c => c.fit && isIncluded(c));   // not manually excluded
 
-      // No colour mix configured → can't balance by colour, keep every design.
+      // No colour mix configured → can't balance, keep every design.
       if (!haveMix) {
         assigned.forEach(c => inc.add(c.id));
         pool.forEach(c => { if (c.includeOverride === true) inc.add(c.id); });
         return inc;
       }
 
-      // How many DESIGNS of each colour to buy across the category = colour % of the
-      // budget-bound design target (catDesigns). Sums to catDesigns, so total buy
-      // stays within budget.
-      const colTarget = splitInts(catDesigns, colW);
+      const byRatingSort = (a, b) =>
+        ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
+        ((b.rating || 0) - (a.rating || 0));
 
-      // Bucket every design by canonical colour; off-list colours are held.
-      const haveByCol = {};
+      // ── TROUSER MODE — COLOUR × FIT HARD GRID ──────────────────────
+      // Both colour AND fit are hard caps. The design count is split across a
+      // colour×fit grid with largest-remainder rounding (cells re-sum to the exact
+      // total). Each cell keeps its best-rated designs (pins first) up to its target;
+      // extras are held. A cell we can't fill becomes a "source more" instruction —
+      // never backfilled from another colour/fit (that gap is the shopping list).
+      if (fitHard) {
+        const g = lrGrid(catDesigns, colW, fitW);   // g.raw[ck][fk], g.rounded[ck][fk]
+        const cellCand = {}, cellHave = {}, cellSel = {};
+        const colUploaded = {}, fitUploaded = {};
+        colKeys.forEach(ck => { cellCand[ck] = {}; cellHave[ck] = {}; cellSel[ck] = {};
+          fitKeys.forEach(fk => { cellCand[ck][fk] = []; cellHave[ck][fk] = 0; cellSel[ck][fk] = 0; }); });
+        // Bucket assigned designs into cells; off-list colour or fit → held.
+        assigned.forEach(c => {
+          const ck = canonColour(c.colour, colKeys);
+          if (colKeys.indexOf(ck) < 0) {
+            if (c.includeOverride === true) { inc.add(c.id); return; }
+            excludeInfo[c.id] = { colour: (c.colour && String(c.colour).trim()) || 'Unspecified', offList: true, have: 1, target: 0 };
+            return;
+          }
+          const fk = c.fit;
+          if (fitKeys.indexOf(fk) < 0) {
+            if (c.includeOverride === true) { inc.add(c.id); return; }
+            excludeInfo[c.id] = { colour: ck, fit: fk || 'Unspecified', offListFit: true, offList: false, have: 1, target: 0 };
+            return;
+          }
+          colUploaded[ck] = (colUploaded[ck] || 0) + 1;
+          fitUploaded[fk] = (fitUploaded[fk] || 0) + 1;
+          cellHave[ck][fk]++; cellCand[ck][fk].push(c);
+        });
+        // PO-import — already-purchased/paid Trouser lines net the grid at the
+        // colour×fit CELL level (not just fit). Pieces convert to designs via ÷ SET
+        // (Auto). A line whose colour OR fit isn't in this batch's mix is NEVER
+        // backfilled into a planned cell — it becomes its own read-only "already
+        // bought (not in this plan)" row.
+        const ordCell = {}, ordOff = {};
+        colKeys.forEach(ck => { ordCell[ck] = {}; fitKeys.forEach(fk => ordCell[ck][fk] = { pieces: 0, cost: 0, items: [] }); });
+        orderedPool.forEach(c => {
+          const pieces = Math.max(0, c.orderedQty || 0);
+          if (pieces <= 0) return;
+          const cost = Math.max(0, c.orderedCost || 0) * pieces;   // ₹ actual (unit × qty)
+          const rawCol = (c.colour && String(c.colour).trim()) || 'Unspecified';
+          const ck = canonColour(c.colour, colKeys);
+          const fk = c.fit || '';
+          const onPlan = colKeys.indexOf(ck) >= 0 && fitKeys.indexOf(fk) >= 0;
+          if (onPlan) {
+            const o = ordCell[ck][fk]; o.pieces += pieces; o.cost += cost; o.items.push(c);
+          } else {
+            const okey = rawCol + '::' + (fk || 'Unspecified');
+            const o = ordOff[okey] = ordOff[okey] || { colour: rawCol, fit: fk || 'Unspecified', fitLabel: (fk ? fitLabel(fk) : 'Unspecified'), pieces: 0, cost: 0, items: [] };
+            o.pieces += pieces; o.cost += cost; o.items.push(c);
+          }
+        });
+        const pcToDesigns = pc => (SET > 0 ? Math.max(pc > 0 ? 1 : 0, Math.round(pc / SET)) : 0);
+        // Fill each cell: pins first, then best-rated, up to the cell's hard target.
+        colKeys.forEach(ck => fitKeys.forEach(fk => {
+          const tgt = Math.max(0, g.rounded[ck][fk] || 0);
+          const list = cellCand[ck][fk].slice().sort(byRatingSort);
+          let taken = 0;
+          list.forEach(c => { if (c.includeOverride === true && !inc.has(c.id)) { inc.add(c.id); cellSel[ck][fk]++; taken++; } });
+          list.forEach(c => {
+            if (inc.has(c.id)) return;
+            if (taken >= tgt) { excludeInfo[c.id] = { colour: ck, fit: fk, offList: false, cellCapped: true, cellTarget: tgt, have: cellHave[ck][fk], target: tgt }; return; }
+            inc.add(c.id); cellSel[ck][fk]++; taken++;
+          });
+        }));
+        // Grid output + detailed source-more list.
+        catGrid = { base: catDesigns, set: SET, catUnits,
+          colours: colKeys.map(ck => ({ key: ck, label: ck, pct: cwTot ? Math.round(colW[ck] / cwTot * 100) : 0 })),
+          fits: fitKeys.map(fk => ({ key: fk, label: fitLabel(fk), pct: fwTot ? Math.round(fitW[fk] / fwTot * 100) : 0 })),
+          cells: [] };
+        colKeys.forEach(ck => fitKeys.forEach(fk => {
+          const tgt = Math.max(0, g.rounded[ck][fk] || 0), have = cellHave[ck][fk] || 0, sel = cellSel[ck][fk] || 0;
+          const o = ordCell[ck][fk] || { pieces: 0, cost: 0 };
+          const ordPieces = o.pieces || 0, ordDesigns = pcToDesigns(ordPieces), ordCost = Math.round(o.cost || 0);
+          // Paid designs count toward the cell target — remaining need drops by them.
+          const need = Math.max(0, tgt - sel - ordDesigns);
+          catGrid.cells.push({ colour: ck, fit: fk, fitLabel: fitLabel(fk),
+            raw: Math.round((g.raw[ck][fk] || 0) * 100) / 100, rounded: tgt,
+            have, selected: sel, sourceMore: need, held: Math.max(0, have - sel),
+            orderedDesigns: ordDesigns, orderedPieces: ordPieces, orderedCost: ordCost });
+          if (need > 0) catSourceMore.push({ colour: ck, fit: fk, fitLabel: fitLabel(fk), need, needPieces: need * SET, have, paidDesigns: ordDesigns });
+        }));
+        catSourceMore.sort((a, b) => b.need - a.need);
+        // Off-plan already-bought rows — colour/fit NOT in this batch's desired mix.
+        // Shown as paid, need 0, so the founder sees the extra buy without it polluting
+        // the planned grid or the source-more shopping list.
+        catGrid.offPlan = Object.keys(ordOff).map(k => {
+          const o = ordOff[k];
+          return { colour: o.colour, fit: o.fit, fitLabel: o.fitLabel,
+            orderedPieces: o.pieces, orderedDesigns: pcToDesigns(o.pieces), orderedCost: Math.round(o.cost) };
+        }).sort((a, b) => b.orderedDesigns - a.orderedDesigns);
+        // Totals split — money already SPENT (actual ₹, paid) vs still-to-source (estimate ₹).
+        let boughtDesigns = 0, boughtPieces = 0, boughtCost = 0;
+        catGrid.cells.forEach(c => { boughtDesigns += c.orderedDesigns; boughtPieces += c.orderedPieces; boughtCost += c.orderedCost; });
+        catGrid.offPlan.forEach(o => { boughtDesigns += o.orderedDesigns; boughtPieces += o.orderedPieces; boughtCost += o.orderedCost; });
+        const toSourceDesigns = catSourceMore.reduce((a, s) => a + s.need, 0);
+        catGrid.split = {
+          bought: { designs: boughtDesigns, pieces: boughtPieces, cost: boughtCost },
+          toSource: { designs: toSourceDesigns, pieces: toSourceDesigns * SET, cost: Math.round(toSourceDesigns * SET * expPrice) }
+        };
+        // Zero-coverage nudge — colours that carry a % but the buy is too small to
+        // give them even one design (both fit cells rounded to 0). The founder wants
+        // an explicit "add N more designs" instruction: source ONE design in each such
+        // colour specifically (no backfill, no re-rounding the whole grid).
+        const zeroCov = [];
+        colKeys.forEach(ck => {
+          if (ck === 'Other') return;
+          if ((+colW[ck] || 0) <= 0) return;
+          const tot = fitKeys.reduce((a, fk) => a + Math.max(0, g.rounded[ck][fk] || 0), 0);
+          // Already bought some of this colour via a PO → it's covered, no nudge.
+          const paid = fitKeys.reduce((a, fk) => a + ((ordCell[ck] && ordCell[ck][fk] ? ordCell[ck][fk].pieces : 0)), 0);
+          if (tot === 0 && paid <= 0) zeroCov.push({ colour: ck, pct: cwTot ? Math.round(colW[ck] / cwTot * 100) : 0, addDesigns: 1, addPieces: SET });
+        });
+        catCoverage = zeroCov.length ? { colours: zeroCov, addDesigns: zeroCov.length, addPieces: zeroCov.length * SET } : null;
+        // Common-design ORDER SHEET (staircase) — collapse the colour×fit plan into
+        // the MINIMUM number of base designs per fit, each repeated across colours.
+        // Per fit: still-to-order per colour = rounded target − already-bought(PO).
+        // #base designs = the largest single-colour still-to-order count; design
+        // slot i runs in every colour whose remaining count > i (sorted desc). The
+        // already-bought PO designs are subtracted here AND surfaced separately so
+        // the founder sees both "make these" and "already have these".
+        const SHEET_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        catOrderSheet = { set: SET, fits: fitKeys.map(fk => {
+          const cols = colKeys.filter(ck => ck !== 'Other').map(ck => {
+            const cell = catGrid.cells.find(c => c.colour === ck && c.fit === fk) || {};
+            const target = Math.max(0, cell.rounded || 0);
+            const bought = Math.max(0, cell.orderedDesigns || 0);
+            return { colour: ck, order: Math.max(0, target - bought), bought };
+          });
+          const src = cols.filter(c => c.order > 0).sort((a, b) => b.order - a.order);
+          const maxN = src.reduce((m, c) => Math.max(m, c.order), 0);
+          const slots = [];
+          for (let i = 0; i < maxN; i++) {
+            const slotCols = src.filter(c => c.order > i).map(c => c.colour);
+            slots.push({ slot: SHEET_LETTERS[i] || ('#' + (i + 1)), colours: slotCols, pieces: slotCols.length * SET });
+          }
+          const bought = cols.filter(c => c.bought > 0).map(c => ({ colour: c.colour, designs: c.bought, pieces: c.bought * SET }));
+          const toSourceSkus = src.reduce((a, c) => a + c.order, 0);
+          return { key: fk, label: fitLabel(fk), slots, bought,
+            toSourceDesigns: slots.length, toSourceSkus, toSourcePieces: toSourceSkus * SET,
+            boughtDesigns: bought.reduce((a, b) => a + b.designs, 0) };
+        }).filter(f => f.slots.length || f.bought.length) };
+        // Category-wide rollups (feed the existing colour/fit chips + math panel).
+        colKeys.forEach(ck => {
+          if (ck === 'Other') return;
+          const tgt = fitKeys.reduce((a, fk) => a + Math.max(0, g.rounded[ck][fk] || 0), 0);
+          const sel = fitKeys.reduce((a, fk) => a + (cellSel[ck][fk] || 0), 0);
+          const upl = colUploaded[ck] || 0;
+          if (tgt - sel > 0) catColourShort.push({ key: ck, label: ck, have: upl, want: tgt, need: tgt - sel });
+          if (upl > tgt) catColourOver.push({ key: ck, label: ck, target: tgt, selected: sel, over: Math.max(0, sel - tgt), held: Math.max(0, upl - sel) });
+        });
+        fitKeys.forEach(fk => {
+          const tgt = colKeys.reduce((a, ck) => a + Math.max(0, g.rounded[ck][fk] || 0), 0);
+          const sel = colKeys.reduce((a, ck) => a + (cellSel[ck][fk] || 0), 0);
+          if (tgt - sel > 0) catFitShort.push({ key: fk, label: fitLabel(fk), have: fitUploaded[fk] || 0, want: tgt, need: tgt - sel });
+        });
+        catColourShort.sort((a, b) => b.need - a.need);
+        catColourOver.sort((a, b) => (b.over + b.held) - (a.over + a.held));
+        catFitShort.sort((a, b) => b.need - a.need);
+        let szT0 = 0; Object.keys(activeSizes).forEach(sk => szT0 += Math.max(0, +activeSizes[sk] || 0));
+        catCalc = { base: catDesigns, catUnits, set: SET, totalUploaded: assigned.length,
+          prints: [],
+          colours: colKeys.map(ck => ({ key: ck, label: ck, pct: cwTot ? Math.round(colW[ck] / cwTot * 100) : 0,
+            target: fitKeys.reduce((a, fk) => a + Math.max(0, g.rounded[ck][fk] || 0), 0), have: colUploaded[ck] || 0 })),
+          fits: fitKeys.map(fk => ({ key: fk, label: fitLabel(fk), pct: fwTot ? Math.round(fitW[fk] / fwTot * 100) : 0,
+            target: colKeys.reduce((a, ck) => a + Math.max(0, g.rounded[ck][fk] || 0), 0), have: fitUploaded[fk] || 0 })),
+          sizes: sizePctRows.map(s => ({ key: s.key, label: s.label,
+            pct: szT0 ? Math.round(Math.max(0, +cfg.sizes[s.key] || 0) / szT0 * 100) : 0 })) };
+        pool.forEach(c => { if (c.includeOverride === true) inc.add(c.id); });
+        return inc;
+      }
+
+      // PRINT weights → design count per print (trousers: one bucket = whole cat).
+      const printKeys = hasPrint ? Object.keys(cfg.printTypes || {}) : ['_all'];
+      const printW = {}; let pwTot = 0;
+      printKeys.forEach(pk => { printW[pk] = hasPrint ? Math.max(0, +cfg.printTypes[pk] || 0) : 1; pwTot += printW[pk]; });
+      if (pwTot <= 0) printKeys.forEach(pk => printW[pk] = 1);
+      const printTarget = splitInts(catDesigns, printW);
+
+      // WEIGHTED-PARALLEL selection.
+      //   • PRINT is the ANCHOR: each print keeps its exact design target (a hard
+      //     per-bucket capacity). Print only misses when supply runs out.
+      //   • COLOUR and FIT are CATEGORY-WIDE targets (colour% × 17, fit% × 17),
+      //     filled from ANY print — this is what removes the old print-box
+      //     stranding (a black need can be met by a black shirt of any print).
+      //   • Inside each print bucket we choose WHICH designs fill it by whichever
+      //     best close the biggest remaining colour+fit gaps (rating as tiebreak).
+      const colTarget = splitInts(catDesigns, colW);
+      const fitCatTarget = fitKeys.length ? splitInts(catDesigns, fitW) : {};
+
+      // Bucket assigned designs by print; off-list print or off-list colour → held.
+      // colUploaded / fitUploaded = category-wide supply for the math panel.
+      const byPrint = {};
+      const colUploaded = {}; const fitUploaded = {};
       assigned.forEach(c => {
-        const ck = canonColour(c.colour, colKeys);
-        if (colKeys.indexOf(ck) < 0) {                 // colour not in the mix at all
-          if (c.includeOverride === true) { inc.add(c.id); return; }  // pin overrides
-          excludeInfo[c.id] = { colour: (c.colour && String(c.colour).trim()) || 'Unspecified', offList: true, have: 1, target: 0 };
+        const pk = hasPrint ? printKeyOf(c) : '_all';
+        if (printKeys.indexOf(pk) < 0) {
+          if (c.includeOverride === true) { inc.add(c.id); return; }
+          excludeInfo[c.id] = { colour: (c.colour && String(c.colour).trim()) || 'Unspecified', print: pk, offListPrint: true, offList: false, have: 1, target: 0 };
           return;
         }
-        (haveByCol[ck] = haveByCol[ck] || []).push(c);
+        const ck = canonColour(c.colour, colKeys);
+        if (colKeys.indexOf(ck) < 0) {
+          if (c.includeOverride === true) { inc.add(c.id); return; }
+          excludeInfo[c.id] = { colour: (c.colour && String(c.colour).trim()) || 'Unspecified', print: pk, offList: true, have: 1, target: 0 };
+          return;
+        }
+        colUploaded[ck] = (colUploaded[ck] || 0) + 1;
+        if (c.fit) fitUploaded[c.fit] = (fitUploaded[c.fit] || 0) + 1;
+        (byPrint[pk] = byPrint[pk] || []).push(c);
       });
 
-      // Per colour: buy the best-rated up to its target (pins first, always in);
-      // hold the extras. If you have fewer photos than the target → "source more".
-      colKeys.forEach(ck => {
-        const bucket = (haveByCol[ck] || []).slice().sort((a, b) =>
-          ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
-          ((b.rating || 0) - (a.rating || 0)));
-        const have = bucket.length;
-        const want = Math.max(0, colTarget[ck] || 0);
-        let kept = 0;
-        bucket.forEach(c => {
-          if (kept < want || c.includeOverride === true) { inc.add(c.id); kept++; }
-          else excludeInfo[c.id] = { colour: ck, offList: false, have: have, target: want };
+      // Running CATEGORY-WIDE needs (shared across every print bucket).
+      const needCol = {}; colKeys.forEach(ck => needCol[ck] = Math.max(0, colTarget[ck] || 0));
+      const needFit = {}; fitKeys.forEach(fk => needFit[fk] = Math.max(0, fitCatTarget[fk] || 0));
+      // Per-print remaining capacity (the anchor).
+      const printCap = {}; printKeys.forEach(pk => printCap[pk] = Math.max(0, printTarget[pk] || 0));
+
+      const byRating = (a, b) =>
+        ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
+        ((b.rating || 0) - (a.rating || 0));
+
+      // Manual pins go in FIRST and consume from every tally.
+      printKeys.forEach(pk => {
+        (byPrint[pk] || []).forEach(c => {
+          if (c.includeOverride === true) {
+            inc.add(c.id);
+            printCap[pk] = Math.max(0, printCap[pk] - 1);
+            const ck = canonColour(c.colour, colKeys);
+            if (needCol[ck] != null) needCol[ck]--;
+            if (needFit[c.fit] != null) needFit[c.fit]--;
+          }
         });
-        // Source more: fewer photos of this colour than its target → upload more.
-        if (want > have && ck !== 'Other') catColourShort.push({ key: ck, label: ck, have: have, want: want, need: want - have });
       });
+
+      // Candidate lists = non-pinned designs, best-rated first.
+      const cand = {};
+      printKeys.forEach(pk => { cand[pk] = (byPrint[pk] || []).filter(c => c.includeOverride !== true).sort(byRating); });
+
+      // A design's value = how much its colour + fit close the biggest open needs.
+      const scoreOf = c => {
+        const ck = canonColour(c.colour, colKeys);
+        return Math.max(0, needCol[ck] || 0) + Math.max(0, needFit[c.fit] || 0);
+      };
+      // GREEDY: repeatedly place the single best-scoring design across all print
+      // buckets that still have capacity. PRINT and COLOUR are BOTH HARD CAPS — a
+      // design is only eligible if its print bucket AND its colour still have room;
+      // once a colour hits its % target the rest of that colour's photos are HELD
+      // (never backfilled into another colour). FIT stays soft/parallel: it only
+      // scores WHICH eligible design wins each slot (rating breaks ties). This can
+      // leave a print bucket short when its only remaining photos are of colours
+      // that are already full — that shortfall is flagged, not papered over.
+      let guard = assigned.length + 5;
+      while (guard-- > 0) {
+        let best = null, bestPk = null, bestScore = -1, bestRating = -1;
+        printKeys.forEach(pk => {
+          if (printCap[pk] <= 0) return;
+          const list = cand[pk];
+          for (let i = 0; i < list.length; i++) {
+            const c = list[i];
+            if (inc.has(c.id)) continue;
+            const ck = canonColour(c.colour, colKeys);
+            if ((needCol[ck] || 0) <= 0) continue;   // COLOUR HARD CAP — no room, hold it
+            const s = scoreOf(c), r = c.rating || 0;
+            if (s > bestScore || (s === bestScore && r > bestRating)) { best = c; bestPk = pk; bestScore = s; bestRating = r; }
+          }
+        });
+        if (!best) break;   // no capacity left anywhere, or nothing left to place
+        inc.add(best.id);
+        printCap[bestPk] = Math.max(0, printCap[bestPk] - 1);
+        const bck = canonColour(best.colour, colKeys);
+        if (needCol[bck] != null) needCol[bck]--;
+        if (needFit[best.fit] != null) needFit[best.fit]--;
+      }
+
+      // Anything left in a print bucket wasn't bought → held. Two reasons now:
+      //   • COLOUR full  — its colour hit the % cap (over-supplied that colour).
+      //   • PRINT overfilled — more photos of this print than its design target.
+      printKeys.forEach(pk => {
+        (cand[pk] || []).forEach(c => {
+          if (!inc.has(c.id)) {
+            const ck = canonColour(c.colour, colKeys);
+            const colTgt = Math.max(0, colTarget[ck] || 0);
+            const colourCapped = (colUploaded[ck] || 0) > colTgt;
+            excludeInfo[c.id] = { colour: ck, print: pk, offList: false, colourCapped, colTarget: colTgt, have: (byPrint[pk] || []).length, target: Math.max(0, printTarget[pk] || 0) };
+          }
+        });
+      });
+
+      // Category-wide SELECTED count per colour — needed for OVERSHOOT reporting
+      // (a colour whose surplus uploads backfilled another colour's empty slots
+      // because PRINT is the hard anchor, so it ends up above its own % target).
+      const colSel = {};
+      assigned.forEach(c => {
+        if (!inc.has(c.id)) return;
+        const ck = canonColour(c.colour, colKeys);
+        if (colKeys.indexOf(ck) >= 0) colSel[ck] = (colSel[ck] || 0) + 1;
+      });
+
+      // SHORTFALLS at every level — a positive remaining need = truly no photo to
+      // fill it (supply gap), because colour/fit could draw from ANY print.
+      printKeys.forEach(pk => {
+        if (pk === '_all') return;
+        if (printCap[pk] > 0) catPrintShort.push({ key: pk, label: (PRINT_BY_KEY[pk] || { label: pk }).label,
+          have: (byPrint[pk] || []).length, want: Math.max(0, printTarget[pk] || 0), need: printCap[pk] });
+      });
+      colKeys.forEach(ck => {
+        if (ck === 'Other') return;
+        const tgt = Math.max(0, colTarget[ck] || 0), sel = colSel[ck] || 0, upl = colUploaded[ck] || 0;
+        if (needCol[ck] > 0) catColourShort.push({ key: ck, label: ck,
+          have: upl, want: tgt, need: needCol[ck] });
+        // OVER — colour is HARD-CAPPED at target, so any surplus uploads are HELD
+        // (you over-supplied this colour vs its %). `over` = pin-driven excess past
+        // the cap (rare); `held` = capped-out surplus photos not bought.
+        if (upl > tgt) catColourOver.push({ key: ck, label: ck, target: tgt, selected: sel,
+          over: Math.max(0, sel - tgt), held: Math.max(0, upl - sel) });
+      });
+      fitKeys.forEach(fk => {
+        if (needFit[fk] > 0) catFitShort.push({ key: fk, label: fitLabel(fk),
+          have: fitUploaded[fk] || 0, want: Math.max(0, fitCatTarget[fk] || 0), need: needFit[fk] });
+      });
+      catPrintShort.sort((a, b) => b.need - a.need);
       catColourShort.sort((a, b) => b.need - a.need);
+      catColourOver.sort((a, b) => (b.over + b.held) - (a.over + a.held));
+      catFitShort.sort((a, b) => b.need - a.need);
+
+      // TRANSPARENT MATH — how each level's % turns into a category-wide target qty.
+      // base = catDesigns (designs the %s split); each design = SET pieces.
+      // `have` = uploaded photos of that print/colour/fit (supply on hand).
+      let szTot = 0; Object.keys(activeSizes).forEach(sk => szTot += Math.max(0, +activeSizes[sk] || 0));
+      catCalc = {
+        base: catDesigns, catUnits, set: SET,
+        totalUploaded: assigned.length,
+        prints: printKeys.filter(pk => pk !== '_all').map(pk => ({
+          key: pk, label: (PRINT_BY_KEY[pk] || { label: pk }).label,
+          pct: pwTot ? Math.round(printW[pk] / pwTot * 100) : 0,
+          target: Math.max(0, printTarget[pk] || 0),
+          have: (byPrint[pk] || []).length
+        })),
+        colours: colKeys.map(ck => ({
+          key: ck, label: ck,
+          pct: cwTot ? Math.round(colW[ck] / cwTot * 100) : 0,
+          target: Math.max(0, colTarget[ck] || 0),
+          have: colUploaded[ck] || 0
+        })),
+        fits: fitKeys.map(fk => ({
+          key: fk, label: fitLabel(fk),
+          pct: fwTot ? Math.round(fitW[fk] / fwTot * 100) : 0,
+          target: Math.max(0, fitCatTarget[fk] || 0),
+          have: fitUploaded[fk] || 0
+        })),
+        sizes: sizePctRows.map(s => ({
+          key: s.key, label: s.label,
+          pct: szTot ? Math.round(Math.max(0, +cfg.sizes[s.key] || 0) / szTot * 100) : 0
+        }))
+      };
 
       pool.forEach(c => { if (c.includeOverride === true) inc.add(c.id); });
       return inc;
@@ -899,7 +1348,7 @@ function buildPlan(cands, settings) {
         const db = inc ? (designBud[p.id] || 0) : 0;
         const du = inc && enabled && expPrice > 0 ? Math.round(db / expPrice) : 0;
         // A design's est units fan out over the SIZE ladder (editable %).
-        const sizeUnits = splitInts(du, cfg.sizes);
+        const sizeUnits = splitInts(du, activeSizes);
         const sizes = sizePctRows.map(s => ({ key: s.key, label: s.label, share: s.share, units: sizeUnits[s.key] || 0 })).filter(s => s.units > 0);
         const colour = (p.colour && String(p.colour).trim()) || 'Unspecified';
         if (inc) {
@@ -1011,6 +1460,16 @@ function buildPlan(cands, settings) {
       // Colour gaps are now a CATEGORY-level list (colour balance is category-wide,
       // not per fit cell) — "source more <colour>".
       colourShort: (enabled ? catColourShort : []),
+      colourOver: (enabled ? catColourOver : []),
+      printShort: (enabled ? catPrintShort : []),
+      fitShort: (enabled ? catFitShort : []),
+      // Trouser colour×fit HARD grid + its detailed "source more" shopping list.
+      grid: (enabled ? catGrid : null),
+      sourceMore: (enabled ? catSourceMore : []),
+      coverage: (enabled ? catCoverage : null),
+      orderSheet: (enabled ? catOrderSheet : null),
+      fitHard,
+      calc: (enabled ? catCalc : null),
       fits, printGroups, unassigned,
       // Size ladder is still a decided % (rolled up from the design runs).
       sizes: sizePctRows.map(r => ({ ...r, units: catSizeAgg[r.key] || 0 })),
@@ -1052,8 +1511,10 @@ router.post('/api/casuals/settings', (req, res) => {
       enabled: inc.enabled != null ? !!inc.enabled : c.enabled,
       budget: inc.budget != null ? Math.max(0, parseInt(String(inc.budget).replace(/[^\d]/g, '')) || 0) : c.budget,
       avgCost: inc.avgCost != null ? Math.max(1, parseInt(inc.avgCost) || c.avgCost) : c.avgCost,
-      sizeMode: inc.sizeMode != null ? (inc.sizeMode === 'units' ? 'units' : 'cost') : c.sizeMode,
+      sizeMode: inc.sizeMode != null ? ((inc.sizeMode === 'units' || inc.sizeMode === 'designs') ? inc.sizeMode : 'cost') : c.sizeMode,
       targetUnits: inc.targetUnits != null ? Math.max(0, parseInt(String(inc.targetUnits).replace(/[^\d]/g, '')) || 0) : c.targetUnits,
+      designs: inc.designs != null ? Math.max(0, parseInt(String(inc.designs).replace(/[^\d]/g, '')) || 0) : c.designs,
+      sizeSystem: inc.sizeSystem != null ? (inc.sizeSystem === 'numeric' ? 'numeric' : 'alpha') : c.sizeSystem,
       fits: pickPct(inc.fits, c.fits),
       sizes: pickPct(inc.sizes, c.sizes),
       colours: pickPct(inc.colours, c.colours),
@@ -1089,7 +1550,9 @@ router.get('/api/casuals/batches', (req, res) => {
 // Create a new (empty) batch and make it active.
 router.post('/api/casuals/batches', (req, res) => {
   const s = loadStore();
-  const b = newBatch(s, req.body && req.body.name);
+  // Accept either `categories:[...]` (multi-select) or a single `category` (legacy).
+  const cat = (req.body && Array.isArray(req.body.categories)) ? req.body.categories : (req.body && req.body.category);
+  const b = newBatch(s, req.body && req.body.name, cat);
   s.activeBatch = b.id;
   saveStore(s);
   res.json({ success: true, batch: b, batches: batchList(s), activeBatch: s.activeBatch });
@@ -1137,13 +1600,44 @@ router.post('/api/casuals/candidates', async (req, res) => {
   else if (reqBatch && s.batches.some(b => b.id === reqBatch)) target = s.batches.find(b => b.id === reqBatch);
   else target = s.batches.find(b => b.id === s.activeBatch) || newBatch(s);
   s.activeBatch = target.id;   // new photos' batch becomes the one being planned
+  // DESIGN-WISE upload (optional second mode): the founder uploads one photo per
+  // colourway grouped under a named design, so `meta` is a JSON array parallel to
+  // `files` — meta[i] = { designId, designName, fit, colour } for files[i]. When
+  // present we pre-fill the candidate's category (= the batch's category), fit and
+  // colour as HUMAN overrides (fitOverride/colourOverride), so a later re-analyse
+  // leaves them alone and the plan math treats them exactly like a tagged pile
+  // photo. rating stays null (rating only ranks variety, never gates inclusion).
+  let meta = null;
+  const rawMeta = req.body && req.body.meta;
+  if (rawMeta) { try { const m = JSON.parse(rawMeta); if (Array.isArray(m)) meta = m; } catch {} }
+  // A batch can span several categories, so each design carries its OWN category
+  // (meta[i].category). Fall back to the batch's sole category when it has just one.
+  const batchCatKeys = batchCats(target);
+  const soleCat = batchCatKeys.length === 1 ? batchCatKeys[0] : null;
   const added = [];
-  for (const f of files) {
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
     const fp = path.join(CAND_DIR, f.filename);
     const sig = await computeSignature(fp);
     const c = { id: crypto.randomBytes(8).toString('hex'), file: f.filename, vendor, batch: target.id,
       category: null, fit: null, colour: null, pattern: null,
       uploadedAt: new Date().toISOString(), sha: fileSha(fp), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null };
+    const md = meta && meta[i];
+    // Category for THIS design: prefer the design's own meta.category (must be one
+    // the batch spans), else the batch's single category. Skip prefill if neither.
+    let mdCat = md && String(md.category || '').trim();
+    if (mdCat && !(CAT_BY_KEY[mdCat] && (!batchCatKeys.length || batchCatKeys.indexOf(mdCat) >= 0))) mdCat = null;
+    const useCat = mdCat || soleCat;
+    const spec = useCat ? CAT_BY_KEY[useCat] : null;
+    if (md && spec) {
+      c.category = useCat;
+      const fk = String(md.fit || '').trim();
+      if (fk && spec.fits.some(x => x.key === fk)) { c.fit = fk; c.fitOverride = true; }
+      const col = String(md.colour || '').trim();
+      if (col) { c.colour = col; c.colourOverride = true; }
+      if (md.designId) c.designId = String(md.designId);
+      if (md.designName) c.designName = String(md.designName).trim();
+    }
     s.candidates.push(c);
     added.push(publicCandidate(c));
   }
@@ -1158,6 +1652,10 @@ router.get('/api/casuals/candidate/:id', (req, res) => {
   const s = loadStore();
   const c = s.candidates.find(x => x.id === req.params.id);
   if (!c) return res.status(404).end();
+  // PO-imported lines carry no local file — just the supplier photo's URL
+  // (photoRef). Redirect to it so the card shows the image with zero disk copy.
+  if (!c.file && c.photoRef) return res.redirect(302, c.photoRef);
+  if (!c.file) return res.status(404).end();
   const fp = path.join(CAND_DIR, c.file);
   if (!fs.existsSync(fp)) return res.status(404).end();
   res.sendFile(fp);
@@ -1348,6 +1846,24 @@ router.post('/api/casuals/invoice/parse', async (req, res) => {
   }
 });
 
+// Dropdown metadata (category / fit / print options) WITHOUT reading a bill.
+// Used when the already-ordered lines come from an existing procurement PO rather
+// than an uploaded invoice — the front-end still needs the same fits/prints/cats
+// to render the review table, but there's no AI parse step. Mirrors exactly the
+// {fits, prints, cats} the parse endpoint returns.
+router.get('/api/casuals/invoice/meta', (req, res) => {
+  const merged = settingsWithDefaults(loadStore());
+  const fits = {};
+  CAT_KEYS.forEach(k => {
+    const cfg = merged.categories[k];
+    const labelOf = key => { const sp = CAT_BY_KEY[k].fits.find(f => f.key === key); if (sp) return sp.label; const ex = (cfg.extraFits || []).find(f => f.key === key); return ex ? ex.label : key; };
+    fits[k] = Object.keys(cfg.fits).map(fk => ({ key: fk, label: labelOf(fk) }));
+  });
+  const prints = {};
+  CAT_KEYS.forEach(k => { prints[k] = catHasPrintTypes(k) ? PRINT_TYPES.map(p => ({ key: p.key, label: p.label })) : []; });
+  res.json({ success: true, fits, prints, cats: CAT_KEYS.map(k => ({ key: k, label: CAT_BY_KEY[k].label })) });
+});
+
 // Classify one product photo PER invoice line (buyer-uploaded, since bills rarely
 // carry images). Reuses the Fresh-Procurement vision brain so a line gets its
 // category / fit / print / colour auto-filled just like a design photo. Field
@@ -1430,6 +1946,9 @@ router.post('/api/casuals/invoice/apply', async (req, res) => {
   let lines = [];
   try { lines = JSON.parse((req.body && req.body.meta) || '[]'); } catch { lines = []; }
   if (!Array.isArray(lines)) lines = [];
+  // When the bill came from an existing procurement PO (not a fresh upload), stamp
+  // every candidate with that PO id so the whole import can be undone in one go.
+  const sourcePo = String((req.body && req.body.sourcePo) || '').trim() || null;
   // Photos run parallel to ids[] (multer preserves field order).
   let ids = req.body && req.body.ids; if (typeof ids === 'string') ids = [ids];
   ids = Array.isArray(ids) ? ids : [];
@@ -1463,11 +1982,16 @@ router.post('/api/casuals/invoice/apply', async (req, res) => {
       const fn = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + ext;
       try { fs.writeFileSync(path.join(CAND_DIR, fn), pf.buffer); file = fn; } catch { file = null; }
     }
+    // When importing from a procurement PO with no freshly-uploaded photo, reuse
+    // the PO's own supplier image by URL (photoRef) — no re-download/copy, so it
+    // costs no disk. The card falls back to photoRef when there's no local file.
+    const photoRef = (!file && it && it.photoRef) ? String(it.photoRef).trim() : null;
     s.candidates.push({
-      id: crypto.randomBytes(8).toString('hex'), file, vendor: String((it && it.vendor) || '').trim(),
+      id: crypto.randomBytes(8).toString('hex'), file, photoRef: photoRef || null, vendor: String((it && it.vendor) || '').trim(),
       batch: target.id, category: cat, fit, colour: (it && it.colour) ? String(it.colour).trim() : null,
       pattern: null, printType: pt || null, printOverride: !!pt,
       ordered: true, orderedQty: qty, orderedSizes, orderedCost: Math.round(price),
+      sourcePo: sourcePo || null,          // which procurement PO this line was imported from (null = uploaded bill)
       uploadedAt: new Date().toISOString(), sha: null, phash: null, avg: null, dupeOf: null
     });
     applied++;
@@ -1481,14 +2005,70 @@ router.post('/api/casuals/invoice/apply', async (req, res) => {
     ...buildPlan(active, settings) });
 });
 
+// Which procurement POs have been imported into the ACTIVE batch (so the picker can
+// show "already imported" and offer an undo). Rolls each PO's imported lines up to
+// a count + total pieces.
+router.get('/api/casuals/imported-pos', (req, res) => {
+  const s = loadStore();
+  const roll = {};
+  activeCands(s).forEach(c => {
+    if (!c.sourcePo) return;
+    const r = roll[c.sourcePo] || (roll[c.sourcePo] = { poId: c.sourcePo, lines: 0, pieces: 0 });
+    r.lines += 1; r.pieces += (parseInt(c.orderedQty, 10) || 0);
+  });
+  res.json({ success: true, pos: Object.values(roll) });
+});
+
+// Undo a whole imported PO — delete every candidate in the active batch that came
+// from that PO (removing its photo files), then hand back a fresh plan so the boxes
+// re-net. Reverses one "Import an existing PO" in a single action.
+router.delete('/api/casuals/imported-po/:poId', (req, res) => {
+  const s = loadStore();
+  const poId = String(req.params.poId || '').trim();
+  if (!poId) return res.status(400).json({ success: false, error: 'No PO id' });
+  const doomed = s.candidates.filter(c => c.batch === s.activeBatch && c.sourcePo === poId);
+  if (!doomed.length) return res.status(404).json({ success: false, error: 'No imported lines found for ' + poId });
+  doomed.forEach(c => { if (c.file) { try { fs.unlinkSync(path.join(CAND_DIR, c.file)); } catch {} } });
+  const doomedIds = new Set(doomed.map(c => c.id));
+  s.candidates = s.candidates.filter(c => !doomedIds.has(c.id));
+  saveStore(s);
+  const settings = settingsWithDefaults(s);
+  const active = activeCands(s);
+  markDuplicates(active);
+  res.json({ success: true, removed: doomed.length, poId, analysed: active.some(c => c.category),
+    settings, categories: categoryCounts(active), batches: batchList(s), activeBatch: s.activeBatch,
+    ...buildPlan(active, settings) });
+});
+
 router.get('/api/casuals/plan', (req, res) => {
   const s = loadStore();
   const settings = settingsWithDefaults(s);
   const active = activeCands(s);
   markDuplicates(active);
   const analysed = active.some(c => c.category);
+  const batchObj = s.batches.find(b => b.id === s.activeBatch);
   res.json({ success: true, analysed, settings, categories: categoryCounts(active),
-    batches: batchList(s), activeBatch: s.activeBatch, ...buildPlan(active, settings) });
+    batches: batchList(s), activeBatch: s.activeBatch,
+    designTags: (batchObj && batchObj.designTags) || {},
+    ...buildPlan(active, settings) });
+});
+
+// Founder tags WHICH uploaded photo represents each base design slot in the
+// common-design order sheet. Saved per batch (survives reload). Key format =
+// "<fitKey>|<slotLetter>"; value = candidate id (or '' to clear).
+router.post('/api/casuals/design-tags', (req, res) => {
+  const s = loadStore();
+  const b = req.body || {};
+  const batchObj = s.batches.find(x => x.id === s.activeBatch);
+  if (!batchObj) return res.status(400).json({ success: false, error: 'No active batch.' });
+  const key = String(b.key || '').trim();
+  if (!key) return res.status(400).json({ success: false, error: 'Missing slot key.' });
+  batchObj.designTags = batchObj.designTags || {};
+  const cid = String(b.candidateId || '').trim();
+  if (cid) batchObj.designTags[key] = cid;
+  else delete batchObj.designTags[key];
+  saveStore(s);
+  res.json({ success: true, designTags: batchObj.designTags });
 });
 
 module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts };

@@ -27,6 +27,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const fetch   = require('node-fetch');
+const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
 
@@ -76,9 +77,8 @@ async function adjustFront(inventoryItemId, locationId, delta) {
   if (!locationId) return { ok: false, error: 'No front location configured' };
   if (!inventoryItemId) return { ok: false, error: 'Missing inventory item' };
   try {
-    const r = await fetch(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
+    const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/adjust.json`, {
       method: 'POST',
-      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         location_id: Number(locationId),
         inventory_item_id: Number(inventoryItemId),

@@ -38,6 +38,7 @@ const fs      = require('fs');
 const crypto  = require('crypto');
 const multer  = require('multer');
 const fetch   = require('node-fetch');
+const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
 
@@ -210,7 +211,7 @@ async function loadCatalogue(force) {
   let url = `https://${SHOPIFY_STORE}/admin/api/${API}/products.json?limit=250&fields=id,variants`;
   const skuMap = {}; let maxSerial = null;
   while (url) {
-    const r = await fetch(url, { headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' } });
+    const r = await shopifyClient.request(url);
     if (!r.ok) { const b = await r.text().catch(() => ''); throw new Error('Shopify ' + r.status + ': ' + b.slice(0, 200)); }
     const d = await r.json();
     (d.products || []).forEach(p => (p.variants || []).forEach(v => {
@@ -365,14 +366,52 @@ function genSeo(g) {
   return { title, handle, metaTitle, metaDescription, imageAlt, tags, bodyHtml };
 }
 
+// A trailing SIZE token on a design name ("FY5002 Black S", "Cargo 32") — the
+// vendor sheet often appends the size to the per-row design name, which would
+// otherwise make each size read as a different product. Strip ONE trailing
+// size-looking token so all sizes of a colourway share the same product name.
+const SIZE_SUFFIX_RE = /[\s,|-]+(?:XXXXL|XXXL|XXL|XXS|XS|[2-6]XL|[SML]|XL|\d{2})\s*$/i;
+function stripSizeSuffix(name) {
+  let s = String(name || '').trim();
+  const stripped = s.replace(SIZE_SUFFIX_RE, '').trim();
+  // Only strip if something meaningful is left (don't reduce "S" → "").
+  return stripped || s;
+}
+
+// Product LINE tag for a PO: SANKI Funky vs SANKI Casuals (two separate ranges).
+// Anything unrecognised → '' (Unclassified), so old/untagged POs stay neutral
+// until bulk-tagged. Only these two values are ever stored.
+function normLine(v) {
+  const x = String(v || '').toLowerCase().trim();
+  return (x === 'funky' || x === 'casuals') ? x : '';
+}
+
+// ── Post-order correction audit trail ───────────────────────────────
+// When goods arrive the actual product can differ from what was ordered
+// (wrong colour, short/over qty, mis-classified size…). We freeze each
+// line's ORDERED values once, at PO creation, in `l.ordered`. Any later
+// edit that makes a tracked field differ from `l.ordered` is a discrepancy
+// the UI highlights — so a bill audited months later still shows what was
+// corrected. The baseline is written ONCE and never overwritten.
+const ORDERED_FIELDS = ['qty', 'colour', 'productType', 'sizeLabel', 'chinaSize', 'designName', 'designCode', 'sku', 'fit'];
+function orderedSnapshot(l) {
+  const o = {};
+  ORDERED_FIELDS.forEach(k => { o[k] = l[k] == null ? '' : l[k]; });
+  return o;
+}
+
 // ── Grouping: intake lines → products (one product per design×colour) ──
-// A "group key" identifies one product whose sizes become the variants.
-// The DESIGN CODE (sheet's "CODE AS PER PRODUCT") is the primary identifier;
-// design name is optional and only used for the SEO title. We fall back to
-// the name if no code is given.
+// A "group key" identifies one product whose sizes become the variants. The
+// DESIGN CODE (sheet's "CODE AS PER PRODUCT") is the primary identifier; if
+// absent we fall back to the size-stripped design name. Grouping is ONLY by
+// design × colour — a single colourway is ONE product for photos, regardless
+// of which sizes it spans. Fit / product-type / audience are NOT part of the
+// key: they vary per size-row in real vendor data (S/M/L tagged "regular",
+// XL "oversized", XXL blank) and would wrongly split one tee into many. Those
+// fields are reconciled to a representative value per group in computePreview.
 function groupKey(l) {
-  const design = (l.designCode || l.designName || '').trim().toLowerCase();
-  return [design, l.productType || '', l.colour || '', l.fit || '', l.audience || 'Men']
+  const design = ((l.designCode || '').trim() || stripSizeSuffix(l.designName || '')).toLowerCase();
+  return [design, l.colour || '']
     .map(x => String(x).trim().toLowerCase()).join('|');
 }
 
@@ -465,8 +504,18 @@ async function computePreview(store, body) {
   lines.forEach(l => {
     if (l.classification !== 'NEW') return;
     const k = groupKey(l);
-    if (!groups[k]) groups[k] = { key: k, lines: [], productType: l.productType, colour: l.colour, designName: l.designName, fit: l.fit, audience: l.audience, vendor: l.vendor, designCode: l.designCode };
-    groups[k].lines.push(l);
+    if (!groups[k]) groups[k] = { key: k, lines: [], productType: '', colour: l.colour, designName: '', fit: '', audience: '', vendor: '', designCode: '' };
+    const g = groups[k];
+    g.lines.push(l);
+    // Reconcile the group's descriptive fields to the FIRST non-empty value across
+    // its size-rows, so a blank field on one size (e.g. XXL with no product type)
+    // doesn't degrade the shared product's SEO. The design name is size-stripped.
+    if (!g.productType && l.productType) g.productType = l.productType;
+    if (!g.fit && l.fit) g.fit = l.fit;
+    if (!g.audience && l.audience) g.audience = l.audience;
+    if (!g.vendor && l.vendor) g.vendor = l.vendor;
+    if (!g.designCode && l.designCode) g.designCode = l.designCode;
+    if (!g.designName && l.designName) g.designName = stripSizeSuffix(l.designName);
   });
   const newProducts = Object.values(groups).map(g => {
     const seo = genSeo({
@@ -509,9 +558,8 @@ async function computePreview(store, body) {
 
 // ── Shopify writes ───────────────────────────────────────────────
 async function shopifyPost(pathUrl, payload) {
-  const r = await fetch(`https://${SHOPIFY_STORE}/admin/api/${API}/${pathUrl}`, {
+  const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/${pathUrl}`, {
     method: 'POST',
-    headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
   const text = await r.text();
@@ -662,9 +710,7 @@ function collectReferencedPhotos(s) {
   });
   return keep;
 }
-router.post('/api/procurement/photos/sweep', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
-  const apply = String((req.query && req.query.apply) || '') === '1';
+function sweepOrphanPhotos(apply) {
   const s = loadStore();
   const keep = collectReferencedPhotos(s);
   let files = []; try { files = fs.readdirSync(PHOTO_DIR); } catch {}
@@ -676,11 +722,32 @@ router.post('/api/procurement/photos/sweep', (req, res) => {
     orphanCount++; orphanBytes += size;
     if (apply) { try { fs.unlinkSync(fp); removed++; freed += size; } catch {} }
   });
-  res.json({ success: true, applied: apply, totalFiles: files.length,
+  return { applied: !!apply, totalFiles: files.length,
     referenced: keep.size, keptOnDisk: keptCount,
     orphanCount, orphanMB: +(orphanBytes / 1048576).toFixed(2),
-    removed, freedMB: +(freed / 1048576).toFixed(2) });
+    removed, freedMB: +(freed / 1048576).toFixed(2) };
+}
+router.post('/api/procurement/photos/sweep', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  const apply = String((req.query && req.query.apply) || '') === '1';
+  res.json({ success: true, ...sweepOrphanPhotos(apply) });
 });
+// Run once at boot so regenerated-image orphans can't silently fill the /data
+// volume across deploys (mirrors the casuals candidate sweep). Also reaps any
+// stale atomic-write .tmp-* files left behind by a crash mid-write.
+try {
+  const r = sweepOrphanPhotos(true);
+  if (r.removed) console.log('[procurement] swept ' + r.removed + ' orphan photo(s), freed ' + r.freedMB + ' MB');
+} catch {}
+try {
+  let reaped = 0;
+  for (const fn of fs.readdirSync(DATA_DIR)) {
+    if (!/\.tmp-\d+-\d+$/.test(fn)) continue;
+    const fp = path.join(DATA_DIR, fn);
+    try { const st = fs.statSync(fp); if (st.isFile() && Date.now() - st.mtimeMs > 3600000) { fs.unlinkSync(fp); reaped++; } } catch {}
+  }
+  if (reaped) console.log('[procurement] reaped ' + reaped + ' stale .tmp write file(s)');
+} catch {}
 // Attach (or clear) a real BACK-view reference photo for a product group so the
 // "Product back" shot is generated from the true reverse instead of guessing.
 // The image itself is uploaded via /api/procurement/photo first; we just store
@@ -980,7 +1047,8 @@ router.post('/api/procurement/advance', async (req, res) => {
       qty: l.qty, perPcsYuan: l.perPcsYuan,
       weightGrams: 0,                                   // filled at receive
       sku: l.sku, serialUsed: l.serialUsed || null, skuError: l.skuError || null,
-      classification: l.classification                 // NEW = create; EXISTING = restock
+      classification: l.classification,                // NEW = create; EXISTING = restock
+      ordered: orderedSnapshot(l)                       // frozen baseline for the discrepancy audit trail
     }));
     s.seq += 1;
     const poId = 'PO-' + String(s.seq).padStart(4, '0');
@@ -994,6 +1062,7 @@ router.post('/api/procurement/advance', async (req, res) => {
       createdAt: new Date().toISOString(),
       createdBy: (req.user && req.user.username) || 'system',
       vendor: String(b.vendor || '').toUpperCase().trim(),
+      line: normLine(b.line),          // 'funky' | 'casuals' | '' (unclassified)
       billNo: b.billNo || '',
       datePurchase: b.datePurchase || '',
       dateReceive: '',
@@ -1114,6 +1183,50 @@ router.post('/api/procurement/pos/:id/line-photo', (req, res) => {
   res.json({ success: true, lineIndex: i, url: po.lines[i].photoUrl });
 });
 
+// ── Inline line corrections during receiving/audit (pre-post) ────────
+// The receiving grid lets staff fix the actual product that arrived —
+// colour, SKU, category, size, design, qty — without reopening the whole
+// advance form. Each touched line freezes its ORDERED baseline the first
+// time it's edited (so pre-existing POs start tracking from now), then any
+// field that ends up differing from `ordered` is a highlighted discrepancy.
+// SKU is a free-text override (these POs aren't on Shopify yet); we do NOT
+// auto-regenerate it from colour/category/size, per the chosen behaviour.
+const LINE_EDIT_FIELDS = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'chinaSize', 'fit', 'sku'];
+router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be edited.' });
+  const b = req.body || {};
+  const edits = b.edits || {};      // { lineIndex: { field: value } }
+  const qtys  = b.qtys  || {};      // { lineIndex: qty }
+  const who = (req.user && req.user.username) || 'system';
+  const now = new Date().toISOString();
+  let touched = 0;
+  (po.lines || []).forEach((l, i) => {
+    const e = edits[i];
+    const hasQty = qtys[i] != null && qtys[i] !== '';
+    if (!e && !hasQty) return;
+    // Freeze the baseline once, BEFORE applying this edit, so the very edit
+    // that introduces a difference is captured against the prior values.
+    if (!l.ordered || typeof l.ordered !== 'object') l.ordered = orderedSnapshot(l);
+    let changed = false;
+    if (e) LINE_EDIT_FIELDS.forEach(k => {
+      if (e[k] == null) return;
+      let v = String(e[k]).trim();
+      if (k === 'sku') v = v.toUpperCase();
+      if (v !== String(l[k] == null ? '' : l[k])) { l[k] = v; changed = true; }
+    });
+    if (hasQty) {
+      const q = Math.max(0, Math.round(num(qtys[i])));
+      if (q !== (num(l.qty) || 0)) { l.qty = q; changed = true; }
+    }
+    if (changed) { l.editedAt = now; l.editedBy = who; touched++; }
+  });
+  saveStore(s);
+  res.json({ success: true, poId: po.id, touched, po: publicPo(po, req) });
+});
+
 // ── Edit a PO's header + drop lines (not posted) ─────────────────
 // Header fields (vendor / bill / dates / lead time) can be corrected any time
 // before the PO is posted. Individual lines may be removed. Remaining lines
@@ -1126,6 +1239,7 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be edited.' });
     const b = req.body || {};
     if (b.vendor != null)       po.vendor = String(b.vendor).toUpperCase().trim();
+    if (b.line != null)         po.line = normLine(b.line);
     if (b.billNo != null)       po.billNo = String(b.billNo).trim();
     if (b.datePurchase != null) po.datePurchase = String(b.datePurchase);
     if (b.leadTimeDays != null && b.leadTimeDays !== '') po.leadTimeDays = Math.max(0, Math.round(num(b.leadTimeDays)));
@@ -1145,6 +1259,10 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     // serial. computePreview honours an explicit sku, so pre-filling each line's
     // sku preserves it. Weight is carried through if the line already had one.
     if (Array.isArray(b.lines)) {
+      // Carry each line's frozen "ordered" baseline across a full-form edit. The
+      // preview rebuild drops unknown fields, so we re-attach by (stable) SKU.
+      const prevOrdered = {};
+      (po.lines || []).forEach(l => { if (l.sku && l.ordered) prevOrdered[l.sku] = l.ordered; });
       const preview = await computePreview(s, { lines: b.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
       po.lines = preview.lines.map(l => ({
         designName: l.designName, productType: l.productType, colour: l.colour,
@@ -1153,7 +1271,10 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
         qty: l.qty, perPcsYuan: l.perPcsYuan,
         weightGrams: num(l.weightGrams),
         sku: l.sku, serialUsed: l.serialUsed || null, skuError: l.skuError || null,
-        classification: l.classification
+        classification: l.classification,
+        // Preserve the frozen ordered baseline: carried on the line, else matched
+        // by SKU from before the edit, else seeded fresh so tracking still starts.
+        ordered: (l.ordered && typeof l.ordered === 'object') ? l.ordered : (prevOrdered[l.sku] || orderedSnapshot(l))
       }));
       po.seoDraft = (preview.newProducts || []).map(np => ({ key: np.key, designCode: np.designCode, colour: np.colour, productType: np.productType, seo: np.seo }));
     } else if (Array.isArray(b.removeLineIndexes) && b.removeLineIndexes.length) {
@@ -1167,6 +1288,19 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     const out = publicPo(po, req); delete out.seoDraft;
     res.json({ success: true, poId: po.id, po: out });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Tag a PO's product line (Funky / Casuals) — works on ANY status ──
+// Bulk-tagging needs to reach posted/live POs too, so this is deliberately
+// NOT gated on status (unlike edit/delete). Accepts one id or ?ids / body.ids
+// for a batch. line = 'funky' | 'casuals' | '' (clear → Unclassified).
+router.post('/api/procurement/pos/:id/line', (req, res) => {
+  const s = loadStore();
+  const po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
+  po.line = normLine((req.body || {}).line);
+  saveStore(s);
+  res.json({ success: true, poId: po.id, line: po.line });
 });
 
 // ── Delete a PO entirely (not posted) ────────────────────────────
@@ -1510,6 +1644,114 @@ router.get('/api/procurement/pos/:id', (req, res) => {
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
   res.json({ success: true, po: publicPo(po, req) });
+});
+
+// ── Purchases summary — what's been bought, by garment type ──────
+// Two buckets: DONE (posted → live on Shopify) and PENDING/in-process
+// (advance/received/awaiting_approval → money committed, not yet live), plus
+// the Casuals "on order" planning quantities folded in as queued (pending).
+// Per garment type we roll up pieces + ₹ landed value, drillable to each buy.
+const SUMMARY_DONE_STATUSES    = ['posted'];
+const SUMMARY_PENDING_STATUSES = ['advance', 'received', 'awaiting_approval'];
+// ₹ landed per piece for a PO line, honouring the PO's own rates/origin.
+function summaryLinePerPc(po, line, settings) {
+  const lineSettings = {
+    ...settings,
+    exRate:         po.exRate != null ? po.exRate : settings.exRate,
+    freightPerGram: po.freightPerGram != null ? po.freightPerGram : settings.freightPerGram
+  };
+  const totalQty = (po.lines || []).reduce((a, l) => a + num(l.qty), 0);
+  const transportPerPc = (po.origin === 'india' && totalQty > 0) ? num(po.transportTotal) / totalQty : 0;
+  return landedCost(line, lineSettings, { origin: po.origin, transportPerPc }).landed;
+}
+router.get('/api/procurement/summary', (req, res) => {
+  const s = loadStore();
+  const cats = {};
+  const catOf = t => (cats[t] || (cats[t] = {
+    type: t, done: { pieces: 0, cost: 0 }, pending: { pieces: 0, cost: 0 }, items: []
+  }));
+  const totals = { done: { pieces: 0, cost: 0 }, pending: { pieces: 0, cost: 0 } };
+
+  // 1) Real purchase orders.
+  Object.values(s.pos).forEach(po => {
+    let bucket = null;
+    if (SUMMARY_DONE_STATUSES.includes(po.status)) bucket = 'done';
+    else if (SUMMARY_PENDING_STATUSES.includes(po.status)) bucket = 'pending';
+    if (!bucket) return;
+    (po.lines || []).forEach(line => {
+      const qty = num(line.qty);
+      if (qty <= 0) return;
+      const perPc = summaryLinePerPc(po, line, s.settings);
+      const cost  = Math.round(perPc * qty);
+      const c = catOf(line.productType || 'Uncategorised');
+      c[bucket].pieces += qty; c[bucket].cost += cost;
+      totals[bucket].pieces += qty; totals[bucket].cost += cost;
+      c.items.push({
+        bucket, source: 'po', poId: po.id, status: po.status,
+        line: po.line || '',                 // 'funky' | 'casuals' | '' (unclassified)
+        name: line.designName || line.designCode || '(unnamed)',
+        code: line.designCode || '',         // vendor product code
+        colour: line.colour || '', fit: line.fit || '', size: line.sizeLabel || '',
+        chinaSize: line.chinaSize || '',     // vendor (China) size off the bill — shown beside the Indian size
+        vendor: line.vendor || po.vendor || '',
+        photoUrl: (line.photoUrl || '').trim(),
+        date: po.datePurchase || (po.createdAt || '').slice(0, 10),
+        dateReceive: po.dateReceive || '',
+        qty, cost, perPc: Math.round(perPc)
+      });
+    });
+  });
+
+  // 2) Casuals "on order" — planning-level queued pieces (count as pending).
+  try {
+    const cz = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'casuals.json'), 'utf8'));
+    const czCats = (cz.settings && cz.settings.categories) || {};
+    const norm = { 'T-shirt': 'T-Shirt', 'Shirt': 'Shirt', 'Trouser': 'Trouser' };
+    Object.keys(czCats).forEach(catKey => {
+      const cc = czCats[catKey] || {};
+      const onOrder = cc.onOrder || {}, onCost = cc.onOrderCost || {};
+      const type = norm[catKey] || catKey;
+      Object.keys(onOrder).forEach(key => {
+        const qty = num(onOrder[key]);
+        if (qty <= 0) return;
+        const perPc = num(onCost[key]) || num(cc.avgCost) || 0;
+        const cost  = Math.round(perPc * qty);
+        const c = catOf(type);
+        c.pending.pieces += qty; c.pending.cost += cost;
+        totals.pending.pieces += qty; totals.pending.cost += cost;
+        c.items.push({
+          bucket: 'pending', source: 'casuals', poId: null, status: 'queued',
+          line: 'casuals', name: 'Casuals queue', code: '', colour: '', fit: String(key).replace('::', ' · '), size: '',
+          vendor: '', photoUrl: '', date: '', dateReceive: '', qty, cost, perPc: Math.round(perPc)
+        });
+      });
+    });
+  } catch { /* no casuals store yet — skip */ }
+
+  const categories = Object.values(cats).map(c => {
+    c.total = { pieces: c.done.pieces + c.pending.pieces, cost: c.done.cost + c.pending.cost };
+    c.items.sort((a, b) => (a.bucket === b.bucket ? b.qty - a.qty : (a.bucket === 'done' ? -1 : 1)));
+    return c;
+  }).sort((a, b) => b.total.pieces - a.total.pieces);
+
+  // Same rows, re-grouped by VENDOR (parallel view to the by-category one).
+  const vends = {};
+  const vendOf = v => (vends[v] || (vends[v] = {
+    type: v, done: { pieces: 0, cost: 0 }, pending: { pieces: 0, cost: 0 }, items: []
+  }));
+  categories.forEach(c => (c.items || []).forEach(it => {
+    const v = vendOf(it.vendor && String(it.vendor).trim() ? it.vendor : 'Unassigned');
+    const b = it.bucket === 'done' ? 'done' : 'pending';
+    v[b].pieces += it.qty; v[b].cost += it.cost;
+    v.items.push({ ...it, category: c.type });
+  }));
+  const vendors = Object.values(vends).map(v => {
+    v.total = { pieces: v.done.pieces + v.pending.pieces, cost: v.done.cost + v.pending.cost };
+    v.items.sort((a, b) => (a.bucket === b.bucket ? b.qty - a.qty : (a.bucket === 'done' ? -1 : 1)));
+    return v;
+  }).sort((a, b) => b.total.pieces - a.total.pieces);
+
+  res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
 module.exports = { router, genSeo, buildSku, landedCost, parseSerial, nextSerial };

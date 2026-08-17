@@ -55,6 +55,8 @@ const ROLES = [
   { id: 'inventory',   label: 'Inventory' },
   { id: 'sales',       label: 'Sales' },
   { id: 'procurement', label: 'Fresh Procurement' },
+  { id: 'accounting',  label: 'Accounting' },
+  { id: 'claimant',    label: 'Claimant (log expenses only)' },
   { id: 'revenue',     label: 'Revenue / Accounts' },
   { id: 'warehouse',   label: 'Warehouse / Rack' },
   { id: 'stocksearch', label: 'Stock Search' }
@@ -69,6 +71,8 @@ const ROLE_HOME = {
   inventory:   '/dashboard.html',
   sales:       '/dashboard.html',
   procurement: '/dashboard.html',
+  accounting:  '/dashboard.html',
+  claimant:    '/expenses.html',
   revenue:     '/dashboard.html',
   warehouse:   '/dashboard.html',
   stocksearch: '/dashboard.html'
@@ -81,6 +85,8 @@ const DEFAULT_ROLE_PAGES = {
   inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html', '/procurement.html'],
   sales:       ['/orders.html', '/sales.html', '/analytics.html', '/velocity.html'],
   procurement: ['/procurement.html'],
+  accounting:  ['/accounting.html', '/expenses.html'],
+  claimant:    ['/expenses.html'],
   revenue:     ['/orders.html', '/coming-soon.html'],
   warehouse:   ['/orders.html', '/rack-locations.html'],
   stocksearch: ['/rack-locations.html']

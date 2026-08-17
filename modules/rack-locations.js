@@ -27,6 +27,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const fetch   = require('node-fetch');
+const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
 
@@ -118,9 +119,7 @@ let _inflight = null;
 async function shopifyFetchAll(startUrl) {
   let all = [], url = startUrl;
   while (url) {
-    const r = await fetch(url, {
-      headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' }
-    });
+    const r = await shopifyClient.request(url);
     if (!r.ok) {
       const body = await r.text().catch(() => '');
       const err = new Error('Shopify ' + r.status + ': ' + body.slice(0, 300));

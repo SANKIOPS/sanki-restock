@@ -55,6 +55,9 @@ const MODULES = [
   { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Decide what NEW fashion to source — funkiness tiers + live market trends', icon: '🧠', href: '/fresh-procurement.html', section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
   { key: 'size-tracker', title: 'Size Tracker',           desc: 'Match vendor (China) size charts to SANKI target sizes before every PO', icon: '📏', href: '/size-tracker.html',      section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
+  { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'revenue'] },
+  { key: 'expenses',     title: 'Expenses',              desc: 'Log → approve (bill proof) → pay (payment proof); cash balances', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'claimant'] },
+
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
   { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },
 
