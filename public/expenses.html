@@ -103,6 +103,7 @@
     <div class="tabs" id="tabs">
       <button data-t="log" class="on">＋ Log expense</button>
       <button data-t="list">All expenses</button>
+      <button data-t="vendors">Vendor ledgers</button>
       <button data-t="cash">Cash balances</button>
     </div>
 
@@ -114,7 +115,7 @@
   <dialog id="payDlg"><div class="dlg">
     <h3>Record payment</h3>
     <div class="fld"><label>Pay from account</label><select id="payAcct"></select></div>
-    <div class="fld" style="margin-top:10px"><label>Payment screenshot (proof) — required</label><input type="file" id="payFile" accept="image/*" /></div>
+    <div class="fld" style="margin-top:10px"><label>Payment proof — required (screenshot, or camera photo for cash)</label><input type="file" id="payFile" accept="image/*" capture="environment" /></div>
     <img id="payPrev" class="prev" style="display:none" />
     <div class="row-actions">
       <button class="btn green" id="payGo" disabled>Mark paid</button>
@@ -148,6 +149,7 @@
       setMsg('');
       if(tab==='log') return renderLog();
       if(tab==='list') return renderList();
+      if(tab==='vendors') return renderVendors();
       if(tab==='cash') return renderCash();
       if(tab==='approvals') return renderApprovals();
     }
@@ -167,21 +169,20 @@
         '<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types)+'</select></div>'+
         '<div class="fld"><label>Nature</label><input value="SANKI" disabled><div class="hint">SANKI business expense — counts in the P&amp;L</div></div>'+
         '<div class="fld"><label>Claimant (who did it)</label><input id="f_runner" list="peopleList" placeholder="name"><datalist id="peopleList">'+cfg.people.map(function(p){return '<option value="'+esc(p)+'">';}).join('')+'</datalist></div>'+
-        '<div class="fld"><label>Vendor (optional)</label><input id="f_vendor" list="vendorList" placeholder="vendor name"><datalist id="vendorList">'+cfg.vendors.map(function(v){return '<option value="'+esc(v)+'">';}).join('')+'</datalist></div>'+
+        '<div class="fld"><label>Vendor</label><select id="f_vendor"><option value="">Select vendor (if applicable)</option>'+opts(cfg.vendors)+'</select><div class="hint"><a href="#" id="addVendorLink">＋ request a new vendor</a></div></div>'+
         '<div class="fld"><label>Pay from</label><select id="f_account">'+opts(cfg.accounts)+'</select><div class="hint"><a href="#" id="addAcctLink">＋ add account (needs approval)</a></div></div>'+
         '<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>'+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
-        '<div class="fld"><label>Bill photo (proof)</label><input type="file" id="f_billfile" accept="image/*"><div class="hint" id="billHint"></div></div>'+
-        '<div class="fld full" id="noteWrap" style="display:none"><label>No-bill declaration (why no bill)</label><input id="f_billnote" placeholder="what the claimant declared in the group"></div>'+
+        '<div class="fld"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*" capture="environment" required><div class="hint" id="billHint">Printed or handwritten bills are accepted.</div></div>'+
       '</div>'+
       '<div class="row-actions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
       '</div>';
 
       // Category combobox: known → auto-fill type; unknown → offer "request add"
       el('f_ledger').addEventListener('input', onLedgerInput);
-      el('f_bill').addEventListener('change', function(){ el('noteWrap').style.display = this.value==='none' ? '' : 'none'; });
       el('saveExp').addEventListener('click', saveExpense);
       el('addAcctLink').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
+      el('addVendorLink').addEventListener('click', function(ev){ ev.preventDefault(); requestVendor(); });
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
     function onLedgerInput(){
@@ -212,6 +213,15 @@
           setMsg(d.already ? 'Account already exists / requested.' : 'Requested account "'+nm.trim()+'" — pending admin approval.', true);
         });
     }
+    function requestVendor(){
+      var nm = prompt('New vendor name (admin will review it):'); if(!nm||!nm.trim()) return;
+      var det = prompt('Vendor details or note (optional):')||'';
+      api('/api/expenses/requests', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind:'vendor', name:nm.trim(), details:det }) })
+        .then(function(d){
+          if(!d.success){ setMsg(d.error||'Could not request vendor.', false); return; }
+          setMsg(d.already ? 'Vendor already exists / is already requested.' : 'Requested vendor "'+nm.trim()+'" — pending admin approval.', true);
+        });
+    }
 
     function uploadFile(input){
       if(!input.files || !input.files[0]) return Promise.resolve('');
@@ -222,14 +232,14 @@
     function saveExpense(){
       var ledgerVal = el('f_ledger').value.trim();
       if(!findLedger(ledgerVal)){ setMsg('Pick an existing category. New ones must be requested & approved first (type it above → Request add).', false); return; }
+      if(!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
       uploadFile(el('f_billfile')).then(function(billUrl){
         var body = {
           date: el('f_date').value, amount: el('f_amount').value, particulars: el('f_part').value,
           ledger: ledgerVal, type: el('f_type').value,
           claimant: el('f_runner').value, vendor: el('f_vendor').value, account: el('f_account').value,
-          channel: el('f_channel').value, bill: el('f_bill').value,
-          billPhoto: billUrl, billNote: el('f_billnote') ? el('f_billnote').value : ''
+          channel: el('f_channel').value, bill: el('f_bill').value, billPhoto: billUrl
         };
         return api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
       }).then(function(d){
@@ -264,12 +274,13 @@
           '<div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div>'+
           '<div class="stat"><div class="k">Approved</div><div class="v">'+fmt(t.approved)+'</div></div>'+
           '<div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div>'+
-          '<div class="stat"><div class="k">No-bill (flag)</div><div class="v '+(t.noBill?'neg':'')+'">'+fmt(t.noBill)+'</div></div>';
+          '<div class="stat"><div class="k">Missing bill (legacy)</div><div class="v '+(t.noBill?'neg':'')+'">'+fmt(t.noBill)+'</div></div>';
         if(!d.expenses.length){ el('ltable').innerHTML='<span class="muted">No expenses in range.</span>'; return; }
         var rows = d.expenses.map(function(e){
           var act = '';
           if(!cfg.canApprove){ act = '<span class="muted" style="font-size:11px">'+esc(e.status)+'</span>'; }
-          else if(e.status==='pending') act = '<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button>';
+          else if(e.status==='pending') act = (e.billPhoto ? '<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button> ' : '<span class="badge b-nobill">bill required</span> ')+
+            '<button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button>';
           else if(e.status==='approved') act = '<button class="btn mini green" onclick="openPay(\''+e.id+'\')">Pay</button> <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo</button>';
           else if(e.status==='paid') act = e.paymentProof ? '<img class="thumb" src="'+esc(e.paymentProof)+'" onclick="window.open(this.src)" title="payment proof">' : '';
           return '<tr id="row_'+e.id+'">'+
@@ -299,14 +310,12 @@
       }
       return led+'<div style="margin-top:3px"><span class="tag">'+esc(e.type)+'</span></div>';
     }
-    // ── Bill cell: thumbnail if photo, "no bill" badge, or inline attach controls while pending ──
+    // ── Bill cell: thumbnail, or attach control for legacy pending rows ──
     function billCell(e){
       if(e.billPhoto) return '<img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" title="bill photo">';
-      if(e.bill==='none') return '<span class="badge b-nobill" title="'+esc(e.billNote||'declared: no bill')+'">no bill ✎</span>';
       if(e.status==='pending'){
         return '<label class="btn mini ghost" style="cursor:pointer;margin:0">📎 Attach'+
-          '<input type="file" accept="image/*" style="display:none" onchange="attachBill(\''+e.id+'\',this)"></label>'+
-          ' <button class="btn mini ghost" onclick="markNoBill(\''+e.id+'\')">No bill</button>';
+          '<input type="file" accept="image/*" capture="environment" style="display:none" onchange="attachBill(\''+e.id+'\',this)"></label>';
       }
       return '<span class="muted">—</span>';
     }
@@ -319,11 +328,22 @@
           .then(function(){ setMsg('Bill attached — you can approve now.', true); loadList(); });
       });
     };
-    window.markNoBill = function(id){
-      var note = prompt('No bill for this expense — enter the WhatsApp declaration / reason (required):');
-      if(!note || !note.trim()) return;
-      api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ bill:'none', billNote:note.trim() }) })
-        .then(function(){ setMsg('Marked "no bill" — declaration saved.', true); loadList(); });
+    window.editExpense = function(id){
+      api('/api/expenses/list').then(function(d){
+        var e=d.expenses.find(function(x){return x.id===id;}); if(!e) return;
+        var date=prompt('Date (YYYY-MM-DD):',e.date||''); if(date===null) return;
+        var particulars=prompt('Particulars:',e.particulars||''); if(particulars===null) return;
+        var amount=prompt('Amount ₹:',e.amount); if(amount===null) return;
+        var ledger=prompt('Category (must match an existing category):',e.ledger||''); if(ledger===null) return;
+        if(!findLedger(ledger)){ setMsg('The edited category must match an existing approved category.',false); return; }
+        var type=prompt('Type ('+cfg.types.join(', ')+'):',e.type||'variable'); if(type===null) return;
+        var vendor=prompt('Vendor (approved vendor name, or type a corrected/new name for admin to create):',e.vendor||''); if(vendor===null) return;
+        var claimant=prompt('Claimant:',e.claimant||''); if(claimant===null) return;
+        var account=prompt('Pay-from account:',e.account||''); if(account===null) return;
+        var channel=prompt('Channel ('+cfg.channels.join(', ')+'):',e.channel||'Shared'); if(channel===null) return;
+        api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:date,particulars:particulars,amount:amount,ledger:ledger,type:type,vendor:vendor,claimant:claimant,account:account,channel:channel}) })
+          .then(function(x){ if(x.success){ setMsg('Expense updated.',true); loadConfig().then(loadList); } else setMsg(x.error||'Could not update.',false); });
+      });
     };
     window.quickEdit = function(id, patch){
       api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch) })
@@ -452,17 +472,22 @@
         var rows = d.requests.map(function(r){
           var detail = r.kind==='ledger' ? ('<span class="tag">'+esc((r.meta&&r.meta.type)||'variable')+'</span>')
                                          : (r.meta&&r.meta.details ? '<span class="muted" style="font-size:11px">'+esc(r.meta.details)+'</span>' : '');
+          var requested = r.kind==='vendor'
+            ? '<input id="reqname_'+r.id+'" value="'+esc(r.name)+'" aria-label="Vendor name"> '+detail
+            : '<b>'+esc(r.name)+'</b> '+detail;
           return '<tr><td data-label="Kind"><span class="tag">'+esc(r.kind)+'</span></td>'+
-            '<td data-label="Requested"><b>'+esc(r.name)+'</b> '+detail+'</td>'+
+            '<td data-label="Requested">'+requested+'</td>'+
             '<td class="muted" data-label="By" style="font-size:11px">'+esc(r.by||'')+'<br>'+esc((r.at||'').slice(0,10))+'</td>'+
-            '<td data-label=""><button class="btn mini green" onclick="decideReq(\''+r.id+'\',true)">Approve</button> '+
+            '<td data-label=""><button class="btn mini green" onclick="decideReq(\''+r.id+'\',true,'+(r.kind==='vendor'?'true':'false')+')">Approve</button> '+
                 '<button class="btn mini ghost" onclick="decideReq(\''+r.id+'\',false)">Reject</button></td></tr>';
         }).join('');
         el('atable').innerHTML = '<table class="resp"><thead><tr><th>Kind</th><th>Requested</th><th>By</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
       });
     }
-    window.decideReq = function(id, approve){
-      api('/api/expenses/requests/'+id+'/decide', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({approve:approve}) })
+    window.decideReq = function(id, approve, vendorRequest){
+      var body={approve:approve};
+      if(approve&&vendorRequest){ var inp=el('reqname_'+id); body.name=inp?inp.value.trim():''; }
+      api('/api/expenses/requests/'+id+'/decide', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
         .then(function(d){
           if(!d.success){ setMsg(d.error||'Could not decide.', false); return; }
           loadConfig().then(function(){ syncApprovalsTab(); loadApprovals(); });
@@ -484,6 +509,8 @@
       if(!cfg.canApprove){ // claimant-only: log + view own list, nothing else
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();
+        var vendorsBtn = el('tabs').querySelector('[data-t="vendors"]');
+        if(vendorsBtn) vendorsBtn.remove();
       }
       syncApprovalsTab();
       // Optional deep links can open a particular expense or the approvals queue.

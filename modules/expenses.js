@@ -4,8 +4,7 @@
 //
 // Real-world flow this mirrors (founder, 2026-08-16):
 //   1. A RUNNER goes and does the task (buys food, fetches goods from a vendor…)
-//   2. They LOG the expense with a BILL — printed / handwritten photo, or (in the
-//      no-bill case) an explicit declaration.
+//   2. They LOG the expense with a BILL — printed or handwritten photo.
 //   3. ACCOUNTS APPROVES it. Bill photo is REQUIRED to approve (proof of spend).
 //   4. Payment is made (Paytm / bank / cash) and a SCREENSHOT is attached as
 //      PROOF OF PAYMENT. Without proof, nothing is marked paid.
@@ -111,7 +110,7 @@ const TYPES = ['fixed', 'running', 'variable', 'marketing'];
 const NATURES = ['SANKI'];                 // business-only; drawings aren't logged here
 const BUSINESS_NATURES = ['SANKI', 'A3'];  // 'A3' kept for legacy rows saved before the rename
 const CHANNELS = ['POS', 'Website', 'Shared'];
-const BILLS = ['printed', 'handwritten', 'none'];
+const BILLS = ['printed', 'handwritten'];
 
 // Accounts the founder actually pays from are added in-app (with approval) —
 // start minimal instead of the old guessed list.
@@ -198,17 +197,24 @@ router.post('/api/expenses', (req, res) => {
   const ledger = String(b.ledger || '').trim();
   const amount = num(b.amount);
   if (!ledger) return res.status(400).json({ success: false, error: 'Pick a category (ledger).' });
+  if (!pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
+    return res.status(400).json({ success: false, error: 'Select an approved category.' });
+  }
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Amount must be greater than 0.' });
 
   const meta = ledgerMeta(s, ledger);
   const nature = 'SANKI';                              // business-only module
   const type = TYPES.includes(b.type) ? b.type : meta.type;
   const channel = CHANNELS.includes(b.channel) ? b.channel : 'Shared';
-  const bill = BILLS.includes(b.bill) ? b.bill : 'none';
+  const bill = BILLS.includes(b.bill) ? b.bill : 'printed';
+  const billPhoto = String(b.billPhoto || '').trim();
+  if (!billPhoto) return res.status(400).json({ success: false, error: 'Bill photo is required before an expense can be submitted.' });
   const claimant = String(b.claimant || b.runner || '').trim();  // who ran the errand
 
   const vendor = String(b.vendor || '').trim();
-  if (vendor && !s.vendors[vendor.toLowerCase()]) s.vendors[vendor.toLowerCase()] = { name: vendor, notes: '' };
+  if (vendor && !s.vendors[vendor.toLowerCase()]) {
+    return res.status(400).json({ success: false, error: 'Select an approved vendor, or request the new vendor for admin approval first.' });
+  }
 
   s.seq = (s.seq || 0) + 1;
   const id = 'EX-' + String(s.seq).padStart(5, '0');
@@ -222,8 +228,8 @@ router.post('/api/expenses', (req, res) => {
     claimant,                                     // who did the errand (was "runner")
     account: String(b.account || '').trim(),      // where money will leave (Paytm/bank/cash)
     channel, bill,
-    billPhoto: String(b.billPhoto || '').trim(),  // proof of spend
-    billNote: String(b.billNote || '').trim(),    // no-bill declaration (WhatsApp-style)
+    billPhoto,                                    // mandatory proof of spend
+    billNote: '',                                 // retained only for old stored rows
     paymentProof: '',                             // proof of payment (Paytm screenshot)
     status: 'pending',                            // pending → approved → paid
     paidAmount: 0,
@@ -254,7 +260,13 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (b.amount != null && num(b.amount) > 0) e.amount = num(b.amount);
   if (NATURES.includes(b.nature)) e.nature = b.nature;
   if (TYPES.includes(b.type)) e.type = b.type;
-  if (b.ledger != null && String(b.ledger).trim()) e.ledger = String(b.ledger).trim();
+  if (b.ledger != null && String(b.ledger).trim()) {
+    const ledger = String(b.ledger).trim();
+    if (!pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
+      return res.status(400).json({ success: false, error: 'Select an approved category.' });
+    }
+    e.ledger = ledger;
+  }
   if (CHANNELS.includes(b.channel)) e.channel = b.channel;
   if (BILLS.includes(b.bill)) e.bill = b.bill;
   if (b.claimant != null || b.runner != null) e.claimant = String(b.claimant != null ? b.claimant : b.runner).trim();
@@ -262,14 +274,18 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (b.billPhoto != null) e.billPhoto = String(b.billPhoto).trim();
   if (b.billNote != null) e.billNote = String(b.billNote).trim();
   if (b.vendor != null) {
-    e.vendor = String(b.vendor).trim();
-    if (e.vendor && !s.vendors[e.vendor.toLowerCase()]) s.vendors[e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
+    const vendor = String(b.vendor).trim();
+    if (vendor && !s.vendors[vendor.toLowerCase()]) {
+      if (!canApprove(req)) return res.status(400).json({ success: false, error: 'Select an approved vendor or request it first.' });
+      s.vendors[vendor.toLowerCase()] = { name: vendor, notes: '' };
+    }
+    e.vendor = vendor;
   }
   saveStore(s);
   res.json({ success: true, expense: e });
 });
 
-// ── Approve (GATE 1: bill photo required, unless declared no-bill) ─
+// ── Approve (GATE 1: bill photo is always required) ─────────────
 router.post('/api/expenses/:id/approve', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can approve.' });
   const s = loadStore();
@@ -282,10 +298,8 @@ router.post('/api/expenses/:id/approve', (req, res) => {
     saveStore(s);
     return res.json({ success: true, expense: e });
   }
-  // Proof gate: a bill photo is required to approve, unless the runner declared
-  // "no bill" AND left a note (the DC-world WhatsApp declaration).
-  if (!e.billPhoto && !(e.bill === 'none' && e.billNote)) {
-    return res.status(400).json({ success: false, error: 'Bill photo required to approve (or mark "No bill" with a note).' });
+  if (!e.billPhoto) {
+    return res.status(400).json({ success: false, error: 'Bill photo required to approve.' });
   }
   e.status = 'approved';
   e.approvedAt = new Date().toISOString();
@@ -348,7 +362,7 @@ router.get('/api/expenses/list', (req, res) => {
   list.forEach(e => {
     totals.all += e.amount;
     totals[e.status] = (totals[e.status] || 0) + e.amount;
-    if (e.bill === 'none') totals.noBill += e.amount;
+    if (!e.billPhoto) totals.noBill += e.amount;
     if ((e.status === 'approved' || e.status === 'paid') && BUSINESS_NATURES.includes(e.nature)) totals.byType[e.type] += e.amount;
   });
   res.json({ success: true, expenses: list, totals });
@@ -437,19 +451,21 @@ router.post('/api/expenses/settings', (req, res) => {
   res.json({ success: true });
 });
 
-// ── Approval queue: request a NEW category or a NEW paying account ─
+// ── Approval queue: request a NEW category, paying account, or vendor ─
 // Anyone in the accounting area can REQUEST; only an admin can APPROVE. This is
 // what stops the ledger list from turning into a free-for-all again.
 router.post('/api/expenses/requests', (req, res) => {
   const s = loadStore();
   const b = req.body || {};
-  const kind = b.kind === 'account' ? 'account' : 'ledger';
+  const kind = ['account', 'vendor'].includes(b.kind) ? b.kind : 'ledger';
   const name = String(b.name || '').trim();
   if (!name) return res.status(400).json({ success: false, error: 'Name required.' });
   // Already exists? Then no request needed.
   const exists = kind === 'ledger'
     ? pickableLedgers(s).some(l => l.name.toLowerCase() === name.toLowerCase())
-    : (s.accounts || []).some(a => a.toLowerCase() === name.toLowerCase());
+    : kind === 'vendor'
+      ? !!s.vendors[name.toLowerCase()]
+      : (s.accounts || []).some(a => a.toLowerCase() === name.toLowerCase());
   if (exists) return res.json({ success: true, already: true });
   // De-dupe pending requests.
   const dup = (s.requests || []).find(r => r.status === 'pending' && r.kind === kind && r.name.toLowerCase() === name.toLowerCase());
@@ -486,6 +502,11 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
     if (r.kind === 'ledger') {
       s.customLedgers = s.customLedgers || {};
       s.customLedgers[r.name] = { name: r.name, type: (r.meta && r.meta.type) || 'variable' };
+    } else if (r.kind === 'vendor') {
+      const editedName = String((req.body || {}).name || r.name).trim();
+      if (!editedName) return res.status(400).json({ success: false, error: 'Vendor name required.' });
+      s.vendors[editedName.toLowerCase()] = { name: editedName, notes: String((r.meta && r.meta.details) || '') };
+      r.name = editedName;
     } else {
       if (!(s.accounts || []).some(a => a.toLowerCase() === r.name.toLowerCase())) s.accounts.push(r.name);
     }
