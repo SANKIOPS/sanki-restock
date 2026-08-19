@@ -4,10 +4,11 @@
 //
 // Real-world flow this mirrors (founder, 2026-08-16):
 //   1. A RUNNER goes and does the task (buys food, fetches goods from a vendor…)
-//   2. They LOG the expense with a BILL — printed or handwritten photo.
-//   3. ACCOUNTS APPROVES it. Bill photo is REQUIRED to approve (proof of spend).
-//   4. Payment is made (Paytm / bank / cash) and a SCREENSHOT is attached as
-//      PROOF OF PAYMENT. Without proof, nothing is marked paid.
+//   2. They LOG the expense with a printed/handwritten bill. If the claimant
+//      paid personally and no bill exists, seller-payment proof + alternative
+//      evidence + a reason form an admin-only exception.
+//   3. ACCOUNTS APPROVES normal bills; only ADMIN approves no-bill exceptions.
+//   4. Company payment (or reimbursement to the claimant) requires its own proof.
 //   5. Only APPROVED business (A3) expenses hit the P&L; cash balances drop only
 //      when actually PAID. Home (C3) / personal (PSNL) / Hotel are excluded.
 //
@@ -110,7 +111,8 @@ const TYPES = ['fixed', 'running', 'variable', 'marketing'];
 const NATURES = ['SANKI'];                 // business-only; drawings aren't logged here
 const BUSINESS_NATURES = ['SANKI', 'A3'];  // 'A3' kept for legacy rows saved before the rename
 const CHANNELS = ['POS', 'Website', 'Shared'];
-const BILLS = ['printed', 'handwritten'];
+const BILLS = ['printed', 'handwritten', 'none'];
+const PAID_BY = ['company', 'claimant'];
 
 // Accounts the founder actually pays from are added in-app (with approval) —
 // start minimal instead of the old guessed list.
@@ -182,7 +184,7 @@ router.get('/api/expenses/config', (req, res) => {
     ledgers: pickableLedgers(s),
     vendors: Object.values(s.vendors).map(v => v.name).sort((a, b) => a.localeCompare(b)),
     accounts: s.accounts, people: s.people,
-    types: TYPES, natures: NATURES, channels: CHANNELS, bills: BILLS,
+    types: TYPES, natures: NATURES, channels: CHANNELS, bills: BILLS, paidByOptions: PAID_BY,
     isAdmin: isAdmin(req),
     canApprove: canApprove(req),
     me: (req.user && req.user.username) || '',
@@ -207,8 +209,24 @@ router.post('/api/expenses', (req, res) => {
   const type = TYPES.includes(b.type) ? b.type : meta.type;
   const channel = CHANNELS.includes(b.channel) ? b.channel : 'Shared';
   const bill = BILLS.includes(b.bill) ? b.bill : 'printed';
+  const fundedBy = PAID_BY.includes(b.fundedBy) ? b.fundedBy : 'company';
   const billPhoto = String(b.billPhoto || '').trim();
-  if (!billPhoto) return res.status(400).json({ success: false, error: 'Bill photo is required before an expense can be submitted.' });
+  const purchasePaymentProof = String(b.purchasePaymentProof || '').trim();
+  const exceptionEvidence = String(b.exceptionEvidence || '').trim();
+  const exceptionReason = String(b.exceptionReason || '').trim();
+  const isNoBillException = bill === 'none';
+  if (!isNoBillException && !billPhoto) {
+    return res.status(400).json({ success: false, error: 'Bill photo is required before an expense can be submitted.' });
+  }
+  if (isNoBillException && fundedBy !== 'claimant') {
+    return res.status(400).json({ success: false, error: 'No-bill exception is only available when the claimant paid personally.' });
+  }
+  if (isNoBillException && (!purchasePaymentProof || !exceptionEvidence || !exceptionReason)) {
+    return res.status(400).json({ success: false, error: 'No-bill exception requires seller-payment proof, alternative purchase evidence, and an explanation.' });
+  }
+  if (fundedBy === 'claimant' && !purchasePaymentProof) {
+    return res.status(400).json({ success: false, error: 'Claimant seller-payment proof is required.' });
+  }
   const claimant = String(b.claimant || b.runner || '').trim();  // who ran the errand
 
   const vendor = String(b.vendor || '').trim();
@@ -227,10 +245,13 @@ router.post('/api/expenses', (req, res) => {
     nature, type, ledger, vendor,
     claimant,                                     // who did the errand (was "runner")
     account: String(b.account || '').trim(),      // where money will leave (Paytm/bank/cash)
-    channel, bill,
-    billPhoto,                                    // mandatory proof of spend
-    billNote: '',                                 // retained only for old stored rows
-    paymentProof: '',                             // proof of payment (Paytm screenshot)
+    channel, bill, fundedBy,
+    billPhoto,                                    // normal printed/handwritten bill
+    purchasePaymentProof,                         // claimant → seller payment proof
+    exceptionEvidence,                            // goods/seller/receipt evidence when no bill
+    exceptionReason,                              // mandatory explanation when no bill
+    billNote: exceptionReason,                    // compatibility for old reports
+    paymentProof: '',                             // company payment/reimbursement proof
     status: 'pending',                            // pending → approved → paid
     paidAmount: 0,
     createdAt: now,
@@ -273,6 +294,10 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (b.account != null) e.account = String(b.account).trim();
   if (b.billPhoto != null) e.billPhoto = String(b.billPhoto).trim();
   if (b.billNote != null) e.billNote = String(b.billNote).trim();
+  if (PAID_BY.includes(b.fundedBy)) e.fundedBy = b.fundedBy;
+  if (b.purchasePaymentProof != null) e.purchasePaymentProof = String(b.purchasePaymentProof).trim();
+  if (b.exceptionEvidence != null) e.exceptionEvidence = String(b.exceptionEvidence).trim();
+  if (b.exceptionReason != null) { e.exceptionReason = String(b.exceptionReason).trim(); e.billNote = e.exceptionReason; }
   if (b.vendor != null) {
     const vendor = String(b.vendor).trim();
     if (vendor && !s.vendors[vendor.toLowerCase()]) {
@@ -285,7 +310,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   res.json({ success: true, expense: e });
 });
 
-// ── Approve (GATE 1: bill photo is always required) ─────────────
+// ── Approve (GATE 1: bill, or admin-only claimant-paid exception) ─
 router.post('/api/expenses/:id/approve', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can approve.' });
   const s = loadStore();
@@ -298,7 +323,14 @@ router.post('/api/expenses/:id/approve', (req, res) => {
     saveStore(s);
     return res.json({ success: true, expense: e });
   }
-  if (!e.billPhoto) {
+  const isNoBillException = e.bill === 'none';
+  if (isNoBillException && !isAdmin(req)) {
+    return res.status(403).json({ success: false, error: 'Only an admin can approve a no-bill exception.' });
+  }
+  if (isNoBillException && (e.fundedBy !== 'claimant' || !e.purchasePaymentProof || !e.exceptionEvidence || !(e.exceptionReason || e.billNote))) {
+    return res.status(400).json({ success: false, error: 'Complete seller-payment proof, alternative evidence, and exception reason before approval.' });
+  }
+  if (!isNoBillException && !e.billPhoto) {
     return res.status(400).json({ success: false, error: 'Bill photo required to approve.' });
   }
   e.status = 'approved';
@@ -317,7 +349,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   if (e.status === 'pending') return res.status(400).json({ success: false, error: 'Approve it before paying.' });
   const b = req.body || {};
   const proof = String(b.paymentProof || e.paymentProof || '').trim();
-  if (!proof) return res.status(400).json({ success: false, error: 'Payment screenshot required — no proof, no payment.' });
+  if (!proof) return res.status(400).json({ success: false, error: e.fundedBy === 'claimant' ? 'Reimbursement proof required — the claimant cannot be marked reimbursed without it.' : 'Payment screenshot required — no proof, no payment.' });
   if (b.account) e.account = String(b.account).trim();
   const pay = b.amount != null ? num(b.amount) : (e.amount - num(e.paidAmount));
   e.paidAmount = Math.min(e.amount, num(e.paidAmount) + pay);

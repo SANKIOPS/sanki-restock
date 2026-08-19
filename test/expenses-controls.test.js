@@ -80,3 +80,39 @@ test('bill remains mandatory at approval and payment proof is mandatory for cash
   assert.equal(paid.status, 200);
   assert.equal(paid.body.expense.status, 'paid');
 });
+
+test('claimant-paid no-bill exception requires evidence, admin approval, and separate reimbursement proof', () => {
+  const incomplete = invoke('POST', '/api/expenses', { body: {
+    ledger: 'FOOD EXPENSE', amount: 175, bill: 'none', fundedBy: 'claimant',
+    purchasePaymentProof: '/api/expenses/photo/seller-payment.jpg'
+  } });
+  assert.equal(incomplete.status, 400);
+  assert.match(incomplete.body.error, /alternative purchase evidence/);
+
+  const created = invoke('POST', '/api/expenses', { body: {
+    ledger: 'FOOD EXPENSE', amount: 175, bill: 'none', fundedBy: 'claimant',
+    purchasePaymentProof: '/api/expenses/photo/seller-payment.jpg',
+    exceptionEvidence: '/api/expenses/photo/goods.jpg',
+    exceptionReason: 'Urgent purchase; seller did not issue a bill.'
+  } });
+  assert.equal(created.status, 200);
+  const id = created.body.expense.id;
+
+  const accountingApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id }, role: 'accounting' });
+  assert.equal(accountingApproval.status, 403);
+  assert.match(accountingApproval.body.error, /Only an admin/);
+
+  const adminApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id }, role: 'admin' });
+  assert.equal(adminApproval.status, 200);
+
+  const missingReimbursement = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: { account: 'Cash' }, role: 'admin' });
+  assert.equal(missingReimbursement.status, 400);
+  assert.match(missingReimbursement.body.error, /Reimbursement proof required/);
+
+  const reimbursed = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: {
+    account: 'Cash', paymentProof: '/api/expenses/photo/reimbursement.jpg'
+  }, role: 'admin' });
+  assert.equal(reimbursed.status, 200);
+  assert.equal(reimbursed.body.expense.status, 'paid');
+  assert.equal(reimbursed.body.expense.fundedBy, 'claimant');
+});

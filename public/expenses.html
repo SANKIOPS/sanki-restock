@@ -113,9 +113,9 @@
 
   <!-- payment dialog -->
   <dialog id="payDlg"><div class="dlg">
-    <h3>Record payment</h3>
-    <div class="fld"><label>Pay from account</label><select id="payAcct"></select></div>
-    <div class="fld" style="margin-top:10px"><label>Payment proof — required (screenshot, or camera photo for cash)</label><input type="file" id="payFile" accept="image/*" capture="environment" /></div>
+    <h3 id="payTitle">Record payment</h3>
+    <div class="fld"><label id="payAcctLabel">Pay from account</label><select id="payAcct"></select></div>
+    <div class="fld" style="margin-top:10px"><label id="payProofLabel">Payment proof — required (screenshot, or camera photo for cash)</label><input type="file" id="payFile" accept="image/*" capture="environment" /></div>
     <img id="payPrev" class="prev" style="display:none" />
     <div class="row-actions">
       <button class="btn green" id="payGo" disabled>Mark paid</button>
@@ -129,7 +129,7 @@
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ return '₹' + Math.round(n||0).toLocaleString('en-IN'); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrl = '', focusId = '';
+    var cfg = null, tab = 'log', payId = null, payUrl = '', focusId = '', expensesById = {};
 
     function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
@@ -170,19 +170,35 @@
         '<div class="fld"><label>Nature</label><input value="SANKI" disabled><div class="hint">SANKI business expense — counts in the P&amp;L</div></div>'+
         '<div class="fld"><label>Claimant (who did it)</label><input id="f_runner" list="peopleList" placeholder="name"><datalist id="peopleList">'+cfg.people.map(function(p){return '<option value="'+esc(p)+'">';}).join('')+'</datalist></div>'+
         '<div class="fld"><label>Vendor</label><select id="f_vendor"><option value="">Select vendor (if applicable)</option>'+opts(cfg.vendors)+'</select><div class="hint"><a href="#" id="addVendorLink">＋ request a new vendor</a></div></div>'+
-        '<div class="fld"><label>Pay from</label><select id="f_account">'+opts(cfg.accounts)+'</select><div class="hint"><a href="#" id="addAcctLink">＋ add account (needs approval)</a></div></div>'+
+        '<div class="fld"><label>Who paid the seller?</label><select id="f_funded"><option value="company">Company account/cash</option><option value="claimant">Claimant paid personally</option></select></div>'+
+        '<div class="fld"><label>Company payment/reimbursement account</label><select id="f_account">'+opts(cfg.accounts)+'</select><div class="hint"><a href="#" id="addAcctLink">＋ add account (needs approval)</a></div></div>'+
         '<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>'+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
-        '<div class="fld"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*" capture="environment" required><div class="hint" id="billHint">Printed or handwritten bills are accepted.</div></div>'+
+        '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*" capture="environment"><div class="hint" id="billHint">Printed or handwritten bills are accepted.</div></div>'+
+        '<div class="fld" id="purchaseProofWrap" style="display:none"><label>Claimant → seller payment proof (required)</label><input type="file" id="f_purchaseproof" accept="image/*" capture="environment"><div class="hint">Screenshot showing the claimant paid the seller.</div></div>'+
+        '<div class="fld full" id="exceptionWrap" style="display:none"><div class="grid">'+
+          '<div class="fld"><label>Alternative purchase evidence (required)</label><input type="file" id="f_exceptionevidence" accept="image/*" capture="environment"><div class="hint">Photo of goods, seller, receipt, or location.</div></div>'+
+          '<div class="fld"><label>Why no bill was available (required)</label><textarea id="f_exceptionreason" rows="3" placeholder="Urgent purchase; seller did not provide a bill…"></textarea></div>'+
+        '</div><div class="hint">No-bill exceptions are flagged and require admin—not ordinary accounting—approval.</div></div>'+
       '</div>'+
       '<div class="row-actions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
       '</div>';
 
       // Category combobox: known → auto-fill type; unknown → offer "request add"
       el('f_ledger').addEventListener('input', onLedgerInput);
+      el('f_funded').addEventListener('change', toggleExpenseProofs);
+      el('f_bill').addEventListener('change', toggleExpenseProofs);
       el('saveExp').addEventListener('click', saveExpense);
       el('addAcctLink').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
       el('addVendorLink').addEventListener('click', function(ev){ ev.preventDefault(); requestVendor(); });
+      toggleExpenseProofs();
+    }
+    function toggleExpenseProofs(){
+      var claimantPaid=el('f_funded').value==='claimant', noBill=el('f_bill').value==='none';
+      el('purchaseProofWrap').style.display=claimantPaid?'':'none';
+      el('billPhotoWrap').style.display=noBill?'none':'';
+      el('exceptionWrap').style.display=noBill?'':'none';
+      if(noBill&&!claimantPaid){ el('f_funded').value='claimant'; el('purchaseProofWrap').style.display=''; }
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
     function onLedgerInput(){
@@ -232,14 +248,18 @@
     function saveExpense(){
       var ledgerVal = el('f_ledger').value.trim();
       if(!findLedger(ledgerVal)){ setMsg('Pick an existing category. New ones must be requested & approved first (type it above → Request add).', false); return; }
-      if(!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
+      var claimantPaid=el('f_funded').value==='claimant', noBill=el('f_bill').value==='none';
+      if(!noBill&&!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
+      if(claimantPaid&&!el('f_purchaseproof').files[0]){ setMsg('Attach the claimant-to-seller payment screenshot.', false); return; }
+      if(noBill&&(!el('f_exceptionevidence').files[0]||!el('f_exceptionreason').value.trim())){ setMsg('No-bill exception requires alternative purchase evidence and an explanation.', false); return; }
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
-      uploadFile(el('f_billfile')).then(function(billUrl){
+      Promise.all([uploadFile(el('f_billfile')),uploadFile(el('f_purchaseproof')),uploadFile(el('f_exceptionevidence'))]).then(function(urls){
         var body = {
           date: el('f_date').value, amount: el('f_amount').value, particulars: el('f_part').value,
           ledger: ledgerVal, type: el('f_type').value,
           claimant: el('f_runner').value, vendor: el('f_vendor').value, account: el('f_account').value,
-          channel: el('f_channel').value, bill: el('f_bill').value, billPhoto: billUrl
+          channel: el('f_channel').value, bill: el('f_bill').value, fundedBy:el('f_funded').value,
+          billPhoto:urls[0], purchasePaymentProof:urls[1], exceptionEvidence:urls[2], exceptionReason:el('f_exceptionreason').value.trim()
         };
         return api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
       }).then(function(d){
@@ -268,6 +288,7 @@
       var q = '?from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+el('lf_type').value;
       api('/api/expenses/list'+q).then(function(d){
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
+        expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});
         var t = d.totals;
         el('lstats').innerHTML =
           '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div>'+
@@ -279,7 +300,7 @@
         var rows = d.expenses.map(function(e){
           var act = '';
           if(!cfg.canApprove){ act = '<span class="muted" style="font-size:11px">'+esc(e.status)+'</span>'; }
-          else if(e.status==='pending') act = (e.billPhoto ? '<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button> ' : '<span class="badge b-nobill">bill required</span> ')+
+          else if(e.status==='pending') act = (canApproveExpense(e) ? '<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button> ' : '<span class="badge b-nobill">proof incomplete / admin required</span> ')+
             '<button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button>';
           else if(e.status==='approved') act = '<button class="btn mini green" onclick="openPay(\''+e.id+'\')">Pay</button> <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo</button>';
           else if(e.status==='paid') act = e.paymentProof ? '<img class="thumb" src="'+esc(e.paymentProof)+'" onclick="window.open(this.src)" title="payment proof">' : '';
@@ -287,7 +308,7 @@
             '<td data-label="Date">'+esc(e.date)+'<div class="muted" style="font-size:10px">'+e.id+'</div></td>'+
             '<td data-label="Particulars">'+esc(e.particulars||'—')+(e.vendor?'<div class="muted" style="font-size:11px">vendor: '+esc(e.vendor)+'</div>':'')+'</td>'+
             '<td data-label="Category">'+catCell(e)+'</td>'+
-            '<td data-label="Claimant">'+esc(e.claimant||e.runner||'—')+'</td>'+
+            '<td data-label="Claimant">'+esc(e.claimant||e.runner||'—')+(e.fundedBy==='claimant'?'<div class="badge b-nobill">reimbursement</div>':'')+'</td>'+
             '<td data-label="Account">'+esc(e.account||'—')+'</td>'+
             '<td class="r" data-label="Amount">'+fmt(e.amount)+'</td>'+
             '<td data-label="Bill">'+billCell(e)+'</td>'+
@@ -299,6 +320,10 @@
         // Deep links can scroll to and highlight a specific expense row.
         if(focusId){ var row = el('row_'+focusId); if(row){ row.scrollIntoView({block:'center'}); row.classList.add('flash'); setTimeout(function(){ row.classList.remove('flash'); }, 2600); } focusId=''; }
       });
+    }
+    function canApproveExpense(e){
+      if(e.bill==='none') return cfg.isAdmin&&e.fundedBy==='claimant'&&e.purchasePaymentProof&&e.exceptionEvidence&&(e.exceptionReason||e.billNote);
+      return !!e.billPhoto;
     }
     // ── Category cell: static tags when locked, inline nature/type selects while pending ──
     function catCell(e){
@@ -313,6 +338,9 @@
     // ── Bill cell: thumbnail, or attach control for legacy pending rows ──
     function billCell(e){
       if(e.billPhoto) return '<img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" title="bill photo">';
+      if(e.bill==='none') return '<span class="badge b-nobill" title="'+esc(e.exceptionReason||e.billNote||'')+'">no-bill exception</span> '+
+        (e.purchasePaymentProof?'<img class="thumb" src="'+esc(e.purchasePaymentProof)+'" onclick="window.open(this.src)" title="claimant payment proof">':'')+
+        (e.exceptionEvidence?'<img class="thumb" src="'+esc(e.exceptionEvidence)+'" onclick="window.open(this.src)" title="alternative evidence">':'');
       if(e.status==='pending'){
         return '<label class="btn mini ghost" style="cursor:pointer;margin:0">📎 Attach'+
           '<input type="file" accept="image/*" capture="environment" style="display:none" onchange="attachBill(\''+e.id+'\',this)"></label>';
@@ -362,6 +390,11 @@
     // ── PAY dialog ──
     window.openPay = function(id){
       payId = id; payUrl='';
+      var e=expensesById[id]||{}; var reimbursement=e.fundedBy==='claimant';
+      el('payTitle').textContent=reimbursement?'Record claimant reimbursement':'Record company payment';
+      el('payAcctLabel').textContent=reimbursement?'Reimburse claimant from':'Pay from account';
+      el('payProofLabel').textContent=reimbursement?'Company → claimant reimbursement proof — required':'Payment proof — required (screenshot, or camera photo for cash)';
+      el('payGo').textContent=reimbursement?'Mark reimbursed':'Mark paid';
       el('payAcct').innerHTML = opts(cfg.accounts);
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';
       el('payDlg').showModal();
