@@ -113,6 +113,7 @@ const BUSINESS_NATURES = ['SANKI', 'A3'];  // 'A3' kept for legacy rows saved be
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const BILLS = ['printed', 'handwritten', 'none'];
 const PAID_BY = ['company', 'claimant'];
+const PAYMENT_TYPES = ['UPI', 'Cash', 'Credit'];
 
 // Accounts the founder actually pays from are added in-app (with approval) —
 // start minimal instead of the old guessed list.
@@ -185,7 +186,8 @@ router.get('/api/expenses/config', (req, res) => {
     ledgers: pickableLedgers(s),
     vendors: Object.values(s.vendors).map(v => v.name).sort((a, b) => a.localeCompare(b)),
     accounts: s.accounts, people: s.people,
-    types: TYPES, natures: NATURES, channels: CHANNELS, bills: BILLS, paidByOptions: PAID_BY,
+    types: TYPES, natures: NATURES, channels: CHANNELS,
+    bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
     canApprove: canApprove(req),
     me: (req.user && req.user.username) || '',
@@ -208,27 +210,15 @@ router.post('/api/expenses', (req, res) => {
   const meta = ledgerMeta(s, ledger);
   const nature = 'SANKI';                              // business-only module
   const type = TYPES.includes(b.type) ? b.type : meta.type;
-  const channel = CHANNELS.includes(b.channel) ? b.channel : 'Shared';
-  const bill = BILLS.includes(b.bill) ? b.bill : 'printed';
-  const fundedBy = PAID_BY.includes(b.fundedBy) ? b.fundedBy : 'company';
+  const channel = canApprove(req) && CHANNELS.includes(b.channel) ? b.channel : 'Shared';
+  const bill = ['printed', 'handwritten'].includes(b.bill) ? b.bill : 'printed';
+  const paymentType = PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI';
   const billPhoto = String(b.billPhoto || '').trim();
-  const purchasePaymentProof = String(b.purchasePaymentProof || '').trim();
-  const exceptionEvidence = String(b.exceptionEvidence || '').trim();
-  const exceptionReason = String(b.exceptionReason || '').trim();
-  const isNoBillException = bill === 'none';
-  if (!isNoBillException && !billPhoto) {
+  const qrPhoto = String(b.qrPhoto || '').trim();
+  if (!billPhoto) {
     return res.status(400).json({ success: false, error: 'Bill photo is required before an expense can be submitted.' });
   }
-  if (isNoBillException && fundedBy !== 'claimant') {
-    return res.status(400).json({ success: false, error: 'No-bill exception is only available when the claimant paid personally.' });
-  }
-  if (isNoBillException && (!purchasePaymentProof || !exceptionEvidence || !exceptionReason)) {
-    return res.status(400).json({ success: false, error: 'No-bill exception requires seller-payment proof, alternative purchase evidence, and an explanation.' });
-  }
-  if (fundedBy === 'claimant' && !purchasePaymentProof) {
-    return res.status(400).json({ success: false, error: 'Claimant seller-payment proof is required.' });
-  }
-  const claimant = String(b.claimant || b.runner || '').trim();  // who ran the errand
+  const claimant = (req.user && req.user.username) || 'system';
 
   const vendor = String(b.vendor || '').trim();
   if (vendor && !s.vendors[vendor.toLowerCase()]) {
@@ -245,13 +235,10 @@ router.post('/api/expenses', (req, res) => {
     amount,
     nature, type, ledger, vendor,
     claimant,                                     // who did the errand (was "runner")
-    account: String(b.account || '').trim(),      // where money will leave (Paytm/bank/cash)
-    channel, bill, fundedBy,
+    account: '',                                  // selected by approver when payment is made
+    channel, bill, fundedBy: 'company', paymentType, qrPhoto,
     billPhoto,                                    // normal printed/handwritten bill
-    purchasePaymentProof,                         // claimant → seller payment proof
-    exceptionEvidence,                            // goods/seller/receipt evidence when no bill
-    exceptionReason,                              // mandatory explanation when no bill
-    billNote: exceptionReason,                    // compatibility for old reports
+    purchasePaymentProof: '', exceptionEvidence: '', exceptionReason: '', billNote: '',
     paymentProof: '',                             // company payment/reimbursement proof
     status: 'pending',                            // pending → approved → paid
     paidAmount: 0,
@@ -289,9 +276,11 @@ router.post('/api/expenses/:id', (req, res, next) => {
     }
     e.ledger = ledger;
   }
-  if (CHANNELS.includes(b.channel)) e.channel = b.channel;
+  if (canApprove(req) && CHANNELS.includes(b.channel)) e.channel = b.channel;
+  if (PAYMENT_TYPES.includes(b.paymentType)) e.paymentType = b.paymentType;
+  if (b.qrPhoto != null) e.qrPhoto = String(b.qrPhoto).trim();
   if (BILLS.includes(b.bill)) e.bill = b.bill;
-  if (b.claimant != null || b.runner != null) e.claimant = String(b.claimant != null ? b.claimant : b.runner).trim();
+  // Claimant identity is immutable: it always comes from the authenticated creator.
   if (b.account != null) e.account = String(b.account).trim();
   if (b.billPhoto != null) e.billPhoto = String(b.billPhoto).trim();
   if (b.billNote != null) e.billNote = String(b.billNote).trim();

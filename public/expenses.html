@@ -178,48 +178,33 @@
           '<div class="hint" id="ledgerHint"></div></div>'+
         '<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types)+'</select></div>'+
         '<div class="fld"><label>Nature</label><input value="SANKI" disabled><div class="hint">SANKI business expense — counts in the P&amp;L</div></div>'+
-        '<div class="fld"><label>Claimant (who did it)</label><input id="f_runner" list="peopleList" placeholder="name"><datalist id="peopleList">'+cfg.people.map(function(p){return '<option value="'+esc(p)+'">';}).join('')+'</datalist></div>'+
         '<div class="fld"><label>Vendor</label><select id="f_vendor"><option value="">Select an approved vendor</option>'+opts(cfg.vendors)+'<option value="__request__">＋ Vendor not listed — request a new vendor</option></select>'+
           '<div class="inline-request" id="vendorRequestWrap" style="display:none"><label>New vendor name</label><input id="newVendorName" placeholder="Enter the vendor’s correct name" autocomplete="organization">'+
           '<label style="margin-top:8px">Details (optional)</label><input id="newVendorDetails" placeholder="Location, phone, or identifying note">'+
           '<div class="request-actions"><button type="button" class="btn primary mini" id="submitVendorRequest">Send for approval</button><button type="button" class="btn ghost mini" id="cancelVendorRequest">Cancel</button></div></div></div>'+
-        '<div class="fld"><label>Who paid the seller?</label><div class="payment-choice">'+
-          '<label><input type="radio" name="fundedBy" value="company" checked> Company account or cash</label>'+
-          '<label><input type="radio" name="fundedBy" value="claimant"> Claimant paid personally</label></div></div>'+
-        '<div class="fld"><label>Company payment/reimbursement account</label><select id="f_account">'+opts(cfg.accounts)+'</select><div class="hint"><a href="#" id="addAcctLink">＋ add account (needs approval)</a></div></div>'+
-        '<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>'+
+        '<div class="fld"><label>Payment type</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
+        '<div class="fld" id="qrPhotoWrap"><label>Vendor QR-code photo (optional)</label><input type="file" id="f_qrphoto" accept="image/*" capture="environment"><div class="hint">Upload the vendor QR so the approver can make the UPI payment.</div></div>'+
+        (cfg.canApprove?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
         '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*" capture="environment"><div class="hint" id="billHint">Printed or handwritten bills are accepted.</div></div>'+
-        '<div class="fld" id="purchaseProofWrap" style="display:none"><label>Claimant → seller payment proof (required)</label><input type="file" id="f_purchaseproof" accept="image/*" capture="environment"><div class="hint">Screenshot showing the claimant paid the seller.</div></div>'+
-        '<div class="fld full" id="exceptionWrap" style="display:none"><div class="grid">'+
-          '<div class="fld"><label>Alternative purchase evidence (required)</label><input type="file" id="f_exceptionevidence" accept="image/*" capture="environment"><div class="hint">Photo of goods, seller, receipt, or location.</div></div>'+
-          '<div class="fld"><label>Why no bill was available (required)</label><textarea id="f_exceptionreason" rows="3" placeholder="Urgent purchase; seller did not provide a bill…"></textarea></div>'+
-        '</div><div class="hint">No-bill exceptions are flagged and require admin—not ordinary accounting—approval.</div></div>'+
       '</div>'+
       '<div class="row-actions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
       '</div>';
 
       // Category combobox: known → auto-fill type; unknown → offer "request add"
       el('f_ledger').addEventListener('input', onLedgerInput);
-      Array.prototype.forEach.call(document.querySelectorAll('input[name="fundedBy"]'),function(x){x.addEventListener('change',toggleExpenseProofs);});
-      el('f_bill').addEventListener('change', toggleExpenseProofs);
+      el('f_paymenttype').addEventListener('change', toggleQrPhoto);
       el('saveExp').addEventListener('click', saveExpense);
-      el('addAcctLink').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
       el('f_vendor').addEventListener('change', function(){
         var requesting=this.value==='__request__'; el('vendorRequestWrap').style.display=requesting?'':'none';
         if(requesting) setTimeout(function(){el('newVendorName').focus();},0);
       });
       el('submitVendorRequest').addEventListener('click', requestVendor);
       el('cancelVendorRequest').addEventListener('click', function(){el('f_vendor').value='';el('vendorRequestWrap').style.display='none';});
-      toggleExpenseProofs();
+      toggleQrPhoto();
     }
-    function toggleExpenseProofs(){
-      var selected=document.querySelector('input[name="fundedBy"]:checked');
-      var claimantPaid=selected&&selected.value==='claimant', noBill=el('f_bill').value==='none';
-      el('purchaseProofWrap').style.display=claimantPaid?'':'none';
-      el('billPhotoWrap').style.display=noBill?'none':'';
-      el('exceptionWrap').style.display=noBill?'':'none';
-      if(noBill&&!claimantPaid){ document.querySelector('input[name="fundedBy"][value="claimant"]').checked=true; el('purchaseProofWrap').style.display=''; }
+    function toggleQrPhoto(){
+      el('qrPhotoWrap').style.display=el('f_paymenttype').value==='UPI'?'':'none';
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
     function onLedgerInput(){
@@ -272,20 +257,16 @@
     function saveExpense(){
       var ledgerVal = el('f_ledger').value.trim();
       if(!findLedger(ledgerVal)){ setMsg('Pick an existing category. New ones must be requested & approved first (type it above → Request add).', false); return; }
-      var fundedChoice=document.querySelector('input[name="fundedBy"]:checked');
-      var claimantPaid=fundedChoice&&fundedChoice.value==='claimant', noBill=el('f_bill').value==='none';
       if(el('f_vendor').value==='__request__'){setMsg('Send the new vendor request first, then wait for approval before using it.',false);return;}
-      if(!noBill&&!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
-      if(claimantPaid&&!el('f_purchaseproof').files[0]){ setMsg('Attach the claimant-to-seller payment screenshot.', false); return; }
-      if(noBill&&(!el('f_exceptionevidence').files[0]||!el('f_exceptionreason').value.trim())){ setMsg('No-bill exception requires alternative purchase evidence and an explanation.', false); return; }
+      if(!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
-      Promise.all([uploadFile(el('f_billfile')),uploadFile(el('f_purchaseproof')),uploadFile(el('f_exceptionevidence'))]).then(function(urls){
+      Promise.all([uploadFile(el('f_billfile')),uploadFile(el('f_qrphoto'))]).then(function(urls){
         var body = {
           date: el('f_date').value, amount: el('f_amount').value, particulars: el('f_part').value,
           ledger: ledgerVal, type: el('f_type').value,
-          claimant: el('f_runner').value, vendor: el('f_vendor').value, account: el('f_account').value,
-          channel: el('f_channel').value, bill: el('f_bill').value, fundedBy:fundedChoice?fundedChoice.value:'company',
-          billPhoto:urls[0], purchasePaymentProof:urls[1], exceptionEvidence:urls[2], exceptionReason:el('f_exceptionreason').value.trim()
+          vendor: el('f_vendor').value, paymentType:el('f_paymenttype').value,
+          channel:cfg.canApprove&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
+          billPhoto:urls[0], qrPhoto:urls[1]
         };
         return api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
       }).then(function(d){
@@ -334,15 +315,15 @@
             '<td data-label="Date">'+esc(e.date)+'<div class="muted" style="font-size:10px">'+e.id+'</div></td>'+
             '<td data-label="Particulars">'+esc(e.particulars||'—')+(e.vendor?'<div class="muted" style="font-size:11px">vendor: '+esc(e.vendor)+'</div>':'')+'</td>'+
             '<td data-label="Category">'+catCell(e)+'</td>'+
-            '<td data-label="Claimant">'+esc(e.claimant||e.runner||'—')+(e.fundedBy==='claimant'?'<div class="badge b-nobill">reimbursement</div>':'')+'</td>'+
-            '<td data-label="Account">'+esc(e.account||'—')+'</td>'+
+            '<td data-label="Claimant">'+esc(e.claimant||e.runner||e.createdBy||'—')+'</td>'+
+            '<td data-label="Payment">'+paymentCell(e)+'</td>'+
             '<td class="r" data-label="Amount">'+fmt(e.amount)+'</td>'+
             '<td data-label="Bill">'+billCell(e)+'</td>'+
             '<td data-label="Status"><span class="badge b-'+e.status+'">'+e.status+'</span></td>'+
             '<td data-label="Action">'+act+(cfg.canApprove?' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">✕</button>':'')+'</td>'+
           '</tr>';
         }).join('');
-        el('ltable').innerHTML = '<table class="resp"><thead><tr><th>Date</th><th>Particulars</th><th>Category</th><th>Claimant</th><th>Account</th><th class="r">Amount</th><th>Bill</th><th>Status</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table>';
+        el('ltable').innerHTML = '<table class="resp"><thead><tr><th>Date</th><th>Particulars</th><th>Category</th><th>Claimant</th><th>Payment</th><th class="r">Amount</th><th>Bill</th><th>Status</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table>';
         // Deep links can scroll to and highlight a specific expense row.
         if(focusId){ var row = el('row_'+focusId); if(row){ row.scrollIntoView({block:'center'}); row.classList.add('flash'); setTimeout(function(){ row.classList.remove('flash'); }, 2600); } focusId=''; }
       });
@@ -350,6 +331,10 @@
     function canApproveExpense(e){
       if(e.bill==='none') return cfg.isAdmin&&e.fundedBy==='claimant'&&e.purchasePaymentProof&&e.exceptionEvidence&&(e.exceptionReason||e.billNote);
       return !!e.billPhoto;
+    }
+    function paymentCell(e){
+      var type=esc(e.paymentType||e.account||'—');
+      return '<span class="tag">'+type+'</span>'+(e.qrPhoto?' <img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" title="vendor QR code">':'');
     }
     // ── Category cell: static tags when locked, inline nature/type selects while pending ──
     function catCell(e){
@@ -392,10 +377,10 @@
         if(!findLedger(ledger)){ setMsg('The edited category must match an existing approved category.',false); return; }
         var type=prompt('Type ('+cfg.types.join(', ')+'):',e.type||'variable'); if(type===null) return;
         var vendor=prompt('Vendor (approved vendor name, or type a corrected/new name for admin to create):',e.vendor||''); if(vendor===null) return;
-        var claimant=prompt('Claimant:',e.claimant||''); if(claimant===null) return;
+        var paymentType=prompt('Payment type ('+cfg.paymentTypes.join(', ')+'):',e.paymentType||'UPI'); if(paymentType===null) return;
         var account=prompt('Pay-from account:',e.account||''); if(account===null) return;
         var channel=prompt('Channel ('+cfg.channels.join(', ')+'):',e.channel||'Shared'); if(channel===null) return;
-        api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:date,particulars:particulars,amount:amount,ledger:ledger,type:type,vendor:vendor,claimant:claimant,account:account,channel:channel}) })
+        api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:date,particulars:particulars,amount:amount,ledger:ledger,type:type,vendor:vendor,paymentType:paymentType,account:account,channel:channel}) })
           .then(function(x){ if(x.success){ setMsg('Expense updated.',true); loadConfig().then(loadList); } else setMsg(x.error||'Could not update.',false); });
       });
     };

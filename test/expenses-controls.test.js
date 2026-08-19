@@ -81,47 +81,37 @@ test('bill remains mandatory at approval and payment proof is mandatory for cash
   assert.equal(paid.body.expense.status, 'paid');
 });
 
-test('claimant-paid no-bill exception requires evidence, admin approval, and separate reimbursement proof', () => {
-  const incomplete = invoke('POST', '/api/expenses', { body: {
-    ledger: 'FOOD EXPENSE', amount: 175, bill: 'none', fundedBy: 'claimant',
-    purchasePaymentProof: '/api/expenses/photo/seller-payment.jpg'
-  } });
-  assert.equal(incomplete.status, 400);
-  assert.match(incomplete.body.error, /alternative purchase evidence/);
-
+test('claimant identity is automatic and claimant-only fields are enforced server-side', () => {
   const created = invoke('POST', '/api/expenses', { body: {
-    ledger: 'FOOD EXPENSE', amount: 175, bill: 'none', fundedBy: 'claimant',
-    purchasePaymentProof: '/api/expenses/photo/seller-payment.jpg',
-    exceptionEvidence: '/api/expenses/photo/goods.jpg',
-    exceptionReason: 'Urgent purchase; seller did not issue a bill.'
+    ledger: 'FOOD EXPENSE', amount: 175, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg',
+    claimant: 'spoofed-name', account: 'Private account', channel: 'POS', paymentType: 'UPI',
+    qrPhoto: '/api/expenses/photo/vendor-qr.jpg'
   } });
   assert.equal(created.status, 200);
-  const id = created.body.expense.id;
+  assert.equal(created.body.expense.claimant, 'claimant-user');
+  assert.equal(created.body.expense.account, '');
+  assert.equal(created.body.expense.channel, 'Shared');
+  assert.equal(created.body.expense.paymentType, 'UPI');
+  assert.equal(created.body.expense.qrPhoto, '/api/expenses/photo/vendor-qr.jpg');
 
-  const accountingApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id }, role: 'accounting' });
-  assert.equal(accountingApproval.status, 403);
-  assert.match(accountingApproval.body.error, /Only an admin/);
+  const edited = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: {
+    claimant: 'another-spoof', channel: 'POS'
+  }, role: 'claimant' });
+  assert.equal(edited.body.expense.claimant, 'claimant-user');
+  assert.equal(edited.body.expense.channel, 'Shared');
 
-  const adminApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id }, role: 'admin' });
-  assert.equal(adminApproval.status, 200);
-
-  const missingReimbursement = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: { account: 'Cash' }, role: 'admin' });
-  assert.equal(missingReimbursement.status, 400);
-  assert.match(missingReimbursement.body.error, /Reimbursement proof required/);
-
-  const reimbursed = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: {
-    account: 'Cash', paymentProof: '/api/expenses/photo/reimbursement.jpg'
-  }, role: 'admin' });
-  assert.equal(reimbursed.status, 200);
-  assert.equal(reimbursed.body.expense.status, 'paid');
-  assert.equal(reimbursed.body.expense.fundedBy, 'claimant');
+  const approverEdit = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { channel: 'POS' }, role: 'accounting' });
+  assert.equal(approverEdit.body.expense.channel, 'POS');
 });
 
-test('mobile expense form exposes inline vendor request and aligned payment choices', () => {
+test('claimant form exposes vendor request and simplified payment controls', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /Vendor not listed — request a new vendor/);
   assert.match(html, /id="vendorRequestWrap"/);
   assert.match(html, /id="submitVendorRequest"/);
-  assert.match(html, /\.payment-choice \{ display:grid/);
-  assert.match(html, /@media \(max-width:680px\)[\s\S]*\.payment-choice \{ grid-template-columns:1fr; \}/);
+  assert.match(html, /id="f_paymenttype"/);
+  assert.match(html, /id="f_qrphoto"/);
+  assert.doesNotMatch(html, /id="f_runner"/);
+  assert.doesNotMatch(html, /id="f_funded"/);
+  assert.doesNotMatch(html, /id="f_account"/);
 });
