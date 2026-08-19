@@ -179,6 +179,7 @@ router.get('/api/expenses/photo/:file', (req, res) => {
 router.get('/api/expenses/config', (req, res) => {
   const s = loadStore();
   const pendingReqs = (s.requests || []).filter(r => r.status === 'pending');
+  const visiblePendingReqs = isAdmin(req) ? pendingReqs : (canApprove(req) ? pendingReqs.filter(r => r.kind === 'vendor') : []);
   res.json({
     success: true,
     ledgers: pickableLedgers(s),
@@ -188,7 +189,7 @@ router.get('/api/expenses/config', (req, res) => {
     isAdmin: isAdmin(req),
     canApprove: canApprove(req),
     me: (req.user && req.user.username) || '',
-    pendingCount: pendingReqs.length
+    pendingCount: visiblePendingReqs.length
   });
 });
 
@@ -519,15 +520,18 @@ router.post('/api/expenses/requests', (req, res) => {
 router.get('/api/expenses/requests', (req, res) => {
   const s = loadStore();
   const status = (req.query.status || 'pending').toString();
-  const list = (s.requests || []).filter(r => (!status || r.status === status) && (isAdmin(req) || r.by === (req.user && req.user.username)))
+  const list = (s.requests || []).filter(r => (!status || r.status === status) &&
+    (isAdmin(req) || (canApprove(req) && r.kind === 'vendor') || r.by === (req.user && req.user.username)))
     .sort((a, b) => (b.at || '').localeCompare(a.at || ''));
   res.json({ success: true, requests: list, isAdmin: isAdmin(req) });
 });
 router.post('/api/expenses/requests/:id/decide', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin approval only.' });
   const s = loadStore();
   const r = (s.requests || []).find(x => x.id === req.params.id);
   if (!r) return res.status(404).json({ success: false, error: 'Request not found.' });
+  if (!(isAdmin(req) || (r.kind === 'vendor' && canApprove(req)))) {
+    return res.status(403).json({ success: false, error: r.kind === 'vendor' ? 'Only an approver/admin can decide vendor requests.' : 'Admin approval only.' });
+  }
   if (r.status !== 'pending') return res.json({ success: true, request: r });
   const approve = !!(req.body || {}).approve;
   if (approve) {

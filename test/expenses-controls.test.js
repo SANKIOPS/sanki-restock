@@ -41,10 +41,10 @@ test('claimant cannot submit an expense without a bill photo', async () => {
   assert.match(result.body.error, /Bill photo is required/);
 });
 
-test('new vendor is reviewed and can be corrected by admin before approval', async () => {
+test('new vendor is reviewed and can be corrected by an approver before approval', async () => {
   const requested = invoke('POST', '/api/expenses/requests', { body: { kind: 'vendor', name: 'Vender Typo', details: 'Delhi supplier' } });
   assert.equal(requested.status, 200);
-  const decided = invoke('POST', '/api/expenses/requests/:id/decide', { params: { id: requested.body.request.id }, body: { approve: true, name: 'Vendor Corrected' }, role: 'admin' });
+  const decided = invoke('POST', '/api/expenses/requests/:id/decide', { params: { id: requested.body.request.id }, body: { approve: true, name: 'Vendor Corrected' }, role: 'accounting' });
   assert.equal(decided.status, 200);
   assert.equal(decided.body.request.name, 'Vendor Corrected');
 
@@ -115,4 +115,13 @@ test('claimant-paid no-bill exception requires evidence, admin approval, and sep
   assert.equal(reimbursed.status, 200);
   assert.equal(reimbursed.body.expense.status, 'paid');
   assert.equal(reimbursed.body.expense.fundedBy, 'claimant');
+});
+
+test('mobile expense form exposes inline vendor request and aligned payment choices', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /Vendor not listed — request a new vendor/);
+  assert.match(html, /id="vendorRequestWrap"/);
+  assert.match(html, /id="submitVendorRequest"/);
+  assert.match(html, /\.payment-choice \{ display:grid/);
+  assert.match(html, /@media \(max-width:680px\)[\s\S]*\.payment-choice \{ grid-template-columns:1fr; \}/);
 });

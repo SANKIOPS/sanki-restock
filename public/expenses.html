@@ -61,6 +61,11 @@
     .filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:flex-end; }
     .filters .fld { min-width:130px; }
     .hint { font-size:11px; color:#9ca3af; margin-top:3px; }
+    .inline-request { margin-top:8px; padding:10px; border:1px solid #dbe3ec; border-radius:9px; background:#f8fafc; }
+    .inline-request .request-actions { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    .payment-choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .payment-choice label { display:flex; align-items:center; gap:8px; min-height:44px; margin:0; padding:10px 12px; border:1px solid #d1d5db; border-radius:8px; background:#fff; text-transform:none; letter-spacing:0; font-size:13px; cursor:pointer; }
+    .payment-choice input { width:18px; height:18px; min-width:18px; margin:0; padding:0; accent-color:var(--blue); }
     dialog { border:none; border-radius:14px; padding:0; max-width:420px; width:92%; box-shadow:0 20px 60px rgba(0,0,0,.3); }
     dialog .dlg { padding:20px; }
     dialog h3 { margin:0 0 12px; font-size:17px; }
@@ -74,6 +79,11 @@
       h1 { font-size:20px; }
       .card { padding:14px; }
       .grid { grid-template-columns:1fr; }
+      .grid > .fld, .grid > .fld.full { grid-column:1; width:100%; }
+      .payment-choice { grid-template-columns:1fr; }
+      .payment-choice label { width:100%; min-height:48px; }
+      .inline-request .request-actions { align-items:stretch; flex-direction:column; }
+      .inline-request .request-actions .btn { width:100%; }
       .tabs { gap:8px; }
       .tabs button { flex:1 1 auto; text-align:center; padding:11px 12px; }
       .row-actions { gap:8px; }
@@ -169,8 +179,13 @@
         '<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types)+'</select></div>'+
         '<div class="fld"><label>Nature</label><input value="SANKI" disabled><div class="hint">SANKI business expense — counts in the P&amp;L</div></div>'+
         '<div class="fld"><label>Claimant (who did it)</label><input id="f_runner" list="peopleList" placeholder="name"><datalist id="peopleList">'+cfg.people.map(function(p){return '<option value="'+esc(p)+'">';}).join('')+'</datalist></div>'+
-        '<div class="fld"><label>Vendor</label><select id="f_vendor"><option value="">Select vendor (if applicable)</option>'+opts(cfg.vendors)+'</select><div class="hint"><a href="#" id="addVendorLink">＋ request a new vendor</a></div></div>'+
-        '<div class="fld"><label>Who paid the seller?</label><select id="f_funded"><option value="company">Company account/cash</option><option value="claimant">Claimant paid personally</option></select></div>'+
+        '<div class="fld"><label>Vendor</label><select id="f_vendor"><option value="">Select an approved vendor</option>'+opts(cfg.vendors)+'<option value="__request__">＋ Vendor not listed — request a new vendor</option></select>'+
+          '<div class="inline-request" id="vendorRequestWrap" style="display:none"><label>New vendor name</label><input id="newVendorName" placeholder="Enter the vendor’s correct name" autocomplete="organization">'+
+          '<label style="margin-top:8px">Details (optional)</label><input id="newVendorDetails" placeholder="Location, phone, or identifying note">'+
+          '<div class="request-actions"><button type="button" class="btn primary mini" id="submitVendorRequest">Send for approval</button><button type="button" class="btn ghost mini" id="cancelVendorRequest">Cancel</button></div></div></div>'+
+        '<div class="fld"><label>Who paid the seller?</label><div class="payment-choice">'+
+          '<label><input type="radio" name="fundedBy" value="company" checked> Company account or cash</label>'+
+          '<label><input type="radio" name="fundedBy" value="claimant"> Claimant paid personally</label></div></div>'+
         '<div class="fld"><label>Company payment/reimbursement account</label><select id="f_account">'+opts(cfg.accounts)+'</select><div class="hint"><a href="#" id="addAcctLink">＋ add account (needs approval)</a></div></div>'+
         '<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>'+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
@@ -186,19 +201,25 @@
 
       // Category combobox: known → auto-fill type; unknown → offer "request add"
       el('f_ledger').addEventListener('input', onLedgerInput);
-      el('f_funded').addEventListener('change', toggleExpenseProofs);
+      Array.prototype.forEach.call(document.querySelectorAll('input[name="fundedBy"]'),function(x){x.addEventListener('change',toggleExpenseProofs);});
       el('f_bill').addEventListener('change', toggleExpenseProofs);
       el('saveExp').addEventListener('click', saveExpense);
       el('addAcctLink').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
-      el('addVendorLink').addEventListener('click', function(ev){ ev.preventDefault(); requestVendor(); });
+      el('f_vendor').addEventListener('change', function(){
+        var requesting=this.value==='__request__'; el('vendorRequestWrap').style.display=requesting?'':'none';
+        if(requesting) setTimeout(function(){el('newVendorName').focus();},0);
+      });
+      el('submitVendorRequest').addEventListener('click', requestVendor);
+      el('cancelVendorRequest').addEventListener('click', function(){el('f_vendor').value='';el('vendorRequestWrap').style.display='none';});
       toggleExpenseProofs();
     }
     function toggleExpenseProofs(){
-      var claimantPaid=el('f_funded').value==='claimant', noBill=el('f_bill').value==='none';
+      var selected=document.querySelector('input[name="fundedBy"]:checked');
+      var claimantPaid=selected&&selected.value==='claimant', noBill=el('f_bill').value==='none';
       el('purchaseProofWrap').style.display=claimantPaid?'':'none';
       el('billPhotoWrap').style.display=noBill?'none':'';
       el('exceptionWrap').style.display=noBill?'':'none';
-      if(noBill&&!claimantPaid){ el('f_funded').value='claimant'; el('purchaseProofWrap').style.display=''; }
+      if(noBill&&!claimantPaid){ document.querySelector('input[name="fundedBy"][value="claimant"]').checked=true; el('purchaseProofWrap').style.display=''; }
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
     function onLedgerInput(){
@@ -230,13 +251,16 @@
         });
     }
     function requestVendor(){
-      var nm = prompt('New vendor name (admin will review it):'); if(!nm||!nm.trim()) return;
-      var det = prompt('Vendor details or note (optional):')||'';
+      var nm = el('newVendorName').value.trim(); if(!nm){ setMsg('Enter the new vendor name.',false); el('newVendorName').focus(); return; }
+      var det = el('newVendorDetails').value.trim();
+      el('submitVendorRequest').disabled=true;
       api('/api/expenses/requests', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind:'vendor', name:nm.trim(), details:det }) })
         .then(function(d){
+          el('submitVendorRequest').disabled=false;
           if(!d.success){ setMsg(d.error||'Could not request vendor.', false); return; }
-          setMsg(d.already ? 'Vendor already exists / is already requested.' : 'Requested vendor "'+nm.trim()+'" — pending admin approval.', true);
-        });
+          el('vendorRequestWrap').style.display='none'; el('f_vendor').value='';
+          setMsg(d.already ? 'Vendor already exists / is already requested.' : 'Requested vendor "'+nm+'" — pending admin approval. Select it after approval.', true);
+        }).catch(function(){el('submitVendorRequest').disabled=false;setMsg('Could not request vendor.',false);});
     }
 
     function uploadFile(input){
@@ -248,7 +272,9 @@
     function saveExpense(){
       var ledgerVal = el('f_ledger').value.trim();
       if(!findLedger(ledgerVal)){ setMsg('Pick an existing category. New ones must be requested & approved first (type it above → Request add).', false); return; }
-      var claimantPaid=el('f_funded').value==='claimant', noBill=el('f_bill').value==='none';
+      var fundedChoice=document.querySelector('input[name="fundedBy"]:checked');
+      var claimantPaid=fundedChoice&&fundedChoice.value==='claimant', noBill=el('f_bill').value==='none';
+      if(el('f_vendor').value==='__request__'){setMsg('Send the new vendor request first, then wait for approval before using it.',false);return;}
       if(!noBill&&!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
       if(claimantPaid&&!el('f_purchaseproof').files[0]){ setMsg('Attach the claimant-to-seller payment screenshot.', false); return; }
       if(noBill&&(!el('f_exceptionevidence').files[0]||!el('f_exceptionreason').value.trim())){ setMsg('No-bill exception requires alternative purchase evidence and an explanation.', false); return; }
@@ -258,7 +284,7 @@
           date: el('f_date').value, amount: el('f_amount').value, particulars: el('f_part').value,
           ledger: ledgerVal, type: el('f_type').value,
           claimant: el('f_runner').value, vendor: el('f_vendor').value, account: el('f_account').value,
-          channel: el('f_channel').value, bill: el('f_bill').value, fundedBy:el('f_funded').value,
+          channel: el('f_channel').value, bill: el('f_bill').value, fundedBy:fundedChoice?fundedChoice.value:'company',
           billPhoto:urls[0], purchasePaymentProof:urls[1], exceptionEvidence:urls[2], exceptionReason:el('f_exceptionreason').value.trim()
         };
         return api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
@@ -475,15 +501,15 @@
         .then(function(){ loadConfig().then(loadCash); });
     };
 
-    // ── APPROVALS (admin) — new categories & accounts awaiting sign-off ──
+    // ── APPROVALS — approvers handle vendors; admin also handles categories/accounts ──
     function renderApprovals(){
       el('panel').innerHTML = '<div class="card"><h3 style="margin:0 0 4px">Pending approvals</h3>'+
-        '<p class="sub" style="margin:0 0 12px">New categories & paying accounts requested by the team. Approve to make them usable.</p>'+
-        '<div id="atable" class="muted">Loading…</div></div>'+
+        '<p class="sub" style="margin:0 0 12px">Review vendor requests'+(cfg.isAdmin?', categories, and paying accounts':'')+' before they become selectable.</p>'+
+        '<div id="atable" class="muted">Loading…</div></div>'+(cfg.isAdmin?(
         '<div class="card"><h3 style="margin:0 0 4px">Approved custom categories</h3>'+
         '<p class="sub" style="margin:0 0 12px">Extra categories added beyond the built-in Tally list. Remove one if it was a mistake.</p>'+
-        '<div id="ctable2" class="muted">Loading…</div></div>';
-      loadApprovals(); loadCustomLedgers();
+        '<div id="ctable2" class="muted">Loading…</div></div>'):'');
+      loadApprovals(); if(cfg.isAdmin) loadCustomLedgers();
     };
     function loadCustomLedgers(){
       api('/api/expenses/custom-ledgers').then(function(d){
@@ -526,9 +552,9 @@
           loadConfig().then(function(){ syncApprovalsTab(); loadApprovals(); });
         });
     };
-    // Show/update the admin-only Approvals tab (with a pending-count badge).
+    // Show/update the approver/admin Approvals tab (with a pending-count badge).
     function syncApprovalsTab(){
-      if(!cfg.isAdmin) return;
+      if(!cfg.canApprove) return;
       var existing = el('tabs').querySelector('[data-t="approvals"]');
       var label = 'Approvals'+(cfg.pendingCount ? ' ('+cfg.pendingCount+')' : '');
       if(existing){ existing.textContent = label; return; }
