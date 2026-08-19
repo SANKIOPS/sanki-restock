@@ -55,7 +55,7 @@ test('new vendor is reviewed and can be corrected by an approver before approval
 test('bill remains mandatory at approval and payment proof is mandatory for cash', async () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', amount: 250, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg',
-    vendor: 'Vendor Corrected', account: 'Cash'
+    vendor: 'Vendor Corrected', paymentType: 'Cash'
   } });
   assert.equal(created.status, 200);
   const id = created.body.expense.id;
@@ -102,6 +102,23 @@ test('claimant identity is automatic and claimant-only fields are enforced serve
 
   const approverEdit = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { channel: 'POS' }, role: 'accounting' });
   assert.equal(approverEdit.body.expense.channel, 'POS');
+});
+
+test('UPI requires a vendor QR photo while Cash and Credit do not', () => {
+  const upiWithoutQr = invoke('POST', '/api/expenses', { body: {
+    ledger: 'FOOD EXPENSE', amount: 100, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'UPI'
+  } });
+  assert.equal(upiWithoutQr.status, 400);
+  assert.match(upiWithoutQr.body.error, /QR-code photo is required/);
+
+  for (const paymentType of ['Cash', 'Credit']) {
+    const result = invoke('POST', '/api/expenses', { body: {
+      ledger: 'FOOD EXPENSE', amount: 100, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg', paymentType
+    } });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.expense.paymentType, paymentType);
+    assert.equal(result.body.expense.qrPhoto, '');
+  }
 });
 
 test('claimant form exposes vendor request and simplified payment controls', () => {

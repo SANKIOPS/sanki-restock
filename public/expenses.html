@@ -183,7 +183,7 @@
           '<label style="margin-top:8px">Details (optional)</label><input id="newVendorDetails" placeholder="Location, phone, or identifying note">'+
           '<div class="request-actions"><button type="button" class="btn primary mini" id="submitVendorRequest">Send for approval</button><button type="button" class="btn ghost mini" id="cancelVendorRequest">Cancel</button></div></div></div>'+
         '<div class="fld"><label>Payment type</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
-        '<div class="fld" id="qrPhotoWrap"><label>Vendor QR-code photo (optional)</label><input type="file" id="f_qrphoto" accept="image/*" capture="environment"><div class="hint">Upload the vendor QR so the approver can make the UPI payment.</div></div>'+
+        '<div class="fld" id="qrPhotoWrap"><label>Vendor QR-code photo (required for UPI)</label><input type="file" id="f_qrphoto" accept="image/*" capture="environment"><div class="hint">Required so the approver can make the UPI payment.</div></div>'+
         (cfg.canApprove?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
         '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*" capture="environment"><div class="hint" id="billHint">Printed or handwritten bills are accepted.</div></div>'+
@@ -204,7 +204,9 @@
       toggleQrPhoto();
     }
     function toggleQrPhoto(){
-      el('qrPhotoWrap').style.display=el('f_paymenttype').value==='UPI'?'':'none';
+      var upi=el('f_paymenttype').value==='UPI';
+      el('qrPhotoWrap').style.display=upi?'':'none';
+      if(!upi) el('f_qrphoto').value='';
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
     function onLedgerInput(){
@@ -259,12 +261,14 @@
       if(!findLedger(ledgerVal)){ setMsg('Pick an existing category. New ones must be requested & approved first (type it above → Request add).', false); return; }
       if(el('f_vendor').value==='__request__'){setMsg('Send the new vendor request first, then wait for approval before using it.',false);return;}
       if(!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
+      var paymentType=el('f_paymenttype').value;
+      if(paymentType==='UPI'&&!el('f_qrphoto').files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
-      Promise.all([uploadFile(el('f_billfile')),uploadFile(el('f_qrphoto'))]).then(function(urls){
+      Promise.all([uploadFile(el('f_billfile')),paymentType==='UPI'?uploadFile(el('f_qrphoto')):Promise.resolve('')]).then(function(urls){
         var body = {
           date: el('f_date').value, amount: el('f_amount').value, particulars: el('f_part').value,
           ledger: ledgerVal, type: el('f_type').value,
-          vendor: el('f_vendor').value, paymentType:el('f_paymenttype').value,
+          vendor: el('f_vendor').value, paymentType:paymentType,
           channel:cfg.canApprove&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
           billPhoto:urls[0], qrPhoto:urls[1]
         };

@@ -218,6 +218,9 @@ router.post('/api/expenses', (req, res) => {
   if (!billPhoto) {
     return res.status(400).json({ success: false, error: 'Bill photo is required before an expense can be submitted.' });
   }
+  if (paymentType === 'UPI' && !qrPhoto) {
+    return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
+  }
   const claimant = (req.user && req.user.username) || 'system';
 
   const vendor = String(b.vendor || '').trim();
@@ -236,7 +239,7 @@ router.post('/api/expenses', (req, res) => {
     nature, type, ledger, vendor,
     claimant,                                     // who did the errand (was "runner")
     account: '',                                  // selected by approver when payment is made
-    channel, bill, fundedBy: 'company', paymentType, qrPhoto,
+    channel, bill, fundedBy: 'company', paymentType, qrPhoto: paymentType === 'UPI' ? qrPhoto : '',
     billPhoto,                                    // normal printed/handwritten bill
     purchasePaymentProof: '', exceptionEvidence: '', exceptionReason: '', billNote: '',
     paymentProof: '',                             // company payment/reimbursement proof
@@ -296,6 +299,10 @@ router.post('/api/expenses/:id', (req, res, next) => {
     }
     e.vendor = vendor;
   }
+  if (e.paymentType === 'UPI' && !e.qrPhoto) {
+    return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
+  }
+  if (e.paymentType !== 'UPI') e.qrPhoto = '';
   saveStore(s);
   res.json({ success: true, expense: e });
 });
