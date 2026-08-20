@@ -300,6 +300,11 @@ test('account adjustments require a reason and support explicit add or deduct en
 });
 
 test('date-range spending dashboard separates incurred spend from company cash paid', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /<label>Breakdown by<\/label>/);
+  assert.match(html, /function renderSpendingBreakdown\(\)/);
+  assert.match(html, /<option value="categories">Category<\/option>/);
+  assert.doesNotMatch(html, /spendingTable\('By entity'/);
   const created = invoke('POST', '/api/expenses', { body: {
     vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'
   } });
