@@ -41,11 +41,11 @@ const SECTION_ORDER = ['Main', 'Sales', 'Store Ops', 'Purchases', 'Accounts', 'M
 // Everything starts 'hidden' (blank launcher). We turn modules 'live'
 // deliberately, one at a time, as we build/bless them together.
 const MODULES = [
-  { key: 'restock',      title: 'Restock Planner',       desc: 'Reorder fast-movers before they run out',            icon: '🔄', href: '/index.html#restock',            section: 'Main',      status: 'live', roles: ['admin', 'inventory'] },
-  { key: 'velocity',     title: 'Velocity Intelligence', desc: 'How fast every product is selling',                  icon: '⚡', href: '/velocity.html',                  section: 'Main',      status: 'live', roles: ['admin', 'sales', 'inventory'] },
-  { key: 'analytics',    title: 'Analytics',             desc: 'Sales & performance dashboards',                     icon: '📊', href: '/analytics.html',                 section: 'Main',      status: 'live', roles: ['admin', 'sales'] },
-  { key: 'inv-stats',    title: 'Inventory Statistics',  desc: 'Stock levels & valuation',                           icon: '📈', href: '/inventory-stats.html',           section: 'Main',      status: 'live', roles: ['admin', 'inventory'] },
-  { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'live', roles: ['admin', 'stocksearch', 'warehouse'] },
+  { key: 'restock',      title: 'Restock Planner',       desc: 'Reorder fast-movers before they run out',            icon: '🔄', href: '/index.html#restock',            section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
+  { key: 'velocity',     title: 'Velocity Intelligence', desc: 'How fast every product is selling',                  icon: '⚡', href: '/velocity.html',                  section: 'Main',      status: 'hidden', roles: ['admin', 'sales', 'inventory'] },
+  { key: 'analytics',    title: 'Analytics',             desc: 'Sales & performance dashboards',                     icon: '📊', href: '/analytics.html',                 section: 'Main',      status: 'hidden', roles: ['admin', 'sales'] },
+  { key: 'inv-stats',    title: 'Inventory Statistics',  desc: 'Stock levels & valuation',                           icon: '📈', href: '/inventory-stats.html',           section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
+  { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'hidden', roles: ['admin', 'stocksearch', 'warehouse'] },
 
   { key: 'orders',       title: 'Orders',                desc: 'Every Shopify sale (POS + Website) + dispatch tracking', icon: '🧾', href: '/orders.html',                section: 'Sales',     status: 'live',   roles: ['admin', 'sales', 'revenue', 'warehouse'] },
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.
@@ -58,8 +58,8 @@ const MODULES = [
   { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'revenue'] },
   { key: 'expenses',     title: 'Expenses',              desc: 'Log → approve (bill proof) → pay (payment proof); cash balances', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'claimant'] },
 
-  { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'live', roles: ['admin', 'inventory', 'warehouse'] },
-  { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'live', roles: ['admin', 'warehouse'] },
+  { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
+  { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },
 
   { key: 'users',        title: 'Users & Roles',         desc: 'Add staff and set what they can access',             icon: '👥', href: '/admin-users.html',               section: 'Admin',     status: 'live',   roles: ['admin'] }
 ];
