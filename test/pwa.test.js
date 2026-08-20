@@ -37,6 +37,7 @@ test('login page cannot automatically loop back to a protected page', () => {
   assert.match(source, /location\.href = d\.home/);
   assert.match(source, /serviceWorker\.getRegistrations\(\)/);
   assert.match(source, /key\.indexOf\('sanki-os-'\)/);
+  assert.match(source, /fetch\('\/api\/auth\/diagnostic'/);
 });
 
 test('PWA pages register the manifest, Apple icon, and service worker', () => {

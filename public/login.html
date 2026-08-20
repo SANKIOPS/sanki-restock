@@ -51,6 +51,7 @@
       <input id="password" name="password" type="password" autocomplete="current-password" required />
       <button id="submit-btn" type="submit">Sign in</button>
       <div class="msg" id="msg"></div>
+      <div class="msg" id="session-diagnostic" style="display:none"></div>
     </form>
   </div>
 
@@ -58,6 +59,7 @@
     var form = document.getElementById('login-form');
     var btn  = document.getElementById('submit-btn');
     var msg  = document.getElementById('msg');
+    var diagnostic = document.getElementById('session-diagnostic');
 
     function show(text, kind) {
       msg.textContent = text || '';
@@ -82,6 +84,21 @@
         keys.filter(function (key) { return key.indexOf('sanki-os-') === 0; })
           .forEach(function (key) { caches.delete(key); });
       }).catch(function () {});
+    }
+
+    if (new URLSearchParams(location.search).get('diagnostic') === '1') {
+      fetch('/api/auth/diagnostic', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var s = (d && d.session) || {};
+          diagnostic.style.display = 'block';
+          diagnostic.textContent = 'Session diagnostic: cookie=' + !!s.cookieReceived +
+            ', signature=' + !!s.signatureValid + ', user=' + !!s.userFound + ', role=' + !!s.roleValid;
+        })
+        .catch(function () {
+          diagnostic.style.display = 'block';
+          diagnostic.textContent = 'Session diagnostic unavailable';
+        });
     }
 
     form.addEventListener('submit', function (e) {
