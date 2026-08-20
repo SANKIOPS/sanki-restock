@@ -84,3 +84,13 @@ test('Railway sessions use a stable fallback key and app-wide cookie path', () =
   assert.match(source, /path: '\/'/);
   assert.match(source, /clearCookie\(COOKIE, \{[^}]*path: '\/'/s);
 });
+
+test('public session diagnostic exposes only non-sensitive boolean state', () => {
+  const authSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'auth.js'), 'utf8');
+  const usersSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
+  assert.match(authSource, /p === '\/api\/auth\/diagnostic'/);
+  assert.match(usersSource, /cookieReceived: !!token/);
+  assert.match(usersSource, /signatureValid: !!payload/);
+  const endpoint = usersSource.match(/router\.get\('\/api\/auth\/diagnostic'[\s\S]*?\n\}\);/)[0];
+  assert.doesNotMatch(endpoint, /username|password|token|payload/);
+});

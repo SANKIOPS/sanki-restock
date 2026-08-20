@@ -155,6 +155,7 @@ function gate(req, res, next) {
       p === '/icon-512.png' ||
       p === '/icon-512-maskable.png' ||
       p === '/apple-touch-icon.png' ||
+      p === '/api/auth/diagnostic' ||
       p === '/api/auth/login' ||
       p === '/api/auth/logout') {
     return next();

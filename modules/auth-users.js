@@ -240,6 +240,21 @@ function verifySession(req) {
   return { username: u.username, role: primaryRole(roles), roles };
 }
 
+// Privacy-safe live diagnostic for authentication incidents. It never returns
+// the cookie, username, token payload, password data, or signing material.
+function sessionDiagnostics(req) {
+  const token = parseCookies(req)[COOKIE];
+  const payload = readSession(token);
+  const user = payload ? loadUsers().users.find(x => x.username === payload.u) : null;
+  const roles = user ? normalizeRoles(user) : [];
+  return {
+    cookieReceived: !!token,
+    signatureValid: !!payload,
+    userFound: !!user,
+    roleValid: roles.length > 0
+  };
+}
+
 // ── Boot seed: first Admin from existing DASH_USER / DASH_PASS ────
 function seedAdminIfEmpty() {
   const store = loadUsers();
@@ -288,6 +303,11 @@ router.get('/api/auth/me', (req, res) => {
     home: landingFor(user.role),
     allowedPages: allowedPagesForUser(user)
   });
+});
+
+router.get('/api/auth/diagnostic', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ success: true, session: sessionDiagnostics(req) });
 });
 
 // ── Admin user management (gate already restricts /api/admin to admin) ──
