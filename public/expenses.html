@@ -390,6 +390,10 @@
     function catCell(e){
       var led = '<div style="font-size:12px">'+esc(e.ledger||'—')+'</div>';
       if(e.status==='pending'){
+        if(cfg.isAdmin){
+          led = '<input class="mini-sel" style="width:180px" list="ledgerList" value="'+esc(e.ledger||'')+'" '+
+            'placeholder="Assign category…" onchange="assignCategory(\''+e.id+'\',this.value)">';
+        }
         var typSel = '<select class="mini-sel" onchange="quickEdit(\''+e.id+'\',{type:this.value})">'+
           cfg.types.map(function(t){return '<option'+(t===e.type?' selected':'')+'>'+t+'</option>';}).join('')+'</select>';
         return led+'<div style="margin-top:3px">'+typSel+'</div>';
@@ -439,6 +443,12 @@
     window.quickEdit = function(id, patch){
       api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch) })
         .then(function(d){ if(!d.success) setMsg(d.error||'Could not update.', false); });
+    };
+    window.assignCategory = function(id, value){
+      var ledger=String(value||'').trim(), match=findLedger(ledger);
+      if(!match){ setMsg('Select an existing category from the list.',false); loadList(); return; }
+      api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ledger:match.name,type:match.type}) })
+        .then(function(d){ if(d.success){ setMsg('Category assigned. You can approve the expense now.',true); loadList(); } else setMsg(d.error||'Could not assign category.',false); });
     };
     window.approve = function(id){
       api('/api/expenses/'+id+'/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(function(d){

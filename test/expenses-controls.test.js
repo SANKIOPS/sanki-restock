@@ -168,6 +168,13 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
   assert.match(html, /SAMAST \(Kirti Nagar\)/);
 });
 
+test('Admin or Owner can assign a category directly in the pending expense list', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /placeholder="Assign category…"/);
+  assert.match(html, /window\.assignCategory\s*=\s*function/);
+  assert.match(html, /Category assigned\. You can approve the expense now\./);
+});
+
 test('Telegram setup is Owner-only and supports per-user notification management', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');
