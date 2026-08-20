@@ -188,10 +188,10 @@
         '<div class="fld"><label>Date</label><input type="date" id="f_date" value="'+today()+'"></div>'+
         '<div class="fld" id="normalAmountWrap"><label>Amount ₹</label><input type="number" id="f_amount" min="0" step="1" placeholder="0"></div>'+
         '<div class="fld full"><label>Particulars (what was it for)</label><input id="f_part" placeholder="e.g. lunch for install team, auto to vendor…"></div>'+
-        '<div class="fld full"><label>Category (expense header)</label>'+
+        (cfg.canApprove?'<div class="fld full"><label>Category (expense header)</label>'+
           '<input id="f_ledger" list="ledgerList" placeholder="type to search a category…" autocomplete="off">'+
           '<datalist id="ledgerList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist>'+
-          '<div class="hint" id="ledgerHint"></div></div>'+
+          '<div class="hint" id="ledgerHint"></div></div>':'')+
         (cfg.canApprove?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
         '<div class="fld"><label>Nature</label><input value="SANKI" disabled><div class="hint">SANKI business expense — counts in the P&amp;L</div></div>'+
         '<div class="fld combo-wrap"><label>Vendor</label><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" aria-autocomplete="list" aria-controls="vendorSuggestions"><div id="vendorSuggestions" class="combo-menu" role="listbox"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
@@ -211,7 +211,7 @@
       '</div><div class="card"><b>Telegram expense updates</b><div class="hint">Link your own Telegram securely to receive approval, payment, and reimbursement updates.</div><div class="row-actions"><button class="btn ghost mini" id="linkTelegram">Link Telegram</button>'+(cfg.isAdmin?'<button class="btn ghost mini" id="setupTelegram">Connect existing bot</button><button class="btn ghost mini" id="testTelegram">Send test</button>':'')+'</div></div>';
 
       // Category combobox: known → auto-fill type; unknown → offer "request add"
-      el('f_ledger').addEventListener('input', onLedgerInput);
+      if(el('f_ledger')) el('f_ledger').addEventListener('input', onLedgerInput);
       el('f_paymenttype').addEventListener('change', toggleQrPhoto);
       el('f_paidalready').addEventListener('change', togglePaymentFlow);
       el('f_installment').addEventListener('change', toggleInstallment);
@@ -283,8 +283,8 @@
     }
 
     function saveExpense(){
-      var ledgerVal = el('f_ledger').value.trim();
-      if(!findLedger(ledgerVal)){ setMsg('Pick an existing category. New ones must be requested & approved first (type it above → Request add).', false); return; }
+      var ledgerVal = el('f_ledger')?el('f_ledger').value.trim():'';
+      if(el('f_ledger')&&!findLedger(ledgerVal)){ setMsg('Pick an existing category.', false); return; }
       if(!el('f_vendor').value.trim()){setMsg('Enter or select a vendor name.',false);return;}
       if(!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
       var paidAlready=el('f_paidalready').value==='true', paymentType=paidAlready?'UPI':el('f_paymenttype').value;
@@ -414,8 +414,8 @@
         var date=prompt('Date (YYYY-MM-DD):',e.date||''); if(date===null) return;
         var particulars=prompt('Particulars:',e.particulars||''); if(particulars===null) return;
         var amount=prompt('Amount ₹:',e.amount); if(amount===null) return;
-        var ledger=prompt('Category (must match an existing category):',e.ledger||''); if(ledger===null) return;
-        if(!findLedger(ledger)&&!cfg.isAdmin){ setMsg('Only Admin or Owner can add a missing category during approval.',false); return; }
+        var ledger=e.ledger||'';
+        if(cfg.isAdmin){ ledger=prompt('Category (required before approval; Admin/Owner may enter a new one):',ledger); if(ledger===null) return; }
         var type=prompt('Type ('+cfg.types.join(', ')+'):',e.type||'variable'); if(type===null) return;
         var vendor=prompt('Vendor (approved vendor name, or type a corrected/new name for admin to create):',e.vendor||''); if(vendor===null) return;
         var paymentType=prompt('Payment type ('+cfg.paymentTypes.join(', ')+'):',e.paymentType||'UPI'); if(paymentType===null) return;

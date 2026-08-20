@@ -44,7 +44,7 @@ test('claimant cannot submit an expense without a bill photo', async () => {
 test('new vendor submits immediately and approver correction becomes reusable', async () => {
   const created = invoke('POST', '/api/expenses', { body: { ledger: 'FOOD EXPENSE', vendor: 'Vender Typo', amount: 100, billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash' } });
   assert.equal(created.status, 200);
-  const corrected = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { vendor: 'Vendor Corrected' }, role: 'accounting' });
+  const corrected = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { vendor: 'Vendor Corrected', ledger: 'FOOD EXPENSE' }, role: 'owner' });
   assert.equal(corrected.status, 200);
   const approved = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
   assert.equal(approved.status, 200);
@@ -68,7 +68,7 @@ test('bill remains mandatory at approval and payment proof is mandatory for cash
   assert.equal(blockedApproval.status, 400);
   assert.match(blockedApproval.body.error, /Bill photo required/);
 
-  invoke('POST', '/api/expenses/:id', { params: { id }, body: { billPhoto: '/api/expenses/photo/bill.jpg' }, role: 'admin' });
+  invoke('POST', '/api/expenses/:id', { params: { id }, body: { billPhoto: '/api/expenses/photo/bill.jpg', ledger: 'FOOD EXPENSE' }, role: 'admin' });
   const approved = invoke('POST', '/api/expenses/:id/approve', { params: { id }, role: 'admin' });
   assert.equal(approved.status, 200);
 
@@ -95,6 +95,7 @@ test('claimant identity is automatic and claimant-only fields are enforced serve
   assert.equal(created.body.expense.paymentType, 'UPI');
   assert.equal(created.body.expense.qrPhoto, '/api/expenses/photo/vendor-qr.jpg');
   assert.equal(created.body.expense.type, 'variable');
+  assert.equal(created.body.expense.ledger, '');
 
   const edited = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: {
     claimant: 'another-spoof', channel: 'POS'
@@ -148,7 +149,7 @@ test('only Admin or Owner can add a missing category during review', () => {
     billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash'
   } });
   const denied = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'New Review Category' }, role: 'accounting' });
-  assert.equal(denied.status, 400);
+  assert.equal(denied.status, 403);
   const added = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'New Review Category', type: 'running' }, role: 'owner' });
   assert.equal(added.status, 200);
   assert.equal(added.body.expense.ledger, 'New Review Category');
@@ -163,6 +164,7 @@ test('personally paid expense becomes reimbursement pending only after approval'
   } });
   assert.equal(created.status, 200);
   assert.equal(created.body.expense.reimbursementStatus, 'awaiting_approval');
+  invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'FOOD EXPENSE' }, role: 'owner' });
   const approved = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
   assert.equal(approved.body.expense.reimbursementStatus, 'pending');
   const blocked = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500 }, role: 'accounting' });
@@ -177,6 +179,7 @@ test('installments support partial payments and prevent overpayment', () => {
     ledger: 'Furniture Expense-A3', vendor: 'Carpenter', amount: 10000, isInstallment: true, requestedAmount: 1000,
     billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash'
   } });
+  invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Furniture Expense-A3' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
   const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'accounting' });
   assert.equal(partial.body.expense.status, 'partially_paid');

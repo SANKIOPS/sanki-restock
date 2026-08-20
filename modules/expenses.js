@@ -234,15 +234,16 @@ router.get('/api/expenses/config', (req, res) => {
 router.post('/api/expenses', (req, res) => {
   const b = req.body || {};
   const s = loadStore();
-  const ledger = String(b.ledger || '').trim();
+  // Claimants do not classify expenses. Admin/Owner assign the category while
+  // reviewing; trusted accounting submitters may classify their own entries.
+  const ledger = canApprove(req) ? String(b.ledger || '').trim() : '';
   const amount = num(b.amount);
-  if (!ledger) return res.status(400).json({ success: false, error: 'Pick a category (ledger).' });
-  if (!pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
+  if (canApprove(req) && !ledger) return res.status(400).json({ success: false, error: 'Pick a category (ledger).' });
+  if (ledger && !pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
     return res.status(400).json({ success: false, error: 'Select an approved category.' });
   }
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Amount must be greater than 0.' });
 
-  const meta = ledgerMeta(s, ledger);
   const nature = 'SANKI';                              // business-only module
   // Claimants never classify accounting type: every submission starts as
   // Variable. An approver may reclassify it while reviewing the pending row.
@@ -340,6 +341,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (NATURES.includes(b.nature)) e.nature = b.nature;
   if (TYPES.includes(b.type)) e.type = b.type;
   if (b.ledger != null && String(b.ledger).trim()) {
+    if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only Admin or Owner can assign or change the category.' });
     const ledger = String(b.ledger).trim();
     if (!pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
       if (!isAdmin(req)) return res.status(400).json({ success: false, error: 'Only Admin or Owner can add a missing category during approval.' });
@@ -397,6 +399,7 @@ router.post('/api/expenses/:id/approve', (req, res) => {
     return res.status(400).json({ success: false, error: 'Bill photo required to approve.' });
   }
   if (!e.vendor) return res.status(400).json({ success: false, error: 'Vendor name required before approval.' });
+  if (!e.ledger) return res.status(400).json({ success: false, error: 'Admin or Owner must assign a category before approval.' });
   // A claimant may type a new vendor directly. Approval confirms the corrected
   // name and promotes it into the reusable vendor list.
   if (!s.vendors[e.vendor.toLowerCase()]) s.vendors[e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
