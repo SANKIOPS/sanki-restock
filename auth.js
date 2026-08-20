@@ -96,6 +96,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
   { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'claimant', 'owner'] },
+  { prefix: '/api/telegram/',             roles: ['admin', 'accounting', 'claimant', 'owner'] },
   { prefix: '/api/pl/',                   roles: ['admin', 'accounting', 'revenue', 'owner'] },
   { prefix: '/api/procurement/',          roles: ['admin', 'procurement'] },
   { prefix: '/api/fresh/',                roles: ['admin', 'procurement'] },
@@ -148,6 +149,7 @@ function gate(req, res, next) {
   // PUBLIC (no auth): external webhooks (signature-authed), health/keep-alive,
   // and the login page + login/logout endpoints (so people can get in).
   if (p.startsWith('/api/webhooks/') ||
+      p.startsWith('/api/telegram/webhook/') ||
       p === '/api/health' ||
       p === '/healthz' ||
       p === '/login.html' ||

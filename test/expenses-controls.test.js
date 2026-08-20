@@ -41,13 +41,13 @@ test('claimant cannot submit an expense without a bill photo', async () => {
   assert.match(result.body.error, /Bill photo is required/);
 });
 
-test('new vendor is reviewed and can be corrected by an approver before approval', async () => {
-  const requested = invoke('POST', '/api/expenses/requests', { body: { kind: 'vendor', name: 'Vender Typo', details: 'Delhi supplier' } });
-  assert.equal(requested.status, 200);
-  const decided = invoke('POST', '/api/expenses/requests/:id/decide', { params: { id: requested.body.request.id }, body: { approve: true, name: 'Vendor Corrected' }, role: 'accounting' });
-  assert.equal(decided.status, 200);
-  assert.equal(decided.body.request.name, 'Vendor Corrected');
-
+test('new vendor submits immediately and approver correction becomes reusable', async () => {
+  const created = invoke('POST', '/api/expenses', { body: { ledger: 'FOOD EXPENSE', vendor: 'Vender Typo', amount: 100, billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash' } });
+  assert.equal(created.status, 200);
+  const corrected = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { vendor: 'Vendor Corrected' }, role: 'accounting' });
+  assert.equal(corrected.status, 200);
+  const approved = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
+  assert.equal(approved.status, 200);
   const config = invoke('GET', '/api/expenses/config').body;
   assert.ok(config.vendors.includes('Vendor Corrected'));
 });
@@ -84,6 +84,7 @@ test('bill remains mandatory at approval and payment proof is mandatory for cash
 test('claimant identity is automatic and claimant-only fields are enforced server-side', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', amount: 175, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg',
+    vendor: 'Vendor Corrected', type: 'fixed',
     claimant: 'spoofed-name', account: 'Private account', channel: 'POS', paymentType: 'UPI',
     qrPhoto: '/api/expenses/photo/vendor-qr.jpg'
   } });
@@ -93,6 +94,7 @@ test('claimant identity is automatic and claimant-only fields are enforced serve
   assert.equal(created.body.expense.channel, 'Shared');
   assert.equal(created.body.expense.paymentType, 'UPI');
   assert.equal(created.body.expense.qrPhoto, '/api/expenses/photo/vendor-qr.jpg');
+  assert.equal(created.body.expense.type, 'variable');
 
   const edited = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: {
     claimant: 'another-spoof', channel: 'POS'
@@ -106,14 +108,14 @@ test('claimant identity is automatic and claimant-only fields are enforced serve
 
 test('UPI requires a vendor QR photo while Cash and Credit do not', () => {
   const upiWithoutQr = invoke('POST', '/api/expenses', { body: {
-    ledger: 'FOOD EXPENSE', amount: 100, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'UPI'
+    ledger: 'FOOD EXPENSE', vendor: 'Vendor Corrected', amount: 100, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'UPI'
   } });
   assert.equal(upiWithoutQr.status, 400);
   assert.match(upiWithoutQr.body.error, /QR-code photo is required/);
 
   for (const paymentType of ['Cash', 'Credit']) {
     const result = invoke('POST', '/api/expenses', { body: {
-      ledger: 'FOOD EXPENSE', amount: 100, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg', paymentType
+      ledger: 'FOOD EXPENSE', vendor: 'Vendor Corrected', amount: 100, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg', paymentType
     } });
     assert.equal(result.status, 200);
     assert.equal(result.body.expense.paymentType, paymentType);
@@ -121,14 +123,45 @@ test('UPI requires a vendor QR photo while Cash and Credit do not', () => {
   }
 });
 
-test('claimant form exposes vendor request and simplified payment controls', () => {
+test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /Vendor not listed — request a new vendor/);
-  assert.match(html, /id="vendorRequestWrap"/);
-  assert.match(html, /id="submitVendorRequest"/);
+  assert.match(html, /id="f_vendor" list="vendorList"/);
+  assert.match(html, /Have you already paid for this expense/);
+  assert.match(html, /id="f_personalproof"/);
+  assert.match(html, /id="f_installment"/);
   assert.match(html, /id="f_paymenttype"/);
   assert.match(html, /id="f_qrphoto"/);
+  assert.doesNotMatch(html, /capture="environment"/);
   assert.doesNotMatch(html, /id="f_runner"/);
   assert.doesNotMatch(html, /id="f_funded"/);
   assert.doesNotMatch(html, /id="f_account"/);
+});
+
+test('personally paid expense becomes reimbursement pending only after approval', () => {
+  const created = invoke('POST', '/api/expenses', { body: {
+    ledger: 'FOOD EXPENSE', vendor: 'Personal Vendor', amount: 500, billPhoto: '/api/expenses/photo/bill.jpg',
+    paidAlready: true, personalPaymentProof: '/api/expenses/photo/personal.jpg'
+  } });
+  assert.equal(created.status, 200);
+  assert.equal(created.body.expense.reimbursementStatus, 'awaiting_approval');
+  const approved = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
+  assert.equal(approved.body.expense.reimbursementStatus, 'pending');
+  const blocked = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500 }, role: 'accounting' });
+  assert.equal(blocked.status, 400);
+  const reimbursed = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500, account: 'Cash', paymentProof: '/api/expenses/photo/reimburse.jpg' }, role: 'accounting' });
+  assert.equal(reimbursed.body.expense.reimbursementStatus, 'reimbursed');
+  assert.equal(reimbursed.body.expense.paidAmount, 500);
+});
+
+test('installments support partial payments and prevent overpayment', () => {
+  const created = invoke('POST', '/api/expenses', { body: {
+    ledger: 'Furniture Expense-A3', vendor: 'Carpenter', amount: 10000, isInstallment: true, requestedAmount: 1000,
+    billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash'
+  } });
+  invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
+  const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'accounting' });
+  assert.equal(partial.body.expense.status, 'partially_paid');
+  const over = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 10000, account: 'Cash', paymentProof: '/api/expenses/photo/pay2.jpg' }, role: 'accounting' });
+  assert.equal(over.status, 400);
+  assert.match(over.body.error, /cannot exceed/i);
 });
