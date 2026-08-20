@@ -78,6 +78,29 @@
     dialog .dlg { padding:20px; }
     dialog h3 { margin:0 0 12px; font-size:17px; }
     .prev { max-width:100%; border-radius:8px; margin-top:8px; border:1px solid #d1d5db; }
+    .claim-list { display:grid; gap:9px; }
+    .claim-card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; color:var(--ink); overflow:hidden; }
+    .claim-card summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 12px; padding:10px 12px; cursor:pointer; list-style:none; }
+    .claim-card summary::-webkit-details-marker { display:none; }
+    .claim-card summary::after { content:'›'; color:#94a3b8; font-size:21px; line-height:16px; align-self:center; transform:rotate(90deg); transition:transform .15s ease; }
+    .claim-card[open] summary::after { transform:rotate(-90deg); }
+    .claim-head,.claim-main,.claim-proofs { display:flex; align-items:center; gap:9px; }
+    .claim-head { justify-content:space-between; min-width:0; }
+    .claim-date { font-size:11px; color:#6b7280; }
+    .claim-id { font-size:10px; color:#9ca3af; margin-left:5px; }
+    .claim-main { justify-content:space-between; grid-column:1 / -1; }
+    .claim-desc { min-width:0; font-size:13px; font-weight:700; line-height:1.25; }
+    .claim-vendor { font-size:11px; color:#6b7280; font-weight:400; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:210px; }
+    .claim-amount { font-size:16px; font-weight:800; white-space:nowrap; }
+    .claim-detail { padding:9px 12px 11px; border-top:1px solid #f1f3f5; background:#fafbfc; font-size:11px; color:#64748b; }
+    .claim-meta { display:flex; flex-wrap:wrap; gap:5px 14px; }
+    .claim-proofs { margin-top:8px; padding-top:8px; border-top:1px solid #e8edf2; }
+    .claim-proof { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; color:#475569; font-weight:700; }
+    .claim-proof .thumb { width:30px; height:30px; }
+    .claim-stats .stat { padding:7px 10px; min-width:90px; }
+    .claim-stats .stat .v { font-size:15px; }
+    .claim-card.flash { animation:flashCard 2.6s ease-out; }
+    @keyframes flashCard { 0%,25% { border-color:#f59e0b; background:#fffbeb; } 100% { border-color:#e5e7eb; background:#fff; } }
     tr.flash > td { animation: flashRow 2.6s ease-out; }
     @keyframes flashRow { 0%,25% { background:#fef3c7; } 100% { background:transparent; } }
 
@@ -327,12 +350,13 @@
       el('panel').innerHTML = '<div class="card"><div class="filters" id="filters"></div>'+
         '<div class="stats" id="lstats"></div><div id="ltable" class="muted">Loading…</div></div>';
       var entityOptions = cfg.canApprove ? opts(cfg.natures,selectedNature) : '<option value="">All my expenses</option>'+opts(cfg.natures);
+      var typeFilter = cfg.canApprove?'<div class="fld"><label>Type</label><select id="lf_type"><option value="">All</option>'+opts(cfg.types)+'</select></div>':'';
       el('filters').innerHTML =
         '<div class="fld"><label>Entity</label><select id="lf_nature">'+entityOptions+'</select></div>'+
         '<div class="fld"><label>From</label><input type="date" id="lf_from"></div>'+
         '<div class="fld"><label>To</label><input type="date" id="lf_to"></div>'+
         '<div class="fld"><label>Status</label><select id="lf_status"><option value="">All</option><option>pending</option><option>approved</option><option>partially_paid</option><option>paid</option><option>rejected</option></select></div>'+
-        '<div class="fld"><label>Type</label><select id="lf_type"><option value="">All</option>'+opts(cfg.types)+'</select></div>'+
+        typeFilter+
         '<button class="btn ghost mini" id="lf_go">Filter</button>';
       var n = new Date(Date.now()+5.5*3600*1000); var y=n.getUTCFullYear(), m=n.getUTCMonth();
       el('lf_from').value = y+'-'+String(m+1).padStart(2,'0')+'-01'; el('lf_to').value = today();
@@ -341,18 +365,21 @@
       loadList();
     }
     function loadList(){
-      var q = '?nature='+encodeURIComponent(el('lf_nature').value)+'&from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+el('lf_type').value;
+      var q = '?nature='+encodeURIComponent(el('lf_nature').value)+'&from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+(el('lf_type')?el('lf_type').value:'');
       api('/api/expenses/list'+q).then(function(d){
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
         expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});
         var t = d.totals;
-        el('lstats').innerHTML =
-          '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div>'+
-          '<div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div>'+
-          '<div class="stat"><div class="k">Approved</div><div class="v">'+fmt(t.approved)+'</div></div>'+
-          '<div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div>'+
-          '<div class="stat"><div class="k">Missing bill (legacy)</div><div class="v '+(t.noBill?'neg':'')+'">'+fmt(t.noBill)+'</div></div>';
+        el('lstats').className='stats'+(cfg.canApprove?'':' claim-stats');
+        el('lstats').innerHTML = cfg.canApprove ?
+          '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div><div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div><div class="stat"><div class="k">Approved</div><div class="v">'+fmt(t.approved)+'</div></div><div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div><div class="stat"><div class="k">Missing bill (legacy)</div><div class="v '+(t.noBill?'neg':'')+'">'+fmt(t.noBill)+'</div></div>' :
+          '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div><div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div><div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div>';
         if(!d.expenses.length){ el('ltable').innerHTML='<span class="muted">No expenses in range.</span>'; return; }
+        if(!cfg.canApprove){
+          el('ltable').innerHTML='<div class="claim-list">'+d.expenses.map(claimantCard).join('')+'</div>';
+          if(focusId){var card=el('row_'+focusId);if(card){card.scrollIntoView({block:'center'});card.classList.add('flash');setTimeout(function(){card.classList.remove('flash');},2600);}focusId='';}
+          return;
+        }
         var rows = d.expenses.map(function(e){
           var act = '';
           if(!cfg.canApprove){
@@ -380,6 +407,15 @@
         // Deep links can scroll to and highlight a specific expense row.
         if(focusId){ var row = el('row_'+focusId); if(row){ row.scrollIntoView({block:'center'}); row.classList.add('flash'); setTimeout(function(){ row.classList.remove('flash'); }, 2600); } focusId=''; }
       });
+    }
+    function claimantCard(e){
+      var paymentProof=e.paymentProof||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
+      var proofs=(e.billPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" alt="bill proof">Bill</span>':'')+
+        (paymentProof?'<span class="claim-proof"><img class="thumb" src="'+esc(paymentProof)+'" onclick="window.open(this.src)" alt="payment proof">Payment proof</span>':'');
+      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+'</div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div>'+
+        '<div class="claim-main"><div class="claim-desc">'+esc(e.particulars||'Expense')+(e.vendor?'<div class="claim-vendor">'+esc(e.vendor)+'</div>':'')+'</div><div class="claim-amount">'+fmt(e.amount)+'</div></div></summary>'+
+        '<div class="claim-detail"><div class="claim-meta"><span>'+esc(e.id)+'</span>'+(e.category?'<span>Category: '+esc(e.category)+'</span>':'')+'<span>Payment: '+esc(e.paymentType||e.account||'—')+'</span></div>'+
+        (proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'</div></details>';
     }
     function canApproveExpense(e){
       if(e.bill==='none') return cfg.isAdmin&&e.fundedBy==='claimant'&&e.purchasePaymentProof&&e.exceptionEvidence&&(e.exceptionReason||e.billNote);

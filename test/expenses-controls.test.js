@@ -192,6 +192,17 @@ test('claimant list defaults to all own entities and exposes payment proof', () 
   assert.match(html, /alt="payment proof"/);
 });
 
+test('claimant expense history uses expandable compact rows while approver table remains', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /function claimantCard\(e\)/);
+  assert.match(html, /<details class="claim-card"/);
+  assert.match(html, /<summary>/);
+  assert.match(html, /class="claim-detail"/);
+  assert.match(html, /if\(!cfg\.canApprove\).*claim-list/s);
+  assert.match(html, /Payment proof<\/span>/);
+  assert.match(html, /<table class="resp">/);
+});
+
 test('Telegram setup is Owner-only and supports per-user notification management', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');
