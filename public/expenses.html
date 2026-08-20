@@ -101,6 +101,9 @@
     .expense-section { margin-top:9px; padding-top:9px; border-top:1px solid #e8edf2; }
     .payment-history { display:grid; gap:6px; margin-top:6px; }
     .payment-entry { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:7px 9px; border-radius:7px; background:#fff; border:1px solid #e5e7eb; }
+    .dash-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    .dash-grid .card { margin:0; }
+    .preset-row { display:flex; flex-wrap:wrap; gap:7px; margin-bottom:12px; }
     .claim-stats .stat { padding:7px 10px; min-width:90px; }
     .claim-stats .stat .v { font-size:15px; }
     .claim-card.flash { animation:flashCard 2.6s ease-out; }
@@ -114,6 +117,7 @@
       h1 { font-size:20px; }
       .card { padding:14px; }
       .grid { grid-template-columns:1fr; }
+      .dash-grid { grid-template-columns:1fr; }
       .grid > .fld, .grid > .fld.full { grid-column:1; width:100%; }
       .payment-choice { grid-template-columns:1fr; }
       .payment-choice label { width:100%; min-height:48px; }
@@ -149,6 +153,7 @@
       <button data-t="log" class="on">＋ Log expense</button>
       <button data-t="list">All expenses</button>
       <button data-t="pending" id="pendingTab" style="display:none">Pending payments</button>
+      <button data-t="spending" id="spendingTab" style="display:none">Spending dashboard</button>
       <button data-t="vendors">Vendor ledgers</button>
       <button data-t="cash">Account ledgers</button>
       <button data-t="reimbursements">Reimbursements</button>
@@ -216,6 +221,7 @@
       if(tab==='log') return renderLog();
       if(tab==='list') return renderList();
       if(tab==='pending') return renderPendingPayments();
+      if(tab==='spending') return renderSpendingDashboard();
       if(tab==='vendors') return renderVendors();
       if(tab==='cash') return renderCash();
       if(tab==='reimbursements') return renderReimbursements();
@@ -424,6 +430,23 @@
         expensesById={};d.expenses.forEach(function(e){expensesById[e.id]=e;});
         el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(d.totalOutstanding)+'</div></div><div class="stat"><div class="k">Payments pending</div><div class="v">'+d.expenses.length+'</div></div>';
         el('ptable').innerHTML=d.expenses.length?'<div class="claim-list">'+d.expenses.map(expenseCard).join('')+'</div>':'<span class="muted">No vendor payments pending.</span>';
+      });
+    }
+    function dateDaysAgo(days){var d=new Date(Date.now()+5.5*3600*1000-(days-1)*86400000);return d.toISOString().slice(0,10);}
+    function renderSpendingDashboard(){
+      el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-days="7">Last 7 days</button><button class="btn mini primary" data-days="20">Last 20 days</button><button class="btn mini ghost" data-days="30">Last 30 days</button><button class="btn mini ghost" data-days="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="sd_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="sd_from" value="'+dateDaysAgo(20)+'"></div><div class="fld"><label>To</label><input type="date" id="sd_to" value="'+today()+'"></div><button class="btn primary mini" id="sd_go">Show spending</button></div><div class="stats" id="sd_stats"></div></div><div class="dash-grid" id="sd_tables"></div>';
+      Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(b){b.addEventListener('click',function(){var v=this.dataset.days;el('sd_from').value=v==='month'?today().slice(0,8)+'01':dateDaysAgo(Number(v));el('sd_to').value=today();Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});loadSpendingDashboard();});});
+      el('sd_go').addEventListener('click',loadSpendingDashboard);el('sd_nature').addEventListener('change',loadSpendingDashboard);loadSpendingDashboard();
+    }
+    function spendingTable(title,rows,mode){
+      var body=rows.map(function(x){return '<tr><td>'+esc(x.name)+'</td>'+(mode==='account'?'<td class="r">'+fmt(x.cashPaid)+'</td>':'<td class="r">'+fmt(x.incurred)+'</td><td class="r">'+fmt(x.cashPaid)+'</td><td class="r '+(x.outstanding?'neg':'')+'">'+fmt(x.outstanding)+'</td>')+'</tr>';}).join('');
+      return '<div class="card"><h3 style="margin:0 0 10px">'+esc(title)+'</h3>'+(rows.length?'<table class="resp"><thead><tr><th>'+esc(title.replace('By ',''))+'</th>'+(mode==='account'?'<th class="r">Cash paid</th>':'<th class="r">Incurred</th><th class="r">Cash paid</th><th class="r">Outstanding</th>')+'</tr></thead><tbody>'+body+'</tbody></table>':'<span class="muted">No activity in this range.</span>')+'</div>';
+    }
+    function loadSpendingDashboard(){
+      api('/api/expenses/spending-dashboard?from='+el('sd_from').value+'&to='+el('sd_to').value+'&nature='+encodeURIComponent(el('sd_nature').value)).then(function(d){
+        if(!d.success){setMsg(d.error||'Could not load dashboard.',false);return;}var t=d.totals;
+        el('sd_stats').innerHTML='<div class="stat"><div class="k">Expenses incurred</div><div class="v">'+fmt(t.incurred)+'</div><div class="hint">'+t.count+' approved expense(s)</div></div><div class="stat"><div class="k">Company cash paid</div><div class="v">'+fmt(t.cashPaid)+'</div></div><div class="stat"><div class="k">Still payable</div><div class="v '+(t.outstanding?'neg':'')+'">'+fmt(t.outstanding)+'</div></div><div class="stat"><div class="k">Reimbursements paid</div><div class="v">'+fmt(t.reimbursementPaid)+'</div></div>';
+        el('sd_tables').innerHTML=spendingTable('By entity',d.entities)+spendingTable('By vendor',d.vendors)+spendingTable('By category',d.categories)+spendingTable('By paying account',d.accounts,'account')+spendingTable('By date',d.daily);
       });
     }
     function claimantCard(e){
@@ -750,7 +773,7 @@
     // boot
     loadConfig().then(function(){
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
-      if(cfg.canApprove) el('pendingTab').style.display='';
+      if(cfg.canApprove){el('pendingTab').style.display='';el('spendingTab').style.display='';}
       if(!cfg.canApprove){ // claimant-only: log + view own list, nothing else
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();

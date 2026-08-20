@@ -627,6 +627,46 @@ router.get('/api/expenses/pending-payments', (req, res) => {
   res.json({ success: true, expenses, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0)) });
 });
 
+// One-click spending analysis: incurred expense and actual company cash movement
+// are deliberately separate so credit purchases do not look like paid cash.
+router.get('/api/expenses/spending-dashboard', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view spending analytics.' });
+  const s = loadStore(), from = String(req.query.from || ''), to = String(req.query.to || '');
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
+  if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
+  const allowed = approvalNatures(req), inRange = d => (!from || d >= from) && (!to || d <= to);
+  const groups = { entities: {}, vendors: {}, categories: {}, accounts: {}, daily: {} };
+  const add = (bucket, key, field, amount) => {
+    key = String(key || 'Unspecified'); bucket[key] = bucket[key] || { name:key, incurred:0, cashPaid:0, outstanding:0 };
+    bucket[key][field] = round0(num(bucket[key][field]) + num(amount));
+  };
+  let incurred = 0, cashPaid = 0, outstanding = 0, reimbursementPaid = 0, count = 0;
+  Object.values(s.expenses || {}).forEach(e => {
+    const entity = normalizedNature(e.nature);
+    if (!allowed.includes(entity) || (nature && entity !== nature)) return;
+    const approved = ['approved','partially_paid','paid'].includes(e.status);
+    if (approved && inRange(String(e.date || ''))) {
+      incurred += num(e.amount); count += 1;
+      add(groups.entities, entity, 'incurred', e.amount); add(groups.vendors, e.vendor, 'incurred', e.amount);
+      add(groups.categories, e.ledger, 'incurred', e.amount); add(groups.daily, e.date, 'incurred', e.amount);
+      const due = e.paidAlready ? Math.max(0, num(e.personalPaidAmount)-num(e.reimbursementAmount)) : Math.max(0,num(e.amount)-num(e.paidAmount));
+      outstanding += due; add(groups.entities, entity, 'outstanding', due); add(groups.vendors, e.vendor, 'outstanding', due);
+    }
+    (e.payments || []).filter(p => !p.personalFunds && inRange(String(p.date || ''))).forEach(p => {
+      cashPaid += num(p.amount); add(groups.entities, entity, 'cashPaid', p.amount); add(groups.vendors, e.vendor, 'cashPaid', p.amount);
+      add(groups.categories, e.ledger, 'cashPaid', p.amount); add(groups.accounts, p.account || e.account, 'cashPaid', p.amount); add(groups.daily, p.date, 'cashPaid', p.amount);
+    });
+    (e.reimbursementPayments || []).filter(p => inRange(String(p.date || ''))).forEach(p => {
+      cashPaid += num(p.amount); reimbursementPaid += num(p.amount); add(groups.entities, entity, 'cashPaid', p.amount);
+      add(groups.accounts, p.account, 'cashPaid', p.amount); add(groups.daily, p.date, 'cashPaid', p.amount);
+    });
+  });
+  const rows = bucket => Object.values(bucket).map(x => ({...x,incurred:round0(x.incurred),cashPaid:round0(x.cashPaid),outstanding:round0(x.outstanding)}))
+    .sort((a,b) => (b.incurred+b.cashPaid+b.outstanding)-(a.incurred+a.cashPaid+a.outstanding) || a.name.localeCompare(b.name));
+  res.json({ success:true, range:{from,to}, totals:{incurred:round0(incurred),cashPaid:round0(cashPaid),outstanding:round0(outstanding),reimbursementPaid:round0(reimbursementPaid),count},
+    entities:rows(groups.entities),vendors:rows(groups.vendors),categories:rows(groups.categories),accounts:rows(groups.accounts),daily:rows(groups.daily).sort((a,b)=>a.name.localeCompare(b.name)) });
+});
+
 router.get('/api/expenses/reimbursements', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view reimbursements.' });
   const s = loadStore();

@@ -281,6 +281,27 @@ test('account transfers create equal debit and credit ledger entries', () => {
   assert.equal(personalBlocked.status, 403);
 });
 
+test('date-range spending dashboard separates incurred spend from company cash paid', () => {
+  const created = invoke('POST', '/api/expenses', { body: {
+    vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'
+  } });
+  invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'FOOD EXPENSE' }, role: 'owner' });
+  invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'owner' });
+  const personal = invoke('POST', '/api/expenses', { role: 'owner', body: { nature: 'PERSONAL', ledger: 'FOOD EXPENSE', vendor: 'Private Dashboard Vendor', amount: 100, date: '2026-08-20', billPhoto: '/api/expenses/photo/private-dash.jpg', paymentType: 'Credit' } });
+  invoke('POST', '/api/expenses/:id/approve', { params: { id: personal.body.expense.id }, role: 'owner' });
+  const owner = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'owner' });
+  assert.equal(owner.status, 200);
+  assert.ok(owner.body.totals.incurred >= 900);
+  assert.ok(owner.body.totals.outstanding >= 900);
+  assert.equal(owner.body.vendors.find(x => x.name === 'Dashboard Vendor').incurred, 900);
+  assert.ok(owner.body.entities.some(x => x.name === 'PERSONAL'));
+  const admin = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'admin' });
+  assert.equal(admin.status, 200);
+  assert.equal(admin.body.entities.some(x => x.name === 'PERSONAL'), false);
+  const claimant = invoke('GET', '/api/expenses/spending-dashboard', { role: 'claimant' });
+  assert.equal(claimant.status, 403);
+});
+
 test('Shopify history is filtered by the permanent accounting reset boundary', () => {
   const pl = fs.readFileSync(path.join(__dirname, '..', 'modules', 'pl.js'), 'utf8');
   const orders = fs.readFileSync(path.join(__dirname, '..', 'modules', 'orders.js'), 'utf8');
