@@ -97,6 +97,10 @@
     .claim-proofs { margin-top:8px; padding-top:8px; border-top:1px solid #e8edf2; }
     .claim-proof { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; color:#475569; font-weight:700; }
     .claim-proof .thumb { width:30px; height:30px; }
+    .expense-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }
+    .expense-section { margin-top:9px; padding-top:9px; border-top:1px solid #e8edf2; }
+    .payment-history { display:grid; gap:6px; margin-top:6px; }
+    .payment-entry { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:7px 9px; border-radius:7px; background:#fff; border:1px solid #e5e7eb; }
     .claim-stats .stat { padding:7px 10px; min-width:90px; }
     .claim-stats .stat .v { font-size:15px; }
     .claim-card.flash { animation:flashCard 2.6s ease-out; }
@@ -144,6 +148,7 @@
     <div class="tabs" id="tabs">
       <button data-t="log" class="on">＋ Log expense</button>
       <button data-t="list">All expenses</button>
+      <button data-t="pending" id="pendingTab" style="display:none">Pending payments</button>
       <button data-t="vendors">Vendor ledgers</button>
       <button data-t="cash">Cash balances</button>
       <button data-t="reimbursements">Reimbursements</button>
@@ -210,6 +215,7 @@
       setMsg('');
       if(tab==='log') return renderLog();
       if(tab==='list') return renderList();
+      if(tab==='pending') return renderPendingPayments();
       if(tab==='vendors') return renderVendors();
       if(tab==='cash') return renderCash();
       if(tab==='reimbursements') return renderReimbursements();
@@ -361,7 +367,7 @@
     function renderList(){
       el('panel').innerHTML = '<div class="card"><div class="filters" id="filters"></div>'+
         '<div class="stats" id="lstats"></div><div id="ltable" class="muted">Loading…</div></div>';
-      var entityOptions = cfg.canApprove ? opts(cfg.natures,selectedNature) : '<option value="">All my expenses</option>'+opts(cfg.natures);
+      var entityOptions = '<option value="">All</option>'+opts(cfg.natures);
       var typeFilter = cfg.canApprove?'<div class="fld"><label>Type</label><select id="lf_type"><option value="">All</option>'+opts(cfg.types)+'</select></div>':'';
       el('filters').innerHTML =
         '<div class="fld"><label>Entity</label><select id="lf_nature">'+entityOptions+'</select></div>'+
@@ -373,11 +379,12 @@
       var n = new Date(Date.now()+5.5*3600*1000); var y=n.getUTCFullYear(), m=n.getUTCMonth();
       el('lf_from').value = y+'-'+String(m+1).padStart(2,'0')+'-01'; el('lf_to').value = today();
       el('lf_go').addEventListener('click', loadList);
-      el('lf_nature').addEventListener('change',function(){if(this.value) selectedNature=this.value;loadList();});
+      el('lf_nature').addEventListener('change',loadList);
       loadList();
     }
     function loadList(){
-      var q = '?nature='+encodeURIComponent(el('lf_nature').value)+'&from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+(el('lf_type')?el('lf_type').value:'')+'&limit=75'+(focusedExpenseId?'&id='+encodeURIComponent(focusedExpenseId):'');
+      var focused = focusedExpenseId;
+      var q = '?nature='+encodeURIComponent(focused?'':el('lf_nature').value)+'&from='+(focused?'':el('lf_from').value)+'&to='+(focused?'':el('lf_to').value)+'&status='+(focused?'':el('lf_status').value)+'&type='+(focused?'':(el('lf_type')?el('lf_type').value:''))+'&limit=75'+(focused?'&id='+encodeURIComponent(focused):'');
       api('/api/expenses/list'+q).then(function(d){
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
         expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});
@@ -387,37 +394,36 @@
           '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div><div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div><div class="stat"><div class="k">Approved</div><div class="v">'+fmt(t.approved)+'</div></div><div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div><div class="stat"><div class="k">Missing bill (legacy)</div><div class="v '+(t.noBill?'neg':'')+'">'+fmt(t.noBill)+'</div></div>' :
           '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div><div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div><div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div>';
         if(!d.expenses.length){ el('ltable').innerHTML='<span class="muted">No expenses in range.</span>'; return; }
-        if(!cfg.canApprove){
-          el('ltable').innerHTML='<div class="claim-list">'+d.expenses.map(claimantCard).join('')+'</div>';
-          if(focusId){var card=el('row_'+focusId);if(card){card.scrollIntoView({block:'center'});card.classList.add('flash');setTimeout(function(){card.classList.remove('flash');},2600);}focusId='';}
-          return;
-        }
-        var rows = d.expenses.map(function(e){
-          var act = '';
-          if(!cfg.canApprove){
-            var claimantProof=e.paymentProof||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
-            act = '<span class="muted" style="font-size:11px">'+esc(e.status)+'</span>'+
-              (claimantProof?' <img class="thumb" src="'+esc(claimantProof)+'" onclick="window.open(this.src)" title="payment proof" alt="payment proof">':'');
-          }
-          else if(e.status==='pending') act = (canApproveExpense(e) ? '<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button> ' : '<span class="badge b-nobill">proof incomplete</span> ')+
-            '<button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button> <button class="btn mini ghost" onclick="rejectExpense(\''+e.id+'\')">Reject</button>';
-          else if(e.status==='approved'||e.status==='partially_paid') act = '<button class="btn mini green" onclick="openPay(\''+e.id+'\')">Record vendor payment</button>'+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo</button>':'');
-          else if(e.status==='paid') act = e.paymentProof ? '<img class="thumb" src="'+esc(e.paymentProof)+'" onclick="window.open(this.src)" title="payment proof">' : '';
-          return '<tr id="row_'+e.id+'">'+
-            '<td data-label="Date">'+esc(e.date)+'<div class="muted" style="font-size:10px">'+e.id+'</div></td>'+
-            '<td data-label="Particulars"><span class="tag">'+esc(e.nature||'SANKI')+'</span> '+esc(e.particulars||'—')+(e.vendor?'<div class="muted" style="font-size:11px">vendor: '+esc(e.vendor)+'</div>':'')+'</td>'+
-            '<td data-label="Category">'+catCell(e)+'</td>'+
-            '<td data-label="Claimant">'+esc(e.claimant||e.runner||e.createdBy||'—')+'</td>'+
-            '<td data-label="Payment">'+paymentCell(e)+'</td>'+
-            '<td class="r" data-label="Amount">'+fmt(e.amount)+(e.isInstallment?'<div class="muted" style="font-size:11px">paid '+fmt(e.paidAmount)+' · due '+fmt(Math.max(0,e.amount-e.paidAmount))+'</div>':'')+'</td>'+
-            '<td data-label="Bill">'+billCell(e)+'</td>'+
-            '<td data-label="Status"><span class="badge b-'+e.status+'">'+e.status+'</span></td>'+
-            '<td data-label="Action">'+act+(cfg.canApprove?' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">✕</button>':'')+'</td>'+
-          '</tr>';
-        }).join('');
-        el('ltable').innerHTML = '<table class="resp"><thead><tr><th>Date</th><th>Particulars</th><th>Category</th><th>Claimant</th><th>Payment</th><th class="r">Amount</th><th>Bill</th><th>Status</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table>'+(d.hasMore?'<div class="hint" style="margin-top:8px">Showing the latest '+d.expenses.length+' of '+d.totalCount+' expenses. Use the date and status filters to see older entries.</div>':'');
-        // Deep links can scroll to and highlight a specific expense row.
-        if(focusId){ var row = el('row_'+focusId); if(row){ row.scrollIntoView({block:'center'}); row.classList.add('flash'); setTimeout(function(){ row.classList.remove('flash'); }, 2600); } focusId=''; }
+        el('ltable').innerHTML='<div class="claim-list">'+d.expenses.map(expenseCard).join('')+'</div>'+(d.hasMore?'<div class="hint" style="margin-top:8px">Showing the latest '+d.expenses.length+' of '+d.totalCount+' expenses. Use the filters to see older entries.</div>':'');
+        if(focusId){var card=el('row_'+focusId);if(card){card.open=true;card.scrollIntoView({block:'center'});card.classList.add('flash');setTimeout(function(){card.classList.remove('flash');},2600);}focusId='';focusedExpenseId='';}
+      });
+    }
+    function expenseActions(e){
+      if(!cfg.canApprove) return '';
+      if(e.status==='pending') return (canApproveExpense(e)?'<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button>':'<span class="badge b-nobill">proof incomplete</span>')+' <button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button> <button class="btn mini ghost" onclick="rejectExpense(\''+e.id+'\')">Reject</button>';
+      if(e.status==='approved'||e.status==='partially_paid') return '<button class="btn mini green" onclick="openPay(\''+e.id+'\')">Record payment</button>'+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo approval</button>':'');
+      return '';
+    }
+    function paymentHistory(e){
+      if(!(e.payments||[]).length) return '<span class="muted">No payment recorded yet.</span>';
+      return '<div class="payment-history">'+e.payments.map(function(p){return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'</span><b>'+fmt(p.amount)+'</b>'+(p.proof?' <img class="thumb" src="'+esc(p.proof)+'" onclick="window.open(this.src)" alt="payment proof">':'')+'</div>';}).join('')+'</div>';
+    }
+    function expenseCard(e){
+      var due=Math.max(0,(e.amount||0)-(e.paidAmount||0));
+      var paymentProof=e.paymentProof||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
+      var proofs=(e.billPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" alt="bill proof">Bill</span>':'')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+(paymentProof?'<span class="claim-proof"><img class="thumb" src="'+esc(paymentProof)+'" onclick="window.open(this.src)" alt="payment proof">Payment</span>':'');
+      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div></div><div class="claim-amount">'+fmt(e.amount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(e.claimant||e.createdBy||'—')+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Balance: '+fmt(due)+'</span>'+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
+    }
+    function renderPendingPayments(){
+      el('panel').innerHTML='<div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="pf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>Vendor</label><input id="pf_vendor" placeholder="Search vendor"></div><button class="btn ghost mini" id="pf_go">Filter</button></div><div class="stats" id="pstats"></div><div id="ptable" class="muted">Loading…</div></div>';
+      el('pf_go').addEventListener('click',loadPendingPayments); loadPendingPayments();
+    }
+    function loadPendingPayments(){
+      api('/api/expenses/pending-payments?nature='+encodeURIComponent(el('pf_nature').value)+'&vendor='+encodeURIComponent(el('pf_vendor').value)).then(function(d){
+        if(!d.success){el('ptable').textContent=d.error||'Could not load pending payments.';return;}
+        expensesById={};d.expenses.forEach(function(e){expensesById[e.id]=e;});
+        el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(d.totalOutstanding)+'</div></div><div class="stat"><div class="k">Payments pending</div><div class="v">'+d.expenses.length+'</div></div>';
+        el('ptable').innerHTML=d.expenses.length?'<div class="claim-list">'+d.expenses.map(expenseCard).join('')+'</div>':'<span class="muted">No vendor payments pending.</span>';
       });
     }
     function claimantCard(e){
@@ -725,6 +731,7 @@
     // boot
     loadConfig().then(function(){
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
+      if(cfg.canApprove) el('pendingTab').style.display='';
       if(!cfg.canApprove){ // claimant-only: log + view own list, nothing else
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();

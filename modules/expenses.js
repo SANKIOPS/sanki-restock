@@ -604,6 +604,27 @@ router.get('/api/expenses/list', (req, res) => {
   res.json({ success: true, expenses: list, totals, totalCount, hasMore: totalCount > list.length });
 });
 
+// Approved vendor bills that still require a full or partial company payment.
+router.get('/api/expenses/pending-payments', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view pending payments.' });
+  const s = loadStore();
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
+  const vendor = String(req.query.vendor || '').trim().toLowerCase();
+  if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
+  const today = new Date().toISOString().slice(0, 10);
+  const expenses = Object.values(s.expenses || {}).filter(e => {
+    if (!canApproveExpenseNature(req, e)) return false;
+    if (nature && normalizedNature(e.nature) !== nature) return false;
+    if (vendor && !String(e.vendor || '').toLowerCase().includes(vendor)) return false;
+    return ['approved', 'partially_paid'].includes(e.status) && num(e.paidAmount) < num(e.amount);
+  }).map(e => ({
+    ...e,
+    balanceDue: round0(num(e.amount) - num(e.paidAmount)),
+    daysPending: Math.max(0, Math.floor((Date.parse(today) - Date.parse(String(e.approvedAt || e.date).slice(0, 10))) / 86400000))
+  })).sort((a, b) => b.daysPending - a.daysPending || String(a.approvedAt || '').localeCompare(String(b.approvedAt || '')));
+  res.json({ success: true, expenses, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0)) });
+});
+
 router.get('/api/expenses/reimbursements', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view reimbursements.' });
   const s = loadStore();

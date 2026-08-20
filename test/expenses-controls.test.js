@@ -224,8 +224,8 @@ test('payment dialog lists stored accounts and lets Admin or Owner add one', () 
 
 test('claimant list defaults to all own entities and exposes payment proof', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /All my expenses/);
-  assert.match(html, /claimantProof=e\.paymentProof/);
+  assert.match(html, /<option value="">All<\/option>/);
+  assert.match(html, /paymentProof=e\.paymentProof/);
   assert.match(html, /alt="payment proof"/);
 });
 
@@ -234,20 +234,31 @@ test('expense deep links load only the selected record and normal lists are boun
   const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
   assert.match(html, /focusedExpenseId/);
   assert.match(html, /&limit=75/);
-  assert.match(html, /&id='\+encodeURIComponent\(focusedExpenseId\)/);
+  assert.match(html, /&id='\+encodeURIComponent\(focused\)/);
+  assert.match(html, /card\.open=true/);
   assert.match(server, /if \(id && e\.id !== id\) return false/);
   assert.match(server, /hasMore: totalCount > list\.length/);
 });
 
-test('claimant expense history uses expandable compact rows while approver table remains', () => {
+test('expense history uses expandable compact rows for every role', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /function claimantCard\(e\)/);
+  assert.match(html, /function expenseCard\(e\)/);
   assert.match(html, /<details class="claim-card"/);
   assert.match(html, /<summary>/);
   assert.match(html, /class="claim-detail"/);
-  assert.match(html, /if\(!cfg\.canApprove\).*claim-list/s);
-  assert.match(html, /Payment proof<\/span>/);
-  assert.match(html, /<table class="resp">/);
+  assert.match(html, /d\.expenses\.map\(expenseCard\)/);
+  assert.match(html, /Payment history/);
+});
+
+test('approvers get a pending payments workspace with balances and partial-payment history', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
+  assert.match(html, /data-t="pending"/);
+  assert.match(html, /function renderPendingPayments\(\)/);
+  assert.match(html, /Record payment/);
+  assert.match(server, /router\.get\('\/api\/expenses\/pending-payments'/);
+  assert.match(server, /\['approved', 'partially_paid'\]\.includes\(e\.status\)/);
+  assert.match(server, /canApproveExpenseNature\(req, e\)/);
 });
 
 test('Shopify history is filtered by the permanent accounting reset boundary', () => {
