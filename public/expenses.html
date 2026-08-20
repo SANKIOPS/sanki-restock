@@ -176,7 +176,7 @@
   <dialog id="approveDlg"><div class="dlg">
     <h3>Review and approve expense</h3>
     <div id="approveSummary" class="sub" style="margin-bottom:12px"></div>
-    <div class="fld"><label>Category (required)</label><select id="approveCategory"></select></div>
+    <div class="fld"><label>Category (required)</label><input id="approveCategory" list="approvalLedgerList" placeholder="Type to search or create a category" autocomplete="off"><datalist id="approvalLedgerList"></datalist><div class="hint">Choose an existing suggestion, or type a new category name to create it.</div></div>
     <div class="fld" style="margin-top:10px"><label>Type</label><select id="approveType"></select></div>
     <div class="row-actions">
       <button class="btn primary" id="approveGo">Assign category and approve</button>
@@ -196,7 +196,7 @@
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
     function setMsg(t, ok){ el('msg').className='msg '+(ok?'ok':'err'); el('msg').textContent=t||''; }
 
-    function loadConfig(){ return api('/api/expenses/config').then(function(d){ cfg = d; }); }
+    function loadConfig(){ return api('/api/expenses/config').then(function(d){ cfg = d; if(el('approvalLedgerList')) el('approvalLedgerList').innerHTML=cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join(''); }); }
 
     // ── tabs ──
     el('tabs').addEventListener('click', function(e){
@@ -445,8 +445,8 @@
       var led = '<div style="font-size:12px">'+esc(e.ledger||'—')+'</div>';
       if(e.status==='pending'){
         if(cfg.isAdmin){
-          led = '<input class="mini-sel" style="width:180px" list="ledgerList" value="'+esc(e.ledger||'')+'" '+
-            'placeholder="Assign category…" onchange="assignCategory(\''+e.id+'\',this.value)">';
+          led = '<input class="mini-sel" style="width:180px" list="approvalLedgerList" value="'+esc(e.ledger||'')+'" '+
+            'placeholder="Search or create category…" onchange="assignCategory(\''+e.id+'\',this.value)">';
         }
         var typSel = '<select class="mini-sel" onchange="quickEdit(\''+e.id+'\',{type:this.value})">'+
           cfg.types.map(function(t){return '<option'+(t===e.type?' selected':'')+'>'+t+'</option>';}).join('')+'</select>';
@@ -500,16 +500,16 @@
     };
     window.assignCategory = function(id, value){
       var ledger=String(value||'').trim(), match=findLedger(ledger);
-      if(!match){ setMsg('Select an existing category from the list.',false); loadList(); return; }
-      api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ledger:match.name,type:match.type}) })
-        .then(function(d){ if(d.success){ setMsg('Category assigned. You can approve the expense now.',true); loadList(); } else setMsg(d.error||'Could not assign category.',false); });
+      if(!ledger){ setMsg('Enter or select a category.',false); return; }
+      api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ledger:match?match.name:ledger,type:match?match.type:(expensesById[id]&&expensesById[id].type)||'variable'}) })
+        .then(function(d){ if(d.success){ setMsg((match?'Category assigned.':'New category created and assigned.')+' You can approve the expense now.',true); loadConfig().then(loadList); } else setMsg(d.error||'Could not assign category.',false); });
     };
     window.approve = function(id){
       var e=expensesById[id]||{};
       if(!e.ledger){
         approveId=id;
         el('approveSummary').textContent=id+' · '+(e.particulars||'Expense')+' · '+fmt(e.amount);
-        el('approveCategory').innerHTML='<option value="">Select a category…</option>'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">'+esc(l.name)+'</option>';}).join('');
+        el('approveCategory').value='';
         el('approveType').innerHTML=opts(cfg.types); el('approveType').value=e.type||'variable';
         el('approveMsg').textContent=''; el('approveDlg').showModal(); return;
       }
@@ -519,7 +519,7 @@
     };
     el('approveCancel').addEventListener('click',function(){el('approveDlg').close();});
     el('approveGo').addEventListener('click',function(){
-      var ledger=el('approveCategory').value, type=el('approveType').value;
+      var ledger=String(el('approveCategory').value||'').trim(), type=el('approveType').value;
       if(!ledger){el('approveMsg').textContent='Please select a category.';return;}
       el('approveGo').disabled=true; el('approveMsg').textContent='Saving category…';
       api('/api/expenses/'+approveId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ledger:ledger,type:type})}).then(function(saved){

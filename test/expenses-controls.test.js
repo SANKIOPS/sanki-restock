@@ -170,9 +170,9 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
 
 test('Admin or Owner can assign a category directly in the pending expense list', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /placeholder="Assign category…"/);
+  assert.match(html, /placeholder="Search or create category…"/);
   assert.match(html, /window\.assignCategory\s*=\s*function/);
-  assert.match(html, /Category assigned\. You can approve the expense now\./);
+  assert.match(html, /New category created and assigned/);
 });
 
 test('approving an uncategorized expense opens a mobile-safe category review dialog', () => {
@@ -182,6 +182,9 @@ test('approving an uncategorized expense opens a mobile-safe category review dia
   assert.match(html, /Assign category and approve/);
   assert.match(html, /approveCategory/);
   assert.match(html, /return api\('\/api\/expenses\/'\+approveId\+'\/approve'/);
+  assert.match(html, /list="approvalLedgerList"/);
+  assert.match(html, /type a new category name to create it/);
+  assert.match(html, /New category created and assigned/);
 });
 
 test('payment dialog lists stored accounts and lets Admin or Owner add one', () => {
