@@ -133,12 +133,13 @@ function blankStore() {
     openingBalances: {},                 // { [account]: opening ₹ }
     openingBalancesByNature: { SAMAST: {}, PERSONAL: {} }, // non-SANKI books stay separate
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
+    transfers: [],                       // [{ id, nature, fromAccount, toAccount, amount, date, proof, note }]
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
     requests: [],                        // [{ id, kind:'ledger'|'account', name, meta, status, by, at, decidedBy, decidedAt }]
     openingInvestment: 0,
     odConfig: { 'Tiana 0425': { limit: 0, ratePct: 0 } },
-    seq: 0, adjSeq: 0, reqSeq: 0
+    seq: 0, adjSeq: 0, transferSeq: 0, reqSeq: 0
   };
 }
 function loadStore() {
@@ -167,6 +168,7 @@ function storedAccountNames(s) {
   const names = new Set([].concat(s.accounts || [], Object.keys(s.openingBalances || {}), Object.keys(s.odConfig || {})));
   Object.values(s.openingBalancesByNature || {}).forEach(map => Object.keys(map || {}).forEach(name => names.add(name)));
   (s.adjustments || []).forEach(x => { if (x.account) names.add(String(x.account)); });
+  (s.transfers || []).forEach(x => { if (x.fromAccount) names.add(String(x.fromAccount)); if (x.toAccount) names.add(String(x.toAccount)); });
   Object.values(s.expenses || {}).forEach(e => {
     if (e.account) names.add(String(e.account));
     (e.payments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
@@ -369,7 +371,7 @@ router.post('/api/expenses', (req, res) => {
 // ── Edit ─────────────────────────────────────────────────────────
 // Single-segment POST paths that have their OWN handlers registered after this
 // param route — the ':id' pattern would otherwise swallow them. Fall through.
-const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'vendors', 'custom-ledgers', 'upload']);
+const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'transfers', 'vendors', 'custom-ledgers', 'upload']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
   const s = loadStore();
@@ -690,13 +692,13 @@ router.post('/api/expenses/vendors', (req, res) => {
 });
 
 // ── Running cash balances per account ────────────────────────────
-// balance = opening + Σ adjustments(top-ups/corrections) − Σ paid-from-account.
+// balance = opening + adjustments + transfers in − transfers out − payments.
 router.get('/api/expenses/balances', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view balances.' });
   const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
-  const paidOut = {}; const adj = {};
+  const paidOut = {}; const adj = {}; const transferIn = {}; const transferOut = {};
   Object.values(s.expenses).forEach(e => {
     if (normalizedNature(e.nature) !== nature) return;
     const a = e.account || '(unspecified)';
@@ -710,14 +712,61 @@ router.get('/api/expenses/balances', (req, res) => {
     });
   });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
+  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => {
+    transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
+    transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
+  });
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  const accounts = s.accounts.map(name => {
+  const accounts = storedAccountNames(s).map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(paidOut[name] || 0);
     const topups = round0(adj[name] || 0);
-    return { name, opening: round0(opening), topups, spent, balance: round0(opening + topups - spent) };
+    const transferredIn = round0(transferIn[name] || 0), transferredOut = round0(transferOut[name] || 0);
+    return { name, opening: round0(opening), topups, transferredIn, transferredOut, spent, balance: round0(opening + topups + transferredIn - transferredOut - spent) };
   });
   res.json({ success: true, accounts });
+});
+
+// A transfer is one atomic event that produces a debit and matching credit.
+router.post('/api/expenses/transfers', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can record transfers.' });
+  const s = loadStore(); const b = req.body || {};
+  const nature = normalizedNature(b.nature);
+  if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for this accounting entity.' });
+  const fromAccount = String(b.fromAccount || '').trim(), toAccount = String(b.toAccount || '').trim();
+  const amount = num(b.amount), proof = String(b.proof || '').trim();
+  const accounts = storedAccountNames(s);
+  if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
+  if (fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
+  if (!accounts.some(a => a.toLowerCase() === fromAccount.toLowerCase()) || !accounts.some(a => a.toLowerCase() === toAccount.toLowerCase())) return res.status(400).json({ success: false, error: 'Select stored accounts.' });
+  if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Transfer amount must be greater than 0.' });
+  if (!proof) return res.status(400).json({ success: false, error: 'Transfer proof is required.' });
+  s.transferSeq = (s.transferSeq || 0) + 1;
+  const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature, fromAccount, toAccount, amount,
+    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, note: String(b.note || '').trim(),
+    createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString() };
+  s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer); saveStore(s);
+  res.json({ success: true, transfer });
+});
+
+router.get('/api/expenses/account-ledger', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view account ledgers.' });
+  const s = loadStore(), nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim();
+  if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
+  if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
+  const from = String(req.query.from || ''), to = String(req.query.to || ''), entries = [];
+  const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
+  entries.push({ id: 'OPENING', date: '', kind: 'opening', description: 'Opening balance', credit: num(openingMap[account]), debit: 0 });
+  (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)) }));
+  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && (x.fromAccount === account || x.toAccount === account)).forEach(x => entries.push({ id:x.id,date:x.date,kind:'transfer',description:x.fromAccount===account?'Transfer to '+x.toAccount:'Transfer from '+x.fromAccount,credit:x.toAccount===account?num(x.amount):0,debit:x.fromAccount===account?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy }));
+  Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === nature).forEach(e => {
+    (e.payments || []).filter(p => !p.personalFunds && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant'),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+  });
+  const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
+  let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });
+  const visible = ordered.filter(x => x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to)));
+  res.json({ success:true, account, nature, entries:visible, balance:round0(running) });
 });
 router.post('/api/expenses/balances', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can edit balances.' });

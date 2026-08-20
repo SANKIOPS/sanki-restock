@@ -261,6 +261,26 @@ test('approvers get a pending payments workspace with balances and partial-payme
   assert.match(server, /canApproveExpenseNature\(req, e\)/);
 });
 
+test('account transfers create equal debit and credit ledger entries', () => {
+  const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts;
+  const cashBefore = before.find(a => a.name === 'Cash').balance;
+  const paytmBefore = before.find(a => a.name === 'Paytm').balance;
+  const transfer = invoke('POST', '/api/expenses/transfers', { role: 'owner', body: {
+    nature: 'SANKI', fromAccount: 'Cash', toAccount: 'Paytm', amount: 250,
+    date: '2026-08-20', proof: '/api/expenses/photo/transfer.jpg', note: 'Test transfer'
+  } });
+  assert.equal(transfer.status, 200);
+  const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts;
+  assert.equal(after.find(a => a.name === 'Cash').balance, cashBefore - 250);
+  assert.equal(after.find(a => a.name === 'Paytm').balance, paytmBefore + 250);
+  const cashLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Cash' }, role: 'owner' }).body;
+  const paytmLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Paytm' }, role: 'owner' }).body;
+  assert.equal(cashLedger.entries.find(x => x.id === transfer.body.transfer.id).debit, 250);
+  assert.equal(paytmLedger.entries.find(x => x.id === transfer.body.transfer.id).credit, 250);
+  const personalBlocked = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'PERSONAL', account: 'Cash' }, role: 'admin' });
+  assert.equal(personalBlocked.status, 403);
+});
+
 test('Shopify history is filtered by the permanent accounting reset boundary', () => {
   const pl = fs.readFileSync(path.join(__dirname, '..', 'modules', 'pl.js'), 'utf8');
   const orders = fs.readFileSync(path.join(__dirname, '..', 'modules', 'orders.js'), 'utf8');

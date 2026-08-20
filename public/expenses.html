@@ -150,7 +150,7 @@
       <button data-t="list">All expenses</button>
       <button data-t="pending" id="pendingTab" style="display:none">Pending payments</button>
       <button data-t="vendors">Vendor ledgers</button>
-      <button data-t="cash">Cash balances</button>
+      <button data-t="cash">Account ledgers</button>
       <button data-t="reimbursements">Reimbursements</button>
     </div>
 
@@ -628,9 +628,13 @@
       });
     }
 
-    // ── CASH BALANCES ──
+    // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS ──
     function renderCash(){
-      el('panel').innerHTML = '<div class="card"><div id="ctable" class="muted">Loading…</div></div>';
+      el('panel').innerHTML = '<div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="cf_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div></div><div id="ctable" class="muted">Loading…</div></div>'+
+        '<div class="card"><h3 style="margin-top:0">Transfer between accounts</h3><div class="grid"><div class="fld"><label>From account</label><select id="tr_from">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>To account</label><select id="tr_to">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>Amount ₹</label><input type="number" id="tr_amount" min="1"></div><div class="fld"><label>Date</label><input type="date" id="tr_date" value="'+today()+'"></div><div class="fld full"><label>Note</label><input id="tr_note" placeholder="Reason or reference"></div><div class="fld full"><label>Transfer proof — required</label><input type="file" id="tr_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="tr_go">Record transfer</button></div></div>'+
+        '<div class="card"><h3 style="margin-top:0">Account statement</h3><div class="filters"><div class="fld"><label>Account</label><select id="lg_account">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>From</label><input type="date" id="lg_from"></div><div class="fld"><label>To</label><input type="date" id="lg_to" value="'+today()+'"></div><button class="btn ghost mini" id="lg_go">View ledger</button></div><div id="ledgerTable" class="muted">Select an account.</div></div>';
+      el('cf_nature').addEventListener('change',function(){selectedNature=this.value;loadCash();loadAccountLedger();});
+      el('tr_go').addEventListener('click',recordTransfer); el('lg_go').addEventListener('click',loadAccountLedger);
       loadCash();
     }
     function loadCash(){
@@ -639,16 +643,31 @@
           return '<tr><td data-label="Account">'+esc(a.name)+'</td>'+
             '<td class="r" data-label="Opening"><input type="number" value="'+a.opening+'" style="width:110px" onchange="setOpening(\''+esc(a.name)+'\',this.value)"></td>'+
             '<td class="r pos" data-label="Top-ups">'+fmt(a.topups)+'</td>'+
+            '<td class="r pos" data-label="Transfers in">'+fmt(a.transferredIn)+'</td>'+
+            '<td class="r neg" data-label="Transfers out">'+fmt(a.transferredOut)+'</td>'+
             '<td class="r neg" data-label="Paid out">'+fmt(a.spent)+'</td>'+
             '<td class="r" data-label="Balance" style="font-weight:800">'+fmt(a.balance)+'</td>'+
             '<td data-label=""><button class="btn mini ghost" onclick="topup(\''+esc(a.name)+'\')">＋ Top up</button>'+
               (cfg.isAdmin ? ' <button class="btn mini ghost" onclick="removeAcct(\''+esc(a.name)+'\')" title="remove wrong account">✕</button>' : '')+
             '</td></tr>';
         }).join('');
-        el('ctable').innerHTML = '<table class="resp"><thead><tr><th>Account</th><th class="r">Opening</th><th class="r">Top-ups</th><th class="r">Paid out</th><th class="r">Balance</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'+
+        el('ctable').innerHTML = '<table class="resp"><thead><tr><th>Account</th><th class="r">Opening</th><th class="r">Adjustments</th><th class="r">Transfers in</th><th class="r">Transfers out</th><th class="r">Paid out</th><th class="r">Balance</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'+
           '<div class="row-actions"><a href="#" id="addAcctLink2">＋ add a paying account'+(cfg.isAdmin?'':' (needs approval)')+'</a></div>'+
-          '<div class="hint" style="margin-top:8px">Balance = opening + top-ups − payments made from this account (only PAID expenses reduce it).</div>';
+          '<div class="hint" style="margin-top:8px">Balance = opening + adjustments + transfers in − transfers out − paid expenses and reimbursements.</div>';
         el('addAcctLink2').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
+      });
+    }
+    function recordTransfer(){
+      var from=el('tr_from').value,to=el('tr_to').value,amount=Number(el('tr_amount').value||0),btn=el('tr_go');
+      if(from===to){setMsg('Choose two different accounts.',false);return;} if(!(amount>0)){setMsg('Enter a transfer amount.',false);return;} if(!el('tr_proof').files[0]){setMsg('Transfer proof is required.',false);return;}
+      btn.disabled=true; uploadFile(el('tr_proof'),selectedNature).then(function(proof){return api('/api/expenses/transfers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:selectedNature,fromAccount:from,toAccount:to,amount:amount,date:el('tr_date').value,note:el('tr_note').value,proof:proof})});}).then(function(d){btn.disabled=false;if(!d.success){setMsg(d.error||'Transfer failed.',false);return;}setMsg('Transfer '+d.transfer.id+' recorded in both account ledgers.',true);el('tr_amount').value='';el('tr_note').value='';el('tr_proof').value='';loadCash();loadAccountLedger();}).catch(function(){btn.disabled=false;setMsg('Transfer upload failed.',false);});
+    }
+    function loadAccountLedger(){
+      var account=el('lg_account').value;if(!account)return;
+      api('/api/expenses/account-ledger?nature='+encodeURIComponent(selectedNature)+'&account='+encodeURIComponent(account)+'&from='+el('lg_from').value+'&to='+el('lg_to').value).then(function(d){
+        if(!d.success){el('ledgerTable').textContent=d.error||'Could not load ledger.';return;}
+        var rows=d.entries.map(function(x){return '<tr><td>'+esc(x.date||'Opening')+'</td><td>'+esc(x.description)+'</td><td>'+esc(x.id)+'</td><td class="r pos">'+(x.credit?fmt(x.credit):'—')+'</td><td class="r neg">'+(x.debit?fmt(x.debit):'—')+'</td><td class="r"><b>'+fmt(x.balance)+'</b></td><td>'+(x.proof?'<img class="thumb" src="'+esc(x.proof)+'" onclick="window.open(this.src)" alt="proof">':'')+'</td></tr>';}).join('');
+        el('ledgerTable').innerHTML='<div class="stat" style="margin-bottom:10px"><div class="k">Current balance · '+esc(d.account)+'</div><div class="v">'+fmt(d.balance)+'</div></div><table class="resp"><thead><tr><th>Date</th><th>Description</th><th>Reference</th><th class="r">Credit</th><th class="r">Debit</th><th class="r">Balance</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table>';
       });
     }
     window.setOpening = function(acct, amt){
