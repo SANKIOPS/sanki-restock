@@ -449,11 +449,17 @@
     function loadPendingPayments(){
       api('/api/expenses/pending-payments?nature='+encodeURIComponent(el('pf_nature').value)+'&vendor='+encodeURIComponent(el('pf_vendor').value)).then(function(d){
         if(!d.success){el('ptable').textContent=d.error||'Could not load pending payments.';return;}
-        expensesById={};d.expenses.forEach(function(e){expensesById[e.id]=e;});
-        el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(d.totalOutstanding)+'</div></div><div class="stat"><div class="k">Payments pending</div><div class="v">'+d.expenses.length+'</div></div>';
-        el('ptable').innerHTML=d.expenses.length?'<div class="claim-list">'+d.expenses.map(expenseCard).join('')+'</div>':'<span class="muted">No vendor payments pending.</span>';
+        expensesById={};d.expenses.concat(d.purchases||[]).forEach(function(e){expensesById[e.id]=e;});
+        var all=d.expenses.concat(d.purchases||[]);
+        el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(d.totalOutstanding)+'</div></div><div class="stat"><div class="k">Payments pending</div><div class="v">'+all.length+'</div></div><div class="stat"><div class="k">Purchase mediator</div><div class="v" style="font-size:17px">'+esc(d.mediator||'Logistics Mediator')+'</div>'+(cfg.isAdmin?'<button class="btn mini ghost" onclick="setMediator(\''+esc(d.mediator||'Logistics Mediator')+'\')">Change</button>':'')+'</div>';
+        var purchases=(d.purchases||[]).map(procurementPayableCard).join('');
+        el('ptable').innerHTML=all.length?'<div class="claim-list">'+purchases+d.expenses.map(expenseCard).join('')+'</div>':'<span class="muted">No vendor payments pending.</span>';
       });
     }
+    function procurementPayableCard(e){
+      return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">ADVANCED PURCHASE</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor)+'<div class="claim-vendor">China supplier: '+esc(e.supplier||'—')+(e.billNo?' · Bill '+esc(e.billNo):'')+'</div></div><div class="claim-amount">'+fmt(e.balanceDue)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Total landed cost: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Balance: '+fmt(e.balanceDue)+'</span><span>Includes goods + China-to-store transport</span></div><div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div><div class="expense-actions"><button class="btn mini green" onclick="openPurchasePay(\''+e.id+'\')">Record mediator payment</button></div></div></details>';
+    }
+    window.setMediator=function(current){var name=prompt('Logistics mediator / payee name:',current||'');if(!name||!name.trim())return;api('/api/expenses/procurement-payables/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediator:name.trim()})}).then(function(d){if(d.success){setMsg('Purchase mediator updated.',true);loadPendingPayments();}else setMsg(d.error||'Could not update mediator.',false);});};
     function dateDaysAgo(days){var d=new Date(Date.now()+5.5*3600*1000-(days-1)*86400000);return d.toISOString().slice(0,10);}
     function renderSpendingDashboard(){
       el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-days="7">Last 7 days</button><button class="btn mini primary" data-days="20">Last 20 days</button><button class="btn mini ghost" data-days="30">Last 30 days</button><button class="btn mini ghost" data-days="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="sd_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="sd_from" value="'+dateDaysAgo(20)+'"></div><div class="fld"><label>To</label><input type="date" id="sd_to" value="'+today()+'"></div><button class="btn primary mini" id="sd_go">Show spending</button></div><div class="stats" id="sd_stats"></div></div><div class="card"><div class="filters"><div class="fld"><label>Breakdown by</label><select id="sd_group"><option value="categories">Category</option><option value="vendors">Vendor</option><option value="entities">Entity</option><option value="accounts">Paying account</option><option value="daily">Date</option></select></div></div><div id="sd_breakdown" class="muted">Loading…</div></div>';
@@ -604,6 +610,7 @@
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';
       el('payDlg').showModal();
     };
+    window.openPurchasePay = function(id){ openPay(id); payMode='procurement'; el('payTitle').textContent='Pay logistics mediator · '+id; };
     window.openReimburse = function(id){
       payId=id; payUrl=''; payMode='reimburse'; var e=expensesById[id]||{};
       el('payTitle').textContent='Reimburse '+(e.createdBy||e.claimant||'claimant'); el('payAcctLabel').textContent='Reimburse from account';
@@ -631,10 +638,10 @@
     });
     el('payGo').addEventListener('click', function(){
       if(!payUrl){ el('payMsg').textContent='Screenshot required.'; return; }
-      var endpoint='/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay');
+      var endpoint=payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay');
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ paymentProof:payUrl, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value }) }).then(function(d){
-        if(d.success){ el('payDlg').close(); if(payMode==='reimburse') loadReimbursements(); else loadList(); setMsg('Payment and proof saved.', true); }
+        if(d.success){ el('payDlg').close(); if(payMode==='reimburse') loadReimbursements(); else if(payMode==='procurement') loadPendingPayments(); else loadList(); setMsg('Payment and proof saved.', true); }
         else el('payMsg').textContent = d.error||'Could not pay.';
       });
     });

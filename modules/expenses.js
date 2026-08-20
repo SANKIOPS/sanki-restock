@@ -27,6 +27,7 @@ const DATA_DIR = process.env.DATA_PATH
   ? path.dirname(process.env.DATA_PATH)
   : path.join(__dirname, '..');
 const EXP_PATH = path.join(DATA_DIR, 'expenses.json');
+const PROC_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
 
 // Proof images (bill + payment screenshot) live on the /data volume, same
 // pattern as procurement photos.
@@ -139,6 +140,11 @@ function blankStore() {
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
     requests: [],                        // [{ id, kind:'ledger'|'account', name, meta, status, by, at, decidedBy, decidedAt }]
     openingInvestment: 0,
+    procurementAccounting: {
+      mediator: 'Logistics Mediator',
+      trackPostedFrom: process.env.PROCUREMENT_ACCOUNTING_FROM || '2026-08-21T00:00:00+05:30',
+      paymentsByPo: {}
+    },
     odConfig: { 'Tiana 0425': { limit: 0, ratePct: 0 } },
     seq: 0, receivableSeq: 0, adjSeq: 0, transferSeq: 0, reqSeq: 0
   };
@@ -151,6 +157,32 @@ function saveStore(s) {
   const tmp = EXP_PATH + '.tmp-' + process.pid + '-' + Date.now();
   fs.writeFileSync(tmp, JSON.stringify(s));
   fs.renameSync(tmp, EXP_PATH);
+}
+function procurementAccounting(s) {
+  s.procurementAccounting = Object.assign({ mediator: 'Logistics Mediator', trackPostedFrom: '2026-08-21T00:00:00+05:30', paymentsByPo: {} }, s.procurementAccounting || {});
+  s.procurementAccounting.paymentsByPo = s.procurementAccounting.paymentsByPo || {};
+  return s.procurementAccounting;
+}
+function loadProcurementStore() {
+  try { return JSON.parse(fs.readFileSync(PROC_PATH, 'utf8')); } catch { return { pos: {} }; }
+}
+function poLandedTotal(po) {
+  let total = 0;
+  (po.newProducts || []).forEach(p => (p.variants || []).forEach(v => { total += num(v.landed) * num(v.qty); }));
+  (po.existingAdds || []).forEach(v => { total += num(v.landed) * num(v.qty); });
+  return round0(total);
+}
+function procurementPayables(s, includePaid) {
+  const cfg = procurementAccounting(s), proc = loadProcurementStore();
+  return Object.values(proc.pos || {}).filter(po => po.status === 'posted' && String(po.postedAt || '') >= String(cfg.trackPostedFrom || ''))
+    .map(po => {
+      const state = cfg.paymentsByPo[po.id] || {}, payments = Array.isArray(state.payments) ? state.payments : [];
+      const amount = poLandedTotal(po), paidAmount = round0(payments.reduce((n, p) => n + num(p.amount), 0));
+      return { id: po.id, source: 'procurement', nature: 'SANKI', vendor: state.mediator || cfg.mediator,
+        supplier: po.vendor || '', billNo: po.billNo || '', date: po.dateReceive || po.datePurchase || String(po.postedAt || '').slice(0, 10),
+        postedAt: po.postedAt || '', particulars: 'Advanced purchase · goods and China-to-store transport', amount, paidAmount,
+        balanceDue: Math.max(0, amount - paidAmount), status: paidAmount >= amount ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'approved'), payments };
+    }).filter(x => includePaid || x.balanceDue > 0).sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 function ledgerMeta(s, name) {
   const ov = (s.ledgerOverrides || {})[name] || {};
@@ -625,7 +657,33 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     balanceDue: round0(num(e.amount) - num(e.paidAmount)),
     daysPending: Math.max(0, Math.floor((Date.parse(today) - Date.parse(String(e.approvedAt || e.date).slice(0, 10))) / 86400000))
   })).sort((a, b) => b.daysPending - a.daysPending || String(a.approvedAt || '').localeCompare(String(b.approvedAt || '')));
-  res.json({ success: true, expenses, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0)) });
+  const purchases = (!nature || nature === 'SANKI') ? procurementPayables(s, false).filter(p => !vendor || String(p.vendor).toLowerCase().includes(vendor) || String(p.supplier).toLowerCase().includes(vendor)) : [];
+  res.json({ success: true, expenses, purchases, mediator: procurementAccounting(s).mediator, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0) + purchases.reduce((n, p) => n + p.balanceDue, 0)) });
+});
+
+// Advanced Purchases remains read-only here. Accounting owns only the mediator
+// name and payment history keyed by PO, so inventory/Shopify data is untouched.
+router.post('/api/expenses/procurement-payables/settings', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin/Owner only.' });
+  const s = loadStore(), name = String((req.body || {}).mediator || '').trim();
+  if (!name) return res.status(400).json({ success: false, error: 'Mediator name is required.' });
+  procurementAccounting(s).mediator = name; saveStore(s);
+  res.json({ success: true, mediator: name });
+});
+router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can pay.' });
+  const s = loadStore(), b = req.body || {}, item = procurementPayables(s, true).find(x => x.id === req.params.id);
+  if (!item) return res.status(404).json({ success: false, error: 'Purchase payable not found.' });
+  const proof = String(b.paymentProof || '').trim(), account = String(b.account || '').trim(), pay = num(b.amount);
+  if (!proof) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
+  if (!storedAccountNames(s).some(x => x.toLowerCase() === account.toLowerCase())) return res.status(400).json({ success: false, error: 'Select a stored paying account.' });
+  if (!(pay > 0) || pay > item.balanceDue) return res.status(400).json({ success: false, error: 'Payment must be greater than zero and cannot exceed ₹' + item.balanceDue + '.' });
+  const cfg = procurementAccounting(s), state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
+  state.payments = Array.isArray(state.payments) ? state.payments : [];
+  state.payments.push({ id:'PPAY-'+String(state.payments.length+1).padStart(3,'0'), amount:pay, account:storedAccountNames(s).find(x=>x.toLowerCase()===account.toLowerCase()) || account,
+    date:String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI', proof,
+    note:String(b.note || '').trim(), paidBy:(req.user&&req.user.username)||'admin', paidAt:new Date().toISOString() });
+  saveStore(s); res.json({ success:true, payable:procurementPayables(s, true).find(x=>x.id===item.id) });
 });
 
 // One-click spending analysis: incurred expense and actual company cash movement
@@ -744,6 +802,10 @@ router.get('/api/expenses/vendors', (req, res) => {
     const b = books[e.vendor] || (books[e.vendor] = { name: e.vendor, billed: 0, paid: 0, outstanding: 0, count: 0, notes: '' });
     b.billed += e.amount; b.paid += num(e.paidAmount); b.count += 1;
   });
+  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => {
+    const b = books[p.vendor] || (books[p.vendor] = { name:p.vendor, billed:0, paid:0, outstanding:0, count:0, notes:'Advanced Purchases mediator' });
+    b.billed += p.amount; b.paid += p.paidAmount; b.count += 1;
+  });
   const list = Object.values(books).map(b => ({
     name: b.name, count: b.count, billed: round0(b.billed), paid: round0(b.paid),
     outstanding: round0(b.billed - b.paid), notes: b.notes
@@ -787,6 +849,7 @@ router.get('/api/expenses/balances', (req, res) => {
       paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
     });
   });
+  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
   (s.transfers || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => {
@@ -840,6 +903,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     (e.payments || []).filter(p => !p.personalFunds && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant'),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
   });
+  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
   let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });

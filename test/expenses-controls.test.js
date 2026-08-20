@@ -415,3 +415,18 @@ test('installments support partial payments and prevent overpayment', () => {
   assert.equal(over.status, 400);
   assert.match(over.body.error, /cannot exceed/i);
 });
+
+test('posted advanced purchases become mediator payables without changing procurement', () => {
+  const procurementFile = path.join(tempDir, 'procurement.json');
+  const original = { pos: { 'PO-9001': { id:'PO-9001', status:'posted', postedAt:'2026-08-21T08:00:00.000Z', dateReceive:'2026-08-21', vendor:'CHINA SUPPLIER', billNo:'CN-77',
+    newProducts:[{variants:[{qty:2,landed:500}]}], existingAdds:[{qty:1,landed:250}] } } };
+  fs.writeFileSync(procurementFile, JSON.stringify(original));
+  const pending = invoke('GET', '/api/expenses/pending-payments', { query:{nature:'SANKI'}, role:'accounting' });
+  assert.equal(pending.body.purchases[0].amount, 1250);
+  assert.equal(pending.body.purchases[0].supplier, 'CHINA SUPPLIER');
+  const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'accounting', body:{amount:500,account:'Cash',date:'2026-08-21',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
+  assert.equal(partial.body.payable.balanceDue, 750);
+  const ledger = invoke('GET', '/api/expenses/account-ledger', { query:{nature:'SANKI',account:'Cash'}, role:'owner' }).body;
+  assert.ok(ledger.entries.some(x => x.kind === 'purchase' && x.debit === 500));
+  assert.deepEqual(JSON.parse(fs.readFileSync(procurementFile, 'utf8')), original);
+});
