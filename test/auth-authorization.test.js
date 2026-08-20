@@ -69,3 +69,10 @@ test('shared authenticated endpoints remain available to all roles', () => {
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/auth/me'), true);
   assert.equal(apiAllowedForUser(user('accounting'), '/api/modules'), true);
 });
+
+test('safe PWA update assets remain public so expired sessions can recover', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'auth.js'), 'utf8');
+  for (const asset of ['/sw.js', '/manifest.webmanifest', '/icon-192.png', '/apple-touch-icon.png']) {
+    assert.match(source, new RegExp(`p === ['"]${asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`));
+  }
+});

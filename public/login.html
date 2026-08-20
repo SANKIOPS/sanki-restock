@@ -69,6 +69,21 @@
     // creates /login.html ↔ /dashboard.html redirect loops. A successful form
     // login below still sends the user to their correct role home.
 
+    // Recovery boundary: a user reaches this public page when their session is
+    // no longer accepted. Remove only this origin's old SANKI PWA worker/cache;
+    // the authenticated destination registers the current worker again.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        regs.forEach(function (reg) { reg.unregister(); });
+      }).catch(function () {});
+    }
+    if ('caches' in window) {
+      caches.keys().then(function (keys) {
+        keys.filter(function (key) { return key.indexOf('sanki-os-') === 0; })
+          .forEach(function (key) { caches.delete(key); });
+      }).catch(function () {});
+    }
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       var username = document.getElementById('username').value.trim();

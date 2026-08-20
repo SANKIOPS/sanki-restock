@@ -35,6 +35,8 @@ test('login page cannot automatically loop back to a protected page', () => {
   const source = fs.readFileSync(path.join(publicDir, 'login.html'), 'utf8');
   assert.doesNotMatch(source, /fetch\('\/api\/auth\/me'/);
   assert.match(source, /location\.href = d\.home/);
+  assert.match(source, /serviceWorker\.getRegistrations\(\)/);
+  assert.match(source, /key\.indexOf\('sanki-os-'\)/);
 });
 
 test('PWA pages register the manifest, Apple icon, and service worker', () => {
