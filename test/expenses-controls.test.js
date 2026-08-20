@@ -143,6 +143,19 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
   assert.doesNotMatch(html, /id="f_account"/);
 });
 
+test('Telegram setup is Owner-only and supports per-user notification management', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');
+  assert.match(html, /cfg\.isOwner\?'<div class="card"><b>Telegram notifications \(Owner only\)/);
+  assert.match(html, /id="telegramUser"/);
+  assert.match(html, /Test selected user/);
+  assert.match(html, /Disconnect selected user/);
+  assert.doesNotMatch(html, /Link your own Telegram/);
+  assert.match(telegram, /router\.post\('\/api\/telegram\/link'.*if\(!owner\(req\)\)/);
+  assert.match(telegram, /router\.post\('\/api\/telegram\/test'.*if\(!owner\(req\)\)/);
+  assert.match(telegram, /router\.post\('\/api\/telegram\/unlink'.*if\(!owner\(req\)\)/);
+});
+
 test('only Admin or Owner can add a missing category during review', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', vendor: 'Vendor Corrected', amount: 90,

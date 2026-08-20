@@ -208,7 +208,7 @@
         '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*"><div class="hint" id="billHint">Printed or handwritten; choose Camera, Photo Library, or Files.</div></div>'+
       '</div>'+
       '<div class="row-actions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
-      '</div>'+(cfg.isOwner?'<div class="card"><b>Telegram user linking (Owner only)</b><div class="hint">Choose a user, generate a 15-minute link, then send that link to the user. Claimants and other users cannot initiate linking.</div><div class="row-actions"><select id="telegramUser"><option value="">Loading users…</option></select><button class="btn ghost mini" id="linkTelegram">Generate link</button><button class="btn ghost mini" id="setupTelegram">Connect existing bot</button><button class="btn ghost mini" id="testTelegram">Send test</button></div><div id="telegramLinkResult" class="hint"></div></div>':'');
+      '</div>'+(cfg.isOwner?'<div class="card"><b>Telegram notifications (Owner only)</b><div class="hint">Set up each claimant, approver, accountant, or other user who needs notifications. Generate a 15-minute link and send it to that user; they must tap Start once.</div><div class="row-actions"><select id="telegramUser"><option value="">Loading users…</option></select><button class="btn ghost mini" id="linkTelegram">Generate / relink</button><button class="btn ghost mini" id="testTelegram">Test selected user</button><button class="btn ghost mini" id="unlinkTelegram">Disconnect selected user</button><button class="btn ghost mini" id="setupTelegram">Connect existing bot</button></div><div id="telegramUserStatus" class="hint"></div><div id="telegramLinkResult" class="hint"></div></div>':'');
 
       // Category combobox: known → auto-fill type; unknown → offer "request add"
       if(el('f_ledger')) el('f_ledger').addEventListener('input', onLedgerInput);
@@ -223,6 +223,7 @@
       if(el('linkTelegram')){el('linkTelegram').addEventListener('click',linkTelegram);loadTelegramUsers();}
       if(el('setupTelegram'))el('setupTelegram').addEventListener('click',setupTelegram);
       if(el('testTelegram'))el('testTelegram').addEventListener('click',testTelegram);
+      if(el('unlinkTelegram'))el('unlinkTelegram').addEventListener('click',unlinkTelegram);
       togglePaymentFlow(); toggleInstallment();
     }
     function renderVendorSuggestions(){
@@ -240,10 +241,13 @@
       });
     }
     function closeVendorSuggestions(ev){if(el('vendorSuggestions')&&!el('vendorSuggestions').contains(ev.target)&&ev.target!==el('f_vendor'))el('vendorSuggestions').classList.remove('open');}
-    function loadTelegramUsers(){api('/api/admin/users').then(function(d){var s=el('telegramUser');s.innerHTML=(d.users||[]).map(function(u){return '<option value="'+esc(u.username)+'">'+esc(u.username)+' ('+esc((u.roles||[]).join(', '))+')</option>';}).join('')||'<option value="">No users found</option>';});}
+    var telegramLinkedUsers=[];
+    function loadTelegramUsers(){Promise.all([api('/api/admin/users'),api('/api/telegram/status')]).then(function(results){var d=results[0],status=results[1],s=el('telegramUser');telegramLinkedUsers=(status.linkedUsernames||[]).map(function(u){return String(u).toLowerCase();});s.innerHTML=(d.users||[]).map(function(u){var linked=telegramLinkedUsers.indexOf(u.username.toLowerCase())>=0;return '<option value="'+esc(u.username)+'">'+(linked?'✅ ':'⚪ ')+esc(u.username)+' ('+esc((u.roles||[]).join(', '))+')</option>';}).join('')||'<option value="">No users found</option>';s.onchange=showTelegramUserStatus;showTelegramUserStatus();});}
+    function showTelegramUserStatus(){var username=el('telegramUser').value,linked=telegramLinkedUsers.indexOf(username.toLowerCase())>=0;el('telegramUserStatus').textContent=username+(linked?' is linked and can receive relevant notifications.':' is not linked yet. Generate a link and send it to this user.');}
     function linkTelegram(){var username=el('telegramUser').value;if(!username){setMsg('Select a user first.',false);return;}api('/api/telegram/link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username})}).then(function(d){if(!d.configured){setMsg('Telegram bot is not configured on Railway yet.',false);return;}if(d.url){el('telegramLinkResult').innerHTML='Link for <b>'+esc(d.username)+'</b>: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">Open Telegram link</a> <button class="btn ghost mini" id="copyTelegramLink">Copy link</button>';el('copyTelegramLink').addEventListener('click',function(){navigator.clipboard.writeText(d.url).then(function(){setMsg('Telegram link copied. Send it to '+d.username+'.',true);});});setMsg('Link generated for '+d.username+'. It expires in 15 minutes.',true);}else setMsg('Connect the existing bot first, then try again.',false);});}
     function setupTelegram(){api('/api/telegram/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(d){setMsg(d.success?'Existing Telegram bot connected. Now click Link Telegram.':(d.error||'Setup failed.'),!!d.success);});}
-    function testTelegram(){api('/api/telegram/test',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(d){setMsg(d.success?'Test sent to '+d.sent+' approver chat(s).':(d.error||'Test failed.'),!!d.success);});}
+    function testTelegram(){var username=el('telegramUser').value;if(!username){setMsg('Select a user first.',false);return;}api('/api/telegram/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username})}).then(function(d){setMsg(d.success?'Test notification sent to '+d.username+'.':(d.error||'Test failed.'),!!d.success);});}
+    function unlinkTelegram(){var username=el('telegramUser').value;if(!username){setMsg('Select a user first.',false);return;}if(!confirm('Disconnect Telegram notifications for '+username+'?'))return;api('/api/telegram/unlink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username})}).then(function(d){setMsg(d.success?'Telegram disconnected for '+d.username+'.':(d.error||'Disconnect failed.'),!!d.success);if(d.success)loadTelegramUsers();});}
     function togglePaymentFlow(){
       var paid=el('f_paidalready').value==='true';
       el('paymentTypeWrap').style.display=paid?'none':''; el('personalProofWrap').style.display=paid?'':'none';
