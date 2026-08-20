@@ -294,6 +294,7 @@ test('date-range spending dashboard separates incurred spend from company cash p
   assert.ok(owner.body.totals.incurred >= 900);
   assert.ok(owner.body.totals.outstanding >= 900);
   assert.equal(owner.body.vendors.find(x => x.name === 'Dashboard Vendor').incurred, 900);
+  assert.ok(owner.body.categories.find(x => x.name === 'FOOD EXPENSE').outstanding >= 900);
   assert.ok(owner.body.entities.some(x => x.name === 'PERSONAL'));
   const admin = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'admin' });
   assert.equal(admin.status, 200);

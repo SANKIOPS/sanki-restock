@@ -651,6 +651,7 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
       add(groups.categories, e.ledger, 'incurred', e.amount); add(groups.daily, e.date, 'incurred', e.amount);
       const due = e.paidAlready ? Math.max(0, num(e.personalPaidAmount)-num(e.reimbursementAmount)) : Math.max(0,num(e.amount)-num(e.paidAmount));
       outstanding += due; add(groups.entities, entity, 'outstanding', due); add(groups.vendors, e.vendor, 'outstanding', due);
+      add(groups.categories, e.ledger, 'outstanding', due); add(groups.daily, e.date, 'outstanding', due);
     }
     (e.payments || []).filter(p => !p.personalFunds && inRange(String(p.date || ''))).forEach(p => {
       cashPaid += num(p.amount); add(groups.entities, entity, 'cashPaid', p.amount); add(groups.vendors, e.vendor, 'cashPaid', p.amount);
