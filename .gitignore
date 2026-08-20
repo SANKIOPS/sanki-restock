@@ -6,6 +6,7 @@ node_modules/
 .DS_Store
 
 # Runtime data and authentication material must stay on the Railway volume.
+# This tracked marker also ensures a newly cloned staging environment builds.
 users.json
 session_secret.key
 casuals.json
