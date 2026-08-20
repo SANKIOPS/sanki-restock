@@ -126,6 +126,7 @@ const DEFAULT_PEOPLE = ['Pradeep', 'Prashant'];   // claimants (people who run t
 function blankStore() {
   return {
     expenses: {},
+    receivables: {},
     vendors: {},
     vendorsByNature: { SAMAST: {}, PERSONAL: {} },
     accounts: DEFAULT_ACCOUNTS.slice(),
@@ -139,7 +140,7 @@ function blankStore() {
     requests: [],                        // [{ id, kind:'ledger'|'account', name, meta, status, by, at, decidedBy, decidedAt }]
     openingInvestment: 0,
     odConfig: { 'Tiana 0425': { limit: 0, ratePct: 0 } },
-    seq: 0, adjSeq: 0, transferSeq: 0, reqSeq: 0
+    seq: 0, receivableSeq: 0, adjSeq: 0, transferSeq: 0, reqSeq: 0
   };
 }
 function loadStore() {
@@ -371,7 +372,7 @@ router.post('/api/expenses', (req, res) => {
 // ── Edit ─────────────────────────────────────────────────────────
 // Single-segment POST paths that have their OWN handlers registered after this
 // param route — the ':id' pattern would otherwise swallow them. Fall through.
-const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'transfers', 'vendors', 'custom-ledgers', 'upload']);
+const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'transfers', 'receivables', 'vendors', 'custom-ledgers', 'upload']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
   const s = loadStore();
@@ -694,6 +695,40 @@ router.get('/api/expenses/reimbursements', (req, res) => {
   });
 });
 
+router.post('/api/expenses/receivables', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can create receivables.' });
+  const s=loadStore(), b=req.body||{}, nature=normalizedNature(b.nature), amount=num(b.amount);
+  if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot create a receivable for this accounting entity.'});
+  const party=String(b.party||'').trim(), reason=String(b.reason||'').trim();
+  if(!party) return res.status(400).json({success:false,error:'Party name is required.'});
+  if(!reason) return res.status(400).json({success:false,error:'Reason is required.'});
+  if(!(amount>0)) return res.status(400).json({success:false,error:'Receivable amount must be greater than 0.'});
+  s.receivableSeq=(s.receivableSeq||0)+1; const now=new Date().toISOString(), id='RCV-'+String(s.receivableSeq).padStart(5,'0');
+  const item={id,nature,party,reason,amount,receivedAmount:0,status:'open',date:String(b.date||now.slice(0,10)).slice(0,10),dueDate:String(b.dueDate||'').slice(0,10),proof:String(b.proof||'').trim(),collections:[],createdBy:(req.user&&req.user.username)||'admin',createdAt:now};
+  s.receivables=s.receivables||{};s.receivables[id]=item;saveStore(s);res.json({success:true,receivable:item});
+});
+
+router.get('/api/expenses/receivables', (req,res) => {
+  if(!canApprove(req)) return res.status(403).json({success:false,error:'Only accounting/admin can view receivables.'});
+  const s=loadStore(), nature=req.query.nature?normalizedNature(req.query.nature):'', status=String(req.query.status||''), party=String(req.query.party||'').toLowerCase();
+  if(nature&&!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});
+  const list=Object.values(s.receivables||{}).filter(x=>approvalNatures(req).includes(normalizedNature(x.nature))&&(!nature||normalizedNature(x.nature)===nature)&&(!status||x.status===status)&&(!party||String(x.party).toLowerCase().includes(party))).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
+  res.json({success:true,receivables:list,totalDue:round0(list.reduce((n,x)=>n+Math.max(0,num(x.amount)-num(x.receivedAmount)),0)),totalReceived:round0(list.reduce((n,x)=>n+num(x.receivedAmount),0))});
+});
+
+router.post('/api/expenses/receivables/:id/receive', (req,res) => {
+  if(!canApprove(req)) return res.status(403).json({success:false,error:'Only accounting/admin can record collections.'});
+  const s=loadStore(), x=(s.receivables||{})[req.params.id], b=req.body||{};
+  if(!x) return res.status(404).json({success:false,error:'Receivable not found.'});
+  if(!approvalNatures(req).includes(normalizedNature(x.nature))) return res.status(403).json({success:false,error:'You cannot collect this receivable.'});
+  const due=Math.max(0,num(x.amount)-num(x.receivedAmount)), amount=num(b.amount), account=String(b.account||'').trim(), proof=String(b.proof||'').trim();
+  if(!(amount>0)||amount>due) return res.status(400).json({success:false,error:'Collection must be greater than 0 and cannot exceed ₹'+round0(due)+'.'});
+  if(!storedAccountNames(s).some(a=>a.toLowerCase()===account.toLowerCase())) return res.status(400).json({success:false,error:'Select a stored receiving account.'});
+  if(!proof) return res.status(400).json({success:false,error:'Collection proof is required.'});
+  x.collections=Array.isArray(x.collections)?x.collections:[];x.collections.push({id:'COL-'+String(x.collections.length+1).padStart(3,'0'),amount,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),account:storedAccountNames(s).find(a=>a.toLowerCase()===account.toLowerCase())||account,proof,note:String(b.note||'').trim(),receivedBy:(req.user&&req.user.username)||'admin',receivedAt:new Date().toISOString()});
+  x.receivedAmount=num(x.receivedAmount)+amount;x.status=x.receivedAmount>=x.amount?'received':'partially_received';saveStore(s);res.json({success:true,receivable:x});
+});
+
 // ── Vendor books (accounts payable per vendor) ───────────────────
 router.get('/api/expenses/vendors', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view vendor books.' });
@@ -739,7 +774,7 @@ router.get('/api/expenses/balances', (req, res) => {
   const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
-  const paidOut = {}; const adj = {}; const transferIn = {}; const transferOut = {};
+  const paidOut = {}; const collected = {}; const adj = {}; const transferIn = {}; const transferOut = {};
   Object.values(s.expenses).forEach(e => {
     if (normalizedNature(e.nature) !== nature) return;
     const a = e.account || '(unspecified)';
@@ -753,6 +788,7 @@ router.get('/api/expenses/balances', (req, res) => {
     });
   });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
+  Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
   (s.transfers || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => {
     transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
     transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
@@ -762,8 +798,8 @@ router.get('/api/expenses/balances', (req, res) => {
     const opening = num(openingMap[name]);
     const spent = round0(paidOut[name] || 0);
     const topups = round0(adj[name] || 0);
-    const transferredIn = round0(transferIn[name] || 0), transferredOut = round0(transferOut[name] || 0);
-    return { name, opening: round0(opening), topups, transferredIn, transferredOut, spent, balance: round0(opening + topups + transferredIn - transferredOut - spent) };
+    const transferredIn = round0(transferIn[name] || 0), transferredOut = round0(transferOut[name] || 0), received=round0(collected[name]||0);
+    return { name, opening: round0(opening), topups, received, transferredIn, transferredOut, spent, balance: round0(opening + topups + received + transferredIn - transferredOut - spent) };
   });
   res.json({ success: true, accounts });
 });
@@ -804,6 +840,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     (e.payments || []).filter(p => !p.personalFunds && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant'),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
   });
+  Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
   let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });
   const visible = ordered.filter(x => x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to)));

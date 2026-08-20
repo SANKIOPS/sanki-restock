@@ -321,6 +321,29 @@ test('date-range spending dashboard separates incurred spend from company cash p
   assert.equal(claimant.status, 403);
 });
 
+test('receivables support partial collections and credit the receiving account ledger', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /data-t="receivables"/);
+  assert.match(html, /Record money received/);
+  const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
+  const created = invoke('POST', '/api/expenses/receivables', { role: 'owner', body: { nature:'SANKI',party:'Refund Vendor',reason:'Purchase refund',amount:1000,date:'2026-08-20',dueDate:'2026-08-25' } });
+  assert.equal(created.status, 200);
+  const blocked = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Cash'} });
+  assert.equal(blocked.status, 400);
+  assert.match(blocked.body.error,/proof is required/i);
+  const partial = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Cash',date:'2026-08-21',proof:'/api/expenses/photo/collection.jpg'} });
+  assert.equal(partial.body.receivable.status,'partially_received');
+  const list = invoke('GET','/api/expenses/receivables',{query:{nature:'SANKI'},role:'owner'}).body;
+  assert.equal(list.receivables.find(x=>x.id===created.body.receivable.id).receivedAmount,400);
+  const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
+  assert.equal(after,before+400);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Cash'},role:'owner'}).body;
+  assert.equal(ledger.entries.find(x=>x.id===created.body.receivable.id+'/COL-001').credit,400);
+  const personal=invoke('POST','/api/expenses/receivables',{role:'owner',body:{nature:'PERSONAL',party:'Private',reason:'Loan return',amount:100}});
+  assert.equal(personal.status,200);
+  assert.equal(invoke('GET','/api/expenses/receivables',{query:{nature:'PERSONAL'},role:'admin'}).status,403);
+});
+
 test('Shopify history is filtered by the permanent accounting reset boundary', () => {
   const pl = fs.readFileSync(path.join(__dirname, '..', 'modules', 'pl.js'), 'utf8');
   const orders = fs.readFileSync(path.join(__dirname, '..', 'modules', 'orders.js'), 'utf8');

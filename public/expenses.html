@@ -152,7 +152,8 @@
     <div class="tabs" id="tabs">
       <button data-t="log" class="on">＋ Log expense</button>
       <button data-t="list">All expenses</button>
-      <button data-t="pending" id="pendingTab" style="display:none">Pending payments</button>
+      <button data-t="pending" id="pendingTab" style="display:none">Payables</button>
+      <button data-t="receivables" id="receivablesTab" style="display:none">Receivables</button>
       <button data-t="spending" id="spendingTab" style="display:none">Spending dashboard</button>
       <button data-t="vendors">Vendor ledgers</button>
       <button data-t="cash">Account ledgers</button>
@@ -209,12 +210,18 @@
     <div class="msg" id="adjMsg"></div>
   </div></dialog>
 
+  <dialog id="receiveDlg"><div class="dlg">
+    <h3>Record money received</h3><div id="receiveSummary" class="sub"></div>
+    <div class="grid"><div class="fld"><label>Receiving account</label><select id="receiveAccount"></select></div><div class="fld"><label>Amount ₹</label><input type="number" id="receiveAmount" min="1"></div><div class="fld"><label>Date</label><input type="date" id="receiveDate"></div><div class="fld"><label>Note</label><input id="receiveNote"></div><div class="fld full"><label>Collection proof — required</label><input type="file" id="receiveProof" accept="image/*"></div></div>
+    <div class="row-actions"><button class="btn green" id="receiveGo">Save collection</button><button class="btn ghost" id="receiveCancel">Cancel</button></div><div class="msg" id="receiveMsg"></div>
+  </div></dialog>
+
   <script src="/sidebar.js"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ return '₹' + Math.round(n||0).toLocaleString('en-IN'); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI';
+    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', receiveId = '', receivablesById = {};
 
     function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
@@ -235,6 +242,7 @@
       if(tab==='log') return renderLog();
       if(tab==='list') return renderList();
       if(tab==='pending') return renderPendingPayments();
+      if(tab==='receivables') return renderReceivables();
       if(tab==='spending') return renderSpendingDashboard();
       if(tab==='vendors') return renderVendors();
       if(tab==='cash') return renderCash();
@@ -645,6 +653,22 @@
       });
     }
 
+    function renderReceivables(){
+      el('panel').innerHTML='<div class="card"><h3 style="margin-top:0">Add money receivable</h3><div class="grid"><div class="fld"><label>Entity</label><select id="rv_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div><div class="fld"><label>Party who owes money</label><input id="rv_party" placeholder="Person, customer or vendor"></div><div class="fld full"><label>Reason</label><input id="rv_reason" placeholder="What is this money due for?"></div><div class="fld"><label>Amount ₹</label><input type="number" id="rv_amount" min="1"></div><div class="fld"><label>Entry date</label><input type="date" id="rv_date" value="'+today()+'"></div><div class="fld"><label>Due date</label><input type="date" id="rv_due"></div><div class="fld"><label>Supporting proof — optional</label><input type="file" id="rv_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="rv_add">Add receivable</button></div></div><div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="rv_filter_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>Status</label><select id="rv_status"><option value="">All</option><option value="open">Open</option><option value="partially_received">Partially received</option><option value="received">Received</option></select></div><div class="fld"><label>Party</label><input id="rv_filter_party" placeholder="Search party"></div><button class="btn ghost mini" id="rv_go">Filter</button></div><div class="stats" id="rv_stats"></div><div id="rv_list" class="muted">Loading…</div></div>';
+      el('rv_nature').addEventListener('change',function(){selectedNature=this.value;});el('rv_add').addEventListener('click',createReceivable);el('rv_go').addEventListener('click',loadReceivables);loadReceivables();
+    }
+    function createReceivable(){
+      var party=el('rv_party').value.trim(),reason=el('rv_reason').value.trim(),amount=Number(el('rv_amount').value||0),btn=el('rv_add');if(!party||!reason||!(amount>0)){setMsg('Party, reason and amount are required.',false);return;}
+      btn.disabled=true;var upload=el('rv_proof').files[0]?uploadFile(el('rv_proof'),el('rv_nature').value):Promise.resolve('');upload.then(function(proof){return api('/api/expenses/receivables',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:el('rv_nature').value,party:party,reason:reason,amount:amount,date:el('rv_date').value,dueDate:el('rv_due').value,proof:proof})});}).then(function(d){btn.disabled=false;if(!d.success){setMsg(d.error||'Could not add receivable.',false);return;}setMsg('Receivable '+d.receivable.id+' added.',true);el('rv_party').value='';el('rv_reason').value='';el('rv_amount').value='';el('rv_due').value='';el('rv_proof').value='';loadReceivables();}).catch(function(){btn.disabled=false;setMsg('Could not upload/save receivable.',false);});
+    }
+    function receivableHistory(x){return (x.collections||[]).length?'<div class="payment-history">'+x.collections.map(function(c){return '<div class="payment-entry"><span>'+esc(c.date)+' · '+esc(c.account)+(c.note?' · '+esc(c.note):'')+'</span><b>'+fmt(c.amount)+'</b>'+(c.proof?'<img class="thumb" src="'+esc(c.proof)+'" onclick="window.open(this.src)" alt="collection proof">':'')+'</div>';}).join('')+'</div>':'<span class="muted">No collection recorded yet.</span>';}
+    function loadReceivables(){
+      api('/api/expenses/receivables?nature='+encodeURIComponent(el('rv_filter_nature').value)+'&status='+encodeURIComponent(el('rv_status').value)+'&party='+encodeURIComponent(el('rv_filter_party').value)).then(function(d){if(!d.success){el('rv_list').textContent=d.error||'Could not load receivables.';return;}receivablesById={};d.receivables.forEach(function(x){receivablesById[x.id]=x;});el('rv_stats').innerHTML='<div class="stat"><div class="k">Still receivable</div><div class="v">'+fmt(d.totalDue)+'</div></div><div class="stat"><div class="k">Received</div><div class="v">'+fmt(d.totalReceived)+'</div></div>';el('rv_list').innerHTML=d.receivables.length?'<div class="claim-list">'+d.receivables.map(function(x){var due=Math.max(0,x.amount-x.receivedAmount),overdue=x.dueDate&&x.dueDate<today()&&due>0;return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(x.date)+' · '+esc(x.id)+' · <span class="tag">'+esc(x.nature)+'</span></div><span class="badge b-'+(x.status==='received'?'paid':x.status==='partially_received'?'partially_paid':'approved')+'">'+esc(x.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(x.party)+'<div class="claim-vendor">'+esc(x.reason)+'</div></div><div class="claim-amount">'+fmt(due)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Total: '+fmt(x.amount)+'</span><span>Received: '+fmt(x.receivedAmount)+'</span><span class="'+(overdue?'neg':'')+'">Due date: '+esc(x.dueDate||'Not set')+(overdue?' · OVERDUE':'')+'</span><span>Created by: '+esc(x.createdBy)+'</span></div>'+(x.proof?'<div class="claim-proofs"><span class="claim-proof"><img class="thumb" src="'+esc(x.proof)+'" onclick="window.open(this.src)">Supporting proof</span></div>':'')+'<div class="expense-section"><b>Collection history</b>'+receivableHistory(x)+'</div>'+(due>0?'<div class="expense-actions"><button class="btn mini green" onclick="openReceive(\''+x.id+'\')">Record money received</button></div>':'')+'</div></details>';}).join('')+'</div>':'<span class="muted">No receivables found.</span>';});
+    }
+    window.openReceive=function(id){var x=receivablesById[id];receiveId=id;el('receiveSummary').textContent=id+' · '+x.party+' · '+fmt(Math.max(0,x.amount-x.receivedAmount))+' due';el('receiveAccount').innerHTML=opts(cfg.accounts);el('receiveAmount').value=Math.max(0,x.amount-x.receivedAmount);el('receiveDate').value=today();el('receiveNote').value='';el('receiveProof').value='';el('receiveMsg').textContent='';el('receiveDlg').showModal();};
+    el('receiveCancel').addEventListener('click',function(){el('receiveDlg').close();});
+    el('receiveGo').addEventListener('click',function(){var x=receivablesById[receiveId],btn=el('receiveGo');if(!el('receiveProof').files[0]){el('receiveMsg').textContent='Collection proof is required.';return;}btn.disabled=true;uploadFile(el('receiveProof'),x.nature).then(function(proof){return api('/api/expenses/receivables/'+receiveId+'/receive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:el('receiveAmount').value,account:el('receiveAccount').value,date:el('receiveDate').value,note:el('receiveNote').value,proof:proof})});}).then(function(d){btn.disabled=false;if(!d.success){el('receiveMsg').textContent=d.error||'Could not record collection.';return;}el('receiveDlg').close();setMsg('Money received and account ledger credited.',true);loadReceivables();}).catch(function(){btn.disabled=false;el('receiveMsg').textContent='Could not upload/save collection.';});});
+
     // ── VENDORS ──
     function renderVendors(){
       el('panel').innerHTML = '<div class="card"><div class="row-actions" style="margin-top:0"><input id="newVendor" placeholder="add vendor name"><button class="btn ghost mini" id="addVendor">Add</button></div><div id="vtable" class="muted" style="margin-top:12px">Loading…</div></div>';
@@ -679,7 +703,8 @@
         var rows = d.accounts.map(function(a){
           return '<tr><td data-label="Account">'+esc(a.name)+'</td>'+
             '<td class="r" data-label="Opening"><input type="number" value="'+a.opening+'" style="width:110px" onchange="setOpening(\''+esc(a.name)+'\',this.value)"></td>'+
-            '<td class="r pos" data-label="Top-ups">'+fmt(a.topups)+'</td>'+
+            '<td class="r pos" data-label="Adjustments">'+fmt(a.topups)+'</td>'+
+            '<td class="r pos" data-label="Receipts">'+fmt(a.received)+'</td>'+
             '<td class="r pos" data-label="Transfers in">'+fmt(a.transferredIn)+'</td>'+
             '<td class="r neg" data-label="Transfers out">'+fmt(a.transferredOut)+'</td>'+
             '<td class="r neg" data-label="Paid out">'+fmt(a.spent)+'</td>'+
@@ -688,9 +713,9 @@
               (cfg.isAdmin ? ' <button class="btn mini ghost" onclick="removeAcct(\''+esc(a.name)+'\')" title="remove wrong account">✕</button>' : '')+
             '</td></tr>';
         }).join('');
-        el('ctable').innerHTML = '<table class="resp"><thead><tr><th>Account</th><th class="r">Opening</th><th class="r">Adjustments</th><th class="r">Transfers in</th><th class="r">Transfers out</th><th class="r">Paid out</th><th class="r">Balance</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'+
+        el('ctable').innerHTML = '<table class="resp"><thead><tr><th>Account</th><th class="r">Opening</th><th class="r">Adjustments</th><th class="r">Receipts</th><th class="r">Transfers in</th><th class="r">Transfers out</th><th class="r">Paid out</th><th class="r">Balance</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'+
           '<div class="row-actions"><a href="#" id="addAcctLink2">＋ add a paying account'+(cfg.isAdmin?'':' (needs approval)')+'</a></div>'+
-          '<div class="hint" style="margin-top:8px">Balance = opening + adjustments + transfers in − transfers out − paid expenses and reimbursements.</div>';
+          '<div class="hint" style="margin-top:8px">Balance = opening + adjustments + receivable collections + transfers in − transfers out − paid expenses and reimbursements.</div>';
         el('addAcctLink2').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
       });
     }
@@ -790,7 +815,7 @@
     // boot
     loadConfig().then(function(){
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
-      if(cfg.canApprove){el('pendingTab').style.display='';el('spendingTab').style.display='';}
+      if(cfg.canApprove){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';}
       if(!cfg.canApprove){ // claimant-only: log + view own list, nothing else
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();
