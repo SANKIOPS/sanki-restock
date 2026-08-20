@@ -195,6 +195,20 @@
     <div class="msg" id="approveMsg"></div>
   </div></dialog>
 
+  <dialog id="adjDlg"><div class="dlg">
+    <h3>Add account adjustment</h3>
+    <div class="grid">
+      <div class="fld"><label>Account</label><input id="adjAccount" readonly></div>
+      <div class="fld"><label>Adjustment</label><select id="adjDirection"><option value="add">Add money</option><option value="deduct">Deduct money</option></select></div>
+      <div class="fld"><label>Amount ₹</label><input type="number" id="adjAmount" min="1"></div>
+      <div class="fld"><label>Date</label><input type="date" id="adjDate"></div>
+      <div class="fld full"><label>Reason — required</label><input id="adjReason" placeholder="Why is this balance being adjusted?"></div>
+      <div class="fld full"><label>Proof — optional</label><input type="file" id="adjProof" accept="image/*"></div>
+    </div>
+    <div class="row-actions"><button class="btn primary" id="adjGo">Save adjustment</button><button class="btn ghost" id="adjCancel">Cancel</button></div>
+    <div class="msg" id="adjMsg"></div>
+  </div></dialog>
+
   <script src="/sidebar.js"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
@@ -670,7 +684,7 @@
             '<td class="r neg" data-label="Transfers out">'+fmt(a.transferredOut)+'</td>'+
             '<td class="r neg" data-label="Paid out">'+fmt(a.spent)+'</td>'+
             '<td class="r" data-label="Balance" style="font-weight:800">'+fmt(a.balance)+'</td>'+
-            '<td data-label=""><button class="btn mini ghost" onclick="topup(\''+esc(a.name)+'\')">＋ Top up</button>'+
+            '<td data-label=""><button class="btn mini ghost" onclick="openAdjustment(\''+esc(a.name)+'\')">＋ Add adjustment</button>'+
               (cfg.isAdmin ? ' <button class="btn mini ghost" onclick="removeAcct(\''+esc(a.name)+'\')" title="remove wrong account">✕</button>' : '')+
             '</td></tr>';
         }).join('');
@@ -696,11 +710,14 @@
     window.setOpening = function(acct, amt){
       api('/api/expenses/balances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ nature:selectedNature,setOpening:{account:acct, amount:amt} }) }).then(function(){ loadCash(); });
     };
-    window.topup = function(acct){
-      var amt = prompt('Top up '+acct+' by ₹ (use a negative number to correct down):'); if(amt===null) return;
-      var note = prompt('Note (optional):')||'';
-      api('/api/expenses/balances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ nature:selectedNature,adjust:{account:acct, amount:amt, note:note} }) }).then(function(){ loadCash(); });
-    };
+    window.openAdjustment = function(acct){el('adjAccount').value=acct;el('adjDirection').value='add';el('adjAmount').value='';el('adjDate').value=today();el('adjReason').value='';el('adjProof').value='';el('adjMsg').textContent='';el('adjDlg').showModal();};
+    el('adjCancel').addEventListener('click',function(){el('adjDlg').close();});
+    el('adjGo').addEventListener('click',function(){
+      var amount=Number(el('adjAmount').value||0),reason=el('adjReason').value.trim(),btn=el('adjGo');
+      if(!(amount>0)){el('adjMsg').textContent='Enter an amount greater than zero.';return;}if(!reason){el('adjMsg').textContent='Reason is required.';return;}
+      btn.disabled=true;var upload=el('adjProof').files[0]?uploadFile(el('adjProof'),selectedNature):Promise.resolve('');
+      upload.then(function(proof){return api('/api/expenses/balances',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:selectedNature,adjust:{account:el('adjAccount').value,direction:el('adjDirection').value,amount:amount,date:el('adjDate').value,note:reason,proof:proof}})});}).then(function(d){btn.disabled=false;if(!d.success){el('adjMsg').textContent=d.error||'Could not save adjustment.';return;}el('adjDlg').close();setMsg('Account adjustment recorded.',true);loadCash();loadAccountLedger();}).catch(function(){btn.disabled=false;el('adjMsg').textContent='Could not upload/save adjustment.';});
+    });
 
     window.removeAcct = function(name){
       if(!confirm('Remove account "'+name+'"? (history is kept)')) return;

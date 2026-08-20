@@ -281,6 +281,24 @@ test('account transfers create equal debit and credit ledger entries', () => {
   assert.equal(personalBlocked.status, 403);
 });
 
+test('account adjustments require a reason and support explicit add or deduct entries', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /Add account adjustment/);
+  assert.match(html, /Reason — required/);
+  assert.doesNotMatch(html, /\＋ Top up/);
+  const blocked = invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Cash', direction: 'add', amount: 100 } } });
+  assert.equal(blocked.status, 400);
+  assert.match(blocked.body.error, /reason is required/i);
+  const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
+  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Cash', direction: 'add', amount: 500, date: '2026-08-20', note: 'Cash introduced', proof: '/api/expenses/photo/adjust.jpg' } } }).status, 200);
+  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Cash', direction: 'deduct', amount: 125, date: '2026-08-20', note: 'Counting correction' } } }).status, 200);
+  const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
+  assert.equal(after, before + 375);
+  const ledger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Cash' }, role: 'owner' }).body;
+  assert.equal(ledger.entries.find(x => x.description === 'Cash introduced').proof, '/api/expenses/photo/adjust.jpg');
+  assert.equal(ledger.entries.find(x => x.description === 'Counting correction').debit, 125);
+});
+
 test('date-range spending dashboard separates incurred spend from company cash paid', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'

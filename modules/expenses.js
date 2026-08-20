@@ -798,7 +798,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const from = String(req.query.from || ''), to = String(req.query.to || ''), entries = [];
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   entries.push({ id: 'OPENING', date: '', kind: 'opening', description: 'Opening balance', credit: num(openingMap[account]), debit: 0 });
-  (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)) }));
+  (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
   (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && (x.fromAccount === account || x.toAccount === account)).forEach(x => entries.push({ id:x.id,date:x.date,kind:'transfer',description:x.fromAccount===account?'Transfer to '+x.toAccount:'Transfer from '+x.fromAccount,credit:x.toAccount===account?num(x.amount):0,debit:x.fromAccount===account?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy }));
   Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === nature).forEach(e => {
     (e.payments || []).filter(p => !p.personalFunds && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
@@ -823,11 +823,18 @@ router.post('/api/expenses/balances', (req, res) => {
     } else s.openingBalances[String(b.setOpening.account)] = num(b.setOpening.amount);
   }
   if (b.adjust && b.adjust.account && b.adjust.amount != null) {
+    const rawAmount = Math.abs(num(b.adjust.amount));
+    const direction = String(b.adjust.direction || (num(b.adjust.amount) < 0 ? 'deduct' : 'add'));
+    const note = String(b.adjust.note || '').trim();
+    if (!(rawAmount > 0)) return res.status(400).json({ success: false, error: 'Adjustment amount must be greater than 0.' });
+    if (!['add', 'deduct'].includes(direction)) return res.status(400).json({ success: false, error: 'Choose Add money or Deduct money.' });
+    if (!note) return res.status(400).json({ success: false, error: 'Adjustment reason is required.' });
     s.adjSeq = (s.adjSeq || 0) + 1;
     s.adjustments.push({
       id: 'ADJ-' + s.adjSeq, account: String(b.adjust.account),
-      amount: num(b.adjust.amount), note: String(b.adjust.note || ''),
-      date: (b.adjust.date || new Date().toISOString().slice(0, 10)).toString().slice(0, 10), nature
+      amount: direction === 'deduct' ? -rawAmount : rawAmount, note,
+      date: (b.adjust.date || new Date().toISOString().slice(0, 10)).toString().slice(0, 10), nature,
+      proof: String(b.adjust.proof || '').trim(), createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString()
     });
   }
   saveStore(s);
