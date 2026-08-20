@@ -64,11 +64,10 @@
       msg.className = 'msg' + (kind ? ' ' + kind : '');
     }
 
-    // If already logged in, skip straight to the role's home.
-    fetch('/api/auth/me', { headers: { 'Accept': 'application/json' } })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (me) { if (me && me.success && me.home) location.replace(me.home); })
-      .catch(function () {});
+    // Do not automatically forward from login to a protected page. If a stale
+    // browser credential/cookie disagrees with the page gate, auto-forwarding
+    // creates /login.html ↔ /dashboard.html redirect loops. A successful form
+    // login below still sends the user to their correct role home.
 
     form.addEventListener('submit', function (e) {
       e.preventDefault();

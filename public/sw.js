@@ -5,11 +5,8 @@
 //  • static assets     → stale-while-revalidate (instant from cache, refresh in bg)
 // Only same-origin, status-200, credentialed ("basic") responses are cached, so a
 // login redirect or a cross-origin response never poisons the cache.
-const CACHE = 'sanki-os-v2';
+const CACHE = 'sanki-os-v3';
 const SHELL = [
-  '/dashboard.html',
-  '/expenses.html',
-  '/accounting.html',
   '/sidebar.js',
   '/manifest.webmanifest',
   '/icon-192.png',
@@ -30,7 +27,9 @@ self.addEventListener('activate', (e) => {
 });
 
 function cacheable(res) {
-  return res && res.status === 200 && res.type === 'basic';
+  // A protected page may redirect to login and finish as a 200 response.
+  // Never store that redirected login HTML under the protected page's URL.
+  return res && res.status === 200 && res.type === 'basic' && !res.redirected;
 }
 
 self.addEventListener('fetch', (e) => {

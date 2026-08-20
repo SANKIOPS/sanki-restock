@@ -24,6 +24,19 @@ test('service worker explicitly bypasses every API request', () => {
   assert.doesNotMatch(source, /caches\.put\([^\n]*\/api\//);
 });
 
+test('service worker never precaches protected HTML or caches redirected login responses', () => {
+  const source = fs.readFileSync(path.join(publicDir, 'sw.js'), 'utf8');
+  const shell = source.slice(source.indexOf('const SHELL'), source.indexOf('];', source.indexOf('const SHELL')) + 2);
+  assert.doesNotMatch(shell, /\.html/);
+  assert.match(source, /!res\.redirected/);
+});
+
+test('login page cannot automatically loop back to a protected page', () => {
+  const source = fs.readFileSync(path.join(publicDir, 'login.html'), 'utf8');
+  assert.doesNotMatch(source, /fetch\('\/api\/auth\/me'/);
+  assert.match(source, /location\.href = d\.home/);
+});
+
 test('PWA pages register the manifest, Apple icon, and service worker', () => {
   for (const page of ['dashboard.html', 'expenses.html', 'accounting.html']) {
     const source = fs.readFileSync(path.join(publicDir, page), 'utf8');
