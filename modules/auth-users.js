@@ -148,6 +148,19 @@ function normalizeRoles(u) {
   return roles.length ? Array.from(new Set(roles)) : [];
 }
 function primaryRole(roles) { return roles.includes('admin') ? 'admin' : (roles[0] || ''); }
+function repairMissingRoles(store, u) {
+  let roles = normalizeRoles(u);
+  if (roles.length) return roles;
+  // Legacy users created before role enforcement can exist with a blank or
+  // obsolete role. Restore the configured owner as admin; give every other
+  // such account the least-privileged useful role instead of elevating it.
+  roles = [u.username === process.env.DASH_USER ? 'admin' : 'claimant'];
+  u.roles = roles.slice();
+  delete u.role;
+  saveUsers(store);
+  console.warn('[auth] repaired missing role for an existing user');
+  return roles;
+}
 function rolesOf(user) {
   if (!user) return [];
   if (Array.isArray(user.roles) && user.roles.length) return user.roles;
@@ -234,9 +247,10 @@ function readSession(token) {
 function verifySession(req) {
   const p = readSession(parseCookies(req)[COOKIE]);
   if (!p) return null;
-  const u = loadUsers().users.find(x => x.username === p.u);
+  const store = loadUsers();
+  const u = store.users.find(x => x.username === p.u);
   if (!u) return null;
-  const roles = normalizeRoles(u);
+  const roles = repairMissingRoles(store, u);
   return { username: u.username, role: primaryRole(roles), roles };
 }
 
@@ -270,9 +284,10 @@ function seedAdminIfEmpty() {
 router.post('/api/auth/login', (req, res) => {
   const { username, password } = (req.body || {});
   if (!username || !password) return res.json({ success: false, error: 'Enter username and password' });
-  const u = loadUsers().users.find(x => x.username === String(username));
+  const store = loadUsers();
+  const u = store.users.find(x => x.username === String(username));
   if (!u || !verifyPassword(password, u.password)) return res.json({ success: false, error: 'Invalid username or password' });
-  const roles = normalizeRoles(u);
+  const roles = repairMissingRoles(store, u);
   const primary = primaryRole(roles);
   const token = signSession({ u: u.username, r: primary, exp: Date.now() + SESSION_TTL_MS });
   res.cookie(COOKIE, token, {

@@ -94,3 +94,11 @@ test('public session diagnostic exposes only non-sensitive boolean state', () =>
   const endpoint = usersSource.match(/router\.get\('\/api\/auth\/diagnostic'[\s\S]*?\n\}\);/)[0];
   assert.doesNotMatch(endpoint, /username|password|token|payload/);
 });
+
+test('legacy users with missing roles are repaired without privilege escalation', () => {
+  const usersSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
+  const authSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'auth.js'), 'utf8');
+  assert.match(usersSource, /u\.username === process\.env\.DASH_USER \? 'admin' : 'claimant'/);
+  assert.match(usersSource, /const roles = repairMissingRoles\(store, u\)/);
+  assert.match(authSource, /if \(!rolesOf\(user\)\.length\)/);
+});

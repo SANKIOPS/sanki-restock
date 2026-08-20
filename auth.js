@@ -177,6 +177,13 @@ function gate(req, res, next) {
   }
   req.user = user;
 
+  // Never redirect a role-less account to the dashboard when the dashboard is
+  // also its fallback destination; that creates an infinite self-redirect.
+  if (!rolesOf(user).length) {
+    if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'No valid role assigned' });
+    return res.redirect(302, '/login.html');
+  }
+
   // API permissions are enforced independently of page visibility. Unknown
   // endpoints fail closed for non-admin users until a rule is added above.
   if (p.startsWith('/api/')) {
