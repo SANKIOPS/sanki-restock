@@ -175,6 +175,15 @@ test('Admin or Owner can assign a category directly in the pending expense list'
   assert.match(html, /Category assigned\. You can approve the expense now\./);
 });
 
+test('approving an uncategorized expense opens a mobile-safe category review dialog', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /id="approveDlg"/);
+  assert.match(html, /if\(!e\.ledger\)/);
+  assert.match(html, /Assign category and approve/);
+  assert.match(html, /approveCategory/);
+  assert.match(html, /return api\('\/api\/expenses\/'\+approveId\+'\/approve'/);
+});
+
 test('payment dialog lists stored accounts and lets Admin or Owner add one', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');

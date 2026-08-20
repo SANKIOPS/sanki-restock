@@ -173,12 +173,24 @@
     <div class="msg" id="payMsg"></div>
   </div></dialog>
 
+  <dialog id="approveDlg"><div class="dlg">
+    <h3>Review and approve expense</h3>
+    <div id="approveSummary" class="sub" style="margin-bottom:12px"></div>
+    <div class="fld"><label>Category (required)</label><select id="approveCategory"></select></div>
+    <div class="fld" style="margin-top:10px"><label>Type</label><select id="approveType"></select></div>
+    <div class="row-actions">
+      <button class="btn primary" id="approveGo">Assign category and approve</button>
+      <button class="btn ghost" id="approveCancel">Cancel</button>
+    </div>
+    <div class="msg" id="approveMsg"></div>
+  </div></dialog>
+
   <script src="/sidebar.js"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ return '₹' + Math.round(n||0).toLocaleString('en-IN'); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI';
+    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI';
 
     function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
@@ -493,10 +505,32 @@
         .then(function(d){ if(d.success){ setMsg('Category assigned. You can approve the expense now.',true); loadList(); } else setMsg(d.error||'Could not assign category.',false); });
     };
     window.approve = function(id){
+      var e=expensesById[id]||{};
+      if(!e.ledger){
+        approveId=id;
+        el('approveSummary').textContent=id+' · '+(e.particulars||'Expense')+' · '+fmt(e.amount);
+        el('approveCategory').innerHTML='<option value="">Select a category…</option>'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">'+esc(l.name)+'</option>';}).join('');
+        el('approveType').innerHTML=opts(cfg.types); el('approveType').value=e.type||'variable';
+        el('approveMsg').textContent=''; el('approveDlg').showModal(); return;
+      }
       api('/api/expenses/'+id+'/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(function(d){
         if(d.success) loadList(); else setMsg(d.error||'Could not approve.', false);
       });
     };
+    el('approveCancel').addEventListener('click',function(){el('approveDlg').close();});
+    el('approveGo').addEventListener('click',function(){
+      var ledger=el('approveCategory').value, type=el('approveType').value;
+      if(!ledger){el('approveMsg').textContent='Please select a category.';return;}
+      el('approveGo').disabled=true; el('approveMsg').textContent='Saving category…';
+      api('/api/expenses/'+approveId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ledger:ledger,type:type})}).then(function(saved){
+        if(!saved.success) throw new Error(saved.error||'Could not assign category.');
+        return api('/api/expenses/'+approveId+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      }).then(function(done){
+        el('approveGo').disabled=false;
+        if(!done.success){el('approveMsg').textContent=done.error||'Could not approve.';return;}
+        el('approveDlg').close(); setMsg('Expense approved.',true); loadList();
+      }).catch(function(err){el('approveGo').disabled=false;el('approveMsg').textContent=err.message||'Could not approve.';});
+    });
     window.rejectExpense = function(id){
       var reason=prompt('Reason for rejection:'); if(reason===null) return;
       api('/api/expenses/'+id+'/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason})}).then(function(d){
