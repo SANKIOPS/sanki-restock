@@ -32,6 +32,12 @@ const DATA_DIR = process.env.DATA_PATH
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
 const PROC_PATH = path.join(DATA_DIR, 'procurement.json');
 const PL_PATH = path.join(DATA_DIR, 'pl.json');
+const ACCOUNTING_BOUNDARY_PATH = path.join(DATA_DIR, 'accounting-boundary.json');
+
+function accountingStartAt() {
+  try { return String(JSON.parse(fs.readFileSync(ACCOUNTING_BOUNDARY_PATH, 'utf8')).startAt || ''); }
+  catch { return ''; }
+}
 
 // GST is NOT stored per order in Shopify (SANKI prices are GST-INCLUSIVE, so
 // total_tax comes back ~0). To show a real ex-GST figure we back-calculate GST
@@ -110,7 +116,9 @@ function numOr(v, d) { const n = parseFloat(v); return isNaN(n) ? d : n; }
 function loadOrders() {
   try {
     const s = JSON.parse(fs.readFileSync(ORDERS_PATH, 'utf8'));
-    return { orders: s && s.orders ? Object.values(s.orders) : [], dispatch: (s && s.dispatch) || {} };
+    const startAt = accountingStartAt();
+    const orders = s && s.orders ? Object.values(s.orders).filter(o => !startAt || String(o.createdAt || o.created_at || '') >= startAt) : [];
+    return { orders, dispatch: (s && s.dispatch) || {} };
   } catch { return { orders: [], dispatch: {} }; }
 }
 

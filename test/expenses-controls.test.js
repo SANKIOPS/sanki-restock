@@ -250,6 +250,15 @@ test('claimant expense history uses expandable compact rows while approver table
   assert.match(html, /<table class="resp">/);
 });
 
+test('Shopify history is filtered by the permanent accounting reset boundary', () => {
+  const pl = fs.readFileSync(path.join(__dirname, '..', 'modules', 'pl.js'), 'utf8');
+  const orders = fs.readFileSync(path.join(__dirname, '..', 'modules', 'orders.js'), 'utf8');
+  assert.match(pl, /accounting-boundary\.json/);
+  assert.match(pl, /filter\(o => !startAt/);
+  assert.match(orders, /const resetBoundary = accountingStartAt\(\)/);
+  assert.match(orders, /Order predates the accounting reset/);
+});
+
 test('Telegram setup is Owner-only and supports per-user notification management', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');

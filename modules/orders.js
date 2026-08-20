@@ -41,6 +41,11 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const ORDERS_PATH = process.env.ORDERS_PATH ||
   path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'),
             'orders.json');
+const ACCOUNTING_BOUNDARY_PATH = path.join(path.dirname(ORDERS_PATH), 'accounting-boundary.json');
+function accountingStartAt() {
+  try { return String(JSON.parse(fs.readFileSync(ACCOUNTING_BOUNDARY_PATH, 'utf8')).startAt || ''); }
+  catch { return ''; }
+}
 
 // Fields we pull from Shopify (keep the payload lean but complete).
 const ORDER_FIELDS = [
@@ -248,6 +253,8 @@ router.post('/api/orders-ledger/sync', async (req, res) => {
 router.get('/api/orders-ledger', (req, res) => {
   const store = loadStore();
   let list = mergedList(store);
+  const resetBoundary = accountingStartAt();
+  if (resetBoundary) list = list.filter(o => String(o.createdAt || '') >= resetBoundary);
   const q = (req.query.q || '').toString().trim().toLowerCase();
   const channel = (req.query.channel || '').toString();
   const from = (req.query.from || '').toString();
@@ -289,6 +296,7 @@ router.get('/api/orders-ledger/:id', (req, res) => {
   const store = loadStore();
   const o = store.orders[String(req.params.id)];
   if (!o) return res.status(404).json({ success: false, error: 'Order not found' });
+  if (accountingStartAt() && String(o.createdAt || '') < accountingStartAt()) return res.status(404).json({ success: false, error: 'Order predates the accounting reset' });
   const merged = mergedList({ orders: { [o.id]: o }, dispatch: store.dispatch })[0];
   res.json({ success: true, order: merged });
 });
