@@ -389,7 +389,7 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
   res.json({ success: true, username: uname, roles });
 });
 
-router.post('/api/admin/users/reset', requireAdmin, (req, res) => {
+function resetPassword(req, res) {
   const { username, password } = (req.body || {});
   if (!password || String(password).length < 4) return res.json({ success: false, error: 'Password must be at least 4 characters' });
   const store = loadUsers();
@@ -398,7 +398,12 @@ router.post('/api/admin/users/reset', requireAdmin, (req, res) => {
   u.password = hashPassword(password);
   saveUsers(store);
   res.json({ success: true });
-});
+}
+// Dedicated route avoids ambiguity with the /api/admin/users collection and
+// remains easy to diagnose in browser network logs. Keep the legacy alias for
+// older cached admin pages.
+router.post('/api/admin/reset-password', requireAdmin, resetPassword);
+router.post('/api/admin/users/reset', requireAdmin, resetPassword);
 
 // Set a user's FULL role set (multi-role). Accepts `roles` array (or single
 // `role`). Blocks removing admin from the only admin (avoid lockout).

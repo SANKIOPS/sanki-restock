@@ -113,7 +113,12 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(payload || {})
-      }).then(function (r) { return r.json(); });
+      }).then(function (r) {
+        return r.text().then(function (text) {
+          try { return JSON.parse(text); }
+          catch (_) { return { success:false, error:'Server returned an invalid response ('+r.status+'). Please refresh and try again.' }; }
+        });
+      }).catch(function () { return { success:false, error:'Could not reach the server. Please try again.' }; });
     }
 
     // Build a set of role checkboxes into `host`; returns a reader for the ticked ids.
@@ -197,7 +202,7 @@
         resetBtn.addEventListener('click', function () {
           var pw = prompt('New password for ' + u.username + ' (min 4 chars):');
           if (pw == null) return;
-          api('/api/admin/users/reset', { username: u.username, password: pw }).then(function (d) {
+          api('/api/admin/reset-password', { username: u.username, password: pw }).then(function (d) {
             setMsg(document.getElementById('list-msg'),
               d.success ? ('Password reset for ' + u.username) : (d.error || 'Could not reset'),
               d.success ? 'ok' : 'err');
