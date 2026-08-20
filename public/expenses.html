@@ -228,7 +228,10 @@
     function renderVendorSuggestions(){
       var input=el('f_vendor'), menu=el('vendorSuggestions'), q=input.value.trim().toLowerCase();
       var matches=cfg.vendors.filter(function(v){return !q||v.toLowerCase().includes(q);}).slice(0,20);
-      if(!matches.length){menu.classList.remove('open');menu.innerHTML='';return;}
+      if(!matches.length){
+        menu.innerHTML='<div class="combo-option" role="option" aria-disabled="true"><b>No existing match.</b><br><span class="muted">“'+esc(input.value.trim())+'” will be submitted as a new vendor.</span></div>';
+        menu.classList.add('open'); return;
+      }
       menu.innerHTML=matches.map(function(v){return '<div class="combo-option" role="option" tabindex="0" data-vendor="'+esc(v)+'">'+esc(v)+'</div>';}).join('');
       menu.classList.add('open');
       Array.prototype.forEach.call(menu.querySelectorAll('.combo-option'),function(o){

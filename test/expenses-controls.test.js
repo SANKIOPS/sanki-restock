@@ -127,6 +127,7 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="f_vendor"/);
   assert.match(html, /id="vendorSuggestions" class="combo-menu"/);
+  assert.match(html, /No existing match/);
   assert.match(html, /id="f_totalamount"/);
   assert.match(html, /Have you already paid for this expense/);
   assert.match(html, /id="f_personalproof"/);
