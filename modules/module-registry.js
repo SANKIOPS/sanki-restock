@@ -55,13 +55,15 @@ const MODULES = [
   { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Decide what NEW fashion to source — funkiness tiers + live market trends', icon: '🧠', href: '/fresh-procurement.html', section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
   { key: 'size-tracker', title: 'Size Tracker',           desc: 'Match vendor (China) size charts to SANKI target sizes before every PO', icon: '📏', href: '/size-tracker.html',      section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
-  { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'revenue'] },
-  { key: 'expenses',     title: 'Expenses',              desc: 'Log → approve (bill proof) → pay (payment proof); cash balances', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'claimant'] },
+  { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },
+  { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'revenue', 'owner'] },
+  { key: 'expenses',     title: 'Expenses',              desc: 'Log → approve (bill proof) → pay (payment proof); cash balances', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'claimant', 'owner'] },
+  { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the P&L', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
   { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },
 
-  { key: 'users',        title: 'Users & Roles',         desc: 'Add staff and set what they can access',             icon: '👥', href: '/admin-users.html',               section: 'Admin',     status: 'live',   roles: ['admin'] }
+  { key: 'users',        title: 'Users & Roles',         desc: 'Add staff and set what they can access',             icon: '👥', href: '/admin-users.html',               section: 'Admin',     status: 'live',   roles: ['admin', 'owner'] }
 ];
 
 // Hand the module list to auth-users so role-permission seeding knows which
@@ -76,11 +78,12 @@ function modulePath(href) { return String(href || '').split('#')[0]; }
 // ── Visibility resolution ───────────────────────────────────────
 function visibleFor(user) {
   const isAdmin = rolesOf(user).includes('admin');
+  const isOwner = rolesOf(user).includes('owner');
   // Non-admins: visibility follows the (editable) role→pages permission map,
   // union'd across all of the user's roles. A module shows when its page path
   // is in that allow-list. Admin sees everything not hidden.
-  const allowed = isAdmin ? '*' : allowedPagesForUser(user);
-  const canSee = (m) => isAdmin || (Array.isArray(allowed) && allowed.includes(modulePath(m.href)));
+  const allowed = (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
+  const canSee = (m) => m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))));
   return MODULES
     .filter(m => m.status !== 'hidden')
     .filter(canSee)

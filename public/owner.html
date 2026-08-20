@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Money Picture · SANKI</title>
+  <style>
+    :root { --blue:#185FA5; --green:#047857; --red:#b42318; --amber:#b45309; --ink:#1a1a1a; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f6f7f9; color:var(--ink); }
+    .wrap { max-width:980px; margin:0 auto; padding:22px 20px 90px; }
+    h1 { font-size:22px; margin:0 0 2px; font-weight:800; }
+    .sub { color:#6b7280; font-size:13px; margin:0 0 16px; }
+    .card { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:16px; margin-bottom:14px; }
+    h3 { margin:0 0 10px; font-size:15px; }
+    .filters { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+    .fld { display:flex; flex-direction:column; }
+    label { font-size:11px; font-weight:700; color:#374151; margin:0 0 4px; text-transform:uppercase; letter-spacing:.3px; }
+    input, select { font-size:14px; padding:9px 11px; border:1px solid #d1d5db; border-radius:8px; outline:none; background:#fff; }
+    input:focus, select:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(24,95,165,.13); }
+    .stats { display:flex; flex-wrap:wrap; gap:12px; }
+    .stat { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:14px 16px; min-width:150px; flex:1; }
+    .stat .k { font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#9ca3af; }
+    .stat .v { font-size:24px; font-weight:800; margin-top:3px; }
+    .stat.big { background:#f0f7ff; border-color:#cfe0f5; }
+    .pos { color:var(--green); } .neg { color:var(--red); }
+    .btn { font-size:14px; padding:10px 16px; border:none; border-radius:8px; cursor:pointer; font-weight:700; background:var(--blue); color:#fff; }
+    .btn.ghost { background:#fff; border:1px solid #d1d5db; color:#374151; }
+    .btn.mini { font-size:12px; padding:6px 10px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { padding:8px 10px; text-align:right; border-bottom:1px solid #eef0f2; white-space:nowrap; }
+    th:first-child, td:first-child, th.l, td.l { text-align:left; }
+    thead th { font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:#6b7280; background:#fafbfc; font-weight:700; }
+    .pill { font-size:10px; font-weight:800; padding:2px 8px; border-radius:20px; }
+    .pill.in { background:#d1fae5; color:#065f46; } .pill.out { background:#fee2e2; color:#991b1b; }
+    .msg { font-size:12px; min-height:16px; margin:8px 2px; } .msg.ok { color:var(--green); } .msg.err { color:var(--red); }
+    .hint { font-size:12px; color:#6b7280; line-height:1.5; }
+    .tablewrap { overflow-x:auto; }
+    @media (max-width:680px){ .wrap { padding:16px 12px 90px; } h1 { font-size:20px; } input, select { font-size:16px; } .stat .v { font-size:20px; } .filters .fld { flex:1 1 44%; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>👑 Money Picture</h1>
+    <p class="sub">Your private owner view — sales vs the money you've put in, what the business owes you, and where every rupee is. Only you (owner login) can see this.</p>
+    <div id="host"><div class="hint">Loading your money picture…</div></div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script>
+    var el=function(id){return document.getElementById(id);};
+    var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+    var fmt=function(n){n=Math.round(n||0);return (n<0?'−₹':'₹')+Math.abs(n).toLocaleString('en-IN');};
+    var api=function(u,o){return fetch(u,o).then(function(r){return r.json();});};
+    function flash(t,ok){el('msg').className='msg '+(ok?'ok':'err');el('msg').textContent=t||'';}
+    function pad(n){return String(n).padStart(2,'0');}
+    function monthRange(){var n=new Date(),y=n.getFullYear(),m=n.getMonth();return {from:y+'-'+pad(m+1)+'-01',to:y+'-'+pad(m+1)+'-'+pad(new Date(y,m+1,0).getDate())};}
+    var from='', to='', ledgerStart='2026-07-09';
+
+    function load(){
+      if(!from && !to){ var r=monthRange(); from=r.from; to=r.to; }
+      el('host').innerHTML='<div class="hint">Loading…</div>';
+      var q=(from||to)?('?from='+from+'&to='+to):'';
+      Promise.all([ api('/api/owner/summary'+q), api('/api/pl/summary'+q).catch(function(){return null;}) ]).then(function(res){
+        var o=res[0]||{}, pl=res[1], c=(pl&&pl.combined)||{};
+        if(o.ledgerStart) ledgerStart=o.ledgerStart;
+        if(o.error){ el('host').innerHTML='<div class="card"><b>'+esc(o.error)+'</b><div class="hint" style="margin-top:6px">This page is only for the owner login.</div></div>'; return; }
+        var sales=c.sales||0;
+        var costs=(c.cogs||0)+(c.fixedCost||0)+(c.runningCost||0)+(c.variableCost||0)+(c.marketing||0);
+        var result=(c.netProfit!=null)?c.netProfit:(sales-costs);
+        var owes=o.ownerInvested||0, inAcc=o.accountsTotal||0;
+        var mr=monthRange(); var isMonth=(from===mr.from && to===mr.to);
+        var periodTxt=isMonth?'This month':(from?(from+' → '+to):'All time (since '+(o.ledgerStart||'Aug 1')+')');
+        var stat=function(k,v,cls,big){return '<div class="stat'+(big?' big':'')+'"><div class="k">'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div></div>';};
+        var resultLine=result>=0
+          ? '<div class="hint" style="margin-top:8px">✅ The business made a <b class="pos">profit of '+fmt(result)+'</b> this period.</div>'
+          : '<div class="hint" style="margin-top:8px">📉 The business is <b class="neg">'+fmt(-result)+' in the red</b> this period — covered by the money you put in.</div>';
+        var accts=(o.accounts||[]).map(function(a){return '<option value="'+esc(a.name)+'">'+esc(a.name)+'</option>';}).join('');
+        var acctRows=(o.accounts||[]).map(function(a){return '<tr><td class="l">'+esc(a.name)+'</td><td>'+fmt(a.sales)+'</td><td style="font-weight:700">'+fmt(a.balance)+'</td></tr>';}).join('');
+        var moves=o.moves||[];
+        var moveRows=moves.length ? moves.map(function(m){
+          var isIn=m.kind==='investment';
+          return '<tr><td class="l">'+esc(m.date)+'</td>'+
+            '<td class="l"><span class="pill '+(isIn?'in':'out')+'">'+(isIn?'PUT IN':'TOOK BACK')+'</span></td>'+
+            '<td class="'+(isIn?'pos':'neg')+'" style="font-weight:700">'+fmt(Math.abs(m.amount))+'</td>'+
+            '<td class="l">'+esc(m.account)+'</td>'+
+            '<td class="l">'+esc(m.note||'—')+'</td>'+
+            '<td><button class="btn mini ghost" data-del="'+esc(m.id)+'">✕</button></td></tr>';
+        }).join('') : '<tr><td colspan="6" class="hint" style="text-align:center">No money-in / money-out recorded yet.</td></tr>';
+
+        // Overdraft (Tiana) card
+        var odHtml = (o.od||[]).map(function(x){
+          var pct = x.limit ? Math.min(100, Math.round(x.used/x.limit*100)) : 0;
+          var barcol = pct>85 ? '#b42318' : (pct>60 ? '#b45309' : '#185FA5');
+          return '<div class="card"><h3>🏦 '+esc(x.account)+' — Overdraft (money you’ve borrowed to run the business)</h3>'+
+            '<div class="stats">'+
+              '<div class="stat"><div class="k">OD used (owed to bank)</div><div class="v neg">'+fmt(x.used)+'</div></div>'+
+              '<div class="stat"><div class="k">Limit</div><div class="v">'+fmt(x.limit)+'</div></div>'+
+              '<div class="stat"><div class="k">Left to pull</div><div class="v pos">'+fmt(x.available)+'</div></div>'+
+              '<div class="stat"><div class="k">Interest '+(x.ratePct||0)+'%/yr (this period)</div><div class="v neg">'+fmt(x.interest)+'</div></div>'+
+            '</div>'+
+            '<div style="height:9px;background:#eef0f2;border-radius:6px;overflow:hidden;margin:10px 0"><div style="width:'+pct+'%;height:100%;background:'+barcol+'"></div></div>'+
+            '<div class="hint">'+pct+'% of your OD used'+(x.limit?'':' — set your limit &amp; interest rate below').toString()+'. <a href="#" class="od-set" data-acct="'+esc(x.account)+'" data-limit="'+x.limit+'" data-rate="'+x.ratePct+'" data-used="'+x.used+'">Set OD limit / interest rate / opening used</a></div>'+
+          '</div>';
+        }).join('');
+
+        el('host').innerHTML =
+          '<div class="card"><div class="filters">'+
+            '<div class="fld"><label>Period</label><div style="font-weight:800;font-size:15px">'+esc(periodTxt)+'</div></div>'+
+            '<div class="fld"><label>&nbsp;</label><button class="btn ghost mini" id="p_month">This month</button></div>'+
+            '<div class="fld"><label>&nbsp;</label><button class="btn ghost mini" id="p_all">All time</button></div>'+
+            '<div class="fld"><label>From</label><input type="date" id="p_from" value="'+from+'"></div>'+
+            '<div class="fld"><label>To</label><input type="date" id="p_to" value="'+to+'"></div>'+
+          '</div>'+
+          '<div class="stats" style="margin-top:14px">'+
+            stat('🛍️ Sales earned', fmt(sales))+
+            stat('🧾 Costs (COGS + fixed + salary…)', fmt(costs))+
+            stat('📈 Business result', fmt(result), result<0?'neg':'pos')+
+          '</div>'+ resultLine +
+          '<div class="stats" style="margin-top:14px">'+
+            stat('🙋 Business owes you <span class="hint">(OD used + your cash)</span>', fmt(owes), 'pos', true)+
+            stat('🏦 Money in your accounts now', fmt(inAcc), '', true)+
+          '</div>'+
+          '<div class="hint" style="margin-top:8px">“Business owes you” = what you’ve pulled from the Tiana OD (<b>'+fmt(o.odUsed||0)+'</b>) + your own cash put in (<b>'+fmt(o.ownerCash||0)+'</b>). Pulling from Tiana is tracked automatically — just pay/move from it as usual.</div></div>'+
+
+          odHtml +
+
+          '<div class="card"><h3>Add your own cash (the exchange)</h3>'+
+          '<div class="hint" style="margin-bottom:10px">Use this ONLY when you put in <b>your own cash</b> — e.g. you sent money to someone’s account and took cash back. (You do NOT record Tiana here — that’s automatic.) It lands in Counter Cash and adds to what the business owes you.</div>'+
+          '<div class="filters">'+
+            '<div class="fld" style="flex:1 1 140px"><label>Cash landed in</label><select id="a_acct">'+accts+'</select></div>'+
+            '<div class="fld"><label>Amount ₹</label><input type="number" id="a_amt" placeholder="0" style="width:120px"></div>'+
+            '<div class="fld" style="flex:2 1 200px"><label>What for / who gave the cash</label><input id="a_note" placeholder="e.g. from brother’s a/c — to pay July salaries"></div>'+
+            '<div class="fld"><label>Date</label><input type="date" id="a_date" value="'+(to||'')+'"></div>'+
+          '</div><div class="filters" style="margin-top:10px">'+
+            '<button class="btn" id="a_in">💰 I put my cash in</button>'+
+            '<button class="btn ghost" id="a_back">💸 I took my cash back</button>'+
+            '<span style="flex:1"></span>'+
+            '<a href="#" id="a_open" class="hint">Set starting cash total ('+fmt(o.openingInvestment||0)+')</a>'+
+          '</div></div>'+
+
+          '<div class="card"><h3>Your money — history (in &amp; out)</h3><div class="tablewrap"><table>'+
+            '<thead><tr><th class="l">Date</th><th class="l">Type</th><th>Amount</th><th class="l">Account (form)</th><th class="l">What for / how</th><th></th></tr></thead>'+
+            '<tbody>'+moveRows+'</tbody></table></div></div>'+
+
+          '<div class="card"><h3>Where your money is now</h3><div class="tablewrap"><table>'+
+            '<thead><tr><th class="l">Account</th><th>Sales in (period)</th><th>Balance now</th></tr></thead><tbody>'+acctRows+'</tbody></table></div>'+
+            '<div class="hint" style="margin-top:8px">Ledger starts '+esc(o.ledgerStart||'2026-08-01')+'. Set real opening balances per account in <b>Expenses → Cash balances</b>.</div></div>';
+
+        el('p_month').addEventListener('click', function(){ var r=monthRange(); from=r.from; to=r.to; load(); });
+        el('p_all').addEventListener('click', function(){ from=ledgerStart; to=new Date().toISOString().slice(0,10); load(); });
+        el('p_from').addEventListener('change', function(){ from=this.value; load(); });
+        el('p_to').addEventListener('change', function(){ to=this.value; load(); });
+        el('a_in').addEventListener('click', function(){ move('investment'); });
+        el('a_back').addEventListener('click', function(){ move('drawing'); });
+        el('a_open').addEventListener('click', function(ev){ ev.preventDefault();
+          var v=prompt('Total money you had ALREADY put into the business before 1 Aug tracking (₹):', String(o.openingInvestment||0));
+          if(v===null) return;
+          api('/api/owner/opening',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:parseFloat(v)||0})}).then(function(){ load(); });
+        });
+        Array.prototype.forEach.call(document.querySelectorAll('[data-del]'), function(btn){
+          btn.addEventListener('click', function(){ if(!confirm('Delete this entry?')) return;
+            api('/api/owner/invest/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:this.dataset.del})}).then(function(){ load(); });
+          });
+        });
+        Array.prototype.forEach.call(document.querySelectorAll('.od-set'), function(lnk){
+          lnk.addEventListener('click', function(ev){ ev.preventDefault();
+            var acct=this.dataset.acct;
+            var lim=prompt('OD limit for '+acct+' (₹):', this.dataset.limit||'0'); if(lim===null) return;
+            var rate=prompt('OD interest rate (% per year):', this.dataset.rate||'0'); if(rate===null) return;
+            var used=prompt('OD ALREADY USED as of '+(o.ledgerStart||'1 Aug')+' (₹):', this.dataset.used||'0'); if(used===null) return;
+            api('/api/owner/od',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account:acct,limit:parseFloat(lim)||0,ratePct:parseFloat(rate)||0,openingUsed:parseFloat(used)||0})}).then(function(){ load(); });
+          });
+        });
+      });
+    }
+    function move(kind){
+      var acct=el('a_acct').value, amt=parseFloat(el('a_amt').value), note=el('a_note').value.trim(), date=el('a_date').value;
+      if(!acct){ flash('Pick an account.', false); return; }
+      if(!amt || amt<=0){ flash('Enter an amount.', false); return; }
+      api('/api/owner/invest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account:acct,amount:amt,kind:kind,note:note,date:date})})
+        .then(function(){ flash(kind==='drawing'?'Recorded — you took '+fmt(amt)+' back.':'Recorded — you put in '+fmt(amt)+'.', true); el('a_amt').value=''; el('a_note').value=''; load(); });
+    }
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Salary · SANKI Business OS</title>
+  <style>
+    :root { --blue:#185FA5; --green:#047857; --red:#b42318; --amber:#b45309; --ink:#1a1a1a; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f6f7f9; color:var(--ink); }
+    .wrap { max-width:1180px; margin:0 auto; padding:22px 20px 90px; }
+    h1 { font-size:22px; margin:0 0 2px; font-weight:800; }
+    .sub { color:#6b7280; font-size:13px; margin:0 0 16px; }
+    .bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 14px; }
+    .tabs { display:flex; gap:6px; flex-wrap:wrap; }
+    .tabs button, .navbtn { font-size:13px; padding:9px 14px; border:1px solid #d1d5db; background:#fff; border-radius:8px; cursor:pointer; font-weight:600; color:#374151; }
+    .tabs button.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+    .mlabel { font-weight:800; font-size:15px; min-width:120px; text-align:center; }
+    .card { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:0; overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; font-size:13px; min-width:720px; }
+    th, td { padding:9px 10px; text-align:right; border-bottom:1px solid #eef0f2; white-space:nowrap; }
+    th:first-child, td:first-child, th.l, td.l { text-align:left; }
+    thead th { font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:#6b7280; background:#fafbfc; font-weight:700; position:sticky; top:0; }
+    tfoot td { font-weight:800; border-top:2px solid #1a1a1a; background:#fafbfc; }
+    input.cell { width:66px; padding:5px 6px; font-size:13px; text-align:right; border:1px solid #d1d5db; border-radius:6px; }
+    input.rem { width:150px; text-align:left; padding:5px 6px; font-size:12px; border:1px solid #e5e7eb; border-radius:6px; }
+    .neg { color:var(--red); } .pos { color:var(--green); } .muted { color:#9ca3af; }
+    .tag { font-size:10px; font-weight:700; padding:1px 6px; border-radius:5px; background:#eef2f7; color:#475569; }
+    .tag.POS { background:#dbeafe; color:#1d4ed8; } .tag.Website { background:#ede9fe; color:#6d28d9; } .tag.Shared { background:#f1f5f9; color:#475569; }
+    .btn { font-size:13px; padding:9px 14px; border:none; border-radius:8px; cursor:pointer; font-weight:700; background:var(--blue); color:#fff; }
+    .btn.ghost { background:#fff; border:1px solid #d1d5db; color:#374151; }
+    .btn.mini { font-size:12px; padding:6px 10px; }
+    .msg { font-size:12px; min-height:16px; margin:8px 2px; } .msg.ok { color:var(--green); } .msg.err { color:var(--red); }
+    /* Attendance grid */
+    .att td, .att th { padding:4px 6px; text-align:center; font-size:11px; }
+    .att .daycell { width:26px; cursor:pointer; user-select:none; border:1px solid #eef0f2; font-weight:700; }
+    .m-P { background:#dcfce7; color:#166534; } .m-H { background:#fef9c3; color:#854d0e; }
+    .m-A { background:#fee2e2; color:#991b1b; } .m-PL { background:#dbeafe; color:#1e40af; } .m-WO { background:#f1f5f9; color:#64748b; }
+    .legend { font-size:12px; color:#6b7280; margin:8px 2px; display:flex; gap:12px; flex-wrap:wrap; }
+    .legend b { padding:1px 6px; border-radius:5px; }
+    .empform { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; padding:14px; }
+    .empform .fld { display:flex; flex-direction:column; }
+    .empform label { font-size:11px; font-weight:700; color:#374151; margin:0 0 4px; text-transform:uppercase; letter-spacing:.3px; }
+    .empform input, .empform select { font-size:14px; padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; }
+    .conf { font-size:12px; color:#6b7280; margin:10px 2px; line-height:1.5; }
+    @media (max-width:680px){
+      .wrap { padding:16px 12px 90px; } h1 { font-size:20px; }
+      input, select { font-size:16px; } input.cell { width:60px; } input.rem { width:120px; }
+      .empform { grid-template-columns:1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Salary &amp; Attendance</h1>
+    <p class="sub">Pay = <b>salary ÷ 30 × paid days</b> − advance. Attendance auto-fills paid days (editable). Earned salary posts to the P&amp;L Fixed Cost, channel-tagged. Admin/accounting only.</p>
+
+    <div class="bar">
+      <div class="tabs" id="tabs">
+        <button data-v="payroll" class="on">Payroll</button>
+        <button data-v="attendance">Attendance</button>
+        <button data-v="employees">Employees</button>
+      </div>
+      <span style="flex:1"></span>
+      <button class="navbtn" id="prevM">‹</button>
+      <span class="mlabel" id="mlabel">…</span>
+      <button class="navbtn" id="nextM">›</button>
+    </div>
+
+    <div id="host"><div class="conf">Loading…</div></div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <script src="/sidebar.js"></script>
+  <script>
+    var el = function(id){ return document.getElementById(id); };
+    var esc = function(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); };
+    var fmt = function(n){ n = Math.round((n||0)); return (n<0?'−₹':'₹') + Math.abs(n).toLocaleString('en-IN'); };
+    var MARKS = ['P','H','A','PL','WO'];               // cycle order (click)
+    var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'PL', 'PL':'WO', 'WO':'' };
+    var state = { view:'payroll', ym:'', data:null, employees:null };
+
+    function pad(n){ return String(n).padStart(2,'0'); }
+    function ymLabel(ym){ var p=ym.split('-'); var mn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mn[+p[1]-1]+' '+p[0]; }
+    function shiftMonth(ym, d){ var p=ym.split('-').map(Number); var dt=new Date(p[0], p[1]-1+d, 1); return dt.getFullYear()+'-'+pad(dt.getMonth()+1); }
+
+    function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
+    function flash(txt, ok){ el('msg').className='msg '+(ok?'ok':'err'); el('msg').textContent=txt; }
+
+    function load(){
+      el('mlabel').textContent = ymLabel(state.ym);
+      if(state.view==='employees'){ loadEmployees(); return; }
+      api('/api/salary/month/'+state.ym).then(function(d){
+        if(!d.success){ el('host').innerHTML='<div class="conf">'+esc(d.error||'Unavailable.')+'</div>'; return; }
+        state.data = d;
+        if(state.view==='attendance') renderAttendance(d); else renderPayroll(d);
+      });
+    }
+
+    // ── PAYROLL ──
+    function renderPayroll(d){
+      var rows = d.rows.map(function(r){
+        var pd = r.paidDays==null ? '' : r.paidDays;
+        var auto = (r.paidDays==null && r.computedPaidDays!=null) ? ' title="from attendance"' : '';
+        return '<tr>'+
+          '<td class="l"><b>'+esc(r.name)+'</b><div class="muted" style="font-size:10px">'+esc(r.post||'')+'</div></td>'+
+          '<td class="l"><span class="tag '+esc(r.channel)+'">'+esc(r.channel)+'</span></td>'+
+          '<td>'+fmt(r.salary)+'</td>'+
+          '<td><input class="cell" type="number" step="0.5" value="'+pd+'"'+auto+' onchange="saveRow(\''+r.id+'\',\'paidDays\',this.value)" placeholder="'+(r.computedPaidDays!=null?r.computedPaidDays:'—')+'"></td>'+
+          '<td>'+fmt(r.salaryAmt)+'</td>'+
+          '<td><input class="cell" type="number" value="'+(r.advance||0)+'" onchange="saveRow(\''+r.id+'\',\'advance\',this.value)"></td>'+
+          '<td class="'+(r.netPayable<0?'neg':'')+'">'+fmt(r.netPayable)+'</td>'+
+          '<td><input class="cell" type="number" value="'+(r.paid||0)+'" onchange="saveRow(\''+r.id+'\',\'paid\',this.value)"></td>'+
+          '<td class="'+(r.balance<0?'neg':(r.balance>0?'pos':''))+'">'+fmt(r.balance)+'</td>'+
+          '<td><input class="rem" value="'+esc(r.remarks||'')+'" onchange="saveRow(\''+r.id+'\',\'remarks\',this.value)"></td>'+
+        '</tr>';
+      }).join('');
+      var t=d.totals;
+      el('host').innerHTML =
+        '<div class="card"><table>'+
+          '<thead><tr><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance</th><th>Net payable</th><th>Paid</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
+          '<tbody>'+rows+'</tbody>'+
+          '<tfoot><tr><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>'+'—'+'</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td class="'+(t.netPayable<0?'neg':'')+'">'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
+        '</table></div>'+
+        '<div class="conf">Divisor = '+d.divisor+' (fixed). <b>Paid days</b> can exceed 30 for overtime. Blank paid-days uses attendance (grey placeholder). <b>Salary amt</b> (earned) is what posts to the P&amp;L — advance &amp; paid only affect what you owe/settle.</div>';
+    }
+    window.saveRow = function(empId, field, val){
+      var body={ empId:empId }; body[field]=val;
+      api('/api/salary/row/'+state.ym, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+        .then(function(){ flash('Saved.', true); load(); });
+    };
+
+    // ── ATTENDANCE ──
+    function renderAttendance(d){
+      var dim = d.daysInMonth, att = d.attendance||{};
+      var headDays=''; for(var i=1;i<=dim;i++) headDays += '<th>'+i+'</th>';
+      var body = d.rows.map(function(r){
+        var cells='';
+        for(var day=1; day<=dim; day++){
+          var dd = pad(day);
+          var m = (att[r.id]||{})[dd] || '';
+          cells += '<td class="daycell '+(m?('m-'+m):'')+'" data-emp="'+r.id+'" data-day="'+dd+'">'+(m||'·')+'</td>';
+        }
+        var pdShown = r.computedPaidDays!=null ? r.computedPaidDays : '—';
+        return '<tr><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+pdShown+'</b></td></tr>';
+      }).join('');
+      el('host').innerHTML =
+        '<div class="card"><table class="att">'+
+          '<thead><tr><th class="l">Name</th>'+headDays+'<th>Paid days</th></tr></thead>'+
+          '<tbody>'+body+'</tbody>'+
+        '</table></div>'+
+        '<div class="legend">Click a cell to cycle: '+
+          '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b class="m-PL">PL</b> Paid leave · <b class="m-WO">WO</b> Week-off · <b>·</b> clear'+
+        '</div>'+
+        '<div class="conf">P=1, H=0.5, PL=1, WO=1, A=0 paid day. The <b>Paid days</b> column feeds the Payroll tab (unless you typed an override there).</div>';
+      Array.prototype.forEach.call(document.querySelectorAll('.daycell'), function(c){
+        c.addEventListener('click', function(){
+          var cur = this.textContent==='·' ? '' : this.textContent;
+          var next = MARK_NEXT[cur];
+          var emp=this.dataset.emp, day=this.dataset.day;
+          api('/api/salary/attendance/'+state.ym, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ empId:emp, day:day, mark:next }) })
+            .then(function(){ load(); });
+        });
+      });
+    }
+
+    // ── EMPLOYEES ──
+    function loadEmployees(){
+      api('/api/salary/employees').then(function(d){
+        state.employees = d.employees;
+        var chOpts = function(sel){ return (d.channels||['POS','Website','Shared']).map(function(c){ return '<option '+(c===sel?'selected':'')+'>'+c+'</option>'; }).join(''); };
+        var rows = d.employees.map(function(e){
+          return '<tr'+(e.active===false?' style="opacity:.5"':'')+'>'+
+            '<td class="l"><input class="rem" style="width:150px" value="'+esc(e.name)+'" onchange="saveEmp(\''+e.id+'\',\'name\',this.value)"></td>'+
+            '<td class="l"><input class="rem" style="width:130px" value="'+esc(e.post||'')+'" onchange="saveEmp(\''+e.id+'\',\'post\',this.value)"></td>'+
+            '<td><input class="cell" style="width:80px" type="number" value="'+e.salary+'" onchange="saveEmp(\''+e.id+'\',\'salary\',this.value)"></td>'+
+            '<td class="l"><select onchange="saveEmp(\''+e.id+'\',\'channel\',this.value)">'+chOpts(e.channel)+'</select></td>'+
+            '<td><button class="btn mini ghost" onclick="toggleEmp(\''+e.id+'\','+(e.active===false)+')">'+(e.active===false?'Reactivate':'Deactivate')+'</button></td>'+
+          '</tr>';
+        }).join('');
+        el('host').innerHTML =
+          '<div class="card"><table><thead><tr><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+          '<div class="card" style="margin-top:14px"><div class="empform">'+
+            '<div class="fld"><label>Name</label><input id="ne_name" placeholder="full name"></div>'+
+            '<div class="fld"><label>Post</label><input id="ne_post" placeholder="e.g. Sales Executive"></div>'+
+            '<div class="fld"><label>Monthly salary ₹</label><input id="ne_salary" type="number" placeholder="0"></div>'+
+            '<div class="fld"><label>Channel</label><select id="ne_channel">'+chOpts('Shared')+'</select></div>'+
+            '<div class="fld" style="justify-content:flex-end"><button class="btn" id="addEmp">＋ Add employee</button></div>'+
+          '</div></div>'+
+          '<div class="conf">Channel decides which P&amp;L column the salary lands in — <b>POS</b> (store), <b>Website</b> (content/fulfilment), or <b>Shared</b> (split by revenue share).</div>';
+        el('addEmp').addEventListener('click', function(){
+          var b = { name:el('ne_name').value.trim(), post:el('ne_post').value.trim(), salary:el('ne_salary').value, channel:el('ne_channel').value };
+          if(!b.name){ flash('Name required.', false); return; }
+          api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b) })
+            .then(function(){ flash('Added.', true); loadEmployees(); });
+        });
+      });
+    }
+    window.saveEmp = function(id, field, val){
+      var b={ id:id }; b[field]=val;
+      api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b) }).then(function(){ flash('Saved.', true); });
+    };
+    window.toggleEmp = function(id, reactivate){
+      if(reactivate){ api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ id:id, active:true }) }).then(function(){ loadEmployees(); }); }
+      else { api('/api/salary/employees/'+id, { method:'DELETE' }).then(function(){ loadEmployees(); }); }
+    };
+
+    // ── boot ──
+    el('tabs').addEventListener('click', function(e){
+      if(!e.target.dataset.v) return;
+      state.view = e.target.dataset.v;
+      Array.prototype.forEach.call(el('tabs').children, function(b){ b.classList.toggle('on', b.dataset.v===state.view); });
+      load();
+    });
+    el('prevM').addEventListener('click', function(){ state.ym = shiftMonth(state.ym, -1); load(); });
+    el('nextM').addEventListener('click', function(){ state.ym = shiftMonth(state.ym, 1); load(); });
+
+    // Default to the month that has data (July 2026 seed) if the current month is empty.
+    (function(){
+      var now = new Date(); state.ym = now.getFullYear()+'-'+pad(now.getMonth()+1);
+      api('/api/salary/month/'+state.ym).then(function(d){
+        var has = d && d.success && d.rows && d.rows.some(function(r){ return r.paidDays!=null || (r.advance||r.paid); });
+        if(!has) state.ym = '2026-07';
+        load();
+      }).catch(function(){ load(); });
+    })();
+  </script>
+</body>
+</html>

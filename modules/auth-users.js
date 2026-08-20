@@ -63,6 +63,7 @@ const SECRET = (function () {
 // ── Roles → which pages each role may open, and where they land ──
 const ROLES = [
   { id: 'admin',       label: 'Admin (full access)' },
+  { id: 'owner',       label: 'Owner (private Money Picture + accounting)' },
   { id: 'inventory',   label: 'Inventory' },
   { id: 'sales',       label: 'Sales' },
   { id: 'procurement', label: 'Fresh Procurement' },
@@ -79,6 +80,7 @@ const ROLE_IDS = ROLES.map(r => r.id);
 // still reachable — they're just not the front door anymore.)
 const ROLE_HOME = {
   admin:       '/dashboard.html',
+  owner:       '/owner.html',
   inventory:   '/dashboard.html',
   sales:       '/dashboard.html',
   procurement: '/dashboard.html',
@@ -93,6 +95,7 @@ const ROLE_HOME = {
 // user store under `rolePages`); admin always stays '*'.
 const DEFAULT_ROLE_PAGES = {
   admin:       '*',
+  owner:       '*',
   inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html', '/procurement.html'],
   sales:       ['/orders.html', '/sales.html', '/analytics.html', '/velocity.html'],
   procurement: ['/procurement.html'],
@@ -133,7 +136,7 @@ function getRolePages() {
   const overrides = store.rolePages || {};
   const out = {};
   ROLE_IDS.forEach(r => {
-    if (r === 'admin') { out[r] = '*'; return; }             // admin is always full access
+    if (r === 'admin' || r === 'owner') { out[r] = '*'; return; }
     out[r] = Array.isArray(overrides[r]) ? overrides[r] : seedPagesForRole(r);
   });
   return out;
@@ -148,24 +151,24 @@ function normalizeRoles(u) {
   roles = roles.filter(r => ROLE_IDS.includes(r));
   return roles.length ? Array.from(new Set(roles)) : [];
 }
-function primaryRole(roles) { return roles.includes('admin') ? 'admin' : (roles[0] || ''); }
+function primaryRole(roles) { return roles.includes('owner') ? 'owner' : (roles.includes('admin') ? 'admin' : (roles[0] || '')); }
 function repairMissingRoles(store, u) {
   let roles = normalizeRoles(u);
-  // The confirmed business owner must always retain administrative access,
-  // including after migration from a legacy blank/incorrect role record.
-  if (u.username === OWNER_USER && !roles.includes('admin')) {
-    roles = Array.from(new Set(['admin'].concat(roles)));
+  // The confirmed founder must retain the distinct Owner role. Owner is a
+  // superuser and unlocks the private Money Picture / OD dashboard.
+  if (u.username === OWNER_USER && !roles.includes('owner')) {
+    roles = Array.from(new Set(['owner'].concat(roles.filter(r => r !== 'admin'))));
     u.roles = roles.slice();
     delete u.role;
     saveUsers(store);
-    console.warn('[auth] restored owner admin role');
+    console.warn('[auth] restored owner role');
     return roles;
   }
   if (roles.length) return roles;
   // Legacy users created before role enforcement can exist with a blank or
   // obsolete role. Restore the configured owner as admin; give every other
   // such account the least-privileged useful role instead of elevating it.
-  roles = [u.username === process.env.DASH_USER ? 'admin' : 'claimant'];
+  roles = [u.username === OWNER_USER ? 'owner' : (u.username === process.env.DASH_USER ? 'admin' : 'claimant')];
   u.roles = roles.slice();
   delete u.role;
   saveUsers(store);
@@ -338,7 +341,8 @@ router.get('/api/auth/diagnostic', (req, res) => {
 
 // ── Admin user management (gate already restricts /api/admin to admin) ──
 function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+  const roles = rolesOf(req.user);
+  if (!roles.includes('admin') && !roles.includes('owner')) return res.status(403).json({ success: false, error: 'Admin or owner only' });
   next();
 }
 

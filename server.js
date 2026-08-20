@@ -2535,6 +2535,7 @@ app.use(require('./modules/fresh-procurement').router);
 app.use(require('./modules/casuals').router);
 app.use(require('./modules/size-tracker').router);
 app.use(require('./modules/expenses').router);
+app.use(require('./modules/salary').router);
 app.use(require('./modules/pl').router);
 app.use(require('./modules/module-registry').router);
 

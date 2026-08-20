@@ -21,6 +21,8 @@ const path = require('path');
 // approved BUSINESS (A3) expenses come through; see expenses.summaryForPL.
 let expenseSummary;
 try { expenseSummary = require('./expenses').summaryForPL; } catch { expenseSummary = null; }
+let salarySummary;
+try { salarySummary = require('./salary').summaryForPL; } catch { salarySummary = null; }
 
 const router = express.Router();
 
@@ -257,6 +259,12 @@ function aggregate(from, to) {
     const share = ch === 'POS' ? posShare : (1 - posShare);
     return (exp[ch][kind] || 0) + (exp.Shared[kind] || 0) * share;
   }
+  const salary = salarySummary ? salarySummary(from, to) : null;
+  function salaryFor(ch) {
+    if (!salary) return 0;
+    const share = ch === 'POS' ? posShare : (1 - posShare);
+    return (salary[ch] || 0) + (salary.Shared || 0) * share;
+  }
 
   // Build a full P&L row-set per channel + combined. COGS is now ACTUAL where
   // the SKU's landed cost is known (from Purchases), and falls back to the
@@ -298,7 +306,7 @@ function aggregate(from, to) {
   CHANNELS.forEach(ch => {
     channels[ch] = rows(Object.assign({
       cogsPct: settings.cogsPct[ch],
-      fixedCost: expFor(ch, 'fixed'), runningCost: expFor(ch, 'running'),
+      fixedCost: expFor(ch, 'fixed') + salaryFor(ch), runningCost: expFor(ch, 'running'),
       variableCost: expFor(ch, 'variable'), marketing: expFor(ch, 'marketing')
     }, acc[ch]));
   });

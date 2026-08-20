@@ -132,6 +132,8 @@ function blankStore() {
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
     requests: [],                        // [{ id, kind:'ledger'|'account', name, meta, status, by, at, decidedBy, decidedAt }]
+    openingInvestment: 0,
+    odConfig: { 'Tiana 0425': { limit: 0, ratePct: 0 } },
     seq: 0, adjSeq: 0, reqSeq: 0
   };
 }
@@ -160,9 +162,9 @@ function pickableLedgers(s) {
 function rolesOfReq(req) {
   return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || [];
 }
-function isAdmin(req) { return rolesOfReq(req).includes('admin'); }
+function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
-function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting'); }
+function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting') || r.includes('owner'); }
 
 // ── Proof image upload / serve ───────────────────────────────────
 router.post('/api/expenses/upload', proofUpload.single('photo'), (req, res) => {
@@ -460,6 +462,91 @@ router.post('/api/expenses/balances', (req, res) => {
   }
   saveStore(s);
   res.json({ success: true });
+});
+
+// ── Private Owner Dashboard / OD view ───────────────────────────
+function ownerAccounts(s, from, to) {
+  const paidOut = {}, adjustments = {};
+  Object.values(s.expenses || {}).forEach(e => {
+    const d = String((e.paidAt || e.date || '')).slice(0, 10);
+    if ((from && d < from) || (to && d > to)) return;
+    const account = e.account || '(unspecified)';
+    paidOut[account] = (paidOut[account] || 0) + num(e.paidAmount);
+  });
+  (s.adjustments || []).forEach(x => {
+    const d = String(x.date || '').slice(0, 10);
+    if ((from && d < from) || (to && d > to)) return;
+    adjustments[x.account] = (adjustments[x.account] || 0) + num(x.amount);
+  });
+  const names = Array.from(new Set([].concat(s.accounts || [], Object.keys(s.openingBalances || {}), Object.keys(s.odConfig || {}), ['Tiana 0425'])));
+  return names.map(name => {
+    const opening = num((s.openingBalances || {})[name]);
+    const topups = round0(adjustments[name] || 0);
+    const spent = round0(paidOut[name] || 0);
+    return { name, opening: round0(opening), topups, sales: 0, spent, balance: round0(opening + topups - spent) };
+  });
+}
+function ownerCapital(s, from, to) {
+  let total = num(s.openingInvestment); const moves = [];
+  (s.adjustments || []).forEach(x => {
+    if (x.kind !== 'investment' && x.kind !== 'drawing') return;
+    total += num(x.amount);
+    const d = String(x.date || '').slice(0, 10);
+    if ((!from || d >= from) && (!to || d <= to)) moves.push({ id: x.id, date: d, account: x.account, amount: num(x.amount), note: x.note || '', kind: x.kind });
+  });
+  moves.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  return { ownerCash: round0(total), openingInvestment: round0(num(s.openingInvestment)), moves };
+}
+function ownerOd(s, accounts, from, to) {
+  const cfg = Object.assign({ 'Tiana 0425': { limit: 0, ratePct: 0 } }, s.odConfig || {});
+  const start = Date.parse(from || new Date().toISOString().slice(0, 10));
+  const end = Date.parse(to || new Date().toISOString().slice(0, 10));
+  const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
+  return Object.keys(cfg).map(name => {
+    const account = accounts.find(a => a.name === name) || { balance: 0 };
+    const used = Math.max(0, -num(account.balance));
+    const limit = Math.abs(num(cfg[name].limit));
+    const ratePct = Math.abs(num(cfg[name].ratePct));
+    return { account: name, used: round0(used), limit: round0(limit), available: round0(limit - used), ratePct, interest: round0(used * ratePct / 100 * days / 365) };
+  });
+}
+router.get('/api/owner/summary', (req, res) => {
+  const s = loadStore();
+  const from = String(req.query.from || '2026-07-09').slice(0, 10);
+  const to = String(req.query.to || '').slice(0, 10);
+  const accounts = ownerAccounts(s, from, to);
+  const od = ownerOd(s, accounts, from, to);
+  const odNames = new Set(od.map(x => x.account));
+  const accountsTotal = round0(accounts.filter(a => !odNames.has(a.name)).reduce((n, a) => n + a.balance, 0));
+  const capital = ownerCapital(s, from, to);
+  const odUsed = round0(od.reduce((n, x) => n + x.used, 0));
+  res.json(Object.assign({ success: true, accounts, accountsTotal, range: { from, to }, ledgerStart: '2026-07-09', od, odUsed, ownerInvested: round0(odUsed + capital.ownerCash) }, capital));
+});
+router.post('/api/owner/od', (req, res) => {
+  const s = loadStore(); const b = req.body || {}; const account = String(b.account || '').trim();
+  if (!account) return res.status(400).json({ success: false, error: 'Account required.' });
+  s.odConfig = s.odConfig || {};
+  s.odConfig[account] = { limit: Math.abs(num(b.limit)), ratePct: Math.abs(num(b.ratePct)) };
+  if (b.openingUsed != null) s.openingBalances[account] = -Math.abs(num(b.openingUsed));
+  if (!(s.accounts || []).includes(account)) s.accounts.push(account);
+  saveStore(s); res.json({ success: true, odConfig: s.odConfig[account] });
+});
+router.post('/api/owner/invest', (req, res) => {
+  const s = loadStore(); const b = req.body || {}; const amount = Math.abs(num(b.amount));
+  if (!b.account || !amount) return res.status(400).json({ success: false, error: 'Account and amount required.' });
+  const kind = b.kind === 'drawing' ? 'drawing' : 'investment';
+  s.adjSeq = (s.adjSeq || 0) + 1;
+  s.adjustments.push({ id: 'ADJ-' + s.adjSeq, account: String(b.account), amount: kind === 'drawing' ? -amount : amount, note: String(b.note || ''), date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), kind });
+  saveStore(s); res.json({ success: true });
+});
+router.post('/api/owner/invest/delete', (req, res) => {
+  const s = loadStore(); const id = String((req.body || {}).id || '');
+  s.adjustments = (s.adjustments || []).filter(x => !(x.id === id && (x.kind === 'investment' || x.kind === 'drawing')));
+  saveStore(s); res.json({ success: true });
+});
+router.post('/api/owner/opening', (req, res) => {
+  const s = loadStore(); s.openingInvestment = num((req.body || {}).amount); saveStore(s);
+  res.json({ success: true, openingInvestment: s.openingInvestment });
 });
 
 // ── Settings: accounts / people / ledger classification overrides ─

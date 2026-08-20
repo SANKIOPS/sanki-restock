@@ -91,10 +91,12 @@ function checkApiKey(req) {
 const API_ROLE_RULES = [
   { path: '/api/auth/me',                 roles: '*' },
   { path: '/api/modules',                 roles: '*' },
-  { prefix: '/api/admin',                 roles: ['admin'] },
+  { prefix: '/api/admin',                 roles: ['admin', 'owner'] },
+  { prefix: '/api/owner/',                roles: ['owner'] },
+  { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
-  { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'claimant'] },
-  { prefix: '/api/pl/',                   roles: ['admin', 'accounting', 'revenue'] },
+  { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'claimant', 'owner'] },
+  { prefix: '/api/pl/',                   roles: ['admin', 'accounting', 'revenue', 'owner'] },
   { prefix: '/api/procurement/',          roles: ['admin', 'procurement'] },
   { prefix: '/api/fresh/',                roles: ['admin', 'procurement'] },
   { prefix: '/api/casuals/',              roles: ['admin', 'procurement'] },
@@ -127,7 +129,7 @@ function apiRuleFor(p) {
 
 function apiAllowedForUser(user, p) {
   const userRoles = rolesOf(user);
-  if (userRoles.includes('admin')) return true;
+  if (userRoles.includes('admin') || userRoles.includes('owner')) return true;
   const rule = apiRuleFor(p);
   if (!rule) return false; // new APIs must opt in instead of silently opening
   if (rule.roles === '*') return true;
@@ -177,6 +179,13 @@ function gate(req, res, next) {
   }
   req.user = user;
 
+  // The Money Picture and its capital/OD APIs are private to the Owner role,
+  // even when another account has ordinary Admin access.
+  if ((p === '/owner.html' || p.startsWith('/api/owner/')) && !rolesOf(user).includes('owner')) {
+    if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
+    return res.redirect(302, landingFor(user.role));
+  }
+
   // Never redirect a role-less account to the dashboard when the dashboard is
   // also its fallback destination; that creates an infinite self-redirect.
   if (!rolesOf(user).length) {
@@ -194,7 +203,7 @@ function gate(req, res, next) {
   }
 
   // ── Page/navigation gating by role (admin sees everything) ──
-  if (rolesOf(user).includes('admin')) return next();
+  if (rolesOf(user).includes('admin') || rolesOf(user).includes('owner')) return next();
   if (isAssetPath(p)) return next();                 // shared JS/CSS/images
   if (p === '/') return res.redirect(302, landingFor(user.role));
   if (userCanAccessPath(user, p)) return next();     // union across all roles
