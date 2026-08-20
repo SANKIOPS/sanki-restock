@@ -354,6 +354,16 @@ function rolesFromBody(body) {
 }
 function adminCount(store) { return store.users.filter(u => normalizeRoles(u).includes('admin')).length; }
 
+// Safe internal lookup for modules that need to target an existing user
+// without exposing password hashes or the underlying user store.
+function userSummary(username) {
+  const wanted = String(username || '').trim().toLowerCase();
+  const user = loadUsers().users.find(u => String(u.username || '').toLowerCase() === wanted);
+  if (!user) return null;
+  const roles = normalizeRoles(user);
+  return { username: user.username, role: primaryRole(roles), roles };
+}
+
 router.get('/api/admin/users', requireAdmin, (req, res) => {
   const users = loadUsers().users.map(u => {
     const roles = normalizeRoles(u);
@@ -451,5 +461,5 @@ router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
 module.exports = {
   router, seedAdminIfEmpty, verifySession, landingFor, ROLES,
   roleCanAccessPath, userCanAccessPath,
-  allowedPagesForUser, rolesOf, registerModules
+  allowedPagesForUser, rolesOf, registerModules, userSummary
 };

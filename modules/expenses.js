@@ -224,6 +224,7 @@ router.get('/api/expenses/config', (req, res) => {
     types: TYPES, natures: NATURES, channels: CHANNELS,
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
+    isOwner: rolesOfReq(req).includes('owner'),
     canApprove: canApprove(req),
     me: (req.user && req.user.username) || '',
     pendingCount: visiblePendingReqs.length
