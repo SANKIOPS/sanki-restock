@@ -192,6 +192,16 @@ test('claimant list defaults to all own entities and exposes payment proof', () 
   assert.match(html, /alt="payment proof"/);
 });
 
+test('expense deep links load only the selected record and normal lists are bounded', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
+  assert.match(html, /focusedExpenseId/);
+  assert.match(html, /&limit=75/);
+  assert.match(html, /&id='\+encodeURIComponent\(focusedExpenseId\)/);
+  assert.match(server, /if \(id && e\.id !== id\) return false/);
+  assert.match(server, /hasMore: totalCount > list\.length/);
+});
+
 test('claimant expense history uses expandable compact rows while approver table remains', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /function claimantCard\(e\)/);

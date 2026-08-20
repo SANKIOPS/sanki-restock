@@ -178,7 +178,7 @@
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ return '₹' + Math.round(n||0).toLocaleString('en-IN'); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', focusId = '', expensesById = {}, selectedNature = 'SANKI';
+    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI';
 
     function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
@@ -365,7 +365,7 @@
       loadList();
     }
     function loadList(){
-      var q = '?nature='+encodeURIComponent(el('lf_nature').value)+'&from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+(el('lf_type')?el('lf_type').value:'');
+      var q = '?nature='+encodeURIComponent(el('lf_nature').value)+'&from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+(el('lf_type')?el('lf_type').value:'')+'&limit=75'+(focusedExpenseId?'&id='+encodeURIComponent(focusedExpenseId):'');
       api('/api/expenses/list'+q).then(function(d){
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
         expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});
@@ -403,7 +403,7 @@
             '<td data-label="Action">'+act+(cfg.canApprove?' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">✕</button>':'')+'</td>'+
           '</tr>';
         }).join('');
-        el('ltable').innerHTML = '<table class="resp"><thead><tr><th>Date</th><th>Particulars</th><th>Category</th><th>Claimant</th><th>Payment</th><th class="r">Amount</th><th>Bill</th><th>Status</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table>';
+        el('ltable').innerHTML = '<table class="resp"><thead><tr><th>Date</th><th>Particulars</th><th>Category</th><th>Claimant</th><th>Payment</th><th class="r">Amount</th><th>Bill</th><th>Status</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table>'+(d.hasMore?'<div class="hint" style="margin-top:8px">Showing the latest '+d.expenses.length+' of '+d.totalCount+' expenses. Use the date and status filters to see older entries.</div>':'');
         // Deep links can scroll to and highlight a specific expense row.
         if(focusId){ var row = el('row_'+focusId); if(row){ row.scrollIntoView({block:'center'}); row.classList.add('flash'); setTimeout(function(){ row.classList.remove('flash'); }, 2600); } focusId=''; }
       });
@@ -703,7 +703,7 @@
       // Optional deep links can open a particular expense or the approvals queue.
       var qs = new URLSearchParams(location.search);
       var f = qs.get('focus'), tp = qs.get('tab');
-      if(f){ tab = 'list'; focusId = f; }
+      if(f){ tab = 'list'; focusId = f; focusedExpenseId = f; }
       else if(tp && el('tabs').querySelector('[data-t="'+tp+'"]')){ tab = tp; }
       Array.prototype.forEach.call(el('tabs').children, function(b){ b.classList.toggle('on', b.dataset.t===tab); });
       render();

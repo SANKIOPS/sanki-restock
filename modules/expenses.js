@@ -563,6 +563,7 @@ router.delete('/api/expenses/:id', (req, res) => {
 // ── List with filters + totals ───────────────────────────────────
 router.get('/api/expenses/list', (req, res) => {
   const s = loadStore();
+  const id = (req.query.id || '').toString().trim();
   const from = (req.query.from || '').toString();
   const to = (req.query.to || '').toString();
   const status = (req.query.status || '').toString();
@@ -571,6 +572,7 @@ router.get('/api/expenses/list', (req, res) => {
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   let list = Object.values(s.expenses).filter(e => {
     if (!canViewExpense(req, e)) return false;
+    if (id && e.id !== id) return false;
     if (nature && normalizedNature(e.nature) !== nature) return false;
     if (from && e.date < from) return false;
     if (to && e.date > to) return false;
@@ -588,7 +590,11 @@ router.get('/api/expenses/list', (req, res) => {
     if (!e.billPhoto) totals.noBill += e.amount;
     if ((e.status === 'approved' || e.status === 'paid') && BUSINESS_NATURES.includes(normalizedNature(e.nature))) totals.byType[e.type] += e.amount;
   });
-  res.json({ success: true, expenses: list, totals });
+  const requestedLimit = Number(req.query.limit || 0);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(200, Math.floor(requestedLimit)) : 0;
+  const totalCount = list.length;
+  if (limit) list = list.slice(0, limit);
+  res.json({ success: true, expenses: list, totals, totalCount, hasMore: totalCount > list.length });
 });
 
 router.get('/api/expenses/reimbursements', (req, res) => {
