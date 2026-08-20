@@ -265,18 +265,7 @@
       var hint = el('ledgerHint');
       if(m){ if(el('f_type')) el('f_type').value = m.type; hint.innerHTML = cfg.canApprove?'<span class="tag">'+esc(m.type)+'</span> known category':'Selected category'; return; }
       if(!v){ hint.textContent=''; return; }
-      hint.innerHTML = 'New category — pick a type and request it: '+
-        '<select id="newLedType" class="mini-sel">'+opts(cfg.types,'variable')+'</select> '+
-        '<button class="btn mini ghost" id="reqLedBtn">Request add</button>';
-      var b = document.getElementById('reqLedBtn');
-      if(b) b.addEventListener('click', function(){ requestLedger(v, el('newLedType').value); });
-    }
-    function requestLedger(name, type){
-      api('/api/expenses/requests', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ kind:'ledger', name:name, type:type }) })
-        .then(function(d){
-          if(!d.success){ setMsg(d.error||'Could not request.', false); return; }
-          setMsg(d.already ? 'Already exists / already requested.' : 'Requested "'+name+'" — an admin will approve it, then you can log against it.', true);
-        });
+      hint.textContent='Select an approved category from the suggestions. Admin or Owner can add a missing category during approval.';
     }
     function requestAccount(){
       var nm = prompt('New paying account name (e.g. HDFC ....1234). It will need admin approval:'); if(!nm||!nm.trim()) return;
@@ -426,7 +415,7 @@
         var particulars=prompt('Particulars:',e.particulars||''); if(particulars===null) return;
         var amount=prompt('Amount ₹:',e.amount); if(amount===null) return;
         var ledger=prompt('Category (must match an existing category):',e.ledger||''); if(ledger===null) return;
-        if(!findLedger(ledger)){ setMsg('The edited category must match an existing approved category.',false); return; }
+        if(!findLedger(ledger)&&!cfg.isAdmin){ setMsg('Only Admin or Owner can add a missing category during approval.',false); return; }
         var type=prompt('Type ('+cfg.types.join(', ')+'):',e.type||'variable'); if(type===null) return;
         var vendor=prompt('Vendor (approved vendor name, or type a corrected/new name for admin to create):',e.vendor||''); if(vendor===null) return;
         var paymentType=prompt('Payment type ('+cfg.paymentTypes.join(', ')+'):',e.paymentType||'UPI'); if(paymentType===null) return;

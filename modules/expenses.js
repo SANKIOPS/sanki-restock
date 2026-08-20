@@ -342,7 +342,9 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (b.ledger != null && String(b.ledger).trim()) {
     const ledger = String(b.ledger).trim();
     if (!pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
-      return res.status(400).json({ success: false, error: 'Select an approved category.' });
+      if (!isAdmin(req)) return res.status(400).json({ success: false, error: 'Only Admin or Owner can add a missing category during approval.' });
+      s.customLedgers = s.customLedgers || {};
+      s.customLedgers[ledger] = { name: ledger, type: TYPES.includes(b.type) ? b.type : (e.type || 'variable') };
     }
     e.ledger = ledger;
   }

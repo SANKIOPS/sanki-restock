@@ -129,6 +129,8 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
   assert.match(html, /id="vendorSuggestions" class="combo-menu"/);
   assert.match(html, /No existing match/);
   assert.match(html, /id="f_totalamount"/);
+  assert.doesNotMatch(html, /id="reqLedBtn"/);
+  assert.doesNotMatch(html, /function requestLedger/);
   assert.match(html, /Have you already paid for this expense/);
   assert.match(html, /id="f_personalproof"/);
   assert.match(html, /id="f_installment"/);
@@ -138,6 +140,20 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
   assert.doesNotMatch(html, /id="f_runner"/);
   assert.doesNotMatch(html, /id="f_funded"/);
   assert.doesNotMatch(html, /id="f_account"/);
+});
+
+test('only Admin or Owner can add a missing category during review', () => {
+  const created = invoke('POST', '/api/expenses', { body: {
+    ledger: 'FOOD EXPENSE', vendor: 'Vendor Corrected', amount: 90,
+    billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash'
+  } });
+  const denied = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'New Review Category' }, role: 'accounting' });
+  assert.equal(denied.status, 400);
+  const added = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'New Review Category', type: 'running' }, role: 'owner' });
+  assert.equal(added.status, 200);
+  assert.equal(added.body.expense.ledger, 'New Review Category');
+  const config = invoke('GET', '/api/expenses/config', { role: 'owner' }).body;
+  assert.ok(config.ledgers.some(l => l.name === 'New Review Category' && l.type === 'running'));
 });
 
 test('personally paid expense becomes reimbursement pending only after approval', () => {
