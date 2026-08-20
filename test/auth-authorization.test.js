@@ -102,3 +102,10 @@ test('legacy users with missing roles are repaired without privilege escalation'
   assert.match(usersSource, /const roles = repairMissingRoles\(store, u\)/);
   assert.match(authSource, /if \(!rolesOf\(user\)\.length\)/);
 });
+
+test('confirmed owner account always retains admin access', () => {
+  const usersSource = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
+  assert.match(usersSource, /OWNER_USER = process\.env\.OWNER_USER \|\| 'gaganlambasanki'/);
+  assert.match(usersSource, /u\.username === OWNER_USER && !roles\.includes\('admin'\)/);
+  assert.match(usersSource, /\['admin'\]\.concat\(roles\)/);
+});

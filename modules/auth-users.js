@@ -37,6 +37,7 @@ const USERS_PATH = process.env.USERS_PATH || path.join(DATA_DIR, 'users.json');
 const SECRET_PATH = path.join(DATA_DIR, 'session_secret.key');
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 const COOKIE = 'sanki_session';
+const OWNER_USER = process.env.OWNER_USER || 'gaganlambasanki';
 
 // Session-signing secret: prefer env; else persist a random one on the
 // volume so it stays stable across restarts (a changed secret just logs
@@ -150,6 +151,16 @@ function normalizeRoles(u) {
 function primaryRole(roles) { return roles.includes('admin') ? 'admin' : (roles[0] || ''); }
 function repairMissingRoles(store, u) {
   let roles = normalizeRoles(u);
+  // The confirmed business owner must always retain administrative access,
+  // including after migration from a legacy blank/incorrect role record.
+  if (u.username === OWNER_USER && !roles.includes('admin')) {
+    roles = Array.from(new Set(['admin'].concat(roles)));
+    u.roles = roles.slice();
+    delete u.role;
+    saveUsers(store);
+    console.warn('[auth] restored owner admin role');
+    return roles;
+  }
   if (roles.length) return roles;
   // Legacy users created before role enforcement can exist with a blank or
   // obsolete role. Restore the configured owner as admin; give every other
