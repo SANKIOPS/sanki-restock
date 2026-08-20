@@ -76,3 +76,11 @@ test('safe PWA update assets remain public so expired sessions can recover', () 
     assert.match(source, new RegExp(`p === ['"]${asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`));
   }
 });
+
+test('Railway sessions use a stable fallback key and app-wide cookie path', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
+  assert.match(source, /process\.env\.DASH_USER && process\.env\.DASH_PASS/);
+  assert.match(source, /createHash\('sha256'\)/);
+  assert.match(source, /path: '\/'/);
+  assert.match(source, /clearCookie\(COOKIE, \{[^}]*path: '\/'/s);
+});

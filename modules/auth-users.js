@@ -43,6 +43,16 @@ const COOKIE = 'sanki_session';
 // everyone out — safe, not destructive).
 const SECRET = (function () {
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  // Railway may briefly serve more than one instance during a deploy, and a
+  // volume-backed random key is not guaranteed to be identical in every
+  // instance. The existing bootstrap credentials are stable deployment
+  // secrets, so derive a dedicated session key from them when no explicit
+  // SESSION_SECRET is configured. No credential value is stored in the token.
+  if (process.env.DASH_USER && process.env.DASH_PASS) {
+    return crypto.createHash('sha256')
+      .update('sanki-session-v1\0' + process.env.DASH_USER + '\0' + process.env.DASH_PASS)
+      .digest('hex');
+  }
   try { const s = fs.readFileSync(SECRET_PATH, 'utf8').trim(); if (s) return s; } catch { /* none yet */ }
   const s = crypto.randomBytes(32).toString('hex');
   try { fs.writeFileSync(SECRET_PATH, s); } catch (e) { console.error('[auth] could not persist session secret:', e.message); }
@@ -250,12 +260,18 @@ router.post('/api/auth/login', (req, res) => {
   const roles = normalizeRoles(u);
   const primary = primaryRole(roles);
   const token = signSession({ u: u.username, r: primary, exp: Date.now() + SESSION_TTL_MS });
-  res.cookie(COOKIE, token, { httpOnly: true, secure: true, sameSite: 'lax', maxAge: SESSION_TTL_MS });
+  res.cookie(COOKIE, token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: SESSION_TTL_MS
+  });
   res.json({ success: true, username: u.username, role: primary, roles, home: landingFor(primary) });
 });
 
 router.post('/api/auth/logout', (req, res) => {
-  res.clearCookie(COOKIE);
+  res.clearCookie(COOKIE, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
   res.json({ success: true });
 });
 
