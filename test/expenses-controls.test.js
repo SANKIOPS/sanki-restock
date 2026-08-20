@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router } = require('../modules/expenses');
+const { router, summaryForPL } = require('../modules/expenses');
 
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -124,6 +124,29 @@ test('UPI requires a vendor QR photo while Cash and Credit do not', () => {
   }
 });
 
+test('SAMAST expenses are separate and only its accounting role can approve them', () => {
+  const sankiPlBefore = summaryForPL();
+  const created = invoke('POST', '/api/expenses', { body: {
+    nature: 'SAMAST', vendor: 'Kirti Nagar Service', amount: 700,
+    billPhoto: '/api/expenses/photo/samast-bill.jpg', paymentType: 'Cash'
+  } });
+  assert.equal(created.status, 200);
+  assert.equal(created.body.expense.nature, 'SAMAST');
+  invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Operating Expense' }, role: 'owner' });
+
+  const wrongBooks = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
+  assert.equal(wrongBooks.status, 403);
+  const samastApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'samast_accounting' });
+  assert.equal(samastApproval.status, 200);
+  assert.deepEqual(summaryForPL(), sankiPlBefore, 'SAMAST must never enter the SANKI P&L');
+
+  const samastList = invoke('GET', '/api/expenses/list', { query: {}, role: 'samast_accounting' });
+  assert.ok(samastList.body.expenses.length > 0);
+  assert.ok(samastList.body.expenses.every(e => e.nature === 'SAMAST'));
+  const sankiList = invoke('GET', '/api/expenses/list', { query: {}, role: 'accounting' });
+  assert.ok(sankiList.body.expenses.every(e => (e.nature || 'SANKI') !== 'SAMAST'));
+});
+
 test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="f_vendor"/);
@@ -141,6 +164,8 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
   assert.doesNotMatch(html, /id="f_runner"/);
   assert.doesNotMatch(html, /id="f_funded"/);
   assert.doesNotMatch(html, /id="f_account"/);
+  assert.match(html, /id="f_nature"/);
+  assert.match(html, /SAMAST \(Kirti Nagar\)/);
 });
 
 test('Telegram setup is Owner-only and supports per-user notification management', () => {

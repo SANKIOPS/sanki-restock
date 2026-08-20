@@ -108,8 +108,9 @@ function defaultType(name) {
 }
 
 const TYPES = ['fixed', 'running', 'variable', 'marketing'];
-const NATURES = ['SANKI'];                 // business-only; drawings aren't logged here
-const BUSINESS_NATURES = ['SANKI', 'A3'];  // 'A3' kept for legacy rows saved before the rename
+const NATURES = ['SANKI', 'SAMAST'];
+const BUSINESS_NATURES = ['SANKI', 'SAMAST', 'A3'];  // 'A3' kept for legacy SANKI rows
+const SANKI_PL_NATURES = ['SANKI', 'A3'];
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const BILLS = ['printed', 'handwritten', 'none'];
 const PAID_BY = ['company', 'claimant'];
@@ -125,9 +126,11 @@ function blankStore() {
   return {
     expenses: {},
     vendors: {},
+    vendorsByNature: { SAMAST: {} },
     accounts: DEFAULT_ACCOUNTS.slice(),
     people: DEFAULT_PEOPLE.slice(),      // claimants
     openingBalances: {},                 // { [account]: opening ₹ }
+    openingBalancesByNature: { SAMAST: {} }, // SAMAST books stay separate; legacy map is SANKI
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
@@ -164,7 +167,26 @@ function rolesOfReq(req) {
 }
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
-function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting') || r.includes('owner'); }
+function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting') || r.includes('samast_accounting') || r.includes('owner'); }
+function normalizedNature(v) { return String(v || '').toUpperCase() === 'SAMAST' ? 'SAMAST' : 'SANKI'; }
+function approvalNatures(req) {
+  const r = rolesOfReq(req);
+  if (r.includes('admin') || r.includes('owner')) return NATURES.slice();
+  const out = [];
+  if (r.includes('accounting')) out.push('SANKI');
+  if (r.includes('samast_accounting')) out.push('SAMAST');
+  return out;
+}
+function submissionNatures(req) {
+  const r = rolesOfReq(req);
+  if (r.includes('admin') || r.includes('owner') || r.includes('claimant')) return NATURES.slice();
+  return approvalNatures(req);
+}
+function canApproveExpenseNature(req, e) { return approvalNatures(req).includes(normalizedNature(e && e.nature)); }
+function canViewExpense(req, e) {
+  if (canApproveExpenseNature(req, e)) return true;
+  return e && e.createdBy === (req.user && req.user.username);
+}
 
 // Notifications must never block an accounting action. Telegram is optional in
 // local/test environments, so these helpers deliberately degrade to a no-op.
@@ -172,8 +194,9 @@ function notifyApproversNewExpense(e) {
   try {
     const telegram = require('./telegram');
     const esc = telegram.esc || (v => String(v));
-    telegram.notify(
-      `🧾 <b>New expense ${esc(e.id)}</b>\n${esc(e.createdBy)} · ${esc(e.vendor)} · ₹${round0(e.requestedAmount || e.amount)}`,
+    const send = typeof telegram.notifyApprovers === 'function' ? telegram.notifyApprovers : ((nature, text, opts) => telegram.notify(text, opts));
+    send(normalizedNature(e.nature),
+      `🧾 <b>New ${esc(normalizedNature(e.nature))} expense ${esc(e.id)}</b>\n${esc(e.createdBy)} · ${esc(e.vendor)} · ₹${round0(e.requestedAmount || e.amount)}`,
       { button: { text: 'Review expense', url: `/expenses.html?focus=${encodeURIComponent(e.id)}` } }
     );
   } catch { /* Telegram is optional */ }
@@ -193,7 +216,7 @@ function notifyExpenseUser(e, event, amount) {
     };
     telegram.notifyUser(
       e.createdBy || e.claimant,
-      `💸 <b>${esc(e.id)}</b> — ${esc(labels[event] || event)}\n${esc(e.vendor)} · ₹${round0(e.amount)}`,
+      `💸 <b>${esc(normalizedNature(e.nature))} · ${esc(e.id)}</b> — ${esc(labels[event] || event)}\n${esc(e.vendor)} · ₹${round0(e.amount)}`,
       { button: { text: 'View expense', url: `/expenses.html?focus=${encodeURIComponent(e.id)}` } }
     );
   } catch { /* Telegram is optional */ }
@@ -214,14 +237,23 @@ router.get('/api/expenses/photo/:file', (req, res) => {
 // ── Config for the entry form ────────────────────────────────────
 router.get('/api/expenses/config', (req, res) => {
   const s = loadStore();
-  const pendingReqs = (s.requests || []).filter(r => r.status === 'pending');
+  const allowed = submissionNatures(req);
+  const pendingReqs = (s.requests || []).filter(r => r.status === 'pending' && approvalNatures(req).includes(normalizedNature(r.nature)));
   const visiblePendingReqs = isAdmin(req) ? pendingReqs : (canApprove(req) ? pendingReqs.filter(r => r.kind === 'vendor') : []);
+  const vendorsByNature = { SANKI: Object.values(s.vendors).map(v => v.name), SAMAST: Object.values(((s.vendorsByNature || {}).SAMAST) || {}).map(v => v.name) };
+  Object.values(s.expenses || {}).forEach(e => {
+    const nature = normalizedNature(e.nature);
+    if (e.vendor && !vendorsByNature[nature].some(v => v.toLowerCase() === String(e.vendor).toLowerCase())) vendorsByNature[nature].push(e.vendor);
+  });
+  Object.keys(vendorsByNature).forEach(n => vendorsByNature[n].sort((a, b) => a.localeCompare(b)));
   res.json({
     success: true,
     ledgers: pickableLedgers(s),
-    vendors: Object.values(s.vendors).map(v => v.name).sort((a, b) => a.localeCompare(b)),
+    vendors: vendorsByNature.SANKI,
+    vendorsByNature,
     accounts: s.accounts, people: s.people,
-    types: TYPES, natures: NATURES, channels: CHANNELS,
+    types: TYPES, natures: allowed, channels: CHANNELS,
+    approvalNatures: approvalNatures(req),
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
     isOwner: rolesOfReq(req).includes('owner'),
@@ -245,7 +277,8 @@ router.post('/api/expenses', (req, res) => {
   }
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Amount must be greater than 0.' });
 
-  const nature = 'SANKI';                              // business-only module
+  const nature = normalizedNature(b.nature);
+  if (!submissionNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You do not have access to this accounting entity.' });
   // Claimants never classify accounting type: every submission starts as
   // Variable. An approver may reclassify it while reviewing the pending row.
   const type = canApprove(req) && TYPES.includes(b.type) ? b.type : 'variable';
@@ -325,6 +358,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   const s = loadStore();
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
+  if (!canViewExpense(req, e)) return res.status(403).json({ success: false, error: 'You do not have access to this accounting entity.' });
   if (!canApprove(req) && (e.createdBy !== (req.user && req.user.username) || e.status !== 'pending')) {
     return res.status(403).json({ success: false, error: 'You can only edit your own pending expenses.' });
   }
@@ -339,7 +373,8 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (e.paidAlready && requested < num(e.personalPaidAmount)) return res.status(400).json({ success: false, error: 'Requested payment cannot be less than the amount already paid personally.' });
     e.requestedAmount = requested;
   }
-  if (NATURES.includes(b.nature)) e.nature = b.nature;
+  // Entity is immutable after submission so an entry cannot be moved between
+  // separate books accidentally. Owner can delete/re-enter a mistaken record.
   if (TYPES.includes(b.type)) e.type = b.type;
   if (b.ledger != null && String(b.ledger).trim()) {
     if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only Admin or Owner can assign or change the category.' });
@@ -382,6 +417,7 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   const s = loadStore();
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
+  if (!canApproveExpenseNature(req, e)) return res.status(403).json({ success: false, error: 'You cannot approve this accounting entity.' });
   if (e.status === 'approved' || e.status === 'partially_paid' || e.status === 'paid') {
     // Un-approve (only if not yet paid).
     if (e.status === 'paid' || e.status === 'partially_paid') return res.status(400).json({ success: false, error: 'Payments already recorded — cannot un-approve.' });
@@ -403,7 +439,12 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   if (!e.ledger) return res.status(400).json({ success: false, error: 'Admin or Owner must assign a category before approval.' });
   // A claimant may type a new vendor directly. Approval confirms the corrected
   // name and promotes it into the reusable vendor list.
-  if (!s.vendors[e.vendor.toLowerCase()]) s.vendors[e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
+  if (normalizedNature(e.nature) === 'SANKI') {
+    if (!s.vendors[e.vendor.toLowerCase()]) s.vendors[e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
+  } else {
+    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature.SAMAST = s.vendorsByNature.SAMAST || {};
+    if (!s.vendorsByNature.SAMAST[e.vendor.toLowerCase()]) s.vendorsByNature.SAMAST[e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
+  }
   e.status = e.paidAmount >= e.amount ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
   if (e.paidAlready) e.reimbursementStatus = 'pending';
   e.approvedAt = new Date().toISOString();
@@ -419,6 +460,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   const s = loadStore();
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
+  if (!canApproveExpenseNature(req, e)) return res.status(403).json({ success: false, error: 'You cannot pay this accounting entity.' });
   if (e.status === 'pending') return res.status(400).json({ success: false, error: 'Approve it before paying.' });
   if (e.status === 'paid') return res.status(400).json({ success: false, error: 'This expense is already fully paid.' });
   const b = req.body || {};
@@ -457,6 +499,7 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can reimburse.' });
   const s = loadStore(); const e = s.expenses[req.params.id]; const b = req.body || {};
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
+  if (!canApproveExpenseNature(req, e)) return res.status(403).json({ success: false, error: 'You cannot reimburse this accounting entity.' });
   if (e.reimbursementStatus !== 'pending' && e.reimbursementStatus !== 'partially_reimbursed') {
     return res.status(400).json({ success: false, error: 'This expense has no approved reimbursement pending.' });
   }
@@ -483,6 +526,7 @@ router.post('/api/expenses/:id/reject', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can reject.' });
   const s = loadStore(); const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
+  if (!canApproveExpenseNature(req, e)) return res.status(403).json({ success: false, error: 'You cannot reject this accounting entity.' });
   if (e.status !== 'pending') return res.status(400).json({ success: false, error: 'Only a pending expense can be rejected.' });
   e.status = 'rejected'; e.rejectReason = String((req.body || {}).reason || '').trim();
   e.rejectedAt = new Date().toISOString(); e.rejectedBy = (req.user && req.user.username) || 'admin';
@@ -496,6 +540,7 @@ router.delete('/api/expenses/:id', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can delete.' });
   const s = loadStore();
   if (!s.expenses[req.params.id]) return res.status(404).json({ success: false, error: 'Not found.' });
+  if (!canApproveExpenseNature(req, s.expenses[req.params.id])) return res.status(403).json({ success: false, error: 'You cannot delete this accounting entity.' });
   delete s.expenses[req.params.id];
   saveStore(s);
   res.json({ success: true });
@@ -509,8 +554,10 @@ router.get('/api/expenses/list', (req, res) => {
   const status = (req.query.status || '').toString();
   const type = (req.query.type || '').toString();
   const vendor = (req.query.vendor || '').toString().toLowerCase();
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   let list = Object.values(s.expenses).filter(e => {
-    if (!canApprove(req) && e.createdBy !== (req.user && req.user.username)) return false;
+    if (!canViewExpense(req, e)) return false;
+    if (nature && normalizedNature(e.nature) !== nature) return false;
     if (from && e.date < from) return false;
     if (to && e.date > to) return false;
     if (status && e.status !== status) return false;
@@ -525,7 +572,7 @@ router.get('/api/expenses/list', (req, res) => {
     totals.all += e.amount;
     totals[e.status] = (totals[e.status] || 0) + e.amount;
     if (!e.billPhoto) totals.noBill += e.amount;
-    if ((e.status === 'approved' || e.status === 'paid') && BUSINESS_NATURES.includes(e.nature)) totals.byType[e.type] += e.amount;
+    if ((e.status === 'approved' || e.status === 'paid') && BUSINESS_NATURES.includes(normalizedNature(e.nature))) totals.byType[e.type] += e.amount;
   });
   res.json({ success: true, expenses: list, totals });
 });
@@ -537,7 +584,10 @@ router.get('/api/expenses/reimbursements', (req, res) => {
   const person = String(req.query.person || '').toLowerCase();
   const todayOnly = String(req.query.today || '') === 'true';
   const today = new Date().toISOString().slice(0, 10);
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   let list = Object.values(s.expenses || {}).filter(e => {
+    if (!canApproveExpenseNature(req, e)) return false;
+    if (nature && normalizedNature(e.nature) !== nature) return false;
     if (!e.paidAlready || e.reimbursementStatus === 'awaiting_approval' || e.reimbursementStatus === 'rejected') return false;
     if (status && e.reimbursementStatus !== status) return false;
     if (person && !String(e.createdBy || e.claimant || '').toLowerCase().includes(person)) return false;
@@ -557,9 +607,13 @@ router.get('/api/expenses/reimbursements', (req, res) => {
 router.get('/api/expenses/vendors', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view vendor books.' });
   const s = loadStore();
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
+  if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const books = {};
-  Object.values(s.vendors).forEach(v => { books[v.name] = { name: v.name, billed: 0, paid: 0, outstanding: 0, count: 0, notes: v.notes || '' }; });
+  const master = nature === 'SANKI' ? s.vendors : (((s.vendorsByNature || {}).SAMAST) || {});
+  Object.values(master).forEach(v => { books[v.name] = { name: v.name, billed: 0, paid: 0, outstanding: 0, count: 0, notes: v.notes || '' }; });
   Object.values(s.expenses).forEach(e => {
+    if (normalizedNature(e.nature) !== nature) return;
     if (!e.vendor) return;
     const b = books[e.vendor] || (books[e.vendor] = { name: e.vendor, billed: 0, paid: 0, outstanding: 0, count: 0, notes: '' });
     b.billed += e.amount; b.paid += num(e.paidAmount); b.count += 1;
@@ -573,11 +627,18 @@ router.get('/api/expenses/vendors', (req, res) => {
 router.post('/api/expenses/vendors', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can edit vendors.' });
   const s = loadStore();
+  const nature = normalizedNature((req.body || {}).nature);
+  if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
   const name = String((req.body || {}).name || '').trim();
   if (!name) return res.status(400).json({ success: false, error: 'Vendor name required.' });
-  if (!s.vendors[name.toLowerCase()]) s.vendors[name.toLowerCase()] = { name, notes: '' };
+  if (nature === 'SANKI') {
+    if (!s.vendors[name.toLowerCase()]) s.vendors[name.toLowerCase()] = { name, notes: '' };
+  } else {
+    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature.SAMAST = s.vendorsByNature.SAMAST || {};
+    if (!s.vendorsByNature.SAMAST[name.toLowerCase()]) s.vendorsByNature.SAMAST[name.toLowerCase()] = { name, notes: '' };
+  }
   saveStore(s);
-  res.json({ success: true, vendors: Object.values(s.vendors).map(v => v.name) });
+  res.json({ success: true });
 });
 
 // ── Running cash balances per account ────────────────────────────
@@ -585,8 +646,11 @@ router.post('/api/expenses/vendors', (req, res) => {
 router.get('/api/expenses/balances', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view balances.' });
   const s = loadStore();
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
+  if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const paidOut = {}; const adj = {};
   Object.values(s.expenses).forEach(e => {
+    if (normalizedNature(e.nature) !== nature) return;
     const a = e.account || '(unspecified)';
     // Personally funded payments did not leave a company account.
     const companyPaid = (e.payments || []).filter(p => !p.personalFunds)
@@ -597,9 +661,10 @@ router.get('/api/expenses/balances', (req, res) => {
       paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
     });
   });
-  (s.adjustments || []).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
+  (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
+  const openingMap = nature === 'SAMAST' ? (((s.openingBalancesByNature || {}).SAMAST) || {}) : (s.openingBalances || {});
   const accounts = s.accounts.map(name => {
-    const opening = num((s.openingBalances || {})[name]);
+    const opening = num(openingMap[name]);
     const spent = round0(paidOut[name] || 0);
     const topups = round0(adj[name] || 0);
     return { name, opening: round0(opening), topups, spent, balance: round0(opening + topups - spent) };
@@ -610,15 +675,21 @@ router.post('/api/expenses/balances', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can edit balances.' });
   const s = loadStore();
   const b = req.body || {};
+  const nature = normalizedNature(b.nature);
+  if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
   if (b.setOpening && b.setOpening.account) {
-    s.openingBalances[String(b.setOpening.account)] = num(b.setOpening.amount);
+    if (nature === 'SAMAST') {
+      s.openingBalancesByNature = s.openingBalancesByNature || {};
+      s.openingBalancesByNature.SAMAST = s.openingBalancesByNature.SAMAST || {};
+      s.openingBalancesByNature.SAMAST[String(b.setOpening.account)] = num(b.setOpening.amount);
+    } else s.openingBalances[String(b.setOpening.account)] = num(b.setOpening.amount);
   }
   if (b.adjust && b.adjust.account && b.adjust.amount != null) {
     s.adjSeq = (s.adjSeq || 0) + 1;
     s.adjustments.push({
       id: 'ADJ-' + s.adjSeq, account: String(b.adjust.account),
       amount: num(b.adjust.amount), note: String(b.adjust.note || ''),
-      date: (b.adjust.date || new Date().toISOString().slice(0, 10)).toString().slice(0, 10)
+      date: (b.adjust.date || new Date().toISOString().slice(0, 10)).toString().slice(0, 10), nature
     });
   }
   saveStore(s);
@@ -841,7 +912,9 @@ function summaryForPL(from, to) {
     if (!['approved', 'partially_paid', 'paid'].includes(e.status)) return; // approved-only gate
     if (from && e.date < from) return;
     if (to && e.date > to) return;
-    if (!BUSINESS_NATURES.includes(e.nature)) { out.excluded += e.amount; return; }  // legacy drawings only
+    const expenseNature = normalizedNature(e.nature);
+    if (expenseNature === 'SAMAST') return; // separate books; never enter any SANKI P&L figure
+    if (!SANKI_PL_NATURES.includes(e.nature || expenseNature)) { out.excluded += e.amount; return; }  // legacy drawings only
     const ch = CHANNELS.includes(e.channel) ? e.channel : 'Shared';
     out[ch][e.type] = (out[ch][e.type] || 0) + e.amount;
   });

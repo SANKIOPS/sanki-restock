@@ -49,6 +49,13 @@ test('accounting can use P&L and expense APIs but cannot adjust stock', () => {
   assert.equal(apiAllowedForUser(accounting, '/api/inventory/adjust'), false);
 });
 
+test('Samast Accounting role can use expenses but not SANKI P&L or stock', () => {
+  const samast = user('samast_accounting');
+  assert.equal(apiAllowedForUser(samast, '/api/expenses/list'), true);
+  assert.equal(apiAllowedForUser(samast, '/api/pl/summary'), false);
+  assert.equal(apiAllowedForUser(samast, '/api/inventory/adjust'), false);
+});
+
 test('claimants can log expenses but cannot access accounting or unrelated APIs', () => {
   const claimant = user('claimant');
   assert.equal(apiAllowedForUser(claimant, '/api/expenses'), true);

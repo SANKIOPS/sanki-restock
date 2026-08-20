@@ -95,7 +95,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/owner/',                roles: ['owner'] },
   { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
-  { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'claimant', 'owner'] },
+  { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'samast_accounting', 'claimant', 'owner'] },
   { prefix: '/api/telegram/',             roles: ['admin', 'accounting', 'claimant', 'owner'] },
   { prefix: '/api/pl/',                   roles: ['admin', 'accounting', 'revenue', 'owner'] },
   { prefix: '/api/procurement/',          roles: ['admin', 'procurement'] },

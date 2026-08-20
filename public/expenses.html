@@ -154,7 +154,7 @@
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ return '₹' + Math.round(n||0).toLocaleString('en-IN'); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', focusId = '', expensesById = {};
+    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', focusId = '', expensesById = {}, selectedNature = 'SANKI';
 
     function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
@@ -193,7 +193,7 @@
           '<datalist id="ledgerList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist>'+
           '<div class="hint" id="ledgerHint"></div></div>':'')+
         (cfg.canApprove?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
-        '<div class="fld"><label>Nature</label><input value="SANKI" disabled><div class="hint">SANKI business expense — counts in the P&amp;L</div></div>'+
+        '<div class="fld"><label>Accounting entity / nature</label><select id="f_nature">'+opts(cfg.natures,selectedNature)+'</select><div class="hint">Choose SANKI or SAMAST (Kirti Nagar) before submitting.</div></div>'+
         '<div class="fld combo-wrap"><label>Vendor</label><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" aria-autocomplete="list" aria-controls="vendorSuggestions"><div id="vendorSuggestions" class="combo-menu" role="listbox"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
         '<div class="fld full"><label>Have you already paid for this expense?</label><select id="f_paidalready"><option value="false">No — company must pay the vendor</option><option value="true">Yes — I paid personally</option></select></div>'+
         '<div class="fld"><label>Is this an installment / contract?</label><select id="f_installment"><option value="false">No</option><option value="true">Yes</option></select></div>'+
@@ -217,6 +217,7 @@
       el('f_installment').addEventListener('change', toggleInstallment);
       el('f_vendor').addEventListener('input',renderVendorSuggestions);
       el('f_vendor').addEventListener('focus',renderVendorSuggestions);
+      el('f_nature').addEventListener('change',function(){selectedNature=this.value;el('f_vendor').value='';renderVendorSuggestions();});
       document.removeEventListener('click',closeVendorSuggestions,true);
       document.addEventListener('click',closeVendorSuggestions,true);
       el('saveExp').addEventListener('click', saveExpense);
@@ -228,7 +229,8 @@
     }
     function renderVendorSuggestions(){
       var input=el('f_vendor'), menu=el('vendorSuggestions'), q=input.value.trim().toLowerCase();
-      var matches=cfg.vendors.filter(function(v){return !q||v.toLowerCase().includes(q);}).slice(0,20);
+      var nature=el('f_nature')?el('f_nature').value:selectedNature;
+      var matches=(cfg.vendorsByNature&&cfg.vendorsByNature[nature]||cfg.vendors).filter(function(v){return !q||v.toLowerCase().includes(q);}).slice(0,20);
       if(!matches.length){
         menu.innerHTML='<div class="combo-option" role="option" aria-disabled="true"><b>No existing match.</b><br><span class="muted">“'+esc(input.value.trim())+'” will be submitted as a new vendor.</span></div>';
         menu.classList.add('open'); return;
@@ -303,7 +305,7 @@
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
       Promise.all([uploadFile(el('f_billfile')),(!paidAlready&&paymentType==='UPI')?uploadFile(el('f_qrphoto')):Promise.resolve(''),paidAlready?uploadFile(el('f_personalproof')):Promise.resolve('')]).then(function(urls){
         var body = {
-          date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value,
+          date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value, nature:el('f_nature').value,
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
           isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
@@ -324,6 +326,7 @@
       el('panel').innerHTML = '<div class="card"><div class="filters" id="filters"></div>'+
         '<div class="stats" id="lstats"></div><div id="ltable" class="muted">Loading…</div></div>';
       el('filters').innerHTML =
+        '<div class="fld"><label>Entity</label><select id="lf_nature">'+opts(cfg.natures,selectedNature)+'</select></div>'+
         '<div class="fld"><label>From</label><input type="date" id="lf_from"></div>'+
         '<div class="fld"><label>To</label><input type="date" id="lf_to"></div>'+
         '<div class="fld"><label>Status</label><select id="lf_status"><option value="">All</option><option>pending</option><option>approved</option><option>partially_paid</option><option>paid</option><option>rejected</option></select></div>'+
@@ -332,10 +335,11 @@
       var n = new Date(Date.now()+5.5*3600*1000); var y=n.getUTCFullYear(), m=n.getUTCMonth();
       el('lf_from').value = y+'-'+String(m+1).padStart(2,'0')+'-01'; el('lf_to').value = today();
       el('lf_go').addEventListener('click', loadList);
+      el('lf_nature').addEventListener('change',function(){selectedNature=this.value;loadList();});
       loadList();
     }
     function loadList(){
-      var q = '?from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+el('lf_type').value;
+      var q = '?nature='+encodeURIComponent(el('lf_nature').value)+'&from='+el('lf_from').value+'&to='+el('lf_to').value+'&status='+el('lf_status').value+'&type='+el('lf_type').value;
       api('/api/expenses/list'+q).then(function(d){
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
         expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});
@@ -356,7 +360,7 @@
           else if(e.status==='paid') act = e.paymentProof ? '<img class="thumb" src="'+esc(e.paymentProof)+'" onclick="window.open(this.src)" title="payment proof">' : '';
           return '<tr id="row_'+e.id+'">'+
             '<td data-label="Date">'+esc(e.date)+'<div class="muted" style="font-size:10px">'+e.id+'</div></td>'+
-            '<td data-label="Particulars">'+esc(e.particulars||'—')+(e.vendor?'<div class="muted" style="font-size:11px">vendor: '+esc(e.vendor)+'</div>':'')+'</td>'+
+            '<td data-label="Particulars"><span class="tag">'+esc(e.nature||'SANKI')+'</span> '+esc(e.particulars||'—')+(e.vendor?'<div class="muted" style="font-size:11px">vendor: '+esc(e.vendor)+'</div>':'')+'</td>'+
             '<td data-label="Category">'+catCell(e)+'</td>'+
             '<td data-label="Claimant">'+esc(e.claimant||e.runner||e.createdBy||'—')+'</td>'+
             '<td data-label="Payment">'+paymentCell(e)+'</td>'+
@@ -494,7 +498,7 @@
       el('rf_go').addEventListener('click',loadReimbursements); loadReimbursements();
     }
     function loadReimbursements(){
-      var q='?status='+encodeURIComponent(el('rf_status').value)+'&person='+encodeURIComponent(el('rf_person').value)+'&today='+el('rf_today').checked;
+      var q='?nature='+encodeURIComponent(selectedNature)+'&status='+encodeURIComponent(el('rf_status').value)+'&person='+encodeURIComponent(el('rf_person').value)+'&today='+el('rf_today').checked;
       api('/api/expenses/reimbursements'+q).then(function(d){
         if(!d.success){el('rtable').textContent=d.error||'Could not load.';return;} expensesById={}; d.reimbursements.forEach(function(e){expensesById[e.id]=e;});
         el('rstats').innerHTML='<div class="stat"><div class="k">Pending reimbursement</div><div class="v">'+fmt(d.pendingTotal)+'</div></div>';
@@ -508,12 +512,12 @@
       el('panel').innerHTML = '<div class="card"><div class="row-actions" style="margin-top:0"><input id="newVendor" placeholder="add vendor name"><button class="btn ghost mini" id="addVendor">Add</button></div><div id="vtable" class="muted" style="margin-top:12px">Loading…</div></div>';
       el('addVendor').addEventListener('click', function(){
         var nm = el('newVendor').value.trim(); if(!nm) return;
-        api('/api/expenses/vendors', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:nm}) }).then(function(){ el('newVendor').value=''; loadConfig().then(loadVendors); });
+        api('/api/expenses/vendors', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:nm,nature:selectedNature}) }).then(function(){ el('newVendor').value=''; loadConfig().then(loadVendors); });
       });
       loadVendors();
     }
     function loadVendors(){
-      api('/api/expenses/vendors').then(function(d){
+      api('/api/expenses/vendors?nature='+encodeURIComponent(selectedNature)).then(function(d){
         if(!d.vendors.length){ el('vtable').innerHTML='<span class="muted">No vendors yet.</span>'; return; }
         var rows = d.vendors.map(function(v){
           return '<tr><td>'+esc(v.name)+'</td><td class="r">'+v.count+'</td><td class="r">'+fmt(v.billed)+'</td><td class="r">'+fmt(v.paid)+'</td><td class="r '+(v.outstanding>0?'neg':'')+'">'+fmt(v.outstanding)+'</td></tr>';
@@ -529,7 +533,7 @@
       loadCash();
     }
     function loadCash(){
-      api('/api/expenses/balances').then(function(d){
+      api('/api/expenses/balances?nature='+encodeURIComponent(selectedNature)).then(function(d){
         var rows = d.accounts.map(function(a){
           return '<tr><td data-label="Account">'+esc(a.name)+'</td>'+
             '<td class="r" data-label="Opening"><input type="number" value="'+a.opening+'" style="width:110px" onchange="setOpening(\''+esc(a.name)+'\',this.value)"></td>'+
@@ -547,12 +551,12 @@
       });
     }
     window.setOpening = function(acct, amt){
-      api('/api/expenses/balances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ setOpening:{account:acct, amount:amt} }) }).then(function(){ loadCash(); });
+      api('/api/expenses/balances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ nature:selectedNature,setOpening:{account:acct, amount:amt} }) }).then(function(){ loadCash(); });
     };
     window.topup = function(acct){
       var amt = prompt('Top up '+acct+' by ₹ (use a negative number to correct down):'); if(amt===null) return;
       var note = prompt('Note (optional):')||'';
-      api('/api/expenses/balances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ adjust:{account:acct, amount:amt, note:note} }) }).then(function(){ loadCash(); });
+      api('/api/expenses/balances', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ nature:selectedNature,adjust:{account:acct, amount:amt, note:note} }) }).then(function(){ loadCash(); });
     };
 
     window.removeAcct = function(name){
@@ -625,6 +629,7 @@
 
     // boot
     loadConfig().then(function(){
+      selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
       if(!cfg.canApprove){ // claimant-only: log + view own list, nothing else
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();
