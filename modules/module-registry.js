@@ -57,7 +57,7 @@ const MODULES = [
 
   { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'revenue', 'owner'] },
-  { key: 'expenses',     title: 'Expenses',              desc: 'SANKI and SAMAST expenses — log, approve and pay with proof', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'samast_accounting', 'claimant', 'owner'] },
+  { key: 'expenses',     title: 'Expenses',              desc: 'SANKI, SAMAST and owner-private Personal expenses', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'samast_accounting', 'personal_claimant', 'claimant', 'owner'] },
   { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the P&L', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },

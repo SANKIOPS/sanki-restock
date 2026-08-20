@@ -229,7 +229,7 @@
           '<datalist id="ledgerList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist>'+
           '<div class="hint" id="ledgerHint"></div></div>':'')+
         (cfg.canApprove?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
-        '<div class="fld"><label>Accounting entity / nature</label><select id="f_nature">'+opts(cfg.natures,selectedNature)+'</select><div class="hint">Choose SANKI or SAMAST (Kirti Nagar) before submitting.</div></div>'+
+        '<div class="fld"><label>Accounting entity / nature</label><select id="f_nature">'+opts(cfg.natures,selectedNature)+'</select><div class="hint">Choose SANKI, SAMAST (Kirti Nagar), or owner-private PERSONAL.</div></div>'+
         '<div class="fld combo-wrap"><label>Vendor</label><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" aria-autocomplete="list" aria-controls="vendorSuggestions"><div id="vendorSuggestions" class="combo-menu" role="listbox"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
         '<div class="fld full"><label>Have you already paid for this expense?</label><select id="f_paidalready"><option value="false">No — company must pay the vendor</option><option value="true">Yes — I paid personally</option></select></div>'+
         '<div class="fld"><label>Is this an installment / contract?</label><select id="f_installment"><option value="false">No</option><option value="true">Yes</option></select></div>'+
@@ -319,9 +319,9 @@
           setMsg(d.already ? 'Account already exists / requested.' : 'Requested account "'+nm.trim()+'" — pending admin approval.', true);
         });
     }
-    function uploadFile(input){
+    function uploadFile(input, nature){
       if(!input.files || !input.files[0]) return Promise.resolve('');
-      var fd = new FormData(); fd.append('photo', input.files[0]);
+      var fd = new FormData(); fd.append('nature',nature||(el('f_nature')?el('f_nature').value:((expensesById[payId]||{}).nature||'SANKI'))); fd.append('photo', input.files[0]);
       return api('/api/expenses/upload', { method:'POST', body:fd }).then(function(d){ return d.url || ''; });
     }
 
@@ -469,7 +469,7 @@
     window.attachBill = function(id, input){
       if(!input.files[0]) return;
       setMsg('uploading bill…', true);
-      uploadFile(input).then(function(url){
+      uploadFile(input,(expensesById[id]||{}).nature).then(function(url){
         if(!url){ setMsg('Upload failed.', false); return; }
         api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ billPhoto:url }) })
           .then(function(){ setMsg('Bill attached — you can approve now.', true); loadList(); });
@@ -573,7 +573,7 @@
     el('payFile').addEventListener('change', function(){
       if(!this.files[0]) return;
       el('payMsg').textContent='uploading…';
-      uploadFile(this).then(function(url){
+      uploadFile(this,(expensesById[payId]||{}).nature).then(function(url){
         payUrl=url; el('payGo').disabled=!url;
         if(url){ el('payPrev').src=url; el('payPrev').style.display=''; el('payMsg').textContent=''; }
       });

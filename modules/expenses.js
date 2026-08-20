@@ -37,7 +37,8 @@ const proofUpload = multer({
     destination: (req, file, cb) => cb(null, PROOF_DIR),
     filename: (req, file, cb) => {
       const ext = (path.extname(file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '');
-      cb(null, Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg'));
+      const privacy = normalizedNature(req.body && req.body.nature) === 'PERSONAL' ? 'personal-' : '';
+      cb(null, privacy + Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg'));
     }
   }),
   limits: { fileSize: 15 * 1024 * 1024 },
@@ -108,8 +109,8 @@ function defaultType(name) {
 }
 
 const TYPES = ['fixed', 'running', 'variable', 'marketing'];
-const NATURES = ['SANKI', 'SAMAST'];
-const BUSINESS_NATURES = ['SANKI', 'SAMAST', 'A3'];  // 'A3' kept for legacy SANKI rows
+const NATURES = ['SANKI', 'SAMAST', 'PERSONAL'];
+const BUSINESS_NATURES = ['SANKI', 'SAMAST', 'A3'];  // PERSONAL never enters a business P&L
 const SANKI_PL_NATURES = ['SANKI', 'A3'];
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const BILLS = ['printed', 'handwritten', 'none'];
@@ -126,11 +127,11 @@ function blankStore() {
   return {
     expenses: {},
     vendors: {},
-    vendorsByNature: { SAMAST: {} },
+    vendorsByNature: { SAMAST: {}, PERSONAL: {} },
     accounts: DEFAULT_ACCOUNTS.slice(),
     people: DEFAULT_PEOPLE.slice(),      // claimants
     openingBalances: {},                 // { [account]: opening ₹ }
-    openingBalancesByNature: { SAMAST: {} }, // SAMAST books stay separate; legacy map is SANKI
+    openingBalancesByNature: { SAMAST: {}, PERSONAL: {} }, // non-SANKI books stay separate
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
@@ -179,19 +180,23 @@ function rolesOfReq(req) {
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
 function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting') || r.includes('samast_accounting') || r.includes('owner'); }
-function normalizedNature(v) { return String(v || '').toUpperCase() === 'SAMAST' ? 'SAMAST' : 'SANKI'; }
+function normalizedNature(v) { const n = String(v || '').toUpperCase(); return n === 'SAMAST' || n === 'PERSONAL' ? n : 'SANKI'; }
 function approvalNatures(req) {
   const r = rolesOfReq(req);
-  if (r.includes('admin') || r.includes('owner')) return NATURES.slice();
+  if (r.includes('owner')) return NATURES.slice();
   const out = [];
+  if (r.includes('admin')) out.push('SANKI', 'SAMAST');
   if (r.includes('accounting')) out.push('SANKI');
   if (r.includes('samast_accounting')) out.push('SAMAST');
-  return out;
+  return Array.from(new Set(out));
 }
 function submissionNatures(req) {
   const r = rolesOfReq(req);
-  if (r.includes('admin') || r.includes('owner') || r.includes('claimant')) return NATURES.slice();
-  return approvalNatures(req);
+  if (r.includes('owner')) return NATURES.slice();
+  const out = approvalNatures(req);
+  if (r.includes('admin') || r.includes('claimant')) out.push('SANKI', 'SAMAST');
+  if (r.includes('personal_claimant')) out.push('PERSONAL');
+  return Array.from(new Set(out));
 }
 function canApproveExpenseNature(req, e) { return approvalNatures(req).includes(normalizedNature(e && e.nature)); }
 function canViewExpense(req, e) {
@@ -240,6 +245,7 @@ router.post('/api/expenses/upload', proofUpload.single('photo'), (req, res) => {
 });
 router.get('/api/expenses/photo/:file', (req, res) => {
   const name = path.basename(String(req.params.file || ''));
+  if (name.startsWith('personal-') && !rolesOfReq(req).includes('owner')) return res.status(403).end();
   const fp = path.join(PROOF_DIR, name);
   if (!fp.startsWith(PROOF_DIR) || !fs.existsSync(fp)) return res.status(404).end();
   res.sendFile(fp);
@@ -251,7 +257,7 @@ router.get('/api/expenses/config', (req, res) => {
   const allowed = submissionNatures(req);
   const pendingReqs = (s.requests || []).filter(r => r.status === 'pending' && approvalNatures(req).includes(normalizedNature(r.nature)));
   const visiblePendingReqs = isAdmin(req) ? pendingReqs : (canApprove(req) ? pendingReqs.filter(r => r.kind === 'vendor') : []);
-  const vendorsByNature = { SANKI: Object.values(s.vendors).map(v => v.name), SAMAST: Object.values(((s.vendorsByNature || {}).SAMAST) || {}).map(v => v.name) };
+  const vendorsByNature = { SANKI: Object.values(s.vendors).map(v => v.name), SAMAST: Object.values(((s.vendorsByNature || {}).SAMAST) || {}).map(v => v.name), PERSONAL: Object.values(((s.vendorsByNature || {}).PERSONAL) || {}).map(v => v.name) };
   Object.values(s.expenses || {}).forEach(e => {
     const nature = normalizedNature(e.nature);
     if (e.vendor && !vendorsByNature[nature].some(v => v.toLowerCase() === String(e.vendor).toLowerCase())) vendorsByNature[nature].push(e.vendor);
@@ -453,8 +459,9 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   if (normalizedNature(e.nature) === 'SANKI') {
     if (!s.vendors[e.vendor.toLowerCase()]) s.vendors[e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
   } else {
-    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature.SAMAST = s.vendorsByNature.SAMAST || {};
-    if (!s.vendorsByNature.SAMAST[e.vendor.toLowerCase()]) s.vendorsByNature.SAMAST[e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
+    const nature = normalizedNature(e.nature);
+    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature[nature] = s.vendorsByNature[nature] || {};
+    if (!s.vendorsByNature[nature][e.vendor.toLowerCase()]) s.vendorsByNature[nature][e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
   }
   e.status = e.paidAmount >= e.amount ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
   if (e.paidAlready) e.reimbursementStatus = 'pending';
@@ -630,7 +637,7 @@ router.get('/api/expenses/vendors', (req, res) => {
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const books = {};
-  const master = nature === 'SANKI' ? s.vendors : (((s.vendorsByNature || {}).SAMAST) || {});
+  const master = nature === 'SANKI' ? s.vendors : (((s.vendorsByNature || {})[nature]) || {});
   Object.values(master).forEach(v => { books[v.name] = { name: v.name, billed: 0, paid: 0, outstanding: 0, count: 0, notes: v.notes || '' }; });
   Object.values(s.expenses).forEach(e => {
     if (normalizedNature(e.nature) !== nature) return;
@@ -654,8 +661,8 @@ router.post('/api/expenses/vendors', (req, res) => {
   if (nature === 'SANKI') {
     if (!s.vendors[name.toLowerCase()]) s.vendors[name.toLowerCase()] = { name, notes: '' };
   } else {
-    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature.SAMAST = s.vendorsByNature.SAMAST || {};
-    if (!s.vendorsByNature.SAMAST[name.toLowerCase()]) s.vendorsByNature.SAMAST[name.toLowerCase()] = { name, notes: '' };
+    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature[nature] = s.vendorsByNature[nature] || {};
+    if (!s.vendorsByNature[nature][name.toLowerCase()]) s.vendorsByNature[nature][name.toLowerCase()] = { name, notes: '' };
   }
   saveStore(s);
   res.json({ success: true });
@@ -682,7 +689,7 @@ router.get('/api/expenses/balances', (req, res) => {
     });
   });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
-  const openingMap = nature === 'SAMAST' ? (((s.openingBalancesByNature || {}).SAMAST) || {}) : (s.openingBalances || {});
+  const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   const accounts = s.accounts.map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(paidOut[name] || 0);
@@ -698,10 +705,10 @@ router.post('/api/expenses/balances', (req, res) => {
   const nature = normalizedNature(b.nature);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
   if (b.setOpening && b.setOpening.account) {
-    if (nature === 'SAMAST') {
+    if (nature !== 'SANKI') {
       s.openingBalancesByNature = s.openingBalancesByNature || {};
-      s.openingBalancesByNature.SAMAST = s.openingBalancesByNature.SAMAST || {};
-      s.openingBalancesByNature.SAMAST[String(b.setOpening.account)] = num(b.setOpening.amount);
+      s.openingBalancesByNature[nature] = s.openingBalancesByNature[nature] || {};
+      s.openingBalancesByNature[nature][String(b.setOpening.account)] = num(b.setOpening.amount);
     } else s.openingBalances[String(b.setOpening.account)] = num(b.setOpening.amount);
   }
   if (b.adjust && b.adjust.account && b.adjust.amount != null) {
@@ -720,6 +727,7 @@ router.post('/api/expenses/balances', (req, res) => {
 function ownerAccounts(s, from, to) {
   const paidOut = {}, adjustments = {};
   Object.values(s.expenses || {}).forEach(e => {
+    if (normalizedNature(e.nature) !== 'SANKI') return;
     const d = String((e.paidAt || e.date || '')).slice(0, 10);
     if ((from && d < from) || (to && d > to)) return;
     (e.payments || []).filter(p => !p.personalFunds).forEach(p => {
@@ -943,7 +951,7 @@ function summaryForPL(from, to) {
     if (from && e.date < from) return;
     if (to && e.date > to) return;
     const expenseNature = normalizedNature(e.nature);
-    if (expenseNature === 'SAMAST') return; // separate books; never enter any SANKI P&L figure
+    if (expenseNature === 'SAMAST' || expenseNature === 'PERSONAL') return; // separate books
     if (!SANKI_PL_NATURES.includes(e.nature || expenseNature)) { out.excluded += e.amount; return; }  // legacy drawings only
     const ch = CHANNELS.includes(e.channel) ? e.channel : 'Shared';
     out[ch][e.type] = (out[ch][e.type] || 0) + e.amount;

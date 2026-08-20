@@ -147,6 +147,31 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   assert.ok(sankiList.body.expenses.every(e => (e.nature || 'SANKI') !== 'SAMAST'));
 });
 
+test('PERSONAL expenses are private and only the Owner can approve them', () => {
+  const sankiPlBefore = summaryForPL();
+  const personalConfig = invoke('GET', '/api/expenses/config', { role: 'personal_claimant' });
+  assert.deepEqual(personalConfig.body.natures, ['PERSONAL']);
+  const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
+  assert.ok(!adminConfig.body.natures.includes('PERSONAL'));
+
+  const created = invoke('POST', '/api/expenses', { role: 'personal_claimant', body: {
+    nature: 'PERSONAL', vendor: 'Private Vendor', amount: 900,
+    billPhoto: '/api/expenses/photo/personal-bill.jpg', paymentType: 'Cash'
+  } });
+  assert.equal(created.status, 200);
+  assert.equal(created.body.expense.nature, 'PERSONAL');
+
+  const adminList = invoke('GET', '/api/expenses/list', { query: { nature: 'PERSONAL' }, role: 'admin' });
+  assert.equal(adminList.body.expenses.length, 0);
+  const adminApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'admin' });
+  assert.equal(adminApproval.status, 403);
+
+  invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'General Expense' }, role: 'owner' });
+  const ownerApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'owner' });
+  assert.equal(ownerApproval.status, 200);
+  assert.deepEqual(summaryForPL(), sankiPlBefore, 'PERSONAL must never enter a business P&L');
+});
+
 test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="f_vendor"/);
