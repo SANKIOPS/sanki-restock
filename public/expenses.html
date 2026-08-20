@@ -326,8 +326,9 @@
     function renderList(){
       el('panel').innerHTML = '<div class="card"><div class="filters" id="filters"></div>'+
         '<div class="stats" id="lstats"></div><div id="ltable" class="muted">Loading…</div></div>';
+      var entityOptions = cfg.canApprove ? opts(cfg.natures,selectedNature) : '<option value="">All my expenses</option>'+opts(cfg.natures);
       el('filters').innerHTML =
-        '<div class="fld"><label>Entity</label><select id="lf_nature">'+opts(cfg.natures,selectedNature)+'</select></div>'+
+        '<div class="fld"><label>Entity</label><select id="lf_nature">'+entityOptions+'</select></div>'+
         '<div class="fld"><label>From</label><input type="date" id="lf_from"></div>'+
         '<div class="fld"><label>To</label><input type="date" id="lf_to"></div>'+
         '<div class="fld"><label>Status</label><select id="lf_status"><option value="">All</option><option>pending</option><option>approved</option><option>partially_paid</option><option>paid</option><option>rejected</option></select></div>'+
@@ -336,7 +337,7 @@
       var n = new Date(Date.now()+5.5*3600*1000); var y=n.getUTCFullYear(), m=n.getUTCMonth();
       el('lf_from').value = y+'-'+String(m+1).padStart(2,'0')+'-01'; el('lf_to').value = today();
       el('lf_go').addEventListener('click', loadList);
-      el('lf_nature').addEventListener('change',function(){selectedNature=this.value;loadList();});
+      el('lf_nature').addEventListener('change',function(){if(this.value) selectedNature=this.value;loadList();});
       loadList();
     }
     function loadList(){
@@ -354,7 +355,11 @@
         if(!d.expenses.length){ el('ltable').innerHTML='<span class="muted">No expenses in range.</span>'; return; }
         var rows = d.expenses.map(function(e){
           var act = '';
-          if(!cfg.canApprove){ act = '<span class="muted" style="font-size:11px">'+esc(e.status)+'</span>'; }
+          if(!cfg.canApprove){
+            var claimantProof=e.paymentProof||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
+            act = '<span class="muted" style="font-size:11px">'+esc(e.status)+'</span>'+
+              (claimantProof?' <img class="thumb" src="'+esc(claimantProof)+'" onclick="window.open(this.src)" title="payment proof" alt="payment proof">':'');
+          }
           else if(e.status==='pending') act = (canApproveExpense(e) ? '<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button> ' : '<span class="badge b-nobill">proof incomplete</span> ')+
             '<button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button> <button class="btn mini ghost" onclick="rejectExpense(\''+e.id+'\')">Reject</button>';
           else if(e.status==='approved'||e.status==='partially_paid') act = '<button class="btn mini green" onclick="openPay(\''+e.id+'\')">Record vendor payment</button>'+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo</button>':'');

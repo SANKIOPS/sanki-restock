@@ -185,6 +185,13 @@ test('payment dialog lists stored accounts and lets Admin or Owner add one', () 
   assert.match(server, /Select the account used for this payment/);
 });
 
+test('claimant list defaults to all own entities and exposes payment proof', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /All my expenses/);
+  assert.match(html, /claimantProof=e\.paymentProof/);
+  assert.match(html, /alt="payment proof"/);
+});
+
 test('Telegram setup is Owner-only and supports per-user notification management', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');
