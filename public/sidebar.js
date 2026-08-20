@@ -70,7 +70,11 @@
     +   '#sanki-shared-sidebar .ss-item span:not(.ss-icon),#sanki-shared-sidebar .ss-label,'
     +   '#sanki-shared-sidebar .ss-logo p,#sanki-shared-sidebar .ss-logo h2,'
     +   '#sanki-shared-sidebar .ss-foot .ss-user,#sanki-shared-sidebar .ss-foot .ss-role,'
-    +   '#sanki-shared-sidebar .ss-logout span{display:none}}';
+    +   '#sanki-shared-sidebar .ss-logout span{display:none}'
+    +   '#sanki-shared-sidebar .ss-foot{padding:8px 6px}'
+    +   '#sanki-shared-sidebar .ss-logout{display:flex;width:40px;height:40px;padding:0;align-items:center;justify-content:center;'
+    +     'font-size:20px;border-radius:10px;background:#fff7f6}'
+    +   '#sanki-shared-sidebar .ss-logout-icon{display:inline!important}}';
 
   var style = document.createElement('style');
   style.textContent = css;
@@ -103,7 +107,8 @@
       html += '<div class="ss-foot">'
         + '<div class="ss-user" title="' + esc(me.username) + '">' + esc(me.username) + '</div>'
         + '<div class="ss-role">' + esc(me.role || '') + '</div>'
-        + '<button class="ss-logout" id="ss-logout-btn"><span>Log out</span></button>'
+        + '<button class="ss-logout" id="ss-logout-btn" type="button" aria-label="Log out" title="Log out">'
+        + '<b class="ss-logout-icon" aria-hidden="true">↪</b><span> Log out</span></button>'
         + '</div>';
     }
     return html;
