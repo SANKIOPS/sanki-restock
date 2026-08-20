@@ -68,6 +68,12 @@
     .payment-choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .payment-choice label { display:flex; align-items:center; gap:8px; min-height:44px; margin:0; padding:10px 12px; border:1px solid #d1d5db; border-radius:8px; background:#fff; text-transform:none; letter-spacing:0; font-size:13px; cursor:pointer; }
     .payment-choice input { width:18px; height:18px; min-width:18px; margin:0; padding:0; accent-color:var(--blue); }
+    .combo-wrap { position:relative; }
+    .combo-menu { display:none; position:absolute; z-index:30; left:0; right:0; top:100%; max-height:220px; overflow:auto; margin-top:3px; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px rgba(15,23,42,.16); }
+    .combo-menu.open { display:block; }
+    .combo-option { padding:10px 12px; cursor:pointer; border-bottom:1px solid #f1f5f9; font-size:14px; }
+    .combo-option:last-child { border-bottom:0; }
+    .combo-option:hover, .combo-option:focus { background:#eff6ff; outline:none; }
     dialog { border:none; border-radius:14px; padding:0; max-width:420px; width:92%; box-shadow:0 20px 60px rgba(0,0,0,.3); }
     dialog .dlg { padding:20px; }
     dialog h3 { margin:0 0 12px; font-size:17px; }
@@ -180,7 +186,7 @@
       el('panel').innerHTML =
       '<div class="card"><div class="grid">'+
         '<div class="fld"><label>Date</label><input type="date" id="f_date" value="'+today()+'"></div>'+
-        '<div class="fld"><label id="amountLabel">Amount ₹</label><input type="number" id="f_amount" min="0" step="1" placeholder="0"></div>'+
+        '<div class="fld" id="normalAmountWrap"><label>Amount ₹</label><input type="number" id="f_amount" min="0" step="1" placeholder="0"></div>'+
         '<div class="fld full"><label>Particulars (what was it for)</label><input id="f_part" placeholder="e.g. lunch for install team, auto to vendor…"></div>'+
         '<div class="fld full"><label>Category (expense header)</label>'+
           '<input id="f_ledger" list="ledgerList" placeholder="type to search a category…" autocomplete="off">'+
@@ -188,11 +194,12 @@
           '<div class="hint" id="ledgerHint"></div></div>'+
         (cfg.canApprove?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
         '<div class="fld"><label>Nature</label><input value="SANKI" disabled><div class="hint">SANKI business expense — counts in the P&amp;L</div></div>'+
-        '<div class="fld"><label>Vendor</label><input id="f_vendor" list="vendorList" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="organization"><datalist id="vendorList">'+cfg.vendors.map(function(v){return '<option value="'+esc(v)+'">';}).join('')+'</datalist><div class="hint">New vendors submit immediately; the approver may correct the name.</div></div>'+
+        '<div class="fld combo-wrap"><label>Vendor</label><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" aria-autocomplete="list" aria-controls="vendorSuggestions"><div id="vendorSuggestions" class="combo-menu" role="listbox"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
         '<div class="fld full"><label>Have you already paid for this expense?</label><select id="f_paidalready"><option value="false">No — company must pay the vendor</option><option value="true">Yes — I paid personally</option></select></div>'+
         '<div class="fld"><label>Is this an installment / contract?</label><select id="f_installment"><option value="false">No</option><option value="true">Yes</option></select></div>'+
-        '<div class="fld" id="requestedWrap" style="display:none"><label>Payment being logged now ₹</label><input type="number" id="f_requestedamount" min="1" step="1"><div class="hint">Cannot exceed the total agreed amount.</div></div>'+
-        '<div class="fld full" id="paymentNoteWrap" style="display:none"><label>Installment note (optional)</label><input id="f_paymentnote" placeholder="e.g. furniture advance"></div>'+
+        '<div class="fld" id="totalAgreedWrap" style="display:none"><label>Total agreed amount ₹</label><input type="number" id="f_totalamount" min="1" step="1" placeholder="e.g. 10000"></div>'+
+        '<div class="fld" id="requestedWrap" style="display:none"><label>Payment being logged now ₹</label><input type="number" id="f_requestedamount" min="1" step="1" placeholder="e.g. 1000"><div class="hint">Cannot exceed the total agreed amount.</div></div>'+
+        '<div class="fld full" id="paymentNoteWrap" style="display:none"><label>Installment note (optional)</label><input id="f_paymentnote" placeholder="e.g. advance, second installment, final payment"></div>'+
         '<div class="fld" id="paymentTypeWrap"><label>Payment type</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
         '<div class="fld" id="qrPhotoWrap"><label>Vendor QR-code photo (required for UPI)</label><input type="file" id="f_qrphoto" accept="image/*"><div class="hint">Choose Camera, Photo Library, or Files.</div></div>'+
         '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof (required)</label><input type="file" id="f_personalproof" accept="image/*"><div class="hint">Screenshot or photo showing that you paid.</div></div>'+
@@ -208,12 +215,28 @@
       el('f_paymenttype').addEventListener('change', toggleQrPhoto);
       el('f_paidalready').addEventListener('change', togglePaymentFlow);
       el('f_installment').addEventListener('change', toggleInstallment);
+      el('f_vendor').addEventListener('input',renderVendorSuggestions);
+      el('f_vendor').addEventListener('focus',renderVendorSuggestions);
+      document.removeEventListener('click',closeVendorSuggestions,true);
+      document.addEventListener('click',closeVendorSuggestions,true);
       el('saveExp').addEventListener('click', saveExpense);
       el('linkTelegram').addEventListener('click',linkTelegram);
       if(el('setupTelegram'))el('setupTelegram').addEventListener('click',setupTelegram);
       if(el('testTelegram'))el('testTelegram').addEventListener('click',testTelegram);
       togglePaymentFlow(); toggleInstallment();
     }
+    function renderVendorSuggestions(){
+      var input=el('f_vendor'), menu=el('vendorSuggestions'), q=input.value.trim().toLowerCase();
+      var matches=cfg.vendors.filter(function(v){return !q||v.toLowerCase().includes(q);}).slice(0,20);
+      if(!matches.length){menu.classList.remove('open');menu.innerHTML='';return;}
+      menu.innerHTML=matches.map(function(v){return '<div class="combo-option" role="option" tabindex="0" data-vendor="'+esc(v)+'">'+esc(v)+'</div>';}).join('');
+      menu.classList.add('open');
+      Array.prototype.forEach.call(menu.querySelectorAll('.combo-option'),function(o){
+        o.addEventListener('mousedown',function(ev){ev.preventDefault();input.value=this.dataset.vendor;menu.classList.remove('open');});
+        o.addEventListener('keydown',function(ev){if(ev.key==='Enter'){input.value=this.dataset.vendor;menu.classList.remove('open');input.focus();}});
+      });
+    }
+    function closeVendorSuggestions(ev){if(el('vendorSuggestions')&&!el('vendorSuggestions').contains(ev.target)&&ev.target!==el('f_vendor'))el('vendorSuggestions').classList.remove('open');}
     function linkTelegram(){api('/api/telegram/link',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(d){if(!d.configured){setMsg('Telegram bot is not configured on Railway yet.',false);return;}if(d.url){window.open(d.url,'_blank');setMsg('Telegram opened. Tap Start within 15 minutes to finish linking.',true);}else setMsg('The admin must connect the existing bot once, then try again.',false);});}
     function setupTelegram(){api('/api/telegram/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(d){setMsg(d.success?'Existing Telegram bot connected. Now click Link Telegram.':(d.error||'Setup failed.'),!!d.success);});}
     function testTelegram(){api('/api/telegram/test',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(d){setMsg(d.success?'Test sent to '+d.sent+' approver chat(s).':(d.error||'Test failed.'),!!d.success);});}
@@ -224,8 +247,8 @@
     }
     function toggleInstallment(){
       var yes=el('f_installment').value==='true';
+      el('normalAmountWrap').style.display=yes?'none':''; el('totalAgreedWrap').style.display=yes?'':'none';
       el('requestedWrap').style.display=yes?'':'none'; el('paymentNoteWrap').style.display=yes?'':'none';
-      el('amountLabel').textContent=yes?'Total agreed amount ₹':'Amount ₹';
     }
     function toggleQrPhoto(){
       var upi=el('f_paidalready').value!=='true'&&el('f_paymenttype').value==='UPI';
@@ -276,14 +299,17 @@
       if(paidAlready&&!el('f_personalproof').files[0]){ setMsg('Attach proof of the payment you made.', false); return; }
       if(!paidAlready&&paymentType==='UPI'&&!el('f_qrphoto').files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
       var installment=el('f_installment').value==='true';
+      var totalAmount=installment?Number(el('f_totalamount').value):Number(el('f_amount').value);
+      if(!(totalAmount>0)){setMsg(installment?'Enter the total agreed amount.':'Enter the expense amount.',false);return;}
       if(installment&&!(Number(el('f_requestedamount').value)>0)){setMsg('Enter the installment amount being logged now.',false);return;}
+      if(installment&&Number(el('f_requestedamount').value)>totalAmount){setMsg('Payment being logged now cannot exceed the total agreed amount.',false);return;}
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
       Promise.all([uploadFile(el('f_billfile')),(!paidAlready&&paymentType==='UPI')?uploadFile(el('f_qrphoto')):Promise.resolve(''),paidAlready?uploadFile(el('f_personalproof')):Promise.resolve('')]).then(function(urls){
         var body = {
-          date: el('f_date').value, amount: el('f_amount').value, particulars: el('f_part').value,
+          date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value,
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
-          isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:el('f_amount').value,
+          isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
           paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:urls[2],
           channel:cfg.canApprove&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
           billPhoto:urls[0], qrPhoto:urls[1]
