@@ -175,6 +175,16 @@ test('Admin or Owner can assign a category directly in the pending expense list'
   assert.match(html, /Category assigned\. You can approve the expense now\./);
 });
 
+test('payment dialog lists stored accounts and lets Admin or Owner add one', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
+  assert.match(html, /id="payAddAcct"/);
+  assert.match(html, /api\('\/api\/expenses\/accounts'/);
+  assert.match(server, /function storedAccountNames\(s\)/);
+  assert.match(server, /router\.post\('\/api\/expenses\/accounts'/);
+  assert.match(server, /Select the account used for this payment/);
+});
+
 test('Telegram setup is Owner-only and supports per-user notification management', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');

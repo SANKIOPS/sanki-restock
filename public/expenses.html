@@ -133,7 +133,8 @@
   <!-- payment dialog -->
   <dialog id="payDlg"><div class="dlg">
     <h3 id="payTitle">Record payment</h3>
-    <div class="fld"><label id="payAcctLabel">Pay from account</label><select id="payAcct"></select></div>
+    <div class="fld"><label id="payAcctLabel">Pay from account</label><select id="payAcct"></select>
+      <button type="button" class="btn mini ghost" id="payAddAcct" style="margin-top:7px">＋ Add paying account</button></div>
     <div class="grid" style="margin-top:10px">
       <div class="fld"><label>Amount ₹</label><input type="number" id="payAmount" min="1" step="1"></div>
       <div class="fld"><label>Date</label><input type="date" id="payDate"></div>
@@ -485,6 +486,15 @@
       el('payDate').value=today(); el('payType').value='UPI'; el('payNote').value=''; el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent=''; el('payDlg').showModal();
     };
     el('payCancel').addEventListener('click', function(){ el('payDlg').close(); });
+    el('payAddAcct').addEventListener('click', function(){
+      if(!cfg.isAdmin){ requestAccount(); return; }
+      var name=prompt('New paying account name (for example, HDFC Bank 1234):');
+      if(!name||!name.trim()) return;
+      api('/api/expenses/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim()})}).then(function(d){
+        if(!d.success){el('payMsg').textContent=d.error||'Could not add account.';return;}
+        loadConfig().then(function(){el('payAcct').innerHTML=opts(cfg.accounts,d.account);el('payAcct').value=d.account;el('payMsg').textContent='Account added and selected.';});
+      });
+    });
     el('payFile').addEventListener('change', function(){
       if(!this.files[0]) return;
       el('payMsg').textContent='uploading…';

@@ -162,6 +162,17 @@ function pickableLedgers(s) {
     .map(n => ledgerMeta(s, n))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+function storedAccountNames(s) {
+  const names = new Set([].concat(s.accounts || [], Object.keys(s.openingBalances || {}), Object.keys(s.odConfig || {})));
+  Object.values(s.openingBalancesByNature || {}).forEach(map => Object.keys(map || {}).forEach(name => names.add(name)));
+  (s.adjustments || []).forEach(x => { if (x.account) names.add(String(x.account)); });
+  Object.values(s.expenses || {}).forEach(e => {
+    if (e.account) names.add(String(e.account));
+    (e.payments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
+    (e.reimbursementPayments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
+  });
+  return Array.from(names).map(x => String(x).trim()).filter(x => x && x !== '(unspecified)').sort((a, b) => a.localeCompare(b));
+}
 function rolesOfReq(req) {
   return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || [];
 }
@@ -251,7 +262,7 @@ router.get('/api/expenses/config', (req, res) => {
     ledgers: pickableLedgers(s),
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
-    accounts: s.accounts, people: s.people,
+    accounts: storedAccountNames(s), people: s.people,
     types: TYPES, natures: allowed, channels: CHANNELS,
     approvalNatures: approvalNatures(req),
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
@@ -466,7 +477,10 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   const b = req.body || {};
   const proof = String(b.paymentProof || e.paymentProof || '').trim();
   if (!proof) return res.status(400).json({ success: false, error: e.fundedBy === 'claimant' ? 'Reimbursement proof required — the claimant cannot be marked reimbursed without it.' : 'Payment screenshot required — no proof, no payment.' });
-  if (b.account) e.account = String(b.account).trim();
+  const account = String(b.account || '').trim();
+  if (!account) return res.status(400).json({ success: false, error: 'Select the account used for this payment.' });
+  if (!storedAccountNames(s).some(name => name.toLowerCase() === account.toLowerCase())) return res.status(400).json({ success: false, error: 'Select a stored paying account or add it first.' });
+  e.account = storedAccountNames(s).find(name => name.toLowerCase() === account.toLowerCase()) || account;
   const outstanding = Math.max(0, e.amount - num(e.paidAmount));
   const pay = b.amount != null ? num(b.amount) : outstanding;
   if (!(pay > 0)) return res.status(400).json({ success: false, error: 'Payment amount must be greater than 0.' });
@@ -877,6 +891,16 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
   res.json({ success: true, request: r });
 });
 // Admin: remove a paying account (fix the wrong ones) — keeps history intact.
+router.post('/api/expenses/accounts', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin or Owner only.' });
+  const s = loadStore();
+  const name = String((req.body || {}).name || '').trim();
+  if (!name) return res.status(400).json({ success: false, error: 'Account name required.' });
+  const existing = storedAccountNames(s).find(a => a.toLowerCase() === name.toLowerCase());
+  if (!existing) s.accounts.push(name);
+  saveStore(s);
+  res.json({ success: true, account: existing || name, accounts: storedAccountNames(s) });
+});
 router.post('/api/expenses/accounts/remove', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
   const s = loadStore();
