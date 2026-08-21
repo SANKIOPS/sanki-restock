@@ -696,8 +696,12 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
   const allowed = approvalNatures(req), inRange = d => (!from || d >= from) && (!to || d <= to);
   const groups = { entities: {}, vendors: {}, categories: {}, accounts: {}, daily: {} };
   const add = (bucket, key, field, amount) => {
-    key = String(key || 'Unspecified'); bucket[key] = bucket[key] || { name:key, incurred:0, cashPaid:0, outstanding:0 };
+    key = String(key || 'Unspecified'); bucket[key] = bucket[key] || { name:key, incurred:0, cashPaid:0, outstanding:0, details:[] };
     bucket[key][field] = round0(num(bucket[key][field]) + num(amount));
+  };
+  const addDetail = (bucket, key, detail) => {
+    key = String(key || 'Unspecified'); bucket[key] = bucket[key] || { name:key, incurred:0, cashPaid:0, outstanding:0, details:[] };
+    bucket[key].details.push(detail);
   };
   let incurred = 0, cashPaid = 0, outstanding = 0, reimbursementPaid = 0, count = 0;
   Object.values(s.expenses || {}).forEach(e => {
@@ -714,11 +718,14 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
     }
     (e.payments || []).filter(p => !p.personalFunds && inRange(String(p.date || ''))).forEach(p => {
       cashPaid += num(p.amount); add(groups.entities, entity, 'cashPaid', p.amount); add(groups.vendors, e.vendor, 'cashPaid', p.amount);
-      add(groups.categories, e.ledger, 'cashPaid', p.amount); add(groups.accounts, p.account || e.account, 'cashPaid', p.amount); add(groups.daily, p.date, 'cashPaid', p.amount);
+      const account = p.account || e.account;
+      add(groups.categories, e.ledger, 'cashPaid', p.amount); add(groups.accounts, account, 'cashPaid', p.amount); add(groups.daily, p.date, 'cashPaid', p.amount);
+      addDetail(groups.accounts, account, { id:e.id, paymentId:p.id || '', date:p.date || '', kind:'Vendor payment', vendor:e.vendor || '', particulars:e.particulars || '', category:e.ledger || '', amount:round0(p.amount), proof:p.proof || e.paymentProof || '' });
     });
     (e.reimbursementPayments || []).filter(p => inRange(String(p.date || ''))).forEach(p => {
       cashPaid += num(p.amount); reimbursementPaid += num(p.amount); add(groups.entities, entity, 'cashPaid', p.amount);
       add(groups.accounts, p.account, 'cashPaid', p.amount); add(groups.daily, p.date, 'cashPaid', p.amount);
+      addDetail(groups.accounts, p.account, { id:e.id, paymentId:p.id || '', date:p.date || '', kind:'Reimbursement', vendor:e.claimant || e.createdBy || '', particulars:e.particulars || '', category:e.ledger || '', amount:round0(p.amount), proof:p.proof || '' });
     });
   });
   const rows = bucket => Object.values(bucket).map(x => ({...x,incurred:round0(x.incurred),cashPaid:round0(x.cashPaid),outstanding:round0(x.outstanding)}))
