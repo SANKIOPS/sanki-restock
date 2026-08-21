@@ -396,6 +396,8 @@ test('personally paid expense becomes reimbursement pending only after approval'
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'FOOD EXPENSE' }, role: 'owner' });
   const approved = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
   assert.equal(approved.body.expense.reimbursementStatus, 'pending');
+  assert.equal(approved.body.expense.status, 'paid');
+  assert.equal(approved.body.expense.vendorPaymentCompleted, true);
   const blocked = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500 }, role: 'accounting' });
   assert.equal(blocked.status, 400);
   const reimbursed = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500, account: 'Cash', paymentProof: '/api/expenses/photo/reimburse.jpg' }, role: 'accounting' });
@@ -466,6 +468,62 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="payOverrideReason"/);
   assert.match(html, /id="editPersonalAccount"/);
   assert.match(html, /id="editBillFile"/);
+});
+
+test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /function monthStart\(\)/);
+  assert.match(html, /id="sd_from" value="'\+monthStart\(\)/);
+  assert.match(html, /id="vf_from" value="'\+monthStart\(\)/);
+  assert.match(html, /id="cf_from" value="'\+monthStart\(\)/);
+  assert.match(html, /id="rf_from" value="'\+monthStart\(\)/);
+  assert.match(html, /id="rv_from" value="'\+monthStart\(\)/);
+  assert.match(html, /id="proofViewer" class="proof-viewer"/);
+  assert.match(html, /window\.viewProof=function/);
+  assert.match(html, /matches\('img\.thumb'\)/);
+  assert.match(html, /\.claim-card summary \{ padding:5px 8px/);
+  assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
+});
+
+test('credit payables filter includes fully and partially unpaid credit expenses', () => {
+  const full = invoke('POST','/api/expenses',{body:{date:'2026-08-21',vendor:'Credit Full',amount:600,billPhoto:'/api/expenses/photo/c1.jpg',paymentType:'Credit'}});
+  invoke('POST','/api/expenses/:id',{params:{id:full.body.expense.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id:full.body.expense.id},role:'owner'});
+  const partial = invoke('POST','/api/expenses',{body:{date:'2026-08-21',vendor:'Credit Partial',amount:800,billPhoto:'/api/expenses/photo/c2.jpg',paymentType:'Credit'}});
+  invoke('POST','/api/expenses/:id',{params:{id:partial.body.expense.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id:partial.body.expense.id},role:'owner'});
+  invoke('POST','/api/expenses/:id/pay',{params:{id:partial.body.expense.id},body:{amount:200,account:'Cash',paymentProof:'/api/expenses/photo/cpay.jpg'},role:'owner'});
+  const credit = invoke('GET','/api/expenses/pending-payments',{query:{bucket:'credit',from:'2026-08-01',to:'2026-08-21'},role:'owner'});
+  assert.equal(credit.status,200);
+  assert.ok(credit.body.expenses.some(x=>x.id===full.body.expense.id&&x.balanceDue===600));
+  assert.ok(credit.body.expenses.some(x=>x.id===partial.body.expense.id&&x.balanceDue===600));
+});
+
+test('Owner/Admin can edit finalized expenses with a mandatory audit reason', () => {
+  const created=invoke('POST','/api/expenses',{body:{date:'2026-08-21',vendor:'Audit Vendor',amount:300,billPhoto:'/api/expenses/photo/audit.jpg',paymentType:'Cash'}});
+  invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id:created.body.expense.id},role:'owner'});
+  const blocked=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'Corrected Audit Vendor'},role:'owner'});
+  assert.equal(blocked.status,400);
+  const edited=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'Corrected Audit Vendor',editReason:'Corrected vendor spelling'},role:'owner'});
+  assert.equal(edited.status,200);
+  assert.equal(edited.body.expense.vendor,'Corrected Audit Vendor');
+  assert.equal(edited.body.expense.auditHistory.at(-1).reason,'Corrected vendor spelling');
+  assert.equal(invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'No Access',editReason:'test'},role:'accounting'}).status,403);
+});
+
+test('account ledgers show newest entries first and Axis sales begin on 2026-08-21', () => {
+  invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Cash',toAccount:'Paytm',amount:10,date:'2026-08-19',proof:'/api/expenses/photo/t-old.jpg'}});
+  invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Cash',toAccount:'Paytm',amount:20,date:'2026-08-21',proof:'/api/expenses/photo/t-new.jpg'}});
+  const cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Cash'},role:'owner'}).body.entries.filter(x=>x.kind!=='opening');
+  assert.ok(cash[0].date>=cash.at(-1).date);
+  fs.writeFileSync(path.join(tempDir,'sales.json'),JSON.stringify({sales:[
+    {id:'OLD-SALE',day:'2026-08-20',paymentMode:'UPI',total:100,channel:'POS'},
+    {id:'NEW-SALE',day:'2026-08-21',paymentMode:'UPI',total:200,channel:'POS'}
+  ]}));
+  const axis=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448'},role:'owner'}).body.entries;
+  assert.equal(axis.some(x=>x.id==='SALE/OLD-SALE'),false);
+  assert.equal(axis.some(x=>x.id==='SALE/NEW-SALE'),true);
 });
 
 test('internal reconciliation flags malformed transfers and requires a recorded payment override', () => {

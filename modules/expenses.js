@@ -32,6 +32,7 @@ const SALES_PATH = process.env.SALES_PATH || path.join(DATA_DIR, 'sales.json');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
 const DEFAULT_SALES_BANK = 'Axis Bank 3448';
 const DEFAULT_COUNTER_CASH = 'Counter Cash';
+const SALES_LEDGER_FROM = '2026-08-21';
 
 // Proof images (bill + payment screenshot) live on the /data volume, same
 // pattern as procurement photos.
@@ -194,6 +195,9 @@ function salesLedgerEntries() {
     if (seen.has(key)) return false;
     seen.add(key); return true;
   });
+}
+function includeAutomaticSale(x) {
+  return x.account !== DEFAULT_SALES_BANK || String(x.date || '') >= SALES_LEDGER_FROM;
 }
 
 function reconciliationIssues(s, nature, account) {
@@ -458,6 +462,11 @@ router.post('/api/expenses/:id', (req, res, next) => {
     return res.status(403).json({ success: false, error: 'You can only edit your own pending expenses.' });
   }
   const b = req.body || {};
+  const finalized = e.status !== 'pending';
+  if (finalized && !isAdmin(req)) return res.status(403).json({ success:false, error:'Only Owner or Admin can edit an approved or paid expense.' });
+  const editReason = String(b.editReason || '').trim();
+  if (finalized && !editReason) return res.status(400).json({ success:false, error:'Reason for editing an approved or paid expense is required.' });
+  const beforeEdit = JSON.parse(JSON.stringify(e));
   if (b.date != null) e.date = String(b.date).slice(0, 10);
   if (b.particulars != null) e.particulars = String(b.particulars).trim();
   if (b.amount != null && num(b.amount) > 0 && num(b.amount) >= num(e.paidAmount)) e.amount = num(b.amount);
@@ -501,7 +510,11 @@ router.post('/api/expenses/:id', (req, res, next) => {
   const wasPaidAlready = !!e.paidAlready;
   if (b.paidAlready != null && canApprove(req)) {
     const nextPaidAlready = b.paidAlready === true || b.paidAlready === 'true';
-    if (nextPaidAlready !== wasPaidAlready && e.status !== 'pending') return res.status(400).json({ success:false, error:'Who funded the expense cannot be changed after approval.' });
+    const hasCompanyPayments = (e.payments || []).some(p => !p.personalFunds);
+    const hasReimbursements = (e.reimbursementPayments || []).length > 0 || num(e.reimbursementAmount) > 0;
+    if (nextPaidAlready !== wasPaidAlready && (hasCompanyPayments || hasReimbursements)) {
+      return res.status(400).json({ success:false, error:'Payment source cannot be changed after a company payment or reimbursement has been recorded.' });
+    }
     e.paidAlready = nextPaidAlready;
   }
   if (e.paidAlready) {
@@ -517,14 +530,22 @@ router.post('/api/expenses/:id', (req, res, next) => {
       personalPayment.account = personalAccount; personalPayment.paymentType = e.paymentType; personalPayment.proof = personalProof; personalPayment.amount = num(e.requestedAmount || e.amount);
     }
     e.fundedBy='claimant';e.personalPaidAmount=num(e.requestedAmount || e.amount);e.paidAmount=e.personalPaidAmount;e.reimbursementStatus=e.status==='pending'?'awaiting_approval':'pending';
-  } else if (wasPaidAlready && e.status === 'pending') {
+  } else if (wasPaidAlready) {
     e.payments=(e.payments||[]).filter(p=>!p.personalFunds);e.fundedBy='company';e.personalPaidAmount=0;e.paidAmount=0;e.reimbursementStatus='not_applicable';e.purchasePaymentProof='';
+    e.reimbursementAmount=0;e.reimbursementPayments=[];e.vendorPaymentCompleted=false;
+    if (e.status !== 'pending') e.status='approved';
   }
   if (!e.billPhoto) return res.status(400).json({ success:false, error:'Bill photo is required.' });
   if (!e.paidAlready && e.paymentType === 'UPI' && !e.qrPhoto) {
     return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
   if (e.paymentType === 'Cash') e.qrPhoto = '';
+  const tracked = ['date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
+  const changes = tracked.filter(k => JSON.stringify(beforeEdit[k]) !== JSON.stringify(e[k])).map(k => ({ field:k, before:beforeEdit[k] == null ? '' : beforeEdit[k], after:e[k] == null ? '' : e[k] }));
+  if (changes.length) {
+    e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
+    e.auditHistory.push({ id:'EDIT-'+String(e.auditHistory.length+1).padStart(3,'0'), reason:editReason || 'Pending expense correction', changes, editedBy:(req.user&&req.user.username)||'system', editedAt:new Date().toISOString() });
+  }
   saveStore(s);
   res.json({ success: true, expense: e });
 });
@@ -565,8 +586,8 @@ router.post('/api/expenses/:id/approve', (req, res) => {
     if (!s.vendorsByNature[nature][e.vendor.toLowerCase()]) s.vendorsByNature[nature][e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
   }
   const approvedNow = e.isInstallment ? num(e.requestedAmount) : num(e.amount);
-  e.status = e.paidAmount >= approvedNow ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
-  if (e.paidAlready) e.reimbursementStatus = 'pending';
+  e.status = e.paidAlready ? 'paid' : (e.paidAmount >= approvedNow ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved'));
+  if (e.paidAlready) { e.reimbursementStatus = 'pending'; e.vendorPaymentCompleted = true; }
   e.approvedAt = new Date().toISOString();
   e.approvedBy = (req.user && req.user.username) || 'admin';
   saveStore(s);
@@ -815,6 +836,7 @@ router.get('/api/expenses/reimbursements', (req, res) => {
   const todayOnly = String(req.query.today || '') === 'true';
   const today = new Date().toISOString().slice(0, 10);
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
+  const from=String(req.query.from||''),to=String(req.query.to||'');
   let list = Object.values(s.expenses || {}).filter(e => {
     if (!canApproveExpenseNature(req, e)) return false;
     if (nature && normalizedNature(e.nature) !== nature) return false;
@@ -822,6 +844,8 @@ router.get('/api/expenses/reimbursements', (req, res) => {
     if (status && e.reimbursementStatus !== status) return false;
     if (person && !String(e.createdBy || e.claimant || '').toLowerCase().includes(person)) return false;
     if (todayOnly && e.date !== today) return false;
+    if (from && String(e.date||'') < from) return false;
+    if (to && String(e.date||'') > to) return false;
     return true;
   });
   list.sort((a, b) => String(b.approvedAt || b.createdAt).localeCompare(String(a.approvedAt || a.createdAt)));
@@ -848,9 +872,9 @@ router.post('/api/expenses/receivables', (req, res) => {
 
 router.get('/api/expenses/receivables', (req,res) => {
   if(!isAdmin(req)) return res.status(403).json({success:false,error:'Owner/Admin only.'});
-  const s=loadStore(), nature=req.query.nature?normalizedNature(req.query.nature):'', status=String(req.query.status||''), party=String(req.query.party||'').toLowerCase();
+  const s=loadStore(), nature=req.query.nature?normalizedNature(req.query.nature):'', status=String(req.query.status||''), party=String(req.query.party||'').toLowerCase(),from=String(req.query.from||''),to=String(req.query.to||'');
   if(nature&&!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});
-  const list=Object.values(s.receivables||{}).filter(x=>approvalNatures(req).includes(normalizedNature(x.nature))&&(!nature||normalizedNature(x.nature)===nature)&&(!status||x.status===status)&&(!party||String(x.party).toLowerCase().includes(party))).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
+  const list=Object.values(s.receivables||{}).filter(x=>approvalNatures(req).includes(normalizedNature(x.nature))&&(!nature||normalizedNature(x.nature)===nature)&&(!status||x.status===status)&&(!party||String(x.party).toLowerCase().includes(party))&&(!from||String(x.date||'')>=from)&&(!to||String(x.date||'')<=to)).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
   res.json({success:true,receivables:list,totalDue:round0(list.reduce((n,x)=>n+Math.max(0,num(x.amount)-num(x.receivedAmount)),0)),totalReceived:round0(list.reduce((n,x)=>n+num(x.receivedAmount),0))});
 });
 
@@ -873,7 +897,7 @@ router.get('/api/expenses/vendors', (req, res) => {
   const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
-  const search=String(req.query.search||'').trim().toLowerCase(), category=String(req.query.category||'').trim().toLowerCase(), source=String(req.query.source||'expense');
+  const search=String(req.query.search||'').trim().toLowerCase(), category=String(req.query.category||'').trim().toLowerCase(), source=String(req.query.source||'expense'), from=String(req.query.from||''), to=String(req.query.to||'');
   const books = {};
   const natures=nature?[nature]:approvalNatures(req);
   natures.forEach(n=>{const master=n==='SANKI'?s.vendors:(((s.vendorsByNature||{})[n])||{});Object.values(master).forEach(v=>{const key=n+'|'+v.name.toLowerCase();books[key]={name:v.name,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:v.notes||'',entries:[]};});});
@@ -881,9 +905,10 @@ router.get('/api/expenses/vendors', (req, res) => {
     const n=normalizedNature(e.nature),key=n+'|'+String(e.vendor||'').toLowerCase();
     if (!natures.includes(n)||!e.vendor||!books[key]||!['approved','partially_paid','paid'].includes(e.status)) return;
     if(category&&!String(e.ledger||'').toLowerCase().includes(category))return;
+    if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
     const b=books[key];b.billed+=e.amount;b.paid+=num(e.paidAmount);b.count+=1;b.entries.push(e);
   });
-  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementPayables(s,true).forEach(p=>{const key='SANKI|'+p.vendor.toLowerCase(),b=books[key]||(books[key]={name:p.vendor,nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[]});b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
+  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementPayables(s,true).filter(p=>(!from||String(p.date||'')>=from)&&(!to||String(p.date||'')<=to)).forEach(p=>{const key='SANKI|'+p.vendor.toLowerCase(),b=books[key]||(books[key]={name:p.vendor,nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[]});b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
   const list = Object.values(books).map(b => ({
     name:b.name,nature:b.nature,count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,entries:b.entries.sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)))
   })).filter(b=>(!category||b.count>0)&&(!search||fuzzyIncludes(b.name,search)||b.entries.some(e=>fuzzyIncludes(e.particulars,search)||fuzzyIncludes(e.ledger,search)))).sort((a,b)=>a.name.localeCompare(b.name));
@@ -930,7 +955,7 @@ router.get('/api/expenses/balances', (req, res) => {
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>inRange(x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>inRange(c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
-  if(nature==='SANKI') salesLedgerEntries().filter(x=>inRange(x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+  if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>inRange(x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
   (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => {
     transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
     transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
@@ -985,10 +1010,11 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   });
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
-  if(nature==='SANKI') salesLedgerEntries().filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0}));
+  if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0}));
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
   let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });
-  const visible = ordered.filter(x => x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to)));
+  const visible = ordered.filter(x => x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to)))
+    .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
   const issues = reconciliationIssues(s, nature, account);
   res.json({ success:true, account, nature, entries:visible, balance:round0(running), reconciled:issues.length===0, reconciliationIssues:issues });
 });
