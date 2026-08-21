@@ -856,25 +856,26 @@ router.get('/api/expenses/balances', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
+  const from=String(req.query.from||''),to=String(req.query.to||''),inRange=d=>(!from||String(d||'')>=from)&&(!to||String(d||'')<=to);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const paidOut = {}; const collected = {}; const adj = {}; const transferIn = {}; const transferOut = {};
   Object.values(s.expenses).forEach(e => {
     if (normalizedNature(e.nature) !== nature) return;
     const a = e.account || '(unspecified)';
     // Personally funded payments did not leave a company account.
-    const companyPaid = (e.payments || []).filter(p => !p.personalFunds)
+    const companyPaid = (e.payments || []).filter(p => !p.personalFunds && inRange(p.date))
       .reduce((n, p) => n + num(p.amount), 0);
     if (companyPaid > 0) paidOut[a] = (paidOut[a] || 0) + companyPaid;
-    (e.reimbursementPayments || []).forEach(p => {
+    (e.reimbursementPayments || []).filter(p=>inRange(p.date)).forEach(p => {
       const ra = p.account || '(unspecified)';
       paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
     });
   });
-  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
-  (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
-  Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
-  if(nature==='SANKI') salesLedgerEntries().forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
-  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature).forEach(x => {
+  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>inRange(x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
+  (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
+  Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>inRange(c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
+  if(nature==='SANKI') salesLedgerEntries().filter(x=>inRange(x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => {
     transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
     transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
   });
@@ -884,7 +885,7 @@ router.get('/api/expenses/balances', (req, res) => {
     const spent = round0(paidOut[name] || 0);
     const topups = round0(adj[name] || 0);
     const transferredIn = round0(transferIn[name] || 0), transferredOut = round0(transferOut[name] || 0), received=round0(collected[name]||0);
-    return { name, opening: round0(opening), topups, received, transferredIn, transferredOut, spent, balance: round0(opening + topups + received + transferredIn - transferredOut - spent) };
+    return { name, opening: round0(opening), topups, received, transferredIn, transferredOut, spent, periodNet:round0(topups+received+transferredIn-transferredOut-spent), balance: round0(opening + topups + received + transferredIn - transferredOut - spent) };
   });
   res.json({ success: true, accounts });
 });
