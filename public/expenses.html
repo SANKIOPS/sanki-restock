@@ -196,6 +196,12 @@
     <div class="msg" id="approveMsg"></div>
   </div></dialog>
 
+  <dialog id="editDlg"><div class="dlg">
+    <h3>Edit expense</h3><input type="hidden" id="editId">
+    <div class="grid"><div class="fld"><label>Date</label><input type="date" id="editDate"></div><div class="fld"><label>Amount ₹</label><input type="number" id="editAmount" min="1"></div><div class="fld full"><label>Particulars</label><input id="editParticulars"></div><div class="fld"><label>Vendor</label><input id="editVendor"></div><div class="fld"><label>Category</label><input id="editLedger" list="approvalLedgerList"></div><div class="fld"><label>Type</label><select id="editType"></select></div><div class="fld"><label>Payment type</label><select id="editPaymentType"><option>UPI</option><option>Cash</option><option>Credit</option></select></div><div class="fld"><label>Installment?</label><select id="editInstallment"><option value="false">No</option><option value="true">Yes</option></select></div><div class="fld"><label>Total agreed ₹</label><input type="number" id="editTotal"></div><div class="fld"><label>Payment required now ₹</label><input type="number" id="editRequested"></div></div>
+    <div class="row-actions"><button class="btn primary" id="editGo">Save changes</button><button class="btn ghost" id="editCancel">Cancel</button></div><div class="msg" id="editMsg"></div>
+  </div></dialog>
+
   <dialog id="adjDlg"><div class="dlg">
     <h3>Add account adjustment</h3>
     <div class="grid">
@@ -221,7 +227,7 @@
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ return '₹' + Math.round(n||0).toLocaleString('en-IN'); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null;
+    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, missingBillOnly=false;
 
     function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
@@ -270,12 +276,13 @@
         '<div class="fld" id="totalAgreedWrap" style="display:none"><label>Total agreed amount ₹</label><input type="number" id="f_totalamount" min="1" step="1" placeholder="e.g. 10000"></div>'+
         '<div class="fld" id="requestedWrap" style="display:none"><label>Payment being logged now ₹</label><input type="number" id="f_requestedamount" min="1" step="1" placeholder="e.g. 1000"><div class="hint">Cannot exceed the total agreed amount.</div></div>'+
         '<div class="fld full" id="paymentNoteWrap" style="display:none"><label>Installment note (optional)</label><input id="f_paymentnote" placeholder="e.g. advance, second installment, final payment"></div>'+
-        '<div class="fld" id="paymentTypeWrap"><label>Payment type</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
-        '<div class="fld" id="qrPhotoWrap"><label>Vendor QR-code photo (required for UPI)</label><input type="file" id="f_qrphoto" accept="image/*"><div class="hint">Choose Camera, Photo Library, or Files.</div></div>'+
-        '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof (required)</label><input type="file" id="f_personalproof" accept="image/*"><div class="hint">Screenshot or photo showing that you paid.</div></div>'+
+        '<div class="fld" id="paymentTypeWrap"><label>How will this be paid?</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
+        '<div class="fld" id="personalAccountWrap" style="display:none"><label>Account used</label><input id="f_personalaccount" placeholder="e.g. Axis 1234"><div class="hint">Cash is recorded automatically as '+esc(cfg.me)+' Cash.</div></div>'+
+        '<div class="fld" id="qrPhotoWrap"><label id="qrLabel">Vendor QR-code photo (required for UPI)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_qrcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_qrphoto" accept="image/*" hidden></label></div></div>'+
+        '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof (required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_personalcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_personalproof" accept="image/*" hidden></label></div></div>'+
         (cfg.isAdmin?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
-        '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*"><div class="hint" id="billHint">Printed or handwritten; choose Camera, Photo Library, or Files.</div></div>'+
+        '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_billcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_billfile" accept="image/*" hidden></label></div></div>'+
       '</div>'+
       '<div class="row-actions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
       '</div>'+(cfg.isOwner?'<div class="card"><b>Telegram notifications (Owner only)</b><div class="hint">Set up each claimant, approver, accountant, or other user who needs notifications. Generate a 15-minute link and send it to that user; they must tap Start once.</div><div id="telegramBotStatus" class="hint">Checking bot connection…</div><div class="row-actions"><select id="telegramUser"><option value="">Loading users…</option></select><button class="btn ghost mini" id="linkTelegram">Generate / relink</button><button class="btn ghost mini" id="testTelegram">Test selected user</button><button class="btn ghost mini" id="unlinkTelegram">Disconnect selected user</button><button class="btn ghost mini" id="setupTelegram">Connect existing bot</button></div><div id="telegramUserStatus" class="hint"></div><div id="telegramLinkResult" class="hint"></div></div>':'');
@@ -322,8 +329,8 @@
     function unlinkTelegram(){var username=el('telegramUser').value;if(!username){setMsg('Select a user first.',false);return;}if(!confirm('Disconnect Telegram notifications for '+username+'?'))return;api('/api/telegram/unlink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username})}).then(function(d){setMsg(d.success?'Telegram disconnected for '+d.username+'.':(d.error||'Disconnect failed.'),!!d.success);if(d.success)loadTelegramUsers();});}
     function togglePaymentFlow(){
       var paid=el('f_paidalready').value==='true';
-      el('paymentTypeWrap').style.display=paid?'none':''; el('personalProofWrap').style.display=paid?'':'none';
-      if(paid) el('f_qrphoto').value=''; toggleQrPhoto();
+      el('personalProofWrap').style.display=paid?'':'none';el('personalAccountWrap').style.display=paid?'':'none';
+      toggleQrPhoto();
     }
     function toggleInstallment(){
       var yes=el('f_installment').value==='true';
@@ -331,9 +338,9 @@
       el('requestedWrap').style.display=yes?'':'none'; el('paymentNoteWrap').style.display=yes?'':'none';
     }
     function toggleQrPhoto(){
-      var upi=el('f_paidalready').value!=='true'&&el('f_paymenttype').value==='UPI';
-      el('qrPhotoWrap').style.display=upi?'':'none';
-      if(!upi) el('f_qrphoto').value='';
+      var paid=el('f_paidalready').value==='true',type=el('f_paymenttype').value,show=!paid&&(type==='UPI'||type==='Credit');
+      el('qrPhotoWrap').style.display=show?'':'none';el('qrLabel').textContent=type==='Credit'?'Vendor QR-code photo (optional for Credit)':'Vendor QR-code photo (required for UPI)';
+      if(el('personalAccountWrap'))el('personalAccountWrap').style.display=paid?'':'none';
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
     function onLedgerInput(){
@@ -358,28 +365,30 @@
       var fd = new FormData(); fd.append('nature',nature||(el('f_nature')?el('f_nature').value:((expensesById[payId]||{}).nature||'SANKI'))); fd.append('photo', input.files[0]);
       return api('/api/expenses/upload', { method:'POST', body:fd }).then(function(d){ return d.url || ''; });
     }
+    function chosenFile(a,b){return (el(a).files&&el(a).files[0])?el(a):el(b);}
 
     function saveExpense(){
       var ledgerVal = el('f_ledger')?el('f_ledger').value.trim():'';
       if(el('f_ledger')&&!findLedger(ledgerVal)){ setMsg('Pick an existing category.', false); return; }
       if(!el('f_vendor').value.trim()){setMsg('Enter or select a vendor name.',false);return;}
-      if(!el('f_billfile').files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
-      var paidAlready=el('f_paidalready').value==='true', paymentType=paidAlready?'UPI':el('f_paymenttype').value;
-      if(paidAlready&&!el('f_personalproof').files[0]){ setMsg('Attach proof of the payment you made.', false); return; }
-      if(!paidAlready&&paymentType==='UPI'&&!el('f_qrphoto').files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
+      var billInput=chosenFile('f_billcamera','f_billfile'),qrInput=chosenFile('f_qrcamera','f_qrphoto'),personalInput=chosenFile('f_personalcamera','f_personalproof');
+      if(!billInput.files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
+      var paidAlready=el('f_paidalready').value==='true', paymentType=el('f_paymenttype').value;
+      if(paidAlready&&!personalInput.files[0]){ setMsg('Attach proof of the payment you made.', false); return; }
+      if(!paidAlready&&paymentType==='UPI'&&!qrInput.files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
       var installment=el('f_installment').value==='true';
       var totalAmount=installment?Number(el('f_totalamount').value):Number(el('f_amount').value);
       if(!(totalAmount>0)){setMsg(installment?'Enter the total agreed amount.':'Enter the expense amount.',false);return;}
       if(installment&&!(Number(el('f_requestedamount').value)>0)){setMsg('Enter the installment amount being logged now.',false);return;}
       if(installment&&Number(el('f_requestedamount').value)>totalAmount){setMsg('Payment being logged now cannot exceed the total agreed amount.',false);return;}
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
-      Promise.all([uploadFile(el('f_billfile')),(!paidAlready&&paymentType==='UPI')?uploadFile(el('f_qrphoto')):Promise.resolve(''),paidAlready?uploadFile(el('f_personalproof')):Promise.resolve('')]).then(function(urls){
+      Promise.all([uploadFile(billInput),(!paidAlready&&(paymentType==='UPI'||paymentType==='Credit')&&qrInput.files[0])?uploadFile(qrInput):Promise.resolve(''),paidAlready?uploadFile(personalInput):Promise.resolve('')]).then(function(urls){
         var body = {
           date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value, nature:el('f_nature').value,
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
           isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
-          paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:urls[2],
+          paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:urls[2],personalAccount:paymentType==='Cash'?(cfg.me+' Cash'):el('f_personalaccount').value,
           channel:cfg.isAdmin&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
           billPhoto:urls[0], qrPhoto:urls[1]
         };
@@ -397,12 +406,12 @@
         '<div class="stats" id="lstats"></div><div id="ltable" class="muted">Loading…</div></div>';
       var entityOptions = '<option value="">All</option>'+opts(cfg.natures);
       var typeFilter = cfg.canApprove?'<div class="fld"><label>Type</label><select id="lf_type"><option value="">All</option>'+opts(cfg.types)+'</select></div>':'';
+      var claimantFilter = cfg.isAdmin?'<div class="fld"><label>Claimant</label><input id="lf_claimant" list="claimantList" placeholder="All claimants"><datalist id="claimantList">'+(cfg.people||[]).map(function(x){return '<option value="'+esc(x)+'">';}).join('')+'</datalist></div>':'';
       el('filters').innerHTML =
         '<div class="fld"><label>Entity</label><select id="lf_nature">'+entityOptions+'</select></div>'+
         '<div class="fld"><label>From</label><input type="date" id="lf_from"></div>'+
         '<div class="fld"><label>To</label><input type="date" id="lf_to"></div>'+
-        '<div class="fld"><label>Status</label><select id="lf_status"><option value="">All</option><option>pending</option><option>approved</option><option>partially_paid</option><option>paid</option><option>rejected</option></select></div>'+
-        typeFilter+
+        '<div class="fld"><label>Status</label><select id="lf_status"><option value="">All</option><option>pending</option><option>approved</option><option>partially_paid</option><option>paid</option><option value="credit">Credit</option><option>rejected</option></select></div>'+claimantFilter+typeFilter+
         '<button class="btn ghost mini" id="lf_go">Filter</button>';
       var n = new Date(Date.now()+5.5*3600*1000); var y=n.getUTCFullYear(), m=n.getUTCMonth();
       el('lf_from').value = y+'-'+String(m+1).padStart(2,'0')+'-01'; el('lf_to').value = today();
@@ -412,20 +421,23 @@
     }
     function loadList(){
       var focused = focusedExpenseId;
-      var q = '?nature='+encodeURIComponent(focused?'':el('lf_nature').value)+'&from='+(focused?'':el('lf_from').value)+'&to='+(focused?'':el('lf_to').value)+'&status='+(focused?'':el('lf_status').value)+'&type='+(focused?'':(el('lf_type')?el('lf_type').value:''))+'&limit=75'+(focused?'&id='+encodeURIComponent(focused):'');
+      var sv=focused?'':el('lf_status').value,isCredit=sv==='credit';
+      var q = '?nature='+encodeURIComponent(focused?'':el('lf_nature').value)+'&from='+(focused?'':el('lf_from').value)+'&to='+(focused?'':el('lf_to').value)+'&status='+(isCredit?'':sv)+'&paymentType='+(isCredit?'Credit':'')+'&missingBill='+(missingBillOnly?'true':'')+'&claimant='+encodeURIComponent(focused?'':(el('lf_claimant')?el('lf_claimant').value:''))+'&type='+(focused?'':(el('lf_type')?el('lf_type').value:''))+'&limit=75'+(focused?'&id='+encodeURIComponent(focused):'');
       api('/api/expenses/list'+q).then(function(d){
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
         expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});
         var t = d.totals;
         el('lstats').className='stats'+(cfg.canApprove?'':' claim-stats');
         el('lstats').innerHTML = cfg.canApprove ?
-          '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div><div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div><div class="stat"><div class="k">Approved</div><div class="v">'+fmt(t.approved)+'</div></div><div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div><div class="stat"><div class="k">Missing bill (legacy)</div><div class="v '+(t.noBill?'neg':'')+'">'+fmt(t.noBill)+'</div></div>' :
+          '<button class="stat" onclick="filterExpenseSummary(\'\')"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></button><button class="stat" onclick="filterExpenseSummary(\'pending\')"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></button><button class="stat" onclick="filterExpenseSummary(\'approved\')"><div class="k">Approved</div><div class="v">'+fmt(t.approved)+'</div></button><button class="stat" onclick="filterExpenseSummary(\'paid\')"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></button><button class="stat" onclick="filterMissingBills()"><div class="k">Missing bill (legacy)</div><div class="v '+(t.noBill?'neg':'')+'">'+fmt(t.noBill)+'</div></button>' :
           '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div><div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div><div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div>';
         if(!d.expenses.length){ el('ltable').innerHTML='<span class="muted">No expenses in range.</span>'; return; }
         el('ltable').innerHTML='<div class="claim-list">'+d.expenses.map(expenseCard).join('')+'</div>'+(d.hasMore?'<div class="hint" style="margin-top:8px">Showing the latest '+d.expenses.length+' of '+d.totalCount+' expenses. Use the filters to see older entries.</div>':'');
         if(focusId){var card=el('row_'+focusId);if(card){card.open=true;card.scrollIntoView({block:'center'});card.classList.add('flash');setTimeout(function(){card.classList.remove('flash');},2600);}focusId='';focusedExpenseId='';}
       });
     }
+    window.filterExpenseSummary=function(status){missingBillOnly=false;el('lf_status').value=status;loadList();};
+    window.filterMissingBills=function(){missingBillOnly=true;el('lf_status').value='';loadList();};
     function expenseActions(e){
       if(!cfg.canApprove) return '';
       if(e.status==='pending') return (canApproveExpense(e)?'<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button>':'<span class="badge b-nobill">proof incomplete</span>')+' <button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button> <button class="btn mini ghost" onclick="rejectExpense(\''+e.id+'\')">Reject</button>';
@@ -437,21 +449,24 @@
       return '<div class="payment-history">'+e.payments.map(function(p){return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'</span><b>'+fmt(p.amount)+'</b>'+(p.proof?' <img class="thumb" src="'+esc(p.proof)+'" onclick="window.open(this.src)" alt="payment proof">':'')+'</div>';}).join('')+'</div>';
     }
     function expenseCard(e){
-      var due=Math.max(0,(e.amount||0)-(e.paidAmount||0));
+      var approvedNow=e.isInstallment?(e.requestedAmount||0):(e.amount||0),due=Math.max(0,approvedNow-(e.paidAmount||0)),contractDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));
       var paymentProof=e.paymentProof||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
       var proofs=(e.billPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" alt="bill proof">Bill</span>':'')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+(paymentProof?'<span class="claim-proof"><img class="thumb" src="'+esc(paymentProof)+'" onclick="window.open(this.src)" alt="payment proof">Payment</span>':'');
-      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div></div><div class="claim-amount">'+fmt(e.amount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(e.claimant||e.createdBy||'—')+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Balance: '+fmt(due)+'</span>'+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
+      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span></div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div></div><div class="claim-amount">'+fmt(approvedNow)+' now</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(e.claimant||e.createdBy||'—')+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
     }
     function renderPendingPayments(){
-      el('panel').innerHTML='<div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="pf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>Vendor</label><input id="pf_vendor" placeholder="Search vendor"></div><button class="btn ghost mini" id="pf_go">Filter</button></div><div class="stats" id="pstats"></div><div id="ptable" class="muted">Loading…</div></div>';
+      el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-pdays="7">Last 7 days</button><button class="btn mini ghost" data-pdays="30">Last 30 days</button><button class="btn mini ghost" data-pdays="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="pf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="pf_from"></div><div class="fld"><label>To</label><input type="date" id="pf_to" value="'+today()+'"></div><div class="fld"><label>Payables</label><select id="pf_bucket"><option value="">All</option><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option></select></div><div class="fld"><label>Vendor</label><input id="pf_vendor" placeholder="Search vendor"></div><button class="btn ghost mini" id="pf_go">Filter</button></div><div class="filters"><div class="fld"><label>Outstanding total</label><select id="pf_total_bucket"><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option><option value="">All</option></select></div></div><div class="stats" id="pstats"></div><div id="ptable" class="muted">Loading…</div></div>';
+      Array.prototype.forEach.call(el('panel').querySelectorAll('[data-pdays]'),function(b){b.onclick=function(){el('pf_from').value=this.dataset.pdays==='month'?today().slice(0,8)+'01':dateDaysAgo(Number(this.dataset.pdays));loadPendingPayments();};});
+      el('pf_total_bucket').addEventListener('change',loadPendingPayments);
       el('pf_go').addEventListener('click',loadPendingPayments); loadPendingPayments();
     }
     function loadPendingPayments(){
-      api('/api/expenses/pending-payments?nature='+encodeURIComponent(el('pf_nature').value)+'&vendor='+encodeURIComponent(el('pf_vendor').value)).then(function(d){
+      var bucket=el('pf_bucket').value;api('/api/expenses/pending-payments?nature='+encodeURIComponent(el('pf_nature').value)+'&vendor='+encodeURIComponent(el('pf_vendor').value)+'&from='+el('pf_from').value+'&to='+el('pf_to').value+'&bucket='+encodeURIComponent(bucket)).then(function(d){
         if(!d.success){el('ptable').textContent=d.error||'Could not load pending payments.';return;}
         expensesById={};d.expenses.concat(d.purchases||[]).forEach(function(e){expensesById[e.id]=e;});
         var all=d.expenses.concat(d.purchases||[]);
-        el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(d.totalOutstanding)+'</div></div><div class="stat"><div class="k">Payments pending</div><div class="v">'+all.length+'</div></div><div class="stat"><div class="k">Purchase mediator</div><div class="v" style="font-size:17px">'+esc(d.mediator||'Logistics Mediator')+'</div>'+(cfg.isAdmin?'<button class="btn mini ghost" onclick="setMediator(\''+esc(d.mediator||'Logistics Mediator')+'\')">Change</button>':'')+'</div>';
+        var totalBucket=el('pf_total_bucket').value,shown=all.filter(function(e){return !totalBucket||(totalBucket==='approved'&&!(e.paidAmount>0)&&e.paymentType!=='Credit')||(totalBucket==='partial'&&e.paidAmount>0)||(totalBucket==='credit'&&e.paymentType==='Credit');});
+        el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(shown.reduce(function(n,e){return n+(e.balanceDue||0);},0))+'</div></div><div class="stat"><div class="k">Payments shown</div><div class="v">'+all.length+'</div></div>';
         var purchases=(d.purchases||[]).map(procurementPayableCard).join('');
         el('ptable').innerHTML=all.length?'<div class="claim-list">'+purchases+d.expenses.map(expenseCard).join('')+'</div>':'<span class="muted">No vendor payments pending.</span>';
       });
@@ -462,19 +477,15 @@
     window.setMediator=function(current){var name=prompt('Logistics mediator / payee name:',current||'');if(!name||!name.trim())return;api('/api/expenses/procurement-payables/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediator:name.trim()})}).then(function(d){if(d.success){setMsg('Purchase mediator updated.',true);loadPendingPayments();}else setMsg(d.error||'Could not update mediator.',false);});};
     function dateDaysAgo(days){var d=new Date(Date.now()+5.5*3600*1000-(days-1)*86400000);return d.toISOString().slice(0,10);}
     function renderSpendingDashboard(){
-      el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-days="7">Last 7 days</button><button class="btn mini primary" data-days="20">Last 20 days</button><button class="btn mini ghost" data-days="30">Last 30 days</button><button class="btn mini ghost" data-days="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="sd_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="sd_from" value="'+dateDaysAgo(20)+'"></div><div class="fld"><label>To</label><input type="date" id="sd_to" value="'+today()+'"></div><button class="btn primary mini" id="sd_go">Show spending</button></div><div class="stats" id="sd_stats"></div></div><div class="card"><div class="filters"><div class="fld"><label>Breakdown by</label><select id="sd_group"><option value="categories">Category</option><option value="vendors">Vendor</option><option value="entities">Entity</option><option value="accounts">Paying account</option><option value="daily">Date</option></select></div></div><div id="sd_breakdown" class="muted">Loading…</div></div>';
+      el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-days="7">Last 7 days</button><button class="btn mini primary" data-days="30">Last 30 days</button><button class="btn mini ghost" data-days="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="sd_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>Paying account</label><select id="sd_account"><option value="">All accounts</option>'+opts(cfg.accounts)+'</select></div><div class="fld"><label>From</label><input type="date" id="sd_from" value="'+dateDaysAgo(30)+'"></div><div class="fld"><label>To</label><input type="date" id="sd_to" value="'+today()+'"></div><button class="btn primary mini" id="sd_go">Show spending</button></div><div class="stats" id="sd_stats"></div><div id="sd_payments" class="muted">Loading…</div></div>';
       Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(b){b.addEventListener('click',function(){var v=this.dataset.days;el('sd_from').value=v==='month'?today().slice(0,8)+'01':dateDaysAgo(Number(v));el('sd_to').value=today();Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});loadSpendingDashboard();});});
-      el('sd_go').addEventListener('click',loadSpendingDashboard);el('sd_nature').addEventListener('change',loadSpendingDashboard);el('sd_group').addEventListener('change',renderSpendingBreakdown);loadSpendingDashboard();
-    }
-    function renderSpendingBreakdown(){
-      if(!spendingData)return;var key=el('sd_group').value,rows=spendingData[key]||[],isAccount=key==='accounts';
-      el('sd_breakdown').innerHTML=rows.length?'<div class="claim-list">'+rows.map(function(x){var details=isAccount&&x.details&&x.details.length?'<div class="expense-section"><b>Payments included in this amount</b><table class="resp"><thead><tr><th>Date</th><th>Expense / vendor</th><th>Reference</th><th>Category</th><th class="r">Amount</th><th>Proof</th></tr></thead><tbody>'+x.details.map(function(d){return '<tr><td>'+esc(d.date)+'</td><td><b>'+esc(d.vendor||d.kind)+'</b><div class="muted">'+esc(d.particulars||d.kind)+'</div></td><td>'+esc(d.id)+(d.paymentId?'<div class="muted">'+esc(d.paymentId)+'</div>':'')+'</td><td>'+esc(d.category||'—')+'</td><td class="r"><b>'+fmt(d.amount)+'</b></td><td>'+(d.proof?'<img class="thumb" src="'+esc(d.proof)+'" onclick="window.open(this.src)" alt="payment proof">':'—')+'</td></tr>';}).join('')+'</tbody></table></div>':(isAccount?'<div class="muted">No payment details found for this range.</div>':'');return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(el('sd_group').options[el('sd_group').selectedIndex].text)+'</div></div><div class="claim-main"><div class="claim-desc">'+esc(x.name)+(isAccount?'<div class="claim-vendor">Click to see every payment</div>':'')+'</div><div class="claim-amount">'+fmt(isAccount?x.cashPaid:x.incurred)+'</div></div></summary><div class="claim-detail"><div class="claim-meta">'+(isAccount?'':'<span>Expense incurred: '+fmt(x.incurred)+'</span>')+'<span>Company cash paid: '+fmt(x.cashPaid)+'</span>'+(isAccount?'':'<span class="'+(x.outstanding?'neg':'')+'">Still payable: '+fmt(x.outstanding)+'</span>')+'</div>'+details+'</div></details>';}).join('')+'</div>':'<span class="muted">No activity in this range.</span>';
+      el('sd_go').addEventListener('click',loadSpendingDashboard);el('sd_nature').addEventListener('change',loadSpendingDashboard);el('sd_account').addEventListener('change',loadSpendingDashboard);loadSpendingDashboard();
     }
     function loadSpendingDashboard(){
-      api('/api/expenses/spending-dashboard?from='+el('sd_from').value+'&to='+el('sd_to').value+'&nature='+encodeURIComponent(el('sd_nature').value)).then(function(d){
-        if(!d.success){setMsg(d.error||'Could not load dashboard.',false);return;}var t=d.totals;
-        el('sd_stats').innerHTML='<div class="stat"><div class="k">Expenses incurred</div><div class="v">'+fmt(t.incurred)+'</div><div class="hint">'+t.count+' approved expense(s)</div></div><div class="stat"><div class="k">Company cash paid</div><div class="v">'+fmt(t.cashPaid)+'</div></div><div class="stat"><div class="k">Still payable</div><div class="v '+(t.outstanding?'neg':'')+'">'+fmt(t.outstanding)+'</div></div><div class="stat"><div class="k">Reimbursements paid</div><div class="v">'+fmt(t.reimbursementPaid)+'</div></div>';
-        spendingData=d;renderSpendingBreakdown();
+      api('/api/expenses/spending-dashboard?from='+el('sd_from').value+'&to='+el('sd_to').value+'&nature='+encodeURIComponent(el('sd_nature').value)+'&account='+encodeURIComponent(el('sd_account').value)).then(function(d){
+        if(!d.success){setMsg(d.error||'Could not load dashboard.',false);return;}
+        el('sd_stats').innerHTML='<div class="stat"><div class="k">Actual expenses paid</div><div class="v">'+fmt(d.totalPaid)+'</div><div class="hint">'+d.count+' payment transaction(s)</div></div>';
+        el('sd_payments').innerHTML=d.payments.length?'<div class="claim-list">'+d.payments.map(function(p){var proofs=(p.billPhoto?'<img class="thumb" src="'+esc(p.billPhoto)+'" onclick="window.open(this.src)"> ':'')+(p.qrPhoto?'<img class="thumb" src="'+esc(p.qrPhoto)+'" onclick="window.open(this.src)"> ':'')+(p.proof?'<img class="thumb" src="'+esc(p.proof)+'" onclick="window.open(this.src)">':'');return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(p.date)+' · '+esc(p.id)+' · '+esc(p.entity)+'</div><span class="tag">'+esc(p.paymentType||p.kind)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(p.vendor||p.particulars)+'<div class="claim-vendor">'+esc(p.account||'Unspecified account')+'</div></div><div class="claim-amount">'+fmt(p.amount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>'+esc(p.kind)+'</span><span>Claimant: '+esc(p.claimant)+'</span><span>Category: '+esc(p.category||'—')+'</span><span>Expense total: '+fmt(p.expenseAmount)+'</span><span>Approved by: '+esc(p.approvedBy||'—')+'</span><span>Paid by: '+esc(p.paidBy||'—')+'</span></div><div class="claim-proofs">'+proofs+'</div></div></details>';}).join('')+'</div>':'<span class="muted">No actual payments in this range.</span>';
       });
     }
     function claimantCard(e){
@@ -533,24 +544,10 @@
       });
     };
     window.editExpense = function(id){
-      api('/api/expenses/list').then(function(d){
-        var e=d.expenses.find(function(x){return x.id===id;}); if(!e) return;
-        var date=prompt('Date (YYYY-MM-DD):',e.date||''); if(date===null) return;
-        var particulars=prompt('Particulars:',e.particulars||''); if(particulars===null) return;
-        var amount=prompt('Amount ₹:',e.amount); if(amount===null) return;
-        var ledger=e.ledger||'';
-        if(cfg.isAdmin){ ledger=prompt('Category (required before approval; Admin/Owner may enter a new one):',ledger); if(ledger===null) return; }
-        var type=prompt('Type ('+cfg.types.join(', ')+'):',e.type||'variable'); if(type===null) return;
-        var vendor=prompt('Vendor (approved vendor name, or type a corrected/new name for admin to create):',e.vendor||''); if(vendor===null) return;
-        var paymentType=prompt('Payment type ('+cfg.paymentTypes.join(', ')+'):',e.paymentType||'UPI'); if(paymentType===null) return;
-        var installment=confirm('Is this a contract/installment expense?\nOK = Yes, Cancel = No');
-        var requestedAmount=installment?prompt('Current payment requested / already paid ₹:',e.requestedAmount||e.amount):amount; if(requestedAmount===null) return;
-        var account=prompt('Pay-from account:',e.account||''); if(account===null) return;
-        var channel=prompt('Channel ('+cfg.channels.join(', ')+'):',e.channel||'Shared'); if(channel===null) return;
-        api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:date,particulars:particulars,amount:amount,ledger:ledger,type:type,vendor:vendor,paymentType:paymentType,isInstallment:installment,requestedAmount:requestedAmount,account:account,channel:channel}) })
-          .then(function(x){ if(x.success){ setMsg('Expense updated.',true); loadConfig().then(loadList); } else setMsg(x.error||'Could not update.',false); });
-      });
+      var e=expensesById[id];if(!e)return;el('editId').value=id;el('editDate').value=e.date||'';el('editAmount').value=e.amount||'';el('editTotal').value=e.amount||'';el('editParticulars').value=e.particulars||'';el('editVendor').value=e.vendor||'';el('editLedger').value=e.ledger||'';el('editType').innerHTML=opts(cfg.types,e.type||'variable');el('editPaymentType').value=e.paymentType||'UPI';el('editInstallment').value=String(!!e.isInstallment);el('editRequested').value=e.requestedAmount||e.amount||'';el('editMsg').textContent='';el('editDlg').showModal();
     };
+    el('editCancel').onclick=function(){el('editDlg').close();};
+    el('editGo').onclick=function(){var id=el('editId').value,installment=el('editInstallment').value==='true',body={date:el('editDate').value,particulars:el('editParticulars').value,amount:el('editTotal').value||el('editAmount').value,ledger:el('editLedger').value,type:el('editType').value,vendor:el('editVendor').value,paymentType:el('editPaymentType').value,isInstallment:installment,requestedAmount:installment?el('editRequested').value:(el('editTotal').value||el('editAmount').value)};api('/api/expenses/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(x){if(x.success){el('editDlg').close();setMsg('Expense updated.',true);loadConfig().then(loadList);}else el('editMsg').textContent=x.error||'Could not update.';});};
     window.quickEdit = function(id, patch){
       api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch) })
         .then(function(d){ if(!d.success) setMsg(d.error||'Could not update.', false); });
@@ -606,7 +603,7 @@
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
       el('payAcct').innerHTML = opts(cfg.accounts);
-      el('payAmount').value=Math.max(0,(e.amount||0)-(e.paidAmount||0)); el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
+      el('payAmount').value=Math.max(0,(e.isInstallment?(e.requestedAmount||0):(e.amount||0))-(e.paidAmount||0)); el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';
       el('payDlg').showModal();
     };
@@ -678,43 +675,45 @@
 
     // ── VENDORS ──
     function renderVendors(){
-      el('panel').innerHTML = '<div class="card"><div class="row-actions" style="margin-top:0"><input id="newVendor" placeholder="add vendor name"><button class="btn ghost mini" id="addVendor">Add</button></div><div id="vtable" class="muted" style="margin-top:12px">Loading…</div></div>';
+      el('panel').innerHTML = '<div class="card"><div class="preset-row"><button class="btn mini primary" data-vsource="expense">Expense vendors</button><button class="btn mini ghost" data-vsource="sourcing">Sourcing vendors</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="vf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>Search vendor / particulars</label><input id="vf_search" placeholder="Type 2–3 letters"></div><div class="fld"><label>Category</label><input id="vf_category" list="vendorCategoryList" placeholder="All categories"><datalist id="vendorCategoryList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist></div><button class="btn ghost mini" id="vf_go">Search</button></div><div class="row-actions"><input id="newVendor" placeholder="add approved vendor name"><button class="btn ghost mini" id="addVendor">Add</button></div><div id="vtable" class="muted" style="margin-top:12px">Loading…</div></div>';
+      el('panel').dataset.vsource='expense';Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(b){b.onclick=function(){el('panel').dataset.vsource=this.dataset.vsource;Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});loadVendors();};});
+      el('vf_go').onclick=loadVendors;el('vf_nature').onchange=loadVendors;
       el('addVendor').addEventListener('click', function(){
         var nm = el('newVendor').value.trim(); if(!nm) return;
-        api('/api/expenses/vendors', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:nm,nature:selectedNature}) }).then(function(){ el('newVendor').value=''; loadConfig().then(loadVendors); });
+        api('/api/expenses/vendors', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:nm,nature:el('vf_nature').value||selectedNature}) }).then(function(){ el('newVendor').value=''; loadConfig().then(loadVendors); });
       });
       loadVendors();
     }
     function loadVendors(){
-      api('/api/expenses/vendors?nature='+encodeURIComponent(selectedNature)).then(function(d){
+      api('/api/expenses/vendors?nature='+encodeURIComponent(el('vf_nature').value)+'&search='+encodeURIComponent(el('vf_search').value)+'&category='+encodeURIComponent(el('vf_category').value)+'&source='+encodeURIComponent(el('panel').dataset.vsource||'expense')).then(function(d){
         if(!d.vendors.length){ el('vtable').innerHTML='<span class="muted">No vendors yet.</span>'; return; }
         var rows = d.vendors.map(function(v){
-          return '<tr><td>'+esc(v.name)+'</td><td class="r">'+v.count+'</td><td class="r">'+fmt(v.billed)+'</td><td class="r">'+fmt(v.paid)+'</td><td class="r '+(v.outstanding>0?'neg':'')+'">'+fmt(v.outstanding)+'</td></tr>';
+          var entries=(v.entries||[]).map(function(e){return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(e.particulars||e.supplier||e.id)+'<div class="claim-vendor">'+esc(e.date)+' · '+esc(e.id)+' · '+esc(e.ledger||e.billNo||'')+'</div></div><div class="claim-amount">'+fmt(e.amount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Paid: '+fmt(e.paidAmount)+'</span><span>Outstanding: '+fmt((e.amount||0)-(e.paidAmount||0))+'</span><span>Entity: '+esc(e.nature||v.nature)+'</span><span>Status: '+esc(e.status||'—')+'</span></div>'+paymentHistory(e)+'</div></details>';}).join('');
+          return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(v.nature)+'</div><span class="tag">'+v.count+' entries</span></div><div class="claim-main"><div class="claim-desc">'+esc(v.name)+'</div><div class="claim-amount">'+fmt(v.outstanding)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Billed: '+fmt(v.billed)+'</span><span>Paid: '+fmt(v.paid)+'</span></div><div class="claim-list">'+entries+'</div></div></details>';
         }).join('');
-        el('vtable').innerHTML = '<table><thead><tr><th>Vendor</th><th class="r">Entries</th><th class="r">Billed</th><th class="r">Paid</th><th class="r">Outstanding</th></tr></thead><tbody>'+rows+'</tbody>'+
-          '<tfoot><tr><th>Total owed</th><th></th><th></th><th></th><th class="r neg">'+fmt(d.totalOutstanding)+'</th></tr></tfoot></table>';
+        el('vtable').innerHTML = '<div class="claim-list">'+rows+'</div><div class="stat" style="margin-top:12px"><div class="k">Total owed</div><div class="v neg">'+fmt(d.totalOutstanding)+'</div></div>';
       });
     }
 
     // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS ──
     function renderCash(){
-      el('panel').innerHTML = '<div class="card"><h3 style="margin:0 0 4px">Money Trail</h3><p class="sub" style="margin:0 0 12px">One-click view of where money entered, where it was spent, and what remains.</p><div class="filters"><div class="fld"><label>Entity</label><select id="cf_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div></div><div id="ctable" class="muted">Loading…</div></div>'+
+      el('panel').innerHTML = '<div class="card"><h3 style="margin:0 0 4px">Money Trail</h3><p class="sub" style="margin:0 0 12px">One-click view of where money entered, where it was spent, and what remains.</p><div class="filters"><div class="fld"><label>Entity</label><select id="cf_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div><div class="fld"><label>From</label><input type="date" id="cf_from" value="'+today()+'"></div><div class="fld"><label>To</label><input type="date" id="cf_to" value="'+today()+'"></div><button class="btn mini ghost" id="cf_go">View</button></div><div id="ctable" class="muted">Loading…</div></div>'+
         '<div class="card"><h3 style="margin-top:0">Transfer between accounts</h3><div class="grid"><div class="fld"><label>From account</label><select id="tr_from">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>To account</label><select id="tr_to">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>Amount ₹</label><input type="number" id="tr_amount" min="1"></div><div class="fld"><label>Date</label><input type="date" id="tr_date" value="'+today()+'"></div><div class="fld full"><label>Note</label><input id="tr_note" placeholder="Reason or reference"></div><div class="fld full"><label>Transfer proof — required</label><input type="file" id="tr_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="tr_go">Record transfer</button></div></div>'+
         '<div class="card"><h3 style="margin-top:0">Detailed statement</h3><div class="filters"><div class="fld"><label>Account</label><select id="lg_account">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>From</label><input type="date" id="lg_from"></div><div class="fld"><label>To</label><input type="date" id="lg_to" value="'+today()+'"></div><button class="btn ghost mini" id="lg_go">View ledger</button></div><div id="ledgerTable" class="muted">Select an account.</div></div>';
-      el('cf_nature').addEventListener('change',function(){selectedNature=this.value;loadCash();loadAccountLedger();});
+      el('cf_nature').addEventListener('change',function(){selectedNature=this.value;loadCash();loadAccountLedger();});el('cf_go').addEventListener('click',loadCash);
       el('tr_go').addEventListener('click',recordTransfer); el('lg_go').addEventListener('click',loadAccountLedger);
       loadCash();
     }
     function loadCash(){
       api('/api/expenses/balances?nature='+encodeURIComponent(selectedNature)).then(function(d){
-        var rows = d.accounts.map(function(a,i){var moneyIn=(a.received||0)+(a.transferredIn||0)+Math.max(0,a.topups||0),moneyOut=(a.spent||0)+(a.transferredOut||0)+Math.max(0,-(a.topups||0));return '<details class="claim-card" ontoggle="if(this.open)loadMoneyTrail(\''+esc(a.name)+'\',\'trail_'+i+'\')"><summary><div class="claim-main"><div class="claim-desc">'+esc(a.name)+'<div class="claim-vendor">Opening '+fmt(a.opening)+'</div></div><div class="claim-amount">'+fmt(a.balance)+' balance</div></div><div class="claim-meta"><span class="pos">Received '+fmt(moneyIn)+'</span><span class="neg">Spent '+fmt(moneyOut)+'</span></div></summary><div class="claim-detail"><div id="trail_'+i+'" class="muted">Loading money trail…</div><div class="expense-actions"><button class="btn mini ghost" onclick="openAdjustment(\''+esc(a.name)+'\')">＋ Add adjustment</button> <button class="btn mini ghost" onclick="selectDetailedAccount(\''+esc(a.name)+'\')">Open detailed statement</button>'+(cfg.isAdmin?' <button class="btn mini ghost" onclick="removeAcct(\''+esc(a.name)+'\')">✕</button>':'')+'</div></div></details>';}).join('');
+        var rows = d.accounts.map(function(a,i){var moneyIn=(a.received||0)+(a.transferredIn||0)+Math.max(0,a.topups||0),moneyOut=(a.spent||0)+(a.transferredOut||0)+Math.max(0,-(a.topups||0)),difference=moneyIn-moneyOut;return '<details class="claim-card" ontoggle="if(this.open)loadMoneyTrail(\''+esc(a.name)+'\',\'trail_'+i+'\')"><summary><div class="claim-main"><div class="claim-desc">'+esc(a.name)+'<div class="claim-vendor">In '+fmt(moneyIn)+' · Out '+fmt(moneyOut)+'</div></div><div class="claim-amount">'+fmt(a.balance)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Opening '+fmt(a.opening)+'</span><span class="pos">Transfers/receipts in '+fmt(moneyIn)+'</span><span class="neg">Transfers/payments out '+fmt(moneyOut)+'</span><span>Net movement '+fmt(difference)+'</span></div><div id="trail_'+i+'" class="muted">Loading money trail…</div><div class="expense-actions"><button class="btn mini ghost" onclick="openAdjustment(\''+esc(a.name)+'\')">＋ Add adjustment</button> <button class="btn mini ghost" onclick="selectDetailedAccount(\''+esc(a.name)+'\')">Open detailed statement</button>'+(cfg.isAdmin?' <button class="btn mini ghost" onclick="removeAcct(\''+esc(a.name)+'\')">✕</button>':'')+'</div></div></details>';}).join('');
         el('ctable').innerHTML = '<div class="claim-list">'+rows+'</div>'+
           '<div class="row-actions"><a href="#" id="addAcctLink2">＋ add a paying account'+(cfg.isAdmin?'':' (needs approval)')+'</a></div>'+
           '<div class="hint" style="margin-top:8px">Balance = opening + adjustments + receivable collections + transfers in − transfers out − paid expenses and reimbursements.</div>';
         el('addAcctLink2').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
       });
     }
-    window.loadMoneyTrail=function(account,host){var box=el(host);if(!box||box.dataset.loaded)return;box.dataset.loaded='1';api('/api/expenses/account-ledger?nature='+encodeURIComponent(selectedNature)+'&account='+encodeURIComponent(account)).then(function(d){if(!d.success){box.textContent=d.error||'Could not load trail.';return;}var rows=d.entries.map(function(x){return '<tr><td>'+esc(x.date||'Opening')+'</td><td>'+esc(x.description)+'</td><td class="r pos">'+(x.credit?fmt(x.credit):'—')+'</td><td class="r neg">'+(x.debit?fmt(x.debit):'—')+'</td><td class="r"><b>'+fmt(x.balance)+'</b></td><td>'+(x.proof?'<img class="thumb" src="'+esc(x.proof)+'" onclick="window.open(this.src)">':'')+'</td></tr>';}).join('');box.innerHTML='<table class="resp"><thead><tr><th>Date</th><th>Where money went / came from</th><th class="r">In</th><th class="r">Out</th><th class="r">Balance</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table>';});};
+    window.loadMoneyTrail=function(account,host){var box=el(host);if(!box)return;api('/api/expenses/account-ledger?nature='+encodeURIComponent(selectedNature)+'&account='+encodeURIComponent(account)+'&from='+el('cf_from').value+'&to='+el('cf_to').value).then(function(d){if(!d.success){box.textContent=d.error||'Could not load trail.';return;}var rows=d.entries.map(function(x){return '<tr><td>'+esc(x.date||'Opening')+'</td><td>'+esc(x.description)+'</td><td>'+esc(x.id)+'</td><td class="r pos">'+(x.credit?fmt(x.credit):'—')+'</td><td class="r neg">'+(x.debit?fmt(x.debit):'—')+'</td><td class="r"><b>'+fmt(x.balance)+'</b></td><td>'+(x.proof?'<img class="thumb" src="'+esc(x.proof)+'" onclick="window.open(this.src)">':'')+'</td></tr>';}).join('');box.innerHTML='<table class="resp"><thead><tr><th>Date</th><th>Source / destination</th><th>Reference</th><th class="r">In</th><th class="r">Out</th><th class="r">Balance</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table>';});};
     window.selectDetailedAccount=function(account){el('lg_account').value=account;loadAccountLedger();el('lg_account').scrollIntoView({behavior:'smooth',block:'center'});};
     function recordTransfer(){
       var from=el('tr_from').value,to=el('tr_to').value,amount=Number(el('tr_amount').value||0),btn=el('tr_go');

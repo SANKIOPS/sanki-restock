@@ -185,7 +185,8 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
   assert.match(html, /id="f_installment"/);
   assert.match(html, /id="f_paymenttype"/);
   assert.match(html, /id="f_qrphoto"/);
-  assert.doesNotMatch(html, /capture="environment"/);
+  assert.match(html, /id="f_billcamera"[^>]*capture="environment"/);
+  assert.match(html, /id="f_billfile"[^>]*accept="image\/\*"/);
   assert.doesNotMatch(html, /id="f_runner"/);
   assert.doesNotMatch(html, /id="f_funded"/);
   assert.doesNotMatch(html, /id="f_account"/);
@@ -299,12 +300,11 @@ test('account adjustments require a reason and support explicit add or deduct en
   assert.equal(ledger.entries.find(x => x.description === 'Counting correction').debit, 125);
 });
 
-test('date-range spending dashboard separates incurred spend from company cash paid', () => {
+test('date-range spending dashboard shows only actual payment transactions', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /<label>Breakdown by<\/label>/);
-  assert.match(html, /function renderSpendingBreakdown\(\)/);
-  assert.match(html, /<option value="categories">Category<\/option>/);
-  assert.doesNotMatch(html, /spendingTable\('By entity'/);
+  assert.doesNotMatch(html, /<label>Breakdown by<\/label>/);
+  assert.match(html, /Actual expenses paid/);
+  assert.match(html, /id="sd_account"/);
   const created = invoke('POST', '/api/expenses', { body: {
     vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'
   } });
@@ -315,20 +315,14 @@ test('date-range spending dashboard separates incurred spend from company cash p
   invoke('POST', '/api/expenses/:id/approve', { params: { id: personal.body.expense.id }, role: 'owner' });
   const owner = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'owner' });
   assert.equal(owner.status, 200);
-  assert.ok(owner.body.totals.incurred >= 900);
-  assert.ok(owner.body.totals.outstanding >= 661);
-  assert.equal(owner.body.vendors.find(x => x.name === 'Dashboard Vendor').incurred, 900);
-  assert.ok(owner.body.categories.find(x => x.name === 'FOOD EXPENSE').outstanding >= 561);
-  assert.ok(owner.body.entities.some(x => x.name === 'PERSONAL'));
-  const cashBreakdown = owner.body.accounts.find(x => x.name === 'Cash');
-  assert.equal(cashBreakdown.cashPaid, 339);
-  assert.equal(cashBreakdown.details[0].id, created.body.expense.id);
-  assert.equal(cashBreakdown.details[0].proof, '/api/expenses/photo/dashboard-pay.jpg');
-  assert.match(html, /Payments included in this amount/);
-  assert.match(html, /Click to see every payment/);
+  assert.ok(owner.body.totalPaid >= 339);
+  const payment = owner.body.payments.find(x => x.id === created.body.expense.id);
+  assert.equal(payment.amount, 339);
+  assert.equal(payment.account, 'Cash');
+  assert.equal(payment.proof, '/api/expenses/photo/dashboard-pay.jpg');
   const admin = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'admin' });
   assert.equal(admin.status, 200);
-  assert.equal(admin.body.entities.some(x => x.name === 'PERSONAL'), false);
+  assert.equal(admin.body.payments.some(x => x.entity === 'PERSONAL'), false);
   const claimant = invoke('GET', '/api/expenses/spending-dashboard', { role: 'claimant' });
   assert.equal(claimant.status, 403);
 });
@@ -417,10 +411,10 @@ test('installments support partial payments and prevent overpayment', () => {
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Furniture Expense-A3' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
   const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'accounting' });
-  assert.equal(partial.body.expense.status, 'partially_paid');
+  assert.equal(partial.body.expense.status, 'paid');
   const over = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 10000, account: 'Cash', paymentProof: '/api/expenses/photo/pay2.jpg' }, role: 'accounting' });
   assert.equal(over.status, 400);
-  assert.match(over.body.error, /cannot exceed/i);
+  assert.match(over.body.error, /already fully paid/i);
 });
 
 test('posted advanced purchases become mediator payables without changing procurement', () => {
@@ -455,7 +449,7 @@ test('account ledgers render an expandable one-click money trail', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /<h3 style="margin:0 0 4px">Money Trail<\/h3>/);
   assert.match(html, /ontoggle="if\(this\.open\)loadMoneyTrail/);
-  assert.match(html, /Received '\+fmt\(moneyIn\)/);
-  assert.match(html, /Spent '\+fmt\(moneyOut\)/);
-  assert.match(html, /Where money went \/ came from/);
+  assert.match(html, /In '\+fmt\(moneyIn\)/);
+  assert.match(html, /Out '\+fmt\(moneyOut\)/);
+  assert.match(html, /Source \/ destination/);
 });
