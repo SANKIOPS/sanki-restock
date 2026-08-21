@@ -160,7 +160,19 @@ function blankStore() {
   };
 }
 function loadStore() {
-  try { return Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
+  try {
+    const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
+    // Repair records finalized under the old instalment rule, which marked the
+    // whole agreement paid when only "payment required now" had been paid.
+    Object.values(s.expenses || {}).forEach(e => {
+      if (!e.approvedAt || e.status === 'rejected') return;
+      const recorded = (e.payments || []).reduce((n, p) => n + num(p.amount), 0);
+      e.paidAmount = Math.max(num(e.paidAmount), recorded);
+      e.status = e.paidAmount >= num(e.amount) ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
+      if (e.paidAlready) e.vendorPaymentCompleted = e.paidAmount >= num(e.amount);
+    });
+    return s;
+  }
   catch { return blankStore(); }
 }
 function saveStore(s) {
@@ -585,9 +597,9 @@ router.post('/api/expenses/:id/approve', (req, res) => {
     s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature[nature] = s.vendorsByNature[nature] || {};
     if (!s.vendorsByNature[nature][e.vendor.toLowerCase()]) s.vendorsByNature[nature][e.vendor.toLowerCase()] = { name: e.vendor, notes: '' };
   }
-  const approvedNow = e.isInstallment ? num(e.requestedAmount) : num(e.amount);
-  e.status = e.paidAlready ? 'paid' : (e.paidAmount >= approvedNow ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved'));
-  if (e.paidAlready) { e.reimbursementStatus = 'pending'; e.vendorPaymentCompleted = true; }
+  const totalDue = num(e.amount);
+  e.status = e.paidAmount >= totalDue ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
+  if (e.paidAlready) { e.reimbursementStatus = 'pending'; e.vendorPaymentCompleted = e.paidAmount >= totalDue; }
   e.approvedAt = new Date().toISOString();
   e.approvedBy = (req.user && req.user.username) || 'admin';
   saveStore(s);
@@ -617,7 +629,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   // A contract may be larger than the installment approved now. Payment is
   // capped at the current installment, while the contract balance remains
   // visible for reference.
-  const approvedNow = e.isInstallment ? num(e.requestedAmount) : num(e.amount);
+  const approvedNow = num(e.amount);
   const outstanding = Math.max(0, approvedNow - num(e.paidAmount));
   const pay = b.amount != null ? num(b.amount) : outstanding;
   if (!(pay > 0)) return res.status(400).json({ success: false, error: 'Payment amount must be greater than 0.' });
@@ -756,7 +768,7 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     if (vendor && !String(e.vendor || '').toLowerCase().includes(vendor)) return false;
     if (from && String(e.approvedAt || e.date).slice(0, 10) < from) return false;
     if (to && String(e.approvedAt || e.date).slice(0, 10) > to) return false;
-    const approvedNow = e.isInstallment ? num(e.requestedAmount) : num(e.amount);
+    const approvedNow = num(e.amount);
     if (!['approved', 'partially_paid'].includes(e.status) || num(e.paidAmount) >= approvedNow) return false;
     if (bucket === 'approved' && (num(e.paidAmount) > 0 || e.paymentType === 'Credit')) return false;
     if (bucket === 'partial' && num(e.paidAmount) <= 0) return false;
@@ -764,7 +776,7 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     return true;
   }).map(e => ({
     ...e,
-    balanceDue: round0((e.isInstallment ? num(e.requestedAmount) : num(e.amount)) - num(e.paidAmount)),
+    balanceDue: round0(num(e.amount) - num(e.paidAmount)),
     contractBalance: round0(num(e.amount) - num(e.paidAmount)),
     daysPending: Math.max(0, Math.floor((Date.parse(today) - Date.parse(String(e.approvedAt || e.date).slice(0, 10))) / 86400000))
   })).sort((a, b) => b.daysPending - a.daysPending || String(a.approvedAt || '').localeCompare(String(b.approvedAt || '')));
@@ -816,12 +828,9 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
   Object.values(s.expenses || {}).forEach(e => {
     const entity = normalizedNature(e.nature);
     if (!allowed.includes(entity) || (nature && entity !== nature)) return;
-    (e.payments || []).filter(p => !p.personalFunds && inRange(String(p.date || ''))).forEach(p => {
+    (e.payments || []).filter(p => e.approvedAt && inRange(String(p.date || ''))).forEach(p => {
       const account = p.account || e.account;
-      if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', date:p.date||'', entity, kind:'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
-    });
-    (e.reimbursementPayments || []).filter(p => inRange(String(p.date || ''))).forEach(p => {
-      if (!accountFilter || String(p.account||'').toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', date:p.date||'', entity, kind:'Reimbursement', vendor:e.claimant||e.createdBy||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account:p.account||'', paymentType:p.paymentType||'', proof:p.proof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'' });
+      if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
     });
   });
   payments.sort((a,b)=>String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId)));
@@ -943,10 +952,10 @@ router.get('/api/expenses/balances', (req, res) => {
   Object.values(s.expenses).forEach(e => {
     if (normalizedNature(e.nature) !== nature) return;
     const a = e.account || '(unspecified)';
-    // Personally funded payments did not leave a company account.
-    const companyPaid = (e.payments || []).filter(p => !p.personalFunds && inRange(p.date))
-      .reduce((n, p) => n + num(p.amount), 0);
-    if (companyPaid > 0) paidOut[a] = (paidOut[a] || 0) + companyPaid;
+    (e.payments || []).filter(p => e.approvedAt && inRange(p.date)).forEach(p => {
+      const paymentAccount = p.account || a;
+      paidOut[paymentAccount] = (paidOut[paymentAccount] || 0) + num(p.amount);
+    });
     (e.reimbursementPayments || []).filter(p=>inRange(p.date)).forEach(p => {
       const ra = p.account || '(unspecified)';
       paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
@@ -1005,7 +1014,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
   (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && (x.fromAccount === account || x.toAccount === account)).forEach(x => entries.push({ id:x.id,date:x.date,kind:'transfer',description:x.fromAccount===account?'Transfer to '+x.toAccount:'Transfer from '+x.fromAccount,credit:x.toAccount===account?num(x.amount):0,debit:x.fromAccount===account?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy }));
   Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === nature).forEach(e => {
-    (e.payments || []).filter(p => !p.personalFunds && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    (e.payments || []).filter(p => e.approvedAt && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant'),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
   });
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));

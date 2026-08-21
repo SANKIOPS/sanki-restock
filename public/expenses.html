@@ -113,17 +113,20 @@
     /* Dense accounting rows: details stay hidden until the user expands one. */
     .claim-list { gap:4px; }
     .claim-card { border-radius:7px; }
-    .claim-card summary { padding:5px 8px; gap:3px 8px; min-height:36px; }
+    .claim-card summary { padding:3px 7px; gap:1px 6px; min-height:32px; }
     .claim-card summary::after { font-size:17px; }
-    .claim-head,.claim-main { gap:5px; }
+    .claim-head,.claim-main { gap:3px; }
     .claim-date,.claim-vendor { font-size:10px; margin-top:0; }
     .claim-desc { font-size:12px; line-height:1.1; }
     .claim-amount { font-size:13px; }
-    .claim-detail { padding:7px 9px 8px; }
-    .stats { gap:5px; margin-bottom:8px; }
-    .stat { min-width:88px; padding:6px 9px; border-radius:7px; }
+    .claim-detail { padding:5px 7px 6px; }
+    .claim-meta { gap:3px 8px; margin-bottom:4px; }
+    .expense-section { margin-top:5px; padding-top:5px; }
+    .expense-actions,.row-actions { gap:4px; margin-top:5px; }
+    .stats { gap:3px; margin-bottom:5px; }
+    .stat { min-width:82px; padding:4px 7px; border-radius:6px; }
     .stat .v { font-size:15px; }
-    .payment-entry { padding:4px 7px; }
+    .payment-entry { padding:3px 6px; }
     table { font-size:11.5px; }
     th,td { padding:5px 7px!important; }
     th { font-size:10px!important; }
@@ -496,7 +499,7 @@
       return '<div class="payment-history">'+e.payments.map(function(p){return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'</span><b>'+fmt(p.amount)+'</b>'+(p.proof?' <img class="thumb" src="'+esc(p.proof)+'" onclick="window.open(this.src)" alt="payment proof">':'')+'</div>';}).join('')+'</div>';
     }
     function expenseCard(e){
-      var approvedNow=e.isInstallment?(e.requestedAmount||0):(e.amount||0),due=Math.max(0,approvedNow-(e.paidAmount||0)),contractDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));
+      var approvedNow=e.amount||0,due=Math.max(0,approvedNow-(e.paidAmount||0)),contractDue=due;
       var paymentProof=e.paymentProof||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
       var proofs=(e.billPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" alt="bill proof">Bill</span>':'')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+(paymentProof?'<span class="claim-proof"><img class="thumb" src="'+esc(paymentProof)+'" onclick="window.open(this.src)" alt="payment proof">Payment</span>':'');
       var audits=(e.auditHistory||[]).length?'<div class="expense-section"><b>Edit history</b>'+(e.auditHistory||[]).slice().reverse().map(function(a){return '<div class="payment-entry"><span>'+esc((a.editedAt||'').replace('T',' ').slice(0,16))+' · '+esc(a.editedBy||'')+' · '+esc(a.reason||'')+'<br><span class="muted">'+(a.changes||[]).map(function(c){return esc(c.field+': '+String(c.before)+' → '+String(c.after));}).join(' · ')+'</span></span><b>'+((a.changes||[]).length)+' field(s)</b></div>';}).join('')+'</div>':'';
@@ -655,7 +658,7 @@
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
       el('payAcct').innerHTML = opts(cfg.accounts);
-      el('payAmount').value=Math.max(0,(e.isInstallment?(e.requestedAmount||0):(e.amount||0))-(e.paidAmount||0)); el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
+      var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
       el('payDlg').showModal();
     };
@@ -690,7 +693,7 @@
       var endpoint=payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay');
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ paymentProof:payUrl, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
-        if(d.success){ el('payDlg').close(); if(payMode==='reimburse') loadReimbursements(); else if(payMode==='procurement') loadPendingPayments(); else loadList(); setMsg('Payment and proof saved.', true); }
+        if(d.success){ el('payDlg').close(); if(payMode==='reimburse') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg('Payment and proof saved.', true); }
         else {el('payMsg').textContent = d.error||'Could not pay.';if(d.requiresOverride){el('payOverrideWrap').style.display='';el('payOverrideReason').focus();}}
       });
     });
@@ -740,7 +743,7 @@
       api('/api/expenses/vendors?nature='+encodeURIComponent(el('vf_nature').value)+'&from='+el('vf_from').value+'&to='+el('vf_to').value+'&search='+encodeURIComponent(el('vf_search').value)+'&category='+encodeURIComponent(el('vf_category').value)+'&source='+encodeURIComponent(el('panel').dataset.vsource||'expense')).then(function(d){
         if(!d.vendors.length){ el('vtable').innerHTML='<span class="muted">No vendors yet.</span>'; return; }
         var rows = d.vendors.map(function(v){
-          var entries=(v.entries||[]).map(function(e){expensesById[e.id]=e;var due=Math.max(0,(e.isInstallment?(e.requestedAmount||0):(e.amount||0))-(e.paidAmount||0)),action=due>0?(e.source==='procurement'?'<button class="btn mini green" onclick="openPurchasePay(\''+e.id+'\')">Record next payment</button>':'<button class="btn mini green" onclick="openPay(\''+e.id+'\')">Record next payment</button>'):'';return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(e.particulars||e.supplier||e.id)+'<div class="claim-vendor">'+esc(e.date)+' · '+esc(e.id)+' · '+esc(e.ledger||e.billNo||'')+'</div></div><div class="claim-amount">'+fmt(due)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Total: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Outstanding: '+fmt(due)+'</span><span>Entity: '+esc(e.nature||v.nature)+'</span><span>Status: '+esc(e.status||'—')+'</span></div>'+paymentHistory(e)+(action?'<div class="expense-actions">'+action+'</div>':'')+'</div></details>';}).join('');
+          var entries=(v.entries||[]).map(function(e){expensesById[e.id]=e;var due=Math.max(0,(e.amount||0)-(e.paidAmount||0)),action=due>0&&!e.paidAlready?(e.source==='procurement'?'<button class="btn mini green" onclick="openPurchasePay(\''+e.id+'\')">Record next payment</button>':'<button class="btn mini green" onclick="openPay(\''+e.id+'\')">Record next payment</button>'):'';return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(e.particulars||e.supplier||e.id)+'<div class="claim-vendor">'+esc(e.date)+' · '+esc(e.id)+' · '+esc(e.ledger||e.billNo||'')+'</div></div><div class="claim-amount">'+fmt(due)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Total: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Outstanding: '+fmt(due)+'</span><span>Entity: '+esc(e.nature||v.nature)+'</span><span>Status: '+esc(e.status||'—')+'</span></div>'+paymentHistory(e)+(action?'<div class="expense-actions">'+action+'</div>':'')+'</div></details>';}).join('');
           return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(v.nature)+'</div><span class="tag">'+v.count+' entries</span></div><div class="claim-main"><div class="claim-desc">'+esc(v.name)+'</div><div class="claim-amount">'+fmt(v.outstanding)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Billed: '+fmt(v.billed)+'</span><span>Paid: '+fmt(v.paid)+'</span></div><div class="claim-list">'+entries+'</div></div></details>';
         }).join('');
         el('vtable').innerHTML = '<div class="claim-list">'+rows+'</div><div class="stat" style="margin-top:12px"><div class="k">Total owed</div><div class="v neg">'+fmt(d.totalOutstanding)+'</div></div>';

@@ -422,10 +422,31 @@ test('installments support partial payments and prevent overpayment', () => {
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Furniture Expense-A3' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
   const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'accounting' });
-  assert.equal(partial.body.expense.status, 'paid');
+  assert.equal(partial.body.expense.status, 'partially_paid');
+  const payables = invoke('GET', '/api/expenses/pending-payments', { query: { bucket:'partial' }, role:'owner' }).body;
+  const payable = payables.expenses.find(e => e.id === created.body.expense.id);
+  assert.equal(payable.balanceDue, 9000);
   const over = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 10000, account: 'Cash', paymentProof: '/api/expenses/photo/pay2.jpg' }, role: 'accounting' });
   assert.equal(over.status, 400);
-  assert.match(over.body.error, /already fully paid/i);
+  assert.match(over.body.error, /cannot exceed/i);
+  const final = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 9000, account: 'Cash', paymentProof: '/api/expenses/photo/pay3.jpg' }, role: 'accounting' });
+  assert.equal(final.body.expense.status, 'paid');
+  assert.equal(final.body.expense.payments.length, 2);
+});
+
+test('approved self-paid expenses appear once in spending, vendor and personal account ledgers', () => {
+  const created = invoke('POST','/api/expenses',{body:{date:'2026-08-21',ledger:'FOOD EXPENSE',vendor:'Self Paid Surface Vendor',particulars:'market supplies',amount:450,billPhoto:'/api/expenses/photo/self-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Claimant Axis 9999',personalPaymentProof:'/api/expenses/photo/self-pay.jpg'}});
+  const id=created.body.expense.id;
+  invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id},role:'owner'});
+  const spending=invoke('GET','/api/expenses/spending-dashboard',{query:{from:'2026-08-21',to:'2026-08-21'},role:'owner'}).body;
+  assert.equal(spending.payments.filter(p=>p.id===id).length,1);
+  assert.equal(spending.payments.find(p=>p.id===id).kind,'Paid personally');
+  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Claimant Axis 9999'},role:'owner'}).body;
+  assert.equal(ledger.entries.find(x=>x.id.startsWith(id)).debit,450);
+  const vendors=invoke('GET','/api/expenses/vendors',{query:{nature:'SANKI',search:'Self Paid Surface'},role:'owner'}).body;
+  assert.equal(vendors.vendors[0].paid,450);
+  assert.equal(vendors.vendors[0].outstanding,0);
 });
 
 test('posted advanced purchases become mediator payables without changing procurement', () => {
@@ -481,7 +502,7 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /id="proofViewer" class="proof-viewer"/);
   assert.match(html, /window\.viewProof=function/);
   assert.match(html, /matches\('img\.thumb'\)/);
-  assert.match(html, /\.claim-card summary \{ padding:5px 8px/);
+  assert.match(html, /\.claim-card summary \{ padding:3px 7px/);
   assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
 });
 
