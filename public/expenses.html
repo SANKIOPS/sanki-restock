@@ -258,11 +258,11 @@
         '<div class="fld"><label>Date</label><input type="date" id="f_date" value="'+today()+'"></div>'+
         '<div class="fld" id="normalAmountWrap"><label>Amount ₹</label><input type="number" id="f_amount" min="0" step="1" placeholder="0"></div>'+
         '<div class="fld full"><label>Particulars (what was it for)</label><input id="f_part" placeholder="e.g. lunch for install team, auto to vendor…"></div>'+
-        (cfg.canApprove?'<div class="fld full"><label>Category (expense header)</label>'+
+        (cfg.isAdmin?'<div class="fld full"><label>Category (expense header)</label>'+
           '<input id="f_ledger" list="ledgerList" placeholder="type to search a category…" autocomplete="off">'+
           '<datalist id="ledgerList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist>'+
           '<div class="hint" id="ledgerHint"></div></div>':'')+
-        (cfg.canApprove?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
+        (cfg.isAdmin?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
         '<div class="fld"><label>Accounting entity / nature</label><select id="f_nature">'+opts(cfg.natures,selectedNature)+'</select><div class="hint">Choose SANKI, SAMAST (Kirti Nagar), or owner-private PERSONAL.</div></div>'+
         '<div class="fld combo-wrap"><label>Vendor</label><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" aria-autocomplete="list" aria-controls="vendorSuggestions"><div id="vendorSuggestions" class="combo-menu" role="listbox"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
         '<div class="fld full"><label>Have you already paid for this expense?</label><select id="f_paidalready"><option value="false">No — company must pay the vendor</option><option value="true">Yes — I paid personally</option></select></div>'+
@@ -273,7 +273,7 @@
         '<div class="fld" id="paymentTypeWrap"><label>Payment type</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
         '<div class="fld" id="qrPhotoWrap"><label>Vendor QR-code photo (required for UPI)</label><input type="file" id="f_qrphoto" accept="image/*"><div class="hint">Choose Camera, Photo Library, or Files.</div></div>'+
         '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof (required)</label><input type="file" id="f_personalproof" accept="image/*"><div class="hint">Screenshot or photo showing that you paid.</div></div>'+
-        (cfg.canApprove?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
+        (cfg.isAdmin?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
         '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><input type="file" id="f_billfile" accept="image/*"><div class="hint" id="billHint">Printed or handwritten; choose Camera, Photo Library, or Files.</div></div>'+
       '</div>'+
@@ -380,7 +380,7 @@
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
           isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
           paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:urls[2],
-          channel:cfg.canApprove&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
+          channel:cfg.isAdmin&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
           billPhoto:urls[0], qrPhoto:urls[1]
         };
         return api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
@@ -698,34 +698,24 @@
 
     // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS ──
     function renderCash(){
-      el('panel').innerHTML = '<div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="cf_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div></div><div id="ctable" class="muted">Loading…</div></div>'+
+      el('panel').innerHTML = '<div class="card"><h3 style="margin:0 0 4px">Money Trail</h3><p class="sub" style="margin:0 0 12px">One-click view of where money entered, where it was spent, and what remains.</p><div class="filters"><div class="fld"><label>Entity</label><select id="cf_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div></div><div id="ctable" class="muted">Loading…</div></div>'+
         '<div class="card"><h3 style="margin-top:0">Transfer between accounts</h3><div class="grid"><div class="fld"><label>From account</label><select id="tr_from">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>To account</label><select id="tr_to">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>Amount ₹</label><input type="number" id="tr_amount" min="1"></div><div class="fld"><label>Date</label><input type="date" id="tr_date" value="'+today()+'"></div><div class="fld full"><label>Note</label><input id="tr_note" placeholder="Reason or reference"></div><div class="fld full"><label>Transfer proof — required</label><input type="file" id="tr_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="tr_go">Record transfer</button></div></div>'+
-        '<div class="card"><h3 style="margin-top:0">Account statement</h3><div class="filters"><div class="fld"><label>Account</label><select id="lg_account">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>From</label><input type="date" id="lg_from"></div><div class="fld"><label>To</label><input type="date" id="lg_to" value="'+today()+'"></div><button class="btn ghost mini" id="lg_go">View ledger</button></div><div id="ledgerTable" class="muted">Select an account.</div></div>';
+        '<div class="card"><h3 style="margin-top:0">Detailed statement</h3><div class="filters"><div class="fld"><label>Account</label><select id="lg_account">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>From</label><input type="date" id="lg_from"></div><div class="fld"><label>To</label><input type="date" id="lg_to" value="'+today()+'"></div><button class="btn ghost mini" id="lg_go">View ledger</button></div><div id="ledgerTable" class="muted">Select an account.</div></div>';
       el('cf_nature').addEventListener('change',function(){selectedNature=this.value;loadCash();loadAccountLedger();});
       el('tr_go').addEventListener('click',recordTransfer); el('lg_go').addEventListener('click',loadAccountLedger);
       loadCash();
     }
     function loadCash(){
       api('/api/expenses/balances?nature='+encodeURIComponent(selectedNature)).then(function(d){
-        var rows = d.accounts.map(function(a){
-          return '<tr><td data-label="Account">'+esc(a.name)+'</td>'+
-            '<td class="r" data-label="Opening"><input type="number" value="'+a.opening+'" style="width:110px" onchange="setOpening(\''+esc(a.name)+'\',this.value)"></td>'+
-            '<td class="r pos" data-label="Adjustments">'+fmt(a.topups)+'</td>'+
-            '<td class="r pos" data-label="Receipts">'+fmt(a.received)+'</td>'+
-            '<td class="r pos" data-label="Transfers in">'+fmt(a.transferredIn)+'</td>'+
-            '<td class="r neg" data-label="Transfers out">'+fmt(a.transferredOut)+'</td>'+
-            '<td class="r neg" data-label="Paid out">'+fmt(a.spent)+'</td>'+
-            '<td class="r" data-label="Balance" style="font-weight:800">'+fmt(a.balance)+'</td>'+
-            '<td data-label=""><button class="btn mini ghost" onclick="openAdjustment(\''+esc(a.name)+'\')">＋ Add adjustment</button>'+
-              (cfg.isAdmin ? ' <button class="btn mini ghost" onclick="removeAcct(\''+esc(a.name)+'\')" title="remove wrong account">✕</button>' : '')+
-            '</td></tr>';
-        }).join('');
-        el('ctable').innerHTML = '<table class="resp"><thead><tr><th>Account</th><th class="r">Opening</th><th class="r">Adjustments</th><th class="r">Receipts</th><th class="r">Transfers in</th><th class="r">Transfers out</th><th class="r">Paid out</th><th class="r">Balance</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'+
+        var rows = d.accounts.map(function(a,i){var moneyIn=(a.received||0)+(a.transferredIn||0)+Math.max(0,a.topups||0),moneyOut=(a.spent||0)+(a.transferredOut||0)+Math.max(0,-(a.topups||0));return '<details class="claim-card" ontoggle="if(this.open)loadMoneyTrail(\''+esc(a.name)+'\',\'trail_'+i+'\')"><summary><div class="claim-main"><div class="claim-desc">'+esc(a.name)+'<div class="claim-vendor">Opening '+fmt(a.opening)+'</div></div><div class="claim-amount">'+fmt(a.balance)+' balance</div></div><div class="claim-meta"><span class="pos">Received '+fmt(moneyIn)+'</span><span class="neg">Spent '+fmt(moneyOut)+'</span></div></summary><div class="claim-detail"><div id="trail_'+i+'" class="muted">Loading money trail…</div><div class="expense-actions"><button class="btn mini ghost" onclick="openAdjustment(\''+esc(a.name)+'\')">＋ Add adjustment</button> <button class="btn mini ghost" onclick="selectDetailedAccount(\''+esc(a.name)+'\')">Open detailed statement</button>'+(cfg.isAdmin?' <button class="btn mini ghost" onclick="removeAcct(\''+esc(a.name)+'\')">✕</button>':'')+'</div></div></details>';}).join('');
+        el('ctable').innerHTML = '<div class="claim-list">'+rows+'</div>'+
           '<div class="row-actions"><a href="#" id="addAcctLink2">＋ add a paying account'+(cfg.isAdmin?'':' (needs approval)')+'</a></div>'+
           '<div class="hint" style="margin-top:8px">Balance = opening + adjustments + receivable collections + transfers in − transfers out − paid expenses and reimbursements.</div>';
         el('addAcctLink2').addEventListener('click', function(ev){ ev.preventDefault(); requestAccount(); });
       });
     }
+    window.loadMoneyTrail=function(account,host){var box=el(host);if(!box||box.dataset.loaded)return;box.dataset.loaded='1';api('/api/expenses/account-ledger?nature='+encodeURIComponent(selectedNature)+'&account='+encodeURIComponent(account)).then(function(d){if(!d.success){box.textContent=d.error||'Could not load trail.';return;}var rows=d.entries.map(function(x){return '<tr><td>'+esc(x.date||'Opening')+'</td><td>'+esc(x.description)+'</td><td class="r pos">'+(x.credit?fmt(x.credit):'—')+'</td><td class="r neg">'+(x.debit?fmt(x.debit):'—')+'</td><td class="r"><b>'+fmt(x.balance)+'</b></td><td>'+(x.proof?'<img class="thumb" src="'+esc(x.proof)+'" onclick="window.open(this.src)">':'')+'</td></tr>';}).join('');box.innerHTML='<table class="resp"><thead><tr><th>Date</th><th>Where money went / came from</th><th class="r">In</th><th class="r">Out</th><th class="r">Balance</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table>';});};
+    window.selectDetailedAccount=function(account){el('lg_account').value=account;loadAccountLedger();el('lg_account').scrollIntoView({behavior:'smooth',block:'center'});};
     function recordTransfer(){
       var from=el('tr_from').value,to=el('tr_to').value,amount=Number(el('tr_amount').value||0),btn=el('tr_go');
       if(from===to){setMsg('Choose two different accounts.',false);return;} if(!(amount>0)){setMsg('Enter a transfer amount.',false);return;} if(!el('tr_proof').files[0]){setMsg('Transfer proof is required.',false);return;}
@@ -810,7 +800,7 @@
     };
     // Show/update the approver/admin Approvals tab (with a pending-count badge).
     function syncApprovalsTab(){
-      if(!cfg.canApprove) return;
+      if(!cfg.isAdmin) return;
       var existing = el('tabs').querySelector('[data-t="approvals"]');
       var label = 'Approvals'+(cfg.pendingCount ? ' ('+cfg.pendingCount+')' : '');
       if(existing){ existing.textContent = label; return; }
@@ -822,8 +812,8 @@
     // boot
     loadConfig().then(function(){
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
-      if(cfg.canApprove){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';}
-      if(!cfg.canApprove){ // claimant-only: log + view own list, nothing else
+      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';}
+      if(!cfg.isAdmin){ // every non-Owner/Admin user: log + view own list only
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();
         var vendorsBtn = el('tabs').querySelector('[data-t="vendors"]');

@@ -421,12 +421,34 @@ test('posted advanced purchases become mediator payables without changing procur
   const original = { pos: { 'PO-9001': { id:'PO-9001', status:'posted', postedAt:'2026-08-21T08:00:00.000Z', dateReceive:'2026-08-21', vendor:'CHINA SUPPLIER', billNo:'CN-77',
     newProducts:[{variants:[{qty:2,landed:500}]}], existingAdds:[{qty:1,landed:250}] } } };
   fs.writeFileSync(procurementFile, JSON.stringify(original));
-  const pending = invoke('GET', '/api/expenses/pending-payments', { query:{nature:'SANKI'}, role:'accounting' });
+  const pending = invoke('GET', '/api/expenses/pending-payments', { query:{nature:'SANKI'}, role:'owner' });
   assert.equal(pending.body.purchases[0].amount, 1250);
   assert.equal(pending.body.purchases[0].supplier, 'CHINA SUPPLIER');
-  const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'accounting', body:{amount:500,account:'Cash',date:'2026-08-21',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
+  const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'owner', body:{amount:500,account:'Cash',date:'2026-08-21',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
   assert.equal(partial.body.payable.balanceDue, 750);
   const ledger = invoke('GET', '/api/expenses/account-ledger', { query:{nature:'SANKI',account:'Cash'}, role:'owner' }).body;
   assert.ok(ledger.entries.some(x => x.kind === 'purchase' && x.debit === 500));
   assert.deepEqual(JSON.parse(fs.readFileSync(procurementFile, 'utf8')), original);
+});
+
+test('advanced accounting workspaces are Owner/Admin only and claimant classification is forced', () => {
+  const protectedGets = ['/api/expenses/pending-payments','/api/expenses/spending-dashboard','/api/expenses/reimbursements','/api/expenses/receivables','/api/expenses/vendors','/api/expenses/balances','/api/expenses/account-ledger'];
+  protectedGets.forEach(route => assert.equal(invoke('GET', route, { query:{nature:'SANKI',account:'Cash'}, role:'accounting' }).status, 403, route));
+  const created = invoke('POST', '/api/expenses', { role:'accounting', body:{ledger:'FOOD EXPENSE',type:'fixed',vendor:'Forced Variable Vendor',amount:100,billPhoto:'/api/expenses/photo/forced.jpg',paymentType:'Cash'} });
+  assert.equal(created.status, 200);
+  assert.equal(created.body.expense.ledger, '');
+  assert.equal(created.body.expense.type, 'variable');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /cfg\.isAdmin\?'<div class="fld full"><label>Category/);
+  assert.match(html, /if\(!cfg\.isAdmin\).*every non-Owner\/Admin user/);
+  assert.match(html, /function syncApprovalsTab\(\)\{\s*if\(!cfg\.isAdmin\) return/);
+});
+
+test('account ledgers render an expandable one-click money trail', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  assert.match(html, /<h3 style="margin:0 0 4px">Money Trail<\/h3>/);
+  assert.match(html, /ontoggle="if\(this\.open\)loadMoneyTrail/);
+  assert.match(html, /Received '\+fmt\(moneyIn\)/);
+  assert.match(html, /Spent '\+fmt\(moneyOut\)/);
+  assert.match(html, /Where money went \/ came from/);
 });

@@ -319,11 +319,11 @@ router.get('/api/expenses/config', (req, res) => {
 router.post('/api/expenses', (req, res) => {
   const b = req.body || {};
   const s = loadStore();
-  // Claimants do not classify expenses. Admin/Owner assign the category while
-  // reviewing; trusted accounting submitters may classify their own entries.
-  const ledger = canApprove(req) ? String(b.ledger || '').trim() : '';
+  // Only Admin/Owner classify expenses. Every other submitter gets the simple
+  // claimant form and Admin/Owner assigns the category during review.
+  const ledger = isAdmin(req) ? String(b.ledger || '').trim() : '';
   const amount = num(b.amount);
-  if (canApprove(req) && !ledger) return res.status(400).json({ success: false, error: 'Pick a category (ledger).' });
+  if (isAdmin(req) && !ledger) return res.status(400).json({ success: false, error: 'Pick a category (ledger).' });
   if (ledger && !pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
     return res.status(400).json({ success: false, error: 'Select an approved category.' });
   }
@@ -333,8 +333,8 @@ router.post('/api/expenses', (req, res) => {
   if (!submissionNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You do not have access to this accounting entity.' });
   // Claimants never classify accounting type: every submission starts as
   // Variable. An approver may reclassify it while reviewing the pending row.
-  const type = canApprove(req) && TYPES.includes(b.type) ? b.type : 'variable';
-  const channel = canApprove(req) && CHANNELS.includes(b.channel) ? b.channel : 'Shared';
+  const type = isAdmin(req) && TYPES.includes(b.type) ? b.type : 'variable';
+  const channel = isAdmin(req) && CHANNELS.includes(b.channel) ? b.channel : 'Shared';
   const bill = ['printed', 'handwritten'].includes(b.bill) ? b.bill : 'printed';
   const paymentType = PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI';
   const billPhoto = String(b.billPhoto || '').trim();
@@ -641,7 +641,7 @@ router.get('/api/expenses/list', (req, res) => {
 
 // Approved vendor bills that still require a full or partial company payment.
 router.get('/api/expenses/pending-payments', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view pending payments.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   const vendor = String(req.query.vendor || '').trim().toLowerCase();
@@ -689,7 +689,7 @@ router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
 // One-click spending analysis: incurred expense and actual company cash movement
 // are deliberately separate so credit purchases do not look like paid cash.
 router.get('/api/expenses/spending-dashboard', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view spending analytics.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore(), from = String(req.query.from || ''), to = String(req.query.to || '');
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
@@ -728,7 +728,7 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
 });
 
 router.get('/api/expenses/reimbursements', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view reimbursements.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
   const status = String(req.query.status || '');
   const person = String(req.query.person || '').toLowerCase();
@@ -754,7 +754,7 @@ router.get('/api/expenses/reimbursements', (req, res) => {
 });
 
 router.post('/api/expenses/receivables', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can create receivables.' });
+  if (!isAdmin(req)) return res.status(403).json({ success:false, error:'Owner/Admin only.' });
   const s=loadStore(), b=req.body||{}, nature=normalizedNature(b.nature), amount=num(b.amount);
   if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot create a receivable for this accounting entity.'});
   const party=String(b.party||'').trim(), reason=String(b.reason||'').trim();
@@ -767,7 +767,7 @@ router.post('/api/expenses/receivables', (req, res) => {
 });
 
 router.get('/api/expenses/receivables', (req,res) => {
-  if(!canApprove(req)) return res.status(403).json({success:false,error:'Only accounting/admin can view receivables.'});
+  if(!isAdmin(req)) return res.status(403).json({success:false,error:'Owner/Admin only.'});
   const s=loadStore(), nature=req.query.nature?normalizedNature(req.query.nature):'', status=String(req.query.status||''), party=String(req.query.party||'').toLowerCase();
   if(nature&&!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});
   const list=Object.values(s.receivables||{}).filter(x=>approvalNatures(req).includes(normalizedNature(x.nature))&&(!nature||normalizedNature(x.nature)===nature)&&(!status||x.status===status)&&(!party||String(x.party).toLowerCase().includes(party))).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
@@ -775,7 +775,7 @@ router.get('/api/expenses/receivables', (req,res) => {
 });
 
 router.post('/api/expenses/receivables/:id/receive', (req,res) => {
-  if(!canApprove(req)) return res.status(403).json({success:false,error:'Only accounting/admin can record collections.'});
+  if(!isAdmin(req)) return res.status(403).json({success:false,error:'Owner/Admin only.'});
   const s=loadStore(), x=(s.receivables||{})[req.params.id], b=req.body||{};
   if(!x) return res.status(404).json({success:false,error:'Receivable not found.'});
   if(!approvalNatures(req).includes(normalizedNature(x.nature))) return res.status(403).json({success:false,error:'You cannot collect this receivable.'});
@@ -789,7 +789,7 @@ router.post('/api/expenses/receivables/:id/receive', (req,res) => {
 
 // ── Vendor books (accounts payable per vendor) ───────────────────
 router.get('/api/expenses/vendors', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view vendor books.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
@@ -813,7 +813,7 @@ router.get('/api/expenses/vendors', (req, res) => {
   res.json({ success: true, vendors: list, totalOutstanding: list.reduce((n, b) => n + b.outstanding, 0) });
 });
 router.post('/api/expenses/vendors', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can edit vendors.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
   const nature = normalizedNature((req.body || {}).nature);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
@@ -832,7 +832,7 @@ router.post('/api/expenses/vendors', (req, res) => {
 // ── Running cash balances per account ────────────────────────────
 // balance = opening + adjustments + transfers in − transfers out − payments.
 router.get('/api/expenses/balances', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view balances.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
@@ -869,7 +869,7 @@ router.get('/api/expenses/balances', (req, res) => {
 
 // A transfer is one atomic event that produces a debit and matching credit.
 router.post('/api/expenses/transfers', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can record transfers.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore(); const b = req.body || {};
   const nature = normalizedNature(b.nature);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for this accounting entity.' });
@@ -890,7 +890,7 @@ router.post('/api/expenses/transfers', (req, res) => {
 });
 
 router.get('/api/expenses/account-ledger', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can view account ledgers.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore(), nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim();
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
@@ -911,7 +911,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   res.json({ success:true, account, nature, entries:visible, balance:round0(running) });
 });
 router.post('/api/expenses/balances', (req, res) => {
-  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can edit balances.' });
+  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
   const b = req.body || {};
   const nature = normalizedNature(b.nature);
