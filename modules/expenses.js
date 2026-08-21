@@ -188,7 +188,24 @@ function salesLedgerEntries() {
       rows.push({ id:'SHOPIFY/'+x.id, date:String(x.processedAt||x.createdAt||'').slice(0,10), account:cash?DEFAULT_COUNTER_CASH:DEFAULT_SALES_BANK, amount:num(x.total)-num(x.refundAmount), description:'Shopify sale · '+(x.name||x.id)+' · '+(x.channel||'') });
     });
   } catch { /* orders have not synced yet */ }
-  return rows.filter(x=>x.date&&x.amount>0);
+  const seen = new Set();
+  return rows.filter(x=>x.date&&x.amount>0).filter(x => {
+    const key = String(x.id || '') + '|' + x.date + '|' + x.amount;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+
+function reconciliationIssues(s, nature, account) {
+  const issues = [], seen = new Set();
+  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && (!account || x.fromAccount === account || x.toAccount === account)).forEach(x => {
+    if (!x.id || seen.has(x.id)) issues.push({ code:'duplicate_transfer', reference:x.id || '(missing)', message:'Duplicate or missing transfer reference.' });
+    if (x.id) seen.add(x.id);
+    if (!x.fromAccount || !x.toAccount || !(num(x.amount) > 0)) issues.push({ code:'incomplete_transfer', reference:x.id || '(missing)', message:'Transfer is missing its source, destination, or amount.' });
+    if (x.fromAccount === x.toAccount) issues.push({ code:'same_account_transfer', reference:x.id || '(missing)', message:'Transfer source and destination are the same.' });
+    if (!x.proof) issues.push({ code:'missing_transfer_proof', reference:x.id || '(missing)', message:'Transfer proof is missing.' });
+  });
+  return issues;
 }
 function poLandedTotal(po) {
   let total = 0;
@@ -373,6 +390,10 @@ router.post('/api/expenses', (req, res) => {
     return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
   const claimant = (req.user && req.user.username) || 'system';
+  const personalAccount = paymentType === 'Cash' ? claimant + ' Cash' : String(b.personalAccount || '').trim();
+  if (paidAlready && paymentType !== 'Cash' && !personalAccount) {
+    return res.status(400).json({ success: false, error: 'Enter the account used for your personal payment.' });
+  }
 
   const vendor = String(b.vendor || '').trim();
   if (!vendor) return res.status(400).json({ success: false, error: 'Vendor name is required.' });
@@ -409,7 +430,7 @@ router.post('/api/expenses', (req, res) => {
     paidAmount: paidAlready ? requestedAmount : 0,
     payments: paidAlready ? [{
       id: 'PAY-001', amount: requestedAmount, date: String(b.date || now.slice(0, 10)).slice(0, 10),
-      account: String(b.personalAccount || (paymentType === 'Cash' ? claimant + ' Cash' : '')).trim(), paymentType, proof: personalPaymentProof,
+      account: personalAccount, paymentType, proof: personalPaymentProof,
       note: String(b.paymentNote || 'Paid personally by submitter').trim(),
       paidBy: claimant, paidAt: now, personalFunds: true
     }] : [],
@@ -477,6 +498,29 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (!vendor) return res.status(400).json({ success: false, error: 'Vendor name is required.' });
     e.vendor = vendor;
   }
+  const wasPaidAlready = !!e.paidAlready;
+  if (b.paidAlready != null && canApprove(req)) {
+    const nextPaidAlready = b.paidAlready === true || b.paidAlready === 'true';
+    if (nextPaidAlready !== wasPaidAlready && e.status !== 'pending') return res.status(400).json({ success:false, error:'Who funded the expense cannot be changed after approval.' });
+    e.paidAlready = nextPaidAlready;
+  }
+  if (e.paidAlready) {
+    const personalAccount = e.paymentType === 'Cash' ? (e.claimant || e.createdBy) + ' Cash' : String(b.personalAccount != null ? b.personalAccount : (((e.payments || [])[0] || {}).account || '')).trim();
+    const personalProof = String(b.personalPaymentProof != null ? b.personalPaymentProof : (e.purchasePaymentProof || '')).trim();
+    if (!personalProof) return res.status(400).json({ success:false, error:'Personal payment proof is required.' });
+    if (e.paymentType !== 'Cash' && !personalAccount) return res.status(400).json({ success:false, error:'Enter the account used for the personal payment.' });
+    e.purchasePaymentProof = personalProof;
+    e.payments = Array.isArray(e.payments) ? e.payments : [];
+    if (!e.payments.some(p => p.personalFunds)) e.payments.unshift({ id:'PAY-001', amount:num(e.requestedAmount || e.amount), date:e.date, paidBy:e.claimant || e.createdBy, paidAt:new Date().toISOString(), personalFunds:true });
+    const personalPayment = e.payments.find(p => p.personalFunds);
+    if (personalPayment && (personalPayment.personalFunds || e.status === 'pending')) {
+      personalPayment.account = personalAccount; personalPayment.paymentType = e.paymentType; personalPayment.proof = personalProof; personalPayment.amount = num(e.requestedAmount || e.amount);
+    }
+    e.fundedBy='claimant';e.personalPaidAmount=num(e.requestedAmount || e.amount);e.paidAmount=e.personalPaidAmount;e.reimbursementStatus=e.status==='pending'?'awaiting_approval':'pending';
+  } else if (wasPaidAlready && e.status === 'pending') {
+    e.payments=(e.payments||[]).filter(p=>!p.personalFunds);e.fundedBy='company';e.personalPaidAmount=0;e.paidAmount=0;e.reimbursementStatus='not_applicable';e.purchasePaymentProof='';
+  }
+  if (!e.billPhoto) return res.status(400).json({ success:false, error:'Bill photo is required.' });
   if (!e.paidAlready && e.paymentType === 'UPI' && !e.qrPhoto) {
     return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
@@ -545,6 +589,9 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   const account = String(b.account || '').trim();
   if (!account) return res.status(400).json({ success: false, error: 'Select the account used for this payment.' });
   if (!storedAccountNames(s).some(name => name.toLowerCase() === account.toLowerCase())) return res.status(400).json({ success: false, error: 'Select a stored paying account or add it first.' });
+  const reconIssues = reconciliationIssues(s, normalizedNature(e.nature), storedAccountNames(s).find(name => name.toLowerCase() === account.toLowerCase()) || account);
+  const overrideReason = String(b.reconciliationOverrideReason || '').trim();
+  if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
   e.account = storedAccountNames(s).find(name => name.toLowerCase() === account.toLowerCase()) || account;
   // A contract may be larger than the installment approved now. Payment is
   // capped at the current installment, while the contract balance remains
@@ -566,7 +613,8 @@ router.post('/api/expenses/:id/pay', (req, res) => {
     proof,
     note: String(b.note || '').trim(),
     paidBy: (req.user && req.user.username) || 'admin',
-    paidAt: new Date().toISOString()
+    paidAt: new Date().toISOString(), reconciliationOverrideReason: overrideReason,
+    reconciliationIssuesAtPayment: reconIssues
   });
   e.status = e.paidAmount >= approvedNow ? 'paid' : 'partially_paid';
   e.paidAt = new Date().toISOString();
@@ -699,7 +747,15 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     contractBalance: round0(num(e.amount) - num(e.paidAmount)),
     daysPending: Math.max(0, Math.floor((Date.parse(today) - Date.parse(String(e.approvedAt || e.date).slice(0, 10))) / 86400000))
   })).sort((a, b) => b.daysPending - a.daysPending || String(a.approvedAt || '').localeCompare(String(b.approvedAt || '')));
-  const purchases = (!nature || nature === 'SANKI') ? procurementPayables(s, false).filter(p => !vendor || String(p.vendor).toLowerCase().includes(vendor) || String(p.supplier).toLowerCase().includes(vendor)) : [];
+  const purchases = (!nature || nature === 'SANKI') ? procurementPayables(s, false).filter(p => {
+    if (vendor && !String(p.vendor).toLowerCase().includes(vendor) && !String(p.supplier).toLowerCase().includes(vendor)) return false;
+    if (from && String(p.date || '') < from) return false;
+    if (to && String(p.date || '') > to) return false;
+    if (bucket === 'partial' && !(p.paidAmount > 0)) return false;
+    if (bucket === 'credit') return false;
+    if (bucket === 'approved' && p.paidAmount > 0) return false;
+    return true;
+  }) : [];
   res.json({ success: true, expenses, purchases, mediator: procurementAccounting(s).mediator, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0) + purchases.reduce((n, p) => n + p.balanceDue, 0)) });
 });
 
@@ -885,7 +941,8 @@ router.get('/api/expenses/balances', (req, res) => {
     const spent = round0(paidOut[name] || 0);
     const topups = round0(adj[name] || 0);
     const transferredIn = round0(transferIn[name] || 0), transferredOut = round0(transferOut[name] || 0), received=round0(collected[name]||0);
-    return { name, opening: round0(opening), topups, received, transferredIn, transferredOut, spent, periodNet:round0(topups+received+transferredIn-transferredOut-spent), balance: round0(opening + topups + received + transferredIn - transferredOut - spent) };
+    const issues = reconciliationIssues(s, nature, name);
+    return { name, opening: round0(opening), topups, received, transferredIn, transferredOut, spent, periodNet:round0(topups+received+transferredIn-transferredOut-spent), balance: round0(opening + topups + received + transferredIn - transferredOut - spent), reconciled:issues.length===0, reconciliationIssues:issues };
   });
   res.json({ success: true, accounts });
 });
@@ -932,7 +989,8 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
   let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });
   const visible = ordered.filter(x => x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to)));
-  res.json({ success:true, account, nature, entries:visible, balance:round0(running) });
+  const issues = reconciliationIssues(s, nature, account);
+  res.json({ success:true, account, nature, entries:visible, balance:round0(running), reconciled:issues.length===0, reconciliationIssues:issues });
 });
 router.post('/api/expenses/balances', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });

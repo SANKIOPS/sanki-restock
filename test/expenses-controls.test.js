@@ -389,7 +389,7 @@ test('only Admin or Owner can add a missing category during review', () => {
 test('personally paid expense becomes reimbursement pending only after approval', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', vendor: 'Personal Vendor', amount: 500, billPhoto: '/api/expenses/photo/bill.jpg',
-    paidAlready: true, personalPaymentProof: '/api/expenses/photo/personal.jpg'
+    paidAlready: true, paymentType: 'UPI', personalAccount: 'Personal Axis 1234', personalPaymentProof: '/api/expenses/photo/personal.jpg'
   } });
   assert.equal(created.status, 200);
   assert.equal(created.body.expense.reimbursementStatus, 'awaiting_approval');
@@ -401,6 +401,15 @@ test('personally paid expense becomes reimbursement pending only after approval'
   const reimbursed = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500, account: 'Cash', paymentProof: '/api/expenses/photo/reimburse.jpg' }, role: 'accounting' });
   assert.equal(reimbursed.body.expense.reimbursementStatus, 'reimbursed');
   assert.equal(reimbursed.body.expense.paidAmount, 500);
+});
+
+test('personally paid non-cash expense requires the account used and cash is named automatically', () => {
+  const missing = invoke('POST', '/api/expenses', { body: { vendor:'Vendor', amount:100, billPhoto:'/api/expenses/photo/bill.jpg', paidAlready:true, paymentType:'UPI', personalPaymentProof:'/api/expenses/photo/pay.jpg' } });
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /account used/i);
+  const cash = invoke('POST', '/api/expenses', { body: { vendor:'Vendor', amount:100, billPhoto:'/api/expenses/photo/bill.jpg', paidAlready:true, paymentType:'Cash', personalPaymentProof:'/api/expenses/photo/pay.jpg' } });
+  assert.equal(cash.status, 200);
+  assert.match(cash.body.expense.payments[0].account, /cash$/i);
 });
 
 test('installments support partial payments and prevent overpayment', () => {
@@ -452,4 +461,30 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /In '\+fmt\(moneyIn\)/);
   assert.match(html, /Out '\+fmt\(moneyOut\)/);
   assert.match(html, /Source \/ destination/);
+  assert.match(html, /data-cfdays="7"/);
+  assert.match(html, /Reconciliation issue/);
+  assert.match(html, /id="payOverrideReason"/);
+  assert.match(html, /id="editPersonalAccount"/);
+  assert.match(html, /id="editBillFile"/);
+});
+
+test('internal reconciliation flags malformed transfers and requires a recorded payment override', () => {
+  const expenseFile = path.join(tempDir, 'expenses.json');
+  const stored = JSON.parse(fs.readFileSync(expenseFile, 'utf8'));
+  stored.transfers = stored.transfers || [];
+  stored.transfers.push({ id:'TR-BROKEN', nature:'SANKI', fromAccount:'Cash', toAccount:'Axis Bank 3448', amount:50, date:'2026-08-21', proof:'' });
+  fs.writeFileSync(expenseFile, JSON.stringify(stored));
+  const balances = invoke('GET', '/api/expenses/balances', { role:'owner', query:{nature:'SANKI'} });
+  assert.equal(balances.status, 200);
+  assert.equal(balances.body.accounts.find(x => x.name === 'Cash').reconciled, false);
+
+  const created = invoke('POST', '/api/expenses', { body:{vendor:'Override Vendor',amount:75,billPhoto:'/api/expenses/photo/bill.jpg',paymentType:'Cash'} });
+  invoke('POST', '/api/expenses/:id', { params:{id:created.body.expense.id}, body:{ledger:'FOOD EXPENSE'}, role:'owner' });
+  invoke('POST', '/api/expenses/:id/approve', { params:{id:created.body.expense.id}, role:'owner' });
+  const blocked = invoke('POST', '/api/expenses/:id/pay', { params:{id:created.body.expense.id}, role:'owner', body:{account:'Cash',paymentProof:'/api/expenses/photo/pay.jpg'} });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.requiresOverride, true);
+  const paid = invoke('POST', '/api/expenses/:id/pay', { params:{id:created.body.expense.id}, role:'owner', body:{account:'Cash',paymentProof:'/api/expenses/photo/pay.jpg',reconciliationOverrideReason:'Urgent approved vendor payment'} });
+  assert.equal(paid.status, 200);
+  assert.equal(paid.body.expense.payments.at(-1).reconciliationOverrideReason, 'Urgent approved vendor payment');
 });
