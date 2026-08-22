@@ -327,7 +327,7 @@ function approvalNatures(req) {
   const r = rolesOfReq(req);
   if (r.includes('owner')) return NATURES.slice();
   const out = [];
-  if (r.includes('admin')) out.push('SANKI', 'SAMAST');
+  if (r.includes('admin')) out.push('SANKI', 'SAMAST', 'PERSONAL');
   if (r.includes('accounting')) out.push('SANKI');
   if (r.includes('samast_accounting')) out.push('SAMAST');
   return Array.from(new Set(out));
