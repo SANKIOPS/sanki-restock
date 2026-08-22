@@ -444,6 +444,21 @@ test('installments support partial payments and prevent overpayment', () => {
   assert.equal(final.body.expense.payments.length, 2);
 });
 
+test('approved expenses for the same vendor can be paid together with one proof', () => {
+  function approved(vendor, amount, date) {
+    const made=invoke('POST','/api/expenses',{body:{date,vendor,amount,billPhoto:'/api/expenses/photo/bill.jpg',qrPhoto:'/api/expenses/photo/qr.jpg',paymentType:'UPI'}});
+    invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
+    invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
+    return made.body.expense.id;
+  }
+  const first=approved('Daily Flowers',500,'2026-08-20'), second=approved('Daily Flowers',500,'2026-08-21');
+  const candidates=invoke('GET','/api/expenses/:id/payment-candidates',{params:{id:second},role:'owner'});
+  assert.ok(candidates.body.expenses.some(x=>x.id===first&&x.balanceDue===500));
+  const paid=invoke('POST','/api/expenses/batch-pay',{role:'owner',body:{expenseIds:[first,second],account:'Counter Cash',paymentProof:'/api/expenses/photo/combined.jpg',date:'2026-08-22'}});
+  assert.equal(paid.body.total,1000); assert.equal(paid.body.expenses.every(x=>x.status==='paid'),true);
+  assert.equal(paid.body.expenses[0].payments.at(-1).batchPaymentId,paid.body.expenses[1].payments.at(-1).batchPaymentId);
+});
+
 test('approved self-paid expenses appear once in spending, vendor and personal account ledgers', () => {
   const created = invoke('POST','/api/expenses',{body:{date:'2026-08-21',ledger:'FOOD EXPENSE',vendor:'Self Paid Surface Vendor',particulars:'market supplies',amount:450,billPhoto:'/api/expenses/photo/self-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/self-pay.jpg'}});
   const id=created.body.expense.id;

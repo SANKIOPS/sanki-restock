@@ -205,6 +205,7 @@
       <div class="fld"><label>Payment type</label><select id="payType"><option>UPI</option><option>Cash</option><option>Credit</option></select></div>
       <div class="fld"><label>Note (optional)</label><input id="payNote"></div>
     </div>
+    <div id="payBatchWrap" class="fld" style="display:none;margin-top:10px"><label>Include other approved expenses for this vendor</label><div id="payBatchList" class="payment-history"></div><div class="hint">Selected balances will be paid together using this one payment proof.</div></div>
     <div class="fld" style="margin-top:10px"><label id="payProofLabel">Payment proof — required</label><input type="file" id="payFile" accept="image/*" /></div>
     <div class="fld" id="payOverrideWrap" style="display:none;margin-top:10px"><label>Urgent payment override reason — required</label><input id="payOverrideReason" placeholder="Why must this payment proceed before reconciliation is fixed?"><div class="hint">The reason is recorded permanently with the payment.</div></div>
     <img id="payPrev" class="prev" style="display:none" />
@@ -660,9 +661,17 @@
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
       el('payAcct').innerHTML = opts(accountsForNature(e.nature||'SANKI'));
-      var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
+      var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
+      el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';
       el('payDlg').showModal();
+      api('/api/expenses/'+id+'/payment-candidates').then(function(d){
+        if(!d.success||!d.expenses||!d.expenses.length)return;
+        var currentDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));
+        el('payBatchWrap').style.display='';
+        el('payBatchList').innerHTML='<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(id)+'" data-due="'+currentDue+'" checked disabled> '+esc(e.date||'')+' · '+esc(e.particulars||e.id)+'</span><b>'+fmt(currentDue)+'</b></label>'+d.expenses.map(function(x){return '<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(x.id)+'" data-due="'+x.balanceDue+'"> '+esc(x.date||'')+' · '+esc(x.particulars||x.id)+'</span><b>'+fmt(x.balanceDue)+'</b></label>';}).join('');
+        Array.prototype.forEach.call(document.querySelectorAll('.batch-expense'),function(box){box.addEventListener('change',function(){var total=0;Array.prototype.forEach.call(document.querySelectorAll('.batch-expense:checked'),function(x){total+=Number(x.getAttribute('data-due'))||0;});el('payAmount').value=total;el('payAmount').readOnly=document.querySelectorAll('.batch-expense:checked').length>1;el('payGo').textContent=document.querySelectorAll('.batch-expense:checked').length>1?'Pay selected together':'Save payment';});});
+      });
     };
     window.openPurchasePay = function(id){ openPay(id); payMode='procurement'; el('payTitle').textContent='Pay logistics mediator · '+id; };
     window.openReimburse = function(id){
@@ -670,6 +679,7 @@
       el('payTitle').textContent='Reimburse '+(e.createdBy||e.claimant||'claimant'); el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Company → claimant payment proof — required'; el('payGo').textContent='Save reimbursement';
       el('payAcct').innerHTML=opts(accountsForNature(e.nature||'SANKI')); el('payAmount').value=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));
+      el('payAmount').readOnly=false;el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';
       el('payDate').value=today(); el('payType').value='UPI'; el('payNote').value=''; el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent=''; el('payDlg').showModal();
     };
     el('payCancel').addEventListener('click', function(){ el('payDlg').close(); });
@@ -692,9 +702,11 @@
     });
     el('payGo').addEventListener('click', function(){
       if(!payUrl){ el('payMsg').textContent='Screenshot required.'; return; }
-      var endpoint=payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay');
+      var selected=payMode==='vendor'?Array.prototype.map.call(document.querySelectorAll('.batch-expense:checked'),function(x){return x.value;}):[];
+      var isBatch=selected.length>1;
+      var endpoint=isBatch?'/api/expenses/batch-pay':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay'));
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ paymentProof:payUrl, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
+        body:JSON.stringify({ expenseIds:selected,paymentProof:payUrl, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
         if(d.success){ el('payDlg').close(); if(payMode==='reimburse') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg('Payment and proof saved.', true); }
         else {el('payMsg').textContent = d.error||'Could not pay.';if(d.requiresOverride){el('payOverrideWrap').style.display='';el('payOverrideReason').focus();}}
       });

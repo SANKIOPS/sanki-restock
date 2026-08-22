@@ -660,6 +660,57 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   res.json({ success: true, expense: e });
 });
 
+// Other approved balances that can be settled with the same vendor payment.
+router.get('/api/expenses/:id/payment-candidates', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can view payment candidates.' });
+  const s = loadStore(), source = s.expenses[req.params.id];
+  if (!source) return res.status(404).json({ success:false, error:'Not found.' });
+  if (!canApproveExpenseNature(req, source)) return res.status(403).json({ success:false, error:'You cannot pay this accounting entity.' });
+  const nature = normalizedNature(source.nature), vendor = String(source.vendor || '').trim().toLowerCase();
+  const expenses = Object.values(s.expenses).filter(e => {
+    if (e.id === source.id || e.paidAlready || !['approved','partially_paid'].includes(e.status)) return false;
+    return normalizedNature(e.nature) === nature && String(e.vendor || '').trim().toLowerCase() === vendor && num(e.paidAmount) < num(e.amount);
+  }).map(e => ({ id:e.id, date:e.date, vendor:e.vendor, particulars:e.particulars, amount:round0(e.amount), paidAmount:round0(e.paidAmount), balanceDue:round0(Math.max(0,num(e.amount)-num(e.paidAmount))) }))
+    .sort((a,b) => String(b.date+b.id).localeCompare(String(a.date+a.id)));
+  res.json({ success:true, source:{ id:source.id, nature, vendor:source.vendor }, expenses });
+});
+
+// One bank/cash transaction may settle several approved bills for the same
+// entity and vendor. Each allocation is stored on its original expense so all
+// existing ledgers and dashboards remain correct.
+router.post('/api/expenses/batch-pay', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can pay.' });
+  const s = loadStore(), b = req.body || {};
+  const ids = [...new Set((Array.isArray(b.expenseIds) ? b.expenseIds : []).map(String))];
+  if (!ids.length) return res.status(400).json({ success:false, error:'Select at least one expense.' });
+  const expenses = ids.map(id => s.expenses[id]);
+  if (expenses.some(e => !e)) return res.status(404).json({ success:false, error:'One or more selected expenses no longer exist.' });
+  const first = expenses[0], nature = normalizedNature(first.nature), vendor = String(first.vendor || '').trim().toLowerCase();
+  if (expenses.some(e => !canApproveExpenseNature(req,e))) return res.status(403).json({ success:false, error:'You cannot pay one of the selected accounting entities.' });
+  if (expenses.some(e => normalizedNature(e.nature)!==nature || String(e.vendor||'').trim().toLowerCase()!==vendor)) return res.status(400).json({ success:false, error:'Combined payments must use the same entity and vendor.' });
+  if (expenses.some(e => e.paidAlready || !['approved','partially_paid'].includes(e.status) || num(e.paidAmount)>=num(e.amount))) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
+  const proof = String(b.paymentProof || '').trim();
+  if (!proof) return res.status(400).json({ success:false, error:'Payment screenshot required — no proof, no payment.' });
+  const account = allowedCompanyAccount(s, nature, String(b.account || '').trim());
+  if (!account) return res.status(400).json({ success:false, error:'Select a paying account assigned to this accounting entity.' });
+  const reconIssues = reconciliationIssues(s, nature, account), overrideReason = String(b.reconciliationOverrideReason || '').trim();
+  if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
+  const date = String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paidBy = (req.user&&req.user.username)||'admin';
+  const batchPaymentId = 'BPAY-' + Date.now().toString(36).toUpperCase();
+  let total = 0; const allocations = [];
+  expenses.forEach(e => {
+    const amount = round0(Math.max(0,num(e.amount)-num(e.paidAmount))); total += amount; allocations.push({ expense:e, amount });
+    e.account=account; e.paymentProof=proof; e.payments=Array.isArray(e.payments)?e.payments:[];
+    e.payments.push({ id:'PAY-'+String(e.payments.length+1).padStart(3,'0'), batchPaymentId, amount, date, account,
+      paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(e.paymentType||''), proof, note:String(b.note||'').trim(),
+      paidBy, paidAt:new Date().toISOString(), reconciliationOverrideReason:overrideReason, reconciliationIssuesAtPayment:reconIssues });
+    e.paidAmount=num(e.paidAmount)+amount; e.status='paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
+  });
+  saveStore(s);
+  allocations.forEach(x => notifyExpenseUser(x.expense,'paid',x.amount));
+  res.json({ success:true, batchPaymentId, total:round0(total), expenses });
+});
+
 // ── Pay (GATE 2: payment screenshot required) ────────────────────
 router.post('/api/expenses/:id/pay', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can pay.' });
