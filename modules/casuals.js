@@ -1559,11 +1559,12 @@ router.post('/api/casuals/simple-plan', async (req, res) => {
 Gender: ${gender}
 Category: ${category}
 Total distinct styles required: ${styleTarget}
-Maximum total buying budget: INR ${budget}
+Maximum total buying budget: INR ${budget} (validation ceiling only; do not change the assortment or style counts because of it)
 Target launch date: ${launchDate}
 
 Rules:
 - Recommend gender-specific silhouettes, never resized opposite-gender garments.
+- Keep the assortment independent of budget. Prices are not known yet; budget is checked later after landed costs are entered.
 - Focus the assortment: commercially strong core pieces first, controlled fashion second, at most one experimental direction.
 - Use specific product/silhouette names a visual model can match from vendor photographs.
 - The sum of every "styles" value MUST equal exactly ${styleTarget}.
