@@ -19,7 +19,7 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
   assert.ok(layer, `route exists: ${method} ${routePath}`);
   const req = {
     body, params, query,
-    user: { username: role + '-user', role, roles: [role] }
+    user: { username: role === 'claimant' ? 'arshpreet' : role + '-user', role, roles: [role] }
   };
   let status = 200;
   let result;
@@ -72,11 +72,11 @@ test('bill remains mandatory at approval and payment proof is mandatory for cash
   const approved = invoke('POST', '/api/expenses/:id/approve', { params: { id }, role: 'admin' });
   assert.equal(approved.status, 200);
 
-  const blockedPayment = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: { account: 'Cash' }, role: 'admin' });
+  const blockedPayment = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: { account: 'Counter Cash' }, role: 'admin' });
   assert.equal(blockedPayment.status, 400);
   assert.match(blockedPayment.body.error, /Payment screenshot required/);
 
-  const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: { account: 'Cash', paymentProof: '/api/expenses/photo/cash.jpg' }, role: 'admin' });
+  const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: { account: 'Counter Cash', paymentProof: '/api/expenses/photo/cash.jpg' }, role: 'admin' });
   assert.equal(paid.status, 200);
   assert.equal(paid.body.expense.status, 'paid');
 });
@@ -89,7 +89,7 @@ test('claimant identity is automatic and claimant-only fields are enforced serve
     qrPhoto: '/api/expenses/photo/vendor-qr.jpg'
   } });
   assert.equal(created.status, 200);
-  assert.equal(created.body.expense.claimant, 'claimant-user');
+  assert.equal(created.body.expense.claimant, 'arshpreet');
   assert.equal(created.body.expense.account, '');
   assert.equal(created.body.expense.channel, 'Shared');
   assert.equal(created.body.expense.paymentType, 'UPI');
@@ -100,7 +100,7 @@ test('claimant identity is automatic and claimant-only fields are enforced serve
   const edited = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: {
     claimant: 'another-spoof', channel: 'POS'
   }, role: 'claimant' });
-  assert.equal(edited.body.expense.claimant, 'claimant-user');
+  assert.equal(edited.body.expense.claimant, 'arshpreet');
   assert.equal(edited.body.expense.channel, 'Shared');
 
   const approverEdit = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { channel: 'POS' }, role: 'accounting' });
@@ -264,21 +264,21 @@ test('approvers get a pending payments workspace with balances and partial-payme
 
 test('account transfers create equal debit and credit ledger entries', () => {
   const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts;
-  const cashBefore = before.find(a => a.name === 'Cash').balance;
-  const paytmBefore = before.find(a => a.name === 'Paytm').balance;
+  const cashBefore = before.find(a => a.name === 'Counter Cash').balance;
+  const paytmBefore = before.find(a => a.name === 'Tiana 0425').balance;
   const transfer = invoke('POST', '/api/expenses/transfers', { role: 'owner', body: {
-    nature: 'SANKI', fromAccount: 'Cash', toAccount: 'Paytm', amount: 250,
+    nature: 'SANKI', fromAccount: 'Counter Cash', toAccount: 'Tiana 0425', amount: 250,
     date: '2026-08-20', proof: '/api/expenses/photo/transfer.jpg', note: 'Test transfer'
   } });
   assert.equal(transfer.status, 200);
   const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts;
-  assert.equal(after.find(a => a.name === 'Cash').balance, cashBefore - 250);
-  assert.equal(after.find(a => a.name === 'Paytm').balance, paytmBefore + 250);
-  const cashLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Cash' }, role: 'owner' }).body;
-  const paytmLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Paytm' }, role: 'owner' }).body;
+  assert.equal(after.find(a => a.name === 'Counter Cash').balance, cashBefore - 250);
+  assert.equal(after.find(a => a.name === 'Tiana 0425').balance, paytmBefore + 250);
+  const cashLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Counter Cash' }, role: 'owner' }).body;
+  const paytmLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Tiana 0425' }, role: 'owner' }).body;
   assert.equal(cashLedger.entries.find(x => x.id === transfer.body.transfer.id).debit, 250);
   assert.equal(paytmLedger.entries.find(x => x.id === transfer.body.transfer.id).credit, 250);
-  const personalBlocked = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'PERSONAL', account: 'Cash' }, role: 'admin' });
+  const personalBlocked = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'PERSONAL', account: 'Counter Cash' }, role: 'admin' });
   assert.equal(personalBlocked.status, 403);
 });
 
@@ -287,15 +287,15 @@ test('account adjustments require a reason and support explicit add or deduct en
   assert.match(html, /Add account adjustment/);
   assert.match(html, /Reason — required/);
   assert.doesNotMatch(html, /\＋ Top up/);
-  const blocked = invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Cash', direction: 'add', amount: 100 } } });
+  const blocked = invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Counter Cash', direction: 'add', amount: 100 } } });
   assert.equal(blocked.status, 400);
   assert.match(blocked.body.error, /reason is required/i);
-  const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
-  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Cash', direction: 'add', amount: 500, date: '2026-08-20', note: 'Cash introduced', proof: '/api/expenses/photo/adjust.jpg' } } }).status, 200);
-  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Cash', direction: 'deduct', amount: 125, date: '2026-08-20', note: 'Counting correction' } } }).status, 200);
-  const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
+  const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Counter Cash').balance;
+  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Counter Cash', direction: 'add', amount: 500, date: '2026-08-20', note: 'Cash introduced', proof: '/api/expenses/photo/adjust.jpg' } } }).status, 200);
+  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Counter Cash', direction: 'deduct', amount: 125, date: '2026-08-20', note: 'Counting correction' } } }).status, 200);
+  const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Counter Cash').balance;
   assert.equal(after, before + 375);
-  const ledger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Cash' }, role: 'owner' }).body;
+  const ledger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Counter Cash' }, role: 'owner' }).body;
   assert.equal(ledger.entries.find(x => x.description === 'Cash introduced').proof, '/api/expenses/photo/adjust.jpg');
   assert.equal(ledger.entries.find(x => x.description === 'Counting correction').debit, 125);
 });
@@ -310,7 +310,7 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   } });
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'FOOD EXPENSE' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'owner' });
-  invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount:339, account:'Cash', date:'2026-08-20', paymentProof:'/api/expenses/photo/dashboard-pay.jpg' }, role:'owner' });
+  invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount:339, account:'Counter Cash', date:'2026-08-20', paymentProof:'/api/expenses/photo/dashboard-pay.jpg' }, role:'owner' });
   const personal = invoke('POST', '/api/expenses', { role: 'owner', body: { nature: 'PERSONAL', ledger: 'FOOD EXPENSE', vendor: 'Private Dashboard Vendor', amount: 100, date: '2026-08-20', billPhoto: '/api/expenses/photo/private-dash.jpg', paymentType: 'Credit' } });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: personal.body.expense.id }, role: 'owner' });
   const owner = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'owner' });
@@ -318,7 +318,7 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.ok(owner.body.totalPaid >= 339);
   const payment = owner.body.payments.find(x => x.id === created.body.expense.id);
   assert.equal(payment.amount, 339);
-  assert.equal(payment.account, 'Cash');
+  assert.equal(payment.account, 'Counter Cash');
   assert.equal(payment.proof, '/api/expenses/photo/dashboard-pay.jpg');
   const admin = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'admin' });
   assert.equal(admin.status, 200);
@@ -331,19 +331,19 @@ test('receivables support partial collections and credit the receiving account l
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /data-t="receivables"/);
   assert.match(html, /Record money received/);
-  const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
+  const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Counter Cash').balance;
   const created = invoke('POST', '/api/expenses/receivables', { role: 'owner', body: { nature:'SANKI',party:'Refund Vendor',reason:'Purchase refund',amount:1000,date:'2026-08-20',dueDate:'2026-08-25' } });
   assert.equal(created.status, 200);
-  const blocked = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Cash'} });
+  const blocked = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Counter Cash'} });
   assert.equal(blocked.status, 400);
   assert.match(blocked.body.error,/proof is required/i);
-  const partial = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Cash',date:'2026-08-21',proof:'/api/expenses/photo/collection.jpg'} });
+  const partial = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Counter Cash',date:'2026-08-21',proof:'/api/expenses/photo/collection.jpg'} });
   assert.equal(partial.body.receivable.status,'partially_received');
   const list = invoke('GET','/api/expenses/receivables',{query:{nature:'SANKI'},role:'owner'}).body;
   assert.equal(list.receivables.find(x=>x.id===created.body.receivable.id).receivedAmount,400);
-  const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Cash').balance;
+  const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Counter Cash').balance;
   assert.equal(after,before+400);
-  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Cash'},role:'owner'}).body;
+  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash'},role:'owner'}).body;
   assert.equal(ledger.entries.find(x=>x.id===created.body.receivable.id+'/COL-001').credit,400);
   const personal=invoke('POST','/api/expenses/receivables',{role:'owner',body:{nature:'PERSONAL',party:'Private',reason:'Loan return',amount:100}});
   assert.equal(personal.status,200);
@@ -389,7 +389,7 @@ test('only Admin or Owner can add a missing category during review', () => {
 test('personally paid expense becomes reimbursement pending only after approval', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', vendor: 'Personal Vendor', amount: 500, billPhoto: '/api/expenses/photo/bill.jpg',
-    paidAlready: true, paymentType: 'UPI', personalAccount: 'Personal Axis 1234', personalPaymentProof: '/api/expenses/photo/personal.jpg'
+    paidAlready: true, paymentType: 'UPI', personalAccount: 'Arshpreet 1919', personalPaymentProof: '/api/expenses/photo/personal.jpg'
   } });
   assert.equal(created.status, 200);
   assert.equal(created.body.expense.reimbursementStatus, 'awaiting_approval');
@@ -400,7 +400,7 @@ test('personally paid expense becomes reimbursement pending only after approval'
   assert.equal(approved.body.expense.vendorPaymentCompleted, true);
   const blocked = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500 }, role: 'accounting' });
   assert.equal(blocked.status, 400);
-  const reimbursed = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500, account: 'Cash', paymentProof: '/api/expenses/photo/reimburse.jpg' }, role: 'accounting' });
+  const reimbursed = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500, account: 'Counter Cash', paymentProof: '/api/expenses/photo/reimburse.jpg' }, role: 'accounting' });
   assert.equal(reimbursed.body.expense.reimbursementStatus, 'reimbursed');
   assert.equal(reimbursed.body.expense.paidAmount, 500);
 });
@@ -414,6 +414,16 @@ test('personally paid non-cash expense requires the account used and cash is nam
   assert.match(cash.body.expense.payments[0].account, /cash$/i);
 });
 
+test('payment accounts are scoped by claimant and accounting entity', () => {
+  const claimantConfig = invoke('GET', '/api/expenses/config').body;
+  assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
+  assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash']);
+  assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992']);
+  assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
+  const blocked = invoke('POST', '/api/expenses', { body:{vendor:'Scoped Vendor',amount:100,billPhoto:'/api/expenses/photo/scoped.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Shivam 4807',personalPaymentProof:'/api/expenses/photo/scoped-pay.jpg'} });
+  assert.equal(blocked.status, 400);
+});
+
 test('installments support partial payments and prevent overpayment', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'Furniture Expense-A3', vendor: 'Carpenter', amount: 10000, isInstallment: true, requestedAmount: 1000,
@@ -421,28 +431,28 @@ test('installments support partial payments and prevent overpayment', () => {
   } });
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Furniture Expense-A3' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
-  const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'accounting' });
+  const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'accounting' });
   assert.equal(partial.body.expense.status, 'partially_paid');
   const payables = invoke('GET', '/api/expenses/pending-payments', { query: { bucket:'partial' }, role:'owner' }).body;
   const payable = payables.expenses.find(e => e.id === created.body.expense.id);
   assert.equal(payable.balanceDue, 9000);
-  const over = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 10000, account: 'Cash', paymentProof: '/api/expenses/photo/pay2.jpg' }, role: 'accounting' });
+  const over = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 10000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay2.jpg' }, role: 'accounting' });
   assert.equal(over.status, 400);
   assert.match(over.body.error, /cannot exceed/i);
-  const final = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 9000, account: 'Cash', paymentProof: '/api/expenses/photo/pay3.jpg' }, role: 'accounting' });
+  const final = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 9000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay3.jpg' }, role: 'accounting' });
   assert.equal(final.body.expense.status, 'paid');
   assert.equal(final.body.expense.payments.length, 2);
 });
 
 test('approved self-paid expenses appear once in spending, vendor and personal account ledgers', () => {
-  const created = invoke('POST','/api/expenses',{body:{date:'2026-08-21',ledger:'FOOD EXPENSE',vendor:'Self Paid Surface Vendor',particulars:'market supplies',amount:450,billPhoto:'/api/expenses/photo/self-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Claimant Axis 9999',personalPaymentProof:'/api/expenses/photo/self-pay.jpg'}});
+  const created = invoke('POST','/api/expenses',{body:{date:'2026-08-21',ledger:'FOOD EXPENSE',vendor:'Self Paid Surface Vendor',particulars:'market supplies',amount:450,billPhoto:'/api/expenses/photo/self-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/self-pay.jpg'}});
   const id=created.body.expense.id;
   invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
   invoke('POST','/api/expenses/:id/approve',{params:{id},role:'owner'});
   const spending=invoke('GET','/api/expenses/spending-dashboard',{query:{from:'2026-08-21',to:'2026-08-21'},role:'owner'}).body;
   assert.equal(spending.payments.filter(p=>p.id===id).length,1);
   assert.equal(spending.payments.find(p=>p.id===id).kind,'Paid personally');
-  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Claimant Axis 9999'},role:'owner'}).body;
+  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Arshpreet 1919'},role:'owner'}).body;
   assert.equal(ledger.entries.find(x=>x.id.startsWith(id)).debit,450);
   const vendors=invoke('GET','/api/expenses/vendors',{query:{nature:'SANKI',search:'Self Paid Surface'},role:'owner'}).body;
   assert.equal(vendors.vendors[0].paid,450);
@@ -457,16 +467,16 @@ test('posted advanced purchases become mediator payables without changing procur
   const pending = invoke('GET', '/api/expenses/pending-payments', { query:{nature:'SANKI'}, role:'owner' });
   assert.equal(pending.body.purchases[0].amount, 1250);
   assert.equal(pending.body.purchases[0].supplier, 'CHINA SUPPLIER');
-  const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'owner', body:{amount:500,account:'Cash',date:'2026-08-21',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
+  const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'owner', body:{amount:500,account:'Counter Cash',date:'2026-08-21',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
   assert.equal(partial.body.payable.balanceDue, 750);
-  const ledger = invoke('GET', '/api/expenses/account-ledger', { query:{nature:'SANKI',account:'Cash'}, role:'owner' }).body;
+  const ledger = invoke('GET', '/api/expenses/account-ledger', { query:{nature:'SANKI',account:'Counter Cash'}, role:'owner' }).body;
   assert.ok(ledger.entries.some(x => x.kind === 'purchase' && x.debit === 500));
   assert.deepEqual(JSON.parse(fs.readFileSync(procurementFile, 'utf8')), original);
 });
 
 test('advanced accounting workspaces are Owner/Admin only and claimant classification is forced', () => {
   const protectedGets = ['/api/expenses/pending-payments','/api/expenses/spending-dashboard','/api/expenses/reimbursements','/api/expenses/receivables','/api/expenses/vendors','/api/expenses/balances','/api/expenses/account-ledger'];
-  protectedGets.forEach(route => assert.equal(invoke('GET', route, { query:{nature:'SANKI',account:'Cash'}, role:'accounting' }).status, 403, route));
+  protectedGets.forEach(route => assert.equal(invoke('GET', route, { query:{nature:'SANKI',account:'Counter Cash'}, role:'accounting' }).status, 403, route));
   const created = invoke('POST', '/api/expenses', { role:'accounting', body:{ledger:'FOOD EXPENSE',type:'fixed',vendor:'Forced Variable Vendor',amount:100,billPhoto:'/api/expenses/photo/forced.jpg',paymentType:'Cash'} });
   assert.equal(created.status, 200);
   assert.equal(created.body.expense.ledger, '');
@@ -513,7 +523,7 @@ test('credit payables filter includes fully and partially unpaid credit expenses
   const partial = invoke('POST','/api/expenses',{body:{date:'2026-08-21',vendor:'Credit Partial',amount:800,billPhoto:'/api/expenses/photo/c2.jpg',paymentType:'Credit'}});
   invoke('POST','/api/expenses/:id',{params:{id:partial.body.expense.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
   invoke('POST','/api/expenses/:id/approve',{params:{id:partial.body.expense.id},role:'owner'});
-  invoke('POST','/api/expenses/:id/pay',{params:{id:partial.body.expense.id},body:{amount:200,account:'Cash',paymentProof:'/api/expenses/photo/cpay.jpg'},role:'owner'});
+  invoke('POST','/api/expenses/:id/pay',{params:{id:partial.body.expense.id},body:{amount:200,account:'Counter Cash',paymentProof:'/api/expenses/photo/cpay.jpg'},role:'owner'});
   const credit = invoke('GET','/api/expenses/pending-payments',{query:{bucket:'credit',from:'2026-08-01',to:'2026-08-21'},role:'owner'});
   assert.equal(credit.status,200);
   assert.ok(credit.body.expenses.some(x=>x.id===full.body.expense.id&&x.balanceDue===600));
@@ -534,9 +544,9 @@ test('Owner/Admin can edit finalized expenses with a mandatory audit reason', ()
 });
 
 test('account ledgers show newest entries first and Axis sales begin on 2026-08-21', () => {
-  invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Cash',toAccount:'Paytm',amount:10,date:'2026-08-19',proof:'/api/expenses/photo/t-old.jpg'}});
-  invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Cash',toAccount:'Paytm',amount:20,date:'2026-08-21',proof:'/api/expenses/photo/t-new.jpg'}});
-  const cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Cash'},role:'owner'}).body.entries.filter(x=>x.kind!=='opening');
+  invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Counter Cash',toAccount:'Tiana 0425',amount:10,date:'2026-08-19',proof:'/api/expenses/photo/t-old.jpg'}});
+  invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Counter Cash',toAccount:'Tiana 0425',amount:20,date:'2026-08-21',proof:'/api/expenses/photo/t-new.jpg'}});
+  const cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash'},role:'owner'}).body.entries.filter(x=>x.kind!=='opening');
   assert.ok(cash[0].date>=cash.at(-1).date);
   fs.writeFileSync(path.join(tempDir,'sales.json'),JSON.stringify({sales:[
     {id:'OLD-SALE',day:'2026-08-20',paymentMode:'UPI',total:100,channel:'POS'},
@@ -551,19 +561,19 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
   const expenseFile = path.join(tempDir, 'expenses.json');
   const stored = JSON.parse(fs.readFileSync(expenseFile, 'utf8'));
   stored.transfers = stored.transfers || [];
-  stored.transfers.push({ id:'TR-BROKEN', nature:'SANKI', fromAccount:'Cash', toAccount:'Axis Bank 3448', amount:50, date:'2026-08-21', proof:'' });
+  stored.transfers.push({ id:'TR-BROKEN', nature:'SANKI', fromAccount:'Counter Cash', toAccount:'Axis Bank 3448', amount:50, date:'2026-08-21', proof:'' });
   fs.writeFileSync(expenseFile, JSON.stringify(stored));
   const balances = invoke('GET', '/api/expenses/balances', { role:'owner', query:{nature:'SANKI'} });
   assert.equal(balances.status, 200);
-  assert.equal(balances.body.accounts.find(x => x.name === 'Cash').reconciled, false);
+  assert.equal(balances.body.accounts.find(x => x.name === 'Counter Cash').reconciled, false);
 
   const created = invoke('POST', '/api/expenses', { body:{vendor:'Override Vendor',amount:75,billPhoto:'/api/expenses/photo/bill.jpg',paymentType:'Cash'} });
   invoke('POST', '/api/expenses/:id', { params:{id:created.body.expense.id}, body:{ledger:'FOOD EXPENSE'}, role:'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params:{id:created.body.expense.id}, role:'owner' });
-  const blocked = invoke('POST', '/api/expenses/:id/pay', { params:{id:created.body.expense.id}, role:'owner', body:{account:'Cash',paymentProof:'/api/expenses/photo/pay.jpg'} });
+  const blocked = invoke('POST', '/api/expenses/:id/pay', { params:{id:created.body.expense.id}, role:'owner', body:{account:'Counter Cash',paymentProof:'/api/expenses/photo/pay.jpg'} });
   assert.equal(blocked.status, 409);
   assert.equal(blocked.body.requiresOverride, true);
-  const paid = invoke('POST', '/api/expenses/:id/pay', { params:{id:created.body.expense.id}, role:'owner', body:{account:'Cash',paymentProof:'/api/expenses/photo/pay.jpg',reconciliationOverrideReason:'Urgent approved vendor payment'} });
+  const paid = invoke('POST', '/api/expenses/:id/pay', { params:{id:created.body.expense.id}, role:'owner', body:{account:'Counter Cash',paymentProof:'/api/expenses/photo/pay.jpg',reconciliationOverrideReason:'Urgent approved vendor payment'} });
   assert.equal(paid.status, 200);
   assert.equal(paid.body.expense.payments.at(-1).reconciliationOverrideReason, 'Urgent approved vendor payment');
 });

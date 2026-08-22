@@ -127,6 +127,17 @@ const CHANNELS = ['POS', 'Website', 'Shared'];
 const BILLS = ['printed', 'handwritten', 'none'];
 const PAID_BY = ['company', 'claimant'];
 const PAYMENT_TYPES = ['UPI', 'Cash', 'Credit'];
+const ENTITY_ACCOUNTS = {
+  SANKI: ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash'],
+  SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992'],
+  PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992']
+};
+const CLAIMANT_ACCOUNTS = {
+  arshpreet: ['Arshpreet 1919'],
+  shivam: ['Shivam 4807'],
+  pradeep: ['Pradeep 8606']
+};
+const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash' };
 
 // Accounts the founder actually pays from are added in-app (with approval) —
 // start minimal instead of the old guessed list.
@@ -164,13 +175,27 @@ function loadStore() {
     const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
     // Repair records finalized under the old instalment rule, which marked the
     // whole agreement paid when only "payment required now" had been paid.
+    const rename = value => ACCOUNT_RENAMES[String(value || '')] || value;
+    s.accounts = Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS), s.accounts || []).map(rename))).filter(a => a !== 'Federal Bank 7328');
     Object.values(s.expenses || {}).forEach(e => {
+      e.account = rename(e.account);
+      (e.payments || []).forEach(p => { p.account = rename(p.account); });
+      (e.reimbursementPayments || []).forEach(p => { p.account = rename(p.account); });
       if (!e.approvedAt || e.status === 'rejected') return;
       const recorded = (e.payments || []).reduce((n, p) => n + num(p.amount), 0);
       e.paidAmount = Math.max(num(e.paidAmount), recorded);
       e.status = e.paidAmount >= num(e.amount) ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
       if (e.paidAlready) e.vendorPaymentCompleted = e.paidAmount >= num(e.amount);
     });
+    (s.adjustments || []).forEach(x => { x.account = rename(x.account); });
+    (s.transfers || []).forEach(x => { x.fromAccount = rename(x.fromAccount); x.toAccount = rename(x.toAccount); });
+    Object.values(s.receivables || {}).forEach(x => (x.collections || []).forEach(c => { c.account = rename(c.account); }));
+    Object.values((s.procurementAccounting || {}).paymentsByPo || {}).forEach(x => (x.payments || []).forEach(p => { p.account = rename(p.account); }));
+    const renameBalanceKeys = map => Object.entries(ACCOUNT_RENAMES).forEach(([oldName, newName]) => {
+      if (map && map[oldName] != null) { map[newName] = num(map[newName]) + num(map[oldName]); delete map[oldName]; }
+    });
+    renameBalanceKeys(s.openingBalances);
+    Object.values(s.openingBalancesByNature || {}).forEach(renameBalanceKeys);
     return s;
   }
   catch { return blankStore(); }
@@ -266,6 +291,31 @@ function storedAccountNames(s) {
   });
   return Array.from(names).map(x => String(x).trim()).filter(x => x && x !== '(unspecified)').sort((a, b) => a.localeCompare(b));
 }
+function companyAccountsForNature(nature) {
+  return (ENTITY_ACCOUNTS[normalizedNature(nature)] || []).slice();
+}
+function personalAccountsForReq(req) {
+  const username = String((req.user && req.user.username) || '').trim().toLowerCase();
+  const roles = rolesOfReq(req);
+  if (roles.includes('owner')) return Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS), ...Object.values(CLAIMANT_ACCOUNTS))));
+  if (roles.includes('admin')) return Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS))));
+  return (CLAIMANT_ACCOUNTS[username] || []).slice();
+}
+function ledgerAccountsForNature(s, nature) {
+  const n = normalizedNature(nature), names = new Set(companyAccountsForNature(n));
+  Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === n).forEach(e => {
+    if (e.account) names.add(String(e.account));
+    (e.payments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
+    (e.reimbursementPayments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
+  });
+  (s.adjustments || []).filter(x => normalizedNature(x.nature) === n).forEach(x => names.add(String(x.account)));
+  (s.transfers || []).filter(x => normalizedNature(x.nature) === n).forEach(x => { names.add(String(x.fromAccount)); names.add(String(x.toAccount)); });
+  return Array.from(names).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+}
+function allowedCompanyAccount(s, nature, account) {
+  const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
+  return companyAccountsForNature(nature).find(name => name.toLowerCase() === candidate.toLowerCase());
+}
 function rolesOfReq(req) {
   return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || [];
 }
@@ -358,7 +408,7 @@ router.get('/api/expenses/config', (req, res) => {
     ledgers: pickableLedgers(s),
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
-    accounts: storedAccountNames(s), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
+    accounts: Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS)))), accountsByNature: ENTITY_ACCOUNTS, personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
     types: TYPES, natures: allowed, channels: CHANNELS,
     approvalNatures: approvalNatures(req),
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
@@ -409,6 +459,9 @@ router.post('/api/expenses', (req, res) => {
   const personalAccount = paymentType === 'Cash' ? claimant + ' Cash' : String(b.personalAccount || '').trim();
   if (paidAlready && paymentType !== 'Cash' && !personalAccount) {
     return res.status(400).json({ success: false, error: 'Enter the account used for your personal payment.' });
+  }
+  if (paidAlready && paymentType !== 'Cash' && !isAdmin(req) && !personalAccountsForReq(req).some(a => a.toLowerCase() === personalAccount.toLowerCase())) {
+    return res.status(400).json({ success:false, error:'Select your assigned personal payment account.' });
   }
 
   const vendor = String(b.vendor || '').trim();
@@ -621,11 +674,12 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   if (!proof) return res.status(400).json({ success: false, error: e.fundedBy === 'claimant' ? 'Reimbursement proof required — the claimant cannot be marked reimbursed without it.' : 'Payment screenshot required — no proof, no payment.' });
   const account = String(b.account || '').trim();
   if (!account) return res.status(400).json({ success: false, error: 'Select the account used for this payment.' });
-  if (!storedAccountNames(s).some(name => name.toLowerCase() === account.toLowerCase())) return res.status(400).json({ success: false, error: 'Select a stored paying account or add it first.' });
-  const reconIssues = reconciliationIssues(s, normalizedNature(e.nature), storedAccountNames(s).find(name => name.toLowerCase() === account.toLowerCase()) || account);
+  const allowedAccount = allowedCompanyAccount(s, e.nature, account);
+  if (!allowedAccount) return res.status(400).json({ success: false, error: 'Select a paying account assigned to this accounting entity.' });
+  const reconIssues = reconciliationIssues(s, normalizedNature(e.nature), allowedAccount);
   const overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
-  e.account = storedAccountNames(s).find(name => name.toLowerCase() === account.toLowerCase()) || account;
+  e.account = allowedAccount;
   // A contract may be larger than the installment approved now. Payment is
   // capped at the current installment, while the contract balance remains
   // visible for reference.
@@ -672,12 +726,14 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
   const due = Math.max(0, num(e.personalPaidAmount) - num(e.reimbursementAmount));
   const amount = b.amount != null ? num(b.amount) : due;
   if (!(amount > 0) || amount > due) return res.status(400).json({ success: false, error: 'Reimbursement must be greater than 0 and cannot exceed ₹' + round0(due) + '.' });
+  const reimbursementAccount = allowedCompanyAccount(s, e.nature, b.account);
+  if (!reimbursementAccount) return res.status(400).json({ success:false, error:'Select a reimbursement account assigned to this accounting entity.' });
   e.reimbursementAmount = num(e.reimbursementAmount) + amount;
   e.reimbursementPayments = Array.isArray(e.reimbursementPayments) ? e.reimbursementPayments : [];
   e.reimbursementPayments.push({
     id: 'REIM-' + String(e.reimbursementPayments.length + 1).padStart(3, '0'), amount,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
-    account: String(b.account || '').trim(), paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI',
+    account: reimbursementAccount, paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI',
     proof, note: String(b.note || '').trim(), paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString()
   });
   e.reimbursementStatus = e.reimbursementAmount >= e.personalPaidAmount ? 'reimbursed' : 'partially_reimbursed';
@@ -766,8 +822,8 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     if (!canApproveExpenseNature(req, e)) return false;
     if (nature && normalizedNature(e.nature) !== nature) return false;
     if (vendor && !String(e.vendor || '').toLowerCase().includes(vendor)) return false;
-    if (from && String(e.approvedAt || e.date).slice(0, 10) < from) return false;
-    if (to && String(e.approvedAt || e.date).slice(0, 10) > to) return false;
+    if (from && String(e.date || e.approvedAt).slice(0, 10) < from) return false;
+    if (to && String(e.date || e.approvedAt).slice(0, 10) > to) return false;
     const approvedNow = num(e.amount);
     if (!['approved', 'partially_paid'].includes(e.status) || num(e.paidAmount) >= approvedNow) return false;
     if (bucket === 'approved' && (num(e.paidAmount) > 0 || e.paymentType === 'Credit')) return false;
@@ -807,11 +863,12 @@ router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
   if (!item) return res.status(404).json({ success: false, error: 'Purchase payable not found.' });
   const proof = String(b.paymentProof || '').trim(), account = String(b.account || '').trim(), pay = num(b.amount);
   if (!proof) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
-  if (!storedAccountNames(s).some(x => x.toLowerCase() === account.toLowerCase())) return res.status(400).json({ success: false, error: 'Select a stored paying account.' });
+  const allowedAccount = allowedCompanyAccount(s, 'SANKI', account);
+  if (!allowedAccount) return res.status(400).json({ success: false, error: 'Select a SANKI paying account.' });
   if (!(pay > 0) || pay > item.balanceDue) return res.status(400).json({ success: false, error: 'Payment must be greater than zero and cannot exceed ₹' + item.balanceDue + '.' });
   const cfg = procurementAccounting(s), state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
   state.payments = Array.isArray(state.payments) ? state.payments : [];
-  state.payments.push({ id:'PPAY-'+String(state.payments.length+1).padStart(3,'0'), amount:pay, account:storedAccountNames(s).find(x=>x.toLowerCase()===account.toLowerCase()) || account,
+  state.payments.push({ id:'PPAY-'+String(state.payments.length+1).padStart(3,'0'), amount:pay, account:allowedAccount,
     date:String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI', proof,
     note:String(b.note || '').trim(), paidBy:(req.user&&req.user.username)||'admin', paidAt:new Date().toISOString() });
   saveStore(s); res.json({ success:true, payable:procurementPayables(s, true).find(x=>x.id===item.id) });
@@ -894,9 +951,10 @@ router.post('/api/expenses/receivables/:id/receive', (req,res) => {
   if(!approvalNatures(req).includes(normalizedNature(x.nature))) return res.status(403).json({success:false,error:'You cannot collect this receivable.'});
   const due=Math.max(0,num(x.amount)-num(x.receivedAmount)), amount=num(b.amount), account=String(b.account||'').trim(), proof=String(b.proof||'').trim();
   if(!(amount>0)||amount>due) return res.status(400).json({success:false,error:'Collection must be greater than 0 and cannot exceed ₹'+round0(due)+'.'});
-  if(!storedAccountNames(s).some(a=>a.toLowerCase()===account.toLowerCase())) return res.status(400).json({success:false,error:'Select a stored receiving account.'});
+  const receivingAccount=allowedCompanyAccount(s,x.nature,account);
+  if(!receivingAccount) return res.status(400).json({success:false,error:'Select a receiving account assigned to this accounting entity.'});
   if(!proof) return res.status(400).json({success:false,error:'Collection proof is required.'});
-  x.collections=Array.isArray(x.collections)?x.collections:[];x.collections.push({id:'COL-'+String(x.collections.length+1).padStart(3,'0'),amount,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),account:storedAccountNames(s).find(a=>a.toLowerCase()===account.toLowerCase())||account,proof,note:String(b.note||'').trim(),receivedBy:(req.user&&req.user.username)||'admin',receivedAt:new Date().toISOString()});
+  x.collections=Array.isArray(x.collections)?x.collections:[];x.collections.push({id:'COL-'+String(x.collections.length+1).padStart(3,'0'),amount,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),account:receivingAccount,proof,note:String(b.note||'').trim(),receivedBy:(req.user&&req.user.username)||'admin',receivedAt:new Date().toISOString()});
   x.receivedAmount=num(x.receivedAmount)+amount;x.status=x.receivedAmount>=x.amount?'received':'partially_received';saveStore(s);res.json({success:true,receivable:x});
 });
 
@@ -970,7 +1028,7 @@ router.get('/api/expenses/balances', (req, res) => {
     transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
   });
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  const accounts = storedAccountNames(s).map(name => {
+  const accounts = ledgerAccountsForNature(s, nature).map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(paidOut[name] || 0);
     const topups = round0(adj[name] || 0);
@@ -987,12 +1045,10 @@ router.post('/api/expenses/transfers', (req, res) => {
   const s = loadStore(); const b = req.body || {};
   const nature = normalizedNature(b.nature);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for this accounting entity.' });
-  const fromAccount = String(b.fromAccount || '').trim(), toAccount = String(b.toAccount || '').trim();
+  const fromAccount = allowedCompanyAccount(s, nature, b.fromAccount), toAccount = allowedCompanyAccount(s, nature, b.toAccount);
   const amount = num(b.amount), proof = String(b.proof || '').trim();
-  const accounts = storedAccountNames(s);
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
   if (fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
-  if (!accounts.some(a => a.toLowerCase() === fromAccount.toLowerCase()) || !accounts.some(a => a.toLowerCase() === toAccount.toLowerCase())) return res.status(400).json({ success: false, error: 'Select stored accounts.' });
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Transfer amount must be greater than 0.' });
   if (!proof) return res.status(400).json({ success: false, error: 'Transfer proof is required.' });
   s.transferSeq = (s.transferSeq || 0) + 1;
@@ -1008,6 +1064,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const s = loadStore(), nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim();
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
+  if (!ledgerAccountsForNature(s, nature).some(a => a.toLowerCase() === account.toLowerCase())) return res.status(403).json({ success:false, error:'This account does not belong to the selected entity.' });
   const from = String(req.query.from || ''), to = String(req.query.to || ''), entries = [];
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   entries.push({ id: 'OPENING', date: '', kind: 'opening', description: 'Opening balance', credit: num(openingMap[account]), debit: 0 });
@@ -1034,13 +1091,17 @@ router.post('/api/expenses/balances', (req, res) => {
   const nature = normalizedNature(b.nature);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
   if (b.setOpening && b.setOpening.account) {
+    const openingAccount = allowedCompanyAccount(s, nature, b.setOpening.account);
+    if (!openingAccount) return res.status(400).json({ success:false, error:'Select an account assigned to this entity.' });
     if (nature !== 'SANKI') {
       s.openingBalancesByNature = s.openingBalancesByNature || {};
       s.openingBalancesByNature[nature] = s.openingBalancesByNature[nature] || {};
-      s.openingBalancesByNature[nature][String(b.setOpening.account)] = num(b.setOpening.amount);
-    } else s.openingBalances[String(b.setOpening.account)] = num(b.setOpening.amount);
+      s.openingBalancesByNature[nature][openingAccount] = num(b.setOpening.amount);
+    } else s.openingBalances[openingAccount] = num(b.setOpening.amount);
   }
   if (b.adjust && b.adjust.account && b.adjust.amount != null) {
+    const adjustmentAccount = allowedCompanyAccount(s, nature, b.adjust.account);
+    if (!adjustmentAccount) return res.status(400).json({ success:false, error:'Select an account assigned to this entity.' });
     const rawAmount = Math.abs(num(b.adjust.amount));
     const direction = String(b.adjust.direction || (num(b.adjust.amount) < 0 ? 'deduct' : 'add'));
     const note = String(b.adjust.note || '').trim();
@@ -1049,7 +1110,7 @@ router.post('/api/expenses/balances', (req, res) => {
     if (!note) return res.status(400).json({ success: false, error: 'Adjustment reason is required.' });
     s.adjSeq = (s.adjSeq || 0) + 1;
     s.adjustments.push({
-      id: 'ADJ-' + s.adjSeq, account: String(b.adjust.account),
+      id: 'ADJ-' + s.adjSeq, account: adjustmentAccount,
       amount: direction === 'deduct' ? -rawAmount : rawAmount, note,
       date: (b.adjust.date || new Date().toISOString().slice(0, 10)).toString().slice(0, 10), nature,
       proof: String(b.adjust.proof || '').trim(), createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString()

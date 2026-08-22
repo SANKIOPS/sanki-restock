@@ -306,7 +306,8 @@
     }
 
     // ── LOG form ──
-    function opts(arr, sel){ return arr.map(function(o){ return '<option'+(o===sel?' selected':'')+'>'+esc(o)+'</option>'; }).join(''); }
+    function opts(arr, sel){ return (arr||[]).map(function(o){ return '<option'+(o===sel?' selected':'')+'>'+esc(o)+'</option>'; }).join(''); }
+    function accountsForNature(nature){ return (cfg.accountsByNature&&cfg.accountsByNature[nature])||[]; }
     function renderLog(){
       el('panel').innerHTML =
       '<div class="card"><div class="grid">'+
@@ -326,7 +327,7 @@
         '<div class="fld" id="requestedWrap" style="display:none"><label>Payment being logged now ₹</label><input type="number" id="f_requestedamount" min="1" step="1" placeholder="e.g. 1000"><div class="hint">Cannot exceed the total agreed amount.</div></div>'+
         '<div class="fld full" id="paymentNoteWrap" style="display:none"><label>Installment note (optional)</label><input id="f_paymentnote" placeholder="e.g. advance, second installment, final payment"></div>'+
         '<div class="fld" id="paymentTypeWrap"><label>How will this be paid?</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
-        '<div class="fld" id="personalAccountWrap" style="display:none"><label>Account used</label><input id="f_personalaccount" placeholder="e.g. Axis 1234"><div class="hint">Cash is recorded automatically as '+esc(cfg.me)+' Cash.</div></div>'+
+        '<div class="fld" id="personalAccountWrap" style="display:none"><label>Account used</label><select id="f_personalaccount">'+opts(cfg.personalAccounts||[])+'</select><div class="hint">Only accounts assigned to you are available. Cash is recorded automatically as '+esc(cfg.me)+' Cash.</div></div>'+
         '<div class="fld" id="qrPhotoWrap"><label id="qrLabel">Vendor QR-code photo (required for UPI)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_qrcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_qrphoto" accept="image/*" hidden></label></div></div>'+
         '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof (required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_personalcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_personalproof" accept="image/*" hidden></label></div></div>'+
         (cfg.isAdmin?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
@@ -424,6 +425,7 @@
       if(!billInput.files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
       var paidAlready=el('f_paidalready').value==='true', paymentType=el('f_paymenttype').value;
       if(paidAlready&&!personalInput.files[0]){ setMsg('Attach proof of the payment you made.', false); return; }
+      if(paidAlready&&paymentType!=='Cash'&&!el('f_personalaccount').value){ setMsg('No personal payment account is assigned to this user.', false); return; }
       if(!paidAlready&&paymentType==='UPI'&&!qrInput.files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
       var installment=el('f_installment').value==='true';
       var totalAmount=installment?Number(el('f_totalamount').value):Number(el('f_amount').value);
@@ -657,7 +659,7 @@
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
-      el('payAcct').innerHTML = opts(cfg.accounts);
+      el('payAcct').innerHTML = opts(accountsForNature(e.nature||'SANKI'));
       var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
       el('payDlg').showModal();
@@ -667,7 +669,7 @@
       payId=id; payUrl=''; payMode='reimburse'; var e=expensesById[id]||{};
       el('payTitle').textContent='Reimburse '+(e.createdBy||e.claimant||'claimant'); el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Company → claimant payment proof — required'; el('payGo').textContent='Save reimbursement';
-      el('payAcct').innerHTML=opts(cfg.accounts); el('payAmount').value=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));
+      el('payAcct').innerHTML=opts(accountsForNature(e.nature||'SANKI')); el('payAmount').value=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));
       el('payDate').value=today(); el('payType').value='UPI'; el('payNote').value=''; el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent=''; el('payDlg').showModal();
     };
     el('payCancel').addEventListener('click', function(){ el('payDlg').close(); });
@@ -753,9 +755,9 @@
     // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS ──
     function renderCash(){
       el('panel').innerHTML = '<div class="card"><h3 style="margin:0 0 4px">Money Trail</h3><p class="sub" style="margin:0 0 12px">One-click view of where money entered, where it was spent, and what remains.</p><div class="preset-row"><button class="btn mini ghost" data-cfdays="today">Today</button><button class="btn mini ghost" data-cfdays="7">Last 7 days</button><button class="btn mini ghost" data-cfdays="30">Last 30 days</button><button class="btn mini primary" data-cfdays="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="cf_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div><div class="fld"><label>From</label><input type="date" id="cf_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="cf_to" value="'+today()+'"></div><button class="btn mini ghost" id="cf_go">View</button></div><div id="ctable" class="muted">Loading…</div></div>'+
-        '<div class="card"><h3 style="margin-top:0">Transfer between accounts</h3><div class="grid"><div class="fld"><label>From account</label><select id="tr_from">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>To account</label><select id="tr_to">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>Amount ₹</label><input type="number" id="tr_amount" min="1"></div><div class="fld"><label>Date</label><input type="date" id="tr_date" value="'+today()+'"></div><div class="fld full"><label>Note</label><input id="tr_note" placeholder="Reason or reference"></div><div class="fld full"><label>Transfer proof — required</label><input type="file" id="tr_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="tr_go">Record transfer</button></div></div>'+
-        '<div class="card"><h3 style="margin-top:0">Detailed statement</h3><div class="filters"><div class="fld"><label>Account</label><select id="lg_account">'+opts(cfg.accounts)+'</select></div><div class="fld"><label>From</label><input type="date" id="lg_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="lg_to" value="'+today()+'"></div><button class="btn ghost mini" id="lg_go">View ledger</button></div><div id="ledgerTable" class="muted">Select an account.</div></div>';
-      el('cf_nature').addEventListener('change',function(){selectedNature=this.value;loadCash();loadAccountLedger();});el('cf_go').addEventListener('click',loadCash);
+        '<div class="card"><h3 style="margin-top:0">Transfer between accounts</h3><div class="grid"><div class="fld"><label>From account</label><select id="tr_from">'+opts(accountsForNature(selectedNature))+'</select></div><div class="fld"><label>To account</label><select id="tr_to">'+opts(accountsForNature(selectedNature))+'</select></div><div class="fld"><label>Amount ₹</label><input type="number" id="tr_amount" min="1"></div><div class="fld"><label>Date</label><input type="date" id="tr_date" value="'+today()+'"></div><div class="fld full"><label>Note</label><input id="tr_note" placeholder="Reason or reference"></div><div class="fld full"><label>Transfer proof — required</label><input type="file" id="tr_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="tr_go">Record transfer</button></div></div>'+
+        '<div class="card"><h3 style="margin-top:0">Detailed statement</h3><div class="filters"><div class="fld"><label>Account</label><select id="lg_account">'+opts(accountsForNature(selectedNature))+'</select></div><div class="fld"><label>From</label><input type="date" id="lg_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="lg_to" value="'+today()+'"></div><button class="btn ghost mini" id="lg_go">View ledger</button></div><div id="ledgerTable" class="muted">Select an account.</div></div>';
+      el('cf_nature').addEventListener('change',function(){selectedNature=this.value;var a=accountsForNature(selectedNature);el('tr_from').innerHTML=opts(a);el('tr_to').innerHTML=opts(a);el('lg_account').innerHTML=opts(a);loadCash();loadAccountLedger();});el('cf_go').addEventListener('click',loadCash);
       Array.prototype.forEach.call(el('panel').querySelectorAll('[data-cfdays]'),function(b){b.onclick=function(){var v=this.dataset.cfdays,d=new Date(),from=today();if(v==='7')from=dateDaysAgo(7);else if(v==='30')from=dateDaysAgo(30);else if(v==='month')from=today().slice(0,8)+'01';el('cf_from').value=from;el('cf_to').value=today();loadCash();};});
       el('tr_go').addEventListener('click',recordTransfer); el('lg_go').addEventListener('click',loadAccountLedger);
       loadCash();
