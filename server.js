@@ -67,6 +67,17 @@ const RUNTIME_DATA_DIR       = process.env.DATA_PATH
                              ? path.dirname(process.env.DATA_PATH)
                              : __dirname;
 
+// Owner-confirmed one-time accounting reset: preserve master/configuration
+// data while removing transactions before 22 August 2026.
+if (String(process.env.RAILWAY_ENVIRONMENT_NAME || '').toLowerCase() === 'production') {
+  try {
+    const result = require('./modules/one-time-accounting-reset').runOneTimeAccountingReset();
+    if (result.ran) console.log('[accounting-reset] completed from', result.cutoffDay);
+  } catch (error) {
+    console.error('[accounting-reset] failed safely; startup continues without marking completion:', error);
+  }
+}
+
 // ── Webhook authentication ────────────────────────────────────────
 // Shopify signs every webhook with HMAC-SHA256(rawBody, secret) in the
 // X-Shopify-Hmac-Sha256 header. We verify it timing-safely over the RAW
