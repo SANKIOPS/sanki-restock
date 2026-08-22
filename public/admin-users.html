@@ -197,6 +197,18 @@
         });
         tdAct.appendChild(editLink);
 
+        var renameBtn = document.createElement('button');
+        renameBtn.className = 'ghost sm'; renameBtn.textContent = 'Rename';
+        renameBtn.addEventListener('click', function () {
+          var next = prompt('New login username for ' + u.username + ':', u.username);
+          if (next == null || !next.trim() || next.trim() === u.username) return;
+          api('/api/admin/users/rename', { username:u.username, newUsername:next.trim() }).then(function (d) {
+            if (d.success) { setMsg(document.getElementById('list-msg'), 'Renamed ' + u.username + ' to ' + d.username + '. Password and roles are unchanged.', 'ok'); load(); }
+            else setMsg(document.getElementById('list-msg'), d.error || 'Could not rename', 'err');
+          });
+        });
+        tdAct.appendChild(renameBtn);
+
         var resetBtn = document.createElement('button');
         resetBtn.className = 'ghost sm'; resetBtn.textContent = 'Reset password';
         resetBtn.addEventListener('click', function () {

@@ -425,6 +425,23 @@ router.post('/api/admin/users/roles', requireAdmin, (req, res) => {
   res.json({ success: true, username: u.username, roles });
 });
 
+// Rename a login without changing its password or roles. Existing sessions for
+// that user stop matching and they sign in again with the new username.
+router.post('/api/admin/users/rename', requireAdmin, (req, res) => {
+  const oldUsername = String((req.body || {}).username || '').trim();
+  const newUsername = String((req.body || {}).newUsername || '').trim().toLowerCase();
+  if (!oldUsername || !newUsername) return res.json({ success:false, error:'Enter both usernames' });
+  if (!/^[a-z0-9._-]{3,40}$/.test(newUsername)) return res.json({ success:false, error:'Use 3–40 letters, numbers, dots, dashes or underscores' });
+  const store = loadUsers();
+  const user = store.users.find(x => x.username === oldUsername);
+  if (!user) return res.json({ success:false, error:'User not found' });
+  if (user.username === OWNER_USER) return res.json({ success:false, error:'The Owner username cannot be renamed here' });
+  if (store.users.some(x => x !== user && String(x.username).toLowerCase() === newUsername)) return res.json({ success:false, error:'That username already exists' });
+  user.username = newUsername;
+  saveUsers(store);
+  res.json({ success:true, oldUsername, username:newUsername, roles:normalizeRoles(user) });
+});
+
 // Back-compat: single-role change → treated as the full set [role].
 router.post('/api/admin/users/role', requireAdmin, (req, res) => {
   const { username, role } = (req.body || {});
