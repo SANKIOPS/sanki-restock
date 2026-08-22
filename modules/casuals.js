@@ -1542,6 +1542,63 @@ router.get('/api/casuals/spec', (req, res) => {
   res.json({ success: true, categories: CASUALS_SPEC });
 });
 
+// Generate the assortment itself for the simplified workflow. This is a
+// strategic planning pass, separate from the later visual catalogue matching.
+router.post('/api/casuals/simple-plan', async (req, res) => {
+  try {
+    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI planning is not enabled. Set ANTHROPIC_API_KEY in Railway.' });
+    const b = req.body || {};
+    const gender = String(b.gender || '').trim();
+    const category = String(b.category || '').trim();
+    const styleTarget = Math.max(1, Math.min(30, parseInt(b.styleTarget) || 0));
+    const budget = Math.max(0, parseInt(b.budget) || 0);
+    const launchDate = String(b.launchDate || '').trim() || 'next available launch';
+    if (!gender || !category || !styleTarget || !budget) return res.status(400).json({ success: false, error: 'Gender, category, style count and budget are required.' });
+    const prompt = `You are the senior merchandise planner for SANKI, an Indian premium-casual fashion brand that buys ready-stock, white-label garments from specialist Chinese vendors. Create a disciplined MICRO-BUY assortment plan.
+
+Gender: ${gender}
+Category: ${category}
+Total distinct styles required: ${styleTarget}
+Maximum total buying budget: INR ${budget}
+Target launch date: ${launchDate}
+
+Rules:
+- Recommend gender-specific silhouettes, never resized opposite-gender garments.
+- Focus the assortment: commercially strong core pieces first, controlled fashion second, at most one experimental direction.
+- Use specific product/silhouette names a visual model can match from vendor photographs.
+- The sum of every "styles" value MUST equal exactly ${styleTarget}.
+- Do not invent sales figures, vendor prices, market shares or claim live web research.
+- "role" must be one of Core, Fashion, Experiment.
+- "reason" must be max 18 words and explain the commercial job of that slot.
+- "colourDirection" must be 1-3 practical colour families, max 8 words.
+
+Return STRICT JSON ONLY:
+{"summary":"max 24 words","mix":[{"name":"specific silhouette","styles":2,"role":"Core","reason":"...","colourDirection":"..."}]}`;
+    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 90000);
+    let r;
+    try {
+      r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
+        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: AI_MODEL, max_tokens: 1800, temperature: 0, messages: [{ role: 'user', content: prompt }] }), signal: ctrl.signal });
+    } finally { clearTimeout(timer); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
+    const parsed = extractJson((j.content || []).map(c => c.text || '').join('')) || {};
+    let mix = Array.isArray(parsed.mix) ? parsed.mix.map(x => ({ name: String(x.name || '').trim().slice(0, 80),
+      styles: Math.max(1, parseInt(x.styles) || 1), role: ['Core','Fashion','Experiment'].includes(x.role) ? x.role : 'Fashion',
+      reason: String(x.reason || '').trim().slice(0, 180), colourDirection: String(x.colourDirection || '').trim().slice(0, 100) })).filter(x => x.name) : [];
+    if (!mix.length) throw new Error('AI returned no assortment slots');
+    let total = mix.reduce((n, x) => n + x.styles, 0);
+    while (total > styleTarget) { const x = mix.slice().reverse().find(y => y.styles > 1); if (x) x.styles--; else mix.pop(); total = mix.reduce((n, y) => n + y.styles, 0); }
+    if (total < styleTarget) mix[0].styles += styleTarget - total;
+    res.json({ success: true, summary: String(parsed.summary || '').trim().slice(0, 240), mix,
+      basis: { gender, category, styleTarget, budget, launchDate, liveWebData: false } });
+  } catch (err) {
+    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'AI planning timed out. Try again.' });
+    res.status(502).json({ success: false, error: 'AI planning failed: ' + (err.message || 'unknown') });
+  }
+});
+
 router.get('/api/casuals/settings', (req, res) => {
   res.json({ success: true, settings: settingsWithDefaults(loadStore()) });
 });
