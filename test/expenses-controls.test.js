@@ -558,6 +558,16 @@ test('Owner/Admin can edit finalized expenses with a mandatory audit reason', ()
   assert.equal(invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'No Access',editReason:'test'},role:'accounting'}).status,403);
 });
 
+test('Owner/Admin can correct an expense entity before payment and the change is audited', () => {
+  const made=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Entity Fix Vendor',amount:250,billPhoto:'/api/expenses/photo/entity.jpg',paymentType:'Cash'}});
+  const id=made.body.expense.id;
+  const moved=invoke('POST','/api/expenses/:id',{params:{id},role:'owner',body:{nature:'SAMAST'}});
+  assert.equal(moved.body.expense.nature,'SAMAST');
+  assert.ok(moved.body.expense.auditHistory.at(-1).changes.some(x=>x.field==='nature'&&x.before==='SANKI'&&x.after==='SAMAST'));
+  const claimantBlocked=invoke('POST','/api/expenses/:id',{params:{id},role:'claimant',body:{nature:'SANKI'}});
+  assert.equal(claimantBlocked.status,403);
+});
+
 test('account ledgers show newest entries first and Axis sales begin on 2026-08-21', () => {
   invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Counter Cash',toAccount:'Tiana 0425',amount:10,date:'2026-08-19',proof:'/api/expenses/photo/t-old.jpg'}});
   invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Counter Cash',toAccount:'Tiana 0425',amount:20,date:'2026-08-21',proof:'/api/expenses/photo/t-new.jpg'}});

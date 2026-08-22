@@ -542,8 +542,19 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (e.paidAlready && requested < num(e.personalPaidAmount)) return res.status(400).json({ success: false, error: 'Requested payment cannot be less than the amount already paid personally.' });
     e.requestedAmount = requested;
   }
-  // Entity is immutable after submission so an entry cannot be moved between
-  // separate books accidentally. Owner can delete/re-enter a mistaken record.
+  if (b.nature != null) {
+    const requestedNature = String(b.nature || '').toUpperCase();
+    if (!NATURES.includes(requestedNature)) return res.status(400).json({ success:false, error:'Select a valid accounting entity.' });
+    const nextNature = normalizedNature(requestedNature);
+    if (nextNature !== normalizedNature(e.nature)) {
+      if (!isAdmin(req)) return res.status(403).json({ success:false, error:'Only Owner or Admin can change the accounting entity.' });
+      if (!approvalNatures(req).includes(nextNature)) return res.status(403).json({ success:false, error:'You cannot move this expense to that accounting entity.' });
+      const hasCompanyPayments = (e.payments || []).some(p => !p.personalFunds);
+      const hasReimbursements = (e.reimbursementPayments || []).length > 0 || num(e.reimbursementAmount) > 0;
+      if (hasCompanyPayments || hasReimbursements) return res.status(400).json({ success:false, error:'Entity cannot be changed after a company payment or reimbursement has been recorded.' });
+      e.nature = nextNature;
+    }
+  }
   if (TYPES.includes(b.type)) e.type = b.type;
   if (b.ledger != null && String(b.ledger).trim()) {
     if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only Admin or Owner can assign or change the category.' });
@@ -605,7 +616,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
     return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
   if (e.paymentType === 'Cash') e.qrPhoto = '';
-  const tracked = ['date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
+  const tracked = ['nature','date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
   const changes = tracked.filter(k => JSON.stringify(beforeEdit[k]) !== JSON.stringify(e[k])).map(k => ({ field:k, before:beforeEdit[k] == null ? '' : beforeEdit[k], after:e[k] == null ? '' : e[k] }));
   if (changes.length) {
     e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
