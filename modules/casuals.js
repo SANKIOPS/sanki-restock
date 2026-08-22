@@ -637,6 +637,60 @@ async function scoreBatch(items) {
   return out;
 }
 
+// ── Simple Procurement: auditable assortment matching ───────────
+// The simplified UI first defines named assortment slots, then asks this pass
+// to compare every viable catalogue image against those slots. This is kept
+// separate from the legacy fit/colour planner so the old workflow is unchanged.
+async function scoreSimpleBatch(items, plan) {
+  const content = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    content.push({ type: 'text', text: 'CANDIDATE ' + (i + 1) + ':' });
+    const enc = await shrinkForVision(it.buffer, it.mediaType);
+    content.push({ type: 'image', source: { type: 'base64', media_type: enc.mediaType, data: enc.data } });
+  }
+  const slots = (plan.mix || []).map((s, i) => `${i + 1}. ${String(s.name || '').trim()} (${Math.max(1, parseInt(s.styles) || 1)} style slot${Math.max(1, parseInt(s.styles) || 1) === 1 ? '' : 's'})`).join('\n');
+  content.push({ type: 'text', text:
+`You are the senior buyer for SANKI, an Indian premium-casual fashion brand. Compare EACH candidate image against this APPROVED buy plan.
+
+Gender: ${String(plan.gender || '')}
+Category: ${String(plan.category || '')}
+Approved assortment slots:
+${slots}
+
+For each candidate return:
+1) "slot" — EXACT approved slot name it best matches, or "No match".
+2) "silhouette" — specific visible garment silhouette, max 7 words.
+3) "colour" — dominant visible colour.
+4) "score" — integer 0-100, using exactly: slot match 0-40 + SANKI brand fit 0-20 + current Indian-market relevance 0-15 + versatility 0-15 + visible finish 0-10.
+5) "reason" — max 18 words explaining the score using visible evidence.
+6) "excludeReason" — if score below 65 or slot is No match, max 12 words; otherwise empty.
+
+Be strict. A generic or wrong-gender product cannot score above 64. Do not invent fabric, price, measurements, stock or demand data from a photograph.
+Return STRICT JSON ONLY: {"items":[{"slot":"..","silhouette":"..","colour":"..","score":78,"reason":"..","excludeReason":""}, ...]} with exactly ${items.length} objects in image order.` });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let r;
+  try {
+    r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 3500, temperature: 0, messages: [{ role: 'user', content }] }),
+      signal: ctrl.signal
+    });
+  } finally { clearTimeout(timer); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
+  const parsed = extractJson((j.content || []).map(c => c.text || '').join(''));
+  const arr = parsed && Array.isArray(parsed.items) ? parsed.items : [];
+  return items.map((it, i) => {
+    const o = arr[i] || {};
+    return { id: it.id, slot: String(o.slot || 'No match').trim(), silhouette: String(o.silhouette || '').trim().slice(0, 80),
+      colour: String(o.colour || '').trim().slice(0, 40), score: Math.max(0, Math.min(100, parseInt(o.score) || 0)),
+      reason: String(o.reason || '').trim().slice(0, 180), excludeReason: String(o.excludeReason || '').trim().slice(0, 120) };
+  });
+}
+
 // ── Invoice ingest: read a supplier bill → already-ordered line items ────
 // The founder uploads the vendor's invoice (photo, PDF or Excel) for stock
 // that is ALREADY ordered / on the way. We read it and return line items so
@@ -1794,6 +1848,55 @@ router.post('/api/casuals/analyze', async (req, res) => {
   } catch (err) {
     if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'Segregation timed out. Try again — sorted photos are saved.' });
     res.status(502).json({ success: false, error: 'Segregation failed: ' + (err.message || 'unknown') });
+  }
+});
+
+// Match the current batch to the named assortment approved in the simplified
+// workflow. Returns both winners and rejected alternatives with reasons, so the
+// recommendation is inspectable rather than a silent first-N shortlist.
+router.post('/api/casuals/simple-recommend', async (req, res) => {
+  try {
+    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI selection is not enabled. Set ANTHROPIC_API_KEY in Railway.' });
+    const plan = req.body && req.body.plan;
+    if (!plan || !Array.isArray(plan.mix) || !plan.mix.length) return res.status(400).json({ success: false, error: 'The approved assortment plan is missing.' });
+    const s = loadStore();
+    const wantedCat = String(plan.category || '');
+    const all = activeCands(s).filter(c => !c.dupeOf && !c.ordered && (!wantedCat || c.category === wantedCat));
+    if (!all.length) return res.status(400).json({ success: false, error: 'No non-duplicate products match this category.' });
+
+    // Rank the strongest broad candidates first, but keep a generous ceiling so
+    // specific approved silhouettes are not crowded out by generic high ratings.
+    const ceiling = 80;
+    const pool = all.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, ceiling);
+    const scored = [];
+    for (let i = 0; i < pool.length; i += VISION_BATCH) {
+      const slice = pool.slice(i, i + VISION_BATCH);
+      const items = [];
+      slice.forEach(c => { try { items.push({ id: c.id, buffer: fs.readFileSync(path.join(CAND_DIR, c.file)), mediaType: mediaTypeForFile(c.file) }); } catch {} });
+      if (items.length) scored.push(...await scoreSimpleBatch(items, plan));
+    }
+    const slotMap = {};
+    plan.mix.forEach(x => { slotMap[String(x.name || '').trim().toLowerCase()] = { name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1) }; });
+    const byId = new Map(pool.map(c => [c.id, c]));
+    const used = new Set(); const selected = [];
+    Object.values(slotMap).forEach(slot => {
+      scored.filter(x => String(x.slot || '').trim().toLowerCase() === slot.name.toLowerCase() && x.score >= 65 && !used.has(x.id))
+        .sort((a, b) => b.score - a.score).slice(0, slot.need).forEach(x => { used.add(x.id); selected.push({ ...publicCandidate(byId.get(x.id)), ...x, slot: slot.name }); });
+    });
+    const excluded = scored.filter(x => !used.has(x.id)).sort((a, b) => b.score - a.score).map(x => {
+      const c = byId.get(x.id); const recognised = slotMap[String(x.slot || '').trim().toLowerCase()];
+      let why = x.excludeReason;
+      if (!why && recognised) why = 'Lower score than selected alternative';
+      if (!why) why = x.slot === 'No match' ? 'Outside approved assortment' : 'Does not fill an open slot';
+      return { ...publicCandidate(c), ...x, excludeReason: why };
+    });
+    const missing = Object.values(slotMap).map(slot => ({ slot: slot.name, required: slot.need,
+      selected: selected.filter(x => x.slot === slot.name).length })).filter(x => x.selected < x.required);
+    res.json({ success: true, evaluated: scored.length, eligibleBeforeLimit: all.length, ceiling,
+      selected, excluded, missing, basis: { threshold: 65, dimensions: { slotMatch: 40, brandFit: 20, marketRelevance: 15, versatility: 15, visibleFinish: 10 } } });
+  } catch (err) {
+    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'AI selection timed out. Try again.' });
+    res.status(502).json({ success: false, error: 'AI selection failed: ' + (err.message || 'unknown') });
   }
 });
 
