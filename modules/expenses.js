@@ -706,20 +706,30 @@ router.post('/api/expenses/batch-pay', (req, res) => {
   if (!account) return res.status(400).json({ success:false, error:'Select a paying account assigned to this accounting entity.' });
   const reconIssues = reconciliationIssues(s, nature, account), overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
+  const combinedOutstanding = round0(expenses.reduce((n,e)=>n+Math.max(0,num(e.amount)-num(e.paidAmount)),0));
+  const requestedTotal = b.amount != null ? round0(num(b.amount)) : combinedOutstanding;
+  if (!(requestedTotal > 0)) return res.status(400).json({ success:false, error:'Payment amount must be greater than 0.' });
+  if (requestedTotal > combinedOutstanding) return res.status(400).json({ success:false, error:'Payment cannot exceed the combined outstanding amount of ₹'+combinedOutstanding+'.' });
   const date = String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paidBy = (req.user&&req.user.username)||'admin';
   const batchPaymentId = 'BPAY-' + Date.now().toString(36).toUpperCase();
-  let total = 0; const allocations = [];
-  expenses.forEach(e => {
-    const amount = round0(Math.max(0,num(e.amount)-num(e.paidAmount))); total += amount; allocations.push({ expense:e, amount });
+  let remaining = requestedTotal; const allocations = [];
+  // Allocate oldest bills first. This is predictable for recurring expenses and
+  // leaves the newest selected bill partially paid when the payment is short.
+  expenses.slice().sort((a,b)=>String((a.date||'')+a.id).localeCompare(String((b.date||'')+b.id))).forEach(e => {
+    const outstanding = round0(Math.max(0,num(e.amount)-num(e.paidAmount))), amount = Math.min(outstanding,remaining);
+    if (!(amount > 0)) return;
+    remaining=round0(remaining-amount); allocations.push({ expense:e, amount });
     e.account=account; e.paymentProof=proof; e.payments=Array.isArray(e.payments)?e.payments:[];
-    e.payments.push({ id:'PAY-'+String(e.payments.length+1).padStart(3,'0'), batchPaymentId, amount, date, account,
+    e.payments.push({ id:'PAY-'+String(e.payments.length+1).padStart(3,'0'), batchPaymentId, batchTotal:requestedTotal, amount, date, account,
       paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(e.paymentType||''), proof, note:String(b.note||'').trim(),
       paidBy, paidAt:new Date().toISOString(), reconciliationOverrideReason:overrideReason, reconciliationIssuesAtPayment:reconIssues });
-    e.paidAmount=num(e.paidAmount)+amount; e.status='paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
+    e.paidAmount=round0(num(e.paidAmount)+amount); e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
   });
+  const allocatedIds=allocations.map(x=>x.expense.id);
+  allocations.forEach(x=>{x.expense.payments.at(-1).linkedExpenseIds=allocatedIds;});
   saveStore(s);
-  allocations.forEach(x => notifyExpenseUser(x.expense,'paid',x.amount));
-  res.json({ success:true, batchPaymentId, total:round0(total), expenses });
+  allocations.forEach(x => notifyExpenseUser(x.expense,x.expense.status==='paid'?'paid':'partially_paid',x.amount));
+  res.json({ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:round0(Math.max(0,num(x.expense.amount)-num(x.expense.paidAmount)))})), expenses });
 });
 
 // ── Pay (GATE 2: payment screenshot required) ────────────────────

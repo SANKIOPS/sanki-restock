@@ -459,6 +459,22 @@ test('approved expenses for the same vendor can be paid together with one proof'
   assert.equal(paid.body.expenses[0].payments.at(-1).batchPaymentId,paid.body.expenses[1].payments.at(-1).batchPaymentId);
 });
 
+test('one consolidated payment partially allocates across selected bills oldest first', () => {
+  function approved(amount,date) {
+    const made=invoke('POST','/api/expenses',{body:{date,vendor:'Partial Flower Vendor',amount,billPhoto:'/api/expenses/photo/pbill.jpg',paymentType:'Cash'}});
+    invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
+    invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
+    return made.body.expense.id;
+  }
+  const older=approved(5000,'2026-08-21'),newer=approved(5000,'2026-08-22');
+  const paid=invoke('POST','/api/expenses/batch-pay',{role:'owner',body:{expenseIds:[newer,older],amount:7000,account:'Counter Cash',paymentProof:'/api/expenses/photo/partial-combined.jpg',date:'2026-08-22'}});
+  assert.equal(paid.body.total,7000);
+  assert.deepEqual(paid.body.allocations.map(x=>[x.expenseId,x.amount,x.status,x.balanceDue]),[[older,5000,'paid',0],[newer,2000,'partially_paid',3000]]);
+  assert.equal(paid.body.expenses.find(x=>x.id===newer).payments.at(-1).batchTotal,7000);
+  const over=invoke('POST','/api/expenses/batch-pay',{role:'owner',body:{expenseIds:[newer],amount:3001,account:'Counter Cash',paymentProof:'/api/expenses/photo/over.jpg'}});
+  assert.equal(over.status,400);assert.match(over.body.error,/combined outstanding/i);
+});
+
 test('approved self-paid expenses appear once in spending, vendor and personal account ledgers', () => {
   const created = invoke('POST','/api/expenses',{body:{date:'2026-08-21',ledger:'FOOD EXPENSE',vendor:'Self Paid Surface Vendor',particulars:'market supplies',amount:450,billPhoto:'/api/expenses/photo/self-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/self-pay.jpg'}});
   const id=created.body.expense.id;

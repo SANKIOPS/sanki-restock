@@ -205,7 +205,7 @@
       <div class="fld"><label>Payment type</label><select id="payType"><option>UPI</option><option>Cash</option><option>Credit</option></select></div>
       <div class="fld"><label>Note (optional)</label><input id="payNote"></div>
     </div>
-    <div id="payBatchWrap" class="fld" style="display:none;margin-top:10px"><label>Include other approved expenses for this vendor</label><div id="payBatchList" class="payment-history"></div><div class="hint">Selected balances will be paid together using this one payment proof.</div></div>
+    <div id="payBatchWrap" class="fld" style="display:none;margin-top:10px"><label>Include other approved expenses for this vendor</label><div id="payBatchList" class="payment-history"></div><div class="hint">Enter any amount up to the selected total. It will settle the oldest selected bill first and partially pay the next bill when required.</div></div>
     <div class="fld" style="margin-top:10px"><label id="payProofLabel">Payment proof — required</label><input type="file" id="payFile" accept="image/*" /></div>
     <div class="fld" id="payOverrideWrap" style="display:none;margin-top:10px"><label>Urgent payment override reason — required</label><input id="payOverrideReason" placeholder="Why must this payment proceed before reconciliation is fixed?"><div class="hint">The reason is recorded permanently with the payment.</div></div>
     <img id="payPrev" class="prev" style="display:none" />
@@ -661,7 +661,7 @@
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
       el('payAcct').innerHTML = opts(accountsForNature(e.nature||'SANKI'));
-      var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
+      var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').max=totalDue;el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
       el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';
       el('payDlg').showModal();
@@ -670,7 +670,7 @@
         var currentDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));
         el('payBatchWrap').style.display='';
         el('payBatchList').innerHTML='<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(id)+'" data-due="'+currentDue+'" checked disabled> '+esc(e.date||'')+' · '+esc(e.particulars||e.id)+'</span><b>'+fmt(currentDue)+'</b></label>'+d.expenses.map(function(x){return '<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(x.id)+'" data-due="'+x.balanceDue+'"> '+esc(x.date||'')+' · '+esc(x.particulars||x.id)+'</span><b>'+fmt(x.balanceDue)+'</b></label>';}).join('');
-        Array.prototype.forEach.call(document.querySelectorAll('.batch-expense'),function(box){box.addEventListener('change',function(){var total=0;Array.prototype.forEach.call(document.querySelectorAll('.batch-expense:checked'),function(x){total+=Number(x.getAttribute('data-due'))||0;});el('payAmount').value=total;el('payAmount').readOnly=document.querySelectorAll('.batch-expense:checked').length>1;el('payGo').textContent=document.querySelectorAll('.batch-expense:checked').length>1?'Pay selected together':'Save payment';});});
+        Array.prototype.forEach.call(document.querySelectorAll('.batch-expense'),function(box){box.addEventListener('change',function(){var total=0;Array.prototype.forEach.call(document.querySelectorAll('.batch-expense:checked'),function(x){total+=Number(x.getAttribute('data-due'))||0;});el('payAmount').value=total;el('payAmount').max=total;el('payAmount').readOnly=false;el('payGo').textContent=document.querySelectorAll('.batch-expense:checked').length>1?'Pay selected together':'Save payment';});});
       });
     };
     window.openPurchasePay = function(id){ openPay(id); payMode='procurement'; el('payTitle').textContent='Pay logistics mediator · '+id; };
