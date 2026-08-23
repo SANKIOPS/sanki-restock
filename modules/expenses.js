@@ -1181,14 +1181,15 @@ router.post('/api/expenses/receipts', (req,res) => {
   if(!isAdmin(req)) return res.status(403).json({success:false,error:'Owner/Admin only.'});
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature);
   if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot record money for this entity.'});
-  const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proof=String(b.proof||'').trim(),source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim();
+  const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proof=String(b.proof||'').trim(),source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim(),note=String(b.note||'').trim(),ownerCashDeclaration=rolesOfReq(req).includes('owner')&&/cash/i.test(String(account||''))&&!proof;
   if(!account) return res.status(400).json({success:false,error:'Select the account that received the money.'});
   if(!(amount>0)) return res.status(400).json({success:false,error:'Receipt amount must be greater than 0.'});
   if(!source) return res.status(400).json({success:false,error:'Source / party is required.'});
-  if(!proof) return res.status(400).json({success:false,error:'Receipt proof is required.'});
+  if(!proof&&!ownerCashDeclaration) return res.status(400).json({success:false,error:'Receipt proof is required. Only the Owner may declare a cash receipt without proof.'});
+  if(ownerCashDeclaration&&!note) return res.status(400).json({success:false,error:'Explain why no proof is available for this cash receipt.'});
   if(!['asset_sale','other_income','refund','owner_contribution'].includes(receiptType)) return res.status(400).json({success:false,error:'Choose a valid receipt type.'});
   s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];
-  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note:String(b.note||'').trim(),proof,createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString()};
+  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note,proof,proofException:ownerCashDeclaration?'Owner cash declaration — no external proof available':'',createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString()};
   s.receipts.push(receipt);saveStore(s);res.json({success:true,receipt});
 });
 
