@@ -335,7 +335,7 @@ function approvalNatures(req) {
   const r = rolesOfReq(req);
   if (r.includes('owner')) return NATURES.slice();
   const out = [];
-  if (r.includes('admin')) out.push('SANKI', 'SAMAST', 'PERSONAL');
+  if (r.includes('admin')) out.push('SANKI', 'SAMAST');
   if (r.includes('accounting')) out.push('SANKI');
   if (r.includes('samast_accounting')) out.push('SAMAST');
   return Array.from(new Set(out));
@@ -859,6 +859,7 @@ router.get('/api/expenses/list', (req, res) => {
   const paymentType = (req.query.paymentType || '').toString().toLowerCase();
   const missingBill = String(req.query.missingBill || '') === 'true';
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
+  if (nature && isAdmin(req) && !approvalNatures(req).includes(nature)) return res.status(403).json({ success:false, error:'You cannot view this accounting entity.' });
   let list = Object.values(s.expenses).filter(e => {
     if (!canViewExpense(req, e)) return false;
     if (id && e.id !== id) return false;
