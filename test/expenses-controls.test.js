@@ -397,6 +397,7 @@ test('Owner Telegram narration creates one deduplicated paid PERSONAL expense', 
   const {parsePersonalCaption}=require('../modules/telegram');
   const parsed=parsePersonalCaption('Personal | Nanny salary August | ICICI 0993 | ₹27,500');
   assert.deepEqual(parsed,{ok:true,amount:27500,account:'ICICI 0993',particulars:'Nanny salary August',date:''});
+  assert.deepEqual(parsePersonalCaption('Personal Food tip 0993 200'),{ok:true,amount:200,account:'0993',particulars:'Food tip',date:''});
   assert.equal(parsePersonalCaption('Personal | Nanny salary').ok,false);
   const input=Object.assign({},parsed,{username:'gaganlambasanki',proof:'/api/expenses/photo/personal-telegram.jpg',sourceKey:'telegram:owner:file-1',rawNarration:'Personal | Nanny salary August | ICICI 0993 | ₹27,500'});
   const created=createTelegramPersonalExpense(input);
