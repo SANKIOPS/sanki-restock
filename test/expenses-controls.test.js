@@ -282,6 +282,23 @@ test('account transfers create equal debit and credit ledger entries', () => {
   assert.equal(personalBlocked.status, 403);
 });
 
+test('asset-sale receipt and cross-entity withdrawal create a complete money trail', () => {
+  const receipt=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SAMAST',account:'Kirti Nagar Cash',receiptType:'asset_sale',source:'Buyer of basement iron racks',amount:27500,date:'2026-08-22',note:'Iron racks sold',proof:'/api/expenses/photo/rack-sale.jpg'}});
+  assert.equal(receipt.status,200);
+  const transfer=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'SAMAST',fromAccount:'Kirti Nagar Cash',toNature:'PERSONAL',toAccount:'Gagan Personal Cash',classification:'owner_withdrawal',amount:27500,date:'2026-08-22',note:'Cash used for personal nanny payment',proof:'/api/expenses/photo/cash-transfer.jpg'}});
+  assert.equal(transfer.status,200);
+  const samast=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'Kirti Nagar Cash'}}).body;
+  const personal=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'PERSONAL',account:'Gagan Personal Cash'}}).body;
+  assert.equal(samast.entries.find(x=>x.id===receipt.body.receipt.id).credit,27500);
+  assert.equal(samast.entries.find(x=>x.id===transfer.body.transfer.id).debit,27500);
+  assert.equal(personal.entries.find(x=>x.id===transfer.body.transfer.id).credit,27500);
+  assert.match(personal.entries.find(x=>x.id===transfer.body.transfer.id).description,/owner withdrawal/);
+  const samastBalance=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SAMAST'}}).body.accounts.find(x=>x.name==='Kirti Nagar Cash');
+  const personalBalance=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'PERSONAL'}}).body.accounts.find(x=>x.name==='Gagan Personal Cash');
+  assert.equal(samastBalance.balance,0);
+  assert.equal(personalBalance.balance,27500);
+});
+
 test('account adjustments require a reason and support explicit add or deduct entries', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /Add account adjustment/);
@@ -418,7 +435,8 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   const claimantConfig = invoke('GET', '/api/expenses/config').body;
   assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
   assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash']);
-  assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992']);
+  assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
+  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
   const blocked = invoke('POST', '/api/expenses', { body:{vendor:'Scoped Vendor',amount:100,billPhoto:'/api/expenses/photo/scoped.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Shivam 4807',personalPaymentProof:'/api/expenses/photo/scoped-pay.jpg'} });
   assert.equal(blocked.status, 400);

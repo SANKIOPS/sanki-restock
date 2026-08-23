@@ -129,8 +129,8 @@ const PAID_BY = ['company', 'claimant'];
 const PAYMENT_TYPES = ['UPI', 'Cash', 'Credit'];
 const ENTITY_ACCOUNTS = {
   SANKI: ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash'],
-  SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992'],
-  PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992']
+  SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
+  PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash']
 };
 const CLAIMANT_ACCOUNTS = {
   arshpreet: ['Arshpreet 1919'],
@@ -157,6 +157,7 @@ function blankStore() {
     openingBalancesByNature: { SAMAST: {}, PERSONAL: {} }, // non-SANKI books stay separate
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
     transfers: [],                       // [{ id, nature, fromAccount, toAccount, amount, date, proof, note }]
+    receipts: [],                        // money received other than sales/receivables
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
     requests: [],                        // [{ id, kind:'ledger'|'account', name, meta, status, by, at, decidedBy, decidedAt }]
@@ -167,7 +168,7 @@ function blankStore() {
       paymentsByPo: {}
     },
     odConfig: { 'Tiana 0425': { limit: 0, ratePct: 0 } },
-    seq: 0, receivableSeq: 0, adjSeq: 0, transferSeq: 0, reqSeq: 0
+    seq: 0, receivableSeq: 0, adjSeq: 0, transferSeq: 0, receiptSeq: 0, reqSeq: 0
   };
 }
 function loadStore() {
@@ -239,7 +240,10 @@ function includeAutomaticSale(x) {
 
 function reconciliationIssues(s, nature, account) {
   const issues = [], seen = new Set();
-  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && (!account || x.fromAccount === account || x.toAccount === account)).forEach(x => {
+  (s.transfers || []).filter(x => {
+    const fromNature=normalizedNature(x.fromNature||x.nature),toNature=normalizedNature(x.toNature||x.nature);
+    return (fromNature===nature&&(!account||x.fromAccount===account))||(toNature===nature&&(!account||x.toAccount===account));
+  }).forEach(x => {
     if (!x.id || seen.has(x.id)) issues.push({ code:'duplicate_transfer', reference:x.id || '(missing)', message:'Duplicate or missing transfer reference.' });
     if (x.id) seen.add(x.id);
     if (!x.fromAccount || !x.toAccount || !(num(x.amount) > 0)) issues.push({ code:'incomplete_transfer', reference:x.id || '(missing)', message:'Transfer is missing its source, destination, or amount.' });
@@ -309,7 +313,11 @@ function ledgerAccountsForNature(s, nature) {
     (e.reimbursementPayments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
   });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === n).forEach(x => names.add(String(x.account)));
-  (s.transfers || []).filter(x => normalizedNature(x.nature) === n).forEach(x => { names.add(String(x.fromAccount)); names.add(String(x.toAccount)); });
+  (s.receipts || []).filter(x => normalizedNature(x.nature) === n).forEach(x => names.add(String(x.account)));
+  (s.transfers || []).forEach(x => {
+    if (normalizedNature(x.fromNature || x.nature) === n) names.add(String(x.fromAccount));
+    if (normalizedNature(x.toNature || x.nature) === n) names.add(String(x.toAccount));
+  });
   return Array.from(names).filter(Boolean).sort((a,b)=>a.localeCompare(b));
 }
 function allowedCompanyAccount(s, nature, account) {
@@ -516,7 +524,7 @@ router.post('/api/expenses', (req, res) => {
 // ── Edit ─────────────────────────────────────────────────────────
 // Single-segment POST paths that have their OWN handlers registered after this
 // param route — the ':id' pattern would otherwise swallow them. Fall through.
-const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'transfers', 'receivables', 'vendors', 'custom-ledgers', 'upload']);
+const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'transfers', 'receipts', 'receivables', 'vendors', 'custom-ledgers', 'upload']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
   const s = loadStore();
@@ -1094,10 +1102,11 @@ router.get('/api/expenses/balances', (req, res) => {
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>inRange(x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>inRange(c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
+  (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&inRange(x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
   if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>inRange(x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
-  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => {
-    transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
-    transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
+  (s.transfers || []).filter(x => inRange(x.date)).forEach(x => {
+    if(normalizedNature(x.fromNature||x.nature)===nature) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
+    if(normalizedNature(x.toNature||x.nature)===nature) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
   });
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   const accounts = ledgerAccountsForNature(s, nature).map(name => {
@@ -1115,20 +1124,37 @@ router.get('/api/expenses/balances', (req, res) => {
 router.post('/api/expenses/transfers', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore(); const b = req.body || {};
-  const nature = normalizedNature(b.nature);
-  if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for this accounting entity.' });
-  const fromAccount = allowedCompanyAccount(s, nature, b.fromAccount), toAccount = allowedCompanyAccount(s, nature, b.toAccount);
+  const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
+  if (!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
+  const fromAccount = allowedCompanyAccount(s, fromNature, b.fromAccount), toAccount = allowedCompanyAccount(s, toNature, b.toAccount);
   const amount = num(b.amount), proof = String(b.proof || '').trim();
+  const classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
-  if (fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
+  if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
+  if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Transfer amount must be greater than 0.' });
   if (!proof) return res.status(400).json({ success: false, error: 'Transfer proof is required.' });
   s.transferSeq = (s.transferSeq || 0) + 1;
-  const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature, fromAccount, toAccount, amount,
+  const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature:fromNature, fromNature, toNature, classification, fromAccount, toAccount, amount,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, note: String(b.note || '').trim(),
     createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString() };
   s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer); saveStore(s);
   res.json({ success: true, transfer });
+});
+
+router.post('/api/expenses/receipts', (req,res) => {
+  if(!isAdmin(req)) return res.status(403).json({success:false,error:'Owner/Admin only.'});
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature);
+  if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot record money for this entity.'});
+  const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proof=String(b.proof||'').trim(),source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim();
+  if(!account) return res.status(400).json({success:false,error:'Select the account that received the money.'});
+  if(!(amount>0)) return res.status(400).json({success:false,error:'Receipt amount must be greater than 0.'});
+  if(!source) return res.status(400).json({success:false,error:'Source / party is required.'});
+  if(!proof) return res.status(400).json({success:false,error:'Receipt proof is required.'});
+  if(!['asset_sale','other_income','refund','owner_contribution'].includes(receiptType)) return res.status(400).json({success:false,error:'Choose a valid receipt type.'});
+  s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];
+  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note:String(b.note||'').trim(),proof,createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString()};
+  s.receipts.push(receipt);saveStore(s);res.json({success:true,receipt});
 });
 
 router.get('/api/expenses/account-ledger', (req, res) => {
@@ -1141,7 +1167,12 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   entries.push({ id: 'OPENING', date: '', kind: 'opening', description: 'Opening balance', credit: num(openingMap[account]), debit: 0 });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
-  (s.transfers || []).filter(x => normalizedNature(x.nature) === nature && (x.fromAccount === account || x.toAccount === account)).forEach(x => entries.push({ id:x.id,date:x.date,kind:'transfer',description:x.fromAccount===account?'Transfer to '+x.toAccount:'Transfer from '+x.fromAccount,credit:x.toAccount===account?num(x.amount):0,debit:x.fromAccount===account?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy }));
+  (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,by:x.createdBy}));
+  (s.transfers || []).forEach(x => {
+    const isOut=normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account,isIn=normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account;if(!isOut&&!isIn)return;
+    const other=(isOut?(x.toNature||x.nature)+' · '+x.toAccount:(x.fromNature||x.nature)+' · '+x.fromAccount);
+    entries.push({id:x.id,date:x.date,kind:'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' '),credit:isIn?num(x.amount):0,debit:isOut?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy});
+  });
   Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === nature).forEach(e => {
     (e.payments || []).filter(p => e.approvedAt && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant'),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
