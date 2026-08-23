@@ -127,6 +127,7 @@ const CHANNELS = ['POS', 'Website', 'Shared'];
 const BILLS = ['printed', 'handwritten', 'none'];
 const PAID_BY = ['company', 'claimant'];
 const PAYMENT_TYPES = ['UPI', 'Cash', 'Credit'];
+const PERSONAL_CATEGORIES = ['Food & Dining','Household Staff','Children & Education','Medical & Healthcare','Travel & Transport','Home & Utilities','Shopping','Subscriptions','Personal Care','Gifts & Charity','Entertainment','Financial Charges','Miscellaneous Personal'];
 const ENTITY_ACCOUNTS = {
   SANKI: ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash'],
   SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
@@ -217,13 +218,14 @@ function createTelegramPersonalExpense(input) {
   if(!proof) return {success:false,error:'Payment screenshot is required.'};
   if(!particulars) return {success:false,error:'Narration is required.'};
   const requested=String(b.account||'').trim().toLowerCase(),accounts=companyAccountsForNature('PERSONAL');
-  const account=accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||accounts.find(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.includes(last);});
+  const suffixMatches=accounts.filter(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.length>=2&&last.endsWith(requested.replace(/\D/g,''));});
+  const account=accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||accounts.find(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.includes(last);})||(suffixMatches.length===1?suffixMatches[0]:'');
   if(!account) return {success:false,error:'Personal account was not recognized.'};
   if(sourceKey){const duplicate=Object.values(s.expenses||{}).find(e=>e.telegramSourceKey===sourceKey);if(duplicate)return {success:true,duplicate:true,expense:duplicate};}
   const now=new Date().toISOString(),date=String(b.date||now.slice(0,10)).slice(0,10),paymentType=/cash/i.test(account)?'Cash':'UPI';
   s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0');
-  const vendor=String(b.vendor||particulars).trim();
-  s.expenses[id]={id,date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger:'General Expense',vendor,claimant:username,account,channel:'Shared',bill:'printed',fundedBy:'claimant',paymentType,qrPhoto:'',billPhoto:proof,purchasePaymentProof:proof,exceptionEvidence:'',exceptionReason:'',billNote:'Captured from owner Telegram payment screenshot',paidAlready:true,personalPaidAmount:amount,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:proof,status:'paid',paidAmount:amount,payments:[{id:'PAY-001',amount,date,account,paymentType,proof,note:'Owner payment captured from Telegram',paidBy:username,paidAt:now,personalFunds:true}],createdAt:now,createdBy:username,approvedAt:now,approvedBy:username,paidAt:now,paidBy:username,telegramSourceKey:sourceKey,telegramNeedsReview:true,telegramNarration:String(b.rawNarration||particulars).trim()};
+  const vendor=String(b.vendor||particulars).trim(),ledger=PERSONAL_CATEGORIES.includes(b.ledger)?b.ledger:'Miscellaneous Personal';
+  s.expenses[id]={id,date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger,vendor,claimant:username,account,channel:'Shared',bill:'printed',fundedBy:'claimant',paymentType,qrPhoto:'',billPhoto:proof,purchasePaymentProof:proof,exceptionEvidence:'',exceptionReason:'',billNote:'Captured from owner Telegram payment screenshot',paidAlready:true,personalPaidAmount:amount,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:proof,status:'paid',paidAmount:amount,payments:[{id:'PAY-001',amount,date,account,paymentType,proof,note:'Owner payment captured from Telegram',paidBy:username,paidAt:now,personalFunds:true}],createdAt:now,createdBy:username,approvedAt:now,approvedBy:username,paidAt:now,paidBy:username,telegramSourceKey:sourceKey,telegramNeedsReview:b.needsReview!==false,telegramNarration:String(b.rawNarration||particulars).trim(),telegramOcrText:String(b.ocrText||'').slice(0,4000)};
   s.vendorsByNature=s.vendorsByNature||{};s.vendorsByNature.PERSONAL=s.vendorsByNature.PERSONAL||{};if(!s.vendorsByNature.PERSONAL[vendor.toLowerCase()])s.vendorsByNature.PERSONAL[vendor.toLowerCase()]={name:vendor,notes:'Added from Owner Telegram capture'};
   saveStore(s);return {success:true,expense:s.expenses[id]};
 }
@@ -298,7 +300,7 @@ function ledgerMeta(s, name) {
 }
 // The category picker = built-in BUSINESS ledgers ∪ admin-approved custom ones.
 function pickableLedgers(s) {
-  const names = LEDGERS.filter(isBusinessLedger).concat(Object.keys(s.customLedgers || {}));
+  const names = LEDGERS.filter(isBusinessLedger).concat(PERSONAL_CATEGORIES,Object.keys(s.customLedgers || {}));
   const seen = {};
   return names.filter(n => (seen[n] ? false : (seen[n] = true)))
     .map(n => ledgerMeta(s, n))

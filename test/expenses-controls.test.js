@@ -393,16 +393,20 @@ test('Telegram setup is Owner-only and supports per-user notification management
   assert.match(telegram, /router\.post\('\/api\/telegram\/unlink'.*if\(!owner\(req\)\)/);
 });
 
-test('Owner Telegram narration creates one deduplicated paid PERSONAL expense', () => {
-  const {parsePersonalCaption}=require('../modules/telegram');
+test('Owner Telegram narration and screenshot OCR create one categorized paid PERSONAL expense', () => {
+  const {parsePersonalCaption,parsePersonalIntent,parsePaymentOcr,inferPersonalCategory}=require('../modules/telegram');
   const parsed=parsePersonalCaption('Personal | Nanny salary August | ICICI 0993 | ₹27,500');
   assert.deepEqual(parsed,{ok:true,amount:27500,account:'ICICI 0993',particulars:'Nanny salary August',date:''});
   assert.deepEqual(parsePersonalCaption('Personal Food tip 0993 200'),{ok:true,amount:200,account:'0993',particulars:'Food tip',date:''});
   assert.equal(parsePersonalCaption('Personal | Nanny salary').ok,false);
-  const input=Object.assign({},parsed,{username:'gaganlambasanki',proof:'/api/expenses/photo/personal-telegram.jpg',sourceKey:'telegram:owner:file-1',rawNarration:'Personal | Nanny salary August | ICICI 0993 | ₹27,500'});
+  assert.deepEqual(parsePersonalIntent('Personal Food tip'),{ok:true,particulars:'Food tip'});
+  const ocr=parsePaymentOcr('Transaction Successful\n23 August 2026 at 4:14 PM\nPaid to\nMr MUKESH KUMAR ₹200\nDebited from\nXXXXXXXXXXX93 ₹200\nUTR: 412656746520');
+  assert.equal(ocr.amount,200);assert.equal(ocr.account,'93');assert.equal(ocr.recipient,'Mr MUKESH KUMAR');assert.equal(ocr.date,'2026-08-23');
+  assert.deepEqual(inferPersonalCategory('Food tip',ocr.recipient),{ledger:'Food & Dining',confidence:true});
+  const input={amount:200,account:'93',particulars:'Food tip',vendor:ocr.recipient,ledger:'Food & Dining',needsReview:false,ocrText:ocr.text,username:'gaganlambasanki',proof:'/api/expenses/photo/personal-telegram.jpg',sourceKey:'telegram:owner:file-1',rawNarration:'Personal Food tip'};
   const created=createTelegramPersonalExpense(input);
-  assert.equal(created.success,true);assert.equal(created.expense.nature,'PERSONAL');assert.equal(created.expense.status,'paid');assert.equal(created.expense.account,'ICICI Bank 0993');assert.equal(created.expense.approvedBy,'gaganlambasanki');assert.equal(created.expense.telegramNeedsReview,true);
-  const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'PERSONAL'}}).body.vendors;assert.ok(vendors.some(v=>v.name==='Nanny salary August'));
+  assert.equal(created.success,true);assert.equal(created.expense.nature,'PERSONAL');assert.equal(created.expense.status,'paid');assert.equal(created.expense.account,'ICICI Bank 0993');assert.equal(created.expense.approvedBy,'gaganlambasanki');assert.equal(created.expense.telegramNeedsReview,false);assert.equal(created.expense.ledger,'Food & Dining');
+  const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'PERSONAL'}}).body.vendors;assert.ok(vendors.some(v=>v.name==='Mr MUKESH KUMAR'));
   assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/NEEDS REVIEW/);
   const duplicate=createTelegramPersonalExpense(input);assert.equal(duplicate.duplicate,true);assert.equal(duplicate.expense.id,created.expense.id);
 });

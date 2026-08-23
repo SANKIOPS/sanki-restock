@@ -1,4 +1,5 @@
 const express=require('express'),https=require('https'),fs=require('fs'),path=require('path'),crypto=require('crypto'),{userSummary}=require('./auth-users');
+const {createWorker}=require('tesseract.js'),eng=require('@tesseract.js-data/eng');
 const router=express.Router(),DIR=process.env.DATA_PATH?path.dirname(process.env.DATA_PATH):path.join(__dirname,'..'),FILE=path.join(DIR,'telegram.json');
 function blank(){return{chats:{},userChats:{},linkCodes:{},webhookSecret:'',botUsername:'',updates:0};}
 function load(){try{return Object.assign(blank(),JSON.parse(fs.readFileSync(FILE,'utf8')));}catch{return blank();}}
@@ -35,12 +36,31 @@ function parsePersonalCaption(raw){
   if(!(amount>0))return{ok:false,error:'Add the payment amount.'};
   return{ok:true,amount,account:accountPart,particulars:narration,date:datePart};
 }
+function parsePersonalIntent(raw){
+  const text=String(raw||'').trim();if(!/^\/?personal\b/i.test(text))return{ok:false,error:'Start the narration with Personal.'};
+  let particulars=text.replace(/^\/?personal\b/i,'').replace(/(?:₹|\brs\.?\b|\binr\b)\s*[0-9][0-9,]*(?:\.\d{1,2})?/ig,' ').replace(/\b\d{4}-\d{2}-\d{2}\b/g,' ').replace(/\b\d{4}\b|\bcash\b/ig,' ').replace(/[|,;-]+/g,' ').replace(/\s+/g,' ').trim();
+  return particulars?{ok:true,particulars}:{ok:false,error:'Add a short purpose or vendor narration.'};
+}
+function parsePaymentOcr(raw){
+  const text=String(raw||''),clean=text.replace(/\r/g,''),lines=clean.split('\n').map(x=>x.trim()).filter(Boolean),pi=lines.findIndex(x=>/paid\s+to/i.test(x)),paidLine=pi>=0?([lines[pi].replace(/^.*?paid\s+to\s*/i,''),lines[pi+1]||''].join(' ')):'',paid=(paidLine.match(/(?:₹|rs\.?|inr)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)\s*$/i)||clean.match(/(?:₹|rs\.?|inr)\s*([0-9][0-9,]*(?:\.\d{1,2})?)/i)||[])[1]||'',amount=Number(paid.replace(/,/g,''))||0;
+  const debited=(clean.match(/debited\s+from[\s\S]{0,120}?(?:x+|\*+|•+)?\s*(\d{2,4})\b/i)||clean.match(/(?:x{2,}|\*{2,}|•{2,})\s*(\d{2,4})\b/i)||[])[1]||'';
+  let recipient='';if(pi>=0){recipient=lines[pi].replace(/^.*?paid\s+to\s*/i,'').replace(/(?:₹|rs\.?|inr)?\s*[0-9][0-9,]*(?:\.\d{1,2})?\s*$/i,'').trim();if(!recipient&&lines[pi+1])recipient=lines[pi+1].replace(/(?:₹|rs\.?|inr)?\s*[0-9][0-9,]*(?:\.\d{1,2})?\s*$/i,'').replace(/^[^A-Za-z]+/,'').trim();}
+  const months={january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12'},dm=clean.match(/\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b/i),date=dm?dm[3]+'-'+months[dm[2].toLowerCase()]+'-'+String(dm[1]).padStart(2,'0'):'';
+  return{amount,account:debited,recipient,date,text:clean};
+}
+function inferPersonalCategory(narration,recipient){
+  const t=(String(narration||'')+' '+String(recipient||'')).toLowerCase(),rules=[
+    ['Food & Dining',/food|dining|restaurant|cafe|coffee|grocery|meal|lunch|dinner|breakfast|tip\b/],['Household Staff',/nanny|maid|driver|cook|helper|domestic|house staff|salary/],['Children & Education',/school|tuition|education|book|child|kid|uniform/],['Medical & Healthcare',/doctor|hospital|medicine|medical|pharmacy|clinic|health/],['Travel & Transport',/uber|ola|rapido|fuel|petrol|diesel|travel|flight|train|taxi|parking/],['Home & Utilities',/electricity|water|rent|repair|plumber|carpenter|home|utility|internet|broadband/],['Shopping',/amazon|myntra|clothes|shopping|purchase/],['Subscriptions',/subscription|netflix|spotify|software|membership/],['Personal Care',/salon|gym|spa|personal care|beauty/],['Gifts & Charity',/gift|donation|charity/],['Entertainment',/movie|cinema|game|entertainment/],['Financial Charges',/bank charge|fee|interest|penalty/]
+  ];for(const r of rules)if(r[1].test(t))return{ledger:r[0],confidence:true};return{ledger:'Miscellaneous Personal',confidence:false};
+}
+let workerPromise;function ocrWorker(){if(!workerPromise)workerPromise=createWorker(eng.code,1,{langPath:eng.langPath,gzip:eng.gzip,cacheMethod:'none'});return workerPromise;}
+async function readPaymentScreenshot(filePath){const worker=await ocrWorker(),result=await worker.recognize(filePath);return parsePaymentOcr(result&&result.data&&result.data.text||'');}
 function downloadPhoto(fileId){
   return tg('getFile',{file_id:fileId}).then(info=>new Promise((resolve,reject)=>{
     const remote=info&&info.ok&&info.result&&info.result.file_path;if(!remote)return reject(new Error('Telegram could not provide the image.'));
     const ext=(path.extname(remote)||'.jpg').toLowerCase().replace(/[^.a-z0-9]/g,'')||'.jpg',dir=path.join(DIR,'expense-proofs');try{fs.mkdirSync(dir,{recursive:true});}catch{}
     const name='personal-tg-'+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,fp=path.join(dir,name);
-    https.get({hostname:'api.telegram.org',path:'/file/bot'+token()+'/'+remote},r=>{const chunks=[];let size=0;r.on('data',c=>{size+=c.length;if(size>15*1024*1024)r.destroy(new Error('Image is too large.'));else chunks.push(c);});r.on('end',()=>{if(r.statusCode<200||r.statusCode>=300)return reject(new Error('Telegram image download failed.'));fs.writeFileSync(fp,Buffer.concat(chunks));resolve('/api/expenses/photo/'+name);});r.on('error',reject);}).on('error',reject);
+    https.get({hostname:'api.telegram.org',path:'/file/bot'+token()+'/'+remote},r=>{const chunks=[];let size=0;r.on('data',c=>{size+=c.length;if(size>15*1024*1024)r.destroy(new Error('Image is too large.'));else chunks.push(c);});r.on('end',()=>{if(r.statusCode<200||r.statusCode>=300)return reject(new Error('Telegram image download failed.'));fs.writeFileSync(fp,Buffer.concat(chunks));resolve({url:'/api/expenses/photo/'+name,filePath:fp});});r.on('error',reject);}).on('error',reject);
   }));
 }
 function linkedUsername(s,chatId){return Object.keys(s.userChats||{}).find(u=>String(s.userChats[u])===String(chatId))||'';}
@@ -54,13 +74,15 @@ async function handleWebhookMessage(msg,s){
   if(file){
     if(msg.chat.type&&msg.chat.type!=='private')return reply(id,'🔒 Personal expense capture works only in your private bot chat.');
     if(!isOwner)return reply(id,'🔒 Only the linked Owner account can create PERSONAL expenses from Telegram.');
-    const parsed=parsePersonalCaption(raw);if(!parsed.ok)return reply(id,'Could not record this yet: '+parsed.error+'\n\nEasy format: Personal Food tip 0993 200');
-    const proof=await downloadPhoto(file.file_id),sourceKey='telegram:'+id+':'+String(file.file_unique_id||file.file_id);
-    const result=require('./expenses').createTelegramPersonalExpense(Object.assign({},parsed,{username:target.username,proof,sourceKey,rawNarration:raw}));
-    if(!result.success)return reply(id,'Could not record this yet: '+result.error+'\n\nEasy format: Personal Food tip 0993 200');
-    const e=result.expense;return reply(id,(result.duplicate?'Already recorded':'✅ PERSONAL expense recorded and marked paid')+'\n'+e.id+' · ₹'+Math.round(e.amount)+' · '+e.particulars+'\nAccount: '+e.account+'\nYou can review/category-correct it later in PERSONAL → All expenses.');
+    const intent=parsePersonalIntent(raw);if(!intent.ok)return reply(id,'Could not record this yet: '+intent.error+'\n\nEasy format: Personal Food tip');
+    const supplied=parsePersonalCaption(raw),download=await downloadPhoto(file.file_id),sourceKey='telegram:'+id+':'+String(file.file_unique_id||file.file_id);let ocr={};try{ocr=await readPaymentScreenshot(download.filePath);}catch(e){console.error('[telegram] OCR failed:',e.message);}
+    const amount=supplied.ok?supplied.amount:ocr.amount,account=supplied.ok?supplied.account:ocr.account,date=(supplied.ok&&supplied.date)||ocr.date||'',category=inferPersonalCategory(intent.particulars,ocr.recipient);
+    if(!(amount>0)||!account){try{fs.unlinkSync(download.filePath);}catch{}return reply(id,'I could not clearly read '+(!(amount>0)?'the amount':'the paying account')+' from this screenshot. Please send a clearer screenshot, or add '+(!(amount>0)?'the amount':'the account last digits')+' after the narration.\n\nExample: Personal Food tip'+(!(amount>0)?' 200':' 0993'));}
+    const result=require('./expenses').createTelegramPersonalExpense({amount,account,date,particulars:intent.particulars,vendor:ocr.recipient||intent.particulars,ledger:category.ledger,needsReview:!category.confidence,ocrText:ocr.text,username:target.username,proof:download.url,sourceKey,rawNarration:raw});
+    if(!result.success)return reply(id,'Could not record this yet: '+result.error+'\n\nEasy format: Personal Food tip');
+    const e=result.expense;return reply(id,(result.duplicate?'Already recorded':'✅ PERSONAL expense recorded and marked paid')+'\n'+e.id+' · ₹'+Math.round(e.amount)+' · '+e.particulars+'\nPaid to: '+e.vendor+'\nAccount: '+e.account+'\nCategory: '+e.ledger+(e.telegramNeedsReview?' (please review)':'')+'\nYou can correct it later in PERSONAL → All expenses.');
   }
-  if(username)return reply(id,'To record a PERSONAL payment, attach its screenshot with a simple caption like:\nPersonal Food tip 0993 200');
+  if(username)return reply(id,'To record a PERSONAL payment, attach its screenshot with a simple caption like:\nPersonal Food tip');
   return reply(id,'Ask the Owner for a fresh SANKI Telegram linking link.');
 }
 router.post('/api/telegram/webhook/:secret',express.json(),(req,res)=>{const s=load(),header=req.get('x-telegram-bot-api-secret-token')||'';if(!s.webhookSecret||(req.params.secret!==s.webhookSecret&&header!==s.webhookSecret))return res.status(403).end();s.updates++;save(s);const msg=(req.body||{}).message||(req.body||{}).edited_message;res.json({ok:true});handleWebhookMessage(msg,s).catch(e=>{console.error('[telegram] webhook message failed:',e.message);if(msg&&msg.chat)reply(String(msg.chat.id),'Could not record that screenshot. Please try again.');});});
@@ -69,4 +91,4 @@ router.get('/api/telegram/status',(req,res)=>{if(!owner(req))return res.status(4
 router.post('/api/telegram/setup',(req,res)=>{if(!owner(req))return res.status(403).json({success:false,error:'Owner only.'});if(!configured())return res.json({success:false,error:'TELEGRAM_BOT_TOKEN is not configured on Railway.'});const s=load();if(!s.webhookSecret)s.webhookSecret=crypto.randomBytes(24).toString('hex');Promise.all([tg('getMe',{}),tg('setWebhook',{url:base()+'/api/telegram/webhook/'+s.webhookSecret,secret_token:s.webhookSecret,allowed_updates:['message']})]).then(([me,hook])=>{if(me&&me.ok)s.botUsername=me.result.username;save(s);res.json(hook&&hook.ok?{success:true,botUsername:s.botUsername}:{success:false,error:(hook&&hook.description)||'Webhook setup failed.'});});});
 router.post('/api/telegram/test',(req,res)=>{if(!owner(req))return res.status(403).json({success:false,error:'Owner only.'});const username=String(req.body&&req.body.username||'').trim();if(username){const target=userSummary(username);if(!target)return res.status(404).json({success:false,error:'User not found.'});return notifyUser(target.username,'🔔 <b>Your SANKI Telegram notifications are working.</b>').then(r=>res.json(r.sent?{success:true,sent:r.sent,username:target.username}:{success:false,sent:0,error:'This user has not linked Telegram yet.'}));}notify('🔔 <b>SANKI Telegram notifications are working.</b>').then(r=>res.json({success:true,sent:r.sent}));});
 router.post('/api/telegram/unlink',(req,res)=>{if(!owner(req))return res.status(403).json({success:false,error:'Owner only.'});const target=userSummary(req.body&&req.body.username);if(!target)return res.status(404).json({success:false,error:'User not found.'});const s=load(),key=target.username.toLowerCase(),chatId=s.userChats[key];delete s.userChats[key];if(chatId&&!Object.values(s.userChats).includes(chatId))delete s.chats[chatId];save(s);res.json({success:true,username:target.username,wasLinked:!!chatId});});
-module.exports={router,notify,notifyApprovers,notifyUser,esc,configured,parsePersonalCaption};
+module.exports={router,notify,notifyApprovers,notifyUser,esc,configured,parsePersonalCaption,parsePersonalIntent,parsePaymentOcr,inferPersonalCategory,readPaymentScreenshot};
