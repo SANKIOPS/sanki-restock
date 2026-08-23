@@ -206,6 +206,27 @@ function saveStore(s) {
   fs.writeFileSync(tmp, JSON.stringify(s));
   fs.renameSync(tmp, EXP_PATH);
 }
+
+// Owner-only Telegram quick capture. The Telegram webhook has already verified
+// the linked owner chat before calling this function. A clear narration plus a
+// payment screenshot becomes a fully paid PERSONAL entry in one step.
+function createTelegramPersonalExpense(input) {
+  const b=input||{},s=loadStore(),amount=num(b.amount),proof=String(b.proof||'').trim();
+  const username=String(b.username||'').trim(),particulars=String(b.particulars||'').trim(),sourceKey=String(b.sourceKey||'').trim();
+  if(!(amount>0)) return {success:false,error:'Amount must be greater than 0.'};
+  if(!proof) return {success:false,error:'Payment screenshot is required.'};
+  if(!particulars) return {success:false,error:'Narration is required.'};
+  const requested=String(b.account||'').trim().toLowerCase(),accounts=companyAccountsForNature('PERSONAL');
+  const account=accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||accounts.find(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.includes(last);});
+  if(!account) return {success:false,error:'Personal account was not recognized.'};
+  if(sourceKey){const duplicate=Object.values(s.expenses||{}).find(e=>e.telegramSourceKey===sourceKey);if(duplicate)return {success:true,duplicate:true,expense:duplicate};}
+  const now=new Date().toISOString(),date=String(b.date||now.slice(0,10)).slice(0,10),paymentType=/cash/i.test(account)?'Cash':'UPI';
+  s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0');
+  const vendor=String(b.vendor||particulars).trim();
+  s.expenses[id]={id,date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger:'General Expense',vendor,claimant:username,account,channel:'Shared',bill:'printed',fundedBy:'claimant',paymentType,qrPhoto:'',billPhoto:proof,purchasePaymentProof:proof,exceptionEvidence:'',exceptionReason:'',billNote:'Captured from owner Telegram payment screenshot',paidAlready:true,personalPaidAmount:amount,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:proof,status:'paid',paidAmount:amount,payments:[{id:'PAY-001',amount,date,account,paymentType,proof,note:'Owner payment captured from Telegram',paidBy:username,paidAt:now,personalFunds:true}],createdAt:now,createdBy:username,approvedAt:now,approvedBy:username,paidAt:now,paidBy:username,telegramSourceKey:sourceKey,telegramNeedsReview:true,telegramNarration:String(b.rawNarration||particulars).trim()};
+  s.vendorsByNature=s.vendorsByNature||{};s.vendorsByNature.PERSONAL=s.vendorsByNature.PERSONAL||{};if(!s.vendorsByNature.PERSONAL[vendor.toLowerCase()])s.vendorsByNature.PERSONAL[vendor.toLowerCase()]={name:vendor,notes:'Added from Owner Telegram capture'};
+  saveStore(s);return {success:true,expense:s.expenses[id]};
+}
 function procurementAccounting(s) {
   s.procurementAccounting = Object.assign({ mediator: 'Logistics Mediator', trackPostedFrom: '2026-08-21T00:00:00+05:30', paymentsByPo: {} }, s.procurementAccounting || {});
   s.procurementAccounting.paymentsByPo = s.procurementAccounting.paymentsByPo || {};
@@ -613,7 +634,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (personalPayment && (personalPayment.personalFunds || e.status === 'pending')) {
       personalPayment.account = personalAccount; personalPayment.paymentType = e.paymentType; personalPayment.proof = personalProof; personalPayment.amount = num(e.requestedAmount || e.amount);
     }
-    e.fundedBy='claimant';e.personalPaidAmount=num(e.requestedAmount || e.amount);e.paidAmount=e.personalPaidAmount;e.reimbursementStatus=e.status==='pending'?'awaiting_approval':'pending';
+    e.fundedBy='claimant';e.personalPaidAmount=num(e.requestedAmount || e.amount);e.paidAmount=e.personalPaidAmount;e.reimbursementStatus=normalizedNature(e.nature)==='PERSONAL'?'not_applicable':(e.status==='pending'?'awaiting_approval':'pending');
   } else if (wasPaidAlready) {
     e.payments=(e.payments||[]).filter(p=>!p.personalFunds);e.fundedBy='company';e.personalPaidAmount=0;e.paidAmount=0;e.reimbursementStatus='not_applicable';e.purchasePaymentProof='';
     e.reimbursementAmount=0;e.reimbursementPayments=[];e.vendorPaymentCompleted=false;
@@ -629,6 +650,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (changes.length) {
     e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
     e.auditHistory.push({ id:'EDIT-'+String(e.auditHistory.length+1).padStart(3,'0'), reason:editReason || 'Pending expense correction', changes, editedBy:(req.user&&req.user.username)||'system', editedAt:new Date().toISOString() });
+    if(e.telegramNeedsReview)e.telegramNeedsReview=false;
   }
   saveStore(s);
   res.json({ success: true, expense: e });
@@ -1460,4 +1482,4 @@ function summaryForPL(from, to) {
   return out;
 }
 
-module.exports = { router, summaryForPL };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense };

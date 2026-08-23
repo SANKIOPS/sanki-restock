@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense } = require('../modules/expenses');
 
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -391,6 +391,19 @@ test('Telegram setup is Owner-only and supports per-user notification management
   assert.match(telegram, /router\.post\('\/api\/telegram\/link'.*if\(!owner\(req\)\)/);
   assert.match(telegram, /router\.post\('\/api\/telegram\/test'.*if\(!owner\(req\)\)/);
   assert.match(telegram, /router\.post\('\/api\/telegram\/unlink'.*if\(!owner\(req\)\)/);
+});
+
+test('Owner Telegram narration creates one deduplicated paid PERSONAL expense', () => {
+  const {parsePersonalCaption}=require('../modules/telegram');
+  const parsed=parsePersonalCaption('Personal | Nanny salary August | ICICI 0993 | ₹27,500');
+  assert.deepEqual(parsed,{ok:true,amount:27500,account:'ICICI 0993',particulars:'Nanny salary August',date:''});
+  assert.equal(parsePersonalCaption('Personal | Nanny salary').ok,false);
+  const input=Object.assign({},parsed,{username:'gaganlambasanki',proof:'/api/expenses/photo/personal-telegram.jpg',sourceKey:'telegram:owner:file-1',rawNarration:'Personal | Nanny salary August | ICICI 0993 | ₹27,500'});
+  const created=createTelegramPersonalExpense(input);
+  assert.equal(created.success,true);assert.equal(created.expense.nature,'PERSONAL');assert.equal(created.expense.status,'paid');assert.equal(created.expense.account,'ICICI Bank 0993');assert.equal(created.expense.approvedBy,'gaganlambasanki');assert.equal(created.expense.telegramNeedsReview,true);
+  const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'PERSONAL'}}).body.vendors;assert.ok(vendors.some(v=>v.name==='Nanny salary August'));
+  assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/NEEDS REVIEW/);
+  const duplicate=createTelegramPersonalExpense(input);assert.equal(duplicate.duplicate,true);assert.equal(duplicate.expense.id,created.expense.id);
 });
 
 test('only Admin or Owner can add a missing category during review', () => {
