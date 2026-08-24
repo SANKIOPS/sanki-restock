@@ -457,7 +457,7 @@
     // ── LIST ──
     function renderList(){
       el('panel').innerHTML = '<div class="card"><div class="filters" id="filters"></div>'+
-        '<div class="stats" id="lstats"></div><div id="ltable" class="muted">Loading…</div></div>';
+        '<div class="stats" id="lstats"></div><div id="combinedPayBar" class="payment-entry" style="display:none;margin:12px 0;border:1px solid #bfdbfe;background:#eff6ff"><span><b id="combinedPaySummary">No bills selected</b><div class="hint">Select approved bills for one vendor, then record one consolidated payment.</div></span><span class="row-actions" style="margin:0"><button type="button" class="btn mini green" id="combinedPayGo" disabled>Pay selected together</button><button type="button" class="btn mini ghost" id="combinedPayClear">Clear</button></span></div><div id="ltable" class="muted">Loading…</div></div>';
       var entityOptions = '<option value="">All</option>'+opts(cfg.natures);
       var typeFilter = cfg.canApprove?'<div class="fld"><label>Type</label><select id="lf_type"><option value="">All</option>'+opts(cfg.types)+'</select></div>':'';
       var claimantFilter = cfg.isAdmin?'<div class="fld"><label>Claimant</label><input id="lf_claimant" list="claimantList" placeholder="All claimants"><datalist id="claimantList">'+(cfg.people||[]).map(function(x){return '<option value="'+esc(x)+'">';}).join('')+'</datalist></div>':'';
@@ -487,6 +487,7 @@
           '<div class="stat"><div class="k">Total</div><div class="v">'+fmt(t.all)+'</div></div><div class="stat"><div class="k">Pending</div><div class="v">'+fmt(t.pending)+'</div></div><div class="stat"><div class="k">Paid</div><div class="v">'+fmt(t.paid)+'</div></div>';
         if(!d.expenses.length){ el('ltable').innerHTML='<span class="muted">No expenses in range.</span>'; return; }
         el('ltable').innerHTML='<div class="claim-list">'+d.expenses.map(expenseCard).join('')+'</div>'+(d.hasMore?'<div class="hint" style="margin-top:8px">Showing the latest '+d.expenses.length+' of '+d.totalCount+' expenses. Use the filters to see older entries.</div>':'');
+        setupCombinedPaymentSelection();
         if(focusId){var card=el('row_'+focusId);if(card){card.open=true;card.scrollIntoView({block:'center'});card.classList.add('flash');setTimeout(function(){card.classList.remove('flash');},2600);}focusId='';focusedExpenseId='';}
       });
     }
@@ -496,8 +497,26 @@
       if(!cfg.canApprove) return '';
       var edit=cfg.isAdmin?' <button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button>':'';
       if(e.status==='pending') return (canApproveExpense(e)?'<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button>':'<span class="badge b-nobill">proof incomplete</span>')+edit+' <button class="btn mini ghost" onclick="rejectExpense(\''+e.id+'\')">Reject</button>';
-      if((e.status==='approved'||e.status==='partially_paid')&&!e.paidAlready) return '<button class="btn mini green" onclick="openPay(\''+e.id+'\')">'+(e.status==='partially_paid'?'Record next payment':'Record payment')+'</button>'+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo approval</button>':'')+edit;
+      if((e.status==='approved'||e.status==='partially_paid')&&!e.paidAlready) return '<label class="btn mini ghost combined-pay-choice" title="Select this bill with other outstanding bills for the same vendor"><input type="checkbox" class="combined-pay-select" value="'+esc(e.id)+'" data-vendor="'+esc(String(e.vendor||'').trim().toLowerCase())+'" data-nature="'+esc(e.nature||'SANKI')+'" data-due="'+Math.max(0,(e.amount||0)-(e.paidAmount||0))+'"> Select to combine</label> <button class="btn mini green" onclick="openPay(\''+e.id+'\')">'+(e.status==='partially_paid'?'Record next payment':'Record payment')+'</button>'+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo approval</button>':'')+edit;
       return edit;
+    }
+    function setupCombinedPaymentSelection(){
+      if(!cfg.canApprove||!el('combinedPayBar')) return;
+      var boxes=Array.prototype.slice.call(document.querySelectorAll('.combined-pay-select'));
+      if(!boxes.length) return;
+      el('combinedPayBar').style.display='flex';
+      function selected(){return boxes.filter(function(x){return x.checked;});}
+      function refresh(){
+        var chosen=selected(),vendor=chosen.length?chosen[0].dataset.vendor:'',nature=chosen.length?chosen[0].dataset.nature:'';
+        boxes.forEach(function(x){x.disabled=!!chosen.length&&!x.checked&&(x.dataset.vendor!==vendor||x.dataset.nature!==nature);});
+        var total=chosen.reduce(function(n,x){return n+(Number(x.dataset.due)||0);},0);
+        el('combinedPaySummary').textContent=chosen.length?(chosen.length+' bill'+(chosen.length===1?'':'s')+' selected · '+fmt(total)+' outstanding'):'No bills selected';
+        el('combinedPayGo').disabled=chosen.length<2;
+      }
+      boxes.forEach(function(x){x.addEventListener('change',refresh);});
+      el('combinedPayClear').onclick=function(){boxes.forEach(function(x){x.checked=false;x.disabled=false;});refresh();};
+      el('combinedPayGo').onclick=function(){var ids=selected().map(function(x){return x.value;});if(ids.length>1)openPay(ids[0],ids);};
+      refresh();
     }
     function paymentHistory(e){
       if(!(e.payments||[]).length) return '<span class="muted">No payment recorded yet.</span>';
@@ -657,7 +676,7 @@
     };
 
     // ── PAY dialog ──
-    window.openPay = function(id){
+    window.openPay = function(id, preselectedIds){
       payId = id; payUrl=''; payMode='vendor';
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
@@ -671,8 +690,10 @@
         if(!d.success||!d.expenses||!d.expenses.length)return;
         var currentDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));
         el('payBatchWrap').style.display='';
-        el('payBatchList').innerHTML='<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(id)+'" data-due="'+currentDue+'" checked disabled> '+esc(e.date||'')+' · '+esc(e.particulars||e.id)+'</span><b>'+fmt(currentDue)+'</b></label>'+d.expenses.map(function(x){return '<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(x.id)+'" data-due="'+x.balanceDue+'"> '+esc(x.date||'')+' · '+esc(x.particulars||x.id)+'</span><b>'+fmt(x.balanceDue)+'</b></label>';}).join('');
+        var wanted=Array.isArray(preselectedIds)?preselectedIds:[id];
+        el('payBatchList').innerHTML='<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(id)+'" data-due="'+currentDue+'" checked disabled> '+esc(e.date||'')+' · '+esc(e.id)+' · '+esc(e.particulars||'')+'</span><b>'+fmt(currentDue)+'</b></label>'+d.expenses.map(function(x){return '<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(x.id)+'" data-due="'+x.balanceDue+'"'+(wanted.indexOf(x.id)>=0?' checked':'')+'> '+esc(x.date||'')+' · '+esc(x.id)+' · '+esc(x.particulars||'')+'</span><b>'+fmt(x.balanceDue)+'</b></label>';}).join('');
         Array.prototype.forEach.call(document.querySelectorAll('.batch-expense'),function(box){box.addEventListener('change',function(){var total=0;Array.prototype.forEach.call(document.querySelectorAll('.batch-expense:checked'),function(x){total+=Number(x.getAttribute('data-due'))||0;});el('payAmount').value=total;el('payAmount').max=total;el('payAmount').readOnly=false;el('payGo').textContent=document.querySelectorAll('.batch-expense:checked').length>1?'Pay selected together':'Save payment';});});
+        if(wanted.length>1){var total=0;Array.prototype.forEach.call(document.querySelectorAll('.batch-expense:checked'),function(x){total+=Number(x.getAttribute('data-due'))||0;});el('payAmount').value=total;el('payAmount').max=total;el('payGo').textContent='Pay selected together';}
       });
     };
     window.openPurchasePay = function(id){ openPay(id); payMode='procurement'; el('payTitle').textContent='Pay logistics mediator · '+id; };

@@ -554,6 +554,14 @@ test('approved expenses for the same vendor can be paid together with one proof'
   assert.equal(paid.body.expenses[0].payments.at(-1).batchPaymentId,paid.body.expenses[1].payments.at(-1).batchPaymentId);
 });
 
+test('All Expenses exposes a clear same-vendor consolidated payment selector', () => {
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/class="combined-pay-select"/);
+  assert.match(html,/Select to combine/);
+  assert.match(html,/Pay selected together/);
+  assert.match(html,/openPay\(ids\[0\],ids\)/);
+});
+
 test('one consolidated payment partially allocates across selected bills oldest first', () => {
   function approved(amount,date) {
     const made=invoke('POST','/api/expenses',{body:{date,vendor:'Partial Flower Vendor',amount,billPhoto:'/api/expenses/photo/pbill.jpg',paymentType:'Cash'}});
