@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { buildPlan, settingsWithDefaults } = require('../modules/casuals');
+const { buildPlan, settingsWithDefaults, validSplitBoxes } = require('../modules/casuals');
 
 test('Shirts and T-shirts support the same design-first target as Trousers', () => {
   const settings = settingsWithDefaults({ settings: {} });
@@ -38,5 +38,21 @@ test('legacy Casual UI presents shared upper and trouser workflow', () => {
   assert.match(html, /id="czDesignFolder"[^>]*webkitdirectory/);
   assert.match(html, /function czDImportFolder\(fileList\)/);
   assert.match(html, /Each subfolder becomes a design automatically/);
+  assert.match(html, /id="czModeSplitter"/);
+  assert.match(html, /id="czSplitBatch"/);
+  assert.match(html, /\/api\/casuals\/photo-split/);
   assert.doesNotMatch(html, /Plan this category by/);
+});
+
+test('photo splitter sanitizes crop boxes and removes near duplicates', () => {
+  assert.deepEqual(validSplitBoxes([
+    [0.05, 0.10, 0.45, 0.90],
+    [0.051, 0.101, 0.451, 0.901],
+    [0.55, 0.10, 0.95, 0.90],
+    [0, 0, 0.02, 0.02],
+    ['bad', 0, 1, 1]
+  ]), [
+    [0.05, 0.10, 0.45, 0.90],
+    [0.55, 0.10, 0.95, 0.90]
+  ]);
 });

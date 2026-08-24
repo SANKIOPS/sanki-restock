@@ -642,6 +642,7 @@
           <div class="czmodetog" style="display:flex;gap:6px;margin:0 0 10px">
             <button type="button" class="czmodebtn on" id="czModePile">🗂 Pile &amp; segregate</button>
             <button type="button" class="czmodebtn" id="czModeDesign">🎨 By design</button>
+            <button type="button" class="czmodebtn" id="czModeSplitter">✂ Photos Splitter</button>
           </div>
           <div id="czPileMode">
             <div class="drop" style="margin-top:4px" id="czDrop">
@@ -664,8 +665,21 @@
               <button type="button" class="btn sm" id="czSaveDesigns" style="margin-left:8px">⬆ Upload these designs</button></div>
           </div>
           <div id="czUploadStatus" class="muted" style="font-size:12px; margin-top:6px"></div>
-        </div>
-      </div>
+            </div>
+          </div>
+          <div id="czSplitterMode" style="display:none">
+            <div class="muted" style="font-size:12px;margin:0 0 10px">Upload collage photos containing several product/colour photos. The app separates them, lets you remove incorrect crops, then sends only the approved photos to the batch you choose.</div>
+            <div class="czrow" style="align-items:flex-end">
+              <div class="fld" style="min-width:220px;flex:1"><label>Destination batch</label><select id="czSplitBatch"></select></div>
+              <div class="fld" style="min-width:180px"><label>Vendor</label><input id="czSplitVendor" placeholder="e.g. CHAOUFI" /></div>
+              <label class="btn ghost" style="cursor:pointer">Choose collage photos
+                <input id="czSplitInput" type="file" accept="image/*" multiple style="display:none" />
+              </label>
+            </div>
+            <div id="czSplitStatus" class="muted" style="font-size:12px;margin-top:8px"></div>
+            <div id="czSplitResults" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:10px"></div>
+            <button class="btn" type="button" id="czSplitAdd" style="display:none;margin-top:12px">Add approved photos to batch</button>
+          </div>
 
       <div id="czWorkflow" style="display:none"><!-- shown only while a batch is open -->
       <!-- ② Design-first plan — one consistent workflow per category -->
@@ -1839,7 +1853,9 @@
   // colour as human overrides + a designId — so it flows into the SAME grid,
   // staircase and budget math as a tagged pile photo, and the order-sheet slots
   // fill themselves from the real photos. No AI segregation needed.
-  var czDMode = false;                 // false = pile, true = by-design
+  var czDMode = false;                 // compatibility flag: true only in by-design mode
+  var czUploadMode = 'pile';
+  var czSplitResults = [];
   var czDesigns = [];                  // [{id, name, cat, fit, cols:[{id, colour, file, url, detecting}]}]
   var czDSeq = 0;
   // The categories this batch spans (multi-category aware). czDCat = the DEFAULT
@@ -1851,12 +1867,83 @@
   function czDCatOf(d){ var cats = czDCats(); if(d && d.cat && cats.indexOf(d.cat) >= 0) return d.cat; return czDCat(); }
   function czDFits(cat){ var m = (czSettings && czSettings.categories[cat] && czSettings.categories[cat].fits) || {}; return Object.keys(m); }
   function czDColours(cat){ var m = (czSettings && czSettings.categories[cat] && czSettings.categories[cat].colours) || {}; return Object.keys(m); }
-  function czSetMode(design){
-    czDMode = !!design;
-    var mp = el('czModePile'), md = el('czModeDesign'), pm = el('czPileMode'), dm = el('czDesignMode');
-    if(mp) mp.classList.toggle('on', !czDMode); if(md) md.classList.toggle('on', czDMode);
-    if(pm) pm.style.display = czDMode ? 'none' : ''; if(dm) dm.style.display = czDMode ? '' : 'none';
+  function czSetMode(mode){
+    if(mode === true) mode='design'; else if(mode === false) mode='pile';
+    czUploadMode = (mode==='design'||mode==='splitter') ? mode : 'pile';
+    czDMode = czUploadMode === 'design';
+    var mp=el('czModePile'), md=el('czModeDesign'), ms=el('czModeSplitter'), pm=el('czPileMode'), dm=el('czDesignMode'), sm=el('czSplitterMode');
+    if(mp) mp.classList.toggle('on',czUploadMode==='pile');
+    if(md) md.classList.toggle('on',czUploadMode==='design');
+    if(ms) ms.classList.toggle('on',czUploadMode==='splitter');
+    if(pm) pm.style.display=czUploadMode==='pile'?'':'none';
+    if(dm) dm.style.display=czUploadMode==='design'?'':'none';
+    if(sm) sm.style.display=czUploadMode==='splitter'?'':'none';
     if(czDMode && !czDesigns.length) czDAddDesign();
+    if(czUploadMode==='splitter') czSplitRenderBatches();
+  }
+
+  function czSplitRenderBatches(){
+    var sel=el('czSplitBatch'); if(!sel) return;
+    sel.innerHTML=(czBatches||[]).map(function(b){
+      var cats=czBatchCats(b).map(function(k){ return CAT_LABEL[k]||k; }).join(', ');
+      return '<option value="'+escapeHtml(b.id)+'"'+(b.id===czActiveBatch?' selected':'')+'>'+escapeHtml(b.name||'Batch')+(cats?' — '+escapeHtml(cats):'')+'</option>';
+    }).join('');
+    if(!sel.innerHTML) sel.innerHTML='<option value="">Create a batch first</option>';
+  }
+  function czSplitDataFile(item){
+    var parts=String(item.data||'').split(','), mime=item.mimeType||'image/jpeg';
+    var bin=atob(parts[1]||''), bytes=new Uint8Array(bin.length);
+    for(var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+    return new File([bytes], 'split-'+(item.sourceIndex+1)+'-'+item.index+'.jpg', {type:mime});
+  }
+  function czSplitRender(){
+    var host=el('czSplitResults'), add=el('czSplitAdd'); if(!host||!add) return;
+    host.innerHTML='';
+    czSplitResults.forEach(function(it){
+      var card=document.createElement('div'); card.style.cssText='border:1px solid #e2e8f0;border-radius:9px;padding:7px;background:#fff';
+      card.innerHTML='<img src="'+it.data+'" style="width:100%;height:150px;object-fit:contain;background:#f8fafc;border-radius:6px;display:block">'
+        +'<div style="font-size:11px;color:#64748b;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+escapeHtml(it.sourceName)+'">'+escapeHtml(it.sourceName)+' · crop '+it.index+'</div>'
+        +'<button type="button" data-remove style="border:none;background:none;color:#dc2626;padding:4px 0 0;cursor:pointer;font-size:11px">Remove crop</button>';
+      card.querySelector('[data-remove]').addEventListener('click',function(){ czSplitResults=czSplitResults.filter(function(x){ return x.id!==it.id; }); czSplitRender(); });
+      host.appendChild(card);
+    });
+    add.style.display=czSplitResults.length?'':'none';
+    add.textContent='Add '+czSplitResults.length+' approved photo'+(czSplitResults.length===1?'':'s')+' to batch';
+  }
+  function czSplitPhotos(files){
+    var st=el('czSplitStatus'), fd=new FormData();
+    Array.prototype.forEach.call(files||[],function(f){ if(/^image\//.test(f.type)) fd.append('photos',f); });
+    if(!fd.getAll('photos').length){ st.innerHTML='<span style="color:var(--err)">Choose at least one collage photo.</span>'; return; }
+    st.textContent='Finding and separating the individual photos…'; el('czSplitInput').disabled=true;
+    fetch('/api/casuals/photo-split',{method:'POST',body:fd}).then(function(r){ return r.json(); }).then(function(d){
+      el('czSplitInput').disabled=false;
+      if(!d.success){ st.innerHTML='<span style="color:var(--err)">'+escapeHtml(d.error||'Could not split photos')+'</span>'; return; }
+      czSplitResults=d.results||[]; czSplitRender();
+      st.innerHTML='<span style="color:var(--emerald-d)">✓ Found '+czSplitResults.length+' individual photo'+(czSplitResults.length===1?'':'s')+'. Review the crops below.</span>';
+    }).catch(function(){ el('czSplitInput').disabled=false; st.innerHTML='<span style="color:var(--err)">Photo splitting failed. Try fewer or clearer collages.</span>'; });
+  }
+  function czSplitAddToBatch(){
+    var st=el('czSplitStatus'), batch=el('czSplitBatch').value, vendor=(el('czSplitVendor').value||'').trim();
+    if(!batch){ st.innerHTML='<span style="color:var(--err)">Create or select a destination batch first.</span>'; return; }
+    if(!vendor){ st.innerHTML='<span style="color:var(--err)">Enter the vendor name.</span>'; el('czSplitVendor').focus(); return; }
+    if(!czSplitResults.length) return;
+    var fd=new FormData(), meta=[];
+    czSplitResults.forEach(function(it){
+      fd.append('photos',czSplitDataFile(it));
+      meta.push({designId:it.designGroup,designName:String(it.sourceName||'Split design').replace(/\.[^.]+$/,'')});
+    });
+    fd.append('vendor',vendor); fd.append('batch',batch); fd.append('meta',JSON.stringify(meta));
+    el('czSplitAdd').disabled=true; st.textContent='Adding approved crops and segregating them for the procurement plan…';
+    fetch('/api/casuals/candidates',{method:'POST',body:fd}).then(function(r){ return r.json(); }).then(function(d){
+      if(!d.success) throw new Error(d.error||'Upload failed');
+      return fetch('/api/casuals/analyze',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(function(r){ return r.json(); });
+    }).then(function(a){
+      el('czSplitAdd').disabled=false;
+      if(!a.success) throw new Error(a.error||'Segregation failed');
+      var n=czSplitResults.length; czSplitResults=[]; czSplitRender();
+      st.innerHTML='<span style="color:var(--emerald-d)">✓ Added and segregated '+n+' individual photo'+(n===1?'':'s')+' in the selected batch. They are now included in its procurement workflow.</span>';
+      return czLoadCandidates().then(czLoadPlan);
+    }).catch(function(e){ el('czSplitAdd').disabled=false; st.innerHTML='<span style="color:var(--err)">'+escapeHtml(e.message||'Could not add photos')+'</span>'; });
   }
   function czDAddDesign(){
     var cat = czDCat();
@@ -3765,6 +3852,9 @@
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czModePile').addEventListener('click', function(){ czSetMode(false); });
   el('czModeDesign').addEventListener('click', function(){ czSetMode(true); czDRender(); });
+  el('czModeSplitter').addEventListener('click', function(){ czSetMode('splitter'); });
+  el('czSplitInput').addEventListener('change', function(){ var fl=Array.prototype.slice.call(this.files||[]); this.value=''; czSplitPhotos(fl); });
+  el('czSplitAdd').addEventListener('click', czSplitAddToBatch);
   el('czDesignFolder').addEventListener('change', function(){ var fl=Array.prototype.slice.call(this.files||[]); this.value=''; czDImportFolder(fl); });
   el('czAddDesign').addEventListener('click', czDAddDesign);
   el('czSaveDesigns').addEventListener('click', czSaveDesigns);

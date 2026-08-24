@@ -547,6 +547,88 @@ const candidateUpload = multer({
   limits: { fileSize: 25 * 1024 * 1024, files: 200 },
   fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
 });
+
+// ── Photo Splitter ──────────────────────────────────────────────
+// Supplier screenshots often contain several colourway/product photos in one
+// collage. Detect the individual photo rectangles, crop them server-side and
+// return reviewable JPEGs. Nothing is written to a procurement batch here; the
+// browser explicitly uploads only the crops the buyer keeps.
+const splitterUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 20 },
+  fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
+});
+
+function validSplitBoxes(raw) {
+  const boxes = [];
+  (Array.isArray(raw) ? raw : []).forEach(b => {
+    const a = Array.isArray(b) ? b : (b && b.box);
+    if (!Array.isArray(a) || a.length !== 4) return;
+    const n = a.map(Number);
+    if (!n.every(Number.isFinite)) return;
+    const x0 = Math.max(0, Math.min(1, n[0])), y0 = Math.max(0, Math.min(1, n[1]));
+    const x1 = Math.max(0, Math.min(1, n[2])), y1 = Math.max(0, Math.min(1, n[3]));
+    if (x1 - x0 < 0.08 || y1 - y0 < 0.08) return;
+    // Avoid duplicate boxes returned with tiny coordinate differences.
+    if (boxes.some(q => Math.abs(q[0]-x0)<0.025 && Math.abs(q[1]-y0)<0.025 && Math.abs(q[2]-x1)<0.025 && Math.abs(q[3]-y1)<0.025)) return;
+    boxes.push([x0,y0,x1,y1]);
+  });
+  return boxes.slice(0, 30);
+}
+
+async function detectPhotoBoxes(buffer, mediaType) {
+  const enc = await shrinkForVision(buffer, mediaType);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90000);
+  let r;
+  try {
+    r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1800, temperature: 0, messages: [{ role:'user', content:[
+        { type:'image', source:{ type:'base64', media_type:enc.mediaType, data:enc.data } },
+        { type:'text', text:'This is a supplier collage or screenshot containing one or more separate garment/product photos. Find every distinct product-photo panel. Exclude text, app controls, blank margins, logos and tiny thumbnails. Return tight rectangular crops that keep the complete garment inside each crop. Coordinates are normalized against the whole image. If this is already one single product photo, return one box covering the useful photo. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.' }
+      ]}] })
+    });
+  } finally { clearTimeout(timer); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('AI HTTP ' + r.status));
+  const parsed = extractJson((j.content || []).map(c => c.text || '').join('')) || {};
+  return validSplitBoxes(parsed.boxes);
+}
+
+router.post('/api/casuals/photo-split', (req, res) => {
+  splitterUpload.array('photos', 20)(req, res, async err => {
+    if (err) return res.status(400).json({ success:false, error:err.code === 'LIMIT_FILE_SIZE' ? 'A photo is larger than 25 MB.' : err.message });
+    if (!Jimp) return res.status(503).json({ success:false, error:'Photo cropping is temporarily unavailable.' });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ success:false, error:'Choose at least one collage photo.' });
+    try {
+      const results = [], splitRun = crypto.randomBytes(6).toString('hex');
+      for (let fi=0; fi<files.length; fi++) {
+        const f = files[fi];
+        const boxes = await detectPhotoBoxes(f.buffer, f.mimetype);
+        if (!boxes.length) continue;
+        const img = await Jimp.read(f.buffer), W = img.bitmap.width, H = img.bitmap.height;
+        for (let bi=0; bi<boxes.length; bi++) {
+          const b = boxes[bi];
+          const x = Math.max(0, Math.floor(b[0]*W)), y = Math.max(0, Math.floor(b[1]*H));
+          const w = Math.max(1, Math.min(W-x, Math.ceil((b[2]-b[0])*W)));
+          const h = Math.max(1, Math.min(H-y, Math.ceil((b[3]-b[1])*H)));
+          const crop = img.clone().crop(x,y,w,h);
+          if (crop.bitmap.width > 1800 || crop.bitmap.height > 1800) crop.scaleToFit(1800,1800);
+          crop.quality(90);
+          const out = await crop.getBufferAsync(Jimp.MIME_JPEG);
+          results.push({ id:'split-'+splitRun+'-'+fi+'-'+bi, sourceIndex:fi, sourceName:f.originalname || ('Photo '+(fi+1)), designGroup:'split-design-'+splitRun+'-'+fi, index:bi+1, box:b, mimeType:'image/jpeg', data:'data:image/jpeg;base64,'+out.toString('base64') });
+        }
+      }
+      if (!results.length) return res.status(422).json({ success:false, error:'No separate product photos could be detected. Try a clearer collage.' });
+      res.json({ success:true, results });
+    } catch (e) {
+      res.status(e && e.name === 'AbortError' ? 504 : 502).json({ success:false, error:e && e.name === 'AbortError' ? 'Photo splitting timed out. Try fewer photos at once.' : ('Could not split the photos: '+e.message) });
+    }
+  });
+});
 function runCandidateUpload(req, res) {
   return new Promise((resolve) => {
     candidateUpload.array('photos', 200)(req, res, (err) => {
@@ -1741,14 +1823,19 @@ router.post('/api/casuals/candidates', async (req, res) => {
     if (mdCat && !(CAT_BY_KEY[mdCat] && (!batchCatKeys.length || batchCatKeys.indexOf(mdCat) >= 0))) mdCat = null;
     const useCat = mdCat || soleCat;
     const spec = useCat ? CAT_BY_KEY[useCat] : null;
+    if (md) {
+      // Design identity does not depend on category being known. Photo Splitter
+      // crops enter as an unclassified pile, but colourways from one source
+      // collage must remain grouped as the same design after segregation.
+      if (md.designId) c.designId = String(md.designId);
+      if (md.designName) c.designName = String(md.designName).trim();
+    }
     if (md && spec) {
       c.category = useCat;
       const fk = String(md.fit || '').trim();
       if (fk && spec.fits.some(x => x.key === fk)) { c.fit = fk; c.fitOverride = true; }
       const col = String(md.colour || '').trim();
       if (col) { c.colour = col; c.colourOverride = true; }
-      if (md.designId) c.designId = String(md.designId);
-      if (md.designName) c.designName = String(md.designName).trim();
     }
     s.candidates.push(c);
     added.push(publicCandidate(c));
@@ -2232,4 +2319,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes };
