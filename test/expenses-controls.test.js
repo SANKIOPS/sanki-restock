@@ -19,6 +19,9 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
   assert.ok(layer, `route exists: ${method} ${routePath}`);
   const req = {
     body, params, query,
+    headers: { 'user-agent':'SANKI Test Mobile', 'x-forwarded-for':'203.0.113.10' },
+    get(name) { return this.headers[String(name).toLowerCase()] || ''; },
+    ip: '203.0.113.10',
     user: { username: role === 'claimant' ? 'arshpreet' : role + '-user', role, roles: [role] }
   };
   let status = 200;
@@ -173,6 +176,18 @@ test('PERSONAL stays outside business P&L and is available to claimants, Admin a
   const ownerApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'owner' });
   assert.equal(ownerApproval.status, 200);
   assert.deepEqual(summaryForPL(), sankiPlBefore, 'PERSONAL must never enter a business P&L');
+});
+
+test('audit log groups each expense into a readable complete lifecycle with user, device and IP', () => {
+  const created=invoke('POST','/api/expenses',{role:'claimant',body:{nature:'SANKI',vendor:'Audit Timeline Vendor',particulars:'Audit test',amount:125.5,billPhoto:'/api/expenses/photo/audit.jpg',paymentType:'Cash'}}).body.expense;
+  invoke('POST','/api/expenses/:id',{role:'admin',params:{id:created.id},body:{ledger:'General Expense'}});
+  invoke('POST','/api/expenses/:id/approve',{role:'admin',params:{id:created.id}});
+  invoke('POST','/api/expenses/:id/pay',{role:'admin',params:{id:created.id},body:{amount:125.5,account:'Counter Cash',paymentType:'Cash',paymentProof:'/api/expenses/photo/audit-payment.jpg'}});
+  const result=invoke('GET','/api/expenses/audit-log',{role:'owner',query:{subject:created.id}});
+  assert.equal(result.status,200);const record=result.body.records.find(x=>x.id===created.id);assert.ok(record);
+  assert.deepEqual(record.timeline.map(x=>x.action),['CREATED','EDITED','APPROVED','PAYMENT_RECORDED']);
+  assert.equal(record.timeline[0].user,'arshpreet');assert.equal(record.timeline[0].device,'Mobile');assert.equal(record.timeline[0].ip,'203.0.113.10');
+  assert.equal(record.amount,125.5);assert.equal(record.status,'paid');
 });
 
 test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
