@@ -652,7 +652,7 @@
             </div>
           </div>
           <div id="czDesignMode" style="display:none">
-            <div class="muted" style="font-size:12px;margin:0 0 8px">For each design, set the category (if this batch has more than one), fit &amp; name, then upload <b>all its colour photos at once</b> — the AI auto-detects each colour. Every colour becomes its own SKU with its real photo; the buy plan &amp; budget are calculated exactly the same as the pile flow.</div>
+            <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> Create one design card (your design folder), set its category, fit and name, then upload <b>all colour photos for that design at once</b>. The AI detects each colour and every colourway keeps its real photo as a separate SKU.</div>
             <div id="czDesignList"></div>
             <div style="margin-top:10px"><button type="button" class="btn ghost sm" id="czAddDesign">＋ Add design</button>
               <button type="button" class="btn sm" id="czSaveDesigns" style="margin-left:8px">⬆ Upload these designs</button></div>
@@ -662,10 +662,10 @@
       </div>
 
       <div id="czWorkflow" style="display:none"><!-- shown only while a batch is open -->
-      <!-- ② Budget — set a separate rupee ceiling per category -->
+      <!-- ② Design-first plan — one consistent workflow per category -->
       <div class="panel">
-        <h2 style="margin:0 0 3px">② Budget — per category</h2>
-        <p class="sub">Enable the categories you're buying this cycle and set a rupee budget for each one below — Trouser, Shirt and T-shirt are funded separately.</p>
+        <h2 style="margin:0 0 3px">② Plan setup — per category</h2>
+        <p class="sub">Trousers, Shirts and T-shirts now use the same design-first setup. Enter the required designs, size run, colour mix and fit; Shirts and T-shirts also retain their print mix.</p>
       </div>
 
       <!-- ③ Categories — enable + budget + editable % (fit / size / colour) -->
@@ -1411,48 +1411,27 @@
       // were removed: the per-unit price is only a soft guess that changes
       // nothing about the rupee plan — real units are decided at PO from the
       // vendor's actual quote. We keep the money, drop the fake piece counts.
-      // TWO sizing modes the founder picks per category. 'cost' anchors the buy
-      // on a rupee budget (÷ est ₹/pc → pieces); 'units' lets the founder type the
-      // piece target directly (real prices only exist AFTER photos go to the
-      // vendor). Either way the total cascades down the SAME fit/print/colour %s.
-      if(c.sizeMode !== 'units' && c.sizeMode !== 'designs') c.sizeMode = 'cost';
+      // Every category now follows the same design-first intake. The founder says
+      // how many designs are required, then defines the category's dimensions.
+      // Real prices remain optional until the vendor confirms them.
+      c.sizeMode = 'designs';
       var isTrouser = (catKey === 'Trouser');
-      // Trouser is ALWAYS spec-driven (designs mode) — the founder is asked #designs
-      // up front, no budget/units picker. Force it so the wizard shows straight away.
-      if(isTrouser) c.sizeMode = 'designs';
-      var isUnits = c.sizeMode === 'units';
-      var isDesigns = c.sizeMode === 'designs';
+      var isDesigns = true;
       var row = document.createElement('div'); row.className = 'czrow';
-      if(isTrouser){
-        // Trouser wizard — step ① is just the number of designs. Size system moves
-        // into step ②, budget/units are gone (optional cost lives at PO stage 2).
-        row.innerHTML =
-          '<div class="fld" style="min-width:180px"><label>① Number of designs</label><input data-designs inputmode="numeric" value="'+fmtINR(c.designs||0)+'" placeholder="e.g. 10" /></div>'
-          + '<div class="fld" data-costfld2 style="min-width:160px"><label>Est ₹/piece (optional)</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
-      } else {
-        row.innerHTML =
-          '<div class="fld" style="min-width:170px"><label>Plan this category by</label>'
-          + '<select data-sizemode>'
-          + '<option value="designs"'+(isDesigns?' selected':'')+'>Number of designs</option>'
-          + '<option value="units"'+(isUnits?' selected':'')+'>Number of units</option>'
-          + '<option value="cost"'+((isUnits||isDesigns)?'':' selected')+'>Estimated budget ₹</option>'
-          + '</select></div>'
-          + '<div class="fld" data-designfld style="min-width:150px;'+(isDesigns?'':'display:none')+'"><label>Number of designs</label><input data-designs inputmode="numeric" value="'+fmtINR(c.designs||0)+'" /></div>'
-          + '<div class="fld" data-costfld style="min-width:150px;'+((isUnits||isDesigns)?'display:none':'')+'"><label>Budget ₹ (this category)</label><input data-budget inputmode="numeric" value="'+fmtINR(c.budget||0)+'" /></div>'
-          + '<div class="fld" data-unitfld style="min-width:150px;'+(isUnits?'':'display:none')+'"><label>Target units (this category)</label><input data-units inputmode="numeric" value="'+fmtINR(c.targetUnits||0)+'" /></div>'
-          + '<div class="fld" data-costfld2 style="min-width:150px;'+(isDesigns?'':'display:none')+'"><label>Est ₹/piece (optional)</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
-      }
+      row.innerHTML =
+        '<div class="fld" style="min-width:180px"><label>① Number of designs</label><input data-designs inputmode="numeric" value="'+fmtINR(c.designs||0)+'" placeholder="e.g. 10" /></div>'
+        + '<div class="fld" data-costfld2 style="min-width:160px"><label>Est ₹/piece (optional)</label><input data-avgcost inputmode="numeric" value="'+fmtINR(c.avgCost||0)+'" /></div>';
       body.appendChild(row);
 
       var pills = document.createElement('div'); pills.className = 'czpills';
       pills.innerHTML = '<div class="czpill">Target pieces<b data-unitspill>0</b></div><div class="czpill">Set size<b data-setpill>0 pc</b></div><div class="czpill">→ Designs<b data-designpill>0</b></div>'
-        + (isTrouser ? '' : '<div class="czpill">Budget<b data-budgetpill>₹0</b></div>');
+        + '<div class="czpill">Estimated value<b data-budgetpill>₹0</b></div>';
       body.appendChild(pills);
 
       // Print-type mix % — an extra manual split (Shirts & T-shirts only) that
       // sits ABOVE fit in the hierarchy, so it is edited FIRST. Fixed 3 buckets.
       if(CZ_PRINT_CATS.indexOf(catKey) >= 0 && c.printTypes){
-        var psub = document.createElement('div'); psub.className = 'czsub'; psub.textContent = '① Print type mix % — editable (split first)';
+        var psub = document.createElement('div'); psub.className = 'czsub'; psub.textContent = '② Print type mix % — editable';
         body.appendChild(psub);
         var pwrap = document.createElement('div'); pwrap.className = 'czdist'; pwrap.setAttribute('data-kind', 'printTypes');
         CZ_PRINT_KEYS.forEach(function(pk){
@@ -1471,17 +1450,18 @@
       // WITHIN each fit; the plan matches it when it must hold designs back and
       // flags any colour it is short of as "needs sourcing".
       var isUpper = CZ_PRINT_CATS.indexOf(catKey) >= 0;
-      // Trouser wizard order: ② Sizes → ③ Colours → ④ Fit (Baggy/Normal). Other
-      // categories keep the original fit → size → colour order.
-      var kinds = isTrouser ? ['sizes','colours','fits'] : ['fits','sizes','colours'];
+      // Use the same operational order for every category. Uppers insert print as
+      // step ②, so their size/colour/fit steps are numbered one place later.
+      var kinds = ['sizes','colours','fits'];
       kinds.forEach(function(kind){
+        var stepBase = isTrouser ? 2 : 3;
         var title = isTrouser
           ? (kind === 'sizes' ? '② Size run — quantity per size (SUM = one design’s set)'
             : kind === 'colours' ? '③ Colour mix %'
             : '④ Fit — Baggy vs Normal %')
-          : (kind === 'fits' ? (isUpper ? '② Fit mix % — within each print type' : 'Fit mix %')
-            : kind === 'sizes' ? 'Pieces per set — one design’s S–XXXL run (SUM = set size)'
-            : 'Colour mix % — within each fit');
+          : (kind === 'sizes' ? (stepBase+' Size run — quantity per size (SUM = one design’s set)')
+            : kind === 'colours' ? ((stepBase+1)+' Colour mix %')
+            : ((stepBase+2)+' Fit mix % — within each print type'));
         var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
         body.appendChild(sub);
         // Trouser: the size-system dropdown (alpha 26–40 / S–XXXXL) leads the Sizes step.
@@ -1519,28 +1499,23 @@
         body.appendChild(add);
       });
 
-      // Trouser: an explicit APPLY button. Founder edits any spec value, clicks
-      // Apply, and the colour×fit calculation + source-more list refresh with the
-      // new numbers — nothing recomputes silently on every keystroke.
-      if(isTrouser){
-        var applyRow = document.createElement('div');
-        applyRow.style.cssText = 'display:flex;gap:10px;align-items:center;margin:14px 0 4px;flex-wrap:wrap';
-        applyRow.innerHTML = '<button class="btn" type="button" data-czapply>✓ Apply — calculate what to buy</button>'
-          + '<span class="muted" style="font-size:12px">Change any value above, then Apply to refresh the plan below.</span>';
-        body.appendChild(applyRow);
-        applyRow.querySelector('[data-czapply]').addEventListener('click', function(){
-          var b = applyRow.querySelector('[data-czapply]'); b.disabled = true; b.textContent = '… calculating';
-          // Wait for the settings save to LAND before reloading the plan — else the
-          // grid is computed from stale specs (designs/sizes/colours/fits).
-          czSaveSettings(true).then(function(){ return czLoadPlan(); }).then(function(){ czRenderCats(); });
-        });
-      }
+      // One explicit Apply action for every category. This avoids shirts/T-shirts
+      // silently showing a summary calculated from settings that have not landed.
+      var applyRow = document.createElement('div');
+      applyRow.style.cssText = 'display:flex;gap:10px;align-items:center;margin:14px 0 4px;flex-wrap:wrap';
+      applyRow.innerHTML = '<button class="btn" type="button" data-czapply>✓ Apply — calculate what to buy</button>'
+        + '<span class="muted" style="font-size:12px">Change any value above, then Apply to refresh this category’s plan below.</span>';
+      body.appendChild(applyRow);
+      applyRow.querySelector('[data-czapply]').addEventListener('click', function(){
+        var b = applyRow.querySelector('[data-czapply]'); b.disabled = true; b.textContent = '… calculating';
+        czSaveSettings(true).then(function(){ return czLoadPlan(); }).then(function(){ czRenderCats(); });
+      });
 
       var colNote = document.createElement('div'); colNote.className = 'czsub';
       colNote.style.textTransform = 'none'; colNote.style.letterSpacing = '0';
       colNote.innerHTML = isTrouser
         ? '<span style="color:var(--muted)">The plan below is a <b>colour × fit grid</b> — both are <b>HARD caps</b>. Each cell shows designs to buy (raw → rounded), and the <b>Source more</b> list is your exact shopping list per colour × fit. Upload photos <b>after</b> this — the app fills the grid and never backfills a gap from another colour or fit.</span>'
-        : '<span style="color:var(--muted)">You upload every vendor photo unselected — the app <b>curates a balanced buy</b> toward these %s within your '+(c.sizeMode==='units'?'target units':'budget')+'. '+(isUpper?'<b>Print</b> and <b>colour</b> are HARD caps':'<b>Colour</b> is a HARD cap')+' (a colour never exceeds its %, surplus is “held over target”), while <b>fit</b> fills in parallel from any '+(isUpper?'print/':'')+'colour so nothing is stranded. Best designs win each slot (your pins first, then AI rating); colours not in your mix are held as “add it to your % to buy”; and anything you’re <b>short</b> of is flagged “needs sourcing” — budget <b>reserved</b>, never poured into another colour'+(isUpper?', print':'')+' or fit.</span>';
+        : '<span style="color:var(--muted)">The plan below uses the same design-first workflow as trousers. <b>Print</b> and <b>colour</b> remain HARD caps for uppers, while fit guides the best combination. Use <b>By design</b> above to upload every colourway together; exact shortages and an order sheet appear in the summary.</span>';
       body.appendChild(colNote);
 
       // The category's products (bill) live INSIDE this card, under its mix %s.
@@ -2698,7 +2673,8 @@
     z.addEventListener('click', function(){ if(z.parentNode) document.body.removeChild(z); });
   }
   function czOsOpenPicker(fitKey, slotKey, designs){
-    var slot = (slotKey.split('|')[1]||'');
+    var slotParts = slotKey.split('|');
+    var slot = slotParts[slotParts.length-1] || '';
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
     var box = document.createElement('div');
@@ -2812,6 +2788,75 @@
       note.innerHTML = 'Your photos cover <b>'+fmtINR(inPO)+' pc</b>'+(onWay>0?(' and <b>'+fmtINR(onWay)+' pc</b> is on the way'):'')+
         ' — upload ~<b>'+fmtINR(shortPc)+' pc</b> more of photos to reach the <b>'+fmtINR(toSrc)+' pc</b> you still need.';
       wrap.appendChild(note);
+    }
+    // SHIRT / T-SHIRT OPERATIONAL PARITY. Uppers keep their extra print
+    // dimension, but expose the same at-a-glance coverage, bought-vs-source and
+    // design-order workflow as trousers. This deliberately uses the engine's
+    // authoritative targets/shortfalls rather than inventing a second plan.
+    if(c.enabled && pc.hasPrint && !pc.fitHard && cc.base){
+      var flatFits = (pc.fits||[]).filter(function(f){ return !f.unassignedFit; });
+      var orderedPieces = 0, orderedCost = 0, orderedDesigns = 0;
+      flatFits.forEach(function(f){
+        (f.ordered||[]).forEach(function(o){
+          var qty = Number(o.qty || o.orderedQty || o.estUnits || 0) || 0;
+          var cost = Number(o.totalCost || 0) || ((Number(o.cost || o.unitCost || o.orderedCost || 0)||0) * qty);
+          orderedPieces += qty; orderedCost += cost; orderedDesigns += Math.max(qty>0?1:0, Math.round(qty/(pc.set||1)));
+        });
+      });
+      var upperSourceDesigns = Math.max(0,
+        (pc.printShort||[]).reduce(function(n,s){ return n+(s.need||0); },0),
+        (pc.colourShort||[]).reduce(function(n,s){ return n+(s.need||0); },0),
+        (pc.fitShort||[]).reduce(function(n,s){ return n+(s.need||0); },0));
+      var split = document.createElement('div');
+      split.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0">'
+        + '<div style="flex:1;min-width:180px;padding:8px 12px;border:1px solid #86efac;background:#f0fdf4;border-radius:8px;font-size:12px;color:#065f46">✓ <b>Bought</b> — <b>'+orderedDesigns+'</b> designs · '+fmtINR(orderedPieces)+' pc · <b>₹'+fmtINR(Math.round(orderedCost))+'</b> actual</div>'
+        + '<div style="flex:1;min-width:180px;padding:8px 12px;border:1px solid #fcd34d;background:#fffbeb;border-radius:8px;font-size:12px;color:#92400e">◻ <b>Still to source</b> — <b>'+upperSourceDesigns+'</b> designs · '+fmtINR(upperSourceDesigns*(pc.set||0))+' pc</div>'
+        + '</div>';
+      wrap.appendChild(split);
+
+      var selected = { prints:{}, colours:{}, fits:{} };
+      (pc.printGroups||[]).forEach(function(pg){ selected.prints[pg.key]=(pg.fits||[]).reduce(function(n,f){ return n+(f.includedCount||0); },0); });
+      (pc.colours||[]).forEach(function(r){ selected.colours[r.key]=r.photos||0; });
+      flatFits.forEach(function(f){ selected.fits[f.key]=(selected.fits[f.key]||0)+(f.includedCount||0); });
+      var shortMaps = {};
+      [['prints',pc.printShort],['colours',pc.colourShort],['fits',pc.fitShort]].forEach(function(pair){
+        shortMaps[pair[0]]={}; (pair[1]||[]).forEach(function(s){ shortMaps[pair[0]][s.key]=s.need||0; });
+      });
+      var cov = document.createElement('div');
+      var covHtml = '<div class="czsub" style="text-transform:none;letter-spacing:0"><b>Coverage table</b> — the same target / uploaded / selected / source-more check used for trousers.</div>';
+      covHtml += '<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr><th style="text-align:left;padding:6px">Dimension</th><th style="text-align:left;padding:6px">Option</th><th style="text-align:right;padding:6px">Target</th><th style="text-align:right;padding:6px">Uploaded</th><th style="text-align:right;padding:6px">Selected</th><th style="text-align:right;padding:6px">Source more</th></tr></thead><tbody>';
+      [['prints','Print',cc.prints],['colours','Colour',cc.colours],['fits','Fit',cc.fits]].forEach(function(group){
+        (group[2]||[]).forEach(function(r){
+          var need=(shortMaps[group[0]][r.key]||0), sel=(selected[group[0]][r.key]||0);
+          covHtml += '<tr style="border-top:1px solid #eef2f7"><td style="padding:6px;color:#64748b">'+group[1]+'</td><td style="padding:6px"><b>'+escapeHtml(r.label)+'</b> · '+r.pct+'%</td><td style="padding:6px;text-align:right">'+r.target+'</td><td style="padding:6px;text-align:right">'+r.have+'</td><td style="padding:6px;text-align:right">'+sel+'</td><td style="padding:6px;text-align:right;color:'+(need?'#b45309':'#059669')+';font-weight:700">'+(need?('+'+need):'Covered')+'</td></tr>';
+        });
+      });
+      covHtml += '</tbody></table></div>'; cov.innerHTML=covHtml; wrap.appendChild(cov);
+
+      // Build a compact design sourcing sheet. Each row is one base design to
+      // source; print, colour and fit gaps are paired into a practical brief.
+      // Individual dimension totals remain visible in the coverage table above,
+      // so the pairing can never hide a shortage.
+      var expandNeeds = function(rows){ var out=[]; (rows||[]).forEach(function(s){ for(var i=0;i<(s.need||0);i++) out.push(s); }); return out; };
+      var ep=expandNeeds(pc.printShort), ec=expandNeeds(pc.colourShort), ef=expandNeeds(pc.fitShort);
+      var slotCount=Math.max(ep.length,ec.length,ef.length), allDesigns=[];
+      flatFits.forEach(function(f){ (f.designs||[]).forEach(function(d){ if(d && d.url) allDesigns.push(d); }); });
+      var osTags=(czLastPlan&&czLastPlan.designTags)||{}, os=document.createElement('div'); os.style.marginTop='12px';
+      var oh='<div class="czsub" style="text-transform:none;letter-spacing:0"><b>Design order sheet</b> — one row per base design still required. Tag an uploaded reference photo exactly as you do for trousers.</div>';
+      if(!slotCount) oh+='<div style="font-size:12px;color:#64748b;padding:8px 0">Nothing left to source — print, colour and fit targets are covered.</div>';
+      else {
+        oh+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">';
+        for(var si=0;si<slotCount;si++){
+          var slot=String.fromCharCode(65+(si%26))+(si>=26?String(Math.floor(si/26)+1):''), skey=pc.category+'|upper|'+slot, cid=osTags[skey]||'';
+          var photo=cid?allDesigns.filter(function(d){ return String(d.id)===String(cid); })[0]:null;
+          if(!photo&&allDesigns.length) photo=allDesigns[si%allDesigns.length];
+          var thumb=photo?'<img class="czospick" src="'+escapeHtml(photo.url)+'" data-key="'+escapeHtml(skey)+'" style="width:58px;height:72px;object-fit:cover;border-radius:7px;border:1px solid #e2e8f0;cursor:pointer">':'<div class="czospick" data-key="'+escapeHtml(skey)+'" style="width:58px;height:72px;border:1px dashed #cbd5e1;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#94a3b8;cursor:pointer;text-align:center">Tag<br>photo</div>';
+          oh+='<div style="width:190px;border:1px solid #e2e8f0;border-radius:9px;padding:8px;background:#fbfcfe"><div style="display:flex;justify-content:space-between"><b>Design '+slot+'</b><span style="font-size:11px;color:#64748b">'+fmtINR(pc.set||0)+' pc</span></div><div style="display:flex;gap:8px;margin-top:7px">'+thumb+'<div style="font-size:11px;line-height:1.6"><div><b>Print:</b> '+escapeHtml(ep[si]?ep[si].label:'Any covered')+'</div><div><b>Colour:</b> '+escapeHtml(ec[si]?ec[si].label:'Any covered')+'</div><div><b>Fit:</b> '+escapeHtml(ef[si]?ef[si].label:'Any covered')+'</div></div></div></div>';
+        }
+        oh+='</div>';
+      }
+      os.innerHTML=oh; wrap.appendChild(os);
+      [].forEach.call(os.querySelectorAll('.czospick'),function(pk){ pk.addEventListener('click',function(){ czOsOpenPicker('',pk.getAttribute('data-key'),allDesigns); }); });
     }
     // TROUSER COLOUR × FIT HARD GRID — the headline for a fit-hard category. Every
     // cell = designs to buy, shown raw → rounded (largest-remainder, re-sums to the
