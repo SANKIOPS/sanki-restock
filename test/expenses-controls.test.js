@@ -646,8 +646,9 @@ test('account ledgers render an expandable one-click money trail', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /<h3 style="margin:0 0 4px">Money Trail<\/h3>/);
   assert.match(html, /ontoggle="if\(this\.open\)loadMoneyTrail/);
-  assert.match(html, /In '\+fmt\(moneyIn\)/);
-  assert.match(html, /Out '\+fmt\(moneyOut\)/);
+  assert.match(html, /Expenses paid '\+fmt\(expensesPaid\)/);
+  assert.match(html, /Transfers out '\+fmt\(transfersOut\)/);
+  assert.match(html, /Closing balance as of/);
   assert.match(html, /Source \/ destination/);
   assert.match(html, /data-cfdays="7"/);
   assert.match(html, /Reconciliation issue/);
