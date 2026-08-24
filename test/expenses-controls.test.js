@@ -673,6 +673,9 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/Only the Owner can change amounts/);
   assert.match(html,/<label>Paying account<\/label><select id="lf_account">/);
   assert.match(html,/payingAccount='\+encodeURIComponent/);
+  assert.match(html,/var claimantName=e\.claimant\|\|e\.createdBy/);
+  assert.match(html,/var payingAccounts=Array\.from\(new Set/);
+  assert.match(html,/Claimant: '\+esc\(claimantName\)\+' · Paid from: '\+esc\(payingAccountLabel\)/);
   assert.match(html,/id="editPayingAccount"/);
   assert.match(html,/paymentAccount:el\('editPayingAccount'\)\.value/);
 });
