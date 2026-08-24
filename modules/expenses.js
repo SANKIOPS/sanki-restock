@@ -1004,17 +1004,21 @@ router.get('/api/expenses/list', (req, res) => {
     if (!canViewExpense(req, e)) return false;
     if (id && e.id !== id) return false;
     if (nature && normalizedNature(e.nature) !== nature) return false;
-    if (from && e.date < from) return false;
-    if (to && e.date > to) return false;
+    // With a paying-account filter, reconcile on the actual payment movement
+    // and its date (the same basis used by Account Ledgers), not the bill date.
+    if (!payingAccount && from && e.date < from) return false;
+    if (!payingAccount && to && e.date > to) return false;
     if (status && e.status !== status) return false;
     if (type && e.type !== type) return false;
     if (vendor && (e.vendor || '').toLowerCase() !== vendor) return false;
     if (claimant && String(e.createdBy || e.claimant || '').toLowerCase() !== claimant) return false;
     if (paymentType && String(e.paymentType || '').toLowerCase() !== paymentType) return false;
     if (payingAccount) {
-      const accounts=(e.payments||[]).map(p=>p.account||e.account).concat((e.reimbursementPayments||[]).map(p=>p.account));
-      if(!accounts.length&&paymentIsPosted(e)&&num(e.paidAmount)>0&&e.account)accounts.push(e.account);
-      if(!accounts.some(a=>String(a||'').toLowerCase()===payingAccount))return false;
+      const movements=[];
+      (e.payments||[]).filter(p=>paymentIsPosted(e)).forEach(p=>movements.push({account:p.account||e.account,date:p.date,amount:num(p.amount)}));
+      (e.reimbursementPayments||[]).forEach(p=>movements.push({account:p.account,date:p.date,amount:num(p.amount)}));
+      e.payingAccountAmount=round0(movements.filter(p=>String(p.account||'').toLowerCase()===payingAccount&&(!from||String(p.date||'')>=from)&&(!to||String(p.date||'')<=to)).reduce((n,p)=>n+p.amount,0));
+      if(!(e.payingAccountAmount>0))return false;
     }
     if (missingBill && e.billPhoto) return false;
     return true;
@@ -1023,10 +1027,11 @@ router.get('/api/expenses/list', (req, res) => {
   const totals = { all: 0, pending: 0, approved: 0, paid: 0, noBill: 0, byType: {} };
   TYPES.forEach(t => { totals.byType[t] = 0; });
   list.forEach(e => {
-    totals.all += e.amount;
-    totals[e.status] = (totals[e.status] || 0) + e.amount;
-    if (!e.billPhoto) totals.noBill += e.amount;
-    if ((e.status === 'approved' || e.status === 'paid') && BUSINESS_NATURES.includes(normalizedNature(e.nature))) totals.byType[e.type] += e.amount;
+    const countedAmount=payingAccount?num(e.payingAccountAmount):num(e.amount);
+    totals.all += countedAmount;
+    totals[e.status] = (totals[e.status] || 0) + countedAmount;
+    if (!e.billPhoto) totals.noBill += countedAmount;
+    if ((e.status === 'approved' || e.status === 'paid') && BUSINESS_NATURES.includes(normalizedNature(e.nature))) totals.byType[e.type] += countedAmount;
   });
   const requestedLimit = Number(req.query.limit || 0);
   const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(200, Math.floor(requestedLimit)) : 0;

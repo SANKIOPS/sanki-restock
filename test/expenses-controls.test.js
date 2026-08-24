@@ -656,6 +656,22 @@ test('legacy finalized payments without approvedAt remain visible in their accou
   assert.ok(!excluded.expenses.some(x=>x.id==='EX-LEGACY-240'));
 });
 
+test('paying-account expense totals reconcile to ledger movements by payment date', () => {
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  stored.expenses['EX-SPLIT-ACCOUNT']={id:'EX-SPLIT-ACCOUNT',date:'2026-08-20',nature:'SANKI',status:'paid',vendor:'Split account vendor',particulars:'Split payment',amount:1000,paidAmount:1000,approvedAt:'2026-08-20T10:00:00.000Z',billPhoto:'/api/expenses/photo/split.jpg',payments:[
+    {id:'PAY-3645',amount:300,date:'2026-08-24',account:'Prashant Axis 3645',proof:'/api/expenses/photo/3645.jpg',paidBy:'prashant'},
+    {id:'PAY-OTHER',amount:700,date:'2026-08-23',account:'Tiana 0425',proof:'/api/expenses/photo/other.jpg',paidBy:'prashant'}
+  ]};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const filtered=invoke('GET','/api/expenses/list',{role:'owner',query:{nature:'SANKI',payingAccount:'Prashant Axis 3645',from:'2026-08-24',to:'2026-08-24'}}).body;
+  const row=filtered.expenses.find(x=>x.id==='EX-SPLIT-ACCOUNT');
+  assert.equal(row.payingAccountAmount,300);
+  assert.equal(filtered.totals.all,300);
+  assert.equal(filtered.totals.paid,300);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-08-24',to:'2026-08-24'}}).body;
+  assert.equal(ledger.entries.find(x=>x.id==='EX-SPLIT-ACCOUNT/PAY-3645').debit,300);
+});
+
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /function monthStart\(\)/);
