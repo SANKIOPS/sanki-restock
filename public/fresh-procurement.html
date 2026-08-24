@@ -611,6 +611,7 @@
         </div>
         <div class="czbatchbar" id="czBatchBar">
           <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to open it; drop photos &amp; plan inside the open batch</span></div>
+          <button class="btn ghost sm" id="czModeSplitter" type="button">✂ Photos Splitter</button>
           <button class="btn ghost sm" id="czNewBatch" type="button">＋ New batch</button>
         </div>
         <!-- Category picker — a batch spans ONE OR MORE categories. Shown when ＋ New
@@ -642,7 +643,6 @@
           <div class="czmodetog" style="display:flex;gap:6px;margin:0 0 10px">
             <button type="button" class="czmodebtn on" id="czModePile">🗂 Pile &amp; segregate</button>
             <button type="button" class="czmodebtn" id="czModeDesign">🎨 By design</button>
-            <button type="button" class="czmodebtn" id="czModeSplitter">✂ Photos Splitter</button>
           </div>
           <div id="czPileMode">
             <div class="drop" style="margin-top:4px" id="czDrop">
@@ -667,7 +667,7 @@
           <div id="czUploadStatus" class="muted" style="font-size:12px; margin-top:6px"></div>
             </div>
           </div>
-          <div id="czSplitterMode" style="display:none">
+          <div id="czSplitterMode" class="panel" style="display:none;margin-top:12px">
             <div class="muted" style="font-size:12px;margin:0 0 10px">Upload collage photos containing several product/colour photos. The app separates them, lets you remove incorrect crops, then sends only the approved photos to the batch you choose.</div>
             <div class="czrow" style="align-items:flex-end">
               <div class="fld" style="min-width:220px;flex:1"><label>Destination batch</label><select id="czSplitBatch"></select></div>
