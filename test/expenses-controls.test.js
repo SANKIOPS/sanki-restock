@@ -278,6 +278,9 @@ test('account transfers create equal debit and credit ledger entries', () => {
   const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts;
   assert.equal(after.find(a => a.name === 'Counter Cash').balance, cashBefore - 250);
   assert.equal(after.find(a => a.name === 'Tiana 0425').balance, paytmBefore + 250);
+  const laterPeriod=invoke('GET','/api/expenses/balances',{query:{nature:'SANKI',from:'2026-08-21',to:'2026-08-31'},role:'owner'}).body.accounts.find(a=>a.name==='Tiana 0425');
+  assert.equal(laterPeriod.transferredIn,0);
+  assert.equal(laterPeriod.balance,paytmBefore+250); // closing balance retains earlier money
   const cashLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Counter Cash' }, role: 'owner' }).body;
   const paytmLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Tiana 0425' }, role: 'owner' }).body;
   assert.equal(cashLedger.entries.find(x => x.id === transfer.body.transfer.id).debit, 250);
@@ -505,7 +508,7 @@ test('approved expenses for the same vendor can be paid together with one proof'
     invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
     return made.body.expense.id;
   }
-  const first=approved('Daily Flowers',500,'2026-08-20'), second=approved('Daily Flowers',500,'2026-08-21');
+  const first=approved('Daily Flowers',500,'2026-08-20'), second=approved('Daily  Flowers.',500,'2026-08-21');
   const candidates=invoke('GET','/api/expenses/:id/payment-candidates',{params:{id:second},role:'owner'});
   assert.ok(candidates.body.expenses.some(x=>x.id===first&&x.balanceDue===500));
   const paid=invoke('POST','/api/expenses/batch-pay',{role:'owner',body:{expenseIds:[first,second],account:'Counter Cash',paymentProof:'/api/expenses/photo/combined.jpg',date:'2026-08-22'}});
