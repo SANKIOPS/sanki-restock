@@ -312,8 +312,9 @@
     // ── LOG form ──
     function opts(arr, sel){ return (arr||[]).map(function(o){ return '<option'+(o===sel?' selected':'')+'>'+esc(o)+'</option>'; }).join(''); }
     function accountsForNature(nature){ return (cfg.accountsByNature&&cfg.accountsByNature[nature])||[]; }
+    function payingAccountsForNature(nature){ return (cfg.payingAccountsByNature&&cfg.payingAccountsByNature[nature])||[]; }
     function reimbursementAccountOptions(){
-      var labels={};(cfg.approvalNatures||[]).forEach(function(n){(accountsForNature(n)||[]).forEach(function(a){labels[a]=labels[a]||[];if(labels[a].indexOf(n)<0)labels[a].push(n);});});
+      var labels={};(cfg.approvalNatures||[]).forEach(function(n){(payingAccountsForNature(n)||[]).forEach(function(a){labels[a]=labels[a]||[];if(labels[a].indexOf(n)<0)labels[a].push(n);});});
       return Object.keys(labels).sort().map(function(a){return '<option value="'+esc(a)+'">'+esc(a)+' — '+esc(labels[a].join('/'))+'</option>';}).join('');
     }
     function renderLog(){
@@ -693,7 +694,7 @@
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
-      el('payAcct').innerHTML = opts(accountsForNature(e.nature||'SANKI'));
+      el('payAcct').innerHTML = opts(payingAccountsForNature(e.nature||'SANKI'));
       var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').max=totalDue;el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
       el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';

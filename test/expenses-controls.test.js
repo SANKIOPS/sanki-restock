@@ -23,7 +23,7 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
     headers: { 'user-agent':'SANKI Test Mobile', 'x-forwarded-for':'203.0.113.10' },
     get(name) { return this.headers[String(name).toLowerCase()] || ''; },
     ip: '203.0.113.10',
-    user: { username: role === 'claimant' ? 'arshpreet' : role + '-user', role, roles: [role] }
+    user: { username: role === 'claimant' ? 'arshpreet' : (role === 'admin' ? 'prashant' : role + '-user'), role, roles: [role] }
   };
   let status = 200;
   let result;
@@ -328,7 +328,7 @@ test('asset-sale receipt and cross-entity withdrawal create a complete money tra
 test('Owner may declare a cash receipt without proof only with a reason', () => {
   const missingReason=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SAMAST',account:'Kirti Nagar Cash',receiptType:'asset_sale',source:'Iron racks buyer',amount:27500}});assert.equal(missingReason.status,400);
   const declared=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SAMAST',account:'Kirti Nagar Cash',receiptType:'asset_sale',source:'Iron racks buyer',amount:27500,note:'Cash received; no external proof was available.'}});assert.equal(declared.status,200);assert.match(declared.body.receipt.proofException,/Owner cash declaration/);
-  const adminDenied=invoke('POST','/api/expenses/receipts',{role:'admin',body:{nature:'SANKI',account:'Counter Cash',receiptType:'other_income',source:'Cash source',amount:100,note:'No proof'}});assert.equal(adminDenied.status,400);
+  const adminDenied=invoke('POST','/api/expenses/receipts',{role:'admin',body:{nature:'SANKI',account:'Counter Cash',receiptType:'other_income',source:'Cash source',amount:100,note:'No proof'}});assert.equal(adminDenied.status,403);
 });
 
 test('account adjustments require a reason and support explicit add or deduct entries', () => {
@@ -502,7 +502,7 @@ test('personally paid expense becomes reimbursement pending only after approval'
   assert.equal(approved.body.expense.vendorPaymentCompleted, true);
   const blocked = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500 }, role: 'accounting' });
   assert.equal(blocked.status, 400);
-  const reimbursed = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500, account: 'Counter Cash', paymentProof: '/api/expenses/photo/reimburse.jpg' }, role: 'accounting' });
+  const reimbursed = invoke('POST', '/api/expenses/:id/reimburse', { params: { id: created.body.expense.id }, body: { amount: 500, account: 'Counter Cash', paymentProof: '/api/expenses/photo/reimburse.jpg' }, role: 'admin' });
   assert.equal(reimbursed.body.expense.reimbursementStatus, 'reimbursed');
   assert.equal(reimbursed.body.expense.paidAmount, 500);
 });
@@ -548,15 +548,15 @@ test('installments support partial payments and prevent overpayment', () => {
   } });
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Furniture Expense-A3' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
-  const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'accounting' });
+  const partial = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 1000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay.jpg' }, role: 'admin' });
   assert.equal(partial.body.expense.status, 'partially_paid');
   const payables = invoke('GET', '/api/expenses/pending-payments', { query: { bucket:'partial' }, role:'owner' }).body;
   const payable = payables.expenses.find(e => e.id === created.body.expense.id);
   assert.equal(payable.balanceDue, 9000);
-  const over = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 10000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay2.jpg' }, role: 'accounting' });
+  const over = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 10000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay2.jpg' }, role: 'admin' });
   assert.equal(over.status, 400);
   assert.match(over.body.error, /cannot exceed/i);
-  const final = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 9000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay3.jpg' }, role: 'accounting' });
+  const final = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, body: { amount: 9000, account: 'Counter Cash', paymentProof: '/api/expenses/photo/pay3.jpg' }, role: 'admin' });
   assert.equal(final.body.expense.status, 'paid');
   assert.equal(final.body.expense.payments.length, 2);
 });

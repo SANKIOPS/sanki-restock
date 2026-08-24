@@ -146,6 +146,9 @@ const CLAIMANT_ACCOUNTS = {
   shivam: ['Shivam 4807'],
   pradeep: ['Pradeep 8606']
 };
+const USER_PAYMENT_ACCOUNTS = {
+  prashant: ['Prashant Axis 3645', 'Prashant Cash', 'Counter Cash']
+};
 const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash' };
 
 // Accounts the founder actually pays from are added in-app (with approval) —
@@ -396,8 +399,18 @@ function personalAccountsForReq(req) {
   const username = String((req.user && req.user.username) || '').trim().toLowerCase();
   const roles = rolesOfReq(req);
   if (roles.includes('owner')) return Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS), ...Object.values(CLAIMANT_ACCOUNTS))));
-  if (roles.includes('admin')) return Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS))));
+  if (roles.includes('admin')) return (USER_PAYMENT_ACCOUNTS[username] || []).slice();
   return (CLAIMANT_ACCOUNTS[username] || []).slice();
+}
+function payingAccountsForReq(req, nature) {
+  const username = String((req.user && req.user.username) || '').trim().toLowerCase();
+  if (isOwner(req)) return companyAccountsForNature(nature);
+  const assigned = USER_PAYMENT_ACCOUNTS[username] || [];
+  return companyAccountsForNature(nature).filter(account => assigned.some(name => name.toLowerCase() === account.toLowerCase()));
+}
+function allowedPayingAccount(req, nature, account) {
+  const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
+  return payingAccountsForReq(req, nature).find(name => name.toLowerCase() === candidate.toLowerCase());
 }
 function ledgerAccountsForNature(s, nature) {
   const n = normalizedNature(nature), names = new Set(companyAccountsForNature(n));
@@ -420,7 +433,7 @@ function allowedCompanyAccount(s, nature, account) {
 }
 function allowedReimbursementAccount(req, account) {
   const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
-  const allowed = Array.from(new Set([].concat(...approvalNatures(req).map(companyAccountsForNature))));
+  const allowed = Array.from(new Set([].concat(...approvalNatures(req).map(n => payingAccountsForReq(req, n)))));
   return allowed.find(name => name.toLowerCase() === candidate.toLowerCase());
 }
 function rolesOfReq(req) {
@@ -535,7 +548,9 @@ router.get('/api/expenses/config', (req, res) => {
     ledgers: pickableLedgers(s),
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
-    accounts: Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS)))), accountsByNature: ENTITY_ACCOUNTS, personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
+    accounts: Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS)))), accountsByNature: ENTITY_ACCOUNTS,
+    payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
+    personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
     types: TYPES, natures: allowed, channels: CHANNELS,
     approvalNatures: approvalNatures(req),
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
@@ -858,7 +873,7 @@ router.post('/api/expenses/batch-pay', (req, res) => {
   if (expenses.some(e => e.paidAlready || !['approved','partially_paid'].includes(e.status) || num(e.paidAmount)>=num(e.amount))) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
   const proof = String(b.paymentProof || '').trim();
   if (!proof) return res.status(400).json({ success:false, error:'Payment screenshot required — no proof, no payment.' });
-  const account = allowedCompanyAccount(s, nature, String(b.account || '').trim());
+  const account = allowedPayingAccount(req, nature, String(b.account || '').trim());
   if (!account) return res.status(400).json({ success:false, error:'Select a paying account assigned to this accounting entity.' });
   const reconIssues = reconciliationIssues(s, nature, account), overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
@@ -903,7 +918,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   if (!proof) return res.status(400).json({ success: false, error: e.fundedBy === 'claimant' ? 'Reimbursement proof required — the claimant cannot be marked reimbursed without it.' : 'Payment screenshot required — no proof, no payment.' });
   const account = String(b.account || '').trim();
   if (!account) return res.status(400).json({ success: false, error: 'Select the account used for this payment.' });
-  const allowedAccount = allowedCompanyAccount(s, e.nature, account);
+  const allowedAccount = allowedPayingAccount(req, e.nature, account);
   if (!allowedAccount) return res.status(400).json({ success: false, error: 'Select a paying account assigned to this accounting entity.' });
   const reconIssues = reconciliationIssues(s, normalizedNature(e.nature), allowedAccount);
   const overrideReason = String(b.reconciliationOverrideReason || '').trim();
@@ -1297,7 +1312,7 @@ router.get('/api/expenses/balances', (req, res) => {
 
 // A transfer is one atomic event that produces a debit and matching credit.
 router.post('/api/expenses/transfers', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
+  if (!isOwner(req)) return res.status(403).json({ success: false, error: 'Only the Owner can record general account transfers.' });
   const s = loadStore(); const b = req.body || {};
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
   if (!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
@@ -1318,7 +1333,7 @@ router.post('/api/expenses/transfers', (req, res) => {
 });
 
 router.post('/api/expenses/receipts', (req,res) => {
-  if(!isAdmin(req)) return res.status(403).json({success:false,error:'Owner/Admin only.'});
+  if(!isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can record money received.'});
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature);
   if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot record money for this entity.'});
   const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proof=String(b.proof||'').trim(),source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim(),note=String(b.note||'').trim(),ownerCashDeclaration=rolesOfReq(req).includes('owner')&&/cash/i.test(String(account||''))&&!proof;
