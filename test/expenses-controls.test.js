@@ -863,6 +863,12 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.match(telegramSource,/Partial vendor payment/);
   assert.match(telegramSource,/Consolidated bill payment/);
   assert.match(telegramSource,/Procurement payable/);
+  assert.match(telegramSource,/TELEGRAM_PERSONAL_BOT_TOKEN/);
+  assert.match(telegramSource,/personal-webhook/);
+  assert.match(telegramSource,/handlePersonalMessage/);
+  assert.match(telegramSource,/handlePersonalCallback/);
+  assert.match(telegramSource,/PERSONAL screenshots now belong in/);
+  assert.match(telegramSource,/Only the linked Owner can use PERSONAL accounting/);
   const expenseSource=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
   assert.match(expenseSource,/Payment proof is attached below/);
   assert.match(expenseSource,/Amount paid:/);
