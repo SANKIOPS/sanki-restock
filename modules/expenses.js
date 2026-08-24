@@ -1241,14 +1241,15 @@ router.get('/api/expenses/balances', (req, res) => {
   function totalsFor(inRange) {
     const paidOut = {}, collected = {}, adj = {}, transferIn = {}, transferOut = {};
     Object.values(s.expenses).forEach(e => {
-      if (normalizedNature(e.nature) !== nature) return;
       const a = e.account || '(unspecified)';
       (e.payments || []).filter(p => paymentIsPosted(e) && inRange(p.date)).forEach(p => {
         const paymentAccount = p.account || a;
+        if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(paymentAccount).toLowerCase()))return;
         paidOut[paymentAccount] = (paidOut[paymentAccount] || 0) + num(p.amount);
       });
       (e.reimbursementPayments || []).filter(p=>inRange(p.date)).forEach(p => {
         const ra = p.account || '(unspecified)';
+        if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(ra).toLowerCase()))return;
         paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
       });
     });
@@ -1332,9 +1333,13 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     const other=(isOut?(x.toNature||x.nature)+' · '+x.toAccount:(x.fromNature||x.nature)+' · '+x.fromAccount);
     entries.push({id:x.id,date:x.date,kind:'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' '),credit:isIn?num(x.amount):0,debit:isOut?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy});
   });
-  Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === nature).forEach(e => {
-    (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
-    (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant'),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+  // A bank ledger follows the account that moved, even when that account paid
+  // an expense belonging to another entity (for example SANKI 3645 paying a
+  // SAMAST bill). The entity remains visible on the ledger description.
+  Object.values(s.expenses || {}).forEach(e => {
+    const expenseNature=normalizedNature(e.nature),entityLabel=expenseNature===nature?'':' ['+expenseNature+']';
+    (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
   });
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
@@ -1389,7 +1394,7 @@ function recordedAccountBalance(s,nature,account,asOf){
   (s.adjustments||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.transfers||[]).filter(x=>on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
-  Object.values(s.expenses||{}).filter(e=>normalizedNature(e.nature)===nature).forEach(e=>{(e.payments||[]).filter(p=>paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
+  Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
   if(nature==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));}
   return round0(total);

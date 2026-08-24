@@ -672,6 +672,18 @@ test('paying-account expense totals reconcile to ledger movements by payment dat
   assert.equal(ledger.entries.find(x=>x.id==='EX-SPLIT-ACCOUNT/PAY-3645').debit,300);
 });
 
+test('a cross-entity expense appears in the ledger of the account that paid it', () => {
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  stored.expenses['EX-CROSS-240']={id:'EX-CROSS-240',date:'2026-08-22',nature:'SAMAST',status:'paid',vendor:'Geeta Poojan Bhandar',particulars:'Cross-entity payment',amount:240,paidAmount:240,approvedAt:'2026-08-22T10:00:00.000Z',billPhoto:'/api/expenses/photo/cross-240.jpg',payments:[{id:'PAY-240',amount:240,date:'2026-08-22',account:'Prashant Axis 3645',proof:'/api/expenses/photo/pay-240.jpg',paidBy:'prashant'}]};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-08-01',to:'2026-08-31'}}).body;
+  const movement=ledger.entries.find(x=>x.id==='EX-CROSS-240/PAY-240');
+  assert.equal(movement.debit,240);
+  assert.match(movement.description,/\[SAMAST\]/);
+  const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2026-08-01',to:'2026-08-31'}}).body;
+  assert.ok(balances.accounts.find(x=>x.name==='Prashant Axis 3645').spent>=240);
+});
+
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /function monthStart\(\)/);
