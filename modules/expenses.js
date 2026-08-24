@@ -408,6 +408,11 @@ function allowedCompanyAccount(s, nature, account) {
   const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
   return companyAccountsForNature(nature).find(name => name.toLowerCase() === candidate.toLowerCase());
 }
+function allowedReimbursementAccount(req, account) {
+  const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
+  const allowed = Array.from(new Set([].concat(...approvalNatures(req).map(companyAccountsForNature))));
+  return allowed.find(name => name.toLowerCase() === candidate.toLowerCase());
+}
 function rolesOfReq(req) {
   return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || [];
 }
@@ -941,14 +946,15 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
   const due = Math.max(0, num(e.personalPaidAmount) - num(e.reimbursementAmount));
   const amount = b.amount != null ? num(b.amount) : due;
   if (!(amount > 0) || amount > due) return res.status(400).json({ success: false, error: 'Reimbursement must be greater than 0 and cannot exceed ₹' + round0(due) + '.' });
-  const reimbursementAccount = allowedCompanyAccount(s, e.nature, b.account);
-  if (!reimbursementAccount) return res.status(400).json({ success:false, error:'Select a reimbursement account assigned to this accounting entity.' });
+  const reimbursementAccount = allowedReimbursementAccount(req, b.account);
+  if (!reimbursementAccount) return res.status(400).json({ success:false, error:'Select an authorised company or cash account for this reimbursement.' });
+  const reimbursementAccountNatures=approvalNatures(req).filter(n=>companyAccountsForNature(n).some(a=>a.toLowerCase()===reimbursementAccount.toLowerCase()));
   e.reimbursementAmount = num(e.reimbursementAmount) + amount;
   e.reimbursementPayments = Array.isArray(e.reimbursementPayments) ? e.reimbursementPayments : [];
   e.reimbursementPayments.push({
     id: 'REIM-' + String(e.reimbursementPayments.length + 1).padStart(3, '0'), amount,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
-    account: reimbursementAccount, paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI',
+    account: reimbursementAccount, accountNatures:reimbursementAccountNatures, paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI',
     proof, note: String(b.note || '').trim(), paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString()
   });
   e.reimbursementStatus = e.reimbursementAmount >= e.personalPaidAmount ? 'reimbursed' : 'partially_reimbursed';

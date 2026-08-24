@@ -506,6 +506,20 @@ test('personally paid expense becomes reimbursement pending only after approval'
   assert.equal(reimbursed.body.expense.paidAmount, 500);
 });
 
+test('Owner can reimburse a SAMAST claimant from an authorised SANKI account', () => {
+  const created=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SAMAST',ledger:'KN Expenses',vendor:'Batra Paints',amount:720,billPhoto:'/api/expenses/photo/batra.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/arshpreet-pay.jpg'}});
+  assert.equal(created.status,200);
+  invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{ledger:'KN Expenses'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id:created.body.expense.id},role:'owner'});
+  const reimbursed=invoke('POST','/api/expenses/:id/reimburse',{params:{id:created.body.expense.id},role:'owner',body:{amount:720,account:'Prashant Axis 3645',paymentProof:'/api/expenses/photo/prashant-reimburse.jpg'}});
+  assert.equal(reimbursed.status,200);
+  assert.equal(reimbursed.body.expense.reimbursementStatus,'reimbursed');
+  assert.equal(reimbursed.body.expense.reimbursementPayments.at(-1).account,'Prashant Axis 3645');
+  assert.deepEqual(reimbursed.body.expense.reimbursementPayments.at(-1).accountNatures,['SANKI']);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645'}}).body;
+  assert.equal(ledger.entries.find(x=>x.id===created.body.expense.id+'/REIM-001').debit,720);
+});
+
 test('personally paid non-cash expense requires the account used and cash is named automatically', () => {
   const missing = invoke('POST', '/api/expenses', { body: { vendor:'Vendor', amount:100, billPhoto:'/api/expenses/photo/bill.jpg', paidAlready:true, paymentType:'UPI', personalPaymentProof:'/api/expenses/photo/pay.jpg' } });
   assert.equal(missing.status, 400);
@@ -709,6 +723,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/var payingAccounts=Array\.from\(new Set/);
   assert.match(html,/class="claim-row-meta">'\+esc\(claimantName\)\+' │ '\+esc\(payingAccountLabel\)/);
   assert.match(html,/recordedPaymentWithProof=\(e\.payments\|\|\[\]\)\.slice\(\)\.reverse\(\)\.find/);
+  assert.match(html,/function reimbursementAccountOptions\(\)/);
+  assert.match(html,/Select actual paying account/);
   assert.match(html,/<label>Expense entity<\/label><select id="lg_expense_nature"><option value="">All<\/option>/);
   assert.match(html,/expenseNature='\+encodeURIComponent\(el\('lg_expense_nature'\)\.value\)/);
   assert.match(html,/id="editPayingAccount"/);
