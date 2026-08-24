@@ -709,6 +709,9 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /id="vf_from" value="'\+monthStart\(\)/);
   assert.match(html, /id="cf_from" value="'\+monthStart\(\)/);
   assert.match(html, /id="rf_from" value="'\+monthStart\(\)/);
+  assert.match(html, /id="rf_nature"><option value="">All<\/option>/);
+  assert.match(html, /id="rf_status"><option value="pending" selected>Pending<\/option>/);
+  assert.match(html, /nature='\+encodeURIComponent\(el\('rf_nature'\)\.value\)/);
   assert.match(html, /id="rv_from" value="'\+monthStart\(\)/);
   assert.match(html, /id="proofViewer" class="proof-viewer"/);
   assert.match(html, /window\.viewProof=function/);

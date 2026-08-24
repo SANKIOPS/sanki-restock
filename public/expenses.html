@@ -748,11 +748,11 @@
     });
 
     function renderReimbursements(){
-      el('panel').innerHTML='<div class="card"><div class="filters"><div class="fld"><label>From</label><input type="date" id="rf_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="rf_to" value="'+today()+'"></div><div class="fld"><label>Status</label><select id="rf_status"><option value="">All</option><option value="pending">Pending</option><option value="partially_reimbursed">Partially reimbursed</option><option value="reimbursed">Reimbursed</option></select></div><div class="fld"><label>Person</label><input id="rf_person" placeholder="search person"></div><button class="btn ghost mini" id="rf_go">Filter</button></div><div class="stats" id="rstats"></div><div id="rtable" class="muted">Loading…</div></div>';
+      el('panel').innerHTML='<div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="rf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="rf_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="rf_to" value="'+today()+'"></div><div class="fld"><label>Status</label><select id="rf_status"><option value="pending" selected>Pending</option><option value="">All</option><option value="partially_reimbursed">Partially reimbursed</option><option value="reimbursed">Reimbursed</option></select></div><div class="fld"><label>Person</label><input id="rf_person" placeholder="search person"></div><button class="btn ghost mini" id="rf_go">Filter</button></div><div class="stats" id="rstats"></div><div id="rtable" class="muted">Loading…</div></div>';
       el('rf_go').addEventListener('click',loadReimbursements); loadReimbursements();
     }
     function loadReimbursements(){
-      var q='?nature='+encodeURIComponent(selectedNature)+'&from='+el('rf_from').value+'&to='+el('rf_to').value+'&status='+encodeURIComponent(el('rf_status').value)+'&person='+encodeURIComponent(el('rf_person').value);
+      var q='?nature='+encodeURIComponent(el('rf_nature').value)+'&from='+el('rf_from').value+'&to='+el('rf_to').value+'&status='+encodeURIComponent(el('rf_status').value)+'&person='+encodeURIComponent(el('rf_person').value);
       api('/api/expenses/reimbursements'+q).then(function(d){
         if(!d.success){el('rtable').textContent=d.error||'Could not load.';return;} expensesById={}; d.reimbursements.forEach(function(e){expensesById[e.id]=e;});
         el('rstats').innerHTML='<div class="stat"><div class="k">Pending reimbursement</div><div class="v">'+fmt(d.pendingTotal)+'</div></div>';
