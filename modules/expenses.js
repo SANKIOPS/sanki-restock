@@ -200,6 +200,28 @@ function loadStore() {
     });
     renameBalanceKeys(s.openingBalances);
     Object.values(s.openingBalancesByNature || {}).forEach(renameBalanceKeys);
+    // Owner-authorized one-time correction: remove the single legacy ₹5,000
+    // source entry for Prashant Axis 3645 through 22 Aug 2026. A transfer is
+    // removed atomically, so its debit and credit legs cannot become unequal.
+    s.oneTimeMigrations=s.oneTimeMigrations||{};
+    const correctionKey='delete-prashant-axis-3645-5000-through-2026-08-22';
+    if(!s.oneTimeMigrations[correctionKey]){
+      const account='Prashant Axis 3645',cutoff='2026-08-22',amount=5000,candidates=[];
+      (s.transfers||[]).forEach((x,i)=>{if(num(x.amount)===amount&&String(x.date||'')<=cutoff&&(x.fromAccount===account||x.toAccount===account))candidates.push({kind:'transfer',index:i,entry:x});});
+      (s.adjustments||[]).forEach((x,i)=>{if(num(x.amount)===amount&&String(x.date||'')<=cutoff&&x.account===account)candidates.push({kind:'adjustment',index:i,entry:x});});
+      if(num((s.openingBalances||{})[account])===amount)candidates.push({kind:'opening',entry:{account,amount,date:'',nature:'SANKI'}});
+      let result='not_found';
+      if(candidates.length===1){
+        const match=candidates[0];
+        if(match.kind==='transfer')s.transfers.splice(match.index,1);
+        else if(match.kind==='adjustment')s.adjustments.splice(match.index,1);
+        else delete s.openingBalances[account];
+        audit(s,null,'LEGACY_ENTRY_DELETED','account',account,{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account,before:match.entry,after:null,note:'Owner authorized deletion of the ₹5,000 legacy entry through 22 Aug 2026'});
+        result='deleted_'+match.kind;
+      }else if(candidates.length>1)result='ambiguous_'+candidates.length;
+      s.oneTimeMigrations[correctionKey]={appliedAt:new Date().toISOString(),account,nature:'SANKI',cutoff,amount,result};
+      saveStore(s);
+    }
     return s;
   }
   catch { return blankStore(); }
