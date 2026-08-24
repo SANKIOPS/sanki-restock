@@ -188,6 +188,10 @@ test('audit log groups each expense into a readable complete lifecycle with user
   assert.deepEqual(record.timeline.map(x=>x.action),['CREATED','EDITED','APPROVED','PAYMENT_RECORDED']);
   assert.equal(record.timeline[0].user,'arshpreet');assert.equal(record.timeline[0].device,'Mobile');assert.equal(record.timeline[0].ip,'203.0.113.10');
   assert.equal(record.amount,125.5);assert.equal(record.status,'paid');
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  stored.auditLog=stored.auditLog.filter(x=>!(x.subjectId===created.id&&x.action==='CREATED'));fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const reconstructed=invoke('GET','/api/expenses/audit-log',{role:'owner',query:{subject:created.id}}).body.records.find(x=>x.id===created.id);
+  assert.equal(reconstructed.timeline[0].action,'CREATED');assert.match(reconstructed.timeline[0].note,/reconstructed/i);assert.equal(reconstructed.timeline[0].user,'arshpreet');
 });
 
 test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
