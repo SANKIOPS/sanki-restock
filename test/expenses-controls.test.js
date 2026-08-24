@@ -454,6 +454,8 @@ test('Owner Telegram narration and screenshot OCR create one categorized paid PE
   assert.equal(created.success,true);assert.equal(created.expense.nature,'PERSONAL');assert.equal(created.expense.status,'paid');assert.equal(created.expense.account,'ICICI Bank 0993');assert.equal(created.expense.approvedBy,'gaganlambasanki');assert.equal(created.expense.telegramNeedsReview,false);assert.equal(created.expense.ledger,'Food & Dining');
   const corrected=invoke('POST','/api/expenses/:id',{role:'owner',params:{id:created.expense.id},body:{amount:121,requestedAmount:121,paidAlready:true,paymentType:'UPI',personalAccount:'ICICI Bank 0993',editReason:'Correct Telegram OCR amount'}});
   assert.equal(corrected.status,200);assert.equal(corrected.body.expense.amount,121);assert.equal(corrected.body.expense.paidAmount,121);assert.equal(corrected.body.expense.personalPaidAmount,121);assert.equal(corrected.body.expense.payments.find(p=>p.personalFunds).amount,121);
+  const adminAmountEdit=invoke('POST','/api/expenses/:id',{role:'admin',params:{id:created.expense.id},body:{amount:122,requestedAmount:122,editReason:'Admin tries amount change'}});
+  assert.equal(adminAmountEdit.status,403);assert.match(adminAmountEdit.body.error,/Only the Owner/);
   const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'PERSONAL'}}).body.vendors;assert.ok(vendors.some(v=>v.name==='Mr MUKESH KUMAR'));
   assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/NEEDS REVIEW/);
   const duplicate=createTelegramPersonalExpense(input);assert.equal(duplicate.duplicate,true);assert.equal(duplicate.expense.id,created.expense.id);
@@ -663,6 +665,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /matches\('img\.thumb'\)/);
   assert.match(html, /\.claim-card summary \{ padding:3px 7px/);
   assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
+  assert.match(html,/el\(x\)\.disabled=!cfg\.isOwner/);
+  assert.match(html,/Only the Owner can change amounts/);
 });
 
 test('credit payables filter includes fully and partially unpaid credit expenses', () => {
