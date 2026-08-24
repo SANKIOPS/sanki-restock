@@ -694,6 +694,17 @@ router.post('/api/expenses/:id', (req, res, next) => {
   }
   if (canApprove(req) && CHANNELS.includes(b.channel)) e.channel = b.channel;
   if (PAYMENT_TYPES.includes(b.paymentType)) e.paymentType = b.paymentType;
+  if(b.paymentAccount!=null&&String(b.paymentAccount).trim()&&(e.payments||[]).some(p=>!p.personalFunds)){
+    if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can change the account used for a recorded payment.'});
+    const nextAccount=allowedCompanyAccount(s,e.nature,b.paymentAccount);
+    if(!nextAccount)return res.status(400).json({success:false,error:'Select a paying account assigned to this accounting entity.'});
+    const companyPayments=(e.payments||[]).filter(p=>!p.personalFunds),target=companyPayments.at(-1),oldAccount=target.account||e.account||'',batchId=target.batchPaymentId||'';
+    if(nextAccount!==oldAccount){
+      const affected=[];
+      Object.values(s.expenses||{}).forEach(x=>(x.payments||[]).forEach(p=>{if(p.personalFunds)return;const same=p===target||(batchId&&p.batchPaymentId===batchId);if(!same)return;affected.push({expense:x,payment:p,before:p.account||x.account||''});p.account=nextAccount;if(x===e||((x.payments||[]).filter(q=>!q.personalFunds).at(-1)===p))x.account=nextAccount;}));
+      affected.filter(x=>x.expense!==e).forEach(x=>audit(s,req,'PAYMENT_ACCOUNT_CHANGED','expense',x.expense.id,{nature:x.expense.nature,account:nextAccount,paymentId:x.payment.id,before:{account:x.before},after:{account:nextAccount},note:`Linked payment account corrected with ${e.id}${editReason?' · '+editReason:''}`}));
+    }
+  }
   if (b.qrPhoto != null) e.qrPhoto = String(b.qrPhoto).trim();
   if (BILLS.includes(b.bill)) e.bill = b.bill;
   // Claimant identity is immutable: it always comes from the authenticated creator.

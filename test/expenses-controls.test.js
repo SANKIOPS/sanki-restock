@@ -673,6 +673,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/Only the Owner can change amounts/);
   assert.match(html,/<label>Paying account<\/label><select id="lf_account">/);
   assert.match(html,/payingAccount='\+encodeURIComponent/);
+  assert.match(html,/id="editPayingAccount"/);
+  assert.match(html,/paymentAccount:el\('editPayingAccount'\)\.value/);
 });
 
 test('credit payables filter includes fully and partially unpaid credit expenses', () => {
@@ -703,6 +705,13 @@ test('Owner/Admin can edit finalized expenses with a mandatory audit reason', ()
   assert.equal(edited.body.expense.auditHistory.at(-1).reason,'Corrected vendor and amount');
   assert.ok(edited.body.expense.auditHistory.at(-1).changes.some(x=>x.field==='amount'&&x.before===300&&x.after===450));
   assert.equal(invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'No Access',editReason:'test'},role:'accounting'}).status,403);
+  invoke('POST','/api/expenses/:id/pay',{params:{id:created.body.expense.id},role:'owner',body:{amount:450,account:'Axis Bank 3448',paymentProof:'/api/expenses/photo/account-before.jpg'}});
+  const accountFixed=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},role:'owner',body:{paymentAccount:'Prashant Axis 3645',editReason:'Correct paying account'}});
+  assert.equal(accountFixed.status,200);assert.equal(accountFixed.body.expense.account,'Prashant Axis 3645');assert.equal(accountFixed.body.expense.payments.at(-1).account,'Prashant Axis 3645');
+  const oldLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body;
+  const newLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645'}}).body;
+  assert.ok(!oldLedger.entries.some(x=>x.id===created.body.expense.id+'/PAY-001'));assert.ok(newLedger.entries.some(x=>x.id===created.body.expense.id+'/PAY-001'));
+  assert.equal(invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},role:'admin',body:{paymentAccount:'Tiana 0425',editReason:'Admin tries account'}}).status,403);
 });
 
 test('Owner/Admin can correct an expense entity before payment and the change is audited', () => {
