@@ -428,13 +428,22 @@ function notifyExpenseUser(e, event, amount) {
       reimbursed: 'Your reimbursement has been completed'
     };
     const paymentEvent=['paid','partially_paid'].includes(event),reimbursementEvent=['reimbursed','partially_reimbursed'].includes(event);
-    const proof=paymentEvent&&Array.isArray(e.payments)&&e.payments.length?e.payments.at(-1).proof:(reimbursementEvent&&Array.isArray(e.reimbursementPayments)&&e.reimbursementPayments.length?e.reimbursementPayments.at(-1).proof:'');
-    const send=proof&&typeof telegram.notifyUserWithPhoto==='function'?telegram.notifyUserWithPhoto:telegram.notifyUser;
-    send(e.createdBy || e.claimant,
-      `💸 <b>${esc(normalizedNature(e.nature))} · ${esc(e.id)}</b> — ${esc(labels[event] || event)}\n${esc(e.vendor)} · ₹${round0(e.amount)}${proof?'\nPayment proof attached.':''}`,
-      proof || { button: { text: 'View expense', url: `/expenses.html?focus=${encodeURIComponent(e.id)}` } },
-      proof ? { button: { text: 'View expense', url: `/expenses.html?focus=${encodeURIComponent(e.id)}` } } : undefined
-    );
+    const record=paymentEvent&&Array.isArray(e.payments)&&e.payments.length?e.payments.at(-1):(reimbursementEvent&&Array.isArray(e.reimbursementPayments)&&e.reimbursementPayments.length?e.reimbursementPayments.at(-1):null);
+    const proof=record&&record.proof||'';
+    const paidAmount=round0(amount!=null?amount:(record&&record.amount)||0);
+    const details=[
+      `💸 <b>${esc(normalizedNature(e.nature))} · ${esc(e.id)}</b> — ${esc(labels[event] || event)}`,
+      `Vendor: <b>${esc(e.vendor||'—')}</b>`,
+      `Particulars: ${esc(e.particulars||'—')}`,
+      paymentEvent||reimbursementEvent?`Amount paid: <b>₹${paidAmount}</b>`:`Expense amount: <b>₹${round0(e.amount)}</b>`,
+      record&&record.date?`Payment date: ${esc(record.date)}`:'',
+      record&&record.account?`Paid from: ${esc(record.account)}`:'',
+      record&&record.paymentType?`Payment type: ${esc(record.paymentType)}`:'',
+      proof?'Payment proof is attached below.':''
+    ].filter(Boolean).join('\n');
+    const username=e.createdBy||e.claimant,button={button:{text:'View expense',url:`/expenses.html?focus=${encodeURIComponent(e.id)}`}};
+    if(proof&&typeof telegram.notifyUserWithPhoto==='function') telegram.notifyUserWithPhoto(username,proof,details,button);
+    else telegram.notifyUser(username,details,button);
   } catch { /* Telegram is optional */ }
 }
 
