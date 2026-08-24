@@ -259,7 +259,7 @@
   <script src="/sidebar.js"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
-    var fmt = function(n){ return '₹' + Math.round(n||0).toLocaleString('en-IN'); };
+    var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
     var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, missingBillOnly=false;
 
