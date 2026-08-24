@@ -838,6 +838,17 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.match(telegramSource,/is already fully paid\. No second payment can be recorded/);
   assert.match(telegramSource,/is already fully paid\. This screenshot was not recorded/);
   assert.match(telegramSource,/function notifyUserWithPhoto/);
+  assert.match(telegramSource,/callback_data:'am:transfer'/);
+  assert.match(telegramSource,/callback_data:'am:received'/);
+  assert.match(telegramSource,/callback_data:'am:pay'/);
+  assert.match(telegramSource,/callback_data:'am:reimburse'/);
+  assert.match(telegramSource,/callback_data:'am:more'/);
+  assert.match(telegramSource,/Only the Owner or Admin can operate the Accounts menu/);
+  assert.match(telegramSource,/Account adjustment/);
+  assert.match(telegramSource,/Receivable collection/);
+  assert.match(telegramSource,/Partial vendor payment/);
+  assert.match(telegramSource,/Consolidated bill payment/);
+  assert.match(telegramSource,/Procurement payable/);
   const expenseSource=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
   assert.match(expenseSource,/Payment proof is attached below/);
   assert.match(expenseSource,/Amount paid:/);
