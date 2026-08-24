@@ -1596,4 +1596,8 @@ function summaryForPL(from, to) {
   return out;
 }
 
+// Run idempotent store repairs/corrections when the service starts, rather
+// than waiting for the first user to open an Expenses screen.
+loadStore();
+
 module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount };
