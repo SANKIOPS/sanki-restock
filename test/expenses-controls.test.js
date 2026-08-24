@@ -147,13 +147,13 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   assert.ok(sankiList.body.expenses.every(e => (e.nature || 'SANKI') !== 'SAMAST'));
 });
 
-test('PERSONAL stays outside business P&L and is Owner-only', () => {
+test('PERSONAL stays outside business P&L and is available to claimants, Admin and Owner', () => {
   const sankiPlBefore = summaryForPL();
   const personalConfig = invoke('GET', '/api/expenses/config', { role: 'personal_claimant' });
   assert.deepEqual(personalConfig.body.natures, ['PERSONAL']);
   const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
-  assert.ok(!adminConfig.body.natures.includes('PERSONAL'));
-  assert.ok(!adminConfig.body.approvalNatures.includes('PERSONAL'));
+  assert.ok(adminConfig.body.natures.includes('PERSONAL'));
+  assert.ok(adminConfig.body.approvalNatures.includes('PERSONAL'));
 
   const created = invoke('POST', '/api/expenses', { role: 'personal_claimant', body: {
     nature: 'PERSONAL', vendor: 'Private Vendor', amount: 900,
@@ -163,12 +163,9 @@ test('PERSONAL stays outside business P&L and is Owner-only', () => {
   assert.equal(created.body.expense.nature, 'PERSONAL');
 
   const adminList = invoke('GET', '/api/expenses/list', { query: { nature: 'PERSONAL' }, role: 'admin' });
-  assert.equal(adminList.status, 403);
+  assert.equal(adminList.status, 200);
   const adminApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'admin' });
-  assert.equal(adminApproval.status, 403);
-
-  const adminReceipt = invoke('POST', '/api/expenses/receipts', { role:'admin', body:{ nature:'PERSONAL', account:'Gagan Personal Cash', receiptType:'other_income', source:'Private source', amount:100, proof:'/api/expenses/photo/private.jpg' } });
-  assert.equal(adminReceipt.status,403);
+  assert.equal(adminApproval.status, 400, 'Admin has access but must assign a category first');
 
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'General Expense' }, role: 'owner' });
   const ownerApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'owner' });
@@ -377,7 +374,7 @@ test('receivables support partial collections and credit the receiving account l
   assert.equal(ledger.entries.find(x=>x.id===created.body.receivable.id+'/COL-001').credit,400);
   const personal=invoke('POST','/api/expenses/receivables',{role:'owner',body:{nature:'PERSONAL',party:'Private',reason:'Loan return',amount:100}});
   assert.equal(personal.status,200);
-  assert.equal(invoke('GET','/api/expenses/receivables',{query:{nature:'PERSONAL'},role:'admin'}).status,403);
+  assert.equal(invoke('GET','/api/expenses/receivables',{query:{nature:'PERSONAL'},role:'admin'}).status,200);
 });
 
 test('Shopify history is filtered by the permanent accounting reset boundary', () => {

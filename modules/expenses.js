@@ -160,6 +160,7 @@ function blankStore() {
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
     transfers: [],                       // [{ id, nature, fromAccount, toAccount, amount, date, proof, note }]
     receipts: [],                        // money received other than sales/receivables
+    auditLog: [],                        // immutable accounting activity trail
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
     requests: [],                        // [{ id, kind:'ledger'|'account', name, meta, status, by, at, decidedBy, decidedAt }]
@@ -170,7 +171,7 @@ function blankStore() {
       paymentsByPo: {}
     },
     odConfig: { 'Tiana 0425': { limit: 0, ratePct: 0 } },
-    seq: 0, receivableSeq: 0, adjSeq: 0, transferSeq: 0, receiptSeq: 0, reqSeq: 0
+    seq: 0, receivableSeq: 0, adjSeq: 0, transferSeq: 0, receiptSeq: 0, reqSeq: 0, auditSeq: 0
   };
 }
 function loadStore() {
@@ -208,6 +209,11 @@ function saveStore(s) {
   fs.writeFileSync(tmp, JSON.stringify(s));
   fs.renameSync(tmp, EXP_PATH);
 }
+function audit(s, req, action, subjectType, subjectId, data) {
+  s.auditLog=Array.isArray(s.auditLog)?s.auditLog:[];s.auditSeq=(s.auditSeq||0)+1;
+  const details=data||{},entry={id:'AUD-'+String(s.auditSeq).padStart(6,'0'),at:new Date().toISOString(),user:(req&&req.user&&req.user.username)||details.user||'system',action,subjectType,subjectId:String(subjectId||''),nature:normalizedNature(details.nature||'SANKI'),account:String(details.account||''),paymentId:String(details.paymentId||''),before:details.before==null?null:details.before,after:details.after==null?null:details.after,note:String(details.note||'')};
+  s.auditLog.push(entry);if(s.auditLog.length>10000)s.auditLog=s.auditLog.slice(-10000);return entry;
+}
 
 // Owner-only Telegram quick capture. The Telegram webhook has already verified
 // the linked owner chat before calling this function. A clear narration plus a
@@ -228,7 +234,7 @@ function createTelegramPersonalExpense(input) {
   const vendor=String(b.vendor||particulars).trim(),ledger=PERSONAL_CATEGORIES.includes(b.ledger)?b.ledger:'Miscellaneous Personal';
   s.expenses[id]={id,date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger,vendor,claimant:username,account,channel:'Shared',bill:'printed',fundedBy:'claimant',paymentType,qrPhoto:'',billPhoto:proof,purchasePaymentProof:proof,exceptionEvidence:'',exceptionReason:'',billNote:'Captured from owner Telegram payment screenshot',paidAlready:true,personalPaidAmount:amount,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:proof,status:'paid',paidAmount:amount,payments:[{id:'PAY-001',amount,date,account,paymentType,proof,note:'Owner payment captured from Telegram',paidBy:username,paidAt:now,personalFunds:true}],createdAt:now,createdBy:username,approvedAt:now,approvedBy:username,paidAt:now,paidBy:username,telegramSourceKey:sourceKey,telegramNeedsReview:b.needsReview!==false,telegramNarration:String(b.rawNarration||particulars).trim(),telegramOcrText:String(b.ocrText||'').slice(0,4000)};
   s.vendorsByNature=s.vendorsByNature||{};s.vendorsByNature.PERSONAL=s.vendorsByNature.PERSONAL||{};if(!s.vendorsByNature.PERSONAL[vendor.toLowerCase()])s.vendorsByNature.PERSONAL[vendor.toLowerCase()]={name:vendor,notes:'Added from Owner Telegram capture'};
-  saveStore(s);return {success:true,expense:s.expenses[id]};
+  audit(s,null,'CREATED','expense',id,{nature:'PERSONAL',user:username,after:s.expenses[id],note:'Telegram capture'});saveStore(s);return {success:true,expense:s.expenses[id]};
 }
 function createTelegramPersonalReceipt(input) {
   const b=input||{},s=loadStore(),amount=num(b.amount),proof=String(b.proof||'').trim(),source=String(b.source||'').trim(),sourceKey=String(b.sourceKey||'').trim(),requested=String(b.account||'').trim().toLowerCase(),accounts=companyAccountsForNature('PERSONAL');
@@ -238,7 +244,7 @@ function createTelegramPersonalReceipt(input) {
   s.receipts=Array.isArray(s.receipts)?s.receipts:[];if(sourceKey){const duplicate=s.receipts.find(x=>x.telegramSourceKey===sourceKey);if(duplicate)return{success:true,duplicate:true,receipt:duplicate};}
   const now=new Date().toISOString(),lower=source.toLowerCase(),receiptType=/refund/.test(lower)?'refund':(/sale|sold/.test(lower)?'asset_sale':(/contribution|capital/.test(lower)?'owner_contribution':'other_income'));
   s.receiptSeq=(s.receiptSeq||0)+1;const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:'PERSONAL',account,amount,receiptType,source,date:String(b.date||now.slice(0,10)).slice(0,10),note:'Captured from Owner Telegram receipt screenshot',proof,createdBy:String(b.username||'owner'),createdAt:now,telegramSourceKey:sourceKey,telegramOcrText:String(b.ocrText||'').slice(0,4000)};
-  s.receipts.push(receipt);saveStore(s);return{success:true,receipt};
+  s.receipts.push(receipt);audit(s,null,'RECEIPT_RECORDED','receipt',receipt.id,{nature:'PERSONAL',account,user:receipt.createdBy,after:receipt,note:'Telegram capture'});saveStore(s);return{success:true,receipt};
 }
 function procurementAccounting(s) {
   s.procurementAccounting = Object.assign({ mediator: 'Logistics Mediator', trackPostedFrom: '2026-08-21T00:00:00+05:30', paymentsByPo: {} }, s.procurementAccounting || {});
@@ -369,7 +375,7 @@ function approvalNatures(req) {
   const r = rolesOfReq(req);
   if (r.includes('owner')) return NATURES.slice();
   const out = [];
-  if (r.includes('admin')) out.push('SANKI', 'SAMAST');
+  if (r.includes('admin')) out.push('SANKI', 'SAMAST', 'PERSONAL');
   if (r.includes('accounting')) out.push('SANKI');
   if (r.includes('samast_accounting')) out.push('SAMAST');
   return Array.from(new Set(out));
@@ -378,7 +384,7 @@ function submissionNatures(req) {
   const r = rolesOfReq(req);
   if (r.includes('owner')) return NATURES.slice();
   const out = approvalNatures(req);
-  if (r.includes('admin') || r.includes('claimant')) out.push('SANKI', 'SAMAST');
+  if (r.includes('admin') || r.includes('claimant')) out.push('SANKI', 'SAMAST', 'PERSONAL');
   if (r.includes('personal_claimant')) out.push('PERSONAL');
   return Array.from(new Set(out));
 }
@@ -429,7 +435,10 @@ router.post('/api/expenses/upload', proofUpload.single('photo'), (req, res) => {
 });
 router.get('/api/expenses/photo/:file', (req, res) => {
   const name = path.basename(String(req.params.file || ''));
-  if (name.startsWith('personal-') && !rolesOfReq(req).includes('owner')) return res.status(403).end();
+  if (name.startsWith('personal-')) {
+    const s=loadStore(),url='/api/expenses/photo/'+name,linked=Object.values(s.expenses||{}).find(e=>normalizedNature(e.nature)==='PERSONAL'&&[e.billPhoto,e.qrPhoto,e.purchasePaymentProof,e.paymentProof].concat((e.payments||[]).map(p=>p.proof)).includes(url));
+    if (!linked || !canViewExpense(req,linked)) return res.status(403).end();
+  }
   const fp = path.join(PROOF_DIR, name);
   if (!fp.startsWith(PROOF_DIR) || !fs.existsSync(fp)) return res.status(404).end();
   res.sendFile(fp);
@@ -550,6 +559,7 @@ router.post('/api/expenses', (req, res) => {
     approvedAt: null, approvedBy: null,
     paidAt: null, paidBy: null
   };
+  audit(s,req,'CREATED','expense',id,{nature,after:s.expenses[id]});
   saveStore(s);
   notifyApproversNewExpense(s.expenses[id]);
   res.json({ success: true, expense: s.expenses[id] });
@@ -670,6 +680,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
     e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
     e.auditHistory.push({ id:'EDIT-'+String(e.auditHistory.length+1).padStart(3,'0'), reason:editReason || 'Pending expense correction', changes, editedBy:(req.user&&req.user.username)||'system', editedAt:new Date().toISOString() });
     if(e.telegramNeedsReview)e.telegramNeedsReview=false;
+    audit(s,req,'EDITED','expense',e.id,{nature:e.nature,before:beforeEdit,after:e,note:editReason||'Pending expense correction'});
   }
   saveStore(s);
   res.json({ success: true, expense: e });
@@ -715,6 +726,7 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   if (e.paidAlready) { e.reimbursementStatus = 'pending'; e.vendorPaymentCompleted = e.paidAmount >= totalDue; }
   e.approvedAt = new Date().toISOString();
   e.approvedBy = (req.user && req.user.username) || 'admin';
+  audit(s,req,'APPROVED','expense',e.id,{nature:e.nature,after:{status:e.status,approvedBy:e.approvedBy,amount:e.amount}});
   saveStore(s);
   notifyExpenseUser(e, 'approved');
   res.json({ success: true, expense: e });
@@ -776,6 +788,7 @@ router.post('/api/expenses/batch-pay', (req, res) => {
   });
   const allocatedIds=allocations.map(x=>x.expense.id);
   allocations.forEach(x=>{x.expense.payments.at(-1).linkedExpenseIds=allocatedIds;});
+  allocations.forEach(x=>audit(s,req,'PAYMENT_ALLOCATED','expense',x.expense.id,{nature:x.expense.nature,account,paymentId:x.expense.payments.at(-1).id,after:{batchPaymentId,amount:x.amount,linkedExpenseIds:allocatedIds,status:x.expense.status}}));
   saveStore(s);
   allocations.forEach(x => notifyExpenseUser(x.expense,x.expense.status==='paid'?'paid':'partially_paid',x.amount));
   res.json({ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:round0(Math.max(0,num(x.expense.amount)-num(x.expense.paidAmount)))})), expenses });
@@ -827,6 +840,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   e.status = e.paidAmount >= approvedNow ? 'paid' : 'partially_paid';
   e.paidAt = new Date().toISOString();
   e.paidBy = (req.user && req.user.username) || 'admin';
+  audit(s,req,'PAYMENT_RECORDED','expense',e.id,{nature:e.nature,account:e.account,paymentId:e.payments.at(-1).id,after:e.payments.at(-1)});
   saveStore(s);
   notifyExpenseUser(e, e.status === 'paid' ? 'paid' : 'partially_paid', pay);
   res.json({ success: true, expense: e });
@@ -858,6 +872,7 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
     proof, note: String(b.note || '').trim(), paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString()
   });
   e.reimbursementStatus = e.reimbursementAmount >= e.personalPaidAmount ? 'reimbursed' : 'partially_reimbursed';
+  audit(s,req,'REIMBURSEMENT_RECORDED','expense',e.id,{nature:e.nature,account:reimbursementAccount,paymentId:e.reimbursementPayments.at(-1).id,after:e.reimbursementPayments.at(-1)});
   saveStore(s);
   notifyExpenseUser(e, e.reimbursementStatus, amount);
   res.json({ success: true, expense: e });
@@ -870,6 +885,7 @@ router.post('/api/expenses/:id/reject', (req, res) => {
   if (!canApproveExpenseNature(req, e)) return res.status(403).json({ success: false, error: 'You cannot reject this accounting entity.' });
   if (e.status !== 'pending') return res.status(400).json({ success: false, error: 'Only a pending expense can be rejected.' });
   e.status = 'rejected'; e.rejectReason = String((req.body || {}).reason || '').trim();
+  audit(s,req,'REJECTED','expense',e.id,{nature:e.nature,after:{status:e.status,reason:e.rejectReason}});
   e.rejectedAt = new Date().toISOString(); e.rejectedBy = (req.user && req.user.username) || 'admin';
   if (e.paidAlready) e.reimbursementStatus = 'rejected';
   saveStore(s); notifyExpenseUser(e, 'rejected');
@@ -882,7 +898,9 @@ router.delete('/api/expenses/:id', (req, res) => {
   const s = loadStore();
   if (!s.expenses[req.params.id]) return res.status(404).json({ success: false, error: 'Not found.' });
   if (!canApproveExpenseNature(req, s.expenses[req.params.id])) return res.status(403).json({ success: false, error: 'You cannot delete this accounting entity.' });
+  const removed=JSON.parse(JSON.stringify(s.expenses[req.params.id]));
   delete s.expenses[req.params.id];
+  audit(s,req,'DELETED','expense',req.params.id,{nature:removed.nature,before:removed});
   saveStore(s);
   res.json({ success: true });
 });
@@ -976,7 +994,7 @@ router.post('/api/expenses/procurement-payables/settings', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin/Owner only.' });
   const s = loadStore(), name = String((req.body || {}).mediator || '').trim();
   if (!name) return res.status(400).json({ success: false, error: 'Mediator name is required.' });
-  procurementAccounting(s).mediator = name; saveStore(s);
+  const before=procurementAccounting(s).mediator;procurementAccounting(s).mediator = name;audit(s,req,'LEDGER_SETTING_CHANGED','procurement','mediator',{nature:'SANKI',before,after:name});saveStore(s);
   res.json({ success: true, mediator: name });
 });
 router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
@@ -993,7 +1011,7 @@ router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
   state.payments.push({ id:'PPAY-'+String(state.payments.length+1).padStart(3,'0'), amount:pay, account:allowedAccount,
     date:String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI', proof,
     note:String(b.note || '').trim(), paidBy:(req.user&&req.user.username)||'admin', paidAt:new Date().toISOString() });
-  saveStore(s); res.json({ success:true, payable:procurementPayables(s, true).find(x=>x.id===item.id) });
+  audit(s,req,'PROCUREMENT_PAYMENT_RECORDED','procurement',item.id,{nature:'SANKI',account:allowedAccount,paymentId:state.payments.at(-1).id,after:state.payments.at(-1)});saveStore(s); res.json({ success:true, payable:procurementPayables(s, true).find(x=>x.id===item.id) });
 });
 
 // One-click spending: one row per actual payment, dated by the payment event.
@@ -1055,7 +1073,7 @@ router.post('/api/expenses/receivables', (req, res) => {
   if(!(amount>0)) return res.status(400).json({success:false,error:'Receivable amount must be greater than 0.'});
   s.receivableSeq=(s.receivableSeq||0)+1; const now=new Date().toISOString(), id='RCV-'+String(s.receivableSeq).padStart(5,'0');
   const item={id,nature,party,reason,amount,receivedAmount:0,status:'open',date:String(b.date||now.slice(0,10)).slice(0,10),dueDate:String(b.dueDate||'').slice(0,10),proof:String(b.proof||'').trim(),collections:[],createdBy:(req.user&&req.user.username)||'admin',createdAt:now};
-  s.receivables=s.receivables||{};s.receivables[id]=item;saveStore(s);res.json({success:true,receivable:item});
+  s.receivables=s.receivables||{};s.receivables[id]=item;audit(s,req,'CREATED','receivable',id,{nature,after:item});saveStore(s);res.json({success:true,receivable:item});
 });
 
 router.get('/api/expenses/receivables', (req,res) => {
@@ -1077,7 +1095,7 @@ router.post('/api/expenses/receivables/:id/receive', (req,res) => {
   if(!receivingAccount) return res.status(400).json({success:false,error:'Select a receiving account assigned to this accounting entity.'});
   if(!proof) return res.status(400).json({success:false,error:'Collection proof is required.'});
   x.collections=Array.isArray(x.collections)?x.collections:[];x.collections.push({id:'COL-'+String(x.collections.length+1).padStart(3,'0'),amount,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),account:receivingAccount,proof,note:String(b.note||'').trim(),receivedBy:(req.user&&req.user.username)||'admin',receivedAt:new Date().toISOString()});
-  x.receivedAmount=num(x.receivedAmount)+amount;x.status=x.receivedAmount>=x.amount?'received':'partially_received';saveStore(s);res.json({success:true,receivable:x});
+  x.receivedAmount=num(x.receivedAmount)+amount;x.status=x.receivedAmount>=x.amount?'received':'partially_received';audit(s,req,'COLLECTION_RECORDED','receivable',x.id,{nature:x.nature,account:receivingAccount,paymentId:x.collections.at(-1).id,after:x.collections.at(-1)});saveStore(s);res.json({success:true,receivable:x});
 });
 
 // ── Vendor books (accounts payable per vendor) ───────────────────
@@ -1116,6 +1134,7 @@ router.post('/api/expenses/vendors', (req, res) => {
     s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature[nature] = s.vendorsByNature[nature] || {};
     if (!s.vendorsByNature[nature][name.toLowerCase()]) s.vendorsByNature[nature][name.toLowerCase()] = { name, notes: '' };
   }
+  audit(s,req,'VENDOR_ADDED','vendor',name,{nature,after:{name}});
   saveStore(s);
   res.json({ success: true });
 });
@@ -1186,7 +1205,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature:fromNature, fromNature, toNature, classification, fromAccount, toAccount, amount,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, note: String(b.note || '').trim(),
     createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString() };
-  s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer); saveStore(s);
+  s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer);audit(s,req,'TRANSFER_RECORDED','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer});saveStore(s);
   res.json({ success: true, transfer });
 });
 
@@ -1203,7 +1222,7 @@ router.post('/api/expenses/receipts', (req,res) => {
   if(!['asset_sale','other_income','refund','owner_contribution'].includes(receiptType)) return res.status(400).json({success:false,error:'Choose a valid receipt type.'});
   s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];
   const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note,proof,proofException:ownerCashDeclaration?'Owner cash declaration — no external proof available':'',createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString()};
-  s.receipts.push(receipt);saveStore(s);res.json({success:true,receipt});
+  s.receipts.push(receipt);audit(s,req,'RECEIPT_RECORDED','receipt',receipt.id,{nature,account,after:receipt});saveStore(s);res.json({success:true,receipt});
 });
 
 router.get('/api/expenses/account-ledger', (req, res) => {
@@ -1250,6 +1269,7 @@ router.post('/api/expenses/balances', (req, res) => {
       s.openingBalancesByNature[nature] = s.openingBalancesByNature[nature] || {};
       s.openingBalancesByNature[nature][openingAccount] = num(b.setOpening.amount);
     } else s.openingBalances[openingAccount] = num(b.setOpening.amount);
+    audit(s,req,'OPENING_BALANCE_CHANGED','account',openingAccount,{nature,account:openingAccount,after:num(b.setOpening.amount)});
   }
   if (b.adjust && b.adjust.account && b.adjust.amount != null) {
     const adjustmentAccount = allowedCompanyAccount(s, nature, b.adjust.account);
@@ -1267,9 +1287,34 @@ router.post('/api/expenses/balances', (req, res) => {
       date: (b.adjust.date || new Date().toISOString().slice(0, 10)).toString().slice(0, 10), nature,
       proof: String(b.adjust.proof || '').trim(), createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString()
     });
+    audit(s,req,'ADJUSTMENT_RECORDED','account',adjustmentAccount,{nature,account:adjustmentAccount,after:s.adjustments.at(-1),note});
   }
   saveStore(s);
   res.json({ success: true });
+});
+
+function recordedAccountBalance(s,nature,account,asOf){
+  const on=d=>!asOf||!d||String(d).slice(0,10)<=asOf,openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{});let total=num(openingMap[account]);
+  (s.adjustments||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
+  (s.receipts||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
+  (s.transfers||[]).filter(x=>on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
+  Object.values(s.expenses||{}).filter(e=>normalizedNature(e.nature)===nature).forEach(e=>{(e.payments||[]).filter(p=>e.approvedAt&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
+  Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
+  if(nature==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));}
+  return round0(total);
+}
+router.get('/api/expenses/balance-sheet',(req,res)=>{
+  if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),asOf=String(req.query.asOf||new Date().toISOString().slice(0,10)).slice(0,10),selected=req.query.nature?normalizedNature(req.query.nature):'',natures=selected?[selected]:approvalNatures(req);
+  if(selected&&!approvalNatures(req).includes(selected))return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});const accounts=[];natures.forEach(n=>ledgerAccountsForNature(s,n).forEach(name=>accounts.push({nature:n,name,balance:recordedAccountBalance(s,n,name,asOf)})));
+  const bankAndCash=accounts.filter(x=>x.balance>0).reduce((n,x)=>n+x.balance,0),overdrafts=Math.abs(accounts.filter(x=>x.balance<0).reduce((n,x)=>n+x.balance,0));let receivables=0,vendorPayables=0,reimbursements=0;
+  Object.values(s.receivables||{}).filter(x=>natures.includes(normalizedNature(x.nature))&&String(x.date||'')<=asOf).forEach(x=>{const received=(x.collections||[]).filter(c=>String(c.date||'')<=asOf).reduce((n,c)=>n+num(c.amount),0);receivables+=Math.max(0,num(x.amount)-received);});
+  Object.values(s.expenses||{}).filter(e=>natures.includes(normalizedNature(e.nature))&&e.approvedAt&&String(e.date||'')<=asOf).forEach(e=>{if(!e.paidAlready)vendorPayables+=Math.max(0,num(e.amount)-num(e.paidAmount));if(e.paidAlready&&normalizedNature(e.nature)!=='PERSONAL')reimbursements+=Math.max(0,num(e.personalPaidAmount)-num(e.reimbursementAmount));});
+  const procurement=natures.includes('SANKI')?procurementPayables(s,false).filter(x=>String(x.date||'')<=asOf).reduce((n,x)=>n+num(x.balanceDue),0):0,totalAssets=round0(bankAndCash+receivables),totalLiabilities=round0(overdrafts+vendorPayables+procurement+reimbursements),equity=round0(totalAssets-totalLiabilities);
+  res.json({success:true,asOf,natures,assets:{accounts:accounts.filter(x=>x.balance>0),bankAndCash:round0(bankAndCash),receivables:round0(receivables),total:totalAssets},liabilities:{overdrafts:round0(overdrafts),vendorPayables:round0(vendorPayables),procurementPayables:round0(procurement),reimbursements:round0(reimbursements),total:totalLiabilities},equity:{recordedNetPosition:equity},note:'Recorded-system position only. Inventory, fixed assets, taxes, loans and opening capital must be entered before this becomes a statutory balance sheet.'});
+});
+router.get('/api/expenses/audit-log',(req,res)=>{
+  if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),nature=req.query.nature?normalizedNature(req.query.nature):'',action=String(req.query.action||'').toUpperCase(),user=String(req.query.user||'').toLowerCase(),from=String(req.query.from||''),to=String(req.query.to||''),subject=String(req.query.subject||'').toLowerCase();
+  const entries=(s.auditLog||[]).filter(x=>(!nature||x.nature===nature)&&(!action||x.action===action)&&(!user||String(x.user).toLowerCase().includes(user))&&(!from||String(x.at).slice(0,10)>=from)&&(!to||String(x.at).slice(0,10)<=to)&&(!subject||String(x.subjectId+' '+x.subjectType+' '+x.account+' '+x.paymentId).toLowerCase().includes(subject))).slice().reverse().slice(0,1000);res.json({success:true,count:entries.length,entries});
 });
 
 // ── Private Owner Dashboard / OD view ───────────────────────────
@@ -1378,7 +1423,7 @@ router.post('/api/expenses/settings', (req, res) => {
     if (TYPES.includes(b.ledgerOverride.type)) cur.type = b.ledgerOverride.type;
     s.ledgerOverrides[nm] = cur;
   }
-  saveStore(s);
+  audit(s,req,'LEDGER_SETTING_CHANGED','settings','expense-settings',{after:b});saveStore(s);
   res.json({ success: true });
 });
 
@@ -1412,7 +1457,7 @@ router.post('/api/expenses/requests', (req, res) => {
     decidedBy: null, decidedAt: null
   };
   s.requests.push(request);
-  saveStore(s);
+  audit(s,req,'REQUEST_CREATED','request',request.id,{after:request});saveStore(s);
   res.json({ success: true, request });
 });
 router.get('/api/expenses/requests', (req, res) => {
@@ -1450,7 +1495,7 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
   }
   r.decidedBy = (req.user && req.user.username) || 'admin';
   r.decidedAt = new Date().toISOString();
-  saveStore(s);
+  audit(s,req,approve?'REQUEST_APPROVED':'REQUEST_REJECTED','request',r.id,{after:r});saveStore(s);
   res.json({ success: true, request: r });
 });
 // Admin: remove a paying account (fix the wrong ones) — keeps history intact.
@@ -1461,7 +1506,7 @@ router.post('/api/expenses/accounts', (req, res) => {
   if (!name) return res.status(400).json({ success: false, error: 'Account name required.' });
   const existing = storedAccountNames(s).find(a => a.toLowerCase() === name.toLowerCase());
   if (!existing) s.accounts.push(name);
-  saveStore(s);
+  audit(s,req,'ACCOUNT_ADDED','account',existing||name,{after:{name:existing||name}});saveStore(s);
   res.json({ success: true, account: existing || name, accounts: storedAccountNames(s) });
 });
 router.post('/api/expenses/accounts/remove', (req, res) => {
@@ -1469,7 +1514,7 @@ router.post('/api/expenses/accounts/remove', (req, res) => {
   const s = loadStore();
   const name = String((req.body || {}).name || '').trim();
   s.accounts = (s.accounts || []).filter(a => a !== name);
-  saveStore(s);
+  audit(s,req,'ACCOUNT_REMOVED','account',name,{before:{name}});saveStore(s);
   res.json({ success: true, accounts: s.accounts });
 });
 // Admin: list / remove admin-approved CUSTOM categories (built-in ones stay).
@@ -1482,7 +1527,7 @@ router.post('/api/expenses/custom-ledgers/remove', (req, res) => {
   const s = loadStore();
   const name = String((req.body || {}).name || '').trim();
   if (s.customLedgers && s.customLedgers[name]) delete s.customLedgers[name];
-  saveStore(s);
+  audit(s,req,'CATEGORY_REMOVED','category',name,{before:{name}});saveStore(s);
   res.json({ success: true });
 });
 

@@ -57,6 +57,7 @@ const MODULES = [
 
   { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'revenue', 'owner'] },
+  { key: 'balance-sheet',title: 'Balance Sheet',          desc: 'Assets, liabilities and recorded net position as of a selected date', icon: '⚖️', href: '/balance-sheet.html', section: 'Accounts', status: 'live', roles: ['admin','owner'] },
   { key: 'expenses',     title: 'Expenses',              desc: 'SANKI, SAMAST and owner-private Personal expenses', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'samast_accounting', 'personal_claimant', 'claimant', 'owner'] },
   { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the P&L', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
 

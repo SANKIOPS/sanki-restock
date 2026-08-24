@@ -183,6 +183,7 @@
       <button data-t="vendors">Vendor ledgers</button>
       <button data-t="cash">Account ledgers</button>
       <button data-t="reimbursements">Reimbursements</button>
+      <button data-t="audit" id="auditTab" style="display:none">Audit log</button>
     </div>
 
     <div id="panel"></div>
@@ -303,6 +304,7 @@
       if(tab==='vendors') return renderVendors();
       if(tab==='cash') return renderCash();
       if(tab==='reimbursements') return renderReimbursements();
+      if(tab==='audit') return renderAudit();
       if(tab==='approvals') return renderApprovals();
     }
 
@@ -844,6 +846,11 @@
         }).join('')+'</tbody></table>';
       });
     }
+
+    function renderAudit(){
+      el('panel').innerHTML='<div class="card"><h3 style="margin-top:0">Accounting audit log</h3><p class="sub">Every recorded accounting change, newest first. Expand a row to see the previous and new values.</p><div class="filters"><div class="fld"><label>Entity</label><select id="au_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="au_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="au_to" value="'+today()+'"></div><div class="fld"><label>User</label><input id="au_user" placeholder="User name"></div><div class="fld"><label>Transaction / account</label><input id="au_subject" placeholder="EX-00001, account…"></div><button class="btn ghost mini" id="au_go">Filter</button></div><div id="au_list" class="muted">Loading…</div></div>';
+      function load(){var q=new URLSearchParams({nature:el('au_nature').value,from:el('au_from').value,to:el('au_to').value,user:el('au_user').value,subject:el('au_subject').value});api('/api/expenses/audit-log?'+q).then(function(d){if(!d.success){el('au_list').textContent=d.error||'Could not load audit log.';return;}el('au_list').innerHTML=d.entries.length?d.entries.map(function(x){var detail={previous:x.before,newValue:x.after,note:x.note,account:x.account,paymentId:x.paymentId};return '<details class="expense-row"><summary><span><b>'+esc(String(x.action||'').replaceAll('_',' '))+'</b><small>'+esc(x.subjectType||'record')+' · '+esc(x.subjectId||'')+'</small></span><span>'+esc(x.user||'system')+'<small>'+esc(new Date(x.at).toLocaleString('en-IN'))+(x.nature?' · '+esc(x.nature):'')+'</small></span></summary><pre style="white-space:pre-wrap;overflow:auto;margin:10px 0 0;font-size:12px">'+esc(JSON.stringify(detail,null,2))+'</pre></details>';}).join(''):'<div class="empty">No recorded actions match these filters.</div>';});}el('au_go').onclick=load;load();
+    }
     window.removeCustomLedger = function(name){
       if(!confirm('Remove custom category "'+name+'"?')) return;
       api('/api/expenses/custom-ledgers/remove', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:name}) })
@@ -890,7 +897,7 @@
     // boot
     loadConfig().then(function(){
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
-      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';}
+      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';}
       if(!cfg.isAdmin){ // every non-Owner/Admin user: log + view own list only
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();
