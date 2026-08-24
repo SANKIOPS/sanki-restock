@@ -84,6 +84,12 @@ test('safe PWA update assets remain public so expired sessions can recover', () 
   }
 });
 
+test('both Telegram webhook routes bypass login and authenticate with their secrets', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'auth.js'), 'utf8');
+  assert.match(source, /p\.startsWith\('\/api\/telegram\/webhook\/'\)/);
+  assert.match(source, /p\.startsWith\('\/api\/telegram\/personal-webhook\/'\)/);
+});
+
 test('Railway sessions use a stable fallback key and app-wide cookie path', () => {
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
   assert.match(source, /process\.env\.DASH_USER && process\.env\.DASH_PASS/);

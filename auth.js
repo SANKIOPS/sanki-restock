@@ -150,6 +150,7 @@ function gate(req, res, next) {
   // and the login page + login/logout endpoints (so people can get in).
   if (p.startsWith('/api/webhooks/') ||
       p.startsWith('/api/telegram/webhook/') ||
+      p.startsWith('/api/telegram/personal-webhook/') ||
       p === '/api/health' ||
       p === '/healthz' ||
       p === '/login.html' ||
