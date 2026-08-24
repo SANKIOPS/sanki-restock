@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -877,6 +877,21 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.equal(duplicate.success,false);
   assert.match(duplicate.error,/not awaiting a vendor payment/);
   assert.equal(telegramExpense(id).payments.length,1);
+});
+
+test('native Telegram accounting actions reuse API permissions and ledger posting', () => {
+  const owner={username:'gaganlambasanki',roles:['owner']},prashant={username:'prashant',roles:['admin']};
+  const receipt=telegramApi('POST','/api/expenses/receipts',owner,{body:{nature:'SANKI',account:'3645',amount:250,source:'Telegram refund',receiptType:'refund',proof:'/api/expenses/photo/tg-receipt.jpg'}});
+  assert.equal(receipt.success,true);
+  assert.equal(receipt.receipt.account,'Prashant Axis 3645');
+  const denied=telegramApi('POST','/api/expenses/receipts',prashant,{body:{nature:'SANKI',account:'3645',amount:250,source:'Not allowed',receiptType:'refund',proof:'/api/expenses/photo/tg-receipt.jpg'}});
+  assert.equal(denied.status,403);
+  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  assert.match(telegramSource,/NATIVE_ACCOUNT_ACTIONS/);
+  assert.match(telegramSource,/callback_data:'am:native-confirm'/);
+  assert.match(telegramSource,/callback_data:'am:native-edit'/);
+  assert.match(telegramSource,/callback_data:'am:native-cancel'/);
+  assert.match(telegramSource,/After this, attach the payment\/proof screenshot/);
 });
 
 test('internal reconciliation flags malformed transfers and requires a recorded payment override', () => {

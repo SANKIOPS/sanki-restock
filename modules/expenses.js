@@ -303,6 +303,18 @@ function telegramRecordTransfer(actor,body){const b=body||{},s=loadStore(),from=
 function telegramApproveExpense(id,actor,changes){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};const before=JSON.parse(JSON.stringify(e)),c=changes||{};['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}if(c.nature)e.nature=normalizedNature(c.nature);if(e.ledger&&!pickableLedgers(s).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase())){s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};}const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};const n=normalizedNature(e.nature);s.vendors=s.vendors||{};s.vendorsByNature=s.vendorsByNature||{};if(n==='SANKI'){s.vendors[e.vendor.toLowerCase()]=s.vendors[e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}else{s.vendorsByNature[n]=s.vendorsByNature[n]||{};s.vendorsByNature[n][e.vendor.toLowerCase()]=s.vendorsByNature[n][e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';if(e.paidAlready)e.reimbursementStatus='pending';e.approvedAt=new Date().toISOString();e.approvedBy=actor;audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};}
 function telegramRejectExpense(id,actor,reason){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'Only a pending expense can be rejected.'};e.status='rejected';e.rejectReason=String(reason||'Rejected from Telegram');e.rejectedAt=new Date().toISOString();e.rejectedBy=actor;audit(s,null,'REJECTED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,reason:e.rejectReason}});saveStore(s);notifyExpenseUser(e,'rejected');return{success:true,expense:e};}
 function telegramRecordPayment(id,actor,b){const s=loadStore(),e=s.expenses[id],body=b||{};if(!e)return{success:false,error:'Expense not found.'};if(!['approved','partially_paid'].includes(e.status)||e.paidAlready)return{success:false,error:'This expense is not awaiting a vendor payment.'};const proof=String(body.proof||'');if(!proof)return{success:false,error:'Payment screenshot is required.'};const account=telegramResolveAccount(e.nature,body.account);if(!account)return{success:false,error:'Paying account was not recognized.',needsAccount:true};const issues=reconciliationIssues(s,normalizedNature(e.nature),account);if(issues.length)return{success:false,error:'This account has a reconciliation warning. Complete this payment in the app.',appRequired:true};const outstanding=Math.max(0,num(e.amount)-num(e.paidAmount)),amount=body.amount!=null?num(body.amount):outstanding;if(!(amount>0)||amount>outstanding)return{success:false,error:'Payment must be between ₹0 and '+outstanding+'.'};e.account=account;e.paidAmount=num(e.paidAmount)+amount;e.paymentProof=proof;e.payments=Array.isArray(e.payments)?e.payments:[];e.payments.push({id:'PAY-'+String(e.payments.length+1).padStart(3,'0'),amount,date:String(body.date||new Date().toISOString().slice(0,10)).slice(0,10),account,paymentType:'UPI',proof,note:'Recorded through Telegram',paidBy:actor,paidAt:new Date().toISOString()});e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid';e.paidAt=new Date().toISOString();e.paidBy=actor;audit(s,null,'PAYMENT_RECORDED','expense',id,{user:actor,device:'Telegram',nature:e.nature,account,paymentId:e.payments.at(-1).id,after:e.payments.at(-1)});saveStore(s);notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',amount);return{success:true,expense:e,payment:e.payments.at(-1)};}
+// Runs an existing synchronous accounting route for a linked Telegram user.
+// This keeps validation, permissions, ledger posting and audit behavior identical
+// between Telegram and the web app instead of maintaining two accounting engines.
+function telegramApi(method, routePath, target, input) {
+  const layer=router.stack.find(item=>item.route&&item.route.path===routePath&&item.route.methods[String(method||'POST').toLowerCase()]);
+  if(!layer)return{success:false,error:'Accounting action is unavailable.'};
+  const o=input||{},req={body:o.body||{},params:o.params||{},query:o.query||{},headers:{'user-agent':'Telegram','x-forwarded-for':'Telegram'},ip:'Telegram',user:{username:String(target&&target.username||target||''),roles:(target&&target.roles)||[],role:((target&&target.roles)||[])[0]||''},get(name){return this.headers[String(name).toLowerCase()]||'';}};
+  let status=200,result={success:false,error:'Accounting action did not return a result.'};
+  const res={status(code){status=code;return this;},json(value){result=value;return this;},end(){return this;},sendFile(){return this;}};
+  try{layer.route.stack[0].handle(req,res,()=>{});}catch(e){return{success:false,error:String(e.message||e),status:500};}
+  return Object.assign({status},result||{});
+}
 function procurementAccounting(s) {
   s.procurementAccounting = Object.assign({ mediator: 'Logistics Mediator', trackPostedFrom: '2026-08-21T00:00:00+05:30', paymentsByPo: {} }, s.procurementAccounting || {});
   s.procurementAccounting.paymentsByPo = s.procurementAccounting.paymentsByPo || {};
@@ -410,7 +422,8 @@ function payingAccountsForReq(req, nature) {
 }
 function allowedPayingAccount(req, nature, account) {
   const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
-  return payingAccountsForReq(req, nature).find(name => name.toLowerCase() === candidate.toLowerCase());
+  const allowed=payingAccountsForReq(req,nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
+  return exact||(matches.length===1?matches[0]:undefined);
 }
 function ledgerAccountsForNature(s, nature) {
   const n = normalizedNature(nature), names = new Set(companyAccountsForNature(n));
@@ -429,12 +442,14 @@ function ledgerAccountsForNature(s, nature) {
 }
 function allowedCompanyAccount(s, nature, account) {
   const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
-  return companyAccountsForNature(nature).find(name => name.toLowerCase() === candidate.toLowerCase());
+  const allowed=companyAccountsForNature(nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
+  return exact||(matches.length===1?matches[0]:undefined);
 }
 function allowedReimbursementAccount(req, account) {
   const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
   const allowed = Array.from(new Set([].concat(...approvalNatures(req).map(n => payingAccountsForReq(req, n)))));
-  return allowed.find(name => name.toLowerCase() === candidate.toLowerCase());
+  const exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
+  return exact||(matches.length===1?matches[0]:undefined);
 }
 function rolesOfReq(req) {
   return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || [];
@@ -1125,7 +1140,7 @@ router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
   if (!item) return res.status(404).json({ success: false, error: 'Purchase payable not found.' });
   const proof = String(b.paymentProof || '').trim(), account = String(b.account || '').trim(), pay = num(b.amount);
   if (!proof) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
-  const allowedAccount = allowedCompanyAccount(s, 'SANKI', account);
+  const allowedAccount = allowedPayingAccount(req, 'SANKI', account);
   if (!allowedAccount) return res.status(400).json({ success: false, error: 'Select a SANKI paying account.' });
   if (!(pay > 0) || pay > item.balanceDue) return res.status(400).json({ success: false, error: 'Payment must be greater than zero and cannot exceed ₹' + item.balanceDue + '.' });
   const cfg = procurementAccounting(s), state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
@@ -1727,4 +1742,4 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount };
