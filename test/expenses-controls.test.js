@@ -412,12 +412,22 @@ test('Telegram setup is Owner-only and supports per-user notification management
   const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');
   assert.match(html, /cfg\.isOwner\?'<div class="card"><b>Telegram notifications \(Owner only\)/);
   assert.match(html, /id="telegramUser"/);
-  assert.match(html, /Test selected user/);
-  assert.match(html, /Disconnect selected user/);
+  assert.match(html, /Test all linked accounts/);
+  assert.match(html, /Disconnect all/);
+  assert.match(html, /Add another Telegram/);
+  assert.match(html, /Disconnect this account/);
   assert.doesNotMatch(html, /Link your own Telegram/);
   assert.match(telegram, /router\.post\('\/api\/telegram\/link'.*if\(!owner\(req\)\)/);
   assert.match(telegram, /router\.post\('\/api\/telegram\/test'.*if\(!owner\(req\)\)/);
   assert.match(telegram, /router\.post\('\/api\/telegram\/unlink'.*if\(!owner\(req\)\)/);
+});
+
+test('one app user can retain multiple Telegram notification accounts', () => {
+  const { chatIdsForUser, linkedAccounts } = require('../modules/telegram');
+  assert.deepEqual(chatIdsForUser({ userChats:{prashant:'111'} }, 'Prashant'), ['111']);
+  const multi={userChats:{prashant:['111','222','111']},chatMeta:{'111':{telegramName:'Prashant phone'},'222':{telegramName:'Office Telegram'}}};
+  assert.deepEqual(chatIdsForUser(multi,'prashant'),['111','222']);
+  assert.deepEqual(linkedAccounts(multi),[{username:'prashant',count:2,connections:[{chatId:'111',label:'Prashant phone',linkedAt:''},{chatId:'222',label:'Office Telegram',linkedAt:''}]}]);
 });
 
 test('Owner Telegram narration and screenshot OCR create one categorized paid PERSONAL expense', () => {
