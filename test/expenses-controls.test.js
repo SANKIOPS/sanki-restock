@@ -621,10 +621,13 @@ test('Owner/Admin can edit finalized expenses with a mandatory audit reason', ()
   invoke('POST','/api/expenses/:id/approve',{params:{id:created.body.expense.id},role:'owner'});
   const blocked=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'Corrected Audit Vendor'},role:'owner'});
   assert.equal(blocked.status,400);
-  const edited=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'Corrected Audit Vendor',editReason:'Corrected vendor spelling'},role:'owner'});
+  const edited=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'Corrected Audit Vendor',amount:450,requestedAmount:450,editReason:'Corrected vendor and amount'},role:'owner'});
   assert.equal(edited.status,200);
   assert.equal(edited.body.expense.vendor,'Corrected Audit Vendor');
-  assert.equal(edited.body.expense.auditHistory.at(-1).reason,'Corrected vendor spelling');
+  assert.equal(edited.body.expense.amount,450);
+  assert.equal(edited.body.expense.requestedAmount,450);
+  assert.equal(edited.body.expense.auditHistory.at(-1).reason,'Corrected vendor and amount');
+  assert.ok(edited.body.expense.auditHistory.at(-1).changes.some(x=>x.field==='amount'&&x.before===300&&x.after===450));
   assert.equal(invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'No Access',editReason:'test'},role:'accounting'}).status,403);
 });
 

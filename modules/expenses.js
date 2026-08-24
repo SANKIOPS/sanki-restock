@@ -575,7 +575,12 @@ router.post('/api/expenses/:id', (req, res, next) => {
   const beforeEdit = JSON.parse(JSON.stringify(e));
   if (b.date != null) e.date = String(b.date).slice(0, 10);
   if (b.particulars != null) e.particulars = String(b.particulars).trim();
-  if (b.amount != null && num(b.amount) > 0 && num(b.amount) >= num(e.paidAmount)) e.amount = num(b.amount);
+  if (b.amount != null) {
+    const nextAmount = num(b.amount);
+    if (!(nextAmount > 0)) return res.status(400).json({ success:false, error:'Expense amount must be greater than 0.' });
+    if (nextAmount < num(e.paidAmount)) return res.status(400).json({ success:false, error:'Expense amount cannot be lower than ₹'+round0(e.paidAmount)+' already paid.' });
+    e.amount = nextAmount;
+  }
   if (b.isInstallment != null) e.isInstallment = b.isInstallment === true || b.isInstallment === 'true';
   if (b.requestedAmount != null) {
     const requested = num(b.requestedAmount);
@@ -657,6 +662,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
     return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
   if (e.paymentType === 'Cash') e.qrPhoto = '';
+  if (!e.paidAlready && finalized && e.status !== 'rejected') e.status = num(e.paidAmount) >= num(e.amount) ? 'paid' : (num(e.paidAmount) > 0 ? 'partially_paid' : 'approved');
   const tracked = ['nature','date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
   const changes = tracked.filter(k => JSON.stringify(beforeEdit[k]) !== JSON.stringify(e[k])).map(k => ({ field:k, before:beforeEdit[k] == null ? '' : beforeEdit[k], after:e[k] == null ? '' : e[k] }));
   if (changes.length) {
