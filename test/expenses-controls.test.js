@@ -707,7 +707,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/payingAccount='\+encodeURIComponent/);
   assert.match(html,/var claimantName=e\.claimant\|\|e\.createdBy/);
   assert.match(html,/var payingAccounts=Array\.from\(new Set/);
-  assert.match(html,/Claimant: '\+esc\(claimantName\)\+' · Paid from: '\+esc\(payingAccountLabel\)/);
+  assert.match(html,/class="claim-row-meta">'\+esc\(claimantName\)\+' │ '\+esc\(payingAccountLabel\)/);
+  assert.match(html,/recordedPaymentWithProof=\(e\.payments\|\|\[\]\)\.slice\(\)\.reverse\(\)\.find/);
   assert.match(html,/<label>Expense entity<\/label><select id="lg_expense_nature"><option value="">All<\/option>/);
   assert.match(html,/expenseNature='\+encodeURIComponent\(el\('lg_expense_nature'\)\.value\)/);
   assert.match(html,/id="editPayingAccount"/);
