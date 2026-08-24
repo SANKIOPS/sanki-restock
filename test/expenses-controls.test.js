@@ -711,6 +711,10 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.match(telegramSource,/notifyExpenseForApproval/);
   assert.match(telegramSource,/is already fully paid\. No second payment can be recorded/);
   assert.match(telegramSource,/is already fully paid\. This screenshot was not recorded/);
+  assert.match(telegramSource,/function notifyUserWithPhoto/);
+  const expenseSource=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  assert.match(expenseSource,/Payment proof attached/);
+  assert.match(expenseSource,/telegram\.notifyUserWithPhoto/);
   const duplicate=telegramRecordPayment(id,'prashant',{amount:225,account:'3645',date:'2026-08-24',proof:'/api/expenses/photo/tg-payment-duplicate.jpg'});
   assert.equal(duplicate.success,false);
   assert.match(duplicate.error,/not awaiting a vendor payment/);

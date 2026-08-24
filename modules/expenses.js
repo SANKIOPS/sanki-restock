@@ -427,10 +427,13 @@ function notifyExpenseUser(e, event, amount) {
       partially_reimbursed: `Reimbursement of ₹${round0(amount)} recorded; ₹${round0(e.personalPaidAmount - e.reimbursementAmount)} remains`,
       reimbursed: 'Your reimbursement has been completed'
     };
-    telegram.notifyUser(
-      e.createdBy || e.claimant,
-      `💸 <b>${esc(normalizedNature(e.nature))} · ${esc(e.id)}</b> — ${esc(labels[event] || event)}\n${esc(e.vendor)} · ₹${round0(e.amount)}`,
-      { button: { text: 'View expense', url: `/expenses.html?focus=${encodeURIComponent(e.id)}` } }
+    const paymentEvent=['paid','partially_paid'].includes(event),reimbursementEvent=['reimbursed','partially_reimbursed'].includes(event);
+    const proof=paymentEvent&&Array.isArray(e.payments)&&e.payments.length?e.payments.at(-1).proof:(reimbursementEvent&&Array.isArray(e.reimbursementPayments)&&e.reimbursementPayments.length?e.reimbursementPayments.at(-1).proof:'');
+    const send=proof&&typeof telegram.notifyUserWithPhoto==='function'?telegram.notifyUserWithPhoto:telegram.notifyUser;
+    send(e.createdBy || e.claimant,
+      `💸 <b>${esc(normalizedNature(e.nature))} · ${esc(e.id)}</b> — ${esc(labels[event] || event)}\n${esc(e.vendor)} · ₹${round0(e.amount)}${proof?'\nPayment proof attached.':''}`,
+      proof || { button: { text: 'View expense', url: `/expenses.html?focus=${encodeURIComponent(e.id)}` } },
+      proof ? { button: { text: 'View expense', url: `/expenses.html?focus=${encodeURIComponent(e.id)}` } } : undefined
     );
   } catch { /* Telegram is optional */ }
 }
