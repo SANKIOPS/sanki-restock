@@ -222,6 +222,22 @@ function loadStore() {
       s.oneTimeMigrations[correctionKey]={appliedAt:new Date().toISOString(),account,nature:'SANKI',cutoff,amount,result};
       saveStore(s);
     }
+    const telegramAmountKey='correct-ex-00044-telegram-ocr-35121-to-5121';
+    if(!s.oneTimeMigrations[telegramAmountKey]){
+      const e=s.expenses&&s.expenses['EX-00044'];let result='not_found_or_already_changed';
+      if(e&&normalizedNature(e.nature)==='PERSONAL'&&num(e.amount)===35121&&e.paidAlready){
+        const before=JSON.parse(JSON.stringify(e));
+        e.amount=5121;e.requestedAmount=5121;e.personalPaidAmount=5121;e.paidAmount=5121;
+        (e.payments||[]).filter(p=>p.personalFunds).forEach(p=>{p.amount=5121;});
+        e.telegramNeedsReview=false;
+        e.auditHistory=Array.isArray(e.auditHistory)?e.auditHistory:[];
+        e.auditHistory.push({id:'EDIT-'+String(e.auditHistory.length+1).padStart(3,'0'),reason:'Correct Telegram OCR amount from ₹35,121 to ₹5,121',changes:[{field:'amount',before:35121,after:5121},{field:'requestedAmount',before:35121,after:5121},{field:'paidAmount',before:35121,after:5121},{field:'personalPaidAmount',before:35121,after:5121}],editedBy:'gaganlambasanki',editedAt:new Date().toISOString()});
+        audit(s,null,'EDITED','expense',e.id,{user:'gaganlambasanki',device:'System migration',nature:'PERSONAL',before,after:e,note:'Owner confirmed Telegram OCR read ₹35,121 instead of ₹5,121'});
+        result='corrected';
+      }
+      s.oneTimeMigrations[telegramAmountKey]={appliedAt:new Date().toISOString(),expenseId:'EX-00044',from:35121,to:5121,result};
+      saveStore(s);
+    }
     return s;
   }
   catch { return blankStore(); }
@@ -625,19 +641,25 @@ router.post('/api/expenses/:id', (req, res, next) => {
   const editReason = String(b.editReason || '').trim();
   if (finalized && !editReason) return res.status(400).json({ success:false, error:'Reason for editing an approved or paid expense is required.' });
   const beforeEdit = JSON.parse(JSON.stringify(e));
+  const hasCompanyPayments=(e.payments||[]).some(p=>!p.personalFunds),hasReimbursements=(e.reimbursementPayments||[]).length>0||num(e.reimbursementAmount)>0;
+  // A personally-paid amount is one accounting fact represented in the
+  // expense and its linked personal payment. Owner/Admin may correct an OCR
+  // mistake only while no company payment or reimbursement has followed; the
+  // linked values are then updated together below and fully audited.
+  const canCorrectPersonalPayment=isAdmin(req)&&e.paidAlready&&!hasCompanyPayments&&!hasReimbursements;
   if (b.date != null) e.date = String(b.date).slice(0, 10);
   if (b.particulars != null) e.particulars = String(b.particulars).trim();
   if (b.amount != null) {
     const nextAmount = num(b.amount);
     if (!(nextAmount > 0)) return res.status(400).json({ success:false, error:'Expense amount must be greater than 0.' });
-    if (nextAmount < num(e.paidAmount)) return res.status(400).json({ success:false, error:'Expense amount cannot be lower than ₹'+round0(e.paidAmount)+' already paid.' });
+    if (nextAmount < num(e.paidAmount)&&!canCorrectPersonalPayment) return res.status(400).json({ success:false, error:'Expense amount cannot be lower than ₹'+round0(e.paidAmount)+' already paid.' });
     e.amount = nextAmount;
   }
   if (b.isInstallment != null) e.isInstallment = b.isInstallment === true || b.isInstallment === 'true';
   if (b.requestedAmount != null) {
     const requested = num(b.requestedAmount);
     if (!(requested > 0) || requested > e.amount) return res.status(400).json({ success: false, error: 'Requested payment must be greater than 0 and cannot exceed the total amount.' });
-    if (e.paidAlready && requested < num(e.personalPaidAmount)) return res.status(400).json({ success: false, error: 'Requested payment cannot be less than the amount already paid personally.' });
+    if (e.paidAlready && requested < num(e.personalPaidAmount)&&!canCorrectPersonalPayment) return res.status(400).json({ success: false, error: 'Requested payment cannot be less than the amount already paid personally.' });
     e.requestedAmount = requested;
   }
   if (b.nature != null) {
