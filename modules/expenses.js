@@ -437,6 +437,9 @@ function canViewExpense(req, e) {
   if (canApproveExpenseNature(req, e)) return true;
   return e && e.createdBy === (req.user && req.user.username);
 }
+// Some legacy paid records have no approvedAt timestamp even though their
+// finalized status and payment history prove that they were posted.
+function paymentIsPosted(e){return!!(e&&e.approvedAt)||['approved','partially_paid','paid'].includes(String(e&&e.status||''));}
 
 // Notifications must never block an accounting action. Telegram is optional in
 // local/test environments, so these helpers deliberately degrade to a no-op.
@@ -1088,7 +1091,7 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
   Object.values(s.expenses || {}).forEach(e => {
     const entity = normalizedNature(e.nature);
     if (!allowed.includes(entity) || (nature && entity !== nature)) return;
-    (e.payments || []).filter(p => e.approvedAt && inRange(String(p.date || ''))).forEach(p => {
+    (e.payments || []).filter(p => paymentIsPosted(e) && inRange(String(p.date || ''))).forEach(p => {
       const account = p.account || e.account;
       if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
     });
@@ -1215,7 +1218,7 @@ router.get('/api/expenses/balances', (req, res) => {
     Object.values(s.expenses).forEach(e => {
       if (normalizedNature(e.nature) !== nature) return;
       const a = e.account || '(unspecified)';
-      (e.payments || []).filter(p => e.approvedAt && inRange(p.date)).forEach(p => {
+      (e.payments || []).filter(p => paymentIsPosted(e) && inRange(p.date)).forEach(p => {
         const paymentAccount = p.account || a;
         paidOut[paymentAccount] = (paidOut[paymentAccount] || 0) + num(p.amount);
       });
@@ -1305,7 +1308,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     entries.push({id:x.id,date:x.date,kind:'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' '),credit:isIn?num(x.amount):0,debit:isOut?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy});
   });
   Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === nature).forEach(e => {
-    (e.payments || []).filter(p => e.approvedAt && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant'),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
   });
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
@@ -1361,7 +1364,7 @@ function recordedAccountBalance(s,nature,account,asOf){
   (s.adjustments||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.transfers||[]).filter(x=>on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
-  Object.values(s.expenses||{}).filter(e=>normalizedNature(e.nature)===nature).forEach(e=>{(e.payments||[]).filter(p=>e.approvedAt&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
+  Object.values(s.expenses||{}).filter(e=>normalizedNature(e.nature)===nature).forEach(e=>{(e.payments||[]).filter(p=>paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
   if(nature==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));}
   return round0(total);

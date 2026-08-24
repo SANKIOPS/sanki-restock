@@ -640,6 +640,16 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="editBillFile"/);
 });
 
+test('legacy finalized payments without approvedAt remain visible in their account ledger', () => {
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  stored.expenses['EX-LEGACY-240']={id:'EX-LEGACY-240',date:'2026-08-22',nature:'SANKI',status:'paid',vendor:'Legacy vendor',particulars:'Legacy bill',amount:240,paidAmount:240,account:'Prashant Axis 3645',payments:[{id:'PAY-001',amount:240,date:'2026-08-22',account:'Prashant Axis 3645',proof:'/api/expenses/photo/legacy-240.jpg',paidBy:'prashant'}]};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-08-01',to:'2026-08-31'}}).body;
+  assert.ok(ledger.entries.some(x=>x.id==='EX-LEGACY-240/PAY-001'&&x.debit===240));
+  const spending=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-08-01',to:'2026-08-31'}}).body;
+  assert.ok(spending.payments.some(x=>x.id==='EX-LEGACY-240'&&x.amount===240));
+});
+
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /function monthStart\(\)/);
