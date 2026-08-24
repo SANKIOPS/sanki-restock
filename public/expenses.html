@@ -461,11 +461,12 @@
       var entityOptions = '<option value="">All</option>'+opts(cfg.natures);
       var typeFilter = cfg.canApprove?'<div class="fld"><label>Type</label><select id="lf_type"><option value="">All</option>'+opts(cfg.types)+'</select></div>':'';
       var claimantFilter = cfg.isAdmin?'<div class="fld"><label>Claimant</label><input id="lf_claimant" list="claimantList" placeholder="All claimants"><datalist id="claimantList">'+(cfg.people||[]).map(function(x){return '<option value="'+esc(x)+'">';}).join('')+'</datalist></div>':'';
+      var accountFilter = cfg.isAdmin?'<div class="fld"><label>Paying account</label><select id="lf_account"><option value="">All</option>'+opts(cfg.accounts)+'</select></div>':'';
       el('filters').innerHTML =
         '<div class="fld"><label>Entity</label><select id="lf_nature">'+entityOptions+'</select></div>'+
         '<div class="fld"><label>From</label><input type="date" id="lf_from"></div>'+
         '<div class="fld"><label>To</label><input type="date" id="lf_to"></div>'+
-        '<div class="fld"><label>Status</label><select id="lf_status"><option value="">All</option><option>pending</option><option>approved</option><option>partially_paid</option><option>paid</option><option value="credit">Credit</option><option>rejected</option></select></div>'+claimantFilter+typeFilter+
+        '<div class="fld"><label>Status</label><select id="lf_status"><option value="">All</option><option>pending</option><option>approved</option><option>partially_paid</option><option>paid</option><option value="credit">Credit</option><option>rejected</option></select></div>'+claimantFilter+accountFilter+typeFilter+
         '<button class="btn ghost mini" id="lf_go">Filter</button>';
       var n = new Date(Date.now()+5.5*3600*1000); var y=n.getUTCFullYear(), m=n.getUTCMonth();
       el('lf_from').value = y+'-'+String(m+1).padStart(2,'0')+'-01'; el('lf_to').value = today();
@@ -476,7 +477,7 @@
     function loadList(){
       var focused = focusedExpenseId;
       var sv=focused?'':el('lf_status').value,isCredit=sv==='credit';
-      var q = '?nature='+encodeURIComponent(focused?'':el('lf_nature').value)+'&from='+(focused?'':el('lf_from').value)+'&to='+(focused?'':el('lf_to').value)+'&status='+(isCredit?'':sv)+'&paymentType='+(isCredit?'Credit':'')+'&missingBill='+(missingBillOnly?'true':'')+'&claimant='+encodeURIComponent(focused?'':(el('lf_claimant')?el('lf_claimant').value:''))+'&type='+(focused?'':(el('lf_type')?el('lf_type').value:''))+'&limit=75'+(focused?'&id='+encodeURIComponent(focused):'');
+      var q = '?nature='+encodeURIComponent(focused?'':el('lf_nature').value)+'&from='+(focused?'':el('lf_from').value)+'&to='+(focused?'':el('lf_to').value)+'&status='+(isCredit?'':sv)+'&paymentType='+(isCredit?'Credit':'')+'&missingBill='+(missingBillOnly?'true':'')+'&claimant='+encodeURIComponent(focused?'':(el('lf_claimant')?el('lf_claimant').value:''))+'&payingAccount='+encodeURIComponent(focused?'':(el('lf_account')?el('lf_account').value:''))+'&type='+(focused?'':(el('lf_type')?el('lf_type').value:''))+'&limit=75'+(focused?'&id='+encodeURIComponent(focused):'');
       api('/api/expenses/list'+q).then(function(d){
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
         expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});

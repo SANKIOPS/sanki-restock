@@ -650,6 +650,10 @@ test('legacy finalized payments without approvedAt remain visible in their accou
   assert.ok(ledger.entries.some(x=>x.id==='EX-LEGACY-240/PAY-001'&&x.debit===240));
   const spending=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-08-01',to:'2026-08-31'}}).body;
   assert.ok(spending.payments.some(x=>x.id==='EX-LEGACY-240'&&x.amount===240));
+  const filtered=invoke('GET','/api/expenses/list',{role:'owner',query:{nature:'SANKI',payingAccount:'Prashant Axis 3645'}}).body;
+  assert.ok(filtered.expenses.some(x=>x.id==='EX-LEGACY-240'));
+  const excluded=invoke('GET','/api/expenses/list',{role:'owner',query:{nature:'SANKI',payingAccount:'Tiana 0425'}}).body;
+  assert.ok(!excluded.expenses.some(x=>x.id==='EX-LEGACY-240'));
 });
 
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
@@ -667,6 +671,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
   assert.match(html,/el\(x\)\.disabled=!cfg\.isOwner/);
   assert.match(html,/Only the Owner can change amounts/);
+  assert.match(html,/<label>Paying account<\/label><select id="lf_account">/);
+  assert.match(html,/payingAccount='\+encodeURIComponent/);
 });
 
 test('credit payables filter includes fully and partially unpaid credit expenses', () => {

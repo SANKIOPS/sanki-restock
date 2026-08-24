@@ -985,6 +985,7 @@ router.get('/api/expenses/list', (req, res) => {
   const vendor = (req.query.vendor || '').toString().toLowerCase();
   const claimant = (req.query.claimant || '').toString().toLowerCase();
   const paymentType = (req.query.paymentType || '').toString().toLowerCase();
+  const payingAccount = (req.query.payingAccount || '').toString().trim().toLowerCase();
   const missingBill = String(req.query.missingBill || '') === 'true';
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   if (nature && isAdmin(req) && !approvalNatures(req).includes(nature)) return res.status(403).json({ success:false, error:'You cannot view this accounting entity.' });
@@ -999,6 +1000,11 @@ router.get('/api/expenses/list', (req, res) => {
     if (vendor && (e.vendor || '').toLowerCase() !== vendor) return false;
     if (claimant && String(e.createdBy || e.claimant || '').toLowerCase() !== claimant) return false;
     if (paymentType && String(e.paymentType || '').toLowerCase() !== paymentType) return false;
+    if (payingAccount) {
+      const accounts=(e.payments||[]).map(p=>p.account||e.account).concat((e.reimbursementPayments||[]).map(p=>p.account));
+      if(!accounts.length&&paymentIsPosted(e)&&num(e.paidAmount)>0&&e.account)accounts.push(e.account);
+      if(!accounts.some(a=>String(a||'').toLowerCase()===payingAccount))return false;
+    }
     if (missingBill && e.billPhoto) return false;
     return true;
   }).sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
