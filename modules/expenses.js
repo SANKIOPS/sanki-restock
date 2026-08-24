@@ -1323,7 +1323,8 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
   if (!ledgerAccountsForNature(s, nature).some(a => a.toLowerCase() === account.toLowerCase())) return res.status(403).json({ success:false, error:'This account does not belong to the selected entity.' });
-  const from = String(req.query.from || ''), to = String(req.query.to || ''), entries = [];
+  const from = String(req.query.from || ''), to = String(req.query.to || ''), expenseNature = req.query.expenseNature ? normalizedNature(req.query.expenseNature) : '', entries = [];
+  if(expenseNature&&!approvalNatures(req).includes(expenseNature))return res.status(403).json({success:false,error:'You cannot view expenses for this entity.'});
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   entries.push({ id: 'OPENING', date: '', kind: 'opening', description: 'Opening balance', credit: num(openingMap[account]), debit: 0 });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
@@ -1337,19 +1338,19 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // an expense belonging to another entity (for example SANKI 3645 paying a
   // SAMAST bill). The entity remains visible on the ledger description.
   Object.values(s.expenses || {}).forEach(e => {
-    const expenseNature=normalizedNature(e.nature),entityLabel=expenseNature===nature?'':' ['+expenseNature+']';
-    (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
-    (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    const entryNature=normalizedNature(e.nature),entityLabel=' ['+entryNature+']';
+    (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
   });
-  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
+  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',entity:'SANKI',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport [SANKI]',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
   if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0}));
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
   let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });
-  const visible = ordered.filter(x => x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to)))
+  const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
   const issues = reconciliationIssues(s, nature, account);
-  res.json({ success:true, account, nature, entries:visible, balance:round0(running), reconciled:issues.length===0, reconciliationIssues:issues });
+  res.json({ success:true, account, nature, expenseNature, entries:visible, balance:round0(running), reconciled:issues.length===0, reconciliationIssues:issues });
 });
 router.post('/api/expenses/balances', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });

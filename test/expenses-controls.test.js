@@ -680,6 +680,10 @@ test('a cross-entity expense appears in the ledger of the account that paid it',
   const movement=ledger.entries.find(x=>x.id==='EX-CROSS-240/PAY-240');
   assert.equal(movement.debit,240);
   assert.match(movement.description,/\[SAMAST\]/);
+  const samastOnly=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',expenseNature:'SAMAST',from:'2026-08-01',to:'2026-08-31'}}).body;
+  assert.ok(samastOnly.entries.some(x=>x.id==='EX-CROSS-240/PAY-240'));
+  const personalOnly=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',expenseNature:'PERSONAL',from:'2026-08-01',to:'2026-08-31'}}).body;
+  assert.ok(!personalOnly.entries.some(x=>x.id==='EX-CROSS-240/PAY-240'));
   const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2026-08-01',to:'2026-08-31'}}).body;
   assert.ok(balances.accounts.find(x=>x.name==='Prashant Axis 3645').spent>=240);
 });
@@ -704,6 +708,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/var claimantName=e\.claimant\|\|e\.createdBy/);
   assert.match(html,/var payingAccounts=Array\.from\(new Set/);
   assert.match(html,/Claimant: '\+esc\(claimantName\)\+' · Paid from: '\+esc\(payingAccountLabel\)/);
+  assert.match(html,/<label>Expense entity<\/label><select id="lg_expense_nature"><option value="">All<\/option>/);
+  assert.match(html,/expenseNature='\+encodeURIComponent\(el\('lg_expense_nature'\)\.value\)/);
   assert.match(html,/id="editPayingAccount"/);
   assert.match(html,/paymentAccount:el\('editPayingAccount'\)\.value/);
 });
