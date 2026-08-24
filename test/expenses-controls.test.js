@@ -709,6 +709,12 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.match(telegramSource,/callback_data:'bp:start:'\+e\.id/);
   assert.match(telegramSource,/msg\.reply_to_message&&msg\.reply_to_message\.message_id/);
   assert.match(telegramSource,/notifyExpenseForApproval/);
+  assert.match(telegramSource,/is already fully paid\. No second payment can be recorded/);
+  assert.match(telegramSource,/is already fully paid\. This screenshot was not recorded/);
+  const duplicate=telegramRecordPayment(id,'prashant',{amount:225,account:'3645',date:'2026-08-24',proof:'/api/expenses/photo/tg-payment-duplicate.jpg'});
+  assert.equal(duplicate.success,false);
+  assert.match(duplicate.error,/not awaiting a vendor payment/);
+  assert.equal(telegramExpense(id).payments.length,1);
 });
 
 test('internal reconciliation flags malformed transfers and requires a recorded payment override', () => {
