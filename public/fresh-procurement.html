@@ -653,6 +653,12 @@
           </div>
           <div id="czDesignMode" style="display:none">
             <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> Create one design card (your design folder), set its category, fit and name, then upload <b>all colour photos for that design at once</b>. The AI detects each colour and every colourway keeps its real photo as a separate SKU.</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;padding:10px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:9px">
+              <label class="btn ghost sm" style="cursor:pointer">📁 Upload segregated design folder
+                <input id="czDesignFolder" type="file" accept="image/*" webkitdirectory directory multiple style="display:none" />
+              </label>
+              <span class="muted" style="font-size:12px">Select one main folder containing one subfolder per design. Each subfolder becomes a design automatically.</span>
+            </div>
             <div id="czDesignList"></div>
             <div style="margin-top:10px"><button type="button" class="btn ghost sm" id="czAddDesign">＋ Add design</button>
               <button type="button" class="btn sm" id="czSaveDesigns" style="margin-left:8px">⬆ Upload these designs</button></div>
@@ -1858,6 +1864,53 @@
     // Collapse existing designs so the list stays compact; open only the new one.
     czDesigns.forEach(function(x){ x.collapsed = true; });
     czDesigns.push({ id: ++czDSeq, name: '', cat: cat, fit: fits[0] || '', cols: [], collapsed: false });
+    czDRender();
+  }
+  // Import a computer folder that is already segregated by design:
+  //   Main folder / Design A / colour photos...
+  //   Main folder / Design B / colour photos...
+  // For a multi-category batch we also accept:
+  //   Main folder / Shirt / Design A / photos...
+  //   Main folder / T-shirt / Design B / photos...
+  // The browser preserves each file's relative path in webkitRelativePath. We
+  // turn every design subfolder into the same editable design card used by the
+  // manual flow, then run the existing colour detector on its photos.
+  function czDImportFolder(fileList){
+    var files = Array.prototype.slice.call(fileList||[]).filter(function(f){ return /^image\//.test(f.type||''); });
+    var st = el('czUploadStatus');
+    if(!files.length){ st.innerHTML='<span style="color:var(--err)">That folder contains no supported image files.</span>'; return; }
+    var batchCats=czDCats(), multi=batchCats.length>1, groups={}, order=[];
+    var catFromPart=function(part){
+      var norm=String(part||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+      return batchCats.filter(function(k){
+        return String(k).toLowerCase().replace(/[^a-z0-9]/g,'')===norm || String(CAT_LABEL[k]||'').toLowerCase().replace(/[^a-z0-9]/g,'')===norm;
+      })[0]||null;
+    };
+    files.forEach(function(f){
+      var rel=String(f.webkitRelativePath||f.name||'').split('/').filter(Boolean);
+      // Drop the common selected root folder. The next segment is normally the
+      // design; in a multi-category tree it may first be a category.
+      var parts=rel.length>1?rel.slice(1):rel;
+      var cat=czDCat(), designPart='Loose photos';
+      if(parts.length>1){
+        var detected=multi?catFromPart(parts[0]):null;
+        if(detected){ cat=detected; designPart=parts[1]||'Loose photos'; }
+        else designPart=parts[0]||'Loose photos';
+      }
+      var key=(cat||'')+'||'+designPart;
+      if(!groups[key]){ groups[key]={cat:cat,name:designPart,files:[]}; order.push(key); }
+      groups[key].files.push(f);
+    });
+    // Replace the empty starter card, but preserve any card the user has already
+    // populated manually.
+    if(czDesigns.length===1 && !czDesigns[0].name && !(czDesigns[0].cols||[]).length) czDesigns=[];
+    order.forEach(function(key){
+      var g=groups[key], fits=czDFits(g.cat);
+      czDesigns.forEach(function(x){ x.collapsed=true; });
+      var d={id:++czDSeq,name:g.name,cat:g.cat,fit:fits[0]||'',cols:[],collapsed:false};
+      czDesigns.push(d); czDAddPhotos(d.id,g.files);
+    });
+    st.innerHTML='<span style="color:var(--emerald-d)">✓ Read '+files.length+' photo'+(files.length===1?'':'s')+' from '+order.length+' design folder'+(order.length===1?'':'s')+'. Review the category/fit and detected colours, then click Upload these designs.</span>';
     czDRender();
   }
   // Match an AI-detected colour string to one of THIS category's plan colours
@@ -3712,6 +3765,7 @@
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
   el('czModePile').addEventListener('click', function(){ czSetMode(false); });
   el('czModeDesign').addEventListener('click', function(){ czSetMode(true); czDRender(); });
+  el('czDesignFolder').addEventListener('change', function(){ var fl=Array.prototype.slice.call(this.files||[]); this.value=''; czDImportFolder(fl); });
   el('czAddDesign').addEventListener('click', czDAddDesign);
   el('czSaveDesigns').addEventListener('click', czSaveDesigns);
   el('czAnalyzeBtn').addEventListener('click', czAnalyze);

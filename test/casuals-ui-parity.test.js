@@ -35,5 +35,8 @@ test('legacy Casual UI presents shared upper and trouser workflow', () => {
   assert.match(html, /SHIRT \/ T-SHIRT OPERATIONAL PARITY/);
   assert.match(html, /<b>Coverage table<\/b>/);
   assert.match(html, /<b>Design order sheet<\/b>/);
+  assert.match(html, /id="czDesignFolder"[^>]*webkitdirectory/);
+  assert.match(html, /function czDImportFolder\(fileList\)/);
+  assert.match(html, /Each subfolder becomes a design automatically/);
   assert.doesNotMatch(html, /Plan this category by/);
 });
