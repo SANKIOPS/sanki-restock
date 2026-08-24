@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, parseBankStatementFile } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -671,6 +671,20 @@ test('bank statement rows are normalized from cumulative Excel exports', () => {
     {date:'2026-08-24',debit:720,credit:0,reference:'UTR720',balance:1527},
     {date:'2026-08-25',debit:0,credit:500,reference:'UTR500',balance:2027}
   ]);
+});
+
+test('PDF and image OCR statement text uses the same normalized bank rows', () => {
+  const rows=parseBankStatementText('24/08/2026 UPI reimbursement UTR720 720.00 0.00 1527.00\n25/08/2026 Customer receipt UTR500 0.00 500.00 2027.00');
+  assert.deepEqual(rows.map(x=>({date:x.date,debit:x.debit,credit:x.credit,balance:x.balance})),[
+    {date:'2026-08-24',debit:720,credit:0,balance:1527},
+    {date:'2026-08-25',debit:0,credit:500,balance:2027}
+  ]);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/\.pdf,.png,.jpg,.jpeg,.webp/);
+  const telegram=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  assert.match(telegram,/callback_data:'am:bank'/);
+  assert.match(telegram,/Statement imported and reconciled/);
+  assert.match(telegram,/Nothing unmatched was automatically recorded/);
 });
 
 test('legacy finalized payments without approvedAt remain visible in their account ledger', () => {
