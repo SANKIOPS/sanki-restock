@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment } = require('../modules/expenses');
 
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -684,6 +684,31 @@ test('account ledgers show newest entries first and Axis sales begin on 2026-08-
   const axis=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448'},role:'owner'}).body.entries;
   assert.equal(axis.some(x=>x.id==='SALE/OLD-SALE'),false);
   assert.equal(axis.some(x=>x.id==='SALE/NEW-SALE'),true);
+});
+
+test('Telegram approval and payment keep one expense isolated through its complete lifecycle', () => {
+  const created=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Telegram Vendor',particulars:'Telegram fuel',amount:225,bill:'printed',billPhoto:'/api/expenses/photo/tg-bill.jpg',qrPhoto:'/api/expenses/photo/tg-qr.jpg',paymentType:'UPI'}});
+  const id=created.body.expense.id;
+  const approved=telegramApproveExpense(id,'prashant',{ledger:'Fuel Expenses',amount:225});
+  assert.equal(approved.success,true);
+  assert.equal(approved.expense.status,'approved');
+  assert.equal(approved.expense.approvedBy,'prashant');
+  assert.equal(approved.expense.ledger,'Fuel Expenses');
+  const paid=telegramRecordPayment(id,'prashant',{amount:225,account:'3645',date:'2026-08-24',proof:'/api/expenses/photo/tg-payment.jpg'});
+  assert.equal(paid.success,true);
+  assert.equal(paid.expense.status,'paid');
+  assert.equal(paid.payment.account,'Prashant Axis 3645');
+  const final=telegramExpense(id);
+  assert.equal(final.payments.length,1);
+  const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));
+  const lifecycle=(stored.auditLog||[]).filter(x=>x.subjectId===id);
+  assert.ok(lifecycle.some(x=>x.action==='APPROVED'&&x.device==='Telegram'));
+  assert.ok(lifecycle.some(x=>x.action==='PAYMENT_RECORDED'&&x.device==='Telegram'));
+  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  assert.match(telegramSource,/callback_data:'ba:approve:'\+id/);
+  assert.match(telegramSource,/callback_data:'bp:start:'\+e\.id/);
+  assert.match(telegramSource,/msg\.reply_to_message&&msg\.reply_to_message\.message_id/);
+  assert.match(telegramSource,/notifyExpenseForApproval/);
 });
 
 test('internal reconciliation flags malformed transfers and requires a recorded payment override', () => {
