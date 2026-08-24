@@ -154,6 +154,8 @@ test('PERSONAL stays outside business P&L and is available to claimants, Admin a
   const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
   assert.ok(adminConfig.body.natures.includes('PERSONAL'));
   assert.ok(adminConfig.body.approvalNatures.includes('PERSONAL'));
+  const claimantConfig = invoke('GET', '/api/expenses/config', { role: 'claimant' });
+  assert.ok(claimantConfig.body.natures.includes('PERSONAL'), 'Pradeep, Shivam and Arshpreet claimant accounts can log PERSONAL expenses');
 
   const created = invoke('POST', '/api/expenses', { role: 'personal_claimant', body: {
     nature: 'PERSONAL', vendor: 'Private Vendor', amount: 900,
@@ -400,7 +402,7 @@ test('Telegram setup is Owner-only and supports per-user notification management
 });
 
 test('Owner Telegram narration and screenshot OCR create one categorized paid PERSONAL expense', () => {
-  const {parsePersonalCaption,parsePersonalIntent,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory}=require('../modules/telegram');
+  const {parsePersonalCaption,parsePersonalIntent,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory,applyCaptureEdit,capturePreview}=require('../modules/telegram');
   const parsed=parsePersonalCaption('Personal | Nanny salary August | ICICI 0993 | ₹27,500');
   assert.deepEqual(parsed,{ok:true,amount:27500,account:'ICICI 0993',particulars:'Nanny salary August',date:''});
   assert.deepEqual(parsePersonalCaption('Personal Food tip 0993 200'),{ok:true,amount:200,account:'0993',particulars:'Food tip',date:''});
@@ -419,6 +421,13 @@ test('Owner Telegram narration and screenshot OCR create one categorized paid PE
   const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'PERSONAL'}}).body.vendors;assert.ok(vendors.some(v=>v.name==='Mr MUKESH KUMAR'));
   assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/NEEDS REVIEW/);
   const duplicate=createTelegramPersonalExpense(input);assert.equal(duplicate.duplicate,true);assert.equal(duplicate.expense.id,created.expense.id);
+  const draft={kind:'expense',payload:{amount:35000,account:'93',particulars:'Food restaurant',vendor:'Restaurant',ledger:'Food & Dining'}};
+  assert.match(capturePreview(draft),/Nothing is recorded until you press Confirm/);
+  assert.equal(applyCaptureEdit(draft,'Amount 5000'),true);assert.equal(draft.payload.amount,5000);
+  assert.equal(applyCaptureEdit(draft,'Account 0992'),true);assert.equal(draft.payload.account,'0992');
+  assert.equal(applyCaptureEdit(draft,'Particulars Dinner restaurant'),true);assert.equal(draft.payload.particulars,'Dinner restaurant');
+  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  assert.match(telegramSource,/callback_data:'personal_confirm'/);assert.match(telegramSource,/allowed_updates:\['message','callback_query'\]/);
   const received=parseReceiptOcr('Money received\n23 August 2026\nReceived from\nMukesh Kumar ₹1,500\nCredited to\nXXXXXXXXXXX93');
   assert.deepEqual({amount:received.amount,account:received.account,source:received.source,date:received.date},{amount:1500,account:'93',source:'Mukesh Kumar',date:'2026-08-23'});
   const receipt=createTelegramPersonalReceipt({amount:received.amount,account:received.account,source:'Refund from Mukesh',date:received.date,proof:'/api/expenses/photo/received.jpg',username:'gaganlambasanki',sourceKey:'telegram:owner:receipt-1',ocrText:received.text});

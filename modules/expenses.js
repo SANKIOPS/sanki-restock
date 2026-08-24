@@ -226,7 +226,7 @@ function createTelegramPersonalExpense(input) {
   if(!particulars) return {success:false,error:'Narration is required.'};
   const requested=String(b.account||'').trim().toLowerCase(),accounts=companyAccountsForNature('PERSONAL');
   const suffixMatches=accounts.filter(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.length>=2&&last.endsWith(requested.replace(/\D/g,''));});
-  const account=accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||accounts.find(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.includes(last);})||(suffixMatches.length===1?suffixMatches[0]:'');
+  const account=(/cash/i.test(requested)&&accounts.find(a=>/cash/i.test(a)))||accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||accounts.find(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.includes(last);})||(suffixMatches.length===1?suffixMatches[0]:'');
   if(!account) return {success:false,error:'Personal account was not recognized.'};
   if(sourceKey){const duplicate=Object.values(s.expenses||{}).find(e=>e.telegramSourceKey===sourceKey);if(duplicate)return {success:true,duplicate:true,expense:duplicate};}
   const now=new Date().toISOString(),date=String(b.date||now.slice(0,10)).slice(0,10),paymentType=/cash/i.test(account)?'Cash':'UPI';
@@ -239,7 +239,7 @@ function createTelegramPersonalExpense(input) {
 function createTelegramPersonalReceipt(input) {
   const b=input||{},s=loadStore(),amount=num(b.amount),proof=String(b.proof||'').trim(),source=String(b.source||'').trim(),sourceKey=String(b.sourceKey||'').trim(),requested=String(b.account||'').trim().toLowerCase(),accounts=companyAccountsForNature('PERSONAL');
   const digits=requested.replace(/\D/g,''),matches=accounts.filter(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&digits.length>=2&&last.endsWith(digits);});
-  const account=accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||(matches.length===1?matches[0]:'');
+  const account=(/cash/i.test(requested)&&accounts.find(a=>/cash/i.test(a)))||accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||(matches.length===1?matches[0]:'');
   if(!(amount>0))return{success:false,error:'Receipt amount must be greater than 0.'};if(!proof)return{success:false,error:'Receipt proof is required.'};if(!source)return{success:false,error:'Source / narration is required.'};if(!account)return{success:false,error:'Personal receiving account was not recognized.'};
   s.receipts=Array.isArray(s.receipts)?s.receipts:[];if(sourceKey){const duplicate=s.receipts.find(x=>x.telegramSourceKey===sourceKey);if(duplicate)return{success:true,duplicate:true,receipt:duplicate};}
   const now=new Date().toISOString(),lower=source.toLowerCase(),receiptType=/refund/.test(lower)?'refund':(/sale|sold/.test(lower)?'asset_sale':(/contribution|capital/.test(lower)?'owner_contribution':'other_income'));
