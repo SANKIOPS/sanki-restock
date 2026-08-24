@@ -20,6 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
+const XLSX = require('xlsx');
 
 const router = express.Router();
 
@@ -30,6 +31,9 @@ const EXP_PATH = path.join(DATA_DIR, 'expenses.json');
 const PROC_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
 const SALES_PATH = process.env.SALES_PATH || path.join(DATA_DIR, 'sales.json');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
+const STATEMENT_DIR = path.join(DATA_DIR, 'bank-statements');
+try { fs.mkdirSync(STATEMENT_DIR, { recursive:true }); } catch {}
+const statementUpload=multer({storage:multer.diskStorage({destination:(req,file,cb)=>cb(null,STATEMENT_DIR),filename:(req,file,cb)=>cb(null,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+path.extname(file.originalname||'.xlsx').toLowerCase())}),limits:{fileSize:15*1024*1024}});
 const DEFAULT_SALES_BANK = 'Axis Bank 3448';
 const DEFAULT_COUNTER_CASH = 'Counter Cash';
 const SALES_LEDGER_FROM = '2026-08-21';
@@ -160,6 +164,7 @@ function blankStore() {
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
     transfers: [],                       // [{ id, nature, fromAccount, toAccount, amount, date, proof, note }]
     receipts: [],                        // money received other than sales/receivables
+    bankStatements: {},                  // cumulative normalized statement rows by account
     auditLog: [],                        // immutable accounting activity trail
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
@@ -1358,6 +1363,27 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const issues = reconciliationIssues(s, nature, account);
   res.json({ success:true, account, nature, expenseNature, entries:visible, balance:round0(running), reconciled:issues.length===0, reconciliationIssues:issues });
 });
+
+function statementDate(v){if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;}const s=String(v||'').trim(),m=s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;}return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):'';}
+function statementNum(v){return num(String(v==null?'':v).replace(/[₹,\s]/g,'').replace(/^\((.*)\)$/,'-$1'));}
+function parseBankStatementFile(filePath){
+  const wb=XLSX.readFile(filePath,{cellDates:true}),sheet=wb.Sheets[wb.SheetNames[0]],matrix=XLSX.utils.sheet_to_json(sheet,{header:1,defval:''}),headerRow=Math.max(0,matrix.findIndex(r=>{const h=r.map(x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,''));return h.some(x=>['date','transactiondate','valuedate','txndate','postingdate'].includes(x))&&h.some(x=>/debit|credit|withdrawal|deposit|amount/.test(x));})),rows=XLSX.utils.sheet_to_json(sheet,{defval:'',range:headerRow});
+  const out=[];rows.forEach((raw,index)=>{const normalized={};Object.keys(raw).forEach(k=>normalized[String(k).toLowerCase().replace(/[^a-z0-9]/g,'')]=raw[k]);const get=(...keys)=>{for(const k of keys)if(normalized[k]!=null&&normalized[k]!=='')return normalized[k];return '';};
+    const date=statementDate(get('date','transactiondate','valuedate','txndate','postingdate')),description=String(get('narration','description','particulars','transactiondetails','remarks','details')).trim(),reference=String(get('reference','referenceno','transactionid','utr','utrno','chequeno','chqrefno')).trim();let debit=statementNum(get('debit','debitamount','withdrawal','withdrawalamount','dramount')),credit=statementNum(get('credit','creditamount','deposit','depositamount','cramount'));
+    if(!debit&&!credit){const amount=statementNum(get('amount','transactionamount')),side=String(get('drcr','type','transactiontype')).toLowerCase();if(/dr|debit|withdraw/.test(side))debit=Math.abs(amount);else if(/cr|credit|deposit/.test(side))credit=Math.abs(amount);else if(amount<0)debit=Math.abs(amount);else credit=Math.abs(amount);}
+    const balance=statementNum(get('balance','closingbalance','availablebalance'));if(!date||(!debit&&!credit))return;out.push({date,description,reference,debit:Math.abs(debit),credit:Math.abs(credit),balance,row:index+2});});return out;
+}
+function bankRowKey(account,row,occurrence){return crypto.createHash('sha256').update([account,row.date,row.debit,row.credit,row.reference||row.description,row.balance,occurrence].join('|')).digest('hex').slice(0,24);}
+function appBankMovements(s,account){const rows=[];
+  (s.adjustments||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,description:x.note||'Adjustment',debit:Math.max(0,-num(x.amount)),credit:Math.max(0,num(x.amount))}));
+  (s.receipts||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,description:x.source,credit:num(x.amount),debit:0}));
+  (s.transfers||[]).forEach(x=>{if(x.fromAccount===account)rows.push({id:x.id,date:x.date,description:'Transfer to '+x.toAccount,debit:num(x.amount),credit:0});if(x.toAccount===account)rows.push({id:x.id,date:x.date,description:'Transfer from '+x.fromAccount,debit:0,credit:num(x.amount)});});
+  Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>paymentIsPosted(e)&&(p.account||e.account)===account).forEach(p=>rows.push({id:e.id+'/'+p.id,date:p.date,description:(e.vendor||e.particulars||e.id),debit:num(p.amount),credit:0}));(e.reimbursementPayments||[]).filter(p=>p.account===account).forEach(p=>rows.push({id:e.id+'/'+p.id,date:p.date,description:'Reimbursement '+(e.claimant||e.createdBy||''),debit:num(p.amount),credit:0}));});
+  Object.values(s.receivables||{}).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>rows.push({id:x.id+'/'+c.id,date:c.date,description:x.party,credit:num(c.amount),debit:0})));
+  salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,description:x.description,credit:num(x.amount),debit:0}));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:p.id+'/'+x.id,date:x.date,description:p.vendor||p.id,debit:num(x.amount),credit:0})));return rows;}
+router.post('/api/expenses/bank-statements/import',(req,res,next)=>isAdmin(req)?next():res.status(403).json({success:false,error:'Owner/Admin only.'}),statementUpload.single('statement'),(req,res)=>{const s=loadStore(),account=String(req.body.account||''),nature=normalizedNature(req.body.nature);if(!ledgerAccountsForNature(s,nature).some(a=>a.toLowerCase()===account.toLowerCase()))return res.status(400).json({success:false,error:'Select the correct account.'});if(!req.file)return res.status(400).json({success:false,error:'Choose an Excel or CSV bank statement.'});let parsed;try{parsed=parseBankStatementFile(req.file.path);}catch(e){return res.status(400).json({success:false,error:'Could not read this statement. Upload the bank Excel or CSV file.'});}if(!parsed.length)return res.status(400).json({success:false,error:'No dated debit/credit transactions were found.'});s.bankStatements=s.bankStatements||{};const book=s.bankStatements[account]||(s.bankStatements[account]={transactions:{},imports:[]}),seen={};let added=0,updated=0;const importId='BST-'+Date.now();parsed.forEach(row=>{const base=[row.date,row.debit,row.credit,row.reference||row.description,row.balance].join('|'),occurrence=seen[base]=(seen[base]||0)+1,key=bankRowKey(account,row,occurrence),existing=book.transactions[key];if(existing){Object.assign(existing,row,{lastSeenImport:importId});updated++;}else{book.transactions[key]=Object.assign({id:'BTX-'+key,firstSeenImport:importId,lastSeenImport:importId},row);added++;}});const dates=parsed.map(x=>x.date).sort();book.imports.push({id:importId,file:path.basename(req.file.path),originalName:req.file.originalname,from:dates[0],to:dates.at(-1),rows:parsed.length,added,updated,uploadedAt:new Date().toISOString(),uploadedBy:req.user.username});audit(s,req,'BANK_STATEMENT_IMPORTED','account',account,{nature,account,after:book.imports.at(-1)});saveStore(s);res.json({success:true,account,import:book.imports.at(-1),transactionCount:Object.keys(book.transactions).length});});
+router.get('/api/expenses/bank-statements',(req,res)=>{if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),account=String(req.query.account||''),book=((s.bankStatements||{})[account])||{transactions:{},imports:[]},transactions=Object.values(book.transactions||{}).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));res.json({success:true,account,imports:(book.imports||[]).slice().reverse(),transactions,lastReconciliation:book.lastReconciliation||null,updatedThrough:transactions.reduce((m,x)=>x.date>m?x.date:m,''),closingBalance:transactions.length?transactions.slice().sort((a,b)=>String(b.date+b.row).localeCompare(String(a.date+a.row)))[0].balance:0});});
+router.post('/api/expenses/bank-statements/reconcile',(req,res)=>{if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),account=String((req.body||{}).account||'');s.bankStatements=s.bankStatements||{};const book=s.bankStatements[account]||(s.bankStatements[account]={transactions:{},imports:[]}),bank=Object.values(book.transactions||{}),app=appBankMovements(s,account),used=new Set(),rows=bank.map(b=>{let best=-1,score=-1;app.forEach((a,i)=>{if(used.has(i)||num(a.debit)!==num(b.debit)||num(a.credit)!==num(b.credit))return;const days=Math.abs((Date.parse(a.date)-Date.parse(b.date))/86400000);if(days>1)return;let next=days===0?2:1;if(b.reference&&String(a.id).toLowerCase().includes(b.reference.toLowerCase()))next=4;if(next>score){score=next;best=i;}});if(best>=0){used.add(best);return{status:score>=2?'matched':'possible_match',bank:b,app:app[best]};}return{status:'missing_in_app',bank:b};});app.forEach((a,i)=>{if(!used.has(i))rows.push({status:'missing_in_bank',app:a});});const summary=rows.reduce((o,x)=>(o[x.status]=(o[x.status]||0)+1,o),{}),reconciled=!summary.missing_in_app&&!summary.missing_in_bank&&!summary.possible_match,reconciledAt=new Date().toISOString();book.lastReconciliation={at:reconciledAt,by:req.user.username,summary,reconciled};audit(s,req,'BANK_RECONCILED','account',account,{account,after:book.lastReconciliation});saveStore(s);res.json({success:true,account,summary,rows,reconciled,reconciledAt});});
 router.post('/api/expenses/balances', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
@@ -1662,4 +1688,4 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, parseBankStatementFile };

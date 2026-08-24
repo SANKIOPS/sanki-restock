@@ -8,7 +8,8 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, parseBankStatementFile } = require('../modules/expenses');
+const XLSX = require('xlsx');
 
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -655,6 +656,21 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="payOverrideReason"/);
   assert.match(html, /id="editPersonalAccount"/);
   assert.match(html, /id="editBillFile"/);
+  assert.match(html, /Bank statement reconciliation/);
+  assert.match(html, /id="bs_upload"/);
+  assert.match(html, /id="bs_reconcile"/);
+});
+
+test('bank statement rows are normalized from cumulative Excel exports', () => {
+  const file=path.join(tempDir,'axis-3645.xlsx'),sheet=XLSX.utils.json_to_sheet([
+    {Date:'24/08/2026',Narration:'UPI reimbursement',Reference:'UTR720',Debit:'720.00',Credit:'',Balance:'1527.00'},
+    {Date:'25/08/2026',Narration:'Customer receipt',Reference:'UTR500',Debit:'',Credit:'500',Balance:'2027'}
+  ]),book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,sheet,'Statement');XLSX.writeFile(book,file);
+  const rows=parseBankStatementFile(file);
+  assert.deepEqual(rows.map(x=>({date:x.date,debit:x.debit,credit:x.credit,reference:x.reference,balance:x.balance})),[
+    {date:'2026-08-24',debit:720,credit:0,reference:'UTR720',balance:1527},
+    {date:'2026-08-25',debit:0,credit:500,reference:'UTR500',balance:2027}
+  ]);
 });
 
 test('legacy finalized payments without approvedAt remain visible in their account ledger', () => {
