@@ -620,6 +620,16 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   assert.equal(blocked.status, 400);
 });
 
+test('claimant ledgers remain visible under both SANKI and SAMAST with zero activity', () => {
+  for (const nature of ['SANKI','SAMAST']) {
+    const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature}});
+    assert.equal(balances.status,200);
+    for (const account of ['Arshpreet 1919','Shivam 4807','Pradeep 8606']) {
+      assert.ok(balances.body.accounts.some(x=>x.name===account),`${account} missing from ${nature}`);
+    }
+  }
+});
+
 test('installments support partial payments and prevent overpayment', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'Furniture Expense-A3', vendor: 'Carpenter', amount: 10000, isInstallment: true, requestedAmount: 1000,

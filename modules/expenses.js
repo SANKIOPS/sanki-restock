@@ -464,6 +464,12 @@ function allowedPayingAccount(req, nature, account) {
 }
 function ledgerAccountsForNature(s, nature) {
   const n = normalizedNature(nature), names = new Set(companyAccountsForNature(n));
+  // Keep claimant sub-ledgers visible for both operating entities even when
+  // they currently have no movement or a prior entry has been removed.
+  if (n === 'SANKI' || n === 'SAMAST') {
+    ['arshpreet','shivam','pradeep'].forEach(username =>
+      (CLAIMANT_ACCOUNTS[username] || []).forEach(account => names.add(account)));
+  }
   Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === n).forEach(e => {
     if (e.account) names.add(String(e.account));
     (e.payments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
