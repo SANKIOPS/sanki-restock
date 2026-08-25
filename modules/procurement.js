@@ -271,8 +271,10 @@ async function loadShopifyPurchaseHistory(force) {
     if (!r.ok) { const b = await r.text().catch(() => ''); throw new Error('Shopify ' + r.status + ': ' + b.slice(0, 200)); }
     const d = await r.json();
     (d.products || []).forEach(p => {
-      const skus = (p.variants || []).map(v => String(v.sku || '').toUpperCase()).filter(sku => parseSerial(sku));
-      if (!skus.length) return;
+      // Historical SKUs include formats that pre-date today's strict parser;
+      // requiring parseSerial() here would silently erase legitimate old buys.
+      const skus = (p.variants || []).map(v => String(v.sku || '').toUpperCase()).filter(Boolean);
+      if (!skus.length || String(p.vendor || '').trim().toUpperCase() !== 'SANKI') return;
       products.push({
         productId: String(p.id), title: p.title || '(untitled)', type: p.product_type || '',
         vendor: p.vendor || '', status: p.status || '', createdAt: p.created_at || '', skus
