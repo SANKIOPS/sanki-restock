@@ -1347,6 +1347,16 @@ router.post('/api/expenses/transfers', (req, res) => {
   res.json({ success: true, transfer });
 });
 
+router.post('/api/expenses/transfers/:id/delete', (req,res) => {
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can delete a recorded transfer.'});
+  const s=loadStore(),id=String(req.params.id||''),index=(s.transfers||[]).findIndex(x=>x.id===id),reason=String((req.body||{}).reason||'').trim();
+  if(index<0)return res.status(404).json({success:false,error:'Transfer not found.'});
+  if(!reason)return res.status(400).json({success:false,error:'Reason for deleting the transfer is required.'});
+  const transfer=s.transfers[index];
+  audit(s,req,'TRANSFER_DELETED','transfer',id,{nature:transfer.fromNature||transfer.nature,account:transfer.fromAccount,before:transfer,note:reason});
+  s.transfers.splice(index,1);saveStore(s);res.json({success:true,deleted:id});
+});
+
 router.post('/api/expenses/receipts', (req,res) => {
   if(!isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can record money received.'});
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature);

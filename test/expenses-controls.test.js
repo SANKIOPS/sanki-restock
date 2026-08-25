@@ -308,6 +308,19 @@ test('account transfers create equal debit and credit ledger entries', () => {
   assert.equal(personalBlocked.status, 403);
 });
 
+test('only Owner can delete a transfer and both ledger sides disappear with an audit trail', () => {
+  const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Counter Cash',toAccount:'Tiana 0425',amount:321,date:'2026-08-25',proof:'/api/expenses/photo/delete-transfer.jpg',note:'Temporary transfer'}});
+  const id=made.body.transfer.id;
+  const denied=invoke('POST','/api/expenses/transfers/:id/delete',{role:'admin',params:{id},body:{reason:'Wrong entry'}});assert.equal(denied.status,403);
+  const missingReason=invoke('POST','/api/expenses/transfers/:id/delete',{role:'owner',params:{id},body:{}});assert.equal(missingReason.status,400);
+  const removed=invoke('POST','/api/expenses/transfers/:id/delete',{role:'owner',params:{id},body:{reason:'Entered by mistake'}});assert.equal(removed.status,200);
+  const cash=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash'}}).body;
+  const tiana=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Tiana 0425'}}).body;
+  assert.ok(!cash.entries.some(x=>x.id===id));assert.ok(!tiana.entries.some(x=>x.id===id));
+  const auditRows=invoke('GET','/api/expenses/audit-log',{role:'owner'}).body.entries||invoke('GET','/api/expenses/audit-log',{role:'owner'}).body.auditLog||[];
+  assert.ok(auditRows.some(x=>x.subjectId===id&&x.action==='TRANSFER_DELETED'));
+});
+
 test('asset-sale receipt and cross-entity withdrawal create a complete money trail', () => {
   const receipt=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SAMAST',account:'Kirti Nagar Cash',receiptType:'asset_sale',source:'Buyer of basement iron racks',amount:27500,date:'2026-08-22',note:'Iron racks sold',proof:'/api/expenses/photo/rack-sale.jpg'}});
   assert.equal(receipt.status,200);
