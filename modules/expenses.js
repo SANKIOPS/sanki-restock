@@ -297,6 +297,41 @@ function createTelegramPersonalReceipt(input) {
   s.receiptSeq=(s.receiptSeq||0)+1;const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:'PERSONAL',account,amount,receiptType,source,date:String(b.date||now.slice(0,10)).slice(0,10),note:'Captured from Owner Telegram receipt screenshot',proof,createdBy:String(b.username||'owner'),createdAt:now,telegramSourceKey:sourceKey,telegramOcrText:String(b.ocrText||'').slice(0,4000)};
   s.receipts.push(receipt);audit(s,null,'RECEIPT_RECORDED','receipt',receipt.id,{nature:'PERSONAL',account,user:receipt.createdBy,after:receipt,note:'Telegram capture'});saveStore(s);return{success:true,receipt};
 }
+function telegramBusinessCategories() {
+  const s=loadStore();
+  return pickableLedgers(s).map(x=>x.name).filter(name=>!PERSONAL_CATEGORIES.includes(name));
+}
+function telegramSuggestBusinessCategory(text) {
+  const q=String(text||'').toLowerCase(),rules=[
+    ['PETROL',/petrol|diesel|fuel|cng/],['Rapido Expense',/rapido|uber|ola|auto|taxi|parking|travel/],
+    ['FOOD EXPENSE',/food|lunch|dinner|breakfast|tea|coffee|restaurant|snack/],['REPAIR & MAINTANCE',/repair|service|electrician|plumber|carpenter|maintenance/],
+    ['CLEANING EXP',/clean|housekeeping|flower|phool|mala/],['STATIONERY',/stationery|paper|pen|office supply/],
+    ['MARKETING EXPENSE',/marketing|advertis|meta|facebook|instagram|shoot|model/],['COD COURIER CHARGES',/courier|freight|delivery|transport|logistic/]
+  ],available=telegramBusinessCategories();
+  for(const [wanted,re] of rules)if(re.test(q)){const exact=available.find(x=>x.toLowerCase()===wanted.toLowerCase())||available.find(x=>x.toLowerCase().includes(wanted.split(' ')[0].toLowerCase()));if(exact)return{ledger:exact,confidence:true};}
+  const direct=available.find(x=>q.includes(x.toLowerCase()));return{ledger:direct||'',confidence:!!direct};
+}
+// Screenshot-first capture for a new SANKI/SAMAST expense that an authorised
+// accounts user has already paid. It is created, approved and posted only after
+// Telegram shows the final preview and the user confirms it.
+function createTelegramBusinessPaidExpense(input) {
+  const b=input||{},s=loadStore(),amount=num(b.amount),proof=String(b.proof||'').trim(),actor=String(b.username||'').trim(),nature=normalizedNature(b.nature||'SANKI');
+  if(nature==='PERSONAL')return{success:false,error:'Use the private PERSONAL bot for PERSONAL expenses.'};
+  if(!(amount>0))return{success:false,error:'Amount must be greater than 0.'};
+  if(!proof)return{success:false,error:'Payment screenshot is required.'};
+  const account=(USER_PAYMENT_ACCOUNTS[String(actor).toLowerCase()]||[]).find(x=>x.toLowerCase()===String(b.account||'').toLowerCase());
+  if(!account)return{success:false,error:'Select one of your assigned paying accounts.'};
+  const categories=telegramBusinessCategories(),ledger=categories.find(x=>x.toLowerCase()===String(b.ledger||'').trim().toLowerCase());
+  if(!ledger)return{success:false,error:'Select a valid expense category.',needsCategory:true};
+  const particulars=String(b.particulars||b.vendor||'').trim(),vendor=String(b.vendor||particulars).trim();
+  if(!vendor)return{success:false,error:'Vendor / payee is required.'};
+  const sourceKey=String(b.sourceKey||'').trim();if(sourceKey){const duplicate=Object.values(s.expenses||{}).find(e=>e.telegramSourceKey===sourceKey);if(duplicate)return{success:true,duplicate:true,expense:duplicate};}
+  const now=new Date().toISOString(),date=String(b.date||now.slice(0,10)).slice(0,10),paymentType=/cash/i.test(account)?'Cash':'UPI';s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0');
+  const payment={id:'PAY-001',amount,date,account,paymentType,proof,note:'New paid expense captured through Telegram',paidBy:actor,paidAt:now,personalFunds:false};
+  const expense={id,date,particulars,amount,isInstallment:false,requestedAmount:amount,nature,type:defaultType(ledger),ledger,vendor,claimant:actor,account,channel:'Shared',bill:'printed',fundedBy:'company',paymentType,qrPhoto:'',billPhoto:proof,purchasePaymentProof:'',exceptionEvidence:'',exceptionReason:'',billNote:'Payment proof captured through Telegram',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:proof,status:'paid',paidAmount:amount,payments:[payment],createdAt:now,createdBy:actor,approvedAt:now,approvedBy:actor,paidAt:now,paidBy:actor,telegramSourceKey:sourceKey,telegramOcrText:String(b.ocrText||'').slice(0,4000)};
+  s.expenses[id]=expense;s.vendorsByNature=s.vendorsByNature||{};if(nature==='SANKI')s.vendors[vendor.toLowerCase()]=s.vendors[vendor.toLowerCase()]||{name:vendor,notes:'Added from Telegram capture'};else{s.vendorsByNature[nature]=s.vendorsByNature[nature]||{};s.vendorsByNature[nature][vendor.toLowerCase()]=s.vendorsByNature[nature][vendor.toLowerCase()]||{name:vendor,notes:'Added from Telegram capture'};}
+  audit(s,null,'CREATED','expense',id,{nature,user:actor,device:'Telegram',after:expense,note:'Screenshot-first paid expense'});audit(s,null,'APPROVED','expense',id,{nature,user:actor,device:'Telegram',after:{status:'paid',approvedBy:actor,amount}});audit(s,null,'PAYMENT_RECORDED','expense',id,{nature,user:actor,device:'Telegram',account,paymentId:payment.id,after:payment});saveStore(s);return{success:true,expense};
+}
 function telegramExpense(id){const e=loadStore().expenses[id];return e?JSON.parse(JSON.stringify(e)):null;}
 function telegramResolveAccount(nature,requested){const q=String(requested||'').toLowerCase(),accounts=companyAccountsForNature(normalizedNature(nature)),digits=q.replace(/\D/g,'');return(/cash/.test(q)&&accounts.find(a=>/cash/i.test(a)))||accounts.find(a=>a.toLowerCase()===q)||accounts.find(a=>digits&&a.replace(/\D/g,'').endsWith(digits))||'';}
 function telegramResolveTransferAccount(requested){const q=String(requested||'').trim().toLowerCase(),digits=q.replace(/\D/g,''),matches=[];NATURES.forEach(nature=>companyAccountsForNature(nature).forEach(account=>{if(account.toLowerCase()===q||(digits&&account.replace(/\D/g,'').endsWith(digits)))matches.push({nature,account});}));return matches.length===1?matches[0]:null;}
@@ -465,7 +500,9 @@ function approvalNatures(req) {
   const r = rolesOfReq(req);
   if (r.includes('owner')) return NATURES.slice();
   const out = [];
-  if (r.includes('admin')) out.push('SANKI', 'SAMAST', 'PERSONAL');
+  // PERSONAL is a private owner book. Admins may operate the business books,
+  // but must never receive PERSONAL rows through list/report/ledger APIs.
+  if (r.includes('admin')) out.push('SANKI', 'SAMAST');
   if (r.includes('accounting')) out.push('SANKI');
   if (r.includes('samast_accounting')) out.push('SAMAST');
   return Array.from(new Set(out));
@@ -474,12 +511,14 @@ function submissionNatures(req) {
   const r = rolesOfReq(req);
   if (r.includes('owner')) return NATURES.slice();
   const out = approvalNatures(req);
-  if (r.includes('admin') || r.includes('claimant')) out.push('SANKI', 'SAMAST', 'PERSONAL');
+  if (r.includes('admin')) out.push('SANKI', 'SAMAST');
+  if (r.includes('claimant')) out.push('SANKI', 'SAMAST', 'PERSONAL');
   if (r.includes('personal_claimant')) out.push('PERSONAL');
   return Array.from(new Set(out));
 }
 function canApproveExpenseNature(req, e) { return approvalNatures(req).includes(normalizedNature(e && e.nature)); }
 function canViewExpense(req, e) {
+  if (normalizedNature(e && e.nature) === 'PERSONAL') return isOwner(req);
   if (canApproveExpenseNature(req, e)) return true;
   return e && e.createdBy === (req.user && req.user.username);
 }
@@ -554,9 +593,10 @@ router.get('/api/expenses/photo/:file', (req, res) => {
 router.get('/api/expenses/config', (req, res) => {
   const s = loadStore();
   const allowed = submissionNatures(req);
+  const ownerView = isOwner(req);
   const pendingReqs = (s.requests || []).filter(r => r.status === 'pending' && approvalNatures(req).includes(normalizedNature(r.nature)));
   const visiblePendingReqs = isAdmin(req) ? pendingReqs : (canApprove(req) ? pendingReqs.filter(r => r.kind === 'vendor') : []);
-  const vendorsByNature = { SANKI: Object.values(s.vendors).map(v => v.name), SAMAST: Object.values(((s.vendorsByNature || {}).SAMAST) || {}).map(v => v.name), PERSONAL: Object.values(((s.vendorsByNature || {}).PERSONAL) || {}).map(v => v.name) };
+  const vendorsByNature = { SANKI: Object.values(s.vendors).map(v => v.name), SAMAST: Object.values(((s.vendorsByNature || {}).SAMAST) || {}).map(v => v.name), PERSONAL: ownerView ? Object.values(((s.vendorsByNature || {}).PERSONAL) || {}).map(v => v.name) : [] };
   // Only approved master vendors are reusable. A name typed by a claimant is
   // promoted into this list only when the related expense is approved.
   Object.keys(vendorsByNature).forEach(n => vendorsByNature[n].sort((a, b) => a.localeCompare(b)));
@@ -565,7 +605,8 @@ router.get('/api/expenses/config', (req, res) => {
     ledgers: pickableLedgers(s),
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
-    accounts: Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS)))), accountsByNature: ENTITY_ACCOUNTS,
+    accounts: Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n])))),
+    accountsByNature: Object.fromEntries(NATURES.map(n => [n, n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
     types: TYPES, natures: allowed, channels: CHANNELS,
@@ -682,7 +723,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   const s = loadStore();
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
-  if (!canViewExpense(req, e)) return res.status(403).json({ success: false, error: 'You do not have access to this accounting entity.' });
+  if (!canViewExpense(req, e)) return res.status(403).json({ success: false, error: normalizedNature(e.nature)==='PERSONAL'?'Only the Owner can view or edit PERSONAL accounting data.':'You do not have access to this accounting entity.' });
   if (!canApprove(req) && (e.createdBy !== (req.user && req.user.username) || e.status !== 'pending')) {
     return res.status(403).json({ success: false, error: 'You can only edit your own pending expenses.' });
   }
@@ -1397,6 +1438,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // SAMAST bill). The entity remains visible on the ledger description.
   Object.values(s.expenses || {}).forEach(e => {
     const entryNature=normalizedNature(e.nature),entityLabel=' ['+entryNature+']';
+    if (!approvalNatures(req).includes(entryNature)) return;
     (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
   });
@@ -1509,7 +1551,8 @@ router.get('/api/expenses/balance-sheet',(req,res)=>{
 });
 router.get('/api/expenses/audit-log',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),nature=req.query.nature?normalizedNature(req.query.nature):'',action=String(req.query.action||'').toUpperCase(),user=String(req.query.user||'').toLowerCase(),from=String(req.query.from||''),to=String(req.query.to||''),subject=String(req.query.subject||'').toLowerCase();
-  const all=(s.auditLog||[]),matches=x=>(!nature||x.nature===nature)&&(!action||x.action===action)&&(!user||String(x.user).toLowerCase().includes(user))&&(!from||String(x.at).slice(0,10)>=from)&&(!to||String(x.at).slice(0,10)<=to)&&(!subject||String(x.subjectId+' '+x.subjectType+' '+x.account+' '+x.paymentId).toLowerCase().includes(subject)),entries=all.filter(matches).slice().reverse().slice(0,1000),expenseIds=Array.from(new Set(entries.filter(x=>x.subjectType==='expense').map(x=>x.subjectId)));
+  if(nature&&!approvalNatures(req).includes(nature))return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});
+  const allowed=approvalNatures(req),all=(s.auditLog||[]).filter(x=>allowed.includes(normalizedNature(x.nature))),matches=x=>(!nature||x.nature===nature)&&(!action||x.action===action)&&(!user||String(x.user).toLowerCase().includes(user))&&(!from||String(x.at).slice(0,10)>=from)&&(!to||String(x.at).slice(0,10)<=to)&&(!subject||String(x.subjectId+' '+x.subjectType+' '+x.account+' '+x.paymentId).toLowerCase().includes(subject)),entries=all.filter(matches).slice().reverse().slice(0,1000),expenseIds=Array.from(new Set(entries.filter(x=>x.subjectType==='expense').map(x=>x.subjectId)));
   const records=expenseIds.map(id=>{const timeline=all.filter(x=>x.subjectType==='expense'&&x.subjectId===id).sort((a,b)=>String(a.at).localeCompare(String(b.at))),current=(s.expenses||{})[id],created=timeline.find(x=>x.action==='CREATED'),deleted=timeline.find(x=>x.action==='DELETED'),snapshot=current||(created&&created.after)||(deleted&&deleted.before)||{};if(!created){timeline.unshift({id:'ORIGIN-'+id,at:snapshot.createdAt||((snapshot.date||'')+'T00:00:00.000Z'),user:snapshot.createdBy||snapshot.claimant||'unknown',action:'CREATED',subjectType:'expense',subjectId:id,nature:normalizedNature(snapshot.nature),account:'',paymentId:'',ip:'',device:'Unknown',userAgent:'',before:null,after:{nature:snapshot.nature,date:snapshot.date,vendor:snapshot.vendor,particulars:snapshot.particulars,amount:snapshot.amount,paymentType:snapshot.paymentType},note:'Original submission reconstructed from the expense record'});}return{id,nature:normalizedNature(snapshot.nature||timeline.at(-1)&&timeline.at(-1).nature),date:snapshot.date||'',vendor:snapshot.vendor||'',particulars:snapshot.particulars||'',amount:num(snapshot.amount),status:snapshot.status||(deleted?'deleted':''),claimant:snapshot.claimant||snapshot.createdBy||'',latestAt:timeline.at(-1)&&timeline.at(-1).at||'',timeline};}).sort((a,b)=>String(b.latestAt).localeCompare(String(a.latestAt))).slice(0,500);
   res.json({success:true,count:entries.length,entries,records});
 });
@@ -1754,4 +1797,4 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount };

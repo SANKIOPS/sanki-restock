@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -151,13 +151,13 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   assert.ok(sankiList.body.expenses.every(e => (e.nature || 'SANKI') !== 'SAMAST'));
 });
 
-test('PERSONAL stays outside business P&L and is available to claimants, Admin and Owner', () => {
+test('PERSONAL stays outside business P&L and its data is visible only to Owner', () => {
   const sankiPlBefore = summaryForPL();
   const personalConfig = invoke('GET', '/api/expenses/config', { role: 'personal_claimant' });
   assert.deepEqual(personalConfig.body.natures, ['PERSONAL']);
   const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
-  assert.ok(adminConfig.body.natures.includes('PERSONAL'));
-  assert.ok(adminConfig.body.approvalNatures.includes('PERSONAL'));
+  assert.ok(!adminConfig.body.natures.includes('PERSONAL'));
+  assert.ok(!adminConfig.body.approvalNatures.includes('PERSONAL'));
   const claimantConfig = invoke('GET', '/api/expenses/config', { role: 'claimant' });
   assert.ok(claimantConfig.body.natures.includes('PERSONAL'), 'Pradeep, Shivam and Arshpreet claimant accounts can log PERSONAL expenses');
 
@@ -169,9 +169,9 @@ test('PERSONAL stays outside business P&L and is available to claimants, Admin a
   assert.equal(created.body.expense.nature, 'PERSONAL');
 
   const adminList = invoke('GET', '/api/expenses/list', { query: { nature: 'PERSONAL' }, role: 'admin' });
-  assert.equal(adminList.status, 200);
+  assert.equal(adminList.status, 403);
   const adminApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'admin' });
-  assert.equal(adminApproval.status, 400, 'Admin has access but must assign a category first');
+  assert.equal(adminApproval.status, 403, 'Admin must not access PERSONAL approval data');
 
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'General Expense' }, role: 'owner' });
   const ownerApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'owner' });
@@ -409,7 +409,7 @@ test('receivables support partial collections and credit the receiving account l
   assert.equal(ledger.entries.find(x=>x.id===created.body.receivable.id+'/COL-001').credit,400);
   const personal=invoke('POST','/api/expenses/receivables',{role:'owner',body:{nature:'PERSONAL',party:'Private',reason:'Loan return',amount:100}});
   assert.equal(personal.status,200);
-  assert.equal(invoke('GET','/api/expenses/receivables',{query:{nature:'PERSONAL'},role:'admin'}).status,200);
+  assert.equal(invoke('GET','/api/expenses/receivables',{query:{nature:'PERSONAL'},role:'admin'}).status,403);
 });
 
 test('Shopify history is filtered by the permanent accounting reset boundary', () => {
@@ -487,6 +487,24 @@ test('Owner Telegram narration and screenshot OCR create one categorized paid PE
   assert.equal(receipt.success,true);assert.equal(receipt.receipt.account,'ICICI Bank 0993');assert.equal(receipt.receipt.nature,'PERSONAL');assert.equal(receipt.receipt.receiptType,'refund');
 });
 
+test('Prashant Telegram menu records a screenshot-first paid expense only after selected account and category', () => {
+  const categories=telegramBusinessCategories();
+  assert.ok(categories.includes('PETROL'));
+  const input={username:'prashant',nature:'SANKI',vendor:'Fuel Station',particulars:'Petrol',ledger:'PETROL',amount:720,account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-paid.jpg',sourceKey:'telegram-quick:test-1'};
+  const created=createTelegramBusinessPaidExpense(input);
+  assert.equal(created.success,true);
+  assert.equal(created.expense.status,'paid');
+  assert.equal(created.expense.account,'Prashant Axis 3645');
+  assert.equal(created.expense.approvedBy,'prashant');
+  assert.equal(created.expense.payments[0].proof,input.proof);
+  assert.equal(createTelegramBusinessPaidExpense(input).duplicate,true);
+  assert.equal(createTelegramBusinessPaidExpense({...input,sourceKey:'telegram-quick:test-2',account:'Axis Bank 3448'}).success,false);
+  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  assert.match(telegramSource,/Attach the payment screenshot now/);
+  assert.match(telegramSource,/Prashant Axis 3645','Prashant Cash','Counter Cash/);
+  assert.match(telegramSource,/Select a category before approval/);
+});
+
 test('only Admin or Owner can add a missing category during review', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', vendor: 'Vendor Corrected', amount: 90,
@@ -548,7 +566,7 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
   assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
-  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']);
+  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
   const blocked = invoke('POST', '/api/expenses', { body:{vendor:'Scoped Vendor',amount:100,billPhoto:'/api/expenses/photo/scoped.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Shivam 4807',personalPaymentProof:'/api/expenses/photo/scoped-pay.jpg'} });
   assert.equal(blocked.status, 400);
