@@ -139,12 +139,13 @@ const PERSONAL_CATEGORIES = ['Food & Dining','Household Staff','Children & Educa
 const ENTITY_ACCOUNTS = {
   SANKI: ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash'],
   SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
-  PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash']
+  PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita Account','Namita Cash']
 };
 const CLAIMANT_ACCOUNTS = {
   arshpreet: ['Arshpreet 1919'],
   shivam: ['Shivam 4807'],
-  pradeep: ['Pradeep 8606']
+  pradeep: ['Pradeep 8606'],
+  namita: ['Namita Account','Namita Cash']
 };
 const USER_PAYMENT_ACCOUNTS = {
   prashant: ['Prashant Axis 3645', 'Prashant Cash', 'Counter Cash']
@@ -274,9 +275,9 @@ function createTelegramPersonalExpense(input) {
   if(!(amount>0)) return {success:false,error:'Amount must be greater than 0.'};
   if(!proof) return {success:false,error:'Payment screenshot is required.'};
   if(!particulars) return {success:false,error:'Narration is required.'};
-  const requested=String(b.account||'').trim().toLowerCase(),accounts=companyAccountsForNature('PERSONAL');
+  const isNamita=String(b.username||'').trim().toLowerCase()==='namita',requested=String(isNamita?(/cash/i.test(String(b.account||''))?'Namita Cash':'Namita Account'):b.account||'').trim().toLowerCase(),accounts=companyAccountsForNature('PERSONAL');
   const suffixMatches=accounts.filter(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.length>=2&&last.endsWith(requested.replace(/\D/g,''));});
-  const account=(/cash/i.test(requested)&&accounts.find(a=>/cash/i.test(a)))||accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||accounts.find(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.includes(last);})||(suffixMatches.length===1?suffixMatches[0]:'');
+  const account=(isNamita&&/cash/i.test(requested)?'Namita Cash':'')||(/cash/i.test(requested)&&accounts.find(a=>/cash/i.test(a)))||accounts.find(a=>a.toLowerCase()===requested)||accounts.find(a=>requested&&a.toLowerCase().includes(requested))||accounts.find(a=>{const last=(a.match(/\d{4}$/)||[])[0];return last&&requested.includes(last);})||(suffixMatches.length===1?suffixMatches[0]:'');
   if(!account) return {success:false,error:'Personal account was not recognized.'};
   if(sourceKey){const duplicate=Object.values(s.expenses||{}).find(e=>e.telegramSourceKey===sourceKey);if(duplicate)return {success:true,duplicate:true,expense:duplicate};}
   const now=new Date().toISOString(),date=String(b.date||now.slice(0,10)).slice(0,10),paymentType=/cash/i.test(account)?'Cash':'UPI';
