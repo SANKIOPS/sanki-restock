@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -355,6 +355,23 @@ test('only Owner can delete a transfer and both ledger sides disappear with an a
   assert.ok(!cash.entries.some(x=>x.id===id));assert.ok(!tiana.entries.some(x=>x.id===id));
   const auditRows=invoke('GET','/api/expenses/audit-log',{role:'owner'}).body.entries||invoke('GET','/api/expenses/audit-log',{role:'owner'}).body.auditLog||[];
   assert.ok(auditRows.some(x=>x.subjectId===id&&x.action==='TRANSFER_DELETED'));
+});
+
+test('claimant accounts are valid transfer endpoints in the app and Telegram', () => {
+  const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+  assert.ok(config.transferAccountsByNature.SANKI.includes('Arshpreet 1919'));
+  assert.ok(config.transferAccountsByNature.SAMAST.includes('Arshpreet 1919'));
+  assert.ok(!config.accountsByNature.SANKI.includes('Arshpreet 1919'));
+  const appTransfer=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'SANKI',fromAccount:'Axis Bank 3448',toNature:'SANKI',toAccount:'Arshpreet 1919',amount:1000,date:'2026-08-26',proof:'/api/expenses/photo/claimant-transfer.jpg'}});
+  assert.equal(appTransfer.status,200);
+  assert.equal(appTransfer.body.transfer.toAccount,'Arshpreet 1919');
+  const telegramTransfer=telegramRecordTransfer('gaganlambasanki',{fromAccount:'3448',toAccount:'1919',amount:500,date:'2026-08-26',proof:'/api/expenses/photo/claimant-transfer-tg.jpg'});
+  assert.equal(telegramTransfer.success,true);
+  assert.equal(telegramTransfer.transfer.fromNature,'SANKI');
+  assert.equal(telegramTransfer.transfer.toNature,'SANKI');
+  assert.equal(telegramTransfer.transfer.toAccount,'Arshpreet 1919');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/transferAccountsByNature/);
 });
 
 test('asset-sale receipt and cross-entity withdrawal create a complete money trail', () => {
