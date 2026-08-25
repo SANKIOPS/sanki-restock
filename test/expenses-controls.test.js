@@ -81,6 +81,17 @@ test('vendor ledger UI offers Delete only when its entry count is zero', () => {
   assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
 });
 
+test('expense reference filter accepts partial numbers and compact rows are numbered', () => {
+  const created=invoke('POST','/api/expenses',{body:{vendor:'Reference Search Vendor',amount:57,billPhoto:'/api/expenses/photo/bill.jpg',paymentType:'Cash'}}).body.expense;
+  const digits=created.id.replace(/\D/g,'').replace(/^0+/, '');
+  const found=invoke('GET','/api/expenses/list',{query:{reference:digits},role:'owner'}).body.expenses;
+  assert.ok(found.some(e=>e.id===created.id));
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/Expense \/ bill no\./);
+  assert.match(html,/expenseCard\(e,i\+1\)/);
+  assert.match(html,/<b>#'\+\(vi\+1\)/);
+});
+
 test('bill remains mandatory at approval and payment proof is mandatory for cash', async () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', amount: 250, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg',
@@ -291,11 +302,11 @@ test('expense deep links load only the selected record and normal lists are boun
 
 test('expense history uses expandable compact rows for every role', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /function expenseCard\(e\)/);
+  assert.match(html, /function expenseCard\(e,rowNo\)/);
   assert.match(html, /<details class="claim-card"/);
   assert.match(html, /<summary>/);
   assert.match(html, /class="claim-detail"/);
-  assert.match(html, /d\.expenses\.map\(expenseCard\)/);
+  assert.match(html, /d\.expenses\.map\(function\(e,i\)\{return expenseCard\(e,i\+1\);\}\)/);
   assert.match(html, /Payment history/);
 });
 

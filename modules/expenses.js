@@ -1086,17 +1086,22 @@ router.get('/api/expenses/list', (req, res) => {
   const claimant = (req.query.claimant || '').toString().toLowerCase();
   const paymentType = (req.query.paymentType || '').toString().toLowerCase();
   const payingAccount = (req.query.payingAccount || '').toString().trim().toLowerCase();
+  const reference = (req.query.reference || '').toString().trim().toLowerCase();
   const missingBill = String(req.query.missingBill || '') === 'true';
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   if (nature && isAdmin(req) && !approvalNatures(req).includes(nature)) return res.status(403).json({ success:false, error:'You cannot view this accounting entity.' });
   let list = Object.values(s.expenses).filter(e => {
     if (!canViewExpense(req, e)) return false;
     if (id && e.id !== id) return false;
+    if (reference) {
+      const needle=reference.replace(/[^a-z0-9]/g,''),digits=reference.replace(/\D/g,''),hay=[e.id,e.billNo,e.billNumber].filter(Boolean).map(v=>String(v).toLowerCase().replace(/[^a-z0-9]/g,''));
+      if(!hay.some(v=>(needle&&v.includes(needle))||(digits&&v.replace(/\D/g,'').includes(digits))))return false;
+    }
     if (nature && normalizedNature(e.nature) !== nature) return false;
     // With a paying-account filter, reconcile on the actual payment movement
     // and its date (the same basis used by Account Ledgers), not the bill date.
-    if (!payingAccount && from && e.date < from) return false;
-    if (!payingAccount && to && e.date > to) return false;
+    if (!payingAccount && !reference && from && e.date < from) return false;
+    if (!payingAccount && !reference && to && e.date > to) return false;
     if (status && e.status !== status) return false;
     if (type && e.type !== type) return false;
     if (vendor && (e.vendor || '').toLowerCase() !== vendor) return false;
@@ -1298,7 +1303,7 @@ router.get('/api/expenses/vendors', (req, res) => {
   if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementPayables(s,true).filter(p=>(!from||String(p.date||'')>=from)&&(!to||String(p.date||'')<=to)).forEach(p=>{const key='SANKI|'+p.vendor.toLowerCase(),b=books[key]||(books[key]={name:p.vendor,nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[]});b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
   const list = Object.values(books).map(b => ({
     name:b.name,nature:b.nature,count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,entries:b.entries.sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)))
-  })).filter(b=>(!category||b.count>0)&&(!search||fuzzyIncludes(b.name,search)||b.entries.some(e=>fuzzyIncludes(e.particulars,search)||fuzzyIncludes(e.ledger,search)))).sort((a,b)=>a.name.localeCompare(b.name));
+  })).filter(b=>(!category||b.count>0)&&(!search||fuzzyIncludes(b.name,search)||b.entries.some(e=>fuzzyIncludes(e.particulars,search)||fuzzyIncludes(e.ledger,search)||String(e.id||'').toLowerCase().includes(search)||String(e.billNo||'').toLowerCase().includes(search)))).sort((a,b)=>a.name.localeCompare(b.name));
   res.json({ success: true, vendors: list, totalOutstanding: list.reduce((n, b) => n + b.outstanding, 0) });
 });
 router.post('/api/expenses/vendors', (req, res) => {
