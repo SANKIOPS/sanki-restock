@@ -76,6 +76,11 @@ test('only owner can rename, merge and safely delete vendor ledgers', () => {
   assert.equal(deleted.status,200);
 });
 
+test('vendor ledger UI offers Delete only when its entry count is zero', () => {
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
+});
+
 test('bill remains mandatory at approval and payment proof is mandatory for cash', async () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', amount: 250, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg',
