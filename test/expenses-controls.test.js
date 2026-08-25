@@ -544,7 +544,7 @@ test('Prashant Telegram menu records a screenshot-first paid expense only after 
   const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
   assert.match(telegramSource,/Attach the payment screenshot now/);
   assert.match(telegramSource,/Prashant Axis 3645','Prashant Cash','Counter Cash/);
-  assert.match(telegramSource,/Select a category before approval/);
+  assert.match(telegramSource,/Best matching categories/);
 });
 
 test('only Admin or Owner can add a missing category during review', () => {
@@ -945,6 +945,9 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.match(telegramSource,/return sendPersonalApprovalPreview\(id,draft\)/);
   assert.match(telegramSource,/Already paid by claimant/);
   assert.match(telegramSource,/Not paid yet/);
+  assert.match(telegramSource,/function approvalCategorySuggestions/);
+  assert.match(telegramSource,/Search category/);
+  assert.match(telegramSource,/Closest existing categories/);
   assert.match(telegramSource,/PERSONAL screenshots now belong in/);
   assert.match(telegramSource,/Only an authorised PERSONAL user can use this bot/);
   const expenseSource=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
