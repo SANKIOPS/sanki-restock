@@ -404,7 +404,8 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.match(html, /Actual expenses paid/);
   assert.match(html, /id="sd_account"/);
   assert.match(html, /id="sd_category"/);
-  assert.match(html, /Group by category/);
+  assert.match(html, /id="sd_category_go">Show spending by category/);
+  assert.doesNotMatch(html, /id="sd_view"/);
   const created = invoke('POST', '/api/expenses', { body: {
     vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'
   } });
