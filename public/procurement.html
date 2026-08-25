@@ -505,9 +505,9 @@
     var purchaseHistory=[];
     function loadPurchaseHistory(){
       el('sumTotals').innerHTML='<p class="sub">Loading purchase history…</p>'; el('sumHost').innerHTML='';
-      fetch('/api/procurement/pos').then(readJson).then(function(d){
+      fetch('/api/procurement/history').then(readJson).then(function(d){
         if(!d.success){ el('sumTotals').innerHTML='<div class="banner err">'+esc(d.error||'Failed to load')+'</div>'; return; }
-        purchaseHistory=d.pos||[]; renderPurchaseHistory();
+        purchaseHistory=d.history||[]; renderPurchaseHistory(d);
       }).catch(function(e){ el('sumTotals').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     }
     function historyTotals(po){
@@ -527,11 +527,13 @@
       var c=colours[s]||['#f1f5f9','#334155'];
       return '<span style="background:'+c[0]+';color:'+c[1]+';border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700;white-space:nowrap">'+esc(labels[s]||s)+'</span>';
     }
-    function renderPurchaseHistory(){
+    function renderPurchaseHistory(meta){
       var totalQty=0,totalValue=0,received=0,posted=0;
-      purchaseHistory.forEach(function(po){var t=historyTotals(po);totalQty+=t.qty;totalValue+=t.total;if(po.status==='received'||po.status==='awaiting_approval'||po.status==='posted')received++;if(po.status==='posted')posted++;});
+      purchaseHistory.forEach(function(po){if(po.historical)return;var t=historyTotals(po);totalQty+=t.qty;totalValue+=t.total;if(po.status==='received'||po.status==='awaiting_approval'||po.status==='posted')received++;if(po.status==='posted')posted++;});
       el('sumTotals').innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap">'+
-        '<span class="pill">'+purchaseHistory.length+' purchases</span><span class="pill">'+totalQty+' pieces</span><span class="pill">'+money(totalValue)+' total</span><span class="pill">'+received+' received</span><span class="pill">'+posted+' posted</span></div>';
+        '<span class="pill">'+purchaseHistory.length+' purchase batches</span><span class="pill">'+totalQty+' known pieces</span><span class="pill">'+money(totalValue)+' known total</span><span class="pill">'+received+' received</span><span class="pill">'+posted+' posted</span>'+
+        ((meta&&meta.recoveredProducts)?'<span class="pill">'+meta.recoveredProducts+' historical products recovered</span>':'')+'</div>'+
+        ((meta&&meta.historyWarning)?'<div class="banner err" style="margin-top:8px">Complete POs are shown, but Shopify history could not be refreshed: '+esc(meta.historyWarning)+'</div>':'');
       if(!purchaseHistory.length){el('sumHost').innerHTML='<p class="sub">No purchases have been created through this software yet.</p>';return;}
       el('sumHost').innerHTML=purchaseHistory.map(historyPoRow).join('');
       Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-history-po]'),function(row){
@@ -543,6 +545,7 @@
       });
     }
     function historyPoRow(po,idx){
+      if(po.historical) return historicalPurchaseRow(po,idx);
       var t=historyTotals(po),ordered=po.datePurchase||String(po.createdAt||'').slice(0,10)||'—',received=po.dateReceive||'Not received';
       var qtyAll=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0);
       var transport=po.origin==='india'&&qtyAll?Number(po.transportTotal||0)/qtyAll:0;
@@ -561,6 +564,20 @@
         '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span><span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
         '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / colour / size</th><th class="money">Qty</th><th class="money">Landed/pc</th><th class="money">Total</th><th>Weight g/pc</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
         (po.status==='posted'?'<div class="banner ok" style="margin-top:9px">Posted to Shopify'+(po.postedAt?' on '+esc(String(po.postedAt).replace('T',' ').slice(0,19)):'')+'.</div>':'')+'</div>';
+      return head+detail;
+    }
+    function historicalPurchaseRow(po,idx){
+      var products=po.products||[];
+      var rows=products.map(function(p){
+        return '<tr><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td>'+esc(p.status||'—')+'</td></tr>';
+      }).join('');
+      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(160px,1.4fr) minmax(120px,1fr) minmax(160px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
+        '<span class="sumcaret muted">▸</span><div><b>'+(idx+1)+'. Historical purchase</b><div class="muted" style="font-size:11px">Recovered from Shopify · original PO unavailable</div></div>'+
+        '<div style="font-size:12px"><span class="muted">Posted</span> '+esc(po.datePurchase||'—')+'</div>'+historyStatus(po)+
+        '<div class="money"><b>'+Number(po.productCount||0)+' products</b></div><div class="money"><b>'+Number(po.skuCount||0)+' SKUs</b></div></div>';
+      var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
+        '<div class="banner" style="margin-bottom:9px">Recovered from Shopify. Product names, SKUs and posting date are verified. The old bill, vendor, quantity and landed cost are not present in Railway, so they are intentionally not guessed.</div>'+
+        '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Product</th><th>Type</th><th>SKUs</th><th>Shopify status</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
       return head+detail;
     }
 

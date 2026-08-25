@@ -35,10 +35,12 @@ test('Nida-style Inventory users can call the complete Purchases workflow', () =
 test('Purchases Summary renders every PO as a compact expandable history row', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   assert.match(html, /Purchase history/);
-  assert.match(html, /fetch\('\/api\/procurement\/pos'\)/);
+  assert.match(html, /fetch\('\/api\/procurement\/history'\)/);
   assert.match(html, /data-history-po/);
   assert.match(html, /historyBody/);
   assert.match(html, /Ordered<\/span>/);
   assert.match(html, /Received<\/span>/);
   assert.match(html, /Posted to Shopify/);
+  assert.match(html, /Recovered from Shopify/);
+  assert.match(html, /original PO unavailable/);
 });

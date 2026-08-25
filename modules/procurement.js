@@ -230,6 +230,7 @@ function nextSerial(cur) {
 
 // ── Shopify variant catalogue (cached; used for serial + classify) ──
 let _catalogue = null;      // { skuMap: {SKU: {productId, variantId, inventoryItemId}}, maxSerial, fetchedAt }
+let _shopifyPurchaseHistory = null;
 async function loadCatalogue(force) {
   if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) throw new Error('Shopify env not configured');
   if (_catalogue && !force && (Date.now() - _catalogue.fetchedAt) < 5 * 60 * 1000) return _catalogue;
@@ -252,6 +253,50 @@ async function loadCatalogue(force) {
   }
   _catalogue = { skuMap, maxSerial, fetchedAt: Date.now() };
   return _catalogue;
+}
+
+// Recover the purchase-era history that survived in Shopify even when the
+// corresponding old procurement.json records did not. These rows remain
+// separate from real POs: Shopify can verify product/date/SKU, but not the
+// original bill, quantity or landed cost.
+async function loadShopifyPurchaseHistory(force) {
+  if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return [];
+  if (_shopifyPurchaseHistory && !force && (Date.now() - _shopifyPurchaseHistory.fetchedAt) < 5 * 60 * 1000) {
+    return _shopifyPurchaseHistory.rows;
+  }
+  let url = `https://${SHOPIFY_STORE}/admin/api/${API}/products.json?limit=250&created_at_min=2026-07-19T00:00:00%2B05:30&fields=id,title,created_at,vendor,product_type,status,variants`;
+  const products = [];
+  while (url) {
+    const r = await shopifyClient.request(url);
+    if (!r.ok) { const b = await r.text().catch(() => ''); throw new Error('Shopify ' + r.status + ': ' + b.slice(0, 200)); }
+    const d = await r.json();
+    (d.products || []).forEach(p => {
+      const skus = (p.variants || []).map(v => String(v.sku || '').toUpperCase()).filter(sku => parseSerial(sku));
+      if (!skus.length) return;
+      products.push({
+        productId: String(p.id), title: p.title || '(untitled)', type: p.product_type || '',
+        vendor: p.vendor || '', status: p.status || '', createdAt: p.created_at || '', skus
+      });
+    });
+    const link = r.headers.get('Link') || '';
+    const next = link.match(/<([^>]+)>;\s*rel="next"/);
+    url = next ? next[1] : null;
+  }
+  const byDate = {};
+  products.forEach(p => {
+    const date = String(p.createdAt).slice(0, 10);
+    if (date) (byDate[date] || (byDate[date] = [])).push(p);
+  });
+  const rows = Object.keys(byDate).sort().reverse().map(date => ({
+    id: 'HIST-' + date.replace(/-/g, ''), historical: true, source: 'shopify-recovery',
+    status: 'posted', datePurchase: date, createdAt: date + 'T00:00:00.000Z',
+    vendor: 'Recovered from Shopify', billNo: '', products: byDate[date],
+    productCount: byDate[date].length,
+    skuCount: byDate[date].reduce((n, p) => n + p.skus.length, 0),
+    quantityKnown: false, valueKnown: false
+  }));
+  _shopifyPurchaseHistory = { rows, fetchedAt: Date.now() };
+  return rows;
 }
 
 // ── SKU builder ──────────────────────────────────────────────────
@@ -1646,6 +1691,35 @@ router.get('/api/procurement/pos', (req, res) => {
   if (req.query.status) { const want = String(req.query.status).split(','); list = list.filter(p => want.includes(p.status)); }
   list = list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   res.json({ success: true, pos: list.map(p => publicPo(p, req)) });
+});
+router.get('/api/procurement/history', async (req, res) => {
+  const s = loadStore();
+  const pos = Object.values(s.pos).map(p => publicPo(p, req));
+  try {
+    const recovered = await loadShopifyPurchaseHistory(req.query.refresh === '1');
+    const linkedProductIds = new Set();
+    Object.values(s.pos).forEach(po => {
+      ((po.results && po.results.created) || []).forEach(p => {
+        if (p && p.productId) linkedProductIds.add(String(p.productId));
+      });
+    });
+    const historical = recovered.map(batch => {
+      const products = batch.products.filter(p => !linkedProductIds.has(String(p.productId)));
+      return { ...batch, products, productCount: products.length,
+        skuCount: products.reduce((n, p) => n + p.skus.length, 0) };
+    }).filter(batch => batch.productCount > 0);
+    const history = pos.concat(historical).sort((a, b) =>
+      String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || ''))
+    );
+    res.json({ success: true, history, completePurchases: pos.length,
+      recoveredBatches: historical.length,
+      recoveredProducts: historical.reduce((n, b) => n + b.productCount, 0) });
+  } catch (e) {
+    res.json({ success: true,
+      history: pos.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+      completePurchases: pos.length, recoveredBatches: 0, recoveredProducts: 0,
+      historyWarning: e.message });
+  }
 });
 router.get('/api/procurement/pos/:id', (req, res) => {
   const s = loadStore();
