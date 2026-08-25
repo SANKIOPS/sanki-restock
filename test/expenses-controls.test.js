@@ -548,7 +548,7 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
   assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
-  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita Account','Namita Cash']);
+  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
   const blocked = invoke('POST', '/api/expenses', { body:{vendor:'Scoped Vendor',amount:100,billPhoto:'/api/expenses/photo/scoped.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Shivam 4807',personalPaymentProof:'/api/expenses/photo/scoped-pay.jpg'} });
   assert.equal(blocked.status, 400);
@@ -894,7 +894,7 @@ test('Telegram approval and payment keep one expense isolated through its comple
 
 test('Namita Personal bot expenses use separate Namita account and cash ledgers', () => {
   const upi=createTelegramPersonalExpense({username:'namita',amount:850,account:'0992',date:'2026-08-25',particulars:'Household shopping',vendor:'Local Store',ledger:'Shopping',proof:'/api/expenses/photo/namita-upi.jpg',sourceKey:'namita-upi-1'});
-  assert.equal(upi.success,true);assert.equal(upi.expense.account,'Namita Account');assert.equal(upi.expense.createdBy,'namita');
+  assert.equal(upi.success,true);assert.equal(upi.expense.account,'Namita 5464');assert.equal(upi.expense.createdBy,'namita');
   const cash=createTelegramPersonalExpense({username:'namita',amount:300,account:'cash',date:'2026-08-25',particulars:'Household cash',vendor:'Local Store',ledger:'Household Staff',proof:'/api/expenses/photo/namita-cash.jpg',sourceKey:'namita-cash-1'});
   assert.equal(cash.success,true);assert.equal(cash.expense.account,'Namita Cash');
   const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');assert.match(source,/isNamita/);assert.match(source,/Only the Owner can approve or settle PERSONAL expenses/);
