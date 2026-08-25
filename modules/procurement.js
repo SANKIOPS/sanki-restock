@@ -1697,14 +1697,17 @@ router.get('/api/procurement/history', async (req, res) => {
   const pos = Object.values(s.pos).map(p => publicPo(p, req));
   try {
     const recovered = await loadShopifyPurchaseHistory(req.query.refresh === '1');
-    const linkedProductIds = new Set();
+    const linkedProducts = new Map();
     Object.values(s.pos).forEach(po => {
+      const poDate = String(po.postedAt || po.datePurchase || po.createdAt || '').slice(0, 10);
       ((po.results && po.results.created) || []).forEach(p => {
-        if (p && p.productId) linkedProductIds.add(String(p.productId));
+        if (p && p.productId) linkedProducts.set(String(p.productId), poDate);
       });
     });
     const historical = recovered.map(batch => {
-      const products = batch.products.filter(p => !linkedProductIds.has(String(p.productId)));
+      // A product linked to a newer PO can be a restock/reference. Only treat
+      // it as the same purchase when both Shopify and PO dates agree.
+      const products = batch.products.filter(p => linkedProducts.get(String(p.productId)) !== batch.datePurchase);
       return { ...batch, products, productCount: products.length,
         skuCount: products.reduce((n, p) => n + p.skus.length, 0) };
     }).filter(batch => batch.productCount > 0);
