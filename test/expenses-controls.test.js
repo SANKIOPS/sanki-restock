@@ -403,6 +403,8 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.doesNotMatch(html, /<label>Breakdown by<\/label>/);
   assert.match(html, /Actual expenses paid/);
   assert.match(html, /id="sd_account"/);
+  assert.match(html, /id="sd_category"/);
+  assert.match(html, /Group by category/);
   const created = invoke('POST', '/api/expenses', { body: {
     vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'
   } });
@@ -418,6 +420,9 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.equal(payment.amount, 339);
   assert.equal(payment.account, 'Counter Cash');
   assert.equal(payment.proof, '/api/expenses/photo/dashboard-pay.jpg');
+  const byCategory=invoke('GET','/api/expenses/spending-dashboard',{query:{from:'2026-08-20',to:'2026-08-20',category:'FOOD EXPENSE'},role:'owner'}).body;
+  assert.ok(byCategory.payments.length>0);
+  assert.ok(byCategory.payments.every(x=>x.category==='FOOD EXPENSE'));
   const admin = invoke('GET', '/api/expenses/spending-dashboard', { query: { from: '2026-08-20', to: '2026-08-20' }, role: 'admin' });
   assert.equal(admin.status, 200);
   assert.equal(admin.body.payments.some(x => x.entity === 'PERSONAL'), false);

@@ -1203,13 +1203,14 @@ router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
 router.get('/api/expenses/spending-dashboard', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore(), from = String(req.query.from || ''), to = String(req.query.to || '');
-  const nature = req.query.nature ? normalizedNature(req.query.nature) : '', accountFilter = String(req.query.account || '').trim().toLowerCase();
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : '', accountFilter = String(req.query.account || '').trim().toLowerCase(), categoryFilter=String(req.query.category||'').trim().toLowerCase();
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const allowed = approvalNatures(req), inRange = d => (!from || d >= from) && (!to || d <= to);
   const payments = [];
   Object.values(s.expenses || {}).forEach(e => {
     const entity = normalizedNature(e.nature);
     if (!allowed.includes(entity) || (nature && entity !== nature)) return;
+    if(categoryFilter&&String(e.ledger||'').trim().toLowerCase()!==categoryFilter)return;
     (e.payments || []).filter(p => paymentIsPosted(e) && inRange(String(p.date || ''))).forEach(p => {
       const account = p.account || e.account;
       if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
