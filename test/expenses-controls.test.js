@@ -592,6 +592,12 @@ test('Owner can reimburse a SAMAST claimant from an authorised SANKI account', (
   assert.deepEqual(reimbursed.body.expense.reimbursementPayments.at(-1).accountNatures,['SANKI']);
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645'}}).body;
   assert.equal(ledger.entries.find(x=>x.id===created.body.expense.id+'/REIM-001').debit,720);
+  const claimantLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'Arshpreet 1919'}}).body;
+  assert.equal(claimantLedger.entries.find(x=>x.id===created.body.expense.id+'/PAY-001').debit,720);
+  assert.equal(claimantLedger.entries.find(x=>x.id===created.body.expense.id+'/REIM-001/RECEIVED').credit,720);
+  assert.equal(claimantLedger.balance,0);
+  const claimantSummary=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SAMAST'}}).body;
+  assert.equal(claimantSummary.accounts.find(x=>x.name==='Arshpreet 1919').balance,0);
 });
 
 test('personally paid non-cash expense requires the account used and cash is named automatically', () => {

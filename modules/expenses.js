@@ -1390,6 +1390,16 @@ router.get('/api/expenses/balances', (req, res) => {
         if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(ra).toLowerCase()))return;
         paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
       });
+      // A reimbursement is an outflow from the company account and an equal
+      // inflow back into the claimant account that originally funded the
+      // expense. Without this credit, a fully reimbursed claimant incorrectly
+      // remains negative forever in the Money Trail.
+      const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
+      if(personalAccount&&ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(personalAccount).toLowerCase())){
+        (e.reimbursementPayments||[]).filter(p=>inRange(p.date)).forEach(p=>{
+          collected[personalAccount]=(collected[personalAccount]||0)+num(p.amount);
+        });
+      }
     });
     if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>inRange(x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
     (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
@@ -1488,8 +1498,10 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   Object.values(s.expenses || {}).forEach(e => {
     const entryNature=normalizedNature(e.nature),entityLabel=' ['+entryNature+']';
     if (!approvalNatures(req).includes(entryNature)) return;
+    const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
     (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    (e.reimbursementPayments || []).filter(p => personalAccount === account).forEach(p => entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
   });
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',entity:'SANKI',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport [SANKI]',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
