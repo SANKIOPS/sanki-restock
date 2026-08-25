@@ -219,10 +219,10 @@
     <div id="viewSummary" class="hidden">
       <div class="panel">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <h2 style="margin:0">What we've bought</h2>
+          <h2 style="margin:0">Purchase history</h2>
           <button class="btn ghost sm" id="refreshSummary">Refresh</button>
         </div>
-        <p class="sub">Every purchase rolled up — <b>tap a stat card</b> (Done / In-process / Grand total) to filter the list, switch <b>Group by Category ↔ Vendor</b>, and tap a row to see the individual buys with zoomable photos. <b>Done</b> = posted &amp; live on Shopify; <b>In process</b> = advance / receiving / awaiting approval, plus Casuals queued. ₹ = landed cost (freight is added once goods are weighed, so in-process value is goods-only until then).</p>
+        <p class="sub">Every purchase created through this software, newest first. Each compact row shows its order and receipt status; click it to see the complete bill, products, quantities, costs, photos and Shopify details.</p>
         <div id="sumTotals" style="margin-top:10px"></div>
         <div id="sumHost" style="margin-top:14px"></div>
       </div>
@@ -314,7 +314,7 @@
     // ── tabs ──
     el('tabAdvance').onclick=function(){ setTab('advance'); };
     el('tabReceive').onclick=function(){ setTab('receive'); loadPos(); };
-    el('tabSummary').onclick=function(){ setTab('summary'); loadSummary(); };
+    el('tabSummary').onclick=function(){ setTab('summary'); loadPurchaseHistory(); };
     function setTab(which){
       el('tabAdvance').classList.toggle('active', which==='advance');
       el('tabReceive').classList.toggle('active', which==='receive');
@@ -325,7 +325,7 @@
     }
 
     // ── purchases summary ──
-    el('refreshSummary').onclick=loadSummary;
+    el('refreshSummary').onclick=loadPurchaseHistory;
     var sumData=null;               // last /summary response (re-rendered on filter/group change)
     var sumFilter='all';            // 'all' | 'done' | 'pending' — driven by clicking a stat card
     var sumGroup='category';        // 'category' | 'vendor'
@@ -497,6 +497,71 @@
         '</div>'+
       '</div>';
       return head+mid;
+    }
+
+    // Chronological purchase history requested for the Summary tab. This uses
+    // the actual PO records (not category/vendor aggregation), so every purchase
+    // made through this software appears exactly once.
+    var purchaseHistory=[];
+    function loadPurchaseHistory(){
+      el('sumTotals').innerHTML='<p class="sub">Loading purchase history…</p>'; el('sumHost').innerHTML='';
+      fetch('/api/procurement/pos').then(readJson).then(function(d){
+        if(!d.success){ el('sumTotals').innerHTML='<div class="banner err">'+esc(d.error||'Failed to load')+'</div>'; return; }
+        purchaseHistory=d.pos||[]; renderPurchaseHistory();
+      }).catch(function(e){ el('sumTotals').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+    }
+    function historyTotals(po){
+      var qty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0);
+      var transport=po.origin==='india'&&qty?Number(po.transportTotal||0)/qty:0;
+      var total=(po.lines||[]).reduce(function(n,l){
+        var per=po.origin==='india' ? Number(l.perPcsYuan||0)+transport
+          : Number(l.perPcsYuan||0)*Number(po.exRate||settings.exRate||0)+Number(l.weightGrams||0)*Number(po.freightPerGram||settings.freightPerGram||0);
+        return n+per*(Number(l.qty)||0);
+      },0);
+      return {qty:qty,total:Math.round(total)};
+    }
+    function historyStatus(po){
+      var s=po.status==='awaiting_approval'?'received':(po.status||'advance');
+      var labels={advance:'Ordered · awaiting goods',received:'Goods received',posted:'Posted to Shopify'};
+      var colours={advance:['#fef3c7','#92400e'],received:['#dbeafe','#1e40af'],posted:['#dcfce7','#065f46']};
+      var c=colours[s]||['#f1f5f9','#334155'];
+      return '<span style="background:'+c[0]+';color:'+c[1]+';border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700;white-space:nowrap">'+esc(labels[s]||s)+'</span>';
+    }
+    function renderPurchaseHistory(){
+      var totalQty=0,totalValue=0,received=0,posted=0;
+      purchaseHistory.forEach(function(po){var t=historyTotals(po);totalQty+=t.qty;totalValue+=t.total;if(po.status==='received'||po.status==='awaiting_approval'||po.status==='posted')received++;if(po.status==='posted')posted++;});
+      el('sumTotals').innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<span class="pill">'+purchaseHistory.length+' purchases</span><span class="pill">'+totalQty+' pieces</span><span class="pill">'+money(totalValue)+' total</span><span class="pill">'+received+' received</span><span class="pill">'+posted+' posted</span></div>';
+      if(!purchaseHistory.length){el('sumHost').innerHTML='<p class="sub">No purchases have been created through this software yet.</p>';return;}
+      el('sumHost').innerHTML=purchaseHistory.map(historyPoRow).join('');
+      Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-history-po]'),function(row){
+        row.onclick=function(e){
+          if(e.target&&e.target.closest&&e.target.closest('img'))return;
+          var id=row.getAttribute('data-history-po'),body=el('historyBody'+id),car=row.querySelector('.sumcaret');
+          if(body){body.classList.toggle('hidden');if(car)car.textContent=body.classList.contains('hidden')?'▸':'▾';}
+        };
+      });
+    }
+    function historyPoRow(po,idx){
+      var t=historyTotals(po),ordered=po.datePurchase||String(po.createdAt||'').slice(0,10)||'—',received=po.dateReceive||'Not received';
+      var qtyAll=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0);
+      var transport=po.origin==='india'&&qtyAll?Number(po.transportTotal||0)/qtyAll:0;
+      var rows=(po.lines||[]).map(function(l){
+        var qty=Number(l.qty)||0;
+        var per=po.origin==='india'?Number(l.perPcsYuan||0)+transport:Number(l.perPcsYuan||0)*Number(po.exRate||settings.exRate||0)+Number(l.weightGrams||0)*Number(po.freightPerGram||settings.freightPerGram||0);
+        var photo=l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'" style="width:36px;height:44px;object-fit:cover;border-radius:5px;cursor:zoom-in">':'—';
+        return '<tr><td>'+photo+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+(l.chinaSize?' (CN '+esc(l.chinaSize)+')':'')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(l.weightGrams||'—')+'</td></tr>';
+      }).join('');
+      var lineLabel=po.line==='funky'?'SANKI Funky':(po.line==='casuals'?'SANKI Casuals':'Unclassified');
+      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(120px,1.2fr) minmax(110px,1fr) minmax(150px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
+        '<span class="sumcaret muted">▸</span><div><b>'+(idx+1)+'. '+esc(po.id)+'</b><div class="muted" style="font-size:11px">'+esc(po.vendor||'—')+' · Bill '+esc(po.billNo||'—')+'</div></div>'+
+        '<div style="font-size:12px"><span class="muted">Ordered</span> '+esc(ordered)+'<br><span class="muted">Received</span> '+esc(received)+'</div>'+
+        '<div>'+historyStatus(po)+'</div><div class="money"><b>'+t.qty+' pcs</b></div><div class="money"><b>'+money(t.total)+'</b></div></div>';
+      var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span><span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
+        '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / colour / size</th><th class="money">Qty</th><th class="money">Landed/pc</th><th class="money">Total</th><th>Weight g/pc</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+        (po.status==='posted'?'<div class="banner ok" style="margin-top:9px">Posted to Shopify'+(po.postedAt?' on '+esc(String(po.postedAt).replace('T',' ').slice(0,19)):'')+'.</div>':'')+'</div>';
+      return head+detail;
     }
 
     // ── boot ──

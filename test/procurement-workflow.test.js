@@ -31,3 +31,14 @@ test('Nida-style Inventory users can call the complete Purchases workflow', () =
   assert.equal(canManagePurchases({ user: { role: 'owner', roles: ['owner'] } }), true);
   assert.equal(canManagePurchases({ user: { role: 'sales', roles: ['sales'] } }), false);
 });
+
+test('Purchases Summary renders every PO as a compact expandable history row', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.match(html, /Purchase history/);
+  assert.match(html, /fetch\('\/api\/procurement\/pos'\)/);
+  assert.match(html, /data-history-po/);
+  assert.match(html, /historyBody/);
+  assert.match(html, /Ordered<\/span>/);
+  assert.match(html, /Received<\/span>/);
+  assert.match(html, /Posted to Shopify/);
+});
