@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -898,6 +898,11 @@ test('Namita Personal bot expenses use separate Namita account and cash ledgers'
   const cash=createTelegramPersonalExpense({username:'namita',amount:300,account:'cash',date:'2026-08-25',particulars:'Household cash',vendor:'Local Store',ledger:'Household Staff',proof:'/api/expenses/photo/namita-cash.jpg',sourceKey:'namita-cash-1'});
   assert.equal(cash.success,true);assert.equal(cash.expense.account,'Namita Cash');
   const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');assert.match(source,/isNamita/);assert.match(source,/Only the Owner can approve or settle PERSONAL expenses/);
+});
+
+test('Telegram resolves ambiguous Personal bank digits when funding Namita', () => {
+  const transfer=telegramRecordNamitaTransfer('gaganlambasanki',{fromAccount:'7883',toAccount:'5464',amount:2500,date:'2026-08-25',proof:'/api/expenses/photo/namita-funding.jpg',note:'Household funds'});
+  assert.equal(transfer.success,true);assert.equal(transfer.transfer.fromNature,'PERSONAL');assert.equal(transfer.transfer.fromAccount,'IndusInd Bank 7883');assert.equal(transfer.transfer.toAccount,'Namita 5464');assert.equal(transfer.transfer.classification,'internal_transfer');
 });
 
 test('native Telegram accounting actions reuse API permissions and ledger posting', () => {
