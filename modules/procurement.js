@@ -649,9 +649,8 @@ async function addExistingInventory(ea, warehouseLocationId) {
 }
 
 // ── Role helpers: SEO is ADMIN-ONLY ──────────────────────────────
-// Inventory managers create advance POs, weigh on arrival, and REQUEST
-// approval — but they never see the generated SEO and cannot post to Shopify.
-// The admin reviews the SEO and is the only one who can post.
+// Inventory managers create advance POs and receive/weigh them directly.
+// SEO and live Shopify posting remain separate admin-only operations.
 function isAdmin(req) { return !!(req.user && req.user.role === 'admin'); }
 function publicPo(po, req) {
   if (isAdmin(req)) return po;
@@ -1054,7 +1053,7 @@ router.post('/api/procurement/advance', async (req, res) => {
     const poId = 'PO-' + String(s.seq).padStart(4, '0');
     s.pos[poId] = {
       id: poId,
-      status: 'advance',               // advance → received → awaiting_approval → posted
+      status: 'advance',               // advance → received → posted
       // Origin of the whole PO: 'china' (¥ × exRate + weight×freight) or 'india'
       // (₹ unit cost + flat transport share, no exchange rate / per-kg freight).
       origin,
@@ -1312,27 +1311,6 @@ router.delete('/api/procurement/pos/:id', (req, res) => {
   delete s.pos[req.params.id];
   saveStore(s);
   res.json({ success: true, deleted: req.params.id });
-});
-
-// ── Stage 2b: inventory REQUESTS admin approval (no Shopify write) ──
-// Once weights are in, the inventory manager sends the PO to the admin. Only
-// the admin can then post it to Shopify (see commit, admin-gated).
-router.post('/api/procurement/pos/:id/request-approval', (req, res) => {
-  const s = loadStore();
-  const po = s.pos[req.params.id];
-  if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
-  // India POs price on a flat transport split, not weight — so weights aren't
-  // required. China POs still need a weight per line to compute per-kg freight.
-  if (po.origin !== 'india') {
-    const unweighed = (po.lines || []).filter(l => !(num(l.weightGrams) > 0)).length;
-    if (unweighed) return res.status(400).json({ success: false, error: 'Enter weight for every line first (' + unweighed + ' missing).' });
-  }
-  po.status = 'awaiting_approval';
-  po.approvalRequestedBy = (req.user && req.user.username) || 'system';
-  po.approvalRequestedAt = new Date().toISOString();
-  saveStore(s);
-  res.json({ success: true, poId: po.id, status: po.status });
 });
 
 // ── AI IMAGE STUDIO (admin) ──────────────────────────────────────

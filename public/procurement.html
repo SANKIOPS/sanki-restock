@@ -104,7 +104,7 @@
     <div class="top">
       <div>
         <h1>Purchases · Inventory Intake</h1>
-        <p class="sub">Advance purchase → SKUs generated now · photos feed the AI image step · weigh &amp; post to Shopify after admin approval.</p>
+        <p class="sub">Advance purchase → SKUs generated now · receive and weigh the goods · the purchase is saved without a separate approval request.</p>
       </div>
       <div style="text-align:right">
         <div><span class="pill new" id="serialTag">serial …</span></div>
@@ -202,11 +202,11 @@
           <h2 style="margin:0">Saved purchases</h2>
           <button class="btn ghost sm" id="refreshPos">Refresh</button>
         </div>
-        <p class="sub">Open a purchase once goods arrive: enter each garment's weight → landed cost is computed → send for admin approval / post to Shopify.</p>
+        <p class="sub">Open a purchase once goods arrive: enter each garment's weight → landed cost is computed → save the received purchase.</p>
         <div class="settingsgrid" id="poFilterBar" style="margin-top:6px">
           <div class="fld"><label>Search <span class="muted" style="font-weight:400;text-transform:none">PO / vendor / bill / design</span></label><input id="poSearch" type="search" placeholder="Type to filter…" autocomplete="off"></div>
           <div class="fld"><label>Vendor</label><select id="poVendorFilter"><option value="">All vendors</option></select></div>
-          <div class="fld"><label>Status</label><select id="poStatusFilter"><option value="all" selected>All</option><option value="open">Open (not posted)</option><option value="advance">Advance</option><option value="received">Received</option><option value="awaiting_approval">Awaiting approval</option><option value="posted">Posted</option></select></div>
+          <div class="fld"><label>Status</label><select id="poStatusFilter"><option value="all" selected>All</option><option value="open">Open (not posted)</option><option value="advance">Advance</option><option value="received">Received</option><option value="posted">Posted</option></select></div>
           <div class="fld"><label>Source</label><select id="poOriginFilter"><option value="">Any source</option><option value="china">China</option><option value="india">India</option></select></div>
         </div>
         <p class="sub" id="poFilterNote" style="margin:4px 2px 0"></p>
@@ -508,7 +508,7 @@
       fetch('/api/procurement/vendors').then(r=>r.json()).catch(()=>({vendors:[]}))
     ]).then(function(res){
       me = { isAdmin:!!res[0].isAdmin, role:res[0].role||'', username:res[0].username||'' };
-      el('roleBadge').textContent = me.isAdmin ? 'ADMIN — full access' : (me.role||'user')+' — SEO & posting are admin-only';
+      el('roleBadge').textContent = me.isAdmin ? 'ADMIN — full access' : (me.role||'user')+' — purchase intake';
       settings = (res[1]&&res[1].settings)||{};
       lookups = res[2]||lookups;
       el('exRate').value = settings.exRate!=null?settings.exRate:'';
@@ -957,7 +957,7 @@
       var e=el(id); if(!e) return;
       e.oninput=renderPoList; e.onchange=renderPoList;
     });
-    var STATUS_META={ advance:['adv','Advance — awaiting goods'], received:['rec','Received — weighed'], awaiting_approval:['await','Awaiting admin approval'], posted:['posted','Posted to Shopify'] };
+    var STATUS_META={ advance:['adv','Advance — awaiting goods'], received:['rec','Received — weighed'], awaiting_approval:['rec','Received — weighed'], posted:['posted','Posted to Shopify'] };
     var poIndex={};   // id → full PO (from the last list load), used for list-level edit
     var allPos=[];    // full unfiltered list from the last load (search/filter work on this)
     function loadPos(){
@@ -987,6 +987,7 @@
       var of=el('poOriginFilter')&&el('poOriginFilter').value; if(of && (p.origin==='india'?'india':'china')!==of) return false;
       var sf=(el('poStatusFilter')&&el('poStatusFilter').value)||'all';
       if(sf==='open'){ if(p.status==='posted') return false; }
+      else if(sf==='received'){ if(p.status!=='received' && p.status!=='awaiting_approval') return false; }
       else if(sf!=='all'){ if(p.status!==sf) return false; }
       return true;
     }
@@ -1392,9 +1393,7 @@
           '<div class="muted" style="font-size:12.5px" id="studioNote">New products are created as <b>draft</b> with their approved AI photos; stock lands at the <b>warehouse</b>. This writes to the live Shopify store.</div>'+
           '<button class="btn warn" id="postBtn">✓ Approve &amp; post to Shopify</button></div>';
       } else {
-        h+='<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'+
-          '<div class="muted" style="font-size:12.5px">Weights saved. SEO and Shopify posting are handled by the admin. Send this purchase for approval.</div>'+
-          '<button class="btn" id="requestBtn">Send request to admin →</button></div>';
+        h+='<div class="banner ok">Purchase received and saved. No separate admin approval is required.</div>';
       }
       h+='<div id="postResult"></div>';
       el('receiveHost').innerHTML=h;
@@ -1404,7 +1403,7 @@
         // persists in module-level `studio`; here we just gate the post button.
         el('postBtn').onclick=function(){ postToShopify(id); };
         refreshPostGate();
-      } else el('requestBtn').onclick=function(){ requestApproval(id); };
+      }
     }
 
     // ══════════ AI STUDIO ══════════
@@ -1729,16 +1728,6 @@
           loadPos();
           fetch('/api/procurement/next-serial?refresh=1').then(r=>r.json()).then(function(s){ if(s.success){var n=s.next; el('serialTag').textContent='next serial '+n.alpha+n.num+' · '+(s.skuCount||0)+' SKUs';} });
         }).catch(function(e){ btn.disabled=false; btn.textContent='✓ Approve & post to Shopify'; el('postResult').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
-    }
-    function requestApproval(id){
-      var btn=el('requestBtn'); btn.disabled=true; btn.textContent='Sending…';
-      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/request-approval',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-        .then(r=>r.json()).then(function(d){
-          btn.disabled=false; btn.textContent='Send request to admin →';
-          if(!d.success){ el('postResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
-          el('postResult').innerHTML='<div class="banner ok">Sent to admin for approval. The admin will review the SEO and post it to Shopify.</div>';
-          loadPos();
-        }).catch(function(e){ btn.disabled=false; btn.textContent='Send request to admin →'; el('postResult').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     }
   })();
   </script>
