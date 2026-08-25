@@ -509,7 +509,7 @@
     ]).then(function(res){
       var userRoles=Array.isArray(res[0].roles)?res[0].roles:[];
       me = { isAdmin:!!res[0].isAdmin, role:res[0].role||'', roles:userRoles, username:res[0].username||'' };
-      me.canManage = me.isAdmin || userRoles.indexOf('owner')>=0 || userRoles.indexOf('procurement')>=0 || me.role==='owner' || me.role==='procurement';
+      me.canManage = me.isAdmin || userRoles.indexOf('owner')>=0 || userRoles.indexOf('procurement')>=0 || userRoles.indexOf('inventory')>=0 || me.role==='owner' || me.role==='procurement' || me.role==='inventory';
       el('roleBadge').textContent = me.canManage ? (me.role||'user')+' — full Purchases workflow' : (me.role||'user')+' — purchase intake';
       settings = (res[1]&&res[1].settings)||{};
       lookups = res[2]||lookups;

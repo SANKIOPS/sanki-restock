@@ -678,8 +678,10 @@ async function addExistingInventory(ea, warehouseLocationId) {
 // workflow: intake → AI photos/SEO → final preview → Shopify draft posting.
 function isAdmin(req) { return !!(req.user && req.user.role === 'admin'); }
 function canManagePurchases(req) {
-  const role = String(req.user && req.user.role || '').toLowerCase();
-  return role === 'admin' || role === 'owner' || role === 'procurement';
+  const roles = (req.user && (Array.isArray(req.user.roles) && req.user.roles.length
+    ? req.user.roles : (req.user.role ? [req.user.role] : []))) || [];
+  return roles.map(r => String(r).toLowerCase()).some(r =>
+    r === 'admin' || r === 'owner' || r === 'procurement' || r === 'inventory');
 }
 function publicPo(po, req) {
   if (canManagePurchases(req)) return po;
@@ -1760,4 +1762,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, landedCost, parseSerial, nextSerial };
+module.exports = { router, genSeo, buildSku, landedCost, parseSerial, nextSerial, canManagePurchases };
