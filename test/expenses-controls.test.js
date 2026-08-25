@@ -940,6 +940,11 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.match(telegramSource,/personal-webhook/);
   assert.match(telegramSource,/handlePersonalMessage/);
   assert.match(telegramSource,/handlePersonalCallback/);
+  assert.match(telegramSource,/function sendPersonalApprovalPreview/);
+  assert.match(telegramSource,/action==='categories'\|\|action==='catpage'/);
+  assert.match(telegramSource,/return sendPersonalApprovalPreview\(id,draft\)/);
+  assert.match(telegramSource,/Already paid by claimant/);
+  assert.match(telegramSource,/Not paid yet/);
   assert.match(telegramSource,/PERSONAL screenshots now belong in/);
   assert.match(telegramSource,/Only an authorised PERSONAL user can use this bot/);
   const expenseSource=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
