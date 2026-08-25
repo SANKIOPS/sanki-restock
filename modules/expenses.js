@@ -1319,6 +1319,49 @@ router.post('/api/expenses/vendors', (req, res) => {
   res.json({ success: true });
 });
 
+function vendorMasterForNature(s, nature) {
+  const n = normalizedNature(nature);
+  if (n === 'SANKI') return s.vendors = s.vendors || {};
+  s.vendorsByNature = s.vendorsByNature || {};
+  return s.vendorsByNature[n] = s.vendorsByNature[n] || {};
+}
+function vendorLinkedExpenses(s, nature, name) {
+  const n = normalizedNature(nature), key = String(name || '').trim().toLowerCase();
+  return Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === n && String(e.vendor || '').trim().toLowerCase() === key);
+}
+router.post('/api/expenses/vendors/manage/edit', (req, res) => {
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can edit vendor ledgers.' });
+  const s=loadStore(), b=req.body||{}, nature=normalizedNature(b.nature), oldName=String(b.name||'').trim(), newName=String(b.newName||'').trim();
+  if(!oldName||!newName) return res.status(400).json({success:false,error:'Current and new vendor names are required.'});
+  const master=vendorMasterForNature(s,nature),oldKey=oldName.toLowerCase(),newKey=newName.toLowerCase(),current=master[oldKey];
+  if(!current) return res.status(404).json({success:false,error:'Vendor ledger not found.'});
+  if(newKey!==oldKey&&master[newKey]) return res.status(409).json({success:false,error:'That vendor ledger already exists. Use Merge instead.'});
+  const linked=vendorLinkedExpenses(s,nature,oldName),before={name:current.name,notes:current.notes||''};
+  linked.forEach(e=>{e.vendor=newName;});delete master[oldKey];master[newKey]={...current,name:newName};
+  audit(s,req,'VENDOR_RENAMED','vendor',oldName,{nature,before,after:{name:newName,linkedExpenses:linked.map(e=>e.id)}});
+  saveStore(s);res.json({success:true,name:newName,updatedExpenses:linked.length});
+});
+router.post('/api/expenses/vendors/manage/merge', (req, res) => {
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can merge vendor ledgers.' });
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),sourceName=String(b.sourceName||'').trim(),targetName=String(b.targetName||'').trim();
+  if(!sourceName||!targetName||sourceName.toLowerCase()===targetName.toLowerCase()) return res.status(400).json({success:false,error:'Select two different vendor ledgers.'});
+  const master=vendorMasterForNature(s,nature),sourceKey=sourceName.toLowerCase(),targetKey=targetName.toLowerCase(),source=master[sourceKey],target=master[targetKey];
+  if(!source) return res.status(404).json({success:false,error:'Source vendor ledger not found.'});
+  if(!target) return res.status(404).json({success:false,error:'Target vendor ledger not found.'});
+  const linked=vendorLinkedExpenses(s,nature,sourceName);linked.forEach(e=>{e.vendor=target.name;});if(!target.notes&&source.notes)target.notes=source.notes;delete master[sourceKey];
+  audit(s,req,'VENDOR_MERGED','vendor',sourceName,{nature,before:{source:source.name,target:target.name},after:{name:target.name,linkedExpenses:linked.map(e=>e.id)}});
+  saveStore(s);res.json({success:true,name:target.name,updatedExpenses:linked.length});
+});
+router.post('/api/expenses/vendors/manage/delete', (req, res) => {
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can delete vendor ledgers.' });
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),name=String(b.name||'').trim(),reason=String(b.reason||'').trim();
+  if(!name) return res.status(400).json({success:false,error:'Vendor name is required.'});
+  if(!reason) return res.status(400).json({success:false,error:'Reason for deletion is required.'});
+  const master=vendorMasterForNature(s,nature),key=name.toLowerCase(),current=master[key];if(!current)return res.status(404).json({success:false,error:'Vendor ledger not found.'});
+  const linked=vendorLinkedExpenses(s,nature,name);if(linked.length)return res.status(409).json({success:false,error:'This ledger has '+linked.length+' linked expense(s). Merge or rename it so accounting history is preserved.'});
+  delete master[key];audit(s,req,'VENDOR_DELETED','vendor',name,{nature,before:current,note:reason});saveStore(s);res.json({success:true});
+});
+
 // ── Running cash balances per account ────────────────────────────
 // balance = opening + adjustments + transfers in − transfers out − payments.
 router.get('/api/expenses/balances', (req, res) => {

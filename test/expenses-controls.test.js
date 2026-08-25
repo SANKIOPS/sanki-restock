@@ -56,6 +56,26 @@ test('new vendor submits immediately and approver correction becomes reusable', 
   assert.ok(config.vendors.includes('Vendor Corrected'));
 });
 
+test('only owner can rename, merge and safely delete vendor ledgers', () => {
+  invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'SANKI',name:'Ferns N Petals'}});
+  invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'SANKI',name:'Ferns n Petal'}});
+  const expense=invoke('POST','/api/expenses',{body:{vendor:'Ferns n Petal',amount:200,billPhoto:'/api/expenses/photo/bill.jpg',paymentType:'Cash'}}).body.expense;
+  invoke('POST','/api/expenses/:id',{role:'owner',params:{id:expense.id},body:{ledger:'Flowers'}});
+  invoke('POST','/api/expenses/:id/approve',{role:'owner',params:{id:expense.id}});
+  const denied=invoke('POST','/api/expenses/vendors/manage/merge',{role:'admin',body:{nature:'SANKI',sourceName:'Ferns n Petal',targetName:'Ferns N Petals'}});
+  assert.equal(denied.status,403);
+  const merged=invoke('POST','/api/expenses/vendors/manage/merge',{role:'owner',body:{nature:'SANKI',sourceName:'Ferns n Petal',targetName:'Ferns N Petals'}});
+  assert.equal(merged.status,200);assert.equal(merged.body.updatedExpenses,1);
+  const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI'}}).body.vendors;
+  assert.equal(vendors.filter(v=>v.name.toLowerCase().startsWith('ferns')).length,1);
+  assert.equal(vendors.find(v=>v.name==='Ferns N Petals').count,1);
+  const blocked=invoke('POST','/api/expenses/vendors/manage/delete',{role:'owner',body:{nature:'SANKI',name:'Ferns N Petals',reason:'cleanup'}});
+  assert.equal(blocked.status,409);assert.match(blocked.body.error,/linked expense/);
+  invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'SANKI',name:'Unused Vendor'}});
+  const deleted=invoke('POST','/api/expenses/vendors/manage/delete',{role:'owner',body:{nature:'SANKI',name:'Unused Vendor',reason:'duplicate created by mistake'}});
+  assert.equal(deleted.status,200);
+});
+
 test('bill remains mandatory at approval and payment proof is mandatory for cash', async () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', amount: 250, bill: 'printed', billPhoto: '/api/expenses/photo/bill.jpg',
