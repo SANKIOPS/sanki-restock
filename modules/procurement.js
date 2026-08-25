@@ -136,11 +136,11 @@ const SIZE_TOKENS = ['FS','XS','S','M','L','XL','XXL','3XL','4XL','5XL','28','30
 // number group backtracks to a VALID size token — critical for numeric waist
 // sizes (…33 could otherwise split as num=…3, size='3').
 const SIZE_ALT = SIZE_TOKENS.slice().sort((a, b) => b.length - a.length).join('|');
-// The running serial number rolls to the next letter at 999, so it is ALWAYS
+// The running serial number rolls to the next Excel-style letter at 999, so it is ALWAYS
 // 1-3 digits. Bounding the number group to \d{1,3} lets it hand the extra
 // leading digit to sizes like 3XL/4XL (e.g. …5633XL = serial 563 + size 3XL,
 // not serial 5633 + size XL).
-const SERIAL_RE = new RegExp('^SA\\d+([A-Z])(\\d{1,3})(' + SIZE_ALT + ')$');
+const SERIAL_RE = new RegExp('^SA\\d+([A-Z]+)(\\d{1,3})(' + SIZE_ALT + ')$');
 
 // ── JSON store (atomic) ──────────────────────────────────────────
 function atomicWrite(fp, data) {
@@ -163,6 +163,26 @@ function loadStore() {
   else s.settings = { ...SEED.settings, ...s.settings };
   if (!s.pos)      s.pos = {};      // { [poId]: PO }
   if (!s.seq)      s.seq = 0;       // internal PO counter
+  // Repair the old Z999 rollover bug. String.fromCharCode('Z' + 1) produced
+  // '[' and reserved malformed SKUs such as SA111[134 on unposted POs.
+  // The intended Excel-style sequence continues Z999 → AA1.
+  let repairedInvalidSerials = false;
+  Object.values(s.pos).forEach(po => {
+    if (!po || po.status === 'posted') return;
+    (po.lines || []).forEach(line => {
+      const serial = line && line.serialUsed;
+      if (!serial || serial.alpha !== '[') return;
+      serial.alpha = 'AA';
+      if (typeof line.sku === 'string' && line.sku.includes('[')) {
+        line.sku = line.sku.replace('[', 'AA');
+      }
+      if (line.ordered && typeof line.ordered.sku === 'string' && line.ordered.sku.includes('[')) {
+        line.ordered.sku = line.ordered.sku.replace('[', 'AA');
+      }
+      repairedInvalidSerials = true;
+    });
+  });
+  if (repairedInvalidSerials) atomicWrite(STORE_PATH, JSON.stringify(s));
   return s;
 }
 function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
@@ -180,10 +200,8 @@ function truncate(s, n) { s = String(s || ''); return s.length <= n ? s : s.slic
 function titleCase(s) { return String(s || '').replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()); }
 
 // ── Serial parsing / next-serial (Shopify-sourced) ───────────────
-// Current SKU format: SA<digits><ALPHA><digits><SIZE>. The single alpha
-// letter delimits the numeric prefix from the running serial number; the
-// trailing token is a known size code. Old eras (two letters, or no size
-// suffix) don't match and are ignored.
+// Current SKU format: SA<digits><ALPHA><digits><SIZE>. One or more Excel-style
+// alpha letters delimit the numeric prefix from the running serial number.
 function parseSerial(sku) {
   const m = String(sku || '').toUpperCase().match(SERIAL_RE);
   if (!m) return null;
@@ -192,15 +210,22 @@ function parseSerial(sku) {
 // Compare two serials: alpha first (A<B…), then number.
 function serialGt(a, b) {
   if (!b) return true;
-  if (a.alpha !== b.alpha) return a.alpha > b.alpha;
+  if (a.alpha !== b.alpha) {
+    if (a.alpha.length !== b.alpha.length) return a.alpha.length > b.alpha.length;
+    return a.alpha > b.alpha;
+  }
   return a.num > b.num;
 }
 function nextSerial(cur) {
-  // cur = { alpha, num }; roll J→K→… at 999.
+  // cur = { alpha, num }; roll J→K→…→Z→AA→AB using Excel-style letters.
   if (!cur) return { alpha: 'J', num: 1 };
   if (cur.num < 999) return { alpha: cur.alpha, num: cur.num + 1 };
-  const nextAlpha = String.fromCharCode(cur.alpha.charCodeAt(0) + 1);
-  return { alpha: nextAlpha, num: 1 };
+  const chars = String(cur.alpha || 'J').toUpperCase().split('');
+  let i = chars.length - 1;
+  while (i >= 0 && chars[i] === 'Z') { chars[i] = 'A'; i--; }
+  if (i < 0) chars.unshift('A');
+  else chars[i] = String.fromCharCode(chars[i].charCodeAt(0) + 1);
+  return { alpha: chars.join(''), num: 1 };
 }
 
 // ── Shopify variant catalogue (cached; used for serial + classify) ──
@@ -648,19 +673,23 @@ async function addExistingInventory(ea, warehouseLocationId) {
   return { sku: ea.sku, added: ea.qty, newAvailable: lvl ? lvl.available : null };
 }
 
-// ── Role helpers: SEO is ADMIN-ONLY ──────────────────────────────
-// Inventory managers create advance POs and receive/weigh them directly.
-// SEO and live Shopify posting remain separate admin-only operations.
+// ── Role helpers ─────────────────────────────────────────────────
+// Owner and authorised procurement users retain the complete historical
+// workflow: intake → AI photos/SEO → final preview → Shopify draft posting.
 function isAdmin(req) { return !!(req.user && req.user.role === 'admin'); }
+function canManagePurchases(req) {
+  const role = String(req.user && req.user.role || '').toLowerCase();
+  return role === 'admin' || role === 'owner' || role === 'procurement';
+}
 function publicPo(po, req) {
-  if (isAdmin(req)) return po;
+  if (canManagePurchases(req)) return po;
   const clone = JSON.parse(JSON.stringify(po));
   delete clone.seoDraft;                                   // hide SEO drafts
   (clone.newProducts || []).forEach(np => { delete np.seo; });
   return clone;
 }
 function stripPreviewForRole(preview, req) {
-  if (isAdmin(req)) return preview;
+  if (canManagePurchases(req)) return preview;
   (preview.newProducts || []).forEach(np => { delete np.seo; });
   return preview;
 }
@@ -752,7 +781,7 @@ try {
 // The image itself is uploaded via /api/procurement/photo first; we just store
 // its URL against the group on the PO.
 router.post('/api/procurement/pos/:id/back-ref', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
@@ -1131,7 +1160,7 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
       origin: po.origin, transportTotal: po.transportTotal
     });
     // Overlay the SEO drafts saved at advance so the admin edits persist.
-    if (isAdmin(req) && Array.isArray(po.seoDraft)) {
+    if (canManagePurchases(req) && Array.isArray(po.seoDraft)) {
       (preview.newProducts || []).forEach(np => {
         const d = po.seoDraft.find(x => x.key === np.key);
         if (d && d.seo) np.seo = d.seo;
@@ -1337,7 +1366,7 @@ async function newGroupsOf(s, po) {
 // No status change and no weights required (weights don't affect imaging/SEO).
 router.get('/api/procurement/pos/:id/studio', async (req, res) => {
   try {
-    if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
@@ -1349,7 +1378,7 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
 // Generate the AI shots for ONE product group (or specific `types`).
 router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
   try {
-    if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only an admin can generate AI images.' });
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
     if (!GEMINI_API_KEY) return res.status(400).json({ success: false, error: 'AI images are not enabled. Set GEMINI_API_KEY in Railway to turn it on.' });
     const s = loadStore();
     const po = s.pos[req.params.id];
@@ -1415,7 +1444,7 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
 
 // Persist image approve/unapprove (and manual replacements) from the studio.
 router.post('/api/procurement/pos/:id/images', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
@@ -1434,7 +1463,7 @@ router.post('/api/procurement/pos/:id/images', (req, res) => {
 // Judge the APPROVED product photo(s) with vision → display name + SEO.
 router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
   try {
-    if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
     if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI SEO is not enabled. Set ANTHROPIC_API_KEY in Railway.' });
     const s = loadStore();
     const po = s.pos[req.params.id];
@@ -1525,7 +1554,7 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
 
 // Persist edited/approved SEO from the studio (before posting).
 router.post('/api/procurement/pos/:id/seo', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
@@ -1544,8 +1573,7 @@ router.post('/api/procurement/pos/:id/seo', (req, res) => {
 // The gated write. Body carries the user-approved plan (edited SEO allowed).
 router.post('/api/procurement/commit', async (req, res) => {
   if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return res.status(400).json({ success: false, error: 'Shopify env not configured' });
-  // ADMIN ONLY: posting to Shopify is the admin's approval step.
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only an admin can approve and post to Shopify.' });
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
   const s = loadStore();
   const b = req.body || {};
   if (!b.approve) return res.status(400).json({ success: false, error: 'Missing approval flag' });

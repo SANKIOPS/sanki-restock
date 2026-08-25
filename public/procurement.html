@@ -507,8 +507,10 @@
       fetch('/api/showroom/locations').then(r=>r.json()).catch(()=>({locations:[]})),
       fetch('/api/procurement/vendors').then(r=>r.json()).catch(()=>({vendors:[]}))
     ]).then(function(res){
-      me = { isAdmin:!!res[0].isAdmin, role:res[0].role||'', username:res[0].username||'' };
-      el('roleBadge').textContent = me.isAdmin ? 'ADMIN — full access' : (me.role||'user')+' — purchase intake';
+      var userRoles=Array.isArray(res[0].roles)?res[0].roles:[];
+      me = { isAdmin:!!res[0].isAdmin, role:res[0].role||'', roles:userRoles, username:res[0].username||'' };
+      me.canManage = me.isAdmin || userRoles.indexOf('owner')>=0 || userRoles.indexOf('procurement')>=0 || me.role==='owner' || me.role==='procurement';
+      el('roleBadge').textContent = me.canManage ? (me.role||'user')+' — full Purchases workflow' : (me.role||'user')+' — purchase intake';
       settings = (res[1]&&res[1].settings)||{};
       lookups = res[2]||lookups;
       el('exRate').value = settings.exRate!=null?settings.exRate:'';
@@ -1151,7 +1153,7 @@
         var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'<span class="muted" style="font-size:11px">none</span>')+
           (posted?'':'<div style="margin-top:3px"><label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">'+(l.photoUrl?'replace':'upload')+'<input type="file" accept="image/*" data-linephoto="'+i+'" style="display:none"></label></div>');
         // Optional back raw photo (admin, new products only). Feeds the AI back shot.
-        if(!posted && me.isAdmin && l.classification!=='EXISTING'){
+        if(!posted && me.canManage && l.classification!=='EXISTING'){
           var gk=groupKeyOf(l), backUrl=(po.backRefs&&po.backRefs[gk])||'';
           photoCell+='<div style="margin-top:5px;padding-top:4px;border-top:1px dashed var(--line)">'+
             (backUrl?'<img class="thumb" src="'+esc(backUrl)+'" title="Back reference — the AI back photo is built from this">':'<span class="muted" style="font-size:10px">back: none</span>')+
@@ -1201,7 +1203,7 @@
       h+='</div>';
       // AI STUDIO — available at every non-posted stage (incl. ADVANCE) so listing
       // photos + SEO are prepared during the shipping lead time, not at receive.
-      if(me.isAdmin && !posted){
+      if(me.canManage && !posted){
         h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">AI image studio — new products</h2>'+
            '<p class="sub">Prepare listing images &amp; SEO <b>now</b>, during the shipping lead time. Per new product: <b>1)</b> generate 4 photos &amp; approve the good ones, <b>2)</b> generate the name &amp; SEO from an approved photo and approve it. When the goods arrive you just enter weights and post — no waiting.</p>'+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
@@ -1209,7 +1211,7 @@
       h+='<div id="receiveHost"></div>';
       el('poDetailHost').innerHTML=h;
       el('poDetailHost').scrollIntoView({behavior:'smooth'});
-      if(me.isAdmin && !posted) initStudioFor(po.id);
+      if(me.canManage && !posted) initStudioFor(po.id);
       if(!posted){
         el('computeBtn').onclick=function(){ computeReceive(po.id); };
         var scb=el('saveCorrBtn'); if(scb) scb.onclick=function(){ saveCorrections(po.id); };
@@ -1378,7 +1380,7 @@
       });
       h+='</tbody></table></div>';
 
-      if(me.isAdmin){
+      if(me.canManage){
         if((d.newProducts||[]).length){
           // The AI studio itself lives in the PO detail (above) so it can be
           // prepared during lead time; here we only remind + gate the post.
@@ -1397,7 +1399,7 @@
       }
       h+='<div id="postResult"></div>';
       el('receiveHost').innerHTML=h;
-      if(me.isAdmin){
+      if(me.canManage){
         receiveId=id;
         // Studio state was already prepared in the PO detail (initStudioFor) and
         // persists in module-level `studio`; here we just gate the post button.
