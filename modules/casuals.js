@@ -582,47 +582,17 @@ function splitDetectionNeedsDetail(boxes) {
   return (b[2] - b[0]) * (b[3] - b[1]) >= 0.42;
 }
 
-function verticalOverlapRatio(a, b) {
-  const overlap = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
-  return overlap / Math.max(0.001, Math.min(a[3] - a[1], b[3] - b[1]));
-}
-
-// Garments on a supplier rail often physically overlap. Vision correctly finds
-// their centres, but independent tight bounding boxes then repeat large pieces
-// of neighbouring colours. Convert each horizontal lineup into mutually
-// exclusive visual columns, divided at the midpoint between adjacent garment
-// centres. This keeps colour identification clear and guarantees no repeated
-// pixels between crops from the same row.
-function separateHorizontalSplitBoxes(raw) {
-  const boxes = (raw || []).map(b => b.slice());
-  const unused = new Set(boxes.map((_, i) => i));
-  const output = [];
-  while (unused.size) {
-    const seed = unused.values().next().value;
-    const group = [seed]; unused.delete(seed);
-    for (let p = 0; p < group.length; p++) {
-      for (const i of Array.from(unused)) {
-        if (verticalOverlapRatio(boxes[group[p]], boxes[i]) >= 0.68) {
-          group.push(i); unused.delete(i);
-        }
-      }
+function splitBoxesNeedFocusCards(boxes) {
+  for (let i = 0; i < (boxes || []).length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j];
+      const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+      const iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+      const smaller = Math.min((a[2]-a[0])*(a[3]-a[1]), (b[2]-b[0])*(b[3]-b[1]));
+      if ((ix * iy) / Math.max(0.001, smaller) >= 0.08) return true;
     }
-    if (group.length < 2) { output.push(boxes[seed]); continue; }
-    const row = group.map(i => boxes[i]).sort((a, b) => ((a[0]+a[2])/2) - ((b[0]+b[2])/2));
-    const centres = row.map(b => (b[0] + b[2]) / 2);
-    const left = Math.max(0, Math.min(...row.map(b => b[0])) - 0.01);
-    const right = Math.min(1, Math.max(...row.map(b => b[2])) + 0.01);
-    const top = Math.max(0, Math.min(...row.map(b => b[1])) - 0.015);
-    const bottom = Math.min(1, Math.max(...row.map(b => b[3])) + 0.015);
-    const edges = [left];
-    for (let i = 0; i < centres.length - 1; i++) edges.push((centres[i] + centres[i+1]) / 2);
-    edges.push(right);
-    row.forEach((b, i) => {
-      if (edges[i+1] - edges[i] >= 0.06) output.push([edges[i], top, edges[i+1], bottom]);
-      else output.push(b);
-    });
   }
-  return output.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  return false;
 }
 
 async function requestPhotoBoxes(enc, prompt) {
@@ -649,14 +619,14 @@ async function detectPhotoBoxes(buffer, mediaType) {
   const enc = await shrinkForVision(buffer, mediaType);
   const primary = await requestPhotoBoxes(enc,
     'Split this supplier image into INDIVIDUAL garment colourways/products. A single continuous rack, row, collage panel, or shared background may contain several colours: make ONE separate crop for EACH visible garment/colourway, even when garments touch or overlap slightly. Do not return one box around an entire row when multiple garments are visible. For model photos, keep the complete model and garment. Exclude captions, app controls, blank margins, logos and tiny unrelated thumbnails. Coordinates are normalized against the whole image. If exactly one garment is visible, return one useful crop. Before answering, count the visible garments and ensure the box count matches. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
-  if (!splitDetectionNeedsDetail(primary)) return separateHorizontalSplitBoxes(primary);
+  if (!splitDetectionNeedsDetail(primary)) return primary;
 
   // A large single box is commonly the whole rack/collage. Ask a second,
   // deliberately garment-level pass so same-background colour lineups are not
   // silently accepted as a successful one-photo split.
   const detailed = await requestPhotoBoxes(enc,
-    'The earlier detector found only one large region. Audit the image specifically for MULTIPLE garment colourways inside that region. Count every separately visible trouser, shirt, T-shirt or other garment, including a row hanging on one rail or models shown side by side on the same background. Return ONE crop PER colourway, centred on that colour and wide enough to identify it. Place boundaries between adjacent garments; do not repeat the same neighbouring garment in multiple crops. Never group a multi-colour lineup into one crop. If there truly is only one garment, return one box. Exclude UI, text-only areas and blank bars. Normalized coordinates. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
-  return separateHorizontalSplitBoxes(detailed.length > primary.length ? detailed : primary);
+    'The earlier detector found only one large region. Audit the image specifically for MULTIPLE garment colourways inside that region. Count every separately visible trouser, shirt, T-shirt or other garment, including a row hanging on one rail or models shown side by side on the same background. Return ONE full-garment bounding box PER colourway. Boxes MAY overlap when the garments overlap; never cut off a garment merely to avoid overlap. Never group a multi-colour lineup into one box. If there truly is only one garment, return one box. Exclude UI, text-only areas and blank bars. Normalized coordinates. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
+  return detailed.length > primary.length ? detailed : primary;
 }
 
 router.post('/api/casuals/photo-split', (req, res) => {
@@ -672,16 +642,37 @@ router.post('/api/casuals/photo-split', (req, res) => {
         const boxes = await detectPhotoBoxes(f.buffer, f.mimetype);
         if (!boxes.length) continue;
         const img = await Jimp.read(f.buffer), W = img.bitmap.width, H = img.bitmap.height;
+        const useFocusCards = splitBoxesNeedFocusCards(boxes);
         for (let bi=0; bi<boxes.length; bi++) {
           const b = boxes[bi];
           const x = Math.max(0, Math.floor(b[0]*W)), y = Math.max(0, Math.floor(b[1]*H));
           const w = Math.max(1, Math.min(W-x, Math.ceil((b[2]-b[0])*W)));
           const h = Math.max(1, Math.min(H-y, Math.ceil((b[3]-b[1])*H)));
-          const crop = img.clone().crop(x,y,w,h);
-          if (crop.bitmap.width > 1800 || crop.bitmap.height > 1800) crop.scaleToFit(1800,1800);
-          crop.quality(90);
-          const out = await crop.getBufferAsync(Jimp.MIME_JPEG);
-          results.push({ id:'split-'+splitRun+'-'+fi+'-'+bi, sourceIndex:fi, sourceName:f.originalname || ('Photo '+(fi+1)), designGroup:'split-design-'+splitRun+'-'+fi, index:bi+1, box:b, mimeType:'image/jpeg', data:'data:image/jpeg;base64,'+out.toString('base64') });
+          let resultImage;
+          if (useFocusCards) {
+            // Preserve the complete source. Dim it, restore the selected
+            // garment at original colour, and outline the focus area. This is
+            // truthful (no invented pixels) and remains readable even when
+            // garments physically overlap in the supplier photograph.
+            resultImage = img.clone().brightness(-0.42);
+            resultImage.composite(img.clone().crop(x,y,w,h), x, y);
+            const line = Math.max(3, Math.round(Math.min(W,H) * 0.006));
+            const green = Jimp.rgbaToInt(16, 185, 129, 255);
+            for (let n=0; n<line; n++) {
+              for (let px=x; px<Math.min(W,x+w); px++) {
+                if (y+n<H) resultImage.setPixelColor(green,px,y+n);
+                if (y+h-1-n>=0) resultImage.setPixelColor(green,px,y+h-1-n);
+              }
+              for (let py=y; py<Math.min(H,y+h); py++) {
+                if (x+n<W) resultImage.setPixelColor(green,x+n,py);
+                if (x+w-1-n>=0) resultImage.setPixelColor(green,x+w-1-n,py);
+              }
+            }
+          } else resultImage = img.clone().crop(x,y,w,h);
+          if (resultImage.bitmap.width > 1800 || resultImage.bitmap.height > 1800) resultImage.scaleToFit(1800,1800);
+          resultImage.quality(90);
+          const out = await resultImage.getBufferAsync(Jimp.MIME_JPEG);
+          results.push({ id:'split-'+splitRun+'-'+fi+'-'+bi, sourceIndex:fi, sourceName:f.originalname || ('Photo '+(fi+1)), designGroup:'split-design-'+splitRun+'-'+fi, index:bi+1, box:b, focusCard:useFocusCards, mimeType:'image/jpeg', data:'data:image/jpeg;base64,'+out.toString('base64') });
         }
       }
       if (!results.length) return res.status(422).json({ success:false, error:'No separate product photos could be detected. Try a clearer collage.' });
@@ -2381,4 +2372,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards };
