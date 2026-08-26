@@ -960,6 +960,18 @@ test('Shopify Paytm sales use clearing while store-credit and test orders never 
   assert.equal(fs.readFileSync(path.join(tempDir,'orders.json'),'utf8').includes('store credit'),true);
 });
 
+test('bank-charge reconciliation adjustments become visible spending without double-posting the bank', () => {
+  invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',adjust:{account:'Axis Bank 3448',direction:'deduct',amount:250,date:'2026-08-22',note:'Bank charges'}}});
+  invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',adjust:{account:'Axis Bank 3448',direction:'deduct',amount:45,date:'2026-08-22',note:'Bank charges'}}});
+  const spending=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{from:'2026-08-22',to:'2026-08-22',nature:'SANKI',category:'BANK CHARGES'}}).body;
+  const repaired=spending.payments.filter(x=>x.kind==='Bank-reconciled expense'&&x.account==='Axis Bank 3448');
+  assert.equal(repaired.reduce((n,x)=>n+x.amount,0),295);
+  assert.deepEqual(repaired.map(x=>x.amount).sort((a,b)=>a-b),[45,250]);
+  const source=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(source,/Connected sales:/);
+  assert.match(source,/Bank\/Paytm charges/);
+});
+
 test('Telegram approval and payment keep one expense isolated through its complete lifecycle', () => {
   const created=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Telegram Vendor',particulars:'Telegram fuel',amount:225,bill:'printed',billPhoto:'/api/expenses/photo/tg-bill.jpg',qrPhoto:'/api/expenses/photo/tg-qr.jpg',paymentType:'UPI'}});
   const id=created.body.expense.id;
