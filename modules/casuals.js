@@ -268,6 +268,8 @@ try { fs.mkdirSync(CAND_DIR, { recursive: true }); } catch { /* exists */ }
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const AI_MODEL = process.env.CASUALS_AI_MODEL || process.env.FRESH_PROC_AI_MODEL || process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const SPLITTER_IMAGE_MODEL = process.env.CASUALS_IMAGE_MODEL || process.env.PROCUREMENT_IMAGE_MODEL || 'gemini-2.5-flash-image';
 
 function atomicWrite(fp, data) {
   const tmp = fp + '.tmp-' + process.pid + '-' + Date.now();
@@ -570,7 +572,12 @@ function validSplitBoxes(raw) {
     const x1 = Math.max(0, Math.min(1, n[2])), y1 = Math.max(0, Math.min(1, n[3]));
     if (x1 - x0 < 0.08 || y1 - y0 < 0.08) return;
     // Avoid duplicate boxes returned with tiny coordinate differences.
-    if (boxes.some(q => Math.abs(q[0]-x0)<0.025 && Math.abs(q[1]-y0)<0.025 && Math.abs(q[2]-x1)<0.025 && Math.abs(q[3]-y1)<0.025)) return;
+    if (boxes.some(q => {
+      if (Math.abs(q[0]-x0)<0.025 && Math.abs(q[1]-y0)<0.025 && Math.abs(q[2]-x1)<0.025 && Math.abs(q[3]-y1)<0.025) return true;
+      const ix=Math.max(0,Math.min(q[2],x1)-Math.max(q[0],x0)), iy=Math.max(0,Math.min(q[3],y1)-Math.max(q[1],y0));
+      const inter=ix*iy, union=(q[2]-q[0])*(q[3]-q[1])+(x1-x0)*(y1-y0)-inter;
+      return inter/Math.max(0.001,union) >= 0.86;
+    })) return;
     boxes.push([x0,y0,x1,y1]);
   });
   return boxes.slice(0, 30);
@@ -593,6 +600,58 @@ function splitBoxesNeedFocusCards(boxes) {
     }
   }
   return false;
+}
+
+const splitSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function reconstructSplitGarment(referenceBuffer) {
+  if (!GEMINI_API_KEY) throw new Error('AI reconstruction is not enabled. Set GEMINI_API_KEY in Railway.');
+  const prompt = 'The green rectangle identifies ONE garment colourway in a supplier photograph. Create a clean isolated product-reference image of ONLY that selected garment. Reconstruct only portions hidden by neighbouring garments, conservatively continuing the visible fabric, colour, cut, length, waistband, pockets, seams and hem. Preserve the selected garment\'s exact visible colour, silhouette, proportions and design; do not copy a neighbour\'s colour or details and do not redesign it. Show the complete garment from top to hem, front-facing, centered on a plain light-grey background with even margins. No person, hanger, rack, other garments, text, labels, watermark, collage, border or green rectangle. Output exactly one garment. This is an AI reconstruction for procurement review, not a final product listing.';
+  let last;
+  for (let attempt=1; attempt<=3; attempt++) {
+    const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 120000);
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${SPLITTER_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+        method:'POST', signal:ctrl.signal, headers:{'content-type':'application/json'},
+        body:JSON.stringify({ contents:[{parts:[
+          {inline_data:{mime_type:'image/jpeg',data:referenceBuffer.toString('base64')}}, {text:prompt}
+        ]}], generationConfig:{responseModalities:['IMAGE'],imageConfig:{aspectRatio:'4:5'}} })
+      });
+      clearTimeout(timer);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { const e=new Error('Gemini '+r.status+': '+(((j.error&&j.error.message)||'image error').slice(0,180))); e.status=r.status; throw e; }
+      const parts=(((((j.candidates||[])[0]||{}).content)||{}).parts)||[];
+      const part=parts.find(p=>p.inlineData||p.inline_data), blob=part&&(part.inlineData||part.inline_data);
+      if (!blob || !blob.data) throw new Error('AI returned no reconstructed image.');
+      return {buffer:Buffer.from(blob.data,'base64'),mimeType:String(blob.mimeType||blob.mime_type||'image/png').toLowerCase()};
+    } catch (e) {
+      clearTimeout(timer); last=e;
+      if (![429,500,503].includes(e.status) || attempt===3) throw e;
+      await splitSleep(1000*Math.pow(2,attempt));
+    }
+  }
+  throw last;
+}
+
+async function splitMapLimit(items, limit, worker) {
+  const out = new Array(items.length); let next=0;
+  async function run(){ while(next<items.length){ const i=next++; out[i]=await worker(items[i],i); } }
+  await Promise.all(Array.from({length:Math.min(limit,items.length)},run));
+  return out;
+}
+
+async function makeSplitFocusReference(img, box) {
+  const W=img.bitmap.width,H=img.bitmap.height;
+  const x=Math.max(0,Math.floor(box[0]*W)),y=Math.max(0,Math.floor(box[1]*H));
+  const w=Math.max(1,Math.min(W-x,Math.ceil((box[2]-box[0])*W))),h=Math.max(1,Math.min(H-y,Math.ceil((box[3]-box[1])*H)));
+  const focus=img.clone().brightness(-0.42);
+  focus.composite(img.clone().crop(x,y,w,h),x,y);
+  const line=Math.max(3,Math.round(Math.min(W,H)*0.006)),green=Jimp.rgbaToInt(16,185,129,255);
+  for(let n=0;n<line;n++){
+    for(let px=x;px<Math.min(W,x+w);px++){ if(y+n<H)focus.setPixelColor(green,px,y+n); if(y+h-1-n>=0)focus.setPixelColor(green,px,y+h-1-n); }
+    for(let py=y;py<Math.min(H,y+h);py++){ if(x+n<W)focus.setPixelColor(green,x+n,py); if(x+w-1-n>=0)focus.setPixelColor(green,x+w-1-n,py); }
+  }
+  if(focus.bitmap.width>1400||focus.bitmap.height>1400)focus.scaleToFit(1400,1400);
+  focus.quality(84); return focus.getBufferAsync(Jimp.MIME_JPEG);
 }
 
 async function requestPhotoBoxes(enc, prompt) {
@@ -636,47 +695,43 @@ router.post('/api/casuals/photo-split', (req, res) => {
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ success:false, error:'Choose at least one collage photo.' });
     try {
-      const results = [], splitRun = crypto.randomBytes(6).toString('hex');
+      const results = [], sources = [], warnings = [], splitRun = crypto.randomBytes(6).toString('hex');
       for (let fi=0; fi<files.length; fi++) {
         const f = files[fi];
         const boxes = await detectPhotoBoxes(f.buffer, f.mimetype);
         if (!boxes.length) continue;
         const img = await Jimp.read(f.buffer), W = img.bitmap.width, H = img.bitmap.height;
         const useFocusCards = splitBoxesNeedFocusCards(boxes);
+        const preview=img.clone(); if(preview.bitmap.width>1200||preview.bitmap.height>1200)preview.scaleToFit(1200,1200); preview.quality(75);
+        const previewBuf=await preview.getBufferAsync(Jimp.MIME_JPEG);
+        sources.push({sourceIndex:fi,sourceName:f.originalname||('Photo '+(fi+1)),mimeType:'image/jpeg',data:'data:image/jpeg;base64,'+previewBuf.toString('base64')});
+        if(useFocusCards){
+          const made=await splitMapLimit(boxes,3,async(b,bi)=>{
+            try{
+              const ref=await makeSplitFocusReference(img,b),gen=await reconstructSplitGarment(ref);
+              return {b,bi,gen};
+            }catch(e){ warnings.push((f.originalname||('Photo '+(fi+1)))+' colour '+(bi+1)+': '+e.message); return null; }
+          });
+          for(const rec of made.filter(Boolean)){
+            const ext=rec.gen.mimeType==='image/png'?'png':rec.gen.mimeType==='image/webp'?'webp':'jpg';
+            results.push({id:'split-'+splitRun+'-'+fi+'-'+rec.bi,sourceIndex:fi,sourceName:f.originalname||('Photo '+(fi+1)),designGroup:'split-design-'+splitRun+'-'+fi,index:rec.bi+1,box:rec.b,aiReconstructed:true,mimeType:rec.gen.mimeType,data:'data:'+rec.gen.mimeType+';base64,'+rec.gen.buffer.toString('base64'),extension:ext});
+          }
+          continue;
+        }
         for (let bi=0; bi<boxes.length; bi++) {
           const b = boxes[bi];
           const x = Math.max(0, Math.floor(b[0]*W)), y = Math.max(0, Math.floor(b[1]*H));
           const w = Math.max(1, Math.min(W-x, Math.ceil((b[2]-b[0])*W)));
           const h = Math.max(1, Math.min(H-y, Math.ceil((b[3]-b[1])*H)));
-          let resultImage;
-          if (useFocusCards) {
-            // Preserve the complete source. Dim it, restore the selected
-            // garment at original colour, and outline the focus area. This is
-            // truthful (no invented pixels) and remains readable even when
-            // garments physically overlap in the supplier photograph.
-            resultImage = img.clone().brightness(-0.42);
-            resultImage.composite(img.clone().crop(x,y,w,h), x, y);
-            const line = Math.max(3, Math.round(Math.min(W,H) * 0.006));
-            const green = Jimp.rgbaToInt(16, 185, 129, 255);
-            for (let n=0; n<line; n++) {
-              for (let px=x; px<Math.min(W,x+w); px++) {
-                if (y+n<H) resultImage.setPixelColor(green,px,y+n);
-                if (y+h-1-n>=0) resultImage.setPixelColor(green,px,y+h-1-n);
-              }
-              for (let py=y; py<Math.min(H,y+h); py++) {
-                if (x+n<W) resultImage.setPixelColor(green,x+n,py);
-                if (x+w-1-n>=0) resultImage.setPixelColor(green,x+w-1-n,py);
-              }
-            }
-          } else resultImage = img.clone().crop(x,y,w,h);
+          let resultImage=img.clone().crop(x,y,w,h);
           if (resultImage.bitmap.width > 1800 || resultImage.bitmap.height > 1800) resultImage.scaleToFit(1800,1800);
           resultImage.quality(90);
           const out = await resultImage.getBufferAsync(Jimp.MIME_JPEG);
-          results.push({ id:'split-'+splitRun+'-'+fi+'-'+bi, sourceIndex:fi, sourceName:f.originalname || ('Photo '+(fi+1)), designGroup:'split-design-'+splitRun+'-'+fi, index:bi+1, box:b, focusCard:useFocusCards, mimeType:'image/jpeg', data:'data:image/jpeg;base64,'+out.toString('base64') });
+          results.push({ id:'split-'+splitRun+'-'+fi+'-'+bi, sourceIndex:fi, sourceName:f.originalname || ('Photo '+(fi+1)), designGroup:'split-design-'+splitRun+'-'+fi, index:bi+1, box:b, mimeType:'image/jpeg', data:'data:image/jpeg;base64,'+out.toString('base64') });
         }
       }
       if (!results.length) return res.status(422).json({ success:false, error:'No separate product photos could be detected. Try a clearer collage.' });
-      res.json({ success:true, results });
+      res.json({ success:true, results, sources, warnings });
     } catch (e) {
       res.status(e && e.name === 'AbortError' ? 504 : 502).json({ success:false, error:e && e.name === 'AbortError' ? 'Photo splitting timed out. Try fewer photos at once.' : ('Could not split the photos: '+e.message) });
     }

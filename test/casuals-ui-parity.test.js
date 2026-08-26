@@ -41,6 +41,8 @@ test('legacy Casual UI presents shared upper and trouser workflow', () => {
   assert.match(html, /id="czModeSplitter"/);
   assert.match(html, /id="czSplitBatch"/);
   assert.match(html, /\/api\/casuals\/photo-split/);
+  assert.match(html, /AI reconstructed/);
+  assert.match(html, /View original/);
   assert.doesNotMatch(html, /Plan this category by/);
 });
 
