@@ -77,12 +77,13 @@ const invoiceUpload = multer({
   fileFilter: (req, file, cb) => cb(null, /^image\/|application\/pdf/.test(file.mimetype))
 });
 
-// ── AI product images (Google Gemini image generation) ───────────
-// Feed the raw invoice/garment photo to Gemini and get back polished listing
+// ── AI product images (OpenAI image editing) ─────────────────────
+// Feed the raw invoice/garment photo to OpenAI and get back polished listing
 // images: a clean model shot, front-only, back-only and a studio product shot.
-// Requires GEMINI_API_KEY (or GOOGLE_API_KEY). Model is overridable.
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-const IMAGE_MODEL = process.env.PROCUREMENT_IMAGE_MODEL || 'gemini-2.5-flash-image';
+// Requires OPENAI_API_KEY. Model and quality are overridable.
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const IMAGE_MODEL = process.env.PROCUREMENT_IMAGE_MODEL || process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5';
+const IMAGE_QUALITY = process.env.PROCUREMENT_IMAGE_QUALITY || process.env.OPENAI_IMAGE_QUALITY || 'high';
 // The four shots we make for every product. `prompt` is suffixed with the
 // product context (type / colour / audience) at generation time.
 const AI_IMAGE_SPECS = [
@@ -842,7 +843,7 @@ router.post('/api/procurement/pos/:id/back-ref', (req, res) => {
   res.json({ success: true, groupKey: b.groupKey, url: po.backRefs[b.groupKey] || '' });
 });
 
-// ── AI image helpers (Gemini) ────────────────────────────────────
+// ── AI image helpers (OpenAI) ───────────────────────────────────
 // Persist a generated image buffer to the photo volume, return its URL.
 function savePhotoBuffer(buf, ext) {
   const name = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg');
@@ -859,31 +860,28 @@ function readStoredPhoto(url) {
   return { buf: fs.readFileSync(fp), mime };
 }
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-// Gemini's image model returns 503 ("overloaded / high demand") and 429 (rate)
-// intermittently — they are transient, so a short exponential backoff usually
-// clears them without the user seeing a thing. 500 is likewise retried.
-const IMG_RETRY_STATUS = new Set([429, 500, 503]);
+// Retry transient rate-limit and upstream failures automatically.
+const IMG_RETRY_STATUS = new Set([429, 500, 502, 503]);
 const IMG_MAX_ATTEMPTS = 4;
 
-// One raw attempt at Gemini image generation. Attaches `.status` on HTTP errors
+// One raw OpenAI image-edit attempt. Attaches `.status` on HTTP errors
 // so the caller can decide whether to retry.
-async function geminiImageAttempt(baseB64, baseMime, prompt, aspect) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+async function openAIImageAttempt(baseB64, baseMime, prompt, aspect) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 120000);
-  // Pin the output aspect ratio so full-body model shots don't come back as an
-  // over-tall canvas that Gemini fills by tiling a duplicate of the garment.
-  const generationConfig = { responseModalities: ['IMAGE'] };
-  if (aspect) generationConfig.imageConfig = { aspectRatio: aspect };
   let r;
   try {
-    r = await fetch(url, {
+    const form = new FormData();
+    form.append('model', IMAGE_MODEL);
+    form.append('prompt', prompt);
+    form.append('size', aspect === '4:5' ? '1024x1536' : '1024x1024');
+    form.append('quality', IMAGE_QUALITY);
+    form.append('output_format', 'png');
+    form.append('image', new Blob([Buffer.from(baseB64, 'base64')], { type: baseMime || 'image/jpeg' }), 'garment-reference.jpg');
+    r = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ inline_data: { mime_type: baseMime, data: baseB64 } }, { text: prompt }] }],
-        generationConfig
-      }),
+      headers: { authorization: 'Bearer ' + OPENAI_API_KEY },
+      body: form,
       signal: ctrl.signal
     });
   } catch (err) {
@@ -894,27 +892,23 @@ async function geminiImageAttempt(baseB64, baseMime, prompt, aspect) {
   clearTimeout(timer);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const e = new Error('Gemini ' + r.status + ': ' + (((j.error && j.error.message) || '').slice(0, 200) || 'image error'));
+    const e = new Error('OpenAI ' + r.status + ': ' + (((j.error && j.error.message) || '').slice(0, 200) || 'image error'));
     e.status = r.status;
     throw e;
   }
-  const parts = ((((j.candidates || [])[0] || {}).content) || {}).parts || [];
-  const img = parts.find(p => p.inlineData || p.inline_data);
-  const blob = img && (img.inlineData || img.inline_data);
-  const data = blob && blob.data;
-  if (!data) throw new Error('The model returned no image (try again or use a clearer source photo).');
-  const mime = (blob.mimeType || blob.mime_type || 'image/png').toLowerCase();
-  return { buf: Buffer.from(data, 'base64'), mime };
+  const data = j.data && j.data[0] && j.data[0].b64_json;
+  if (!data) throw new Error('OpenAI returned no image (try again or use a clearer source photo).');
+  return { buf: Buffer.from(data, 'base64'), mime: 'image/png' };
 }
 
-// Call Gemini image generation with automatic backoff on transient overload
-// (503/429/500). Waits ~2s, 4s, 8s between attempts so a demand spike recovers
+// Call OpenAI image editing with automatic backoff on transient failures.
+// Waits ~2s, 4s, 8s between attempts so a demand spike recovers
 // silently instead of surfacing an error to the user.
-async function geminiGenerateImage(baseB64, baseMime, prompt, aspect) {
+async function openAIGenerateImage(baseB64, baseMime, prompt, aspect) {
   let lastErr;
   for (let attempt = 1; attempt <= IMG_MAX_ATTEMPTS; attempt++) {
     try {
-      return await geminiImageAttempt(baseB64, baseMime, prompt, aspect);
+      return await openAIImageAttempt(baseB64, baseMime, prompt, aspect);
     } catch (err) {
       lastErr = err;
       const retryable = IMG_RETRY_STATUS.has(err.status);
@@ -1427,7 +1421,7 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
 router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-    if (!GEMINI_API_KEY) return res.status(400).json({ success: false, error: 'AI images are not enabled. Set GEMINI_API_KEY in Railway to turn it on.' });
+    if (!OPENAI_API_KEY) return res.status(400).json({ success: false, error: 'AI images are not enabled. Set OPENAI_API_KEY in Railway to turn them on.' });
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
@@ -1445,7 +1439,7 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     const fitDesc = String(b.fit || '').trim();
     const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.` +
       (fitDesc ? ` This garment is a ${fitDesc.toUpperCase()} — render it with exactly that cut and length in every shot; do not change it.` : '') +
-      // Lock the garment's real proportions — Gemini otherwise lengthens 3/4 or
+      // Lock the garment's real proportions so the model never lengthens 3/4 or
       // cropped pieces into full-length ones.
       ` Preserve the garment's EXACT length, hemline, proportions and silhouette exactly as shown in the reference — if it is cropped, three-quarter, calf-length or ankle-length, keep that same length; never lengthen or shorten it.` +
       // Shopify product-image rules: high-res, clean, centered, no text/watermark/border.
@@ -1475,7 +1469,7 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
         const promptText = useBackRef
           ? 'Generate a clean FLAT-LAY / ghost-mannequin photo of the BACK of this exact garment, reproducing the reference image faithfully — same colour, print, graphics, cut and length; do not redesign it. Centered on a pure white background, even studio lighting, no model, no props, no text or watermark, sharp product detail. Do NOT show any inner neck label, brand tag, size tag or care label — the collar/neckline must be clean with no visible tag. Show a SINGLE garment fully in frame; no duplicated copies, no collage. The background must be pure white filling the ENTIRE frame to all four edges — absolutely no black bars, letterboxing, borders or coloured padding.' + context
           : spec.prompt + styleAdd + context;
-        const out = await geminiGenerateImage(useBackRef ? backRefB64 : baseB64, useBackRef ? backRef.mime : src.mime, promptText, spec.aspect);
+        const out = await openAIGenerateImage(useBackRef ? backRefB64 : baseB64, useBackRef ? backRef.mime : src.mime, promptText, spec.aspect);
         const saved = savePhotoBuffer(out.buf, extForMime(out.mime));
         const idx = existing.findIndex(x => x.type === spec.type);
         const rec = { type: spec.type, label: spec.label, url: saved.url, approved: false };
@@ -1537,7 +1531,7 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
 `Optimise for three things at once:\n` +
 `- SEO (Google): natural, keyword-rich phrasing built around real search terms a shopper types (e.g. "baggy red cargo pants men").\n` +
 `- AEO (answer engines / voice): clear, factual, self-contained sentences that directly answer "what is this product?" so it can be quoted as a snippet.\n` +
-`- GEO (ChatGPT/Perplexity/Gemini): state the product entity plainly — brand SANKI + product type + colour + fit + key visible detail — so generative engines can confidently cite it.\n\n` +
+`- GEO: state the product entity plainly — brand SANKI + product type + colour + fit + key visible detail — so generative engines can confidently cite it.\n\n` +
 `Return STRICT JSON ONLY:\n` +
 `{"displayName":"","title":"","metaTitle":"","metaDescription":"","imageAlt":"","tags":[""],"bodyHtml":""}\n\n` +
 `Rules:\n` +
