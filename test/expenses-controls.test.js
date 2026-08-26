@@ -943,6 +943,20 @@ test('account ledgers show newest entries first and Axis sales begin on 2026-08-
   assert.equal(axis.some(x=>x.id==='SALE/NEW-SALE'),true);
 });
 
+test('Shopify Paytm sales use clearing while store-credit and test orders never hit Axis', () => {
+  fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{
+    paytm:{id:'paytm',name:'#2718',orderNumber:2718,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:50000,refundAmount:0},
+    credit:{id:'credit',name:'#2717',orderNumber:2717,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['store credit'],total:20000,refundAmount:0},
+    test:{id:'test',name:'#2720',orderNumber:2720,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:100,refundAmount:0}
+  }}));
+  const axis=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448'},role:'owner'}).body.entries;
+  const clearing=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Paytm Settlement Clearing'},role:'owner'}).body.entries;
+  assert.equal(axis.some(x=>String(x.id).startsWith('SHOPIFY/')),false);
+  assert.equal(clearing.some(x=>x.id==='SHOPIFY/paytm'&&x.credit===50000),true);
+  assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
+  assert.equal(fs.readFileSync(path.join(tempDir,'orders.json'),'utf8').includes('store credit'),true);
+});
+
 test('Telegram approval and payment keep one expense isolated through its complete lifecycle', () => {
   const created=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Telegram Vendor',particulars:'Telegram fuel',amount:225,bill:'printed',billPhoto:'/api/expenses/photo/tg-bill.jpg',qrPhoto:'/api/expenses/photo/tg-qr.jpg',paymentType:'UPI'}});
   const id=created.body.expense.id;
