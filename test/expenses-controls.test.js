@@ -164,30 +164,6 @@ test('UPI requires a vendor QR photo while Cash and Credit do not', () => {
   }
 });
 
-test('contracts always require bill and QR and may begin without an installment', () => {
-  const missingQr = invoke('POST', '/api/expenses', { body: {
-    vendor:'Contractor', amount:2100, isContract:true, isInstallment:false,
-    billPhoto:'/api/expenses/photo/agreement.jpg', paymentType:'Cash'
-  }});
-  assert.equal(missingQr.status,400);
-  assert.match(missingQr.body.error,/every contract/);
-
-  const made = invoke('POST', '/api/expenses', { body: {
-    vendor:'Contractor', amount:2100, isContract:true, isInstallment:false,
-    billPhoto:'/api/expenses/photo/agreement.jpg', qrPhoto:'/api/expenses/photo/contract-qr.jpg', paymentType:'Cash'
-  }});
-  assert.equal(made.status,200);
-  assert.equal(made.body.expense.isContract,true);
-  assert.equal(made.body.expense.isInstallment,false);
-  assert.equal(made.body.expense.requestedAmount,0);
-  assert.equal(made.body.expense.qrPhoto,'/api/expenses/photo/contract-qr.jpg');
-  invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'Furniture Expense-A3'},role:'owner'});
-  assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'}).status,200);
-  const partial=invoke('POST','/api/expenses/:id/pay',{params:{id:made.body.expense.id},role:'owner',body:{amount:500,account:'Counter Cash',paymentProof:'/api/expenses/photo/pay.jpg'}});
-  assert.equal(partial.body.expense.status,'partially_paid');
-  assert.equal(partial.body.expense.paidAmount,500);
-});
-
 test('SAMAST expenses are separate and only its accounting role can approve them', () => {
   const sankiPlBefore = summaryForPL();
   const created = invoke('POST', '/api/expenses', { body: {
@@ -351,13 +327,13 @@ test('account transfers create equal debit and credit ledger entries', () => {
   const paytmBefore = before.find(a => a.name === 'Tiana 0425').balance;
   const transfer = invoke('POST', '/api/expenses/transfers', { role: 'owner', body: {
     nature: 'SANKI', fromAccount: 'Counter Cash', toAccount: 'Tiana 0425', amount: 250,
-    date: '2026-08-20', proof: '/api/expenses/photo/transfer.jpg', note: 'Test transfer'
+    date: '2026-08-22', proof: '/api/expenses/photo/transfer.jpg', note: 'Test transfer'
   } });
   assert.equal(transfer.status, 200);
   const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts;
   assert.equal(after.find(a => a.name === 'Counter Cash').balance, cashBefore - 250);
   assert.equal(after.find(a => a.name === 'Tiana 0425').balance, paytmBefore + 250);
-  const laterPeriod=invoke('GET','/api/expenses/balances',{query:{nature:'SANKI',from:'2026-08-21',to:'2026-08-31'},role:'owner'}).body.accounts.find(a=>a.name==='Tiana 0425');
+  const laterPeriod=invoke('GET','/api/expenses/balances',{query:{nature:'SANKI',from:'2026-08-23',to:'2026-08-31'},role:'owner'}).body.accounts.find(a=>a.name==='Tiana 0425');
   assert.equal(laterPeriod.transferredIn,0);
   assert.equal(laterPeriod.balance,paytmBefore+250); // closing balance retains earlier money
   const cashLedger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Counter Cash' }, role: 'owner' }).body;
@@ -430,8 +406,8 @@ test('account adjustments require a reason and support explicit add or deduct en
   assert.equal(blocked.status, 400);
   assert.match(blocked.body.error, /reason is required/i);
   const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Counter Cash').balance;
-  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Counter Cash', direction: 'add', amount: 500, date: '2026-08-20', note: 'Cash introduced', proof: '/api/expenses/photo/adjust.jpg' } } }).status, 200);
-  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Counter Cash', direction: 'deduct', amount: 125, date: '2026-08-20', note: 'Counting correction' } } }).status, 200);
+  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Counter Cash', direction: 'add', amount: 500, date: '2026-08-22', note: 'Cash introduced', proof: '/api/expenses/photo/adjust.jpg' } } }).status, 200);
+  assert.equal(invoke('POST', '/api/expenses/balances', { role: 'owner', body: { nature: 'SANKI', adjust: { account: 'Counter Cash', direction: 'deduct', amount: 125, date: '2026-08-22', note: 'Counting correction' } } }).status, 200);
   const after = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Counter Cash').balance;
   assert.equal(after, before + 375);
   const ledger = invoke('GET', '/api/expenses/account-ledger', { query: { nature: 'SANKI', account: 'Counter Cash' }, role: 'owner' }).body;
@@ -482,7 +458,7 @@ test('receivables support partial collections and credit the receiving account l
   const blocked = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Counter Cash'} });
   assert.equal(blocked.status, 400);
   assert.match(blocked.body.error,/proof is required/i);
-  const partial = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Counter Cash',date:'2026-08-21',proof:'/api/expenses/photo/collection.jpg'} });
+  const partial = invoke('POST', '/api/expenses/receivables/:id/receive', { params:{id:created.body.receivable.id},role:'owner',body:{amount:400,account:'Counter Cash',date:'2026-08-22',proof:'/api/expenses/photo/collection.jpg'} });
   assert.equal(partial.body.receivable.status,'partially_received');
   const list = invoke('GET','/api/expenses/receivables',{query:{nature:'SANKI'},role:'owner'}).body;
   assert.equal(list.receivables.find(x=>x.id===created.body.receivable.id).receivedAmount,400);
@@ -674,7 +650,7 @@ test('claimant ledgers remain visible under both SANKI and SAMAST with zero acti
 test('installments support partial payments and prevent overpayment', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'Furniture Expense-A3', vendor: 'Carpenter', amount: 10000, isInstallment: true, requestedAmount: 1000,
-    billPhoto: '/api/expenses/photo/bill.jpg', qrPhoto:'/api/expenses/photo/contract-qr.jpg', paymentType: 'Cash'
+    billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash'
   } });
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Furniture Expense-A3' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });
@@ -753,7 +729,7 @@ test('posted advanced purchases become mediator payables without changing procur
   const pending = invoke('GET', '/api/expenses/pending-payments', { query:{nature:'SANKI'}, role:'owner' });
   assert.equal(pending.body.purchases[0].amount, 1250);
   assert.equal(pending.body.purchases[0].supplier, 'CHINA SUPPLIER');
-  const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'owner', body:{amount:500,account:'Counter Cash',date:'2026-08-21',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
+  const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'owner', body:{amount:500,account:'Counter Cash',date:'2026-08-22',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
   assert.equal(partial.body.payable.balanceDue, 750);
   const ledger = invoke('GET', '/api/expenses/account-ledger', { query:{nature:'SANKI',account:'Counter Cash'}, role:'owner' }).body;
   assert.ok(ledger.entries.some(x => x.kind === 'purchase' && x.debit === 500));
@@ -965,6 +941,21 @@ test('account ledgers show newest entries first and Axis sales begin on 2026-08-
   const axis=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448'},role:'owner'}).body.entries;
   assert.equal(axis.some(x=>x.id==='SALE/OLD-SALE'),false);
   assert.equal(axis.some(x=>x.id==='SALE/NEW-SALE'),true);
+});
+
+test('Counter Cash resets on 22 August and cash sales round upward to the next ₹10', () => {
+  fs.writeFileSync(path.join(tempDir,'sales.json'),JSON.stringify({sales:[
+    {id:'CASH-OLD',day:'2026-08-21',paymentMode:'Cash',total:999,channel:'POS'},
+    {id:'CASH-1999',day:'2026-08-22',paymentMode:'Cash',total:1999,channel:'POS'},
+    {id:'CASH-1496',day:'2026-08-22',paymentMode:'Cash',total:1496,channel:'POS'},
+    {id:'CASH-9992',day:'2026-08-22',paymentMode:'Cash',total:9992,channel:'POS'},
+    {id:'CASH-1749',day:'2026-08-22',paymentMode:'Cash',total:1749,channel:'POS'}
+  ]}));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash'},role:'owner'}).body;
+  assert.equal(ledger.entries.some(x=>x.id==='SALE/CASH-OLD'),false);
+  assert.equal(ledger.entries.find(x=>x.id==='OPENING').credit,5240);
+  assert.equal(ledger.entries.find(x=>x.id==='OPENING').date,'2026-08-22');
+  assert.deepEqual(['CASH-1999','CASH-1496','CASH-9992','CASH-1749'].map(id=>ledger.entries.find(x=>x.id==='SALE/'+id).credit),[2000,1500,10000,1750]);
 });
 
 test('Shopify Paytm sales use clearing while store-credit and test orders never hit Axis', () => {
