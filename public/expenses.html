@@ -333,7 +333,8 @@
         '<div class="fld"><label>Accounting entity / nature</label><select id="f_nature">'+opts(cfg.natures,selectedNature)+'</select><div class="hint">Choose SANKI, SAMAST (Kirti Nagar), or owner-private PERSONAL.</div></div>'+
         '<div class="fld combo-wrap"><label>Vendor</label><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" aria-autocomplete="list" aria-controls="vendorSuggestions"><div id="vendorSuggestions" class="combo-menu" role="listbox"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
         '<div class="fld full"><label>Have you already paid for this expense?</label><select id="f_paidalready"><option value="false">No — company must pay the vendor</option><option value="true">Yes — I paid personally</option></select></div>'+
-        '<div class="fld"><label>Is this an installment / contract?</label><select id="f_installment"><option value="false">No</option><option value="true">Yes</option></select></div>'+
+        '<div class="fld"><label>Is this a contract?</label><select id="f_contract"><option value="false">No</option><option value="true">Yes</option></select></div>'+
+        '<div class="fld" id="installmentWrap" style="display:none"><label>Is an installment being logged now?</label><select id="f_installment"><option value="false">No — record contract only</option><option value="true">Yes — payment is required now</option></select></div>'+
         '<div class="fld" id="totalAgreedWrap" style="display:none"><label>Total agreed amount ₹</label><input type="number" id="f_totalamount" min="1" step="1" placeholder="e.g. 10000"></div>'+
         '<div class="fld" id="requestedWrap" style="display:none"><label>Payment being logged now ₹</label><input type="number" id="f_requestedamount" min="1" step="1" placeholder="e.g. 1000"><div class="hint">Cannot exceed the total agreed amount.</div></div>'+
         '<div class="fld full" id="paymentNoteWrap" style="display:none"><label>Installment note (optional)</label><input id="f_paymentnote" placeholder="e.g. advance, second installment, final payment"></div>'+
@@ -352,7 +353,8 @@
       if(el('f_ledger')) el('f_ledger').addEventListener('input', onLedgerInput);
       el('f_paymenttype').addEventListener('change', toggleQrPhoto);
       el('f_paidalready').addEventListener('change', togglePaymentFlow);
-      el('f_installment').addEventListener('change', toggleInstallment);
+      el('f_contract').addEventListener('change', toggleContract);
+      el('f_installment').addEventListener('change', toggleContract);
       el('f_vendor').addEventListener('input',renderVendorSuggestions);
       el('f_vendor').addEventListener('focus',renderVendorSuggestions);
       el('f_nature').addEventListener('change',function(){selectedNature=this.value;el('f_vendor').value='';renderVendorSuggestions();});
@@ -363,7 +365,7 @@
       if(el('setupTelegram'))el('setupTelegram').addEventListener('click',setupTelegram);
       if(el('testTelegram'))el('testTelegram').addEventListener('click',testTelegram);
       if(el('unlinkTelegram'))el('unlinkTelegram').addEventListener('click',function(){unlinkTelegram('');});
-      togglePaymentFlow(); toggleInstallment();
+      togglePaymentFlow(); toggleContract();
     }
     function renderVendorSuggestions(){
       var input=el('f_vendor'), menu=el('vendorSuggestions'), q=input.value.trim().toLowerCase();
@@ -393,14 +395,16 @@
       el('personalProofWrap').style.display=paid?'':'none';el('personalAccountWrap').style.display=paid?'':'none';
       toggleQrPhoto();
     }
-    function toggleInstallment(){
-      var yes=el('f_installment').value==='true';
-      el('normalAmountWrap').style.display=yes?'none':''; el('totalAgreedWrap').style.display=yes?'':'none';
-      el('requestedWrap').style.display=yes?'':'none'; el('paymentNoteWrap').style.display=yes?'':'none';
+    function toggleContract(){
+      var contract=el('f_contract').value==='true', installment=contract&&el('f_installment').value==='true';
+      el('installmentWrap').style.display=contract?'':'none';
+      el('normalAmountWrap').style.display=contract?'none':''; el('totalAgreedWrap').style.display=contract?'':'none';
+      el('requestedWrap').style.display=installment?'':'none'; el('paymentNoteWrap').style.display=installment?'':'none';
+      toggleQrPhoto();
     }
     function toggleQrPhoto(){
-      var paid=el('f_paidalready').value==='true',type=el('f_paymenttype').value,show=!paid&&(type==='UPI'||type==='Credit');
-      el('qrPhotoWrap').style.display=show?'':'none';el('qrLabel').textContent=type==='Credit'?'Vendor QR-code photo (optional for Credit)':'Vendor QR-code photo (required for UPI)';
+      var paid=el('f_paidalready').value==='true',type=el('f_paymenttype').value,contract=el('f_contract')&&el('f_contract').value==='true',show=contract||(!paid&&(type==='UPI'||type==='Credit'));
+      el('qrPhotoWrap').style.display=show?'':'none';el('qrLabel').textContent=contract?'Vendor QR-code photo (required for every contract)':(type==='Credit'?'Vendor QR-code photo (optional for Credit)':'Vendor QR-code photo (required for UPI)');
       if(el('personalAccountWrap'))el('personalAccountWrap').style.display=paid&&type!=='Cash'?'':'none';
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
@@ -437,19 +441,20 @@
       var paidAlready=el('f_paidalready').value==='true', paymentType=el('f_paymenttype').value;
       if(paidAlready&&!personalInput.files[0]){ setMsg('Attach proof of the payment you made.', false); return; }
       if(paidAlready&&paymentType!=='Cash'&&!el('f_personalaccount').value){ setMsg('No personal payment account is assigned to this user.', false); return; }
-      if(!paidAlready&&paymentType==='UPI'&&!qrInput.files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
-      var installment=el('f_installment').value==='true';
-      var totalAmount=installment?Number(el('f_totalamount').value):Number(el('f_amount').value);
-      if(!(totalAmount>0)){setMsg(installment?'Enter the total agreed amount.':'Enter the expense amount.',false);return;}
+      var contract=el('f_contract').value==='true',installment=contract&&el('f_installment').value==='true';
+      if((contract||(!paidAlready&&paymentType==='UPI'))&&!qrInput.files[0]){ setMsg(contract?'Attach the vendor QR-code photo for this contract.':'Attach the vendor QR-code photo for UPI payment.', false); return; }
+      if(contract&&!installment&&paidAlready){setMsg('A contract recorded without an installment cannot be marked as already paid.',false);return;}
+      var totalAmount=contract?Number(el('f_totalamount').value):Number(el('f_amount').value);
+      if(!(totalAmount>0)){setMsg(contract?'Enter the total agreed contract amount.':'Enter the expense amount.',false);return;}
       if(installment&&!(Number(el('f_requestedamount').value)>0)){setMsg('Enter the installment amount being logged now.',false);return;}
       if(installment&&Number(el('f_requestedamount').value)>totalAmount){setMsg('Payment being logged now cannot exceed the total agreed amount.',false);return;}
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
-      Promise.all([uploadFile(billInput),(!paidAlready&&(paymentType==='UPI'||paymentType==='Credit')&&qrInput.files[0])?uploadFile(qrInput):Promise.resolve(''),paidAlready?uploadFile(personalInput):Promise.resolve('')]).then(function(urls){
+      Promise.all([uploadFile(billInput),(contract||(!paidAlready&&(paymentType==='UPI'||paymentType==='Credit')))&&qrInput.files[0]?uploadFile(qrInput):Promise.resolve(''),paidAlready?uploadFile(personalInput):Promise.resolve('')]).then(function(urls){
         var body = {
           date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value, nature:el('f_nature').value,
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
-          isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
+          isContract:contract, isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:(contract?0:totalAmount),
           paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:urls[2],personalAccount:paymentType==='Cash'?(cfg.me+' Cash'):el('f_personalaccount').value,
           channel:cfg.isAdmin&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
           billPhoto:urls[0], qrPhoto:urls[1]
@@ -543,7 +548,7 @@
       var paymentProof=e.paymentProof||(recordedPaymentWithProof&&recordedPaymentWithProof.proof)||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
       var proofs=(e.billPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" alt="bill proof">Bill</span>':'')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+(paymentProof?'<span class="claim-proof"><img class="thumb" src="'+esc(paymentProof)+'" onclick="window.open(this.src)" alt="payment proof">Payment</span>':'');
       var audits=(e.auditHistory||[]).length?'<div class="expense-section"><b>Edit history</b>'+(e.auditHistory||[]).slice().reverse().map(function(a){return '<div class="payment-entry"><span>'+esc((a.editedAt||'').replace('T',' ').slice(0,16))+' · '+esc(a.editedBy||'')+' · '+esc(a.reason||'')+'<br><span class="muted">'+(a.changes||[]).map(function(c){return esc(c.field+': '+String(c.before)+' → '+String(c.after));}).join(' · ')+'</span></span><b>'+((a.changes||[]).length)+' field(s)</b></div>';}).join('')+'</div>':'';
-      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
+      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.isContract?' · <span class="tag">CONTRACT</span>':'')+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isContract?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+' · '+(e.isInstallment?'Installment requested: '+fmt(e.requestedAmount):'No initial installment')+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
     }
     function renderPendingPayments(){
       el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-pdays="7">Last 7 days</button><button class="btn mini ghost" data-pdays="30">Last 30 days</button><button class="btn mini ghost" data-pdays="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="pf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="pf_from"></div><div class="fld"><label>To</label><input type="date" id="pf_to" value="'+today()+'"></div><div class="fld"><label>Payables</label><select id="pf_bucket"><option value="">All</option><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option></select></div><div class="fld"><label>Vendor</label><input id="pf_vendor" placeholder="Search vendor"></div><button class="btn ghost mini" id="pf_go">Filter</button></div><div class="filters"><div class="fld"><label>Outstanding total</label><select id="pf_total_bucket"><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option><option value="">All</option></select></div></div><div class="stats" id="pstats"></div><div id="ptable" class="muted">Loading…</div></div>';

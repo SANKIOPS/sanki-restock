@@ -164,6 +164,30 @@ test('UPI requires a vendor QR photo while Cash and Credit do not', () => {
   }
 });
 
+test('contracts always require bill and QR and may begin without an installment', () => {
+  const missingQr = invoke('POST', '/api/expenses', { body: {
+    vendor:'Contractor', amount:2100, isContract:true, isInstallment:false,
+    billPhoto:'/api/expenses/photo/agreement.jpg', paymentType:'Cash'
+  }});
+  assert.equal(missingQr.status,400);
+  assert.match(missingQr.body.error,/every contract/);
+
+  const made = invoke('POST', '/api/expenses', { body: {
+    vendor:'Contractor', amount:2100, isContract:true, isInstallment:false,
+    billPhoto:'/api/expenses/photo/agreement.jpg', qrPhoto:'/api/expenses/photo/contract-qr.jpg', paymentType:'Cash'
+  }});
+  assert.equal(made.status,200);
+  assert.equal(made.body.expense.isContract,true);
+  assert.equal(made.body.expense.isInstallment,false);
+  assert.equal(made.body.expense.requestedAmount,0);
+  assert.equal(made.body.expense.qrPhoto,'/api/expenses/photo/contract-qr.jpg');
+  invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'Furniture Expense-A3'},role:'owner'});
+  assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'}).status,200);
+  const partial=invoke('POST','/api/expenses/:id/pay',{params:{id:made.body.expense.id},role:'owner',body:{amount:500,account:'Counter Cash',paymentProof:'/api/expenses/photo/pay.jpg'}});
+  assert.equal(partial.body.expense.status,'partially_paid');
+  assert.equal(partial.body.expense.paidAmount,500);
+});
+
 test('SAMAST expenses are separate and only its accounting role can approve them', () => {
   const sankiPlBefore = summaryForPL();
   const created = invoke('POST', '/api/expenses', { body: {
@@ -650,7 +674,7 @@ test('claimant ledgers remain visible under both SANKI and SAMAST with zero acti
 test('installments support partial payments and prevent overpayment', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'Furniture Expense-A3', vendor: 'Carpenter', amount: 10000, isInstallment: true, requestedAmount: 1000,
-    billPhoto: '/api/expenses/photo/bill.jpg', paymentType: 'Cash'
+    billPhoto: '/api/expenses/photo/bill.jpg', qrPhoto:'/api/expenses/photo/contract-qr.jpg', paymentType: 'Cash'
   } });
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'Furniture Expense-A3' }, role: 'owner' });
   invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'accounting' });

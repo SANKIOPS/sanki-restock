@@ -698,8 +698,15 @@ router.post('/api/expenses', (req, res) => {
   if (paidAlready && !personalPaymentProof) {
     return res.status(400).json({ success: false, error: 'Upload proof of the payment you already made.' });
   }
-  if (!paidAlready && paymentType === 'UPI' && !qrPhoto) {
-    return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
+  // Legacy records used isInstallment for both concepts. Treat those requests
+  // as contracts so existing clients remain compatible during rollout.
+  const isContract = b.isContract === true || b.isContract === 'true' || b.isInstallment === true || b.isInstallment === 'true';
+  const isInstallment = isContract && (b.isInstallment === true || b.isInstallment === 'true');
+  if ((isContract || (!paidAlready && paymentType === 'UPI')) && !qrPhoto) {
+    return res.status(400).json({ success: false, error: isContract ? 'Vendor QR-code photo is required for every contract.' : 'Vendor QR-code photo is required for UPI payment.' });
+  }
+  if (isContract && !isInstallment && paidAlready) {
+    return res.status(400).json({ success:false, error:'A contract recorded without an installment cannot be marked as already paid.' });
   }
   const claimant = (req.user && req.user.username) || 'system';
   const personalAccount = paymentType === 'Cash' ? claimant + ' Cash' : String(b.personalAccount || '').trim();
@@ -712,8 +719,7 @@ router.post('/api/expenses', (req, res) => {
 
   const vendor = String(b.vendor || '').trim();
   if (!vendor) return res.status(400).json({ success: false, error: 'Vendor name is required.' });
-  const isInstallment = !!b.isInstallment;
-  const requestedAmount = isInstallment ? num(b.requestedAmount) : amount;
+  const requestedAmount = isInstallment ? num(b.requestedAmount) : (isContract ? 0 : amount);
   if (isInstallment && (!(requestedAmount > 0) || requestedAmount > amount)) {
     return res.status(400).json({ success: false, error: 'Initial requested payment must be greater than 0 and cannot exceed the total agreed amount.' });
   }
@@ -726,13 +732,13 @@ router.post('/api/expenses', (req, res) => {
     date: (b.date || now.slice(0, 10)).toString().slice(0, 10),
     particulars: String(b.particulars || '').trim(),
     amount,
-    isInstallment,
+    isContract, isInstallment,
     requestedAmount,
     nature, type, ledger, vendor,
     claimant,                                     // who did the errand (was "runner")
     account: '',                                  // selected by approver when payment is made
     channel, bill, fundedBy: paidAlready ? 'claimant' : 'company', paymentType,
-    qrPhoto: !paidAlready && (paymentType === 'UPI' || paymentType === 'Credit') ? qrPhoto : '',
+    qrPhoto: isContract || (!paidAlready && (paymentType === 'UPI' || paymentType === 'Credit')) ? qrPhoto : '',
     billPhoto,                                    // normal printed/handwritten bill
     purchasePaymentProof: paidAlready ? personalPaymentProof : '', exceptionEvidence: '', exceptionReason: '', billNote: '',
     paidAlready,
@@ -794,10 +800,12 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (nextAmount < num(e.paidAmount)&&!canCorrectPersonalPayment) return res.status(400).json({ success:false, error:'Expense amount cannot be lower than ₹'+round0(e.paidAmount)+' already paid.' });
     e.amount = nextAmount;
   }
-  if (b.isInstallment != null) e.isInstallment = b.isInstallment === true || b.isInstallment === 'true';
+  if (b.isContract != null) e.isContract = b.isContract === true || b.isContract === 'true';
+  else if (e.isContract == null && e.isInstallment) e.isContract = true;
+  if (b.isInstallment != null) e.isInstallment = !!e.isContract && (b.isInstallment === true || b.isInstallment === 'true');
   if (b.requestedAmount != null) {
     const requested = num(b.requestedAmount);
-    if (!(requested > 0) || requested > e.amount) return res.status(400).json({ success: false, error: 'Requested payment must be greater than 0 and cannot exceed the total amount.' });
+    if ((e.isInstallment && !(requested > 0)) || requested > e.amount || (!e.isInstallment && requested < 0)) return res.status(400).json({ success: false, error: e.isInstallment ? 'Requested installment must be greater than 0 and cannot exceed the total amount.' : 'Requested payment cannot be negative or exceed the total amount.' });
     if(requested!==num(e.requestedAmount||e.amount)&&!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can change the payment amount.'});
     if (e.paidAlready && requested < num(e.personalPaidAmount)&&!canCorrectPersonalPayment) return res.status(400).json({ success: false, error: 'Requested payment cannot be less than the amount already paid personally.' });
     e.requestedAmount = requested;
@@ -883,12 +891,12 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (e.status !== 'pending') e.status='approved';
   }
   if (!e.billPhoto) return res.status(400).json({ success:false, error:'Bill photo is required.' });
-  if (!e.paidAlready && e.paymentType === 'UPI' && !e.qrPhoto) {
-    return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
+  if ((e.isContract || (!e.paidAlready && e.paymentType === 'UPI')) && !e.qrPhoto) {
+    return res.status(400).json({ success: false, error: e.isContract ? 'Vendor QR-code photo is required for every contract.' : 'Vendor QR-code photo is required for UPI payment.' });
   }
-  if (e.paymentType === 'Cash') e.qrPhoto = '';
+  if (e.paymentType === 'Cash' && !e.isContract) e.qrPhoto = '';
   if (!e.paidAlready && finalized && e.status !== 'rejected') e.status = num(e.paidAmount) >= num(e.amount) ? 'paid' : (num(e.paidAmount) > 0 ? 'partially_paid' : 'approved');
-  const tracked = ['nature','date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
+  const tracked = ['nature','date','particulars','amount','isContract','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
   const changes = tracked.filter(k => JSON.stringify(beforeEdit[k]) !== JSON.stringify(e[k])).map(k => ({ field:k, before:beforeEdit[k] == null ? '' : beforeEdit[k], after:e[k] == null ? '' : e[k] }));
   if (changes.length) {
     e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
