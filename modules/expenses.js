@@ -43,6 +43,7 @@ const DEFAULT_SALES_BANK = 'Axis Bank 3448';
 const DEFAULT_COUNTER_CASH = 'Counter Cash';
 const PAYTM_CLEARING_ACCOUNT = 'Paytm Settlement Clearing';
 const SALES_LEDGER_FROM = '2026-08-21';
+const COUNTER_CASH_RESET_DATE = '2026-08-22';
 const ACCOUNTING_BUILD = '2026-08-26-bank-charge-ledgers-v2';
 
 // Proof images (bill + payment screenshot) live on the /data volume, same
@@ -64,6 +65,8 @@ const proofUpload = multer({
 
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
+function roundCashSale(n) { const amount=num(n);return amount>0?Math.ceil(amount/10)*10:amount; }
+function cashEntryIsVisible(account,date) { return String(account||'')!==DEFAULT_COUNTER_CASH||String(date||'').slice(0,10)>=COUNTER_CASH_RESET_DATE; }
 function vendorKey(v) { return String(v || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 function fuzzyIncludes(text, query) {
   const a=String(text||'').toLowerCase(),q=String(query||'').toLowerCase();
@@ -171,6 +174,7 @@ function blankStore() {
     accounts: DEFAULT_ACCOUNTS.slice(),
     people: DEFAULT_PEOPLE.slice(),      // claimants
     openingBalances: {},                 // { [account]: opening ₹ }
+    openingBalanceDates: {},             // effective dates for reset openings
     openingBalancesByNature: { SAMAST: {}, PERSONAL: {} }, // non-SANKI books stay separate
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
     transfers: [],                       // [{ id, nature, fromAccount, toAccount, amount, date, proof, note }]
@@ -235,6 +239,12 @@ function loadStore() {
     // source entry for Prashant Axis 3645 through 22 Aug 2026. A transfer is
     // removed atomically, so its debit and credit legs cannot become unequal.
     s.oneTimeMigrations=s.oneTimeMigrations||{};
+    const counterCashResetKey='counter-cash-reset-2026-08-22-opening-5240';
+    if(!s.oneTimeMigrations[counterCashResetKey]){
+      const before=num((s.openingBalances||{})[DEFAULT_COUNTER_CASH]);s.openingBalances=s.openingBalances||{};s.openingBalanceDates=s.openingBalanceDates||{};s.openingBalances[DEFAULT_COUNTER_CASH]=5240;s.openingBalanceDates[DEFAULT_COUNTER_CASH]=COUNTER_CASH_RESET_DATE;
+      s.oneTimeMigrations[counterCashResetKey]={appliedAt:new Date().toISOString(),account:DEFAULT_COUNTER_CASH,effectiveDate:COUNTER_CASH_RESET_DATE,before,after:5240,rule:'Exclude all earlier Counter Cash movements; round cash sales upward to ₹10'};
+      audit(s,null,'COUNTER_CASH_RESET','account',DEFAULT_COUNTER_CASH,{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account:DEFAULT_COUNTER_CASH,before:{opening:before},after:{opening:5240,effectiveDate:COUNTER_CASH_RESET_DATE},note:'Owner-authorized Counter Cash reset'});saveStore(s);
+    }
     const correctionKey='delete-prashant-axis-3645-5000-through-2026-08-22';
     if(!s.oneTimeMigrations[correctionKey]){
       const account='Prashant Axis 3645',cutoff='2026-08-22',amount=5000,candidates=[];
@@ -384,7 +394,7 @@ function salesLedgerEntries() {
   const rows = [];
   try {
     const local = JSON.parse(fs.readFileSync(SALES_PATH, 'utf8'));
-    (local.sales || []).filter(x => !x.voided).forEach(x => rows.push({ id:'SALE/'+x.id, date:x.day||String(x.ts||'').slice(0,10), account:String(x.paymentMode||'').toLowerCase()==='cash'?DEFAULT_COUNTER_CASH:DEFAULT_SALES_BANK, amount:num(x.total), description:'Sale · '+(x.channel||'POS')+' · '+(x.staff||'') }));
+    (local.sales || []).filter(x => !x.voided).forEach(x => {const cash=String(x.paymentMode||'').toLowerCase()==='cash';rows.push({ id:'SALE/'+x.id, date:x.day||String(x.ts||'').slice(0,10), account:cash?DEFAULT_COUNTER_CASH:DEFAULT_SALES_BANK, amount:cash?roundCashSale(x.total):num(x.total), originalAmount:num(x.total), description:'Sale · '+(x.channel||'POS')+' · '+(x.staff||'') });});
   } catch { /* no local-sales store yet */ }
   try {
     const shop = JSON.parse(fs.readFileSync(ORDERS_PATH, 'utf8'));
@@ -396,7 +406,7 @@ function salesLedgerEntries() {
       if(orderNo==='2717')return; // owner-confirmed fully store-credit-funded order
       if(storeCredit&&!paytm&&!cash)return; // no fresh money entered a bank/gateway
       const freshPaytm=num(x.paytmAmount||x.paytmPaidAmount||x.freshPaymentAmount)||(paytm?gross:0);
-      const amount=cash?gross:freshPaytm;
+      const amount=cash?roundCashSale(gross):freshPaytm;
       if(!(amount>0))return;
       rows.push({ id:'SHOPIFY/'+x.id, orderId:String(x.id), orderNumber:orderNo||String(x.name||x.id), date:String(x.processedAt||x.createdAt||'').slice(0,10), account:cash?DEFAULT_COUNTER_CASH:PAYTM_CLEARING_ACCOUNT, amount, gross, storeCreditUsed:Math.max(0,gross-amount), paymentGateways:x.paymentGateways||[], description:'Shopify sale · '+(x.name||x.id)+' · '+(x.channel||'') });
     });
@@ -698,15 +708,8 @@ router.post('/api/expenses', (req, res) => {
   if (paidAlready && !personalPaymentProof) {
     return res.status(400).json({ success: false, error: 'Upload proof of the payment you already made.' });
   }
-  // Legacy records used isInstallment for both concepts. Treat those requests
-  // as contracts so existing clients remain compatible during rollout.
-  const isContract = b.isContract === true || b.isContract === 'true' || b.isInstallment === true || b.isInstallment === 'true';
-  const isInstallment = isContract && (b.isInstallment === true || b.isInstallment === 'true');
-  if ((isContract || (!paidAlready && paymentType === 'UPI')) && !qrPhoto) {
-    return res.status(400).json({ success: false, error: isContract ? 'Vendor QR-code photo is required for every contract.' : 'Vendor QR-code photo is required for UPI payment.' });
-  }
-  if (isContract && !isInstallment && paidAlready) {
-    return res.status(400).json({ success:false, error:'A contract recorded without an installment cannot be marked as already paid.' });
+  if (!paidAlready && paymentType === 'UPI' && !qrPhoto) {
+    return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
   const claimant = (req.user && req.user.username) || 'system';
   const personalAccount = paymentType === 'Cash' ? claimant + ' Cash' : String(b.personalAccount || '').trim();
@@ -719,7 +722,8 @@ router.post('/api/expenses', (req, res) => {
 
   const vendor = String(b.vendor || '').trim();
   if (!vendor) return res.status(400).json({ success: false, error: 'Vendor name is required.' });
-  const requestedAmount = isInstallment ? num(b.requestedAmount) : (isContract ? 0 : amount);
+  const isInstallment = !!b.isInstallment;
+  const requestedAmount = isInstallment ? num(b.requestedAmount) : amount;
   if (isInstallment && (!(requestedAmount > 0) || requestedAmount > amount)) {
     return res.status(400).json({ success: false, error: 'Initial requested payment must be greater than 0 and cannot exceed the total agreed amount.' });
   }
@@ -732,13 +736,13 @@ router.post('/api/expenses', (req, res) => {
     date: (b.date || now.slice(0, 10)).toString().slice(0, 10),
     particulars: String(b.particulars || '').trim(),
     amount,
-    isContract, isInstallment,
+    isInstallment,
     requestedAmount,
     nature, type, ledger, vendor,
     claimant,                                     // who did the errand (was "runner")
     account: '',                                  // selected by approver when payment is made
     channel, bill, fundedBy: paidAlready ? 'claimant' : 'company', paymentType,
-    qrPhoto: isContract || (!paidAlready && (paymentType === 'UPI' || paymentType === 'Credit')) ? qrPhoto : '',
+    qrPhoto: !paidAlready && (paymentType === 'UPI' || paymentType === 'Credit') ? qrPhoto : '',
     billPhoto,                                    // normal printed/handwritten bill
     purchasePaymentProof: paidAlready ? personalPaymentProof : '', exceptionEvidence: '', exceptionReason: '', billNote: '',
     paidAlready,
@@ -800,12 +804,10 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (nextAmount < num(e.paidAmount)&&!canCorrectPersonalPayment) return res.status(400).json({ success:false, error:'Expense amount cannot be lower than ₹'+round0(e.paidAmount)+' already paid.' });
     e.amount = nextAmount;
   }
-  if (b.isContract != null) e.isContract = b.isContract === true || b.isContract === 'true';
-  else if (e.isContract == null && e.isInstallment) e.isContract = true;
-  if (b.isInstallment != null) e.isInstallment = !!e.isContract && (b.isInstallment === true || b.isInstallment === 'true');
+  if (b.isInstallment != null) e.isInstallment = b.isInstallment === true || b.isInstallment === 'true';
   if (b.requestedAmount != null) {
     const requested = num(b.requestedAmount);
-    if ((e.isInstallment && !(requested > 0)) || requested > e.amount || (!e.isInstallment && requested < 0)) return res.status(400).json({ success: false, error: e.isInstallment ? 'Requested installment must be greater than 0 and cannot exceed the total amount.' : 'Requested payment cannot be negative or exceed the total amount.' });
+    if (!(requested > 0) || requested > e.amount) return res.status(400).json({ success: false, error: 'Requested payment must be greater than 0 and cannot exceed the total amount.' });
     if(requested!==num(e.requestedAmount||e.amount)&&!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can change the payment amount.'});
     if (e.paidAlready && requested < num(e.personalPaidAmount)&&!canCorrectPersonalPayment) return res.status(400).json({ success: false, error: 'Requested payment cannot be less than the amount already paid personally.' });
     e.requestedAmount = requested;
@@ -891,12 +893,12 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (e.status !== 'pending') e.status='approved';
   }
   if (!e.billPhoto) return res.status(400).json({ success:false, error:'Bill photo is required.' });
-  if ((e.isContract || (!e.paidAlready && e.paymentType === 'UPI')) && !e.qrPhoto) {
-    return res.status(400).json({ success: false, error: e.isContract ? 'Vendor QR-code photo is required for every contract.' : 'Vendor QR-code photo is required for UPI payment.' });
+  if (!e.paidAlready && e.paymentType === 'UPI' && !e.qrPhoto) {
+    return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
-  if (e.paymentType === 'Cash' && !e.isContract) e.qrPhoto = '';
+  if (e.paymentType === 'Cash') e.qrPhoto = '';
   if (!e.paidAlready && finalized && e.status !== 'rejected') e.status = num(e.paidAmount) >= num(e.amount) ? 'paid' : (num(e.paidAmount) > 0 ? 'partially_paid' : 'approved');
-  const tracked = ['nature','date','particulars','amount','isContract','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
+  const tracked = ['nature','date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
   const changes = tracked.filter(k => JSON.stringify(beforeEdit[k]) !== JSON.stringify(e[k])).map(k => ({ field:k, before:beforeEdit[k] == null ? '' : beforeEdit[k], after:e[k] == null ? '' : e[k] }));
   if (changes.length) {
     e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
@@ -1433,14 +1435,15 @@ router.get('/api/expenses/balances', (req, res) => {
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   function totalsFor(inRange) {
     const paidOut = {}, collected = {}, adj = {}, transferIn = {}, transferOut = {};
+    const posted=(account,date)=>inRange(date)&&cashEntryIsVisible(account,date);
     Object.values(s.expenses).forEach(e => {
       const a = e.account || '(unspecified)';
-      (e.payments || []).filter(p => paymentIsPosted(e) && inRange(p.date)).forEach(p => {
+      (e.payments || []).filter(p => paymentIsPosted(e) && posted(p.account||a,p.date)).forEach(p => {
         const paymentAccount = p.account || a;
         if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(paymentAccount).toLowerCase()))return;
         paidOut[paymentAccount] = (paidOut[paymentAccount] || 0) + num(p.amount);
       });
-      (e.reimbursementPayments || []).filter(p=>inRange(p.date)).forEach(p => {
+      (e.reimbursementPayments || []).filter(p=>posted(p.account,p.date)).forEach(p => {
         const ra = p.account || '(unspecified)';
         if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(ra).toLowerCase()))return;
         paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
@@ -1451,19 +1454,19 @@ router.get('/api/expenses/balances', (req, res) => {
       // remains negative forever in the Money Trail.
       const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
       if(personalAccount&&ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(personalAccount).toLowerCase())){
-        (e.reimbursementPayments||[]).filter(p=>inRange(p.date)).forEach(p=>{
+        (e.reimbursementPayments||[]).filter(p=>posted(personalAccount,p.date)).forEach(p=>{
           collected[personalAccount]=(collected[personalAccount]||0)+num(p.amount);
         });
       }
     });
-    if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>inRange(x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
-    (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && inRange(x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
-    Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>inRange(c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
-    (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&inRange(x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
-    if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>inRange(x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+    if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
+    (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && posted(x.account,x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
+    Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>posted(c.account,c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
+    (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+    if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
     (s.transfers || []).filter(x => inRange(x.date)).forEach(x => {
-      if(normalizedNature(x.fromNature||x.nature)===nature) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
-      if(normalizedNature(x.toNature||x.nature)===nature) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
+      if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
+      if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
     });
     return {paidOut,collected,adj,transferIn,transferOut};
   }
@@ -1539,7 +1542,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const from = String(req.query.from || ''), to = String(req.query.to || ''), expenseNature = req.query.expenseNature ? normalizedNature(req.query.expenseNature) : '', entries = [];
   if(expenseNature&&!approvalNatures(req).includes(expenseNature))return res.status(403).json({success:false,error:'You cannot view expenses for this entity.'});
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  entries.push({ id: 'OPENING', date: '', kind: 'opening', description: 'Opening balance', credit: num(openingMap[account]), debit: 0 });
+  entries.push({ id: 'OPENING', date: account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:'', kind: 'opening', description: account===DEFAULT_COUNTER_CASH?'Opening balance effective 22 Aug 2026':'Opening balance', credit: num(openingMap[account]), debit: 0 });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
   (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,by:x.createdBy}));
   (s.transfers || []).forEach(x => {
@@ -1570,6 +1573,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&entries[i].date<=coveredThrough)entries.splice(i,1);
     Object.values(bankBook.transactions||{}).forEach(tx=>{const settlement=(s.paytmSettlements||[]).find(x=>x.bankTransactionId===tx.id);entries.push({id:tx.id,date:tx.date,kind:'bank_statement',description:tx.description||'Bank transaction',credit:num(tx.credit),debit:num(tx.debit),reference:tx.reference||'',settlement:settlement||null});});
   }
+  if(account===DEFAULT_COUNTER_CASH)for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&!cashEntryIsVisible(account,entries[i].date))entries.splice(i,1);
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
   let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
@@ -1678,7 +1682,7 @@ router.post('/api/expenses/balances', (req, res) => {
 });
 
 function recordedAccountBalance(s,nature,account,asOf){
-  const on=d=>!asOf||!d||String(d).slice(0,10)<=asOf,openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{});let total=num(openingMap[account]);
+  const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d),openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{});let total=num(openingMap[account]);
   (s.adjustments||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.transfers||[]).filter(x=>on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
