@@ -636,6 +636,7 @@ router.get('/api/expenses/config', (req, res) => {
     vendorsByNature,
     accounts: Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n])))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : [])])),
+    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) ? ledgerAccountsForNature(s,n) : []])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) ? transferAccountsForNature(n) : []])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
