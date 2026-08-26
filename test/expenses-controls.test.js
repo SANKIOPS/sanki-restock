@@ -789,8 +789,19 @@ test('PDF and image OCR statement text uses the same normalized bank rows', () =
   assert.match(html,/\.pdf,.png,.jpg,.jpeg,.webp/);
   const telegram=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
   assert.match(telegram,/callback_data:'am:bank'/);
-  assert.match(telegram,/Statement imported and reconciled/);
-  assert.match(telegram,/Nothing unmatched was automatically recorded/);
+  assert.match(telegram,/Temporary statement preview ready/);
+  assert.match(telegram,/Nothing has been stored in the official bank history/);
+});
+
+test('Axis Bank PDF text ignores the statement-period header and validates the transaction table', () => {
+  const text='Account Statement Report\nStatement of Axis Bank Account No : XXXX3448 for the period ( From : 22/08/2026 To : 25/08/2026 )\nOpening Balance: INR 47,844.86\nS.NOTransaction\nDate\n(dd/mm/yyyy)\nValue Date\n(dd/mm/yyyy)\nParticularsAmount(INR)Debit/CreditBalance(INR)Cheque\nNumber\nBranch Name(SOL)\n122/08/202622/08/2026\nIFT/PB0307710755/PAYTM PAYMENTS SERVICES LIMITED/2/\n14,755.36CR62,600.22 (100)\n222/08/202622/08/2026GST @18% on BNA Convenience Chrgs\n45.00DR62,555.22 (4820)\n322/08/202622/08/2026BNA Convenience Chrgs\n250.00DR62,305.22 (4820)\n422/08/202622/08/2026\nINB/IFT/REDACTED/TPARTY TRANSFER\n2,247.00DR60,058.22 (4820)\n524/08/202624/08/2026\nINB/IFT/REDACTED/TPARTY TRANSFER\n3,341.00DR56,717.22 (4820)\n6TRANSACTION TOTAL DR/CR\n5,883.00/14,755.36\nClosing Balance: INR 56,717.22';
+  const rows=parseBankStatementText(text);
+  assert.equal(rows.length,5);
+  assert.deepEqual(rows.map(x=>[x.date,x.debit,x.credit,x.balance]),[
+    ['2026-08-22',0,14755.36,62600.22],['2026-08-22',45,0,62555.22],['2026-08-22',250,0,62305.22],['2026-08-22',2247,0,60058.22],['2026-08-24',3341,0,56717.22]
+  ]);
+  assert.equal(rows.statementSummary.validated,true);
+  assert.equal(rows.statementSummary.closingBalance,56717.22);
 });
 
 test('legacy finalized payments without approvedAt remain visible in their account ledger', () => {
