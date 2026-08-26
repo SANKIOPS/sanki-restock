@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail } = require('../modules/casuals');
+const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes } = require('../modules/casuals');
 
 test('Shirts and T-shirts support the same design-first target as Trousers', () => {
   const settings = settingsWithDefaults({ settings: {} });
@@ -64,4 +64,17 @@ test('photo splitter retries a suspicious whole-image crop at garment level', ()
     [0.05, 0.10, 0.45, 0.90],
     [0.55, 0.10, 0.95, 0.90]
   ]), false);
+});
+
+test('photo splitter converts overlapping rack garments into clean non-overlapping columns', () => {
+  const separated = separateHorizontalSplitBoxes([
+    [0.08, 0.10, 0.48, 0.92],
+    [0.26, 0.11, 0.68, 0.91],
+    [0.49, 0.09, 0.91, 0.93]
+  ]);
+  assert.equal(separated.length, 3);
+  assert.ok(separated[0][2] <= separated[1][0]);
+  assert.ok(separated[1][2] <= separated[2][0]);
+  assert.ok(separated.every(b => b[2] - b[0] >= 0.06));
+  assert.ok(separated.every(b => b[1] <= 0.09 && b[3] >= 0.93));
 });

@@ -582,6 +582,49 @@ function splitDetectionNeedsDetail(boxes) {
   return (b[2] - b[0]) * (b[3] - b[1]) >= 0.42;
 }
 
+function verticalOverlapRatio(a, b) {
+  const overlap = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  return overlap / Math.max(0.001, Math.min(a[3] - a[1], b[3] - b[1]));
+}
+
+// Garments on a supplier rail often physically overlap. Vision correctly finds
+// their centres, but independent tight bounding boxes then repeat large pieces
+// of neighbouring colours. Convert each horizontal lineup into mutually
+// exclusive visual columns, divided at the midpoint between adjacent garment
+// centres. This keeps colour identification clear and guarantees no repeated
+// pixels between crops from the same row.
+function separateHorizontalSplitBoxes(raw) {
+  const boxes = (raw || []).map(b => b.slice());
+  const unused = new Set(boxes.map((_, i) => i));
+  const output = [];
+  while (unused.size) {
+    const seed = unused.values().next().value;
+    const group = [seed]; unused.delete(seed);
+    for (let p = 0; p < group.length; p++) {
+      for (const i of Array.from(unused)) {
+        if (verticalOverlapRatio(boxes[group[p]], boxes[i]) >= 0.68) {
+          group.push(i); unused.delete(i);
+        }
+      }
+    }
+    if (group.length < 2) { output.push(boxes[seed]); continue; }
+    const row = group.map(i => boxes[i]).sort((a, b) => ((a[0]+a[2])/2) - ((b[0]+b[2])/2));
+    const centres = row.map(b => (b[0] + b[2]) / 2);
+    const left = Math.max(0, Math.min(...row.map(b => b[0])) - 0.01);
+    const right = Math.min(1, Math.max(...row.map(b => b[2])) + 0.01);
+    const top = Math.max(0, Math.min(...row.map(b => b[1])) - 0.015);
+    const bottom = Math.min(1, Math.max(...row.map(b => b[3])) + 0.015);
+    const edges = [left];
+    for (let i = 0; i < centres.length - 1; i++) edges.push((centres[i] + centres[i+1]) / 2);
+    edges.push(right);
+    row.forEach((b, i) => {
+      if (edges[i+1] - edges[i] >= 0.06) output.push([edges[i], top, edges[i+1], bottom]);
+      else output.push(b);
+    });
+  }
+  return output.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+}
+
 async function requestPhotoBoxes(enc, prompt) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
@@ -606,14 +649,14 @@ async function detectPhotoBoxes(buffer, mediaType) {
   const enc = await shrinkForVision(buffer, mediaType);
   const primary = await requestPhotoBoxes(enc,
     'Split this supplier image into INDIVIDUAL garment colourways/products. A single continuous rack, row, collage panel, or shared background may contain several colours: make ONE separate crop for EACH visible garment/colourway, even when garments touch or overlap slightly. Do not return one box around an entire row when multiple garments are visible. For model photos, keep the complete model and garment. Exclude captions, app controls, blank margins, logos and tiny unrelated thumbnails. Coordinates are normalized against the whole image. If exactly one garment is visible, return one useful crop. Before answering, count the visible garments and ensure the box count matches. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
-  if (!splitDetectionNeedsDetail(primary)) return primary;
+  if (!splitDetectionNeedsDetail(primary)) return separateHorizontalSplitBoxes(primary);
 
   // A large single box is commonly the whole rack/collage. Ask a second,
   // deliberately garment-level pass so same-background colour lineups are not
   // silently accepted as a successful one-photo split.
   const detailed = await requestPhotoBoxes(enc,
-    'The earlier detector found only one large region. Audit the image specifically for MULTIPLE garment colourways inside that region. Count every separately visible trouser, shirt, T-shirt or other garment, including a row hanging on one rail or models shown side by side on the same background. Return ONE tight full-garment crop PER colourway; overlapping crop rectangles are allowed when needed to keep each garment complete. Never group a multi-colour lineup into one crop. If there truly is only one garment, return one box. Exclude UI, text-only areas and blank bars. Normalized coordinates. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
-  return detailed.length > primary.length ? detailed : primary;
+    'The earlier detector found only one large region. Audit the image specifically for MULTIPLE garment colourways inside that region. Count every separately visible trouser, shirt, T-shirt or other garment, including a row hanging on one rail or models shown side by side on the same background. Return ONE crop PER colourway, centred on that colour and wide enough to identify it. Place boundaries between adjacent garments; do not repeat the same neighbouring garment in multiple crops. Never group a multi-colour lineup into one crop. If there truly is only one garment, return one box. Exclude UI, text-only areas and blank bars. Normalized coordinates. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
+  return separateHorizontalSplitBoxes(detailed.length > primary.length ? detailed : primary);
 }
 
 router.post('/api/casuals/photo-split', (req, res) => {
@@ -2338,4 +2381,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes };
