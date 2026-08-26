@@ -954,6 +954,9 @@ test('Shopify Paytm sales use clearing while store-credit and test orders never 
   assert.equal(axis.some(x=>String(x.id).startsWith('SHOPIFY/')),false);
   assert.equal(clearing.some(x=>x.id==='SHOPIFY/paytm'&&x.credit===50000),true);
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
+  const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+  assert.equal(config.ledgerAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),true);
+  assert.equal(config.accountsByNature.SANKI.includes('Paytm Settlement Clearing'),false);
   assert.equal(fs.readFileSync(path.join(tempDir,'orders.json'),'utf8').includes('store credit'),true);
 });
 
