@@ -268,8 +268,8 @@ try { fs.mkdirSync(CAND_DIR, { recursive: true }); } catch { /* exists */ }
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const AI_MODEL = process.env.CASUALS_AI_MODEL || process.env.FRESH_PROC_AI_MODEL || process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-const SPLITTER_IMAGE_MODEL = process.env.CASUALS_IMAGE_MODEL || process.env.PROCUREMENT_IMAGE_MODEL || 'gemini-2.5-flash-image';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const SPLITTER_IMAGE_MODEL = process.env.CASUALS_IMAGE_MODEL || process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5';
 
 function atomicWrite(fp, data) {
   const tmp = fp + '.tmp-' + process.pid + '-' + Date.now();
@@ -604,28 +604,32 @@ function splitBoxesNeedFocusCards(boxes) {
 
 const splitSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function reconstructSplitGarment(referenceBuffer) {
-  if (!GEMINI_API_KEY) throw new Error('AI reconstruction is not enabled. Set GEMINI_API_KEY in Railway.');
+  if (!OPENAI_API_KEY) throw new Error('OpenAI reconstruction is not enabled. Set OPENAI_API_KEY in Railway.');
   const prompt = 'The green rectangle identifies ONE garment colourway in a supplier photograph. Create a clean isolated product-reference image of ONLY that selected garment. Reconstruct only portions hidden by neighbouring garments, conservatively continuing the visible fabric, colour, cut, length, waistband, pockets, seams and hem. Preserve the selected garment\'s exact visible colour, silhouette, proportions and design; do not copy a neighbour\'s colour or details and do not redesign it. Show the complete garment from top to hem, front-facing, centered on a plain light-grey background with even margins. No person, hanger, rack, other garments, text, labels, watermark, collage, border or green rectangle. Output exactly one garment. This is an AI reconstruction for procurement review, not a final product listing.';
   let last;
   for (let attempt=1; attempt<=3; attempt++) {
     const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 120000);
     try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${SPLITTER_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
-        method:'POST', signal:ctrl.signal, headers:{'content-type':'application/json'},
-        body:JSON.stringify({ contents:[{parts:[
-          {inline_data:{mime_type:'image/jpeg',data:referenceBuffer.toString('base64')}}, {text:prompt}
-        ]}], generationConfig:{responseModalities:['IMAGE'],imageConfig:{aspectRatio:'4:5'}} })
+      const form=new FormData();
+      form.append('model',SPLITTER_IMAGE_MODEL);
+      form.append('prompt',prompt);
+      form.append('size','1024x1536');
+      form.append('quality','medium');
+      form.append('output_format','png');
+      form.append('image',new Blob([referenceBuffer],{type:'image/jpeg'}),'selected-garment.jpg');
+      const r = await fetch('https://api.openai.com/v1/images/edits', {
+        method:'POST', signal:ctrl.signal,
+        headers:{authorization:'Bearer '+OPENAI_API_KEY}, body:form
       });
       clearTimeout(timer);
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { const e=new Error('Gemini '+r.status+': '+(((j.error&&j.error.message)||'image error').slice(0,180))); e.status=r.status; throw e; }
-      const parts=(((((j.candidates||[])[0]||{}).content)||{}).parts)||[];
-      const part=parts.find(p=>p.inlineData||p.inline_data), blob=part&&(part.inlineData||part.inline_data);
-      if (!blob || !blob.data) throw new Error('AI returned no reconstructed image.');
-      return {buffer:Buffer.from(blob.data,'base64'),mimeType:String(blob.mimeType||blob.mime_type||'image/png').toLowerCase()};
+      if (!r.ok) { const e=new Error('OpenAI '+r.status+': '+(((j.error&&j.error.message)||'image error').slice(0,180))); e.status=r.status; throw e; }
+      const data=j.data&&j.data[0]&&j.data[0].b64_json;
+      if (!data) throw new Error('OpenAI returned no reconstructed image.');
+      return {buffer:Buffer.from(data,'base64'),mimeType:'image/png'};
     } catch (e) {
       clearTimeout(timer); last=e;
-      if (![429,500,503].includes(e.status) || attempt===3) throw e;
+      if (![429,500,502,503].includes(e.status) || attempt===3) throw e;
       await splitSleep(1000*Math.pow(2,attempt));
     }
   }

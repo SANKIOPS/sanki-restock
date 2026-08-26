@@ -79,3 +79,11 @@ test('photo splitter preserves the full source with focus cards for overlapping 
     [0.55, 0.05, 0.98, 0.95]
   ]), false);
 });
+
+test('photo splitter reconstruction uses OpenAI exclusively', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
+  assert.match(source, /OPENAI_API_KEY/);
+  assert.match(source, /api\.openai\.com\/v1\/images\/edits/);
+  assert.match(source, /gpt-image-1\.5/);
+  assert.doesNotMatch(source, /GEMINI_API_KEY|GOOGLE_API_KEY|generativelanguage\.googleapis\.com/);
+});
