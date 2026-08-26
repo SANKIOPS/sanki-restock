@@ -967,6 +967,14 @@ test('bank-charge reconciliation adjustments become visible spending without dou
   const repaired=spending.payments.filter(x=>x.kind==='Bank-reconciled expense'&&x.account==='Axis Bank 3448');
   assert.equal(repaired.reduce((n,x)=>n+x.amount,0),295);
   assert.deepEqual(repaired.map(x=>x.amount).sort((a,b)=>a-b),[45,250]);
+  const expenseStorePath=path.join(tempDir,'expenses.json'),store=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));
+  store.paytmSettlements.push({id:'PTM-LEGACY-NOTE',date:'2026-08-22',bankAccount:'Axis Bank 3448',netAmount:14755.36,grossAmount:14755.36,chargeAmount:0,orderIds:['2718','2721'],reason:'Paytm settlement; charges ₹539.64'});
+  fs.writeFileSync(expenseStorePath,JSON.stringify(store));
+  const repairedPaytm=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{from:'2026-08-22',to:'2026-08-22',nature:'SANKI',category:'BANK CHARGES'}}).body.payments.find(x=>x.vendor==='Paytm');
+  assert.equal(repairedPaytm.amount,540);
+  const persisted=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')).paytmSettlements.find(x=>x.id==='PTM-LEGACY-NOTE');
+  assert.equal(persisted.chargeAmount,539.64);
+  assert.equal(persisted.grossAmount,15295);
   const source=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(source,/Connected sales:/);
   assert.match(source,/Bank\/Paytm charges/);
