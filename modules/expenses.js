@@ -43,6 +43,7 @@ const DEFAULT_SALES_BANK = 'Axis Bank 3448';
 const DEFAULT_COUNTER_CASH = 'Counter Cash';
 const PAYTM_CLEARING_ACCOUNT = 'Paytm Settlement Clearing';
 const SALES_LEDGER_FROM = '2026-08-21';
+const ACCOUNTING_BUILD = '2026-08-26-bank-charge-ledgers-v2';
 
 // Proof images (bill + payment screenshot) live on the /data volume, same
 // pattern as procurement photos.
@@ -218,6 +219,7 @@ function loadStore() {
     (s.adjustments||[]).filter(x=>x.account===DEFAULT_SALES_BANK&&String(x.date||'')==='2026-08-22'&&num(x.amount)<0&&([250,45].includes(Math.abs(num(x.amount)))||/bank\s*charges?/i.test(String(x.note||'')))).forEach(x=>{
       if(!s.reconciliationExpenses.some(e=>e.adjustmentId===x.id)){s.reconciliationExpenses.push({id:'BRE-'+x.id,nature:normalizedNature(x.nature),date:x.date,amount:Math.abs(num(x.amount)),account:x.account,category:'BANK CHARGES',type:'running',vendor:'Axis Bank',particulars:String(x.note||'Bank charges').replace(/\s*\[Bank reconciliation[^\]]*\]/i,''),adjustmentId:x.id,reconciliationDraft:x.reconciliationDraft||'',createdAt:x.createdAt||new Date().toISOString(),createdBy:x.createdBy||'system'});bankChargeRepairAdded=true;}
     });
+    (s.paytmSettlements||[]).forEach(x=>{if(!(num(x.chargeAmount)>0)){const saved=String(x.reason||'').match(/charges?\s*(?:₹|rs\.?|inr)?\s*([0-9,]+(?:\.\d{1,2})?)/i),charge=saved?num(saved[1].replace(/,/g,'')):0;if(charge>0){x.chargeAmount=charge;x.grossAmount=num(x.netAmount)+charge;bankChargeRepairAdded=true;}}});
     (s.paytmSettlements||[]).filter(x=>num(x.chargeAmount)>0).forEach(x=>{
       if(!s.reconciliationExpenses.some(e=>e.settlementId===x.id)){s.reconciliationExpenses.push({id:'BRE-'+x.id,nature:'SANKI',date:x.date,amount:num(x.chargeAmount),account:x.bankAccount||DEFAULT_SALES_BANK,category:'BANK CHARGES',type:'running',vendor:'Paytm',particulars:'Paytm settlement charges · connected sales '+((x.orderIds||[]).map(n=>'#'+String(n).replace(/^#/,'')).join(', ')||'not specified'),settlementId:x.id,bankTransactionId:x.bankTransactionId||'',reconciliationDraft:x.reconciliationDraft||'',createdAt:x.createdAt||new Date().toISOString(),createdBy:x.createdBy||'system'});bankChargeRepairAdded=true;}
     });
