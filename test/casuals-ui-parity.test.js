@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { buildPlan, settingsWithDefaults, validSplitBoxes } = require('../modules/casuals');
+const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail } = require('../modules/casuals');
 
 test('Shirts and T-shirts support the same design-first target as Trousers', () => {
   const settings = settingsWithDefaults({ settings: {} });
@@ -55,4 +55,13 @@ test('photo splitter sanitizes crop boxes and removes near duplicates', () => {
     [0.05, 0.10, 0.45, 0.90],
     [0.55, 0.10, 0.95, 0.90]
   ]);
+});
+
+test('photo splitter retries a suspicious whole-image crop at garment level', () => {
+  assert.equal(splitDetectionNeedsDetail([[0.02, 0.03, 0.98, 0.97]]), true);
+  assert.equal(splitDetectionNeedsDetail([[0.20, 0.10, 0.70, 0.80]]), false);
+  assert.equal(splitDetectionNeedsDetail([
+    [0.05, 0.10, 0.45, 0.90],
+    [0.55, 0.10, 0.95, 0.90]
+  ]), false);
 });

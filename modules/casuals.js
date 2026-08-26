@@ -576,8 +576,13 @@ function validSplitBoxes(raw) {
   return boxes.slice(0, 30);
 }
 
-async function detectPhotoBoxes(buffer, mediaType) {
-  const enc = await shrinkForVision(buffer, mediaType);
+function splitDetectionNeedsDetail(boxes) {
+  if (!Array.isArray(boxes) || boxes.length !== 1) return false;
+  const b = boxes[0];
+  return (b[2] - b[0]) * (b[3] - b[1]) >= 0.42;
+}
+
+async function requestPhotoBoxes(enc, prompt) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   let r;
@@ -587,7 +592,7 @@ async function detectPhotoBoxes(buffer, mediaType) {
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({ model: AI_MODEL, max_tokens: 1800, temperature: 0, messages: [{ role:'user', content:[
         { type:'image', source:{ type:'base64', media_type:enc.mediaType, data:enc.data } },
-        { type:'text', text:'This is a supplier collage or screenshot containing one or more separate garment/product photos. Find every distinct product-photo panel. Exclude text, app controls, blank margins, logos and tiny thumbnails. Return tight rectangular crops that keep the complete garment inside each crop. Coordinates are normalized against the whole image. If this is already one single product photo, return one box covering the useful photo. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.' }
+        { type:'text', text:prompt }
       ]}] })
     });
   } finally { clearTimeout(timer); }
@@ -595,6 +600,20 @@ async function detectPhotoBoxes(buffer, mediaType) {
   if (!r.ok) throw new Error((j.error && j.error.message) || ('AI HTTP ' + r.status));
   const parsed = extractJson((j.content || []).map(c => c.text || '').join('')) || {};
   return validSplitBoxes(parsed.boxes);
+}
+
+async function detectPhotoBoxes(buffer, mediaType) {
+  const enc = await shrinkForVision(buffer, mediaType);
+  const primary = await requestPhotoBoxes(enc,
+    'Split this supplier image into INDIVIDUAL garment colourways/products. A single continuous rack, row, collage panel, or shared background may contain several colours: make ONE separate crop for EACH visible garment/colourway, even when garments touch or overlap slightly. Do not return one box around an entire row when multiple garments are visible. For model photos, keep the complete model and garment. Exclude captions, app controls, blank margins, logos and tiny unrelated thumbnails. Coordinates are normalized against the whole image. If exactly one garment is visible, return one useful crop. Before answering, count the visible garments and ensure the box count matches. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
+  if (!splitDetectionNeedsDetail(primary)) return primary;
+
+  // A large single box is commonly the whole rack/collage. Ask a second,
+  // deliberately garment-level pass so same-background colour lineups are not
+  // silently accepted as a successful one-photo split.
+  const detailed = await requestPhotoBoxes(enc,
+    'The earlier detector found only one large region. Audit the image specifically for MULTIPLE garment colourways inside that region. Count every separately visible trouser, shirt, T-shirt or other garment, including a row hanging on one rail or models shown side by side on the same background. Return ONE tight full-garment crop PER colourway; overlapping crop rectangles are allowed when needed to keep each garment complete. Never group a multi-colour lineup into one crop. If there truly is only one garment, return one box. Exclude UI, text-only areas and blank bars. Normalized coordinates. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
+  return detailed.length > primary.length ? detailed : primary;
 }
 
 router.post('/api/casuals/photo-split', (req, res) => {
@@ -2319,4 +2338,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail };
