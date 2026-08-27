@@ -26,7 +26,7 @@ const CHANNELS = ['POS', 'Website', 'Shared'];
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 
-function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0 }; }
+function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [] }; }
 function load() { try { return Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8'))); } catch { return blank(); } }
 function save(s) { const tmp = SAL_PATH + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, SAL_PATH); }
 
@@ -46,6 +46,12 @@ function attPaidDays(att) {
   return any ? sum : null;
 }
 function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: false, rows: {}, attendance: {} }; return s.months[ym]; }
+function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }
+function advanceOutstanding(a) { return round2(Math.max(0, num(a.amount) - advanceRecovered(a))); }
+function advanceStatus(a) { const r = advanceRecovered(a); return r <= 0 ? 'Outstanding' : (r + .001 >= num(a.amount) ? 'Recovered' : 'Partially recovered'); }
+function advanceView(a) { return Object.assign({}, a, { recovered: advanceRecovered(a), outstanding: advanceOutstanding(a), status: a.active === false ? 'Cancelled' : advanceStatus(a) }); }
+function monthRecovery(s, empId, ym) { return round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === empId).reduce((n, a) => n + (a.recoveries || []).filter(r => r.ym === ym).reduce((m, r) => m + num(r.amount), 0), 0)); }
+function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.advanceAudit || []; s.advanceAudit.push({ at: new Date().toISOString(), by: req.user && req.user.username || 'admin', action, advanceId, details: details || {} }); }
 
 // Compute a month's payroll rows for every employee.
 function computeMonth(s, ym) {
@@ -56,13 +62,16 @@ function computeMonth(s, ym) {
     const computed = attPaidDays((mo.attendance || {})[e.id]);
     const paidDays = row.paidDays != null ? num(row.paidDays) : computed;   // override → attendance → null
     const salaryAmt = paidDays != null ? (num(e.salary) / div * paidDays) : 0;
-    const advance = num(row.advance);
+    const legacyAdvance = num(row.advance);
+    const loggedAdvanceRecovery = monthRecovery(s, e.id, ym);
+    const advance = round2(legacyAdvance + loggedAdvanceRecovery);
     const netPayable = salaryAmt - advance;
     const paid = num(row.paid);
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, active: e.active !== false,
       salary: num(e.salary), paidDays, computedPaidDays: computed,
-      salaryAmt: round2(salaryAmt), advance, netPayable: round2(netPayable),
+      salaryAmt: round2(salaryAmt), advance, legacyAdvance, loggedAdvanceRecovery, netPayable: round2(netPayable),
+      outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
       paid, balance: round2(netPayable - paid), remarks: row.remarks || ''
     };
   });
@@ -119,6 +128,58 @@ router.delete('/api/salary/employees/:id', guard, (req, res) => {
   const s = load();
   if (s.employees[req.params.id]) { s.employees[req.params.id].active = false; save(s); }
   res.json({ success: true });
+});
+
+// Salary advances are recoverable employee balances, not salary/P&L expenses.
+router.get('/api/salary/advances', guard, (req, res) => {
+  const s = load(), q = req.query || {};
+  let rows = Object.values(s.advances || {}).map(advanceView);
+  if (q.employee) rows = rows.filter(a => a.empId === q.employee);
+  if (q.month) rows = rows.filter(a => String(a.date || '').slice(0, 7) === q.month);
+  if (q.status) rows = rows.filter(a => a.status === q.status);
+  if (q.account) rows = rows.filter(a => a.account === q.account);
+  rows.sort((a, b) => String(b.date + b.id).localeCompare(String(a.date + a.id)));
+  const summary = Object.values(s.employees).map(e => {
+    const all = Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id);
+    const total = all.reduce((n, a) => n + num(a.amount), 0), recovered = all.reduce((n, a) => n + advanceRecovered(a), 0);
+    return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), transactions: all.map(advanceView).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))) };
+  }).filter(x => x.total || x.recovered);
+  const totals = summary.reduce((t, x) => ({ total: t.total + x.total, recovered: t.recovered + x.recovered, outstanding: t.outstanding + x.outstanding }), { total: 0, recovered: 0, outstanding: 0 });
+  res.json({ success: true, advances: rows, summary, totals, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500) });
+});
+
+router.post('/api/salary/advances', guard, (req, res) => {
+  const s = load(), b = req.body || {}, emp = s.employees[b.empId], amount = num(b.amount);
+  if (!emp) return res.status(400).json({ success: false, error: 'Select an employee.' });
+  if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Enter a valid advance amount.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date || ''))) return res.status(400).json({ success: false, error: 'Select the payment date.' });
+  if (!String(b.account || '').trim()) return res.status(400).json({ success: false, error: 'Select the paying account.' });
+  if (!String(b.proof || '').trim()) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
+  const recoveryStartMonth = String(b.recoveryStartMonth || b.date.slice(0, 7));
+  if (!/^\d{4}-\d{2}$/.test(recoveryStartMonth)) return res.status(400).json({ success: false, error: 'Select a recovery start month.' });
+  s.advanceSeq = (s.advanceSeq || 0) + 1; const id = 'ADV-' + String(s.advanceSeq).padStart(5, '0'), now = new Date().toISOString();
+  s.advances[id] = { id, empId: emp.id, employeeName: emp.name, amount: round2(amount), date: b.date, account: String(b.account).trim(), proof: String(b.proof).trim(), note: String(b.note || '').trim(), reference: String(b.reference || '').trim(), recoveryStartMonth, recoveries: [], active: true, createdBy: req.user && req.user.username || 'admin', createdAt: now };
+  auditAdvance(s, req, 'CREATED', id, { amount, account: b.account }); save(s);
+  res.json({ success: true, advance: advanceView(s.advances[id]) });
+});
+
+router.post('/api/salary/recoveries/:ym', guard, (req, res) => {
+  const s = load(), b = req.body || {}, ym = req.params.ym, amount = num(b.amount);
+  if (!s.employees[b.empId] || !/^\d{4}-\d{2}$/.test(ym) || amount < 0) return res.status(400).json({ success: false, error: 'Invalid employee, month or amount.' });
+  const eligible = Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === b.empId && a.recoveryStartMonth <= ym && String(a.date).slice(0, 7) <= ym).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
+  eligible.forEach(a => { a.recoveries = (a.recoveries || []).filter(r => r.ym !== ym); });
+  const available = eligible.reduce((n, a) => n + advanceOutstanding(a), 0);
+  if (amount > available + .001) return res.status(400).json({ success: false, error: 'Recovery cannot exceed the eligible outstanding advance of ₹' + round2(available) + '.' });
+  let left = amount; eligible.forEach(a => { if (left <= 0) return; const take = Math.min(left, advanceOutstanding(a)); if (take > 0) { a.recoveries.push({ ym, amount: round2(take), by: req.user && req.user.username || 'admin', at: new Date().toISOString() }); left = round2(left - take); } });
+  auditAdvance(s, req, 'RECOVERY_SET', '', { empId: b.empId, ym, amount }); save(s); res.json({ success: true, amount: round2(amount) });
+});
+
+router.post('/api/salary/advances/:id/cancel', guard, (req, res) => {
+  const s = load(), a = (s.advances || {})[req.params.id], reason = String((req.body || {}).reason || '').trim();
+  if (!a || a.active === false) return res.status(404).json({ success: false, error: 'Advance not found.' });
+  if (!reason) return res.status(400).json({ success: false, error: 'A cancellation reason is required.' });
+  if (advanceRecovered(a) > 0) return res.status(400).json({ success: false, error: 'Reverse its payroll recoveries before cancelling this advance.' });
+  a.active = false; a.cancelledAt = new Date().toISOString(); a.cancelledBy = req.user && req.user.username || 'admin'; a.cancelReason = reason; auditAdvance(s, req, 'CANCELLED', a.id, { reason }); save(s); res.json({ success: true });
 });
 
 // ── A month: computed rows + attendance + totals ──
