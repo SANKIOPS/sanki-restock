@@ -820,6 +820,44 @@ test('bank statement rows are normalized from cumulative Excel exports', () => {
   ]);
 });
 
+test('personal bank reconciliation is Owner-only and stored separately from business books',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  stored.bankStatements=stored.bankStatements||{};
+  stored.bankStatements['IndusInd Bank 7883']={transactions:{business:{id:'BTX-BUSINESS',date:'2026-08-20',debit:10,credit:0,balance:90}},imports:[],reconciledThrough:'2026-08-20'};
+  stored.bankStatements['PERSONAL|IndusInd Bank 7883']={transactions:{personal:{id:'BTX-PERSONAL',date:'2026-08-21',debit:20,credit:0,balance:80}},imports:[],reconciledThrough:'2026-08-21'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const denied=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'PERSONAL',account:'IndusInd Bank 7883'}});
+  assert.equal(denied.status,403);
+  const personal=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'PERSONAL',account:'IndusInd Bank 7883'}});
+  assert.equal(personal.status,200);assert.deepEqual(personal.body.transactions.map(x=>x.id),['BTX-PERSONAL']);
+  const business=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'SAMAST',account:'IndusInd Bank 7883'}});
+  assert.equal(business.status,200);assert.deepEqual(business.body.transactions.map(x=>x.id),['BTX-BUSINESS']);
+  const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+  assert.deepEqual(adminConfig.accountsByNature.PERSONAL,[]);
+});
+
+test('finalizing removes every visible draft summary for that entity and bank',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),now=new Date().toISOString();
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
+  ['BRD-PERSONAL-CURRENT','BRD-PERSONAL-OLDER'].forEach((id,i)=>{stored.bankReconciliationDrafts[id]={id,account:'Namita 5464',nature:'PERSONAL',transactions:[],summary:{from:'2026-08-01',to:'2026-08-27',openingBalance:0,closingBalance:0,totalDebits:0,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',originalName:'personal.csv',fileHash:'hash-'+i,createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};});
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const finalized=invoke('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId:'BRD-PERSONAL-CURRENT'}});
+  assert.equal(finalized.status,200);assert.equal(finalized.body.summary,undefined);
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  assert.equal(Object.values(after.bankReconciliationDrafts).filter(x=>x.account==='Namita 5464'&&x.nature==='PERSONAL').length,0);
+  assert.equal(after.bankStatements['PERSONAL|Namita 5464'].reconciledThrough,'2026-08-27');
+  const view=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'PERSONAL',account:'Namita 5464'}});
+  assert.equal(view.body.draft,null);assert.equal(view.body.updatedThrough,'2026-08-27');
+});
+
+test('personal bank reconciliation UI uses Owner-only entity accounts and clears finalized actions',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/function bankAccountsForNature\(nature\)/);
+  assert.match(html,/PERSONAL bank reconciliation is visible only to Owner/);
+  assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(selectedNature\)/);
+  assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
+});
+
 test('PDF and image OCR statement text uses the same normalized bank rows', () => {
   const rows=parseBankStatementText('24/08/2026 UPI reimbursement UTR720 720.00 0.00 1527.00\n25/08/2026 Customer receipt UTR500 0.00 500.00 2027.00');
   assert.deepEqual(rows.map(x=>({date:x.date,debit:x.debit,credit:x.credit,balance:x.balance})),[
