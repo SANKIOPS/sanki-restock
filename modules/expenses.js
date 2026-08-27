@@ -1103,6 +1103,42 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
   res.json({ success: true, expense: e });
 });
 
+// Reimburse several approved claimant expenses in one payment action. The
+// common batch reference ties the individual ledger entries back to the same
+// proof/payment without losing expense-level auditability.
+router.post('/api/expenses/batch-reimburse', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can reimburse.' });
+  const s=loadStore(),b=req.body||{},ids=Array.from(new Set((Array.isArray(b.expenseIds)?b.expenseIds:[]).map(x=>String(x||'').trim()).filter(Boolean)));
+  if (ids.length<2) return res.status(400).json({success:false,error:'Select at least two pending expenses to reimburse together.'});
+  const proof=String(b.paymentProof||'').trim();
+  if(!proof) return res.status(400).json({success:false,error:'Reimbursement payment proof is required.'});
+  const reimbursementAccount=allowedReimbursementAccount(req,b.account);
+  if(!reimbursementAccount) return res.status(400).json({success:false,error:'Select an authorised company or cash account for this reimbursement.'});
+  const expenses=[];
+  for(const id of ids){
+    const e=s.expenses[id];
+    if(!e) return res.status(404).json({success:false,error:'Expense '+id+' was not found.'});
+    if(!canApproveExpenseNature(req,e)) return res.status(403).json({success:false,error:'You cannot reimburse '+id+' for this accounting entity.'});
+    if(!['pending','partially_reimbursed'].includes(e.reimbursementStatus)) return res.status(400).json({success:false,error:id+' has no approved reimbursement pending.'});
+    const due=Math.max(0,num(e.personalPaidAmount)-num(e.reimbursementAmount));
+    if(!(due>0)) return res.status(400).json({success:false,error:id+' has no reimbursement amount due.'});
+    expenses.push({e,due});
+  }
+  const date=String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),paidAt=new Date().toISOString();
+  const batchId='RB-'+paidAt.replace(/\D/g,'').slice(0,14)+'-'+Math.random().toString(36).slice(2,6).toUpperCase();
+  const reimbursementAccountNatures=approvalNatures(req).filter(n=>companyAccountsForNature(n).some(a=>a.toLowerCase()===reimbursementAccount.toLowerCase()));
+  expenses.forEach(({e,due})=>{
+    e.reimbursementAmount=num(e.reimbursementAmount)+due;
+    e.reimbursementPayments=Array.isArray(e.reimbursementPayments)?e.reimbursementPayments:[];
+    const payment={id:'REIM-'+String(e.reimbursementPayments.length+1).padStart(3,'0'),batchId,amount:due,date,account:reimbursementAccount,accountNatures:reimbursementAccountNatures,paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI',proof,note:String(b.note||'').trim(),paidBy:(req.user&&req.user.username)||'admin',paidAt};
+    e.reimbursementPayments.push(payment);e.reimbursementStatus='reimbursed';
+    audit(s,req,'REIMBURSEMENT_RECORDED','expense',e.id,{nature:e.nature,account:reimbursementAccount,batchId,paymentId:payment.id,after:payment});
+  });
+  saveStore(s);
+  expenses.forEach(({e,due})=>notifyExpenseUser(e,'reimbursed',due));
+  res.json({success:true,batchId,expenseIds:ids,total:round0(expenses.reduce((n,x)=>n+x.due,0)),expenses:expenses.map(x=>x.e)});
+});
+
 router.post('/api/expenses/:id/reject', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can reject.' });
   const s = loadStore(); const e = s.expenses[req.params.id];

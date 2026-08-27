@@ -617,6 +617,27 @@ test('Owner can reimburse a SAMAST claimant from an authorised SANKI account', (
   assert.equal(claimantSummary.accounts.find(x=>x.name==='Arshpreet 1919').balance,0);
 });
 
+test('multiple pending expenses can be reimbursed together and debit the paying account ledger',()=>{
+  const ids=[410,590].map((amount,i)=>{
+    const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Batch Vendor '+i,amount,billPhoto:'/api/expenses/photo/bill-'+i+'.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/personal-'+i+'.jpg'}}).body.expense;
+    invoke('POST','/api/expenses/:id',{params:{id:made.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});invoke('POST','/api/expenses/:id/approve',{params:{id:made.id},role:'owner'});return made.id;
+  });
+  const paid=invoke('POST','/api/expenses/batch-reimburse',{role:'owner',body:{expenseIds:ids,account:'Counter Cash',date:'2026-08-24',paymentType:'UPI',paymentProof:'/api/expenses/photo/batch-reimbursement.jpg',note:'Combined claimant transfer'}});
+  assert.equal(paid.status,200);assert.equal(paid.body.total,1000);assert.match(paid.body.batchId,/^RB-/);assert.equal(paid.body.expenses.length,2);
+  assert.ok(paid.body.expenses.every(e=>e.reimbursementStatus==='reimbursed'&&e.reimbursementPayments.at(-1).batchId===paid.body.batchId));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash',from:'2026-08-22',to:'2026-08-31'}}).body;
+  assert.equal(ids.reduce((n,id)=>n+ledger.entries.filter(x=>x.id.startsWith(id+'/REIM-')).reduce((m,x)=>m+x.debit,0),0),1000);
+});
+
+test('batch reimbursement validates every expense before recording any payment',()=>{
+  const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Atomic Batch Vendor',amount:300,billPhoto:'/api/expenses/photo/atomic.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/atomic-pay.jpg'}}).body.expense;
+  invoke('POST','/api/expenses/:id',{params:{id:made.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});invoke('POST','/api/expenses/:id/approve',{params:{id:made.id},role:'owner'});
+  const blocked=invoke('POST','/api/expenses/batch-reimburse',{role:'owner',body:{expenseIds:[made.id,'EX-99999'],account:'Counter Cash',paymentProof:'/api/expenses/photo/batch.jpg'}});
+  assert.equal(blocked.status,404);
+  const after=invoke('GET','/api/expenses/reimbursements',{role:'owner',query:{status:'pending'}}).body.reimbursements.find(e=>e.id===made.id);
+  assert.equal(after.reimbursementAmount,0);assert.equal(after.reimbursementStatus,'pending');
+});
+
 test('personally paid non-cash expense requires the account used and cash is named automatically', () => {
   const missing = invoke('POST', '/api/expenses', { body: { vendor:'Vendor', amount:100, billPhoto:'/api/expenses/photo/bill.jpg', paidAlready:true, paymentType:'UPI', personalPaymentProof:'/api/expenses/photo/pay.jpg' } });
   assert.equal(missing.status, 400);
