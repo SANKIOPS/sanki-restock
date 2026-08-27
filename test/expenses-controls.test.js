@@ -834,6 +834,9 @@ test('personal bank reconciliation is Owner-only and stored separately from busi
   assert.equal(business.status,200);assert.deepEqual(business.body.transactions.map(x=>x.id),['BTX-BUSINESS']);
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.deepEqual(adminConfig.accountsByNature.PERSONAL,[]);
+  assert.deepEqual(adminConfig.bankAccountsByNature.PERSONAL,[]);
+  const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+  assert.deepEqual(ownerConfig.bankAccountsByNature.PERSONAL,['ICICI Bank 0992','ICICI Bank 0993','IndusInd Bank 7883','Namita 5464']);
 });
 
 test('finalizing removes every visible draft summary for that entity and bank',()=>{
@@ -853,8 +856,11 @@ test('finalizing removes every visible draft summary for that entity and bank',(
 test('personal bank reconciliation UI uses Owner-only entity accounts and clears finalized actions',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/function bankAccountsForNature\(nature\)/);
+  assert.match(html,/id="bs_nature"/);
+  assert.match(html,/bankAccountsByNature/);
+  assert.match(html,/encodeURIComponent\(bankNature\)/);
   assert.match(html,/PERSONAL bank reconciliation is visible only to Owner/);
-  assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(selectedNature\)/);
+  assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
   assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
 });
 
