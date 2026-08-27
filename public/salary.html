@@ -105,11 +105,11 @@
 
     // ── PAYROLL ──
     function renderPayroll(d){
-      var rows = d.rows.map(function(r){
+      var rows = d.rows.map(function(r,index){
         var pd = r.paidDays==null ? '' : r.paidDays;
         var auto = (r.paidDays==null && r.computedPaidDays!=null) ? ' title="from attendance"' : '';
         return '<tr>'+
-          '<td class="l"><b>'+esc(r.name)+'</b><div class="muted" style="font-size:10px">'+esc(r.post||'')+'</div></td>'+
+          '<td>'+(index+1)+'</td><td class="l"><b>'+esc(r.name)+'</b><div class="muted" style="font-size:10px">'+esc(r.post||'')+'</div></td>'+
           '<td class="l"><span class="tag '+esc(r.channel)+'">'+esc(r.channel)+'</span></td>'+
           '<td>'+fmt(r.salary)+'</td>'+
           '<td><input class="cell" type="number" step="0.5" value="'+pd+'"'+auto+' onchange="saveRow(\''+r.id+'\',\'paidDays\',this.value)" placeholder="'+(r.computedPaidDays!=null?r.computedPaidDays:'—')+'"></td>'+
@@ -124,9 +124,9 @@
       var t=d.totals;
       el('host').innerHTML =
         '<div class="card"><table>'+
-          '<thead><tr><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance recovery</th><th>Net payable</th><th>Paid</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
+          '<thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance recovery</th><th>Net payable</th><th>Paid</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
           '<tbody>'+rows+'</tbody>'+
-          '<tfoot><tr><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>'+'—'+'</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td class="'+(t.netPayable<0?'neg':'')+'">'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
+          '<tfoot><tr><td></td><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>'+'—'+'</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td class="'+(t.netPayable<0?'neg':'')+'">'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
         '</table></div>'+
         '<div class="conf">Divisor = '+d.divisor+' (fixed). <b>Paid days</b> can exceed 30 for overtime. Blank paid-days uses attendance (grey placeholder). <b>Salary amt</b> (earned) is what posts to the P&amp;L — advance &amp; paid only affect what you owe/settle.</div>';
     }
@@ -143,13 +143,13 @@
       var f=state.advanceFilters,q='summaryMonth='+state.ym+'&employee='+encodeURIComponent(f.employee)+'&month='+encodeURIComponent(f.month)+'&status='+encodeURIComponent(f.status)+'&account='+encodeURIComponent(f.account);
       Promise.all([api('/api/salary/employees'),api('/api/expenses/config'),api('/api/salary/advances?'+q)]).then(function(all){
         var ed=all[0],cfg=all[1],d=all[2]; state.employees=ed.employees||[]; state.accounts=((cfg.payingAccountsByNature||{}).SANKI)||cfg.accounts||[];
-        var eo=state.employees.filter(function(e){return e.active!==false;}).map(function(e){return '<option value="'+e.id+'">'+esc(e.name)+'</option>';}).join(''), ao=state.accounts.map(function(a){return '<option>'+esc(a)+'</option>';}).join('');
-        var summaries=(d.summary||[]).map(function(x){return '<details class="stat"><summary><b>'+esc(x.name)+'</b> · outstanding '+fmt(x.outstanding)+'</summary><div class="conf">This month '+fmt(x.thisMonth)+' · total received '+fmt(x.total)+' · payroll recovered '+fmt(x.recovered)+'</div>'+x.transactions.map(function(a){return '<div class="conf">'+esc(a.date)+' · '+fmt(a.amount)+' · '+esc(a.account)+' · <span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></div>';}).join('')+'</details>';}).join('')||'<div class="conf">No advances logged yet.</div>';
-        var rows=(d.advances||[]).map(function(a){return '<tr><td class="l"><b>'+esc(a.employeeName)+'</b><div class="muted">'+esc(a.id)+'</div></td><td>'+esc(a.date)+'</td><td class="l">'+esc(a.account)+'</td><td>'+fmt(a.amount)+'</td><td>'+fmt(a.recovered)+'</td><td>'+fmt(a.outstanding)+'</td><td><span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></td><td><a href="'+esc(a.proof)+'" target="_blank">Proof</a> '+(a.active===false?'':'<button class="btn mini ghost" onclick="cancelAdvance(\''+a.id+'\')">Cancel</button>')+'</td></tr>';}).join('');
+        var eo=state.employees.filter(function(e){return e.active!==false;}).map(function(e,index){return '<option value="'+e.id+'">'+(index+1)+'. '+esc(e.name)+'</option>';}).join(''), ao=state.accounts.map(function(a){return '<option>'+esc(a)+'</option>';}).join('');
+        var summaries=(d.summary||[]).map(function(x,index){return '<details class="stat"><summary><b>'+(index+1)+'. '+esc(x.name)+'</b> · outstanding '+fmt(x.outstanding)+'</summary><div class="conf">This month '+fmt(x.thisMonth)+' · total received '+fmt(x.total)+' · payroll recovered '+fmt(x.recovered)+'</div>'+x.transactions.map(function(a,i){return '<div class="conf">'+(i+1)+'. '+esc(a.date)+' · '+fmt(a.amount)+' · '+esc(a.account)+' · <span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></div>';}).join('')+'</details>';}).join('')||'<div class="conf">No advances logged yet.</div>';
+        var rows=(d.advances||[]).map(function(a,index){return '<tr><td>'+(index+1)+'</td><td class="l"><b>'+esc(a.employeeName)+'</b><div class="muted">'+esc(a.id)+'</div></td><td>'+esc(a.date)+'</td><td class="l">'+esc(a.account)+'</td><td>'+fmt(a.amount)+'</td><td>'+fmt(a.recovered)+'</td><td>'+fmt(a.outstanding)+'</td><td><span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></td><td><a href="'+esc(a.proof)+'" target="_blank">Proof</a> '+(a.active===false?'':'<button class="btn mini ghost" onclick="cancelAdvance(\''+a.id+'\')">Cancel</button>')+'</td></tr>';}).join('');
         el('host').innerHTML='<div class="card"><div class="advance-grid"><div><label>Employee</label><select id="ad_emp"><option value="">Select</option>'+eo+'</select></div><div><label>Amount ₹</label><input id="ad_amount" type="number" min="1"></div><div><label>Payment date</label><input id="ad_date" type="date" value="'+new Date().toISOString().slice(0,10)+'"></div><div><label>Paying account / cash</label><select id="ad_account"><option value="">Select</option>'+ao+'</select></div><div><label>Recover from payroll month</label><input id="ad_recovery" type="month" value="'+state.ym+'"></div><div><label>Payment proof (required)</label><input id="ad_proof" type="file" accept="image/*,.pdf"></div><div><label>Reference (optional)</label><input id="ad_ref"></div><div><label>Note (optional)</label><input id="ad_note"></div><div style="align-self:end"><button class="btn" id="addAdvance">Log advance</button></div></div></div>'+
           '<div class="card" style="margin-top:14px"><div class="advance-grid"><div><label>Filter employee</label><select id="af_employee"><option value="">All</option>'+eo+'</select></div><div><label>Advance month</label><input id="af_month" type="month" value="'+esc(f.month)+'"></div><div><label>Status</label><select id="af_status"><option value="">All</option><option>Outstanding</option><option>Partially recovered</option><option>Recovered</option><option>Cancelled</option></select></div><div><label>Paying account</label><select id="af_account"><option value="">All</option>'+ao+'</select></div><div style="align-self:end"><button class="btn ghost" id="clearAdvanceFilters">Clear filters</button></div></div></div>'+
           '<details class="card"><summary>Employee advance summary · outstanding '+fmt((d.totals||{}).outstanding)+'</summary><div class="advance-grid">'+summaries+'</div></details>'+
-          '<details class="card"><summary>Advance transaction history · '+(d.advances||[]).length+' entries</summary><div class="card"><table><thead><tr><th class="l">Employee</th><th>Date</th><th class="l">Account</th><th>Received</th><th>Recovered</th><th>Outstanding</th><th>Status</th><th>Audit</th></tr></thead><tbody>'+rows+'</tbody></table></div></details><div class="conf">Advances debit the selected account immediately and remain a recoverable employee balance. Payroll recovery is allocated to the oldest eligible advance first; cancellations remain in the audit history.</div>';
+          '<details class="card"><summary>Advance transaction history · '+(d.advances||[]).length+' entries</summary><div class="card"><table><thead><tr><th>S.No.</th><th class="l">Employee</th><th>Date</th><th class="l">Account</th><th>Received</th><th>Recovered</th><th>Outstanding</th><th>Status</th><th>Audit</th></tr></thead><tbody>'+rows+'</tbody></table></div></details><div class="conf">Advances debit the selected account immediately and remain a recoverable employee balance. Payroll recovery is allocated to the oldest eligible advance first; cancellations remain in the audit history.</div>';
         el('addAdvance').onclick=function(){ var f=el('ad_proof').files[0]; if(!f){flash('Payment proof is required.',false);return;} this.disabled=true; uploadProof(f).then(function(u){if(!u.success)throw new Error(u.error||'Upload failed');return api('/api/salary/advances',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:el('ad_emp').value,amount:el('ad_amount').value,date:el('ad_date').value,account:el('ad_account').value,recoveryStartMonth:el('ad_recovery').value,proof:u.url,note:el('ad_note').value,reference:el('ad_ref').value})});}).then(function(x){if(!x.success)throw new Error(x.error);flash('Advance logged and posted to the paying account.',true);loadAdvances();}).catch(function(e){flash(e.message,false);el('addAdvance').disabled=false;}); };
         el('af_employee').value=f.employee;el('af_status').value=f.status;el('af_account').value=f.account;
         ['employee','month','status','account'].forEach(function(k){el('af_'+k).onchange=function(){state.advanceFilters[k]=this.value;loadAdvances();};});
@@ -162,7 +162,7 @@
     function renderAttendance(d){
       var dim = d.daysInMonth, att = d.attendance||{};
       var headDays=''; for(var i=1;i<=dim;i++) headDays += '<th>'+i+'</th>';
-      var body = d.rows.map(function(r){
+      var body = d.rows.map(function(r,index){
         var cells='';
         for(var day=1; day<=dim; day++){
           var dd = pad(day);
@@ -170,11 +170,11 @@
           cells += '<td class="daycell '+(m?('m-'+m):'')+'" data-emp="'+r.id+'" data-day="'+dd+'">'+(m||'·')+'</td>';
         }
         var pdShown = r.computedPaidDays!=null ? r.computedPaidDays : '—';
-        return '<tr><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+pdShown+'</b></td></tr>';
+        return '<tr><td>'+(index+1)+'</td><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+pdShown+'</b></td></tr>';
       }).join('');
       el('host').innerHTML =
         '<div class="card"><table class="att">'+
-          '<thead><tr><th class="l">Name</th>'+headDays+'<th>Paid days</th></tr></thead>'+
+          '<thead><tr><th>S.No.</th><th class="l">Name</th>'+headDays+'<th>Paid days</th></tr></thead>'+
           '<tbody>'+body+'</tbody>'+
         '</table></div>'+
         '<div class="legend">Click a cell to cycle: '+
@@ -197,8 +197,8 @@
       api('/api/salary/employees').then(function(d){
         state.employees = d.employees;
         var chOpts = function(sel){ return (d.channels||['POS','Website','Shared']).map(function(c){ return '<option '+(c===sel?'selected':'')+'>'+c+'</option>'; }).join(''); };
-        var rows = d.employees.map(function(e){
-          return '<tr'+(e.active===false?' style="opacity:.5"':'')+'>'+
+        var rows = d.employees.map(function(e,index){
+          return '<tr'+(e.active===false?' style="opacity:.5"':'')+'><td>'+(index+1)+'</td>'+
             '<td class="l"><input class="rem" style="width:150px" value="'+esc(e.name)+'" onchange="saveEmp(\''+e.id+'\',\'name\',this.value)"></td>'+
             '<td class="l"><input class="rem" style="width:130px" value="'+esc(e.post||'')+'" onchange="saveEmp(\''+e.id+'\',\'post\',this.value)"></td>'+
             '<td><input class="cell" style="width:80px" type="number" value="'+e.salary+'" onchange="saveEmp(\''+e.id+'\',\'salary\',this.value)"></td>'+
@@ -207,7 +207,7 @@
           '</tr>';
         }).join('');
         el('host').innerHTML =
-          '<div class="card"><table><thead><tr><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
           '<div class="card" style="margin-top:14px"><div class="empform">'+
             '<div class="fld"><label>Name</label><input id="ne_name" placeholder="full name"></div>'+
             '<div class="fld"><label>Post</label><input id="ne_post" placeholder="e.g. Sales Executive"></div>'+
