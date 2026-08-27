@@ -244,6 +244,34 @@ router.post('/api/salary/attendance/:ym', guard, (req, res) => {
   res.json({ success: true, mark:b.savedMark || '' });
 });
 
+// Atomically replace a supplied attendance range for several employees.
+// Every item is validated before salary.json is changed, preventing partial imports.
+router.post('/api/salary/attendance/:ym/batch', guard, (req, res) => {
+  const ym=String(req.params.ym||''),b=req.body||{},items=Array.isArray(b.items)?b.items:[];
+  if(!/^\d{4}-\d{2}$/.test(ym)||!items.length)return res.status(400).json({success:false,error:'Choose a valid month and at least one employee.'});
+  const s=load(),dim=daysInMonth(ym),seen=new Set(),prepared=[];
+  for(const item of items){
+    const requestedName=String(item.employeeName||'').trim();
+    const emp=item.empId?s.employees[item.empId]:Object.values(s.employees).find(e=>String(e.name||'').localeCompare(requestedName,'en',{sensitivity:'base'})===0);
+    if(!emp||seen.has(emp.id))return res.status(400).json({success:false,error:'An employee is missing or duplicated: '+(requestedName||item.empId||'unknown')});
+    const marks=Array.isArray(item.marks)?item.marks:[];
+    if(marks.length>dim)return res.status(400).json({success:false,error:'Too many attendance days for '+emp.name+'.'});
+    const normalized={};
+    for(let i=0;i<marks.length;i++){
+      const day=String(i+1).padStart(2,'0'),dateText=ym+'-'+day,raw=String(marks[i]||'').trim().toUpperCase(),mark=raw==='HD'?'H':raw;
+      if(mark&&!Object.prototype.hasOwnProperty.call(MARKS,mark))return res.status(400).json({success:false,error:'Invalid mark for '+emp.name+' on '+dateText+'.'});
+      if(mark&&((emp.joiningDate&&dateText<emp.joiningDate)||(emp.lastWorkingDate&&dateText>emp.lastWorkingDate)))return res.status(400).json({success:false,error:dateText+' is outside '+emp.name+'’s employment period.'});
+      const weekday=WEEK_DAYS[new Date(dateText+'T00:00:00Z').getUTCDay()];
+      normalized[day]=mark==='A'&&emp.weekOffDay===weekday?'WO':mark;
+    }
+    seen.add(emp.id);prepared.push({emp,normalized});
+  }
+  const mo=ensureMonth(s,ym);
+  prepared.forEach(({emp,normalized})=>{mo.attendance[emp.id]=mo.attendance[emp.id]||{};Object.entries(normalized).forEach(([day,mark])=>{if(mark)mo.attendance[emp.id][day]=mark;else delete mo.attendance[emp.id][day];});});
+  save(s);
+  res.json({success:true,employees:prepared.length,cells:prepared.reduce((n,x)=>n+Object.keys(x.normalized).length,0),rows:computeMonth(s,ym).filter(r=>seen.has(r.id)).map(r=>({empId:r.id,name:r.name,paidDays:r.computedPaidDays}))});
+});
+
 // Edit a payroll row (paidDays override / advance / paid / remarks).
 router.post('/api/salary/row/:ym', guard, (req, res) => {
   const s = load(); const mo = ensureMonth(s, req.params.ym); const b = req.body || {};
