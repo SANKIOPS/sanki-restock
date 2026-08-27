@@ -143,7 +143,7 @@
     window.postPayrollLedgers=function(){var t=state.data&&state.data.totals;if(!t)return;if(!confirm('Post '+ymLabel(state.ym)+' to employee salary ledgers?\nSalary earned: '+fmt(t.salaryAmt)+'\nPaid: '+fmt(t.paid)+'\nThis month can be posted only once.'))return;api('/api/salary/post/'+state.ym,{method:'POST'}).then(function(d){flash(d.success?'Payroll posted to salary ledgers.':(d.error||'Could not post payroll.'),!!d.success);});};
 
     // ── ADVANCES ──
-    function uploadProof(file){ var fd=new FormData(); fd.append('file',file); fd.append('nature','SANKI'); return fetch('/api/expenses/upload',{method:'POST',body:fd}).then(function(r){return r.json();}); }
+    function uploadProof(file){ var fd=new FormData(); fd.append('photo',file); fd.append('nature','SANKI'); return fetch('/api/expenses/upload',{method:'POST',body:fd}).then(function(r){return r.text().then(function(raw){var d;try{d=JSON.parse(raw);}catch(_){d={success:false,error:r.ok?'The upload returned an unreadable response.':'Payment proof upload failed. Please sign in again or retry.'};}if(!r.ok&&d.success!==false)d={success:false,error:d.error||'Payment proof upload failed.'};return d;});}); }
     function loadAdvances(){
       var f=state.advanceFilters,q='summaryMonth='+state.ym+'&employee='+encodeURIComponent(f.employee)+'&month='+encodeURIComponent(f.month)+'&status='+encodeURIComponent(f.status)+'&account='+encodeURIComponent(f.account);
       Promise.all([api('/api/salary/employees'),api('/api/expenses/config'),api('/api/salary/advances?'+q)]).then(function(all){
