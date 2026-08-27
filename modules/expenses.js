@@ -474,7 +474,7 @@ function storedAccountNames(s) {
   const names = new Set([].concat(s.accounts || [], [DEFAULT_SALES_BANK, DEFAULT_COUNTER_CASH], Object.keys(s.openingBalances || {}), Object.keys(s.odConfig || {})));
   Object.values(s.openingBalancesByNature || {}).forEach(map => Object.keys(map || {}).forEach(name => names.add(name)));
   (s.adjustments || []).forEach(x => { if (x.account) names.add(String(x.account)); });
-  (s.transfers || []).forEach(x => { if (x.fromAccount) names.add(String(x.fromAccount)); if (x.toAccount) names.add(String(x.toAccount)); });
+  (s.transfers || []).forEach(x => { if (x.fromAccount) names.add(String(x.fromAccount)); if (x.toAccount&&x.classification!=='credit_card_payment') names.add(String(x.toAccount)); });
   Object.values(s.expenses || {}).forEach(e => {
     if (e.account) names.add(String(e.account));
     (e.payments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
@@ -534,7 +534,7 @@ function ledgerAccountsForNature(s, nature) {
   (s.receipts || []).filter(x => normalizedNature(x.nature) === n).forEach(x => names.add(String(x.account)));
   (s.transfers || []).forEach(x => {
     if (normalizedNature(x.fromNature || x.nature) === n) names.add(String(x.fromAccount));
-    if (normalizedNature(x.toNature || x.nature) === n) names.add(String(x.toAccount));
+    if (x.classification!=='credit_card_payment'&&normalizedNature(x.toNature || x.nature) === n) names.add(String(x.toAccount));
   });
   return Array.from(names).filter(Boolean).sort((a,b)=>a.localeCompare(b));
 }
@@ -1996,7 +1996,7 @@ function summaryForPL(from, to) {
     const ch = CHANNELS.includes(e.channel) ? e.channel : 'Shared';
     out[ch][e.type] = (out[ch][e.type] || 0) + e.amount;
   });
-  (s.reconciliationExpenses||[]).filter(e=>normalizedNature(e.nature)==='SANKI'&&(!from||e.date>=from)&&(!to||e.date<=to)).forEach(e=>{const type=e.type||defaultType(e.category||'');out.Shared[type]=(out.Shared[type]||0)+num(e.amount);});
+  (s.reconciliationExpenses||[]).filter(e=>normalizedNature(e.nature)==='SANKI'&&(!from||e.date>=from)&&(!to||e.date<=to)).forEach(e=>{const type=e.creditCardId?defaultType(e.category||''):(e.type||defaultType(e.category||'')),channel=CHANNELS.includes(e.channel)?e.channel:'Shared';out[channel][type]=(out[channel][type]||0)+num(e.amount);});
   return out;
 }
 

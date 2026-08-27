@@ -28,9 +28,80 @@ const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 
-function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0 }; }
-function load() { try { return Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8'))); } catch { return blank(); } }
+function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, oneTimeMigrations:{} }; }
+function load() {
+  try {
+    const s=Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8')));
+    if(applyJuly2026AttendanceAndPayroll(s)) save(s);
+    return s;
+  } catch { return blank(); }
+}
 function save(s) { const tmp = SAL_PATH + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, SAL_PATH); }
+
+// Owner-confirmed historical import. It is deliberately idempotent and only
+// changes July 2026. Historical advances have no proof/account, so they remain
+// payroll adjustments and never create bank/cash ledger transactions.
+const JULY_2026_IMPORT = [
+  ['ARSHPREET SINGH','MANAGER','PPAPPPPPPPAPPPPPAPPPPPPAPPPPPPP',2000],
+  ['SUNNY SHARMA','SALES EXECUTIVE','PPPPAPPPPAAAPPPPPPPPPAPPPPPPAAA',17000],
+  ['PARDEEP','EXECUTIVE','PPPPPPPPPPPPPAAAAAAAAAAAAHPPPPP',0],
+  ['NANDANI','SALES EXECUTIVE','PPPPPAAPPPPPPPPPAPPPPPPAPPPPPPA',0],
+  ['SHIVAM','SALES EXECUTIVE','PPPPPPPPPAPPPPPAPPPPAPPPPPAPPPP',1000],
+  ['ISHA','SALES EXECUTIVE','PPPPPPPPPAPPPPPAAPPPPPPPPPPPAPP',100],
+  ['HITESH','PHOTOGRAPHER','PPPPAAAPPPPAPPPPPPAPPAPPPAPPPPP',0],
+  ['AJAY','VIDEO EDITOR','PPPPPPAPPPPAPPPAPPPAPPPPPAPPPPP',0],
+  ['PIYUSH','TAILOR','PPPP AAPPPPAPPPPPPPPPP AAP PAPPPPP'.replace(/ /g,''),0],
+  ['UMAIR','DRIVER','PPPPAPPPPPPAPPAPPPHHH HPPPPPPPPP'.replace(/ /g,''),17000],
+  ['TUSHAR','PACKING HELPER','PPPPAAHPPPPPPPPPPPPPPPPPPAPPPPP',0],
+  ['NIDA','LOGISTIC','PPPPAPPPPPPAPPPPPPAAPPPPPAPPPPP',0],
+  ['GAURAV','EDITOR','PPPPPPPPPPPAPPPPPPAAP PAP PAPPPPP'.replace(/ /g,''),0],
+  ['PRASHANT','ACCOUNTS','PPPPPPPHPPPAPHHPA PPPPPPPPAPPPPP'.replace(/ /g,''),7467],
+  ['Suraj','Office Boy','PPP AAPPPPPPPPPAAAA PPPPPPPPPPPPP'.replace(/ /g,''),1500],
+  ['TUSHAR','Model','PPPPPPPPPPPAPPPPPPAPPPPPAPPPPPP',0],
+  ['Indervir','ACCOUNTS','PPPPAPAAPPPPPPPPPHAPPPPAPPPPPPP',3000],
+  ['Pooja','Model','--------------------PPPPPAPPPPP',0,'2026-07-21'],
+  ['Ravi','DRIVER','---------------------PPPPPPPPPA',6000,'2026-07-22']
+];
+
+function findImportedEmployee(s,name,post){
+  const sameName=Object.values(s.employees||{}).filter(e=>String(e.name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().localeCompare(name,'en',{sensitivity:'base'})===0);
+  return sameName.find(e=>String(e.post||'').localeCompare(post,'en',{sensitivity:'base'})===0)||sameName[0];
+}
+function julyImportedMarks(emp,encoded){
+  const attendance={},raw=String(encoded||''); let paid=0,offs=0;
+  for(let i=0;i<31;i++){
+    const source=raw[i]||'',day=String(i+1).padStart(2,'0');
+    if(source==='-'||!source)continue;
+    if(source==='P'){attendance[day]='P';paid++;continue;}
+    if(source==='H'){attendance[day]='H';paid+=.5;continue;}
+    if(source==='A'){
+      offs++;
+      const date='2026-07-'+day,weekday=WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()],isWeekOff=!!emp.weekOffDay&&emp.weekOffDay===weekday;
+      attendance[day]=isWeekOff?'WO':(offs<=4?'PL':'A');
+      if(offs<=4)paid++;
+    }
+  }
+  return {attendance,paidDays:Math.max(0,round2(paid-1))};
+}
+function applyJuly2026AttendanceAndPayroll(s){
+  const key='july_2026_attendance_payroll_v1';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key]||((s.payrollPostings||{})['2026-07'])||(((s.months||{})['2026-07']||{}).finalized))return false;
+  const mo=ensureMonth(s,'2026-07');mo.attendance=mo.attendance||{};mo.rows=mo.rows||{};
+  const imported=[];
+  for(const [name,post,marks,advance,joiningDate] of JULY_2026_IMPORT){
+    const emp=findImportedEmployee(s,name,post);if(!emp)continue;
+    if(joiningDate)emp.joiningDate=joiningDate;
+    const calculated=julyImportedMarks(emp,marks);
+    mo.attendance[emp.id]=calculated.attendance;
+    mo.rows[emp.id]=Object.assign({},mo.rows[emp.id],{paidDays:calculated.paidDays,advance:round2(advance),paid:0,remarks:'July 2026 attendance import · first 4 offs paid · 31-day adjustment -1'});
+    imported.push({empId:emp.id,name:emp.name,paidDays:calculated.paidDays,advance:round2(advance)});
+  }
+  // The dated source contains no July advance for employees omitted from the
+  // attendance sheet (for example Guard), so remove legacy July-only estimates.
+  for(const [id,row] of Object.entries(mo.rows))if(!imported.some(x=>x.empId===id)){row.advance=0;row.paid=0;}
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),month:'2026-07',employees:imported,advanceTotal:round2(imported.reduce((n,x)=>n+x.advance,0)),rules:{firstOffsPaid:4,calendar31Deduction:1}};
+  return true;
+}
 
 // ── Access: salary is sensitive → admin or accounting only ──
 function rolesOf(req) { return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || []; }
@@ -334,4 +405,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _julyImportedMarks:julyImportedMarks };
