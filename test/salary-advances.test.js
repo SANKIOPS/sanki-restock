@@ -67,6 +67,20 @@ test('assigned weekly off converts an absent mark only on that weekday', () => {
   assert.match(html,/Weekly off day/); assert.match(html,/cal-sunday/); assert.match(html,/cal-weekoff/); assert.match(html,/attendanceCellInfo/);
 });
 
+test('bulk attendance validates every employee before replacing supplied days',()=>{
+  const a=invoke('POST','/api/salary/employees',{body:{name:'Bulk Alpha',salary:12000,weekOffDay:'Sunday'}}).body.employee;
+  const b=invoke('POST','/api/salary/employees',{body:{name:'Bulk Beta',salary:12000}}).body.employee;
+  const bad=invoke('POST','/api/salary/attendance/:ym/batch',{params:{ym:'2026-08'},body:{items:[{employeeName:a.name,marks:['P','A']},{employeeName:b.name,marks:['INVALID']}]}});
+  assert.equal(bad.status,400);
+  let month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body;
+  assert.equal((month.attendance[a.id]||{})['01'],undefined,'invalid batch saves nothing');
+  const good=invoke('POST','/api/salary/attendance/:ym/batch',{params:{ym:'2026-08'},body:{items:[{employeeName:a.name,marks:['P','HD','']},{employeeName:b.name,marks:['A','P','P']}]}});
+  assert.equal(good.status,200);assert.equal(good.body.employees,2);assert.equal(good.body.cells,6);
+  month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body;
+  assert.equal(month.attendance[a.id]['01'],'P');assert.equal(month.attendance[a.id]['02'],'H');assert.equal(month.attendance[a.id]['03'],undefined);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Bulk attendance import/);assert.match(html,/Import this month atomically/);
+});
+
 test('joining and leaving dates limit calendar-month weekly offs and paid days', () => {
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Mid Month Joiner',salary:12000,weekOffDay:'Sunday',joiningDate:'2026-08-20'}}).body.employee;
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'16',mark:'A'}}).status,400);
