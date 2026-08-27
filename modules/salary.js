@@ -260,7 +260,7 @@ router.post('/api/salary/attendance/:ym/batch', guard, (req, res) => {
     for(let i=0;i<marks.length;i++){
       const day=String(i+1).padStart(2,'0'),dateText=ym+'-'+day,raw=String(marks[i]||'').trim().toUpperCase(),mark=raw==='HD'?'H':raw;
       if(mark&&!Object.prototype.hasOwnProperty.call(MARKS,mark))return res.status(400).json({success:false,error:'Invalid mark for '+emp.name+' on '+dateText+'.'});
-      if(mark&&((emp.joiningDate&&dateText<emp.joiningDate)||(emp.lastWorkingDate&&dateText>emp.lastWorkingDate)))return res.status(400).json({success:false,error:dateText+' is outside '+emp.name+'’s employment period.'});
+      if((emp.joiningDate&&dateText<emp.joiningDate)||(emp.lastWorkingDate&&dateText>emp.lastWorkingDate)){normalized[day]='';continue;}
       const weekday=WEEK_DAYS[new Date(dateText+'T00:00:00Z').getUTCDay()];
       normalized[day]=mark==='A'&&emp.weekOffDay===weekday?'WO':mark;
     }
