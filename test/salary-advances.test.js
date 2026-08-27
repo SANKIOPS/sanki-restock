@@ -41,4 +41,16 @@ test('salary advances require proof, summarize balances and recover oldest first
 test('advance UI is collapsed by default and exposes account posting and audit concepts', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/data-v="advances"/); assert.match(html,/<details class="card"><summary>Employee advance summary/); assert.match(html,/Payment proof \(required\)/); assert.match(html,/saveRecovery/); assert.match(html,/oldest eligible advance first/);
+  assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);
+});
+
+test('every salary employee list is returned alphabetically A to Z', () => {
+  invoke('POST','/api/salary/employees',{body:{name:'zulu employee',salary:10000}});
+  invoke('POST','/api/salary/employees',{body:{name:'Alpha employee',salary:10000}});
+  const employees=invoke('GET','/api/salary/employees').body.employees.map(x=>x.name);
+  assert.deepEqual(employees,employees.slice().sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base',numeric:true})));
+  const payroll=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.map(x=>x.name);
+  assert.deepEqual(payroll,employees);
+  const summary=invoke('GET','/api/salary/advances').body.summary.map(x=>x.name);
+  assert.deepEqual(summary,summary.slice().sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base',numeric:true})));
 });
