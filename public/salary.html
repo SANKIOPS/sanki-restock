@@ -44,6 +44,9 @@
     .empform label { font-size:11px; font-weight:700; color:#374151; margin:0 0 4px; text-transform:uppercase; letter-spacing:.3px; }
     .empform input, .empform select { font-size:14px; padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; }
     .conf { font-size:12px; color:#6b7280; margin:10px 2px; line-height:1.5; }
+    details.card { margin-top:14px; overflow:hidden; } details.card>summary { cursor:pointer; padding:15px; font-weight:800; list-style:none; } details.card>summary::after { content:'＋'; float:right; } details.card[open]>summary::after { content:'−'; }
+    .advance-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; padding:14px; } .advance-grid label { display:block; font-size:11px; font-weight:750; text-transform:uppercase; margin-bottom:4px; color:#4b5563; } .advance-grid input,.advance-grid select { width:100%; padding:9px; border:1px solid #d1d5db; border-radius:8px; }
+    .stat { padding:12px; border:1px solid #e5e7eb; border-radius:9px; } .status { font-size:10px; font-weight:800; padding:3px 7px; border-radius:10px; background:#fef3c7; } .status.Recovered { background:#dcfce7; color:#166534; } .status.Cancelled { background:#fee2e2; color:#991b1b; }
     @media (max-width:680px){
       .wrap { padding:16px 12px 90px; } h1 { font-size:20px; }
       input, select { font-size:16px; } input.cell { width:60px; } input.rem { width:120px; }
@@ -61,6 +64,7 @@
         <button data-v="payroll" class="on">Payroll</button>
         <button data-v="attendance">Attendance</button>
         <button data-v="employees">Employees</button>
+        <button data-v="advances">Advances</button>
       </div>
       <span style="flex:1"></span>
       <button class="navbtn" id="prevM">‹</button>
@@ -79,7 +83,7 @@
     var fmt = function(n){ n = Math.round((n||0)); return (n<0?'−₹':'₹') + Math.abs(n).toLocaleString('en-IN'); };
     var MARKS = ['P','H','A','PL','WO'];               // cycle order (click)
     var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'PL', 'PL':'WO', 'WO':'' };
-    var state = { view:'payroll', ym:'', data:null, employees:null };
+    var state = { view:'payroll', ym:'', data:null, employees:null, accounts:[], advanceFilters:{employee:'',month:'',status:'',account:''} };
 
     function pad(n){ return String(n).padStart(2,'0'); }
     function ymLabel(ym){ var p=ym.split('-'); var mn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mn[+p[1]-1]+' '+p[0]; }
@@ -91,6 +95,7 @@
     function load(){
       el('mlabel').textContent = ymLabel(state.ym);
       if(state.view==='employees'){ loadEmployees(); return; }
+      if(state.view==='advances'){ loadAdvances(); return; }
       api('/api/salary/month/'+state.ym).then(function(d){
         if(!d.success){ el('host').innerHTML='<div class="conf">'+esc(d.error||'Unavailable.')+'</div>'; return; }
         state.data = d;
@@ -109,7 +114,7 @@
           '<td>'+fmt(r.salary)+'</td>'+
           '<td><input class="cell" type="number" step="0.5" value="'+pd+'"'+auto+' onchange="saveRow(\''+r.id+'\',\'paidDays\',this.value)" placeholder="'+(r.computedPaidDays!=null?r.computedPaidDays:'—')+'"></td>'+
           '<td>'+fmt(r.salaryAmt)+'</td>'+
-          '<td><input class="cell" type="number" value="'+(r.advance||0)+'" onchange="saveRow(\''+r.id+'\',\'advance\',this.value)"></td>'+
+          '<td><input class="cell" type="number" min="0" value="'+(r.loggedAdvanceRecovery||0)+'" onchange="saveRecovery(\''+r.id+'\',this.value)" title="Logged advance recovery this month">'+(r.legacyAdvance?'<div class="muted" title="Older imported recovery">+ legacy '+fmt(r.legacyAdvance)+'</div>':'')+'<div class="muted">due '+fmt(r.outstandingAdvance)+'</div></td>'+
           '<td class="'+(r.netPayable<0?'neg':'')+'">'+fmt(r.netPayable)+'</td>'+
           '<td><input class="cell" type="number" value="'+(r.paid||0)+'" onchange="saveRow(\''+r.id+'\',\'paid\',this.value)"></td>'+
           '<td class="'+(r.balance<0?'neg':(r.balance>0?'pos':''))+'">'+fmt(r.balance)+'</td>'+
@@ -119,7 +124,7 @@
       var t=d.totals;
       el('host').innerHTML =
         '<div class="card"><table>'+
-          '<thead><tr><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance</th><th>Net payable</th><th>Paid</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
+          '<thead><tr><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance recovery</th><th>Net payable</th><th>Paid</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
           '<tbody>'+rows+'</tbody>'+
           '<tfoot><tr><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>'+'—'+'</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td class="'+(t.netPayable<0?'neg':'')+'">'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
         '</table></div>'+
@@ -130,6 +135,28 @@
       api('/api/salary/row/'+state.ym, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
         .then(function(){ flash('Saved.', true); load(); });
     };
+    window.saveRecovery = function(empId, val){ api('/api/salary/recoveries/'+state.ym,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:empId,amount:val})}).then(function(d){ if(!d.success){flash(d.error||'Could not save recovery.',false);return;} flash('Advance recovery saved and linked oldest-first.',true);load(); }); };
+
+    // ── ADVANCES ──
+    function uploadProof(file){ var fd=new FormData(); fd.append('file',file); fd.append('nature','SANKI'); return fetch('/api/expenses/upload',{method:'POST',body:fd}).then(function(r){return r.json();}); }
+    function loadAdvances(){
+      var f=state.advanceFilters,q='summaryMonth='+state.ym+'&employee='+encodeURIComponent(f.employee)+'&month='+encodeURIComponent(f.month)+'&status='+encodeURIComponent(f.status)+'&account='+encodeURIComponent(f.account);
+      Promise.all([api('/api/salary/employees'),api('/api/expenses/config'),api('/api/salary/advances?'+q)]).then(function(all){
+        var ed=all[0],cfg=all[1],d=all[2]; state.employees=ed.employees||[]; state.accounts=((cfg.payingAccountsByNature||{}).SANKI)||cfg.accounts||[];
+        var eo=state.employees.filter(function(e){return e.active!==false;}).map(function(e){return '<option value="'+e.id+'">'+esc(e.name)+'</option>';}).join(''), ao=state.accounts.map(function(a){return '<option>'+esc(a)+'</option>';}).join('');
+        var summaries=(d.summary||[]).map(function(x){return '<details class="stat"><summary><b>'+esc(x.name)+'</b> · outstanding '+fmt(x.outstanding)+'</summary><div class="conf">This month '+fmt(x.thisMonth)+' · total received '+fmt(x.total)+' · payroll recovered '+fmt(x.recovered)+'</div>'+x.transactions.map(function(a){return '<div class="conf">'+esc(a.date)+' · '+fmt(a.amount)+' · '+esc(a.account)+' · <span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></div>';}).join('')+'</details>';}).join('')||'<div class="conf">No advances logged yet.</div>';
+        var rows=(d.advances||[]).map(function(a){return '<tr><td class="l"><b>'+esc(a.employeeName)+'</b><div class="muted">'+esc(a.id)+'</div></td><td>'+esc(a.date)+'</td><td class="l">'+esc(a.account)+'</td><td>'+fmt(a.amount)+'</td><td>'+fmt(a.recovered)+'</td><td>'+fmt(a.outstanding)+'</td><td><span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></td><td><a href="'+esc(a.proof)+'" target="_blank">Proof</a> '+(a.active===false?'':'<button class="btn mini ghost" onclick="cancelAdvance(\''+a.id+'\')">Cancel</button>')+'</td></tr>';}).join('');
+        el('host').innerHTML='<div class="card"><div class="advance-grid"><div><label>Employee</label><select id="ad_emp"><option value="">Select</option>'+eo+'</select></div><div><label>Amount ₹</label><input id="ad_amount" type="number" min="1"></div><div><label>Payment date</label><input id="ad_date" type="date" value="'+new Date().toISOString().slice(0,10)+'"></div><div><label>Paying account / cash</label><select id="ad_account"><option value="">Select</option>'+ao+'</select></div><div><label>Recover from payroll month</label><input id="ad_recovery" type="month" value="'+state.ym+'"></div><div><label>Payment proof (required)</label><input id="ad_proof" type="file" accept="image/*,.pdf"></div><div><label>Reference (optional)</label><input id="ad_ref"></div><div><label>Note (optional)</label><input id="ad_note"></div><div style="align-self:end"><button class="btn" id="addAdvance">Log advance</button></div></div></div>'+
+          '<div class="card" style="margin-top:14px"><div class="advance-grid"><div><label>Filter employee</label><select id="af_employee"><option value="">All</option>'+eo+'</select></div><div><label>Advance month</label><input id="af_month" type="month" value="'+esc(f.month)+'"></div><div><label>Status</label><select id="af_status"><option value="">All</option><option>Outstanding</option><option>Partially recovered</option><option>Recovered</option><option>Cancelled</option></select></div><div><label>Paying account</label><select id="af_account"><option value="">All</option>'+ao+'</select></div><div style="align-self:end"><button class="btn ghost" id="clearAdvanceFilters">Clear filters</button></div></div></div>'+
+          '<details class="card"><summary>Employee advance summary · outstanding '+fmt((d.totals||{}).outstanding)+'</summary><div class="advance-grid">'+summaries+'</div></details>'+
+          '<details class="card"><summary>Advance transaction history · '+(d.advances||[]).length+' entries</summary><div class="card"><table><thead><tr><th class="l">Employee</th><th>Date</th><th class="l">Account</th><th>Received</th><th>Recovered</th><th>Outstanding</th><th>Status</th><th>Audit</th></tr></thead><tbody>'+rows+'</tbody></table></div></details><div class="conf">Advances debit the selected account immediately and remain a recoverable employee balance. Payroll recovery is allocated to the oldest eligible advance first; cancellations remain in the audit history.</div>';
+        el('addAdvance').onclick=function(){ var f=el('ad_proof').files[0]; if(!f){flash('Payment proof is required.',false);return;} this.disabled=true; uploadProof(f).then(function(u){if(!u.success)throw new Error(u.error||'Upload failed');return api('/api/salary/advances',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:el('ad_emp').value,amount:el('ad_amount').value,date:el('ad_date').value,account:el('ad_account').value,recoveryStartMonth:el('ad_recovery').value,proof:u.url,note:el('ad_note').value,reference:el('ad_ref').value})});}).then(function(x){if(!x.success)throw new Error(x.error);flash('Advance logged and posted to the paying account.',true);loadAdvances();}).catch(function(e){flash(e.message,false);el('addAdvance').disabled=false;}); };
+        el('af_employee').value=f.employee;el('af_status').value=f.status;el('af_account').value=f.account;
+        ['employee','month','status','account'].forEach(function(k){el('af_'+k).onchange=function(){state.advanceFilters[k]=this.value;loadAdvances();};});
+        el('clearAdvanceFilters').onclick=function(){state.advanceFilters={employee:'',month:'',status:'',account:''};loadAdvances();};
+      });
+    }
+    window.cancelAdvance=function(id){var reason=prompt('Reason for cancelling this advance (kept in audit history):');if(!reason)return;api('/api/salary/advances/'+id+'/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason})}).then(function(d){if(!d.success){flash(d.error,false);return;}flash('Advance cancelled; audit retained.',true);loadAdvances();});};
 
     // ── ATTENDANCE ──
     function renderAttendance(d){
