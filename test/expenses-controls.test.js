@@ -864,6 +864,17 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
 });
 
+test('bank statement upload authorizes multipart fields only after multer parses them',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  const routeAt=source.indexOf("router.post('/api/expenses/bank-statements/import'");
+  assert.ok(routeAt>=0,'bank statement import route should exist');
+  const route=source.slice(routeAt,routeAt+2400);
+  const uploadAt=route.indexOf("statementUpload.single('statement')");
+  const accessAt=route.indexOf('canAccessBankReconciliation');
+  assert.ok(uploadAt>=0&&accessAt>uploadAt,'multipart form must be parsed before account authorization');
+  assert.match(route,/unlinkSync\(req\.file\.path\)/,'denied uploads must remove the temporary file');
+});
+
 test('PDF and image OCR statement text uses the same normalized bank rows', () => {
   const rows=parseBankStatementText('24/08/2026 UPI reimbursement UTR720 720.00 0.00 1527.00\n25/08/2026 Customer receipt UTR500 0.00 500.00 2027.00');
   assert.deepEqual(rows.map(x=>({date:x.date,debit:x.debit,credit:x.credit,balance:x.balance})),[
