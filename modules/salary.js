@@ -63,8 +63,34 @@ const JULY_2026_IMPORT = [
   ['Ravi','DRIVER','---------------------PPPPPPPPPA',6000,'2026-07-22']
 ];
 
+const PROVIDED_ADVANCE_IMPORT = [
+  ['2026-07-01','Isha','SALES EXECUTIVE',100],
+  ['2026-07-01','ARSHPREET SINGH','MANAGER',2000],
+  ['2026-07-01','Prashant','ACCOUNTS',7467],
+  ['2026-07-01','Sunny','SALES EXECUTIVE',7000],
+  ['2026-07-18','Suraj','Office Boy',500],
+  ['2026-07-23','Indervir','ACCOUNTS',3000],
+  ['2026-07-23','Suraj','Office Boy',500],
+  ['2026-07-25','Ravi','DRIVER',2000],
+  ['2026-07-26','Shivam','SALES EXECUTIVE',1000],
+  ['2026-07-29','Suraj','Office Boy',500],
+  ['2026-07-29','Umair','DRIVER',17000],
+  ['2026-07-30','Ravi','DRIVER',4000],
+  ['2026-07-30','Sunny','SALES EXECUTIVE',10000],
+  ['2026-08-01','Sunny','SALES EXECUTIVE',2000],
+  ['2026-08-01','ARSHPREET SINGH','MANAGER',50000],
+  ['2026-08-03','Prashant','ACCOUNTS',10000],
+  ['2026-08-07','Indervir','ACCOUNTS',1000],
+  ['2026-08-07','Sunny','SALES EXECUTIVE',1000],
+  ['2026-08-07','Ravi','DRIVER',500],
+  ['2026-08-07','Guard','Security',3000],
+  ['2026-08-09','TUSHAR','PACKING HELPER',2000],
+  ['2026-08-09','Shivam','SALES EXECUTIVE',500]
+];
+
 function findImportedEmployee(s,name,post){
-  const sameName=Object.values(s.employees||{}).filter(e=>String(e.name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().localeCompare(name,'en',{sensitivity:'base'})===0);
+  const target=String(name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase();
+  const sameName=Object.values(s.employees||{}).filter(e=>{const live=String(e.name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase();return live===target||live.startsWith(target+' ')||target.startsWith(live+' ');});
   return sameName.find(e=>String(e.post||'').localeCompare(post,'en',{sensitivity:'base'})===0)||sameName[0];
 }
 function julyImportedMarks(emp,encoded){
@@ -84,7 +110,7 @@ function julyImportedMarks(emp,encoded){
   return {attendance,paidDays:Math.max(0,round2(paid-1))};
 }
 function applyJuly2026AttendanceAndPayroll(s){
-  const key='july_2026_attendance_payroll_v1';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  const key='july_2026_attendance_payroll_v3';s.oneTimeMigrations=s.oneTimeMigrations||{};
   if(s.oneTimeMigrations[key]||((s.payrollPostings||{})['2026-07'])||(((s.months||{})['2026-07']||{}).finalized))return false;
   const mo=ensureMonth(s,'2026-07');mo.attendance=mo.attendance||{};mo.rows=mo.rows||{};
   const imported=[];
@@ -93,13 +119,21 @@ function applyJuly2026AttendanceAndPayroll(s){
     if(joiningDate)emp.joiningDate=joiningDate;
     const calculated=julyImportedMarks(emp,marks);
     mo.attendance[emp.id]=calculated.attendance;
-    mo.rows[emp.id]=Object.assign({},mo.rows[emp.id],{paidDays:calculated.paidDays,advance:round2(advance),paid:0,remarks:'July 2026 attendance import · first 4 offs paid · 31-day adjustment -1'});
-    imported.push({empId:emp.id,name:emp.name,paidDays:calculated.paidDays,advance:round2(advance)});
+    mo.rows[emp.id]=Object.assign({},mo.rows[emp.id],{paidDays:calculated.paidDays,advance:0,paid:0,remarks:'July 2026 attendance import · first 4 offs paid · 31-day adjustment -1'});
+    imported.push({empId:emp.id,name:emp.name,paidDays:calculated.paidDays});
   }
-  // The dated source contains no July advance for employees omitted from the
-  // attendance sheet (for example Guard), so remove legacy July-only estimates.
+  // Replace old summary-only estimates with individually dated advance records.
   for(const [id,row] of Object.entries(mo.rows))if(!imported.some(x=>x.empId===id)){row.advance=0;row.paid=0;}
-  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),month:'2026-07',employees:imported,advanceTotal:round2(imported.reduce((n,x)=>n+x.advance,0)),rules:{firstOffsPaid:4,calendar31Deduction:1}};
+  s.advances=s.advances||{};s.advanceSeq=num(s.advanceSeq);const advanceIds=[];
+  PROVIDED_ADVANCE_IMPORT.forEach(([date,name,post,amount],index)=>{
+    const emp=findImportedEmployee(s,name,post),sourceKey='provided-advance-sheet-'+date+'-'+index;
+    if(!emp||Object.values(s.advances).some(a=>a.sourceKey===sourceKey))return;
+    s.advanceSeq++;const id='ADV-'+String(s.advanceSeq).padStart(5,'0'),now=new Date().toISOString();
+    s.advances[id]={id,empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account:'',proof:'',note:'Historical advance imported from supplied payroll sheet',reference:'HIST-'+date.replace(/-/g,'')+'-'+String(index+1).padStart(2,'0'),sourceKey,recoveryStartMonth:'2026-07',recoveries:[{ym:'2026-07',amount:round2(amount),by:'System migration',at:now}],active:true,historicalImport:true,createdBy:'System migration',createdAt:now};
+    advanceIds.push(id);
+  });
+  const advanceTotal=round2(PROVIDED_ADVANCE_IMPORT.reduce((n,x)=>n+num(x[3]),0));
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),month:'2026-07',employees:imported,advanceIds,advanceTotal,rules:{firstOffsPaid:4,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
   return true;
 }
 
@@ -405,4 +439,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _julyImportedMarks:julyImportedMarks };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee };
