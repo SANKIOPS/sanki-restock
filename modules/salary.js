@@ -93,6 +93,15 @@ function findImportedEmployee(s,name,post){
   const sameName=Object.values(s.employees||{}).filter(e=>{const live=String(e.name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase();return live===target||live.startsWith(target+' ')||target.startsWith(live+' ');});
   return sameName.find(e=>String(e.post||'').localeCompare(post,'en',{sensitivity:'base'})===0)||sameName[0];
 }
+function ensureHistoricalGuard(s,mo){
+  let guard=findImportedEmployee(s,'Guard','Security');
+  if(!guard){
+    s.seq=num(s.seq)+1;const id='E'+String(s.seq).padStart(3,'0');
+    guard=s.employees[id]={id,name:'Guard',post:'Security',salary:15000,channel:'Shared',weekOffDay:'',joiningDate:'',lastWorkingDate:'',note:'Restored from supplied historical payroll advances',active:true,createdAt:new Date().toISOString()};
+  }
+  mo.rows[guard.id]=Object.assign({},mo.rows[guard.id],{paidDays:30,advance:0,paid:0,remarks:'Historical July payroll row restored for supplied Guard advance'});
+  return guard;
+}
 function julyImportedMarks(emp,encoded){
   const attendance={},raw=String(encoded||''); let paid=0,offs=0;
   for(let i=0;i<31;i++){
@@ -110,9 +119,10 @@ function julyImportedMarks(emp,encoded){
   return {attendance,paidDays:Math.max(0,round2(paid-1))};
 }
 function applyJuly2026AttendanceAndPayroll(s){
-  const key='july_2026_attendance_payroll_v3';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  const key='july_2026_attendance_payroll_v4';s.oneTimeMigrations=s.oneTimeMigrations||{};
   if(s.oneTimeMigrations[key]||((s.payrollPostings||{})['2026-07'])||(((s.months||{})['2026-07']||{}).finalized))return false;
   const mo=ensureMonth(s,'2026-07');mo.attendance=mo.attendance||{};mo.rows=mo.rows||{};
+  const guard=ensureHistoricalGuard(s,mo);
   const imported=[];
   for(const [name,post,marks,advance,joiningDate] of JULY_2026_IMPORT){
     const emp=findImportedEmployee(s,name,post);if(!emp)continue;
@@ -133,7 +143,7 @@ function applyJuly2026AttendanceAndPayroll(s){
     advanceIds.push(id);
   });
   const advanceTotal=round2(PROVIDED_ADVANCE_IMPORT.reduce((n,x)=>n+num(x[3]),0));
-  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),month:'2026-07',employees:imported,advanceIds,advanceTotal,rules:{firstOffsPaid:4,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),month:'2026-07',employees:imported,guardEmployeeId:guard.id,advanceIds,advanceTotal,rules:{firstOffsPaid:4,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
   return true;
 }
 
@@ -439,4 +449,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard };
