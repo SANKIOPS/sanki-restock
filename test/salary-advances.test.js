@@ -54,3 +54,28 @@ test('every salary employee list is returned alphabetically A to Z', () => {
   const summary=invoke('GET','/api/salary/advances').body.summary.map(x=>x.name);
   assert.deepEqual(summary,summary.slice().sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base',numeric:true})));
 });
+
+test('assigned weekly off converts an absent mark only on that weekday', () => {
+  const created=invoke('POST','/api/salary/employees',{body:{name:'Weekly Off Test',salary:12000,weekOffDay:'Sunday'}}).body.employee;
+  assert.equal(created.weekOffDay,'Sunday');
+  const sunday=invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:created.id,day:'23',mark:'A'}});
+  const monday=invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:created.id,day:'24',mark:'A'}});
+  assert.equal(sunday.body.mark,'WO'); assert.equal(monday.body.mark,'A');
+  const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body;
+  assert.equal(month.attendance[created.id]['23'],'WO'); assert.equal(month.attendance[created.id]['24'],'A');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/Weekly off day/); assert.match(html,/cal-sunday/); assert.match(html,/cal-weekoff/); assert.match(html,/attendanceCellInfo/);
+});
+
+test('joining and leaving dates limit calendar-month weekly offs and paid days', () => {
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Mid Month Joiner',salary:12000,weekOffDay:'Sunday',joiningDate:'2026-08-20'}}).body.employee;
+  assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'16',mark:'A'}}).status,400);
+  assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'23',mark:'A'}}).body.mark,'WO');
+  assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'30',mark:'A'}}).body.mark,'WO');
+  const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body, row=month.rows.find(x=>x.id===emp.id);
+  assert.equal(row.computedPaidDays,2,'only the two eligible Sundays count');
+  const invalid=invoke('POST','/api/salary/employees',{body:{name:'Invalid Dates',joiningDate:'2026-08-20',lastWorkingDate:'2026-08-19'}});
+  assert.equal(invalid.status,400);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/Joining date/); assert.match(html,/Last working date/); assert.match(html,/not-employed/);
+});
