@@ -92,4 +92,7 @@ test('payroll posting creates employee salary ledgers once and advances remain b
   assert.ok(ledger.entries.some(x=>x.kind==='advance'&&x.reference==='UTR5000'));assert.ok(ledger.entries.some(x=>x.kind==='salary_earned'));
   const salaryHtml=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),expensesHtml=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(salaryHtml,/accountsByNature/);assert.match(salaryHtml,/Post .* in salary ledgers/);assert.match(expensesHtml,/data-t="salaryledgers"/);assert.match(expensesHtml,/function renderSalaryLedgers/);
+  assert.match(salaryHtml,/fd\.append\('photo',file\)/,'advance proof uses the server upload field');
+  assert.doesNotMatch(salaryHtml,/fd\.append\('file',file\)/);
+  assert.match(salaryHtml,/Payment proof upload failed/);
 });
