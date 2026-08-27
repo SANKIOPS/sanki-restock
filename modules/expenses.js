@@ -671,6 +671,7 @@ router.get('/api/expenses/config', (req, res) => {
     vendorsByNature,
     accounts: Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n])))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : [])])),
+    bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? ledgerAccountsForNature(s,n).filter(name => !/cash/i.test(name)) : []])),
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) ? ledgerAccountsForNature(s,n) : []])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) ? transferAccountsForNature(n) : []])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
