@@ -81,6 +81,14 @@ test('bulk attendance validates every employee before replacing supplied days',(
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Bulk attendance import/);assert.match(html,/Import this month atomically/);
 });
 
+test('bulk attendance skips supplied marks outside employment dates',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Bulk Joiner',salary:12000,joiningDate:'2026-08-24'}}).body.employee;
+  const made=invoke('POST','/api/salary/attendance/:ym/batch',{params:{ym:'2026-08'},body:{items:[{empId:emp.id,marks:Array(27).fill('A')}]}});
+  assert.equal(made.status,200);
+  const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body;
+  assert.equal(month.attendance[emp.id]['23'],undefined);assert.equal(month.attendance[emp.id]['24'],'A');
+});
+
 test('joining and leaving dates limit calendar-month weekly offs and paid days', () => {
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Mid Month Joiner',salary:12000,weekOffDay:'Sunday',joiningDate:'2026-08-20'}}).body.employee;
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'16',mark:'A'}}).status,400);
