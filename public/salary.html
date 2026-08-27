@@ -132,7 +132,7 @@
           '<tbody>'+rows+'</tbody>'+
           '<tfoot><tr><td></td><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>'+'—'+'</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td class="'+(t.netPayable<0?'neg':'')+'">'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
         '</table></div>'+
-        '<div class="conf">Divisor = '+d.divisor+' (fixed). <b>Paid days</b> can exceed 30 for overtime. Blank paid-days uses attendance (grey placeholder). <b>Salary amt</b> (earned) is what posts to the P&amp;L — advance &amp; paid only affect what you owe/settle.</div>';
+        '<div class="conf">Divisor = '+d.divisor+' (fixed). <b>Paid days</b> can exceed 30 for overtime. Blank paid-days uses attendance (grey placeholder). <b>Salary amt</b> (earned) is what posts to the P&amp;L — advance &amp; paid only affect what you owe/settle.</div><button class="btn" onclick="postPayrollLedgers()">Post '+esc(ymLabel(state.ym))+' in salary ledgers</button>';
     }
     window.saveRow = function(empId, field, val){
       var body={ empId:empId }; body[field]=val;
@@ -140,13 +140,14 @@
         .then(function(){ flash('Saved.', true); load(); });
     };
     window.saveRecovery = function(empId, val){ api('/api/salary/recoveries/'+state.ym,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:empId,amount:val})}).then(function(d){ if(!d.success){flash(d.error||'Could not save recovery.',false);return;} flash('Advance recovery saved and linked oldest-first.',true);load(); }); };
+    window.postPayrollLedgers=function(){var t=state.data&&state.data.totals;if(!t)return;if(!confirm('Post '+ymLabel(state.ym)+' to employee salary ledgers?\nSalary earned: '+fmt(t.salaryAmt)+'\nPaid: '+fmt(t.paid)+'\nThis month can be posted only once.'))return;api('/api/salary/post/'+state.ym,{method:'POST'}).then(function(d){flash(d.success?'Payroll posted to salary ledgers.':(d.error||'Could not post payroll.'),!!d.success);});};
 
     // ── ADVANCES ──
     function uploadProof(file){ var fd=new FormData(); fd.append('file',file); fd.append('nature','SANKI'); return fetch('/api/expenses/upload',{method:'POST',body:fd}).then(function(r){return r.json();}); }
     function loadAdvances(){
       var f=state.advanceFilters,q='summaryMonth='+state.ym+'&employee='+encodeURIComponent(f.employee)+'&month='+encodeURIComponent(f.month)+'&status='+encodeURIComponent(f.status)+'&account='+encodeURIComponent(f.account);
       Promise.all([api('/api/salary/employees'),api('/api/expenses/config'),api('/api/salary/advances?'+q)]).then(function(all){
-        var ed=all[0],cfg=all[1],d=all[2]; state.employees=ed.employees||[]; state.accounts=((cfg.payingAccountsByNature||{}).SANKI)||cfg.accounts||[];
+        var ed=all[0],cfg=all[1],d=all[2]; state.employees=ed.employees||[]; state.accounts=Array.from(new Set([].concat(((cfg.accountsByNature||{}).SANKI)||[],((cfg.payingAccountsByNature||{}).SANKI)||[])));
         var eo=state.employees.filter(function(e){return e.active!==false;}).map(function(e,index){return '<option value="'+e.id+'">'+(index+1)+'. '+esc(e.name)+'</option>';}).join(''), ao=state.accounts.map(function(a){return '<option>'+esc(a)+'</option>';}).join('');
         var summaries=(d.summary||[]).map(function(x,index){return '<details class="stat"><summary><b>'+(index+1)+'. '+esc(x.name)+'</b> · outstanding '+fmt(x.outstanding)+'</summary><div class="conf">This month '+fmt(x.thisMonth)+' · total received '+fmt(x.total)+' · payroll recovered '+fmt(x.recovered)+'</div>'+x.transactions.map(function(a,i){return '<div class="conf">'+(i+1)+'. '+esc(a.date)+' · '+fmt(a.amount)+' · '+esc(a.account)+' · <span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></div>';}).join('')+'</details>';}).join('')||'<div class="conf">No advances logged yet.</div>';
         var rows=(d.advances||[]).map(function(a,index){return '<tr><td>'+(index+1)+'</td><td class="l"><b>'+esc(a.employeeName)+'</b><div class="muted">'+esc(a.id)+'</div></td><td>'+esc(a.date)+'</td><td class="l">'+esc(a.account)+'</td><td>'+fmt(a.amount)+'</td><td>'+fmt(a.recovered)+'</td><td>'+fmt(a.outstanding)+'</td><td><span class="status '+a.status.replace(' ','')+'">'+esc(a.status)+'</span></td><td><a href="'+esc(a.proof)+'" target="_blank">Proof</a> '+(a.active===false?'':'<button class="btn mini ghost" onclick="cancelAdvance(\''+a.id+'\')">Cancel</button>')+'</td></tr>';}).join('');
