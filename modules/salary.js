@@ -28,7 +28,7 @@ const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 
-function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [] }; }
+function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], payrollPostings:{} }; }
 function load() { try { return Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8'))); } catch { return blank(); } }
 function save(s) { const tmp = SAL_PATH + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, SAL_PATH); }
 
@@ -139,6 +139,20 @@ router.delete('/api/salary/employees/:id', guard, (req, res) => {
   const s = load();
   if (s.employees[req.params.id]) { s.employees[req.params.id].active = false; save(s); }
   res.json({ success: true });
+});
+
+router.post('/api/salary/post/:ym', guard, (req,res)=>{
+  const s=load(),ym=req.params.ym;if(!/^\d{4}-\d{2}$/.test(ym))return res.status(400).json({success:false,error:'Invalid payroll month.'});
+  s.payrollPostings=s.payrollPostings||{};if(s.payrollPostings[ym])return res.status(409).json({success:false,error:'This month is already posted to salary ledgers.'});
+  const rows=computeMonth(s,ym).filter(r=>r.salaryAmt||r.advance||r.paid).map(r=>({empId:r.id,employeeName:r.name,salaryAmt:r.salaryAmt,advanceRecovery:r.loggedAdvanceRecovery,legacyAdvance:r.legacyAdvance,paid:r.paid,netPayable:r.netPayable}));
+  s.payrollPostings[ym]={ym,rows,postedAt:new Date().toISOString(),postedBy:req.user&&req.user.username||'admin'};save(s);res.json({success:true,posting:s.payrollPostings[ym]});
+});
+router.get('/api/salary/ledgers',guard,(req,res)=>{
+  const s=load(),by={};const ensure=(id,name)=>by[id]||(by[id]={empId:id,name,ledgerName:(name||id)+' — Salary',entries:[]});
+  Object.values(s.advances||{}).filter(a=>a.active!==false).forEach(a=>ensure(a.empId,a.employeeName).entries.push({id:a.id,date:a.date,kind:'advance',description:'Salary advance paid'+(a.note?' · '+a.note:''),debit:num(a.amount),credit:0,proof:a.proof||'',reference:a.reference||a.id}));
+  Object.values(s.payrollPostings||{}).forEach(p=>(p.rows||[]).forEach(r=>{const l=ensure(r.empId,r.employeeName),date=p.ym+'-'+String(daysInMonth(p.ym)).padStart(2,'0');if(num(r.salaryAmt))l.entries.push({id:p.ym+'/'+r.empId+'/EARNED',date,kind:'salary_earned',description:p.ym+' salary earned',debit:0,credit:num(r.salaryAmt),reference:p.ym});if(num(r.paid))l.entries.push({id:p.ym+'/'+r.empId+'/PAID',date,kind:'salary_paid',description:p.ym+' salary paid',debit:num(r.paid),credit:0,reference:p.ym});}));
+  const ledgers=Object.values(by).map(l=>{l.entries.sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));let balance=0;l.entries.forEach(e=>{balance+=num(e.credit)-num(e.debit);e.balance=round2(balance);});l.balance=round2(balance);l.status=balance>0?'Company owes':balance<0?'Employee owes':'Settled';l.lastPostingDate=l.entries.at(-1)&&l.entries.at(-1).date||'';l.outstandingAdvance=round2(Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===l.empId).reduce((n,a)=>n+advanceOutstanding(a),0));l.entries=l.entries.slice().reverse();return l;}).sort(byEmployeeName);
+  res.json({success:true,ledgers});
 });
 
 // Salary advances are recoverable employee balances, not salary/P&L expenses.
