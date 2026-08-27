@@ -1637,7 +1637,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   res.json({ success:true, account, nature, expenseNature, entries:visible, balance:round0(running), reconciled:issues.length===0, reconciliationIssues:issues });
 });
 
-function statementDate(v){if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;}const s=String(v||'').trim(),m=s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;}return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):'';}
+function statementDate(v){if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;}const s=String(v||'').trim();if(/^\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}(?:\s|$)/.test(s)){const p=s.slice(0,10).split(/[\/\-.]/);return `${p[0]}-${String(p[1]).padStart(2,'0')}-${String(p[2]).padStart(2,'0')}`;}const m=s.match(/(?:^|\s)(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})(?:\s|$)/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;}return '';}
 function statementNum(v){return num(String(v==null?'':v).replace(/[₹,\s]/g,'').replace(/^\((.*)\)$/,'-$1'));}
 function parseBankStatementFile(filePath){
   const wb=XLSX.readFile(filePath,{cellDates:true}),sheet=wb.Sheets[wb.SheetNames[0]],matrix=XLSX.utils.sheet_to_json(sheet,{header:1,defval:''}),headerRow=Math.max(0,matrix.findIndex(r=>{const h=r.map(x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,''));return h.some(x=>['date','transactiondate','valuedate','txndate','postingdate'].includes(x))&&h.some(x=>/debit|credit|withdrawal|deposit|amount/.test(x));})),rows=XLSX.utils.sheet_to_json(sheet,{defval:'',range:headerRow});
@@ -1659,14 +1659,16 @@ function parseBankStatementText(raw){
     out.statementSummary={format:'Axis Bank PDF',from:period?statementDate(period[1]):out[0]&&out[0].date,to:period?statementDate(period[2]):out.at(-1)&&out.at(-1).date,openingBalance:opening,closingBalance:closing,totalDebits:Math.round(debits*100)/100,totalCredits:Math.round(credits*100)/100,validated:!!out.length&&Math.abs(calculated-closing)<=0.01};
     if(out.length)return out;
   }
-  const out=[];String(raw||'').replace(/\r/g,'').split('\n').map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean).forEach((line,index)=>{
+  const monetaryTokens=line=>Array.from(String(line||'').matchAll(/(?:^|\s)((?:₹\s*)?\(?-?[0-9][0-9,]*(?:\.\d{1,2})?\)?(?:\s*(?:CR|DR))?)(?=\s|$)/ig));
+  const physical=String(raw||'').replace(/\r/g,'').split('\n').map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean),logical=[];physical.forEach(line=>{if(/^(?:\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2})(?:\s|$)/.test(line)){logical.push(line);return;}if(logical.length&&monetaryTokens(logical.at(-1)).length<2)logical[logical.length-1]+=' '+line;});
+  const out=[];logical.forEach((line,index)=>{
     const dm=line.match(/(?:^|\s)((?:\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})|(?:\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}))(?:\s|$)/);if(!dm)return;
-    const date=statementDate(dm[1]);if(!date)return;const rest=line.slice((dm.index||0)+dm[0].length).trim(),tokens=Array.from(rest.matchAll(/(?:₹\s*)?\(?-?[0-9][0-9,]*(?:\.\d{1,2})?\)?(?:\s*(?:CR|DR))?/ig));if(tokens.length<2)return;
-    const values=tokens.map(m=>statementNum(m[0].replace(/\b(?:CR|DR)\b/i,''))),balance=values.at(-1),amountTokens=tokens.slice(0,-1),amounts=values.slice(0,-1);let debit=0,credit=0;
+    const date=statementDate(dm[1]);if(!date)return;const rest=line.slice((dm.index||0)+dm[0].length).trim(),tokens=monetaryTokens(rest);if(tokens.length<2)return;
+    const values=tokens.map(m=>statementNum(m[1].replace(/\b(?:CR|DR)\b/i,''))),balance=values.at(-1),amountTokens=tokens.slice(0,-1),amounts=values.slice(0,-1);let debit=0,credit=0,unclassified=0;
     if(amounts.length>=2){debit=Math.abs(amounts.at(-2));credit=Math.abs(amounts.at(-1));}
-    else{const token=amountTokens[0][0],amount=Math.abs(amounts[0]),context=(rest+' '+token).toLowerCase();if(/\bcr\b|credit|deposit|received/.test(context))credit=amount;else debit=amount;}
-    if(!debit&&!credit)return;const firstAmount=amountTokens[0],description=rest.slice(0,firstAmount.index).trim().replace(/[|:-]+$/,'').trim(),reference=((description.match(/\b(?:utr|ref|txn|chq)[\s:#-]*([a-z0-9-]+)/i)||[])[1]||'');out.push({date,description,reference,debit,credit,balance:Math.abs(balance),row:index+1});
-  });return out;
+    else{const token=amountTokens[0][1],amount=Math.abs(amounts[0]),context=(rest+' '+token).toLowerCase();if(/(?:\/|\b)(?:cr)(?:\/|\b)|credit|deposit|received/.test(context))credit=amount;else if(/(?:\/|\b)(?:dr)(?:\/|\b)|debit|withdraw/.test(context))debit=amount;else unclassified=amount;}
+    const firstAmount=amountTokens[0],description=rest.slice(0,firstAmount.index).trim().replace(/[|:-]+$/,'').trim(),reference=((description.match(/\b(?:utr|ref|txn|chq)[\s:#-]*([a-z0-9-]+)/i)||[])[1]||'');out.push({date,description,reference,debit,credit,balance:Math.abs(balance),row:index+1,unclassified});
+  });out.forEach((row,i)=>{if(!row.unclassified)return;const older=out[i+1],newer=out[i-1],delta=older?row.balance-older.balance:(newer?row.balance-newer.balance:0);if(delta>0)row.credit=row.unclassified;else row.debit=row.unclassified;delete row.unclassified;});out.forEach(row=>delete row.unclassified);return out.filter(x=>x.debit||x.credit);
 }
 async function parseBankStatementUpload(filePath,originalName){
   const ext=path.extname(originalName||filePath).toLowerCase();if(['.xlsx','.xls','.csv'].includes(ext))return parseBankStatementFile(filePath);

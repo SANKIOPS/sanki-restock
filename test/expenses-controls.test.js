@@ -889,6 +889,29 @@ test('PDF and image OCR statement text uses the same normalized bank rows', () =
   assert.match(telegram,/Nothing has been stored in the official bank history/);
 });
 
+test('ICICI PDF text keeps ISO dates and ignores embedded UPI reference numbers',()=>{
+  const rows=parseBankStatementText([
+    '2026-08-25 R/KKBKR52026082500750786/KKBK0000958/NMKK BEAUTY - 200000 281650.4',
+    '2026-08-25 UPI/612835748021/DR/GAGA/ICIC/tforsamast1@ybl - 3000 81650.4',
+    '2026-08-24 UPI/313157351411/DR/GAGA/ICIC/tforsamast1@ybl - 2000 84650.4',
+    '2026-08-24 UPI/612787369858/DR/GAGA/ICIC/tforsamast1@ybl - 3500 86650.4',
+    '2026-08-23 UPI/313107864568/DR/GAGA/ICIC/tforsamast1@ybl - 5000 90150.4',
+    '2026-08-22 UPI/612673856994/DR/PRAS/UTIB/910287-2@okaxis - 6560 95150.4',
+    '2026-08-22 UPI/313002086306/DR/GAGA/ICIC/tforsamast1@ybl - 5000 101710.4',
+    '2026-08-22 UPI/612652390234/DR/GAGA/ICIC/tforsamast1@ybl - 5000 106710.4'
+  ].join('\n'));
+  assert.deepEqual(rows.map(x=>({date:x.date,debit:x.debit,credit:x.credit,balance:x.balance})),[
+    {date:'2026-08-25',debit:0,credit:200000,balance:281650.4},
+    {date:'2026-08-25',debit:3000,credit:0,balance:81650.4},
+    {date:'2026-08-24',debit:2000,credit:0,balance:84650.4},
+    {date:'2026-08-24',debit:3500,credit:0,balance:86650.4},
+    {date:'2026-08-23',debit:5000,credit:0,balance:90150.4},
+    {date:'2026-08-22',debit:6560,credit:0,balance:95150.4},
+    {date:'2026-08-22',debit:5000,credit:0,balance:101710.4},
+    {date:'2026-08-22',debit:5000,credit:0,balance:106710.4}
+  ]);
+});
+
 test('Axis Bank PDF text ignores the statement-period header and validates the transaction table', () => {
   const text='Account Statement Report\nStatement of Axis Bank Account No : XXXX3448 for the period ( From : 22/08/2026 To : 25/08/2026 )\nOpening Balance: INR 47,844.86\nS.NOTransaction\nDate\n(dd/mm/yyyy)\nValue Date\n(dd/mm/yyyy)\nParticularsAmount(INR)Debit/CreditBalance(INR)Cheque\nNumber\nBranch Name(SOL)\n122/08/202622/08/2026\nIFT/PB0307710755/PAYTM PAYMENTS SERVICES LIMITED/2/\n14,755.36CR62,600.22 (100)\n222/08/202622/08/2026GST @18% on BNA Convenience Chrgs\n45.00DR62,555.22 (4820)\n322/08/202622/08/2026BNA Convenience Chrgs\n250.00DR62,305.22 (4820)\n422/08/202622/08/2026\nINB/IFT/REDACTED/TPARTY TRANSFER\n2,247.00DR60,058.22 (4820)\n524/08/202624/08/2026\nINB/IFT/REDACTED/TPARTY TRANSFER\n3,341.00DR56,717.22 (4820)\n6TRANSACTION TOTAL DR/CR\n5,883.00/14,755.36\nClosing Balance: INR 56,717.22';
   const rows=parseBankStatementText(text);
