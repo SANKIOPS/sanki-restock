@@ -1106,7 +1106,7 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
 // Reimburse several approved claimant expenses in one payment action. The
 // common batch reference ties the individual ledger entries back to the same
 // proof/payment without losing expense-level auditability.
-router.post('/api/expenses/batch-reimburse', (req, res) => {
+router.post('/api/expenses/reimbursements/batch', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can reimburse.' });
   const s=loadStore(),b=req.body||{},ids=Array.from(new Set((Array.isArray(b.expenseIds)?b.expenseIds:[]).map(x=>String(x||'').trim()).filter(Boolean)));
   if (ids.length<2) return res.status(400).json({success:false,error:'Select at least two pending expenses to reimburse together.'});

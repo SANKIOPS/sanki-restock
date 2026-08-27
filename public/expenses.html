@@ -757,7 +757,7 @@
       if(!payUrl){ el('payMsg').textContent='Screenshot required.'; return; }
       var selected=payMode==='vendor'?Array.prototype.map.call(document.querySelectorAll('.batch-expense:checked'),function(x){return x.value;}):(payMode==='batch-reimburse'?Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;}):[]);
       var isBatch=selected.length>1;
-      var endpoint=payMode==='batch-reimburse'?'/api/expenses/batch-reimburse':(isBatch?'/api/expenses/batch-pay':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay')));
+      var endpoint=payMode==='batch-reimburse'?'/api/expenses/reimbursements/batch':(isBatch?'/api/expenses/batch-pay':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay')));
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ expenseIds:selected,paymentProof:payUrl, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
         if(d.success){ el('payDlg').close(); if(payMode==='reimburse'||payMode==='batch-reimburse') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg(payMode==='batch-reimburse'?'Selected expenses reimbursed together.':'Payment and proof saved.', true); }
