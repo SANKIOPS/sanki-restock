@@ -629,6 +629,15 @@ test('multiple pending expenses can be reimbursed together and debit the paying 
   assert.equal(ids.reduce((n,id)=>n+ledger.entries.filter(x=>x.id.startsWith(id+'/REIM-')).reduce((m,x)=>m+x.debit,0),0),1000);
 });
 
+test('reimbursements UI groups transactions by person before showing expense details',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/class="claim-card reimbursement-person"/);
+  assert.match(html,/group\.items\.length\+' transaction'/);
+  assert.match(html,/class="reimburse-person-select"/);
+  assert.match(html,/Select all for /);
+  assert.match(html,/class="claim-amount">'\+fmt\(group\.due\)\+' due/);
+});
+
 test('batch reimbursement validates every expense before recording any payment',()=>{
   const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Atomic Batch Vendor',amount:300,billPhoto:'/api/expenses/photo/atomic.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/atomic-pay.jpg'}}).body.expense;
   invoke('POST','/api/expenses/:id',{params:{id:made.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});invoke('POST','/api/expenses/:id/approve',{params:{id:made.id},role:'owner'});
