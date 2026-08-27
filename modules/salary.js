@@ -28,7 +28,7 @@ const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 
-function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], payrollPostings:{} }; }
+function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0 }; }
 function load() { try { return Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8'))); } catch { return blank(); } }
 function save(s) { const tmp = SAL_PATH + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, SAL_PATH); }
 
@@ -72,13 +72,13 @@ function computeMonth(s, ym) {
     const loggedAdvanceRecovery = monthRecovery(s, e.id, ym);
     const advance = round2(legacyAdvance + loggedAdvanceRecovery);
     const netPayable = salaryAmt - advance;
-    const paid = num(row.paid);
+    const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
       salary: num(e.salary), paidDays, computedPaidDays: computed,
       salaryAmt: round2(salaryAmt), advance, legacyAdvance, loggedAdvanceRecovery, netPayable: round2(netPayable),
       outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
-      paid, balance: round2(netPayable - paid), remarks: row.remarks || ''
+      paid, legacyPaid, transactionPaid, balance: round2(netPayable - paid), remarks: row.remarks || ''
     };
   });
 }
@@ -144,13 +144,20 @@ router.delete('/api/salary/employees/:id', guard, (req, res) => {
 router.post('/api/salary/post/:ym', guard, (req,res)=>{
   const s=load(),ym=req.params.ym;if(!/^\d{4}-\d{2}$/.test(ym))return res.status(400).json({success:false,error:'Invalid payroll month.'});
   s.payrollPostings=s.payrollPostings||{};if(s.payrollPostings[ym])return res.status(409).json({success:false,error:'This month is already posted to salary ledgers.'});
-  const rows=computeMonth(s,ym).filter(r=>r.salaryAmt||r.advance||r.paid).map(r=>({empId:r.id,employeeName:r.name,salaryAmt:r.salaryAmt,advanceRecovery:r.loggedAdvanceRecovery,legacyAdvance:r.legacyAdvance,paid:r.paid,netPayable:r.netPayable}));
+  const rows=computeMonth(s,ym).filter(r=>r.salaryAmt||r.advance||r.paid).map(r=>({empId:r.id,employeeName:r.name,salaryAmt:r.salaryAmt,advanceRecovery:r.loggedAdvanceRecovery,legacyAdvance:r.legacyAdvance,legacyPaid:r.legacyPaid,paid:r.paid,netPayable:r.netPayable}));
   s.payrollPostings[ym]={ym,rows,postedAt:new Date().toISOString(),postedBy:req.user&&req.user.username||'admin'};save(s);res.json({success:true,posting:s.payrollPostings[ym]});
+});
+router.post('/api/salary/payments/batch',guard,(req,res)=>{
+  const s=load(),b=req.body||{},ym=String(b.ym||''),date=String(b.date||''),account=String(b.account||'').trim(),proof=String(b.proof||'').trim(),items=Array.isArray(b.items)?b.items:[];
+  if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!account||!proof||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, paying account and payment proof.'});
+  const rows=computeMonth(s,ym),seen=new Set(),prepared=[];for(const x of items){const row=rows.find(r=>r.id===x.empId),amount=round2(num(x.amount));if(!row||seen.has(x.empId)||!(amount>0)||amount>Math.max(0,row.balance)+.001)return res.status(400).json({success:false,error:'A payment is invalid or exceeds the employee’s remaining payable balance.'});seen.add(x.empId);prepared.push({row,amount});}
+  s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0))});
 });
 router.get('/api/salary/ledgers',guard,(req,res)=>{
   const s=load(),by={};const ensure=(id,name)=>by[id]||(by[id]={empId:id,name,ledgerName:(name||id)+' — Salary',entries:[]});
   Object.values(s.advances||{}).filter(a=>a.active!==false).forEach(a=>ensure(a.empId,a.employeeName).entries.push({id:a.id,date:a.date,kind:'advance',description:'Salary advance paid'+(a.note?' · '+a.note:''),debit:num(a.amount),credit:0,proof:a.proof||'',reference:a.reference||a.id}));
-  Object.values(s.payrollPostings||{}).forEach(p=>(p.rows||[]).forEach(r=>{const l=ensure(r.empId,r.employeeName),date=p.ym+'-'+String(daysInMonth(p.ym)).padStart(2,'0');if(num(r.salaryAmt))l.entries.push({id:p.ym+'/'+r.empId+'/EARNED',date,kind:'salary_earned',description:p.ym+' salary earned',debit:0,credit:num(r.salaryAmt),reference:p.ym});if(num(r.paid))l.entries.push({id:p.ym+'/'+r.empId+'/PAID',date,kind:'salary_paid',description:p.ym+' salary paid',debit:num(r.paid),credit:0,reference:p.ym});}));
+  (s.salaryPayments||[]).filter(p=>p.active!==false).forEach(p=>ensure(p.empId,p.employeeName).entries.push({id:p.id,date:p.date,kind:'salary_paid',description:p.ym+' salary payment'+(p.note?' · '+p.note:''),debit:num(p.amount),credit:0,proof:p.proof||'',reference:p.reference||p.batchId}));
+  Object.values(s.payrollPostings||{}).forEach(p=>(p.rows||[]).forEach(r=>{const l=ensure(r.empId,r.employeeName),date=p.ym+'-'+String(daysInMonth(p.ym)).padStart(2,'0');if(num(r.salaryAmt))l.entries.push({id:p.ym+'/'+r.empId+'/EARNED',date,kind:'salary_earned',description:p.ym+' salary earned',debit:0,credit:num(r.salaryAmt),reference:p.ym});if(num(r.legacyPaid))l.entries.push({id:p.ym+'/'+r.empId+'/LEGACY-PAID',date,kind:'legacy_salary_paid',description:p.ym+' legacy paid amount',debit:num(r.legacyPaid),credit:0,reference:p.ym});}));
   const ledgers=Object.values(by).map(l=>{l.entries.sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));let balance=0;l.entries.forEach(e=>{balance+=num(e.credit)-num(e.debit);e.balance=round2(balance);});l.balance=round2(balance);l.status=balance>0?'Company owes':balance<0?'Employee owes':'Settled';l.lastPostingDate=l.entries.at(-1)&&l.entries.at(-1).date||'';l.outstandingAdvance=round2(Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===l.empId).reduce((n,a)=>n+advanceOutstanding(a),0));l.entries=l.entries.slice().reverse();return l;}).sort(byEmployeeName);
   res.json({success:true,ledgers});
 });
