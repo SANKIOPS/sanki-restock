@@ -103,7 +103,7 @@
       api('/api/salary/month/'+state.ym).then(function(d){
         if(!d.success){ el('host').innerHTML='<div class="conf">'+esc(d.error||'Unavailable.')+'</div>'; return; }
         state.data = d;
-        if(state.view==='attendance') renderAttendance(d); else renderPayroll(d);
+        if(state.view==='attendance') renderAttendance(d); else if(!state.accounts.length)api('/api/expenses/config').then(function(c){state.accounts=Array.from(new Set([].concat(((c.accountsByNature||{}).SANKI)||[],((c.payingAccountsByNature||{}).SANKI)||[])));renderPayroll(d);});else renderPayroll(d);
       });
     }
 
@@ -113,14 +113,14 @@
         var pd = r.paidDays==null ? '' : r.paidDays;
         var auto = (r.paidDays==null && r.computedPaidDays!=null) ? ' title="from attendance"' : '';
         return '<tr>'+
-          '<td>'+(index+1)+'</td><td class="l"><b>'+esc(r.name)+'</b><div class="muted" style="font-size:10px">'+esc(r.post||'')+'</div></td>'+
+          '<td><input type="checkbox" class="salpay" data-emp="'+r.id+'"></td><td>'+(index+1)+'</td><td class="l"><b>'+esc(r.name)+'</b><div class="muted" style="font-size:10px">'+esc(r.post||'')+'</div></td>'+
           '<td class="l"><span class="tag '+esc(r.channel)+'">'+esc(r.channel)+'</span></td>'+
           '<td>'+fmt(r.salary)+'</td>'+
           '<td><input class="cell" type="number" step="0.5" value="'+pd+'"'+auto+' onchange="saveRow(\''+r.id+'\',\'paidDays\',this.value)" placeholder="'+(r.computedPaidDays!=null?r.computedPaidDays:'—')+'"></td>'+
           '<td>'+fmt(r.salaryAmt)+'</td>'+
           '<td><input class="cell" type="number" min="0" value="'+(r.loggedAdvanceRecovery||0)+'" onchange="saveRecovery(\''+r.id+'\',this.value)" title="Logged advance recovery this month">'+(r.legacyAdvance?'<div class="muted" title="Older imported recovery">+ legacy '+fmt(r.legacyAdvance)+'</div>':'')+'<div class="muted">due '+fmt(r.outstandingAdvance)+'</div></td>'+
           '<td class="'+(r.netPayable<0?'neg':'')+'">'+fmt(r.netPayable)+'</td>'+
-          '<td><input class="cell" type="number" value="'+(r.paid||0)+'" onchange="saveRow(\''+r.id+'\',\'paid\',this.value)"></td>'+
+          '<td>'+fmt(r.paid)+'</td><td><input class="cell salpayamt" data-emp="'+r.id+'" type="number" min="0" max="'+Math.max(0,r.balance)+'" value="'+Math.max(0,r.balance)+'"></td>'+
           '<td class="'+(r.balance<0?'neg':(r.balance>0?'pos':''))+'">'+fmt(r.balance)+'</td>'+
           '<td><input class="rem" value="'+esc(r.remarks||'')+'" onchange="saveRow(\''+r.id+'\',\'remarks\',this.value)"></td>'+
         '</tr>';
@@ -128,11 +128,11 @@
       var t=d.totals;
       el('host').innerHTML =
         '<div class="card"><table>'+
-          '<thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance recovery</th><th>Net payable</th><th>Paid</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
+          '<thead><tr><th>Pay</th><th>S.No.</th><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance recovery</th><th>Net payable</th><th>Paid</th><th>Pay now</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
           '<tbody>'+rows+'</tbody>'+
-          '<tfoot><tr><td></td><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>'+'—'+'</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td class="'+(t.netPayable<0?'neg':'')+'">'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
+          '<tfoot><tr><td></td><td></td><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>—</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td>'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td></td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
         '</table></div>'+
-        '<div class="conf">Divisor = '+d.divisor+' (fixed). <b>Paid days</b> can exceed 30 for overtime. Blank paid-days uses attendance (grey placeholder). <b>Salary amt</b> (earned) is what posts to the P&amp;L — advance &amp; paid only affect what you owe/settle.</div><button class="btn" onclick="postPayrollLedgers()">Post '+esc(ymLabel(state.ym))+' in salary ledgers</button>';
+        '<div class="card" style="margin-top:12px"><div class="advance-grid"><div><label>Common paying account</label><select id="sp_account">'+state.accounts.map(function(a){return '<option>'+esc(a)+'</option>';}).join('')+'</select></div><div><label>Payment date</label><input id="sp_date" type="date" value="'+new Date().toISOString().slice(0,10)+'"></div><div><label>Common proof</label><input id="sp_proof" type="file" accept="image/*,.pdf"></div><div><label>Reference / batch UTR</label><input id="sp_ref"></div><div style="align-self:end"><button class="btn" onclick="recordSalaryBatch()">Post selected salary payments</button></div></div></div><div class="conf">Select employees and enter payment amounts. The Paid column is read-only and comes from actual salary transactions plus preserved legacy values.</div><button class="btn ghost" onclick="postPayrollLedgers()">Post '+esc(ymLabel(state.ym))+' salary earned in ledgers</button>';
     }
     window.saveRow = function(empId, field, val){
       var body={ empId:empId }; body[field]=val;
@@ -141,6 +141,7 @@
     };
     window.saveRecovery = function(empId, val){ api('/api/salary/recoveries/'+state.ym,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:empId,amount:val})}).then(function(d){ if(!d.success){flash(d.error||'Could not save recovery.',false);return;} flash('Advance recovery saved and linked oldest-first.',true);load(); }); };
     window.postPayrollLedgers=function(){var t=state.data&&state.data.totals;if(!t)return;if(!confirm('Post '+ymLabel(state.ym)+' to employee salary ledgers?\nSalary earned: '+fmt(t.salaryAmt)+'\nPaid: '+fmt(t.paid)+'\nThis month can be posted only once.'))return;api('/api/salary/post/'+state.ym,{method:'POST'}).then(function(d){flash(d.success?'Payroll posted to salary ledgers.':(d.error||'Could not post payroll.'),!!d.success);});};
+    window.recordSalaryBatch=function(){var items=[];Array.prototype.forEach.call(document.querySelectorAll('.salpay:checked'),function(c){var a=document.querySelector('.salpayamt[data-emp="'+c.dataset.emp+'"]');items.push({empId:c.dataset.emp,amount:a&&a.value});});var file=el('sp_proof').files[0];if(!items.length){flash('Select at least one employee.',false);return;}if(!file){flash('Common payment proof is required.',false);return;}var total=items.reduce(function(n,x){return n+(+x.amount||0);},0);if(!confirm('Post '+items.length+' salary payment(s) totaling '+fmt(total)+'?'))return;uploadProof(file).then(function(u){if(!u.success)throw new Error(u.error);return api('/api/salary/payments/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ym:state.ym,date:el('sp_date').value,account:el('sp_account').value,proof:u.url,reference:el('sp_ref').value,items:items})});}).then(function(d){if(!d.success)throw new Error(d.error);flash(d.count+' salary payments posted under '+d.batchId+'.',true);load();}).catch(function(e){flash(e.message,false);});};
 
     // ── ADVANCES ──
     function uploadProof(file){ var fd=new FormData(); fd.append('photo',file); fd.append('nature','SANKI'); return fetch('/api/expenses/upload',{method:'POST',body:fd}).then(function(r){return r.text().then(function(raw){var d;try{d=JSON.parse(raw);}catch(_){d={success:false,error:r.ok?'The upload returned an unreadable response.':'Payment proof upload failed. Please sign in again or retry.'};}if(!r.ok&&d.success!==false)d={success:false,error:d.error||'Payment proof upload failed.'};return d;});}); }
