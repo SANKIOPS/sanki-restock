@@ -20,6 +20,7 @@ const SAL_PATH = path.join(DATA_DIR, 'salary.json');
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
 function round2(n) { return Math.round(n * 100) / 100; }
+function byEmployeeName(a, b) { return String(a.name || a.employeeName || '').localeCompare(String(b.name || b.employeeName || ''), 'en', { sensitivity:'base', numeric:true }); }
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
 // Paid-day value per attendance mark: Present 1, Half 0.5, Paid-leave 1,
@@ -57,7 +58,7 @@ function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.a
 function computeMonth(s, ym) {
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
-  return Object.values(s.employees).map(e => {
+  return Object.values(s.employees).sort(byEmployeeName).map(e => {
     const row = (mo.rows || {})[e.id] || {};
     const computed = attPaidDays((mo.attendance || {})[e.id]);
     const paidDays = row.paidDays != null ? num(row.paidDays) : computed;   // override → attendance → null
@@ -104,7 +105,7 @@ function summaryForPL(from, to) {
 // ── Employee master ──
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
-  res.json({ success: true, employees: Object.values(s.employees), divisor: num(s.divisor) || 30, channels: CHANNELS });
+  res.json({ success: true, employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -139,7 +140,7 @@ router.get('/api/salary/advances', guard, (req, res) => {
   if (q.status) rows = rows.filter(a => a.status === q.status);
   if (q.account) rows = rows.filter(a => a.account === q.account);
   rows.sort((a, b) => String(b.date + b.id).localeCompare(String(a.date + a.id)));
-  const summary = Object.values(s.employees).map(e => {
+  const summary = Object.values(s.employees).sort(byEmployeeName).map(e => {
     const all = Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id);
     const total = all.reduce((n, a) => n + num(a.amount), 0), recovered = all.reduce((n, a) => n + advanceRecovered(a), 0);
     return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), transactions: all.map(advanceView).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))) };
