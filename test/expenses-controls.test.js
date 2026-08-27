@@ -81,6 +81,17 @@ test('vendor ledger UI offers Delete only when its entry count is zero', () => {
   assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
 });
 
+test('vendor ledgers can sort current outstanding amounts in both directions',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/id="vf_sort"/);
+  assert.match(html,/Amount: high to low/);
+  assert.match(html,/Amount: low to high/);
+  assert.match(html,/sort==='amount_asc'/);
+  assert.match(html,/sort==='amount_desc'/);
+  assert.match(html,/Number\(a\.outstanding\|\|0\)-Number\(b\.outstanding\|\|0\)/);
+  assert.match(html,/Number\(b\.outstanding\|\|0\)-Number\(a\.outstanding\|\|0\)/);
+});
+
 test('expense reference filter accepts partial numbers and compact rows are numbered', () => {
   const created=invoke('POST','/api/expenses',{body:{vendor:'Reference Search Vendor',amount:57,billPhoto:'/api/expenses/photo/bill.jpg',paymentType:'Cash'}}).body.expense;
   const digits=created.id.replace(/\D/g,'').replace(/^0+/, '');
