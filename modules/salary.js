@@ -23,6 +23,7 @@ function round2(n) { return Math.round(n * 100) / 100; }
 function byEmployeeName(a, b) { return String(a.name || a.employeeName || '').localeCompare(String(b.name || b.employeeName || ''), 'en', { sensitivity:'base', numeric:true }); }
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
+const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 // Paid-day value per attendance mark: Present 1, Half 0.5, Paid-leave 1,
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
@@ -46,6 +47,10 @@ function attPaidDays(att) {
   Object.keys(att).forEach(d => { const v = MARKS[att[d]]; if (v != null) { sum += v; any = true; } });
   return any ? sum : null;
 }
+function employmentAttendance(att, e, ym) {
+  if (!att) return att;
+  const filtered={}; Object.keys(att).forEach(day=>{const date=ym+'-'+String(day).padStart(2,'0');if(e.joiningDate&&date<e.joiningDate)return;if(e.lastWorkingDate&&date>e.lastWorkingDate)return;filtered[day]=att[day];}); return filtered;
+}
 function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: false, rows: {}, attendance: {} }; return s.months[ym]; }
 function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }
 function advanceOutstanding(a) { return round2(Math.max(0, num(a.amount) - advanceRecovered(a))); }
@@ -60,7 +65,7 @@ function computeMonth(s, ym) {
   const div = num(s.divisor) || 30;
   return Object.values(s.employees).sort(byEmployeeName).map(e => {
     const row = (mo.rows || {})[e.id] || {};
-    const computed = attPaidDays((mo.attendance || {})[e.id]);
+    const computed = attPaidDays(employmentAttendance((mo.attendance || {})[e.id],e,ym));
     const paidDays = row.paidDays != null ? num(row.paidDays) : computed;   // override → attendance → null
     const salaryAmt = paidDays != null ? (num(e.salary) / div * paidDays) : 0;
     const legacyAdvance = num(row.advance);
@@ -69,7 +74,7 @@ function computeMonth(s, ym) {
     const netPayable = salaryAmt - advance;
     const paid = num(row.paid);
     return {
-      id: e.id, name: e.name, post: e.post, channel: e.channel, active: e.active !== false,
+      id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
       salary: num(e.salary), paidDays, computedPaidDays: computed,
       salaryAmt: round2(salaryAmt), advance, legacyAdvance, loggedAdvanceRecovery, netPayable: round2(netPayable),
       outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
@@ -105,19 +110,24 @@ function summaryForPL(from, to) {
 // ── Employee master ──
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
-  res.json({ success: true, employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS });
+  res.json({ success: true, employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
   let id = b.id;
   if (!id) { s.seq = (s.seq || 0) + 1; id = 'E' + String(s.seq).padStart(3, '0'); }
   const cur = s.employees[id] || {};
+  const joiningDate=b.joiningDate!==undefined?String(b.joiningDate||'').slice(0,10):(cur.joiningDate||''),lastWorkingDate=b.lastWorkingDate!==undefined?String(b.lastWorkingDate||'').slice(0,10):(cur.lastWorkingDate||'');
+  if((joiningDate&&!/^\d{4}-\d{2}-\d{2}$/.test(joiningDate))||(lastWorkingDate&&!/^\d{4}-\d{2}-\d{2}$/.test(lastWorkingDate)))return res.status(400).json({success:false,error:'Use valid joining and last-working dates.'});
+  if(joiningDate&&lastWorkingDate&&lastWorkingDate<joiningDate)return res.status(400).json({success:false,error:'Last working date cannot be before the joining date.'});
   s.employees[id] = {
     id,
     name: String(b.name != null ? b.name : cur.name || '').trim(),
     post: String(b.post != null ? b.post : cur.post || '').trim(),
     salary: b.salary != null ? num(b.salary) : num(cur.salary),
     channel: CHANNELS.includes(b.channel) ? b.channel : (cur.channel || 'Shared'),
+    weekOffDay: b.weekOffDay !== undefined ? (WEEK_DAYS.includes(b.weekOffDay) ? b.weekOffDay : '') : (cur.weekOffDay || ''),
+    joiningDate, lastWorkingDate,
     note: b.note != null ? String(b.note) : (cur.note || ''),
     active: b.active != null ? !!b.active : (cur.active !== false),
     createdAt: cur.createdAt || new Date().toISOString()
@@ -201,11 +211,16 @@ router.post('/api/salary/attendance/:ym', guard, (req, res) => {
   const s = load(); const mo = ensureMonth(s, req.params.ym); const b = req.body || {};
   if (b.empId && b.day) {
     mo.attendance[b.empId] = mo.attendance[b.empId] || {};
-    if (b.mark && MARKS[b.mark] != null) mo.attendance[b.empId][b.day] = b.mark;
+    let mark = b.mark;
+    const emp=s.employees[b.empId],dateText=req.params.ym+'-'+String(b.day).padStart(2,'0'),date=new Date(dateText+'T00:00:00Z'),weekday=!isNaN(date)?WEEK_DAYS[date.getUTCDay()]:'';
+    if(emp&&((emp.joiningDate&&dateText<emp.joiningDate)||(emp.lastWorkingDate&&dateText>emp.lastWorkingDate)))return res.status(400).json({success:false,error:'This date is outside the employee’s employment period.'});
+    if(mark==='A'&&emp&&emp.weekOffDay&&emp.weekOffDay===weekday)mark='WO';
+    if (mark && MARKS[mark] != null) mo.attendance[b.empId][b.day] = mark;
     else delete mo.attendance[b.empId][b.day];
+    b.savedMark=mark;
   }
   save(s);
-  res.json({ success: true });
+  res.json({ success: true, mark:b.savedMark || '' });
 });
 
 // Edit a payroll row (paidDays override / advance / paid / remarks).
