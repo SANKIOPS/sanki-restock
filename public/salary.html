@@ -186,8 +186,10 @@
         '</table></div>'+
         '<div class="legend">Click a cell to cycle: '+
           '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b class="m-PL">PL</b> Paid leave · <b class="m-WO">WO</b> Week-off · <b>·</b> clear'+
-        '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+
-        '<div class="conf">P=1, H=0.5, PL=1, WO=1, A=0 paid day. The <b>Paid days</b> column feeds the Payroll tab (unless you typed an override there).</div>';
+        '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+ 
+        '<div class="conf">P=1, H=0.5, PL=1, WO=1, A=0 paid day. The <b>Paid days</b> column feeds the Payroll tab (unless you typed an override there).</div>'+ 
+        '<details class="card"><summary>Bulk attendance import</summary><label>Validated JSON rows</label><textarea id="bulkAttendance" rows="8" style="width:100%" placeholder=\'[{"employeeName":"Employee name","marks":["P","A","HD"]}]\'></textarea><button class="btn" id="saveBulkAttendance">Import this month atomically</button><div class="conf">All rows are validated before anything is saved. Blank marks clear those dates; HD is stored as Half Day.</div></details>';
+      el('saveBulkAttendance').onclick=function(){var items;try{items=JSON.parse(el('bulkAttendance').value);}catch(e){flash('Enter valid JSON rows.',false);return;}if(!Array.isArray(items)||!items.length){flash('Add at least one employee row.',false);return;}if(!confirm('Import attendance for '+items.length+' employees into '+ymLabel(state.ym)+'? Supplied dates will be replaced.'))return;this.disabled=true;api('/api/salary/attendance/'+state.ym+'/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})}).then(function(x){if(!x.success)throw new Error(x.error||'Import failed');flash('Imported '+x.cells+' attendance cells for '+x.employees+' employees.',true);load();}).catch(function(e){flash(e.message,false);el('saveBulkAttendance').disabled=false;});};
       Array.prototype.forEach.call(document.querySelectorAll('.daycell'), function(c){
         c.addEventListener('click', function(){
           state.attendanceInfo=this.dataset.name+' · '+this.dataset.date;
