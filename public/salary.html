@@ -35,6 +35,10 @@
     /* Attendance grid */
     .att td, .att th { padding:4px 6px; text-align:center; font-size:11px; }
     .att .daycell { width:26px; cursor:pointer; user-select:none; border:1px solid #eef0f2; font-weight:700; }
+    .att .cal-sunday { box-shadow:inset 0 0 0 1px #f59e0b; background-color:#fff7ed; }
+    .att .cal-weekoff { box-shadow:inset 0 0 0 2px #60a5fa; background-color:#eff6ff; }
+    .att th.cal-sunday { color:#b45309; background:#fff7ed; }
+    .att .not-employed { background:#e5e7eb; color:#9ca3af; cursor:not-allowed; box-shadow:none; }
     .m-P { background:#dcfce7; color:#166534; } .m-H { background:#fef9c3; color:#854d0e; }
     .m-A { background:#fee2e2; color:#991b1b; } .m-PL { background:#dbeafe; color:#1e40af; } .m-WO { background:#f1f5f9; color:#64748b; }
     .legend { font-size:12px; color:#6b7280; margin:8px 2px; display:flex; gap:12px; flex-wrap:wrap; }
@@ -83,7 +87,7 @@
     var fmt = function(n){ n = Math.round((n||0)); return (n<0?'−₹':'₹') + Math.abs(n).toLocaleString('en-IN'); };
     var MARKS = ['P','H','A','PL','WO'];               // cycle order (click)
     var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'PL', 'PL':'WO', 'WO':'' };
-    var state = { view:'payroll', ym:'', data:null, employees:null, accounts:[], advanceFilters:{employee:'',month:'',status:'',account:''} };
+    var state = { view:'payroll', ym:'', data:null, employees:null, accounts:[], attendanceInfo:'', advanceFilters:{employee:'',month:'',status:'',account:''} };
 
     function pad(n){ return String(n).padStart(2,'0'); }
     function ymLabel(ym){ var p=ym.split('-'); var mn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mn[+p[1]-1]+' '+p[0]; }
@@ -161,13 +165,14 @@
     // ── ATTENDANCE ──
     function renderAttendance(d){
       var dim = d.daysInMonth, att = d.attendance||{};
-      var headDays=''; for(var i=1;i<=dim;i++) headDays += '<th>'+i+'</th>';
+      var weekShort=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'],headDays=''; for(var i=1;i<=dim;i++){var hd=new Date(state.ym+'-'+pad(i)+'T00:00:00'),hw=weekShort[hd.getDay()];headDays += '<th class="'+(hw==='Sun'?'cal-sunday':'')+'" title="'+esc(i+' '+hw+' · '+ymLabel(state.ym))+'">'+i+'<div style="font-size:8px">'+hw+'</div></th>';}
       var body = d.rows.map(function(r,index){
         var cells='';
         for(var day=1; day<=dim; day++){
           var dd = pad(day);
           var m = (att[r.id]||{})[dd] || '';
-          cells += '<td class="daycell '+(m?('m-'+m):'')+'" data-emp="'+r.id+'" data-day="'+dd+'">'+(m||'·')+'</td>';
+          var isoDate=state.ym+'-'+dd,dt=new Date(isoDate+'T00:00:00'),weekday=weekShort[dt.getDay()],fullDate=dd+' '+weekday+' · '+ymLabel(state.ym),outside=(r.joiningDate&&isoDate<r.joiningDate)||(r.lastWorkingDate&&isoDate>r.lastWorkingDate),calendarClass=outside?'not-employed':(weekday==='Sun'?'cal-sunday':(r.weekOffDay===['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dt.getDay()]?'cal-weekoff':''));
+          cells += '<td class="daycell '+calendarClass+' '+(m?('m-'+m):'')+'" data-emp="'+r.id+'" data-name="'+esc(r.name)+'" data-day="'+dd+'" data-date="'+esc(fullDate)+'" data-disabled="'+(outside?'1':'')+'" title="'+esc(r.name+' · '+fullDate+(outside?' · outside employment period':(calendarClass==='cal-weekoff'?' · assigned weekly off':'')))+'">'+(outside?'×':(m||'·'))+'</td>';
         }
         var pdShown = r.computedPaidDays!=null ? r.computedPaidDays : '—';
         return '<tr><td>'+(index+1)+'</td><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+pdShown+'</b></td></tr>';
@@ -179,10 +184,13 @@
         '</table></div>'+
         '<div class="legend">Click a cell to cycle: '+
           '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b class="m-PL">PL</b> Paid leave · <b class="m-WO">WO</b> Week-off · <b>·</b> clear'+
-        '</div>'+
+        '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+
         '<div class="conf">P=1, H=0.5, PL=1, WO=1, A=0 paid day. The <b>Paid days</b> column feeds the Payroll tab (unless you typed an override there).</div>';
       Array.prototype.forEach.call(document.querySelectorAll('.daycell'), function(c){
         c.addEventListener('click', function(){
+          state.attendanceInfo=this.dataset.name+' · '+this.dataset.date;
+          el('attendanceCellInfo').textContent=state.attendanceInfo;
+          if(this.dataset.disabled==='1'){state.attendanceInfo+=' · outside employment period';el('attendanceCellInfo').textContent=state.attendanceInfo;return;}
           var cur = this.textContent==='·' ? '' : this.textContent;
           var next = MARK_NEXT[cur];
           var emp=this.dataset.emp, day=this.dataset.day;
@@ -196,37 +204,43 @@
     function loadEmployees(){
       api('/api/salary/employees').then(function(d){
         state.employees = d.employees;
-        var chOpts = function(sel){ return (d.channels||['POS','Website','Shared']).map(function(c){ return '<option '+(c===sel?'selected':'')+'>'+c+'</option>'; }).join(''); };
+        var chOpts = function(sel){ return (d.channels||['POS','Website','Shared']).map(function(c){ return '<option '+(c===sel?'selected':'')+'>'+c+'</option>'; }).join(''); }, weekOpts=function(sel){return '<option value="">Not assigned</option>'+(d.weekDays||[]).map(function(x){return '<option '+(x===sel?'selected':'')+'>'+x+'</option>';}).join('');};
         var rows = d.employees.map(function(e,index){
           return '<tr'+(e.active===false?' style="opacity:.5"':'')+'><td>'+(index+1)+'</td>'+
             '<td class="l"><input class="rem" style="width:150px" value="'+esc(e.name)+'" onchange="saveEmp(\''+e.id+'\',\'name\',this.value)"></td>'+
             '<td class="l"><input class="rem" style="width:130px" value="'+esc(e.post||'')+'" onchange="saveEmp(\''+e.id+'\',\'post\',this.value)"></td>'+
             '<td><input class="cell" style="width:80px" type="number" value="'+e.salary+'" onchange="saveEmp(\''+e.id+'\',\'salary\',this.value)"></td>'+
             '<td class="l"><select onchange="saveEmp(\''+e.id+'\',\'channel\',this.value)">'+chOpts(e.channel)+'</select></td>'+
+            '<td class="l"><select onchange="saveEmp(\''+e.id+'\',\'weekOffDay\',this.value)">'+weekOpts(e.weekOffDay)+'</select></td>'+
+            '<td><input type="date" value="'+esc(e.joiningDate||'')+'" onchange="saveEmp(\''+e.id+'\',\'joiningDate\',this.value)"></td>'+
+            '<td><input type="date" value="'+esc(e.lastWorkingDate||'')+'" onchange="saveEmp(\''+e.id+'\',\'lastWorkingDate\',this.value)"></td>'+
             '<td><button class="btn mini ghost" onclick="toggleEmp(\''+e.id+'\','+(e.active===false)+')">'+(e.active===false?'Reactivate':'Deactivate')+'</button></td>'+
           '</tr>';
         }).join('');
         el('host').innerHTML =
-          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th class="l">Weekly off day</th><th>Joining date</th><th>Last working date</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
           '<div class="card" style="margin-top:14px"><div class="empform">'+
             '<div class="fld"><label>Name</label><input id="ne_name" placeholder="full name"></div>'+
             '<div class="fld"><label>Post</label><input id="ne_post" placeholder="e.g. Sales Executive"></div>'+
             '<div class="fld"><label>Monthly salary ₹</label><input id="ne_salary" type="number" placeholder="0"></div>'+
             '<div class="fld"><label>Channel</label><select id="ne_channel">'+chOpts('Shared')+'</select></div>'+
+            '<div class="fld"><label>Weekly off day</label><select id="ne_weekoff">'+weekOpts('')+'</select></div>'+
+            '<div class="fld"><label>Joining date</label><input id="ne_joining" type="date"></div>'+
+            '<div class="fld"><label>Last working date (optional)</label><input id="ne_lastworking" type="date"></div>'+
             '<div class="fld" style="justify-content:flex-end"><button class="btn" id="addEmp">＋ Add employee</button></div>'+
           '</div></div>'+
           '<div class="conf">Channel decides which P&amp;L column the salary lands in — <b>POS</b> (store), <b>Website</b> (content/fulfilment), or <b>Shared</b> (split by revenue share).</div>';
         el('addEmp').addEventListener('click', function(){
-          var b = { name:el('ne_name').value.trim(), post:el('ne_post').value.trim(), salary:el('ne_salary').value, channel:el('ne_channel').value };
+          var b = { name:el('ne_name').value.trim(), post:el('ne_post').value.trim(), salary:el('ne_salary').value, channel:el('ne_channel').value, weekOffDay:el('ne_weekoff').value, joiningDate:el('ne_joining').value, lastWorkingDate:el('ne_lastworking').value };
           if(!b.name){ flash('Name required.', false); return; }
           api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b) })
-            .then(function(){ flash('Added.', true); loadEmployees(); });
+            .then(function(d){ if(!d.success){flash(d.error||'Could not add employee.',false);return;} flash('Added.', true); loadEmployees(); });
         });
       });
     }
     window.saveEmp = function(id, field, val){
       var b={ id:id }; b[field]=val;
-      api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b) }).then(function(){ flash('Saved.', true); });
+      api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b) }).then(function(d){ flash(d.success?'Saved.':(d.error||'Could not save.'),!!d.success); if(!d.success)loadEmployees(); });
     };
     window.toggleEmp = function(id, reactivate){
       if(reactivate){ api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ id:id, active:true }) }).then(function(){ loadEmployees(); }); }
