@@ -174,7 +174,7 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   const collision={seq:22,employees:{E022:{id:'E022',name:'Guard',post:'Security',salary:15000}},advances:{a:{empId:'E022',employeeName:'SUNNY SHARMA',historicalImport:true}}};assert.equal(_repairGuardSunnyCollision(collision),true);assert.equal(collision.employees.E022.name,'SUNNY SHARMA');const safeGuard=_ensureHistoricalGuard(collision,{rows:{}});assert.equal(safeGuard.id,'E023');assert.equal(collision.employees.E022.name,'SUNNY SHARMA');
   assert.ok(_july2026Import.every(x=>x[2].length===31),'every supplied employee has exactly 31 source cells');
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-07'}}).body;
-  const expected=new Map(_july2026Import.map(x=>[x[0].toLowerCase()+'|'+x[1].toLowerCase(),{paidDays:_julyImportedMarks(String(x[0]).toLowerCase()==='suraj'?{monthlyPaidLeaveAllowance:1}:{},x[2]).paidDays}]));
+  const expected=new Map(_july2026Import.map(x=>{const emp={monthlyPaidLeaveAllowance:String(x[0]).toLowerCase()==='suraj'?1:4,joiningDate:x[4]||''};return[x[0].toLowerCase()+'|'+x[1].toLowerCase(),{paidDays:_julyImportedMarks(emp,x[2]).paidDays}];}));
   const imported=month.rows.filter(r=>expected.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
   assert.equal(imported.length,19);
   imported.forEach(r=>{const x=expected.get(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase());assert.equal(r.paidDays,x.paidDays,r.name);assert.equal(r.paid,0,r.name+' is not marked salary-paid');});
@@ -191,5 +191,8 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   assert.equal(invoke('GET','/api/salary/employees').body.employees.find(e=>e.id===suraj.id).monthlyPaidLeaveAllowance,1);
   const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
   assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');
-  assert.equal(sundayOff.attendance['01'],'PL','an ordinary absence within the first four offs is paid leave');
+  assert.equal(sundayOff.attendance['01'],'A','ordinary absence remains visibly marked A');
+  const twoLeaves=_julyImportedMarks({},'P'.repeat(29)+'AA'),fiveLeaves=_julyImportedMarks({},'P'.repeat(26)+'AAAAA');
+  assert.equal(twoLeaves.paidDays,32,'two unused allowance days become extra paid days after the July adjustment');
+  assert.equal(fiveLeaves.paidDays,29,'a fifth leave reduces the normal 30 paid days by one');
 });
