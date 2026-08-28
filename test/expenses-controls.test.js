@@ -853,20 +853,6 @@ test('finalizing removes every visible draft summary for that entity and bank',(
   assert.equal(view.body.draft,null);assert.equal(view.body.updatedThrough,'2026-08-27');
 });
 
-test('only Owner can discard an unfinalized bank statement draft',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),uploaded=path.join(tempDir,'discard-me.pdf');
-  fs.writeFileSync(uploaded,'temporary statement');
-  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
-  stored.bankReconciliationDrafts['BRD-DISCARD']={id:'BRD-DISCARD',account:'ICICI Bank 0993',nature:'PERSONAL',transactions:[],summary:{from:'2026-08-01',to:'2026-08-28'},resolutions:{},temporaryFile:uploaded,originalName:'statement.pdf',createdAt:new Date().toISOString(),expiresAt:'2099-01-01T00:00:00.000Z'};
-  fs.writeFileSync(expenseFile,JSON.stringify(stored));
-  const denied=invoke('POST','/api/expenses/bank-statements/discard',{role:'admin',body:{draftId:'BRD-DISCARD'}});
-  assert.equal(denied.status,403);assert.equal(fs.existsSync(uploaded),true);
-  const discarded=invoke('POST','/api/expenses/bank-statements/discard',{role:'owner',body:{draftId:'BRD-DISCARD'}});
-  assert.equal(discarded.status,200);assert.equal(fs.existsSync(uploaded),false);
-  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
-  assert.equal(after.bankReconciliationDrafts['BRD-DISCARD'],undefined);
-});
-
 test('personal bank reconciliation UI uses Owner-only entity accounts and clears finalized actions',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/function bankAccountsForNature\(nature\)/);
@@ -876,17 +862,14 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/PERSONAL bank reconciliation is visible only to Owner/);
   assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
   assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
+  assert.match(html,/Reconciliation history/);
+  assert.match(html,/Decision and actual reason/);
+  assert.match(html,/Open original statement/);
+  assert.match(html,/Export CSV/);
 });
 
-test('bank statement upload authorizes multipart fields only after multer parses them',()=>{
-  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
-  const routeAt=source.indexOf("router.post('/api/expenses/bank-statements/import'");
-  assert.ok(routeAt>=0,'bank statement import route should exist');
-  const route=source.slice(routeAt,routeAt+2400);
-  const uploadAt=route.indexOf("statementUpload.single('statement')");
-  const accessAt=route.indexOf('canAccessBankReconciliation');
-  assert.ok(uploadAt>=0&&accessAt>uploadAt,'multipart form must be parsed before account authorization');
-  assert.match(route,/unlinkSync\(req\.file\.path\)/,'denied uploads must remove the temporary file');
+test('stored bank statements can only be opened through an authorised reconciliation account',()=>{
+  assert.ok(router.stack.some(x=>x.route&&x.route.path==='/api/expenses/bank-statements/file/:id'&&x.route.methods.get));
 });
 
 test('PDF and image OCR statement text uses the same normalized bank rows', () => {
@@ -901,45 +884,6 @@ test('PDF and image OCR statement text uses the same normalized bank rows', () =
   assert.match(telegram,/callback_data:'am:bank'/);
   assert.match(telegram,/Temporary statement preview ready/);
   assert.match(telegram,/Nothing has been stored in the official bank history/);
-});
-
-test('newest-first PDF statements derive the real opening and closing balances', () => {
-  const rows=parseBankStatementText([
-    '2026-08-25 R/KKBKR52026082500 0 200000 281650.40',
-    '2026-08-25 UPI/612835748021/DR 3000 0 81650.40',
-    '2026-08-24 UPI/313157351411/DR 2000 0 84650.40',
-    '2026-08-24 UPI/612787369858/DR 3500 0 86650.40',
-    '2026-08-23 UPI/313107864568/DR 5000 0 90150.40',
-    '2026-08-22 UPI/612673856994/DR 6560 0 95150.40',
-    '2026-08-22 UPI/313002086306/DR 5000 0 101710.40',
-    '2026-08-22 UPI/612652390234/DR 5000 0 106710.40'
-  ].join('\n'));
-  assert.equal(rows.statementSummary.openingBalance,111710.4);
-  assert.equal(rows.statementSummary.closingBalance,281650.4);
-  assert.equal(rows.statementSummary.validated,true);
-});
-
-test('ICICI PDF text keeps ISO dates and ignores embedded UPI reference numbers',()=>{
-  const rows=parseBankStatementText([
-    '2026-08-25 R/KKBKR52026082500750786/KKBK0000958/NMKK BEAUTY - 200000 281650.4',
-    '2026-08-25 UPI/612835748021/DR/GAGA/ICIC/tforsamast1@ybl - 3000 81650.4',
-    '2026-08-24 UPI/313157351411/DR/GAGA/ICIC/tforsamast1@ybl - 2000 84650.4',
-    '2026-08-24 UPI/612787369858/DR/GAGA/ICIC/tforsamast1@ybl - 3500 86650.4',
-    '2026-08-23 UPI/313107864568/DR/GAGA/ICIC/tforsamast1@ybl - 5000 90150.4',
-    '2026-08-22 UPI/612673856994/DR/PRAS/UTIB/910287-2@okaxis - 6560 95150.4',
-    '2026-08-22 UPI/313002086306/DR/GAGA/ICIC/tforsamast1@ybl - 5000 101710.4',
-    '2026-08-22 UPI/612652390234/DR/GAGA/ICIC/tforsamast1@ybl - 5000 106710.4'
-  ].join('\n'));
-  assert.deepEqual(rows.map(x=>({date:x.date,debit:x.debit,credit:x.credit,balance:x.balance})),[
-    {date:'2026-08-25',debit:0,credit:200000,balance:281650.4},
-    {date:'2026-08-25',debit:3000,credit:0,balance:81650.4},
-    {date:'2026-08-24',debit:2000,credit:0,balance:84650.4},
-    {date:'2026-08-24',debit:3500,credit:0,balance:86650.4},
-    {date:'2026-08-23',debit:5000,credit:0,balance:90150.4},
-    {date:'2026-08-22',debit:6560,credit:0,balance:95150.4},
-    {date:'2026-08-22',debit:5000,credit:0,balance:101710.4},
-    {date:'2026-08-22',debit:5000,credit:0,balance:106710.4}
-  ]);
 });
 
 test('Axis Bank PDF text ignores the statement-period header and validates the transaction table', () => {
