@@ -265,7 +265,7 @@ function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.a
 function employeeMonthBase(s,e,ym){
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
-  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),paidDays=row.paidDays!=null?num(row.paidDays):computed;
+  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),paidDays=computed!=null?computed:(row.paidDays!=null?num(row.paidDays):null);
   const salaryAmt=paidDays!=null?(num(e.salary)/div*paidDays):0,legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery);
   const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
   return {row,computed,paidDays,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,legacyPaid,transactionPaid,paid};
@@ -454,6 +454,7 @@ router.post('/api/salary/attendance/:ym', guard, (req, res) => {
     if((mark==='A'||mark==='PL')&&emp)mark=normalizedAbsentMark(emp,req.params.ym,b.day);
     if (mark && MARKS[mark] != null) mo.attendance[b.empId][b.day] = mark;
     else delete mo.attendance[b.empId][b.day];
+    if(mo.rows[b.empId])delete mo.rows[b.empId].paidDays;
     b.savedMark=mark;
   }
   save(s);
@@ -483,18 +484,22 @@ router.post('/api/salary/attendance/:ym/batch', guard, (req, res) => {
     seen.add(emp.id);prepared.push({emp,normalized});
   }
   const mo=ensureMonth(s,ym);
-  prepared.forEach(({emp,normalized})=>{mo.attendance[emp.id]=mo.attendance[emp.id]||{};Object.entries(normalized).forEach(([day,mark])=>{if(mark)mo.attendance[emp.id][day]=mark;else delete mo.attendance[emp.id][day];});});
+  prepared.forEach(({emp,normalized})=>{mo.attendance[emp.id]=mo.attendance[emp.id]||{};Object.entries(normalized).forEach(([day,mark])=>{if(mark)mo.attendance[emp.id][day]=mark;else delete mo.attendance[emp.id][day];});if(mo.rows[emp.id])delete mo.rows[emp.id].paidDays;});
   save(s);
   res.json({success:true,employees:prepared.length,cells:prepared.reduce((n,x)=>n+Object.keys(x.normalized).length,0),rows:computeMonth(s,ym).filter(r=>seen.has(r.id)).map(r=>({empId:r.id,name:r.name,paidDays:r.computedPaidDays}))});
 });
 
-// Edit a payroll row (paidDays override / advance / paid / remarks).
+// Edit a payroll row. Paid days may be entered manually only when attendance is absent.
 router.post('/api/salary/row/:ym', guard, (req, res) => {
   const s = load(); const mo = ensureMonth(s, req.params.ym); const b = req.body || {};
   if (!b.empId) return res.status(400).json({ success: false, error: 'empId required' });
   if(!s.employees[b.empId]||!employeeInPayrollMonth(s.employees[b.empId],req.params.ym))return res.status(400).json({success:false,error:'This employee is outside the selected payroll month.'});
   const row = mo.rows[b.empId] = mo.rows[b.empId] || {};
-  if (b.paidDays !== undefined) row.paidDays = (b.paidDays === '' || b.paidDays === null) ? null : num(b.paidDays);
+  if (b.paidDays !== undefined) {
+    const computed=attPaidDays(employmentAttendance((mo.attendance||{})[b.empId],s.employees[b.empId],req.params.ym),s.employees[b.empId],req.params.ym);
+    if(computed!=null)return res.status(409).json({success:false,error:'Paid days come from attendance for this employee. Update the Attendance tab instead.'});
+    row.paidDays = (b.paidDays === '' || b.paidDays === null) ? null : num(b.paidDays);
+  }
   if (b.advance !== undefined) row.advance = num(b.advance);
   if (b.paid !== undefined) row.paid = num(b.paid);
   if (b.remarks !== undefined) row.remarks = String(b.remarks);
