@@ -820,6 +820,15 @@ test('bank statement rows are normalized from cumulative Excel exports', () => {
   ]);
 });
 
+test('bank statement multipart fields are parsed before account permission is checked',()=>{
+  const route=router.stack.find(x=>x.route&&x.route.path==='/api/expenses/bank-statements/import'&&x.route.methods.post);
+  assert.ok(route);
+  assert.equal(route.route.stack.length,3);
+  assert.match(String(route.route.stack[0].handle.name),/multer/i);
+  assert.match(route.route.stack[1].handle.toString(),/canAccessBankReconciliation/);
+  assert.match(route.route.stack[1].handle.toString(),/unlinkSync/);
+});
+
 test('personal bank reconciliation is Owner-only and stored separately from business books',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
   stored.bankStatements=stored.bankStatements||{};
