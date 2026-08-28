@@ -37,7 +37,10 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
+const dns     = require('dns').promises;
+const net     = require('net');
 const multer  = require('multer');
+const AdmZip  = require('adm-zip');
 let Jimp = null; try { Jimp = require('jimp'); } catch { /* dedup degrades to off */ }
 let XLSX = null; try { XLSX = require('xlsx'); } catch { /* Excel invoice parsing degrades to off */ }
 
@@ -550,6 +553,110 @@ const candidateUpload = multer({
   limits: { fileSize: 25 * 1024 * 1024, files: 200 },
   fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
 });
+
+const ZIP_MAX_BYTES = 50 * 1024 * 1024;
+const ZIP_MAX_FILES = 200;
+const ZIP_MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const ZIP_MAX_EXPANDED_BYTES = 300 * 1024 * 1024;
+const zipUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: ZIP_MAX_BYTES, files: 1 } });
+const ZIP_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+
+function unsafeImportIp(ip) {
+  if (net.isIPv4(ip)) {
+    const p = ip.split('.').map(Number);
+    return p[0] === 10 || p[0] === 127 || p[0] === 0 ||
+      (p[0] === 169 && p[1] === 254) || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
+      (p[0] === 192 && p[1] === 168) || (p[0] === 100 && p[1] >= 64 && p[1] <= 127) || p[0] >= 224;
+  }
+  const v = String(ip || '').toLowerCase();
+  return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe8') || v.startsWith('fe9') || v.startsWith('fea') || v.startsWith('feb');
+}
+
+async function assertSafeImportUrl(raw) {
+  let u;
+  try { u = new URL(String(raw || '').trim()); } catch { throw new Error('Enter a valid public HTTPS ZIP link.'); }
+  if (u.protocol !== 'https:') throw new Error('Only public HTTPS ZIP links are accepted.');
+  if (!u.hostname || u.username || u.password || u.hostname.toLowerCase() === 'localhost') throw new Error('This ZIP link is not allowed.');
+  const resolved = await dns.lookup(u.hostname, { all: true });
+  if (!resolved.length || resolved.some(x => unsafeImportIp(x.address))) throw new Error('Private or local network ZIP links are not allowed.');
+  return u;
+}
+
+async function downloadZip(raw) {
+  let u = await assertSafeImportUrl(raw);
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    let response;
+    try { response = await fetch(u, { redirect: 'manual', signal: controller.signal }); }
+    catch (e) { clearTimeout(timer); throw new Error(e && e.name === 'AbortError' ? 'ZIP download timed out.' : 'Could not download that ZIP link.'); }
+    clearTimeout(timer);
+    if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
+      if (redirects === 3) throw new Error('The ZIP link redirected too many times.');
+      u = await assertSafeImportUrl(new URL(response.headers.get('location'), u).toString());
+      continue;
+    }
+    if (!response.ok) throw new Error('ZIP download failed (HTTP ' + response.status + ').');
+    const declared = Number(response.headers.get('content-length') || 0);
+    if (declared > ZIP_MAX_BYTES) throw new Error('ZIP is larger than 50 MB.');
+    const chunks = []; let total = 0;
+    for await (const chunk of response.body) {
+      total += chunk.length;
+      if (total > ZIP_MAX_BYTES) throw new Error('ZIP is larger than 50 MB.');
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  throw new Error('Could not download that ZIP link.');
+}
+
+function safeZipImages(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4 || buffer.readUInt32LE(0) !== 0x04034b50) throw new Error('The selected file is not a valid ZIP archive.');
+  let entries;
+  try { entries = new AdmZip(buffer).getEntries(); } catch { throw new Error('The ZIP archive could not be read.'); }
+  const images = []; let expanded = 0;
+  for (const entry of entries) {
+    const name = String(entry.entryName || '').replace(/\\/g, '/');
+    if (entry.isDirectory || !name || name.startsWith('/') || name.split('/').includes('..') || name.includes('/__MACOSX/') || name.startsWith('__MACOSX/')) continue;
+    const base = path.basename(name);
+    if (!base || base.startsWith('.') || !ZIP_IMAGE_EXTS.has(path.extname(base).toLowerCase())) continue;
+    if (images.length >= ZIP_MAX_FILES) throw new Error('ZIP contains more than 200 images.');
+    const size = Number(entry.header && entry.header.size || 0);
+    if (size > ZIP_MAX_IMAGE_BYTES) throw new Error(base + ' is larger than 25 MB.');
+    expanded += size;
+    if (expanded > ZIP_MAX_EXPANDED_BYTES) throw new Error('ZIP expands beyond the 300 MB safety limit.');
+    const data = entry.getData();
+    if (!data.length) continue;
+    images.push({ name: base, ext: path.extname(base).toLowerCase(), data });
+  }
+  if (!images.length) throw new Error('No JPG, PNG or WebP images were found in the ZIP.');
+  return images;
+}
+
+async function importZipImages(buffer, body) {
+  const images = safeZipImages(buffer);
+  const vendor = String(body && body.vendor || '').trim();
+  if (!vendor) throw new Error('Enter a vendor name first.');
+  const s = loadStore();
+  const reqBatch = String(body && body.batch || '').trim();
+  const target = s.batches.find(b => b.id === reqBatch);
+  if (!target) throw new Error('Open a destination batch first.');
+  s.activeBatch = target.id;
+  const created = [];
+  try {
+    for (const img of images) {
+      const filename = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + img.ext;
+      const fp = path.join(CAND_DIR, filename);
+      fs.writeFileSync(fp, img.data); created.push(fp);
+      const sig = await computeSignature(fp);
+      s.candidates.push({ id: crypto.randomBytes(8).toString('hex'), file: filename, vendor, batch: target.id,
+        category: null, fit: null, colour: null, pattern: null, uploadedAt: new Date().toISOString(),
+        sha: fileSha(fp), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null });
+    }
+    const active = activeCands(s); const dupes = markDuplicates(active); saveStore(s);
+    return { added: images.length, total: active.length, dupes, batch: target, batches: batchList(s), activeBatch: s.activeBatch };
+  } catch (e) { created.forEach(fp => { try { fs.unlinkSync(fp); } catch {} }); throw e; }
+}
 
 // ── Photo Splitter ──────────────────────────────────────────────
 // Supplier screenshots often contain several colourway/product photos in one
@@ -1961,6 +2068,22 @@ router.post('/api/casuals/candidates', async (req, res) => {
     categories: categoryCounts(active), batches: batchList(s), activeBatch: s.activeBatch, batch: target });
 });
 
+router.post('/api/casuals/candidates/import-zip', (req, res) => {
+  zipUpload.single('zip')(req, res, async err => {
+    if (err) return res.status(400).json({ success: false, error: err.code === 'LIMIT_FILE_SIZE' ? 'ZIP is larger than 50 MB.' : (err.message || 'ZIP upload failed.') });
+    if (!req.file || !req.file.buffer) return res.status(400).json({ success: false, error: 'Choose a ZIP file first.' });
+    try { res.json({ success: true, ...(await importZipImages(req.file.buffer, req.body)) }); }
+    catch (e) { res.status(400).json({ success: false, error: e.message || 'Could not import ZIP.' }); }
+  });
+});
+
+router.post('/api/casuals/candidates/import-zip-url', express.json(), async (req, res) => {
+  try {
+    const buffer = await downloadZip(req.body && req.body.url);
+    res.json({ success: true, ...(await importZipImages(buffer, req.body)) });
+  } catch (e) { res.status(400).json({ success: false, error: e.message || 'Could not import ZIP link.' }); }
+});
+
 router.get('/api/casuals/candidate/:id', (req, res) => {
   const s = loadStore();
   const c = s.candidates.find(x => x.id === req.params.id);
@@ -2433,4 +2556,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, unsafeImportIp };

@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards } = require('../modules/casuals');
+const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, unsafeImportIp } = require('../modules/casuals');
+const AdmZip = require('adm-zip');
 
 test('Shirts and T-shirts support the same design-first target as Trousers', () => {
   const settings = settingsWithDefaults({ settings: {} });
@@ -96,4 +97,26 @@ test('photo splitter requires a destination batch before upload', () => {
   assert.match(html, /id="czSplitChoose"/);
   assert.match(html, /Create a destination batch first, then choose the collage photos/);
   assert.match(html, /Photo splitter server error/);
+});
+
+test('ZIP import keeps supported images and ignores metadata and non-images', () => {
+  const zip = new AdmZip();
+  zip.addFile('vendor/look-1.JPG', Buffer.from([1, 2, 3]));
+  zip.addFile('__MACOSX/._look-1.JPG', Buffer.from([4]));
+  zip.addFile('notes.txt', Buffer.from('no'));
+  const images = safeZipImages(zip.toBuffer());
+  assert.equal(images.length, 1);
+  assert.equal(images[0].name, 'look-1.JPG');
+});
+
+test('ZIP link guard identifies local and private network addresses', () => {
+  ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.2', '169.254.1.1', '::1', 'fd00::1'].forEach(ip => assert.equal(unsafeImportIp(ip), true));
+  assert.equal(unsafeImportIp('8.8.8.8'), false);
+});
+
+test('fresh procurement UI offers ZIP file and ZIP link import', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  assert.match(html, /id="czZipFile"/);
+  assert.match(html, /id="czZipUrl"/);
+  assert.match(html, /\/api\/casuals\/candidates\/import-zip-url/);
 });
