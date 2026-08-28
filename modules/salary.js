@@ -281,7 +281,10 @@ router.get('/api/salary/employees', guard, (req, res) => {
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
   let id = b.id;
-  if (!id) { s.seq = (s.seq || 0) + 1; id = 'E' + String(s.seq).padStart(3, '0'); }
+  if(id&&!s.employees[id])return res.status(404).json({success:false,error:'Employee record not found. Reload the page and try again.'});
+  const requestedName=String(b.name||'').trim(),duplicate=!id&&Object.values(s.employees).find(e=>e.active!==false&&String(e.name||'').trim().localeCompare(requestedName,'en',{sensitivity:'base'})===0);
+  if(duplicate)return res.status(409).json({success:false,duplicate:true,existingEmployee:{id:duplicate.id,name:duplicate.name,post:duplicate.post},error:duplicate.name+' already exists. Edit or reactivate the existing employee instead.'});
+  if (!id) id=nextEmployeeId(s);
   const cur = s.employees[id] || {};
   const joiningDate=b.joiningDate!==undefined?String(b.joiningDate||'').slice(0,10):(cur.joiningDate||''),lastWorkingDate=b.lastWorkingDate!==undefined?String(b.lastWorkingDate||'').slice(0,10):(cur.lastWorkingDate||'');
   if((joiningDate&&!/^\d{4}-\d{2}-\d{2}$/.test(joiningDate))||(lastWorkingDate&&!/^\d{4}-\d{2}-\d{2}$/.test(lastWorkingDate)))return res.status(400).json({success:false,error:'Use valid joining and last-working dates.'});
