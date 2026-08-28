@@ -56,6 +56,23 @@ test('advance UI is collapsed by default and exposes account posting and audit c
   assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);
 });
 
+test('payroll always follows attendance instead of a stale paid-days override',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Attendance Source',salary:30000,monthlyPaidLeaveAllowance:0}}).body.employee;
+  assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,paidDays:24}}).status,200);
+  const marks=Array(31).fill('');
+  for(let i=0;i<26;i++)marks[i]='P';
+  marks[26]='H';
+  const imported=invoke('POST','/api/salary/attendance/:ym/batch',{params:{ym:'2026-08'},body:{items:[{empId:emp.id,marks}]}});
+  assert.equal(imported.status,200);
+  const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.computedPaidDays,25.5);
+  assert.equal(row.paidDays,25.5);
+  assert.equal(row.salaryAmt,25500);
+  const override=invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,paidDays:24}});
+  assert.equal(override.status,409);
+  assert.match(override.body.error,/Attendance tab/i);
+});
+
 test('every salary employee list is returned alphabetically A to Z', () => {
   invoke('POST','/api/salary/employees',{body:{name:'zulu employee',salary:10000}});
   invoke('POST','/api/salary/employees',{body:{name:'Alpha employee',salary:10000}});
