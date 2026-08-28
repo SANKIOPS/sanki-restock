@@ -23,6 +23,7 @@ function round2(n) { return Math.round(n * 100) / 100; }
 function byEmployeeName(a, b) { return String(a.name || a.employeeName || '').localeCompare(String(b.name || b.employeeName || ''), 'en', { sensitivity:'base', numeric:true }); }
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
+const SALARY_PAYING_ACCOUNTS = ['Gagan Sir Cash', 'Counter Cash'];
 const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 // Paid-day value per attendance mark: Present 1, Half 0.5, Paid-leave 1,
 // Week-off 1 (paid), Absent 0.
@@ -205,6 +206,10 @@ function employmentAttendance(att, e, ym) {
   if (!att) return att;
   const filtered={}; Object.keys(att).forEach(day=>{const date=ym+'-'+String(day).padStart(2,'0');if(e.joiningDate&&date<e.joiningDate)return;if(e.lastWorkingDate&&date>e.lastWorkingDate)return;filtered[day]=att[day];}); return filtered;
 }
+function employeeInPayrollMonth(e,ym){
+  const joinMonth=String(e.joiningDate||'').slice(0,7),leaveMonth=String(e.lastWorkingDate||'').slice(0,7);
+  return !(joinMonth&&ym<joinMonth)&&!(leaveMonth&&ym>leaveMonth);
+}
 function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: false, rows: {}, attendance: {} }; return s.months[ym]; }
 function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }
 function advanceOutstanding(a) { return round2(Math.max(0, num(a.amount) - advanceRecovered(a))); }
@@ -214,25 +219,32 @@ function monthRecovery(s, empId, ym) { return round2(Object.values(s.advances ||
 function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.advanceAudit || []; s.advanceAudit.push({ at: new Date().toISOString(), by: req.user && req.user.username || 'admin', action, advanceId, details: details || {} }); }
 
 // Compute a month's payroll rows for every employee.
-function computeMonth(s, ym) {
+function employeeMonthBase(s,e,ym){
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
-  return Object.values(s.employees).sort(byEmployeeName).map(e => {
-    const row = (mo.rows || {})[e.id] || {};
-    const computed = attPaidDays(employmentAttendance((mo.attendance || {})[e.id],e,ym));
-    const paidDays = row.paidDays != null ? num(row.paidDays) : computed;   // override → attendance → null
-    const salaryAmt = paidDays != null ? (num(e.salary) / div * paidDays) : 0;
-    const legacyAdvance = num(row.advance);
-    const loggedAdvanceRecovery = monthRecovery(s, e.id, ym);
-    const advance = round2(legacyAdvance + loggedAdvanceRecovery);
-    const netPayable = salaryAmt - advance;
-    const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
+  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym)),paidDays=row.paidDays!=null?num(row.paidDays):computed;
+  const salaryAmt=paidDays!=null?(num(e.salary)/div*paidDays):0,legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery);
+  const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
+  return {row,computed,paidDays,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,legacyPaid,transactionPaid,paid};
+}
+function payrollCarryIn(s,e,ym){
+  let carry=0;
+  Object.keys(s.months||{}).filter(m=>m<ym).sort().forEach(m=>{
+    if(!employeeInPayrollMonth(e,m))return;
+    const x=employeeMonthBase(s,e,m),net=x.salaryAmt-x.currentAdvance-carry,balance=net-x.paid;
+    carry=round2(Math.max(0,-balance));
+  });
+  return carry;
+}
+function computeMonth(s, ym) {
+  return Object.values(s.employees).filter(e=>employeeInPayrollMonth(e,ym)).sort(byEmployeeName).map(e => {
+    const x=employeeMonthBase(s,e,ym),openingAdvanceCarry=payrollCarryIn(s,e,ym),advance=round2(x.currentAdvance+openingAdvanceCarry),netPayable=x.salaryAmt-advance;
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
-      salary: num(e.salary), paidDays, computedPaidDays: computed,
-      salaryAmt: round2(salaryAmt), advance, legacyAdvance, loggedAdvanceRecovery, netPayable: round2(netPayable),
+      salary: num(e.salary), paidDays:x.paidDays, computedPaidDays:x.computed,
+      salaryAmt: round2(x.salaryAmt), advance, currentAdvance:x.currentAdvance, openingAdvanceCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, netPayable: round2(netPayable),
       outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
-      paid, legacyPaid, transactionPaid, balance: round2(netPayable - paid), remarks: row.remarks || ''
+      paid:x.paid, legacyPaid:x.legacyPaid, transactionPaid:x.transactionPaid, balance:round2(netPayable-x.paid), carryForwardAdvance:round2(Math.max(0,-(netPayable-x.paid))),remarks:x.row.remarks||''
     };
   });
 }
@@ -264,7 +276,7 @@ function summaryForPL(from, to) {
 // ── Employee master ──
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
-  res.json({ success: true, employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS });
+  res.json({ success: true, employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -304,7 +316,7 @@ router.post('/api/salary/post/:ym', guard, (req,res)=>{
 });
 router.post('/api/salary/payments/batch',guard,(req,res)=>{
   const s=load(),b=req.body||{},ym=String(b.ym||''),date=String(b.date||''),account=String(b.account||'').trim(),proof=String(b.proof||'').trim(),items=Array.isArray(b.items)?b.items:[];
-  if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!account||!proof||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, paying account and payment proof.'});
+  if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!SALARY_PAYING_ACCOUNTS.includes(account)||!proof||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, Gagan Sir Cash or Counter Cash, and payment proof.'});
   const rows=computeMonth(s,ym),seen=new Set(),prepared=[];for(const x of items){const row=rows.find(r=>r.id===x.empId),amount=round2(num(x.amount));if(!row||seen.has(x.empId)||!(amount>0)||amount>Math.max(0,row.balance)+.001)return res.status(400).json({success:false,error:'A payment is invalid or exceeds the employee’s remaining payable balance.'});seen.add(x.empId);prepared.push({row,amount});}
   s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0))});
 });
@@ -434,6 +446,7 @@ router.post('/api/salary/attendance/:ym/batch', guard, (req, res) => {
 router.post('/api/salary/row/:ym', guard, (req, res) => {
   const s = load(); const mo = ensureMonth(s, req.params.ym); const b = req.body || {};
   if (!b.empId) return res.status(400).json({ success: false, error: 'empId required' });
+  if(!s.employees[b.empId]||!employeeInPayrollMonth(s.employees[b.empId],req.params.ym))return res.status(400).json({success:false,error:'This employee is outside the selected payroll month.'});
   const row = mo.rows[b.empId] = mo.rows[b.empId] || {};
   if (b.paidDays !== undefined) row.paidDays = (b.paidDays === '' || b.paidDays === null) ? null : num(b.paidDays);
   if (b.advance !== undefined) row.advance = num(b.advance);
