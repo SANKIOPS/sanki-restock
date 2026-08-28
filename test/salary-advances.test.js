@@ -67,6 +67,15 @@ test('every salary employee list is returned alphabetically A to Z', () => {
   assert.deepEqual(summary,summary.slice().sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base',numeric:true})));
 });
 
+test('adding employees never reuses a stale ID or overwrites an existing employee',()=>{
+  const before=invoke('GET','/api/salary/employees').body.employees,protectedEmployee=before[0];
+  const salaryPath=path.join(tempDir,'salary.json'),stored=JSON.parse(fs.readFileSync(salaryPath,'utf8'));stored.seq=0;fs.writeFileSync(salaryPath,JSON.stringify(stored));
+  const added=invoke('POST','/api/salary/employees',{body:{name:'Unique New Employee',post:'Tester',salary:10000}});
+  assert.equal(added.status,200);assert.notEqual(added.body.employee.id,protectedEmployee.id);
+  const after=invoke('GET','/api/salary/employees').body.employees;assert.equal(after.length,before.length+1);assert.ok(after.some(x=>x.id===protectedEmployee.id&&x.name===protectedEmployee.name));
+  const duplicate=invoke('POST','/api/salary/employees',{body:{name:'unique new employee',post:'Tester',salary:10000}});assert.equal(duplicate.status,409);assert.equal(duplicate.body.duplicate,true);
+});
+
 test('assigned weekly off converts an absent mark only on that weekday', () => {
   const created=invoke('POST','/api/salary/employees',{body:{name:'Weekly Off Test',salary:12000,weekOffDay:'Sunday'}}).body.employee;
   assert.equal(created.weekOffDay,'Sunday');
@@ -139,6 +148,7 @@ test('one salary batch posts multiple employees atomically from the payroll tabl
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(month.rows.find(x=>x.id===a.id).transactionPaid,30000);assert.equal(month.rows.find(x=>x.id===b.id).balance,0);
   const bad=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Counter Cash',proof:'/batch.jpg',items:[{empId:a.id,amount:1},{empId:b.id,amount:99999}]}});assert.equal(bad.status,400);
   const again=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(again.rows.find(x=>x.id===a.id).transactionPaid,30000,'invalid batch posts nothing');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Select all payable/);assert.match(html,/Clear selection/);assert.match(html,/Only checked employees will be paid/);assert.match(html,/Partially paid/);
 });
 
 test('negative payable carries forward once and payroll respects employment months',()=>{
