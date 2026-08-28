@@ -40,7 +40,7 @@
     .att th.cal-sunday { color:#b45309; background:#fff7ed; }
     .att .not-employed { background:#e5e7eb; color:#9ca3af; cursor:not-allowed; box-shadow:none; }
     .m-P { background:#dcfce7; color:#166534; } .m-H { background:#fef9c3; color:#854d0e; }
-    .m-A { background:#fee2e2; color:#991b1b; } .m-PL { background:#dbeafe; color:#1e40af; } .m-WO { background:#f1f5f9; color:#64748b; }
+    .m-A { background:#fee2e2; color:#991b1b; } .m-WO { background:#f1f5f9; color:#64748b; }
     .legend { font-size:12px; color:#6b7280; margin:8px 2px; display:flex; gap:12px; flex-wrap:wrap; }
     .legend b { padding:1px 6px; border-radius:5px; }
     .empform { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; padding:14px; }
@@ -85,8 +85,8 @@
     var el = function(id){ return document.getElementById(id); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); };
     var fmt = function(n){ n = Math.round((n||0)); return (n<0?'−₹':'₹') + Math.abs(n).toLocaleString('en-IN'); };
-    var MARKS = ['P','H','A','PL','WO'];               // cycle order (click)
-    var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'PL', 'PL':'WO', 'WO':'' };
+    var MARKS = ['P','H','A','WO'];                    // cycle order (click)
+    var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'WO', 'WO':'' };
     var state = { view:'payroll', ym:'', data:null, employees:null, accounts:[], attendanceInfo:'', advanceFilters:{employee:'',month:'',status:'',account:''} };
 
     function pad(n){ return String(n).padStart(2,'0'); }
@@ -190,9 +190,9 @@
           '<tbody>'+body+'</tbody>'+
         '</table></div>'+
         '<div class="legend">Click a cell to cycle: '+
-          '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b class="m-PL">PL</b> Paid leave · <b class="m-WO">WO</b> Week-off · <b>·</b> clear'+
+          '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b class="m-WO">WO</b> Week-off · <b>·</b> clear'+
         '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+ 
-        '<div class="conf">P=1, H=0.5, PL=1, WO=1, A=0 paid day. The <b>Paid days</b> column feeds the Payroll tab (unless you typed an override there).</div>'+ 
+        '<div class="conf">Attendance stores P, H, A or WO only. Payroll adds the employee’s configured monthly paid-leave allowance separately; when it is 0, every A or WO deducts salary.</div>'+ 
         '<details class="card"><summary>Bulk attendance import</summary><label>Validated JSON rows</label><textarea id="bulkAttendance" rows="8" style="width:100%" placeholder=\'[{"employeeName":"Employee name","marks":["P","A","HD"]}]\'></textarea><label><input id="confirmBulkAttendance" type="checkbox"> I confirm that supplied dates may replace existing attendance</label><button class="btn" id="saveBulkAttendance">Import this month atomically</button><div class="conf">All rows are validated before anything is saved. Blank marks clear those dates; HD is stored as Half Day.</div></details>';
       el('saveBulkAttendance').onclick=function(){var items;try{items=JSON.parse(el('bulkAttendance').value);}catch(e){flash('Enter valid JSON rows.',false);return;}if(!Array.isArray(items)||!items.length){flash('Add at least one employee row.',false);return;}if(!el('confirmBulkAttendance').checked){flash('Confirm that supplied dates may replace existing attendance.',false);return;}this.disabled=true;api('/api/salary/attendance/'+state.ym+'/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})}).then(function(x){if(!x.success)throw new Error(x.error||'Import failed');flash('Imported '+x.cells+' attendance cells for '+x.employees+' employees.',true);load();}).catch(function(e){flash(e.message,false);el('saveBulkAttendance').disabled=false;});};
       Array.prototype.forEach.call(document.querySelectorAll('.daycell'), function(c){
