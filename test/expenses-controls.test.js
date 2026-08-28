@@ -470,9 +470,9 @@ test('expense lists and spending use recorded timestamps for newest-first order'
   newer.payments=[{id:'PAY-001',amount:newer.amount,date:'2026-08-27',account:'Axis Bank 3448',paidAt:'2026-08-28T12:00:00.000Z'}];
   fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const list=invoke('GET','/api/expenses/list',{role:'owner',query:{}}).body.expenses;
-  assert.ok(list.findIndex(x=>x.id===newer.id)<list.findIndex(x=>x.id===older.id));
+  assert.ok(list.findIndex(x=>x.id===older.id)<list.findIndex(x=>x.id===newer.id));
   const spending=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{from:'2026-08-01',to:'2026-08-31'}}).body.payments;
-  assert.ok(spending.findIndex(x=>x.id===newer.id)<spending.findIndex(x=>x.id===older.id));
+  assert.ok(spending.findIndex(x=>x.id===older.id)<spending.findIndex(x=>x.id===newer.id));
 });
 
 test('receivables support partial collections and credit the receiving account ledger', () => {
