@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin' }={}) {
@@ -36,6 +36,18 @@ test('salary advances require proof, summarize balances and recover oldest first
   const payroll=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.find(x=>x.id===emp.id);
   assert.equal(payroll.loggedAdvanceRecovery,2500); assert.equal(payroll.outstandingAdvance,2500);
   const tooMuch=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:6000}}); assert.equal(tooMuch.status,400);
+});
+
+test('historical advances assigned to an earlier payroll month remain editable',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Historical Recovery',salary:30000}}).body.employee;
+  const made=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'}}).body.advance;
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000}}).status,200);
+  let row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-11'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.loggedAdvanceRecovery,3000);
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:1000}}).status,200);
+  row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-11'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.loggedAdvanceRecovery,1000);assert.equal(row.netPayable,-1000);
+  const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,2000);
 });
 
 test('advance UI is collapsed by default and exposes account posting and audit concepts', () => {
@@ -127,4 +139,30 @@ test('one salary batch posts multiple employees atomically from the payroll tabl
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(month.rows.find(x=>x.id===a.id).transactionPaid,30000);assert.equal(month.rows.find(x=>x.id===b.id).balance,0);
   const bad=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Axis Bank 3448',proof:'/batch.jpg',items:[{empId:a.id,amount:1},{empId:b.id,amount:99999}]}});assert.equal(bad.status,400);
   const again=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(again.rows.find(x=>x.id===a.id).transactionPaid,30000,'invalid batch posts nothing');
+});
+
+test('July 2026 historical attendance prepares payroll with paid-off and 31-day rules',()=>{
+  assert.equal(_findImportedEmployee({employees:{x:{id:'x',name:'Arshpreet Singh Arora',post:'Manager'}}},'ARSHPREET SINGH','MANAGER').id,'x','longer employee-master name is matched safely by post');
+  const missingGuard={employees:{},seq:0},guardMonth={rows:{}};const restoredGuard=_ensureHistoricalGuard(missingGuard,guardMonth);assert.equal(restoredGuard.name,'Guard');assert.equal(restoredGuard.salary,15000);assert.equal(guardMonth.rows[restoredGuard.id].paidDays,30);
+  const collision={seq:22,employees:{E022:{id:'E022',name:'Guard',post:'Security',salary:15000}},advances:{a:{empId:'E022',employeeName:'SUNNY SHARMA',historicalImport:true}}};assert.equal(_repairGuardSunnyCollision(collision),true);assert.equal(collision.employees.E022.name,'SUNNY SHARMA');const safeGuard=_ensureHistoricalGuard(collision,{rows:{}});assert.equal(safeGuard.id,'E023');assert.equal(collision.employees.E022.name,'SUNNY SHARMA');
+  assert.ok(_july2026Import.every(x=>x[2].length===31),'every supplied employee has exactly 31 source cells');
+  const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-07'}}).body;
+  const expected=new Map(_july2026Import.map(x=>[x[0].toLowerCase()+'|'+x[1].toLowerCase(),{paidDays:_julyImportedMarks(String(x[0]).toLowerCase()==='suraj'?{monthlyPaidLeaveAllowance:1}:{},x[2]).paidDays}]));
+  const imported=month.rows.filter(r=>expected.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
+  assert.equal(imported.length,19);
+  imported.forEach(r=>{const x=expected.get(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase());assert.equal(r.paidDays,x.paidDays,r.name);assert.equal(r.paid,0,r.name+' is not marked salary-paid');});
+  assert.equal(_providedAdvanceImport.reduce((n,x)=>n+x[3],0),125067);
+  assert.equal(month.totals.advance,125067,'every supplied July and August advance is recovered in July payroll');
+  const history=invoke('GET','/api/salary/advances').body.advances.filter(x=>x.historicalImport);
+  assert.equal(history.length,22);assert.equal(history.reduce((n,x)=>n+x.amount,0),125067);assert.ok(history.every(x=>x.status==='Recovered'&&!x.account&&!x.proof));
+  assert.equal(month.rows.find(r=>r.name==='Pooja').paidDays,10);
+  assert.equal(month.rows.find(r=>r.name==='Ravi').paidDays,9);
+  const sunny=month.rows.find(r=>r.name==='SUNNY SHARMA'),guard=month.rows.find(r=>r.name==='Guard'),suraj=month.rows.find(r=>/^Suraj/i.test(r.name));
+  assert.equal(sunny.salary,24000);assert.equal(sunny.paidDays,26);assert.equal(sunny.advance,20000);assert.equal(sunny.netPayable,800);
+  assert.equal(guard.advance,3000);assert.equal(guard.netPayable,12000);
+  assert.equal(suraj.paidDays,25);assert.equal(suraj.advance,1500);assert.equal(suraj.netPayable,13500);
+  assert.equal(invoke('GET','/api/salary/employees').body.employees.find(e=>e.id===suraj.id).monthlyPaidLeaveAllowance,1);
+  const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
+  assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');
+  assert.equal(sundayOff.attendance['01'],'PL','an ordinary absence within the first four offs is paid leave');
 });
