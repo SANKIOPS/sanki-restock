@@ -32,7 +32,9 @@ function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, adva
 function load() {
   try {
     const s=Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8')));
-    if(applyJuly2026AttendanceAndPayroll(s)) save(s);
+    const julyImported=applyJuly2026AttendanceAndPayroll(s);
+    const employeeRepair=applySunnyGuardAndSurajRepair(s);
+    if(julyImported||employeeRepair) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -93,35 +95,71 @@ function findImportedEmployee(s,name,post){
   const sameName=Object.values(s.employees||{}).filter(e=>{const live=String(e.name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase();return live===target||live.startsWith(target+' ')||target.startsWith(live+' ');});
   return sameName.find(e=>String(e.post||'').localeCompare(post,'en',{sensitivity:'base'})===0)||sameName[0];
 }
+function nextEmployeeId(s){
+  let n=Math.max(num(s.seq),...Object.keys(s.employees||{}).map(id=>num(String(id).replace(/^E/i,''))));let id;
+  do{id='E'+String(++n).padStart(3,'0');}while(s.employees[id]);s.seq=n;return id;
+}
+function repairGuardSunnyCollision(s){
+  const sunny=findImportedEmployee(s,'Sunny','SALES EXECUTIVE'),guard=findImportedEmployee(s,'Guard','Security');
+  if(sunny||!guard)return false;
+  const hasSunnyHistory=Object.values(s.advances||{}).some(a=>a.empId===guard.id&&/^sunny/i.test(String(a.employeeName||'')));
+  if(!hasSunnyHistory)return false;
+  s.employees[guard.id]=Object.assign({},guard,{name:'SUNNY SHARMA',post:'SALES EXECUTIVE',salary:24000,channel:'POS',note:'Restored after historical Guard import ID collision',active:true});
+  return true;
+}
 function ensureHistoricalGuard(s,mo){
   let guard=findImportedEmployee(s,'Guard','Security');
   if(!guard){
-    s.seq=num(s.seq)+1;const id='E'+String(s.seq).padStart(3,'0');
+    const id=nextEmployeeId(s);
     guard=s.employees[id]={id,name:'Guard',post:'Security',salary:15000,channel:'Shared',weekOffDay:'',joiningDate:'',lastWorkingDate:'',note:'Restored from supplied historical payroll advances',active:true,createdAt:new Date().toISOString()};
   }
   mo.rows[guard.id]=Object.assign({},mo.rows[guard.id],{paidDays:30,advance:0,paid:0,remarks:'Historical July payroll row restored for supplied Guard advance'});
   return guard;
 }
 function julyImportedMarks(emp,encoded){
-  const attendance={},raw=String(encoded||''); let paid=0,offs=0;
+  const attendance={},raw=String(encoded||''),paidLeaveAllowance=emp.monthlyPaidLeaveAllowance==null?4:Math.max(0,num(emp.monthlyPaidLeaveAllowance)); let paid=0,ordinaryAbsences=0;
   for(let i=0;i<31;i++){
     const source=raw[i]||'',day=String(i+1).padStart(2,'0');
     if(source==='-'||!source)continue;
     if(source==='P'){attendance[day]='P';paid++;continue;}
     if(source==='H'){attendance[day]='H';paid+=.5;continue;}
     if(source==='A'){
-      offs++;
       const date='2026-07-'+day,weekday=WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()],isWeekOff=!!emp.weekOffDay&&emp.weekOffDay===weekday;
-      attendance[day]=isWeekOff?'WO':(offs<=4?'PL':'A');
-      if(offs<=4)paid++;
+      if(isWeekOff){attendance[day]='WO';paid++;continue;}
+      ordinaryAbsences++;
+      attendance[day]=ordinaryAbsences<=paidLeaveAllowance?'PL':'A';
+      if(ordinaryAbsences<=paidLeaveAllowance)paid++;
     }
   }
   return {attendance,paidDays:Math.max(0,round2(paid-1))};
 }
+function applySunnyGuardAndSurajRepair(s){
+  const key='sunny_guard_suraj_payroll_repair_v6';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const sunny=findImportedEmployee(s,'Sunny Sharma','SALES EXECUTIVE')||findImportedEmployee(s,'Sunny','SALES EXECUTIVE');
+  const guard=findImportedEmployee(s,'Guard','Security');
+  const suraj=findImportedEmployee(s,'Suraj','Office Boy');
+  if(!sunny||!guard||!suraj)return false;
+  Object.assign(sunny,{name:'SUNNY SHARMA',post:'SALES EXECUTIVE',salary:24000,channel:'POS',active:true});
+  Object.assign(guard,{name:'Guard',post:'Security',salary:15000,channel:'Shared',active:true});
+  suraj.monthlyPaidLeaveAllowance=1;
+  Object.values(s.advances||{}).filter(a=>a.historicalImport).forEach(a=>{
+    const n=String(a.employeeName||'').toLowerCase();
+    if(n.startsWith('sunny')){a.empId=sunny.id;a.employeeName=sunny.name;}
+    if(n==='guard'){a.empId=guard.id;a.employeeName=guard.name;}
+  });
+  const mo=ensureMonth(s,'2026-07'),sunnyImport=JULY_2026_IMPORT.find(x=>x[0]==='SUNNY SHARMA'),surajImport=JULY_2026_IMPORT.find(x=>String(x[0]).toLowerCase()==='suraj');
+  if(sunnyImport){const calculated=julyImportedMarks(sunny,sunnyImport[2]);mo.attendance[sunny.id]=calculated.attendance;mo.rows[sunny.id]=Object.assign({},mo.rows[sunny.id],{paidDays:calculated.paidDays,advance:0,paid:0,remarks:'July 2026 attendance import · first 4 ordinary absences paid · 31-day adjustment -1'});}
+  if(surajImport){const calculated=julyImportedMarks(suraj,surajImport[2]);mo.attendance[suraj.id]=calculated.attendance;mo.rows[suraj.id]=Object.assign({},mo.rows[suraj.id],{paidDays:calculated.paidDays,advance:0,paid:0,remarks:'July 2026 attendance import · 1 paid leave monthly · 31-day adjustment -1'});}
+  mo.rows[guard.id]=Object.assign({},mo.rows[guard.id],{paidDays:30,advance:0,paid:0,remarks:'Historical July payroll row restored for supplied Guard advance'});
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),sunnyEmployeeId:sunny.id,guardEmployeeId:guard.id,surajEmployeeId:suraj.id,surajMonthlyPaidLeaveAllowance:1};
+  return true;
+}
 function applyJuly2026AttendanceAndPayroll(s){
-  const key='july_2026_attendance_payroll_v4';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  const key='july_2026_attendance_payroll_v5';s.oneTimeMigrations=s.oneTimeMigrations||{};
   if(s.oneTimeMigrations[key]||((s.payrollPostings||{})['2026-07'])||(((s.months||{})['2026-07']||{}).finalized))return false;
   const mo=ensureMonth(s,'2026-07');mo.attendance=mo.attendance||{};mo.rows=mo.rows||{};
+  const repairedGuardSunnyCollision=repairGuardSunnyCollision(s);
   const guard=ensureHistoricalGuard(s,mo);
   const imported=[];
   for(const [name,post,marks,advance,joiningDate] of JULY_2026_IMPORT){
@@ -142,8 +180,9 @@ function applyJuly2026AttendanceAndPayroll(s){
     s.advances[id]={id,empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account:'',proof:'',note:'Historical advance imported from supplied payroll sheet',reference:'HIST-'+date.replace(/-/g,'')+'-'+String(index+1).padStart(2,'0'),sourceKey,recoveryStartMonth:'2026-07',recoveries:[{ym:'2026-07',amount:round2(amount),by:'System migration',at:now}],active:true,historicalImport:true,createdBy:'System migration',createdAt:now};
     advanceIds.push(id);
   });
+  Object.values(s.advances).filter(a=>a.historicalImport&&String(a.employeeName||'').toLowerCase()==='guard').forEach(a=>{a.empId=guard.id;a.employeeName=guard.name;});
   const advanceTotal=round2(PROVIDED_ADVANCE_IMPORT.reduce((n,x)=>n+num(x[3]),0));
-  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),month:'2026-07',employees:imported,guardEmployeeId:guard.id,advanceIds,advanceTotal,rules:{firstOffsPaid:4,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),month:'2026-07',employees:imported,guardEmployeeId:guard.id,repairedGuardSunnyCollision,advanceIds,advanceTotal,rules:{firstOffsPaid:4,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
   return true;
 }
 
@@ -242,6 +281,7 @@ router.post('/api/salary/employees', guard, (req, res) => {
     salary: b.salary != null ? num(b.salary) : num(cur.salary),
     channel: CHANNELS.includes(b.channel) ? b.channel : (cur.channel || 'Shared'),
     weekOffDay: b.weekOffDay !== undefined ? (WEEK_DAYS.includes(b.weekOffDay) ? b.weekOffDay : '') : (cur.weekOffDay || ''),
+    monthlyPaidLeaveAllowance: b.monthlyPaidLeaveAllowance !== undefined ? Math.max(0,num(b.monthlyPaidLeaveAllowance)) : (cur.monthlyPaidLeaveAllowance == null ? 4 : Math.max(0,num(cur.monthlyPaidLeaveAllowance))),
     joiningDate, lastWorkingDate,
     note: b.note != null ? String(b.note) : (cur.note || ''),
     active: b.active != null ? !!b.active : (cur.active !== false),
@@ -313,8 +353,11 @@ router.post('/api/salary/advances', guard, (req, res) => {
 router.post('/api/salary/recoveries/:ym', guard, (req, res) => {
   const s = load(), b = req.body || {}, ym = req.params.ym, amount = num(b.amount);
   if (!s.employees[b.empId] || !/^\d{4}-\d{2}$/.test(ym) || amount < 0) return res.status(400).json({ success: false, error: 'Invalid employee, month or amount.' });
-  const eligible = Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === b.empId && a.recoveryStartMonth <= ym && String(a.date).slice(0, 7) <= ym).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
-  eligible.forEach(a => { a.recoveries = (a.recoveries || []).filter(r => r.ym !== ym); });
+  const employeeAdvances=Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===b.empId);
+  employeeAdvances.forEach(a=>{a.recoveries=(a.recoveries||[]).filter(r=>r.ym!==ym);});
+  // recoveryStartMonth is the payroll authority. This intentionally supports
+  // owner-approved imports paid later but recovered in an earlier payroll run.
+  const eligible = employeeAdvances.filter(a => a.recoveryStartMonth <= ym).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
   const available = eligible.reduce((n, a) => n + advanceOutstanding(a), 0);
   if (amount > available + .001) return res.status(400).json({ success: false, error: 'Recovery cannot exceed the eligible outstanding advance of ₹' + round2(available) + '.' });
   let left = amount; eligible.forEach(a => { if (left <= 0) return; const take = Math.min(left, advanceOutstanding(a)); if (take > 0) { a.recoveries.push({ ym, amount: round2(take), by: req.user && req.user.username || 'admin', at: new Date().toISOString() }); left = round2(left - take); } });
@@ -449,4 +492,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair };
