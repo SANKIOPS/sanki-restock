@@ -188,7 +188,7 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   assert.equal(sunny.salary,24000);assert.equal(sunny.paidDays,26);assert.equal(sunny.advance,20000);assert.equal(sunny.netPayable,800);
   assert.equal(guard.advance,3000);assert.equal(guard.netPayable,12000);
   assert.equal(suraj.paidDays,25);assert.equal(suraj.advance,1500);assert.equal(suraj.netPayable,13500);
-  assert.equal(invoke('GET','/api/salary/employees').body.employees.find(e=>e.id===suraj.id).monthlyPaidLeaveAllowance,1);
+  const employeeMaster=invoke('GET','/api/salary/employees').body.employees;assert.equal(employeeMaster.find(e=>e.id===suraj.id).monthlyPaidLeaveAllowance,1);assert.equal(employeeMaster.find(e=>e.id===sunny.id).monthlyPaidLeaveAllowance,4);
   const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
   assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');
   assert.equal(sundayOff.attendance['01'],'A','ordinary absence remains visibly marked A');
