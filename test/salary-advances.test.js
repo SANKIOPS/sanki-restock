@@ -116,11 +116,19 @@ test('joining and leaving dates limit calendar-month weekly offs and paid days',
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'23',mark:'A'}}).body.mark,'WO');
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'30',mark:'A'}}).body.mark,'WO');
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body, row=month.rows.find(x=>x.id===emp.id);
-  assert.equal(row.computedPaidDays,2,'only the two eligible Sundays count');
+  assert.equal(row.computedPaidDays,1,'two eligible Sundays are followed by the 31-day payroll adjustment');
   const invalid=invoke('POST','/api/salary/employees',{body:{name:'Invalid Dates',joiningDate:'2026-08-20',lastWorkingDate:'2026-08-19'}});
   assert.equal(invalid.status,400);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/Joining date/); assert.match(html,/Last working date/); assert.match(html,/not-employed/);
+});
+
+test('zero paid-leave allowance converts legacy PL to absence and deducts salary',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Zero Leave Employee',salary:30000,monthlyPaidLeaveAllowance:0}}).body.employee,marks=Array(30).fill('P').concat('PL');
+  assert.equal(invoke('POST','/api/salary/attendance/:ym/batch',{params:{ym:'2026-08'},body:{items:[{empId:emp.id,marks}]}}).status,200);
+  const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body,row=month.rows.find(x=>x.id===emp.id);
+  assert.equal(month.attendance[emp.id]['31'],'A');assert.equal(row.computedPaidDays,29);assert.equal(row.salaryAmt,29000);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.doesNotMatch(html,/m-PL|>PL</);assert.match(html,/when it is 0, every A or WO deducts salary/);
 });
 
 test('payroll posting creates employee salary ledgers once and advances remain bank-backed',()=>{
