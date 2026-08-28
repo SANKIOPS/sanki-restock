@@ -36,7 +36,8 @@ function load() {
     const julyImported=applyJuly2026AttendanceAndPayroll(s);
     const employeeRepair=applySunnyGuardAndSurajRepair(s);
     const correctedJuly=applyCorrectedJulyAttendanceV7(s);
-    if(julyImported||employeeRepair||correctedJuly) save(s);
+    const normalizedLeaveMarks=applyStoredLeaveAllowancesV11(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -150,6 +151,23 @@ function applyCorrectedJulyAttendanceV7(s){
   s.oneTimeMigrations[key]={appliedAt:now,month:'2026-07',employees:updated,advanceIds,advanceTotal:round2(PROVIDED_ADVANCE_IMPORT.reduce((n,x)=>n+num(x[3]),0)),rules:{attendanceLabelsRetained:true,fixedMonthlyAllowance:true,partialMonthAllowanceLimited:true,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
   return true;
 }
+function normalizedAbsentMark(e,ym,day){
+  const date=ym+'-'+String(day).padStart(2,'0'),weekday=WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()];
+  return e&&e.weekOffDay===weekday?'WO':'A';
+}
+function applyStoredLeaveAllowancesV11(s){
+  const key='normalize_legacy_paid_leave_marks_v11';s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
+  let converted=0,recalculated=0;
+  Object.entries(s.months||{}).forEach(([ym,mo])=>{
+    mo.attendance=mo.attendance||{};mo.rows=mo.rows||{};
+    Object.entries(mo.attendance).forEach(([empId,att])=>{
+      const emp=s.employees[empId];if(!emp)return;
+      Object.keys(att||{}).forEach(day=>{if(att[day]==='PL'){att[day]=normalizedAbsentMark(emp,ym,day);converted++;}});
+      if(!mo.finalized&&!((s.payrollPostings||{})[ym])){const calculated=attPaidDays(employmentAttendance(att,emp,ym),emp,ym);if(calculated!=null){mo.rows[empId]=Object.assign({},mo.rows[empId],{paidDays:calculated});recalculated++;}}
+    });
+  });
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),converted,recalculated,rule:'PL removed; stored monthly allowance controls compensation; zero means every absence deducts salary'};return true;
+}
 function applySunnyGuardAndSurajRepair(s){
   const key='sunny_guard_suraj_payroll_repair_v6';s.oneTimeMigrations=s.oneTimeMigrations||{};
   if(s.oneTimeMigrations[key])return false;
@@ -216,7 +234,7 @@ function attPaidDays(att,e,ym) {
   if (!att) return null;
   let worked=0,any=false;
   Object.keys(att).forEach(d=>{const mark=att[d];if(MARKS[mark]!=null){any=true;if(mark==='P')worked++;else if(mark==='H')worked+=.5;}});
-  return any?round2(worked+paidLeaveAllowanceForMonth(e,ym)):null;
+  return any?Math.max(0,round2(worked+paidLeaveAllowanceForMonth(e,ym)-(daysInMonth(ym)===31?1:0))):null;
 }
 function employmentAttendance(att, e, ym) {
   if (!att) return att;
@@ -433,7 +451,7 @@ router.post('/api/salary/attendance/:ym', guard, (req, res) => {
     let mark = b.mark;
     const emp=s.employees[b.empId],dateText=req.params.ym+'-'+String(b.day).padStart(2,'0'),date=new Date(dateText+'T00:00:00Z'),weekday=!isNaN(date)?WEEK_DAYS[date.getUTCDay()]:'';
     if(emp&&((emp.joiningDate&&dateText<emp.joiningDate)||(emp.lastWorkingDate&&dateText>emp.lastWorkingDate)))return res.status(400).json({success:false,error:'This date is outside the employee’s employment period.'});
-    if(mark==='A'&&emp&&emp.weekOffDay&&emp.weekOffDay===weekday)mark='WO';
+    if((mark==='A'||mark==='PL')&&emp)mark=normalizedAbsentMark(emp,req.params.ym,b.day);
     if (mark && MARKS[mark] != null) mo.attendance[b.empId][b.day] = mark;
     else delete mo.attendance[b.empId][b.day];
     b.savedMark=mark;
@@ -460,7 +478,7 @@ router.post('/api/salary/attendance/:ym/batch', guard, (req, res) => {
       if(mark&&!Object.prototype.hasOwnProperty.call(MARKS,mark))return res.status(400).json({success:false,error:'Invalid mark for '+emp.name+' on '+dateText+'.'});
       if((emp.joiningDate&&dateText<emp.joiningDate)||(emp.lastWorkingDate&&dateText>emp.lastWorkingDate)){normalized[day]='';continue;}
       const weekday=WEEK_DAYS[new Date(dateText+'T00:00:00Z').getUTCDay()];
-      normalized[day]=mark==='A'&&emp.weekOffDay===weekday?'WO':mark;
+      normalized[day]=(mark==='A'||mark==='PL')?normalizedAbsentMark(emp,ym,day):mark;
     }
     seen.add(emp.id);prepared.push({emp,normalized});
   }
