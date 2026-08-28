@@ -134,11 +134,28 @@ test('payroll posting creates employee salary ledgers once and advances remain b
 test('one salary batch posts multiple employees atomically from the payroll table',()=>{
   const a=invoke('POST','/api/salary/employees',{body:{name:'Batch A',salary:30000}}).body.employee,b=invoke('POST','/api/salary/employees',{body:{name:'Batch B',salary:15000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-10'},body:{empId:a.id,paidDays:30}});invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-10'},body:{empId:b.id,paidDays:30}});
-  const batch=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Axis Bank 3448',proof:'/batch.jpg',reference:'BATCH-UTR',items:[{empId:a.id,amount:30000},{empId:b.id,amount:15000}]}});
+  const batch=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Gagan Sir Cash',proof:'/batch.jpg',reference:'BATCH-UTR',items:[{empId:a.id,amount:30000},{empId:b.id,amount:15000}]}});
   assert.equal(batch.status,200);assert.equal(batch.body.count,2);assert.equal(batch.body.total,45000);
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(month.rows.find(x=>x.id===a.id).transactionPaid,30000);assert.equal(month.rows.find(x=>x.id===b.id).balance,0);
-  const bad=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Axis Bank 3448',proof:'/batch.jpg',items:[{empId:a.id,amount:1},{empId:b.id,amount:99999}]}});assert.equal(bad.status,400);
+  const bad=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Counter Cash',proof:'/batch.jpg',items:[{empId:a.id,amount:1},{empId:b.id,amount:99999}]}});assert.equal(bad.status,400);
   const again=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(again.rows.find(x=>x.id===a.id).transactionPaid,30000,'invalid batch posts nothing');
+});
+
+test('negative payable carries forward once and payroll respects employment months',()=>{
+  const carryEmp=invoke('POST','/api/salary/employees',{body:{name:'Carry Forward Employee',salary:30000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-05'},body:{empId:carryEmp.id,paidDays:0,advance:5000}});
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-06'},body:{empId:carryEmp.id,paidDays:30}});
+  let june=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-06'}}).body.rows.find(x=>x.id===carryEmp.id);
+  assert.equal(june.openingAdvanceCarry,5000);assert.equal(june.netPayable,25000);assert.equal(june.carryForwardAdvance,0);
+  const joiner=invoke('POST','/api/salary/employees',{body:{name:'August Joiner',salary:18000,joiningDate:'2026-08-15'}}).body.employee;
+  const leaver=invoke('POST','/api/salary/employees',{body:{name:'July Leaver',salary:18000,lastWorkingDate:'2026-07-20'}}).body.employee;
+  const july=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-07'}}).body.rows,august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows;
+  assert.equal(july.some(x=>x.id===joiner.id),false);assert.equal(august.some(x=>x.id===joiner.id),true);
+  assert.equal(july.some(x=>x.id===leaver.id),true);assert.equal(august.some(x=>x.id===leaver.id),false);
+  assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
+  const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
+  assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/Gagan Sir Cash|Counter Cash/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying cash/);assert.match(html,/last month/);
 });
 
 test('July 2026 historical attendance prepares payroll with paid-off and 31-day rules',()=>{
