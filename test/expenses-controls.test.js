@@ -876,6 +876,11 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/Decision and actual reason/);
   assert.match(html,/Open original statement/);
   assert.match(html,/Export CSV/);
+  assert.match(html,/Record missing bank transaction/);
+  assert.match(html,/Split \/ link existing/);
+  assert.match(html,/split_allocation/);
+  assert.match(html,/Existing transfer references included in this settlement/);
+  assert.match(html,/customer membership/);
 });
 
 test('stored bank statements can only be opened through an authorised reconciliation account',()=>{
