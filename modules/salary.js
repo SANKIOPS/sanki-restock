@@ -35,7 +35,8 @@ function load() {
     const s=Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8')));
     const julyImported=applyJuly2026AttendanceAndPayroll(s);
     const employeeRepair=applySunnyGuardAndSurajRepair(s);
-    if(julyImported||employeeRepair) save(s);
+    const correctedJuly=applyCorrectedJulyAttendanceV7(s);
+    if(julyImported||employeeRepair||correctedJuly) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -54,10 +55,10 @@ const JULY_2026_IMPORT = [
   ['HITESH','PHOTOGRAPHER','PPPPAAAPPPPAPPPPPPAPPAPPPAPPPPP',0],
   ['AJAY','VIDEO EDITOR','PPPPPPAPPPPAPPPAPPPAPPPPPAPPPPP',0],
   ['PIYUSH','TAILOR','PPPP AAPPPPAPPPPPPPPPP AAP PAPPPPP'.replace(/ /g,''),0],
-  ['UMAIR','DRIVER','PPPPAPPPPPPAPPAPPPHHH HPPPPPPPPP'.replace(/ /g,''),17000],
-  ['TUSHAR','PACKING HELPER','PPPPAAHPPPPPPPPPPPPPPPPPPAPPPPP',0],
+  ['UMAIR','DRIVER','PPPPAPPPPPPAPPAPPPAAAHPPPPPPPPP',17000],
+  ['TUSHAR','PACKING HELPER','PPPPAAPPPPPPPPPPPPPPPPPPPAPPPPP',0],
   ['NIDA','LOGISTIC','PPPPAPPPPPPAPPPPPPAAPPPPPAPPPPP',0],
-  ['GAURAV','EDITOR','PPPPPPPPPPPAPPPPPPAAP PAP PAPPPPP'.replace(/ /g,''),0],
+  ['GAURAV','EDITOR','PPPPPPPPPPPAPPHPPAAPPAPPPAPPPPP',0],
   ['PRASHANT','ACCOUNTS','PPPPPPPHPPPAPHHPA PPPPPPPPAPPPPP'.replace(/ /g,''),7467],
   ['Suraj','Office Boy','PPP AAPPPPPPPPPAAAA PPPPPPPPPPPPP'.replace(/ /g,''),1500],
   ['TUSHAR','Model','PPPPPPPPPPPAPPPPPPAPPPPPAPPPPPP',0],
@@ -118,21 +119,36 @@ function ensureHistoricalGuard(s,mo){
   return guard;
 }
 function julyImportedMarks(emp,encoded){
-  const attendance={},raw=String(encoded||''),paidLeaveAllowance=emp.monthlyPaidLeaveAllowance==null?4:Math.max(0,num(emp.monthlyPaidLeaveAllowance)); let paid=0,ordinaryAbsences=0;
+  const attendance={},raw=String(encoded||''); let worked=0;
   for(let i=0;i<31;i++){
     const source=raw[i]||'',day=String(i+1).padStart(2,'0');
     if(source==='-'||!source)continue;
-    if(source==='P'){attendance[day]='P';paid++;continue;}
-    if(source==='H'){attendance[day]='H';paid+=.5;continue;}
+    if(source==='P'){attendance[day]='P';worked++;continue;}
+    if(source==='H'){attendance[day]='H';worked+=.5;continue;}
     if(source==='A'){
       const date='2026-07-'+day,weekday=WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()],isWeekOff=!!emp.weekOffDay&&emp.weekOffDay===weekday;
-      if(isWeekOff){attendance[day]='WO';paid++;continue;}
-      ordinaryAbsences++;
-      attendance[day]=ordinaryAbsences<=paidLeaveAllowance?'PL':'A';
-      if(ordinaryAbsences<=paidLeaveAllowance)paid++;
+      attendance[day]=isWeekOff?'WO':'A';
     }
   }
-  return {attendance,paidDays:Math.max(0,round2(paid-1))};
+  return {attendance,paidDays:Math.max(0,round2(worked+paidLeaveAllowanceForMonth(emp,'2026-07')-1))};
+}
+function applyCorrectedJulyAttendanceV7(s){
+  const key='corrected_july_attendance_fixed_leave_allowance_v7';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key]||((s.payrollPostings||{})['2026-07'])||(((s.months||{})['2026-07']||{}).finalized))return false;
+  const mo=ensureMonth(s,'2026-07'),updated=[];
+  JULY_2026_IMPORT.forEach(([name,post,marks,,joiningDate])=>{
+    const emp=findImportedEmployee(s,name,post);if(!emp)return;if(joiningDate)emp.joiningDate=joiningDate;
+    const calculated=julyImportedMarks(emp,marks);mo.attendance[emp.id]=calculated.attendance;mo.rows[emp.id]=Object.assign({},mo.rows[emp.id],{paidDays:calculated.paidDays,advance:0,paid:0,remarks:'Corrected July attendance · A/WO retained · fixed paid-leave allowance · 31-day adjustment -1'});updated.push({empId:emp.id,name:emp.name,paidDays:calculated.paidDays});
+  });
+  const now=new Date().toISOString(),advanceIds=[];s.advances=s.advances||{};s.advanceSeq=num(s.advanceSeq);
+  PROVIDED_ADVANCE_IMPORT.forEach(([date,name,post,amount],index)=>{
+    const emp=findImportedEmployee(s,name,post);if(!emp)return;const sourceKey='provided-advance-sheet-'+date+'-'+index;
+    let advance=Object.values(s.advances).find(a=>a.sourceKey===sourceKey);
+    if(!advance){s.advanceSeq++;const id='ADV-'+String(s.advanceSeq).padStart(5,'0');advance=s.advances[id]={id,createdAt:now,createdBy:'System migration'};}
+    Object.assign(advance,{empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account:'',proof:'',note:'Historical advance imported from supplied payroll sheet',reference:'HIST-'+date.replace(/-/g,'')+'-'+String(index+1).padStart(2,'0'),sourceKey,recoveryStartMonth:'2026-07',recoveries:[{ym:'2026-07',amount:round2(amount),by:'System migration',at:now}],active:true,historicalImport:true});advanceIds.push(advance.id);
+  });
+  s.oneTimeMigrations[key]={appliedAt:now,month:'2026-07',employees:updated,advanceIds,advanceTotal:round2(PROVIDED_ADVANCE_IMPORT.reduce((n,x)=>n+num(x[3]),0)),rules:{attendanceLabelsRetained:true,fixedMonthlyAllowance:true,partialMonthAllowanceLimited:true,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
+  return true;
 }
 function applySunnyGuardAndSurajRepair(s){
   const key='sunny_guard_suraj_payroll_repair_v6';s.oneTimeMigrations=s.oneTimeMigrations||{};
@@ -196,11 +212,11 @@ function guard(req, res, next) {
 }
 
 function daysInMonth(ym) { const p = String(ym).split('-').map(Number); return new Date(p[0], p[1], 0).getDate(); }
-function attPaidDays(att) {
+function attPaidDays(att,e,ym) {
   if (!att) return null;
-  let sum = 0, any = false;
-  Object.keys(att).forEach(d => { const v = MARKS[att[d]]; if (v != null) { sum += v; any = true; } });
-  return any ? sum : null;
+  let worked=0,any=false;
+  Object.keys(att).forEach(d=>{const mark=att[d];if(MARKS[mark]!=null){any=true;if(mark==='P')worked++;else if(mark==='H')worked+=.5;}});
+  return any?round2(worked+paidLeaveAllowanceForMonth(e,ym)):null;
 }
 function employmentAttendance(att, e, ym) {
   if (!att) return att;
@@ -209,6 +225,15 @@ function employmentAttendance(att, e, ym) {
 function employeeInPayrollMonth(e,ym){
   const joinMonth=String(e.joiningDate||'').slice(0,7),leaveMonth=String(e.lastWorkingDate||'').slice(0,7);
   return !(joinMonth&&ym<joinMonth)&&!(leaveMonth&&ym>leaveMonth);
+}
+function paidLeaveAllowanceForMonth(e,ym){
+  const base=e.monthlyPaidLeaveAllowance==null?4:Math.max(0,num(e.monthlyPaidLeaveAllowance)),dim=daysInMonth(ym);
+  if(!base||!employeeInPayrollMonth(e,ym))return 0;
+  const monthStart=ym+'-01',monthEnd=ym+'-'+String(dim).padStart(2,'0'),start=e.joiningDate&&e.joiningDate>monthStart?e.joiningDate:monthStart,end=e.lastWorkingDate&&e.lastWorkingDate<monthEnd?e.lastWorkingDate:monthEnd;
+  if(start===monthStart&&end===monthEnd)return base;
+  if(start>end)return 0;
+  if(e.weekOffDay){let count=0;for(let day=1;day<=dim;day++){const date=ym+'-'+String(day).padStart(2,'0');if(date<start||date>end)continue;if(WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()]===e.weekOffDay)count++;}return Math.min(base,count);}
+  const employedDays=Math.floor((Date.parse(end)-Date.parse(start))/86400000)+1;return Math.min(base,Math.floor(base*employedDays/dim));
 }
 function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: false, rows: {}, attendance: {} }; return s.months[ym]; }
 function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }
@@ -222,7 +247,7 @@ function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.a
 function employeeMonthBase(s,e,ym){
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
-  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym)),paidDays=row.paidDays!=null?num(row.paidDays):computed;
+  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),paidDays=row.paidDays!=null?num(row.paidDays):computed;
   const salaryAmt=paidDays!=null?(num(e.salary)/div*paidDays):0,legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery);
   const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
   return {row,computed,paidDays,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,legacyPaid,transactionPaid,paid};
