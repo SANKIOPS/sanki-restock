@@ -112,27 +112,32 @@
       var rows = d.rows.map(function(r,index){
         var pd = r.paidDays==null ? '' : r.paidDays;
         var auto = (r.paidDays==null && r.computedPaidDays!=null) ? ' title="from attendance"' : '';
+        var payable=Math.max(0,r.balance||0),fullyPaid=payable<=0;
         return '<tr>'+
-          '<td><input type="checkbox" class="salpay" data-emp="'+r.id+'"></td><td>'+(index+1)+'</td><td class="l"><b>'+esc(r.name)+'</b><div class="muted" style="font-size:10px">'+esc(r.post||'')+'</div></td>'+
+          '<td><input type="checkbox" class="salpay" data-emp="'+r.id+'" '+(fullyPaid?'disabled':'')+'></td><td>'+(index+1)+'</td><td class="l"><b>'+esc(r.name)+'</b><div class="muted" style="font-size:10px">'+esc(r.post||'')+'</div></td>'+
           '<td class="l"><span class="tag '+esc(r.channel)+'">'+esc(r.channel)+'</span></td>'+
           '<td>'+fmt(r.salary)+'</td>'+
           '<td><input class="cell" type="number" step="0.5" value="'+pd+'"'+auto+' onchange="saveRow(\''+r.id+'\',\'paidDays\',this.value)" placeholder="'+(r.computedPaidDays!=null?r.computedPaidDays:'—')+'"></td>'+
           '<td>'+fmt(r.salaryAmt)+'</td>'+
           '<td><input class="cell" type="number" min="0" value="'+(r.loggedAdvanceRecovery||0)+'" onchange="saveRecovery(\''+r.id+'\',this.value)" title="Logged advance recovery this month">'+(r.legacyAdvance?'<div class="muted" title="Older imported recovery">+ legacy '+fmt(r.legacyAdvance)+'</div>':'')+(r.openingAdvanceCarry?'<div class="muted neg">last month '+fmt(r.openingAdvanceCarry)+'</div>':'')+'<div class="muted">advance due '+fmt(r.outstandingAdvance)+'</div></td>'+
           '<td class="'+(r.netPayable<0?'neg':'')+'">'+fmt(r.netPayable)+'</td>'+
-          '<td>'+fmt(r.paid)+'</td><td><input class="cell salpayamt" data-emp="'+r.id+'" type="number" min="0" max="'+Math.max(0,r.balance)+'" value="'+Math.max(0,r.balance)+'"></td>'+
+          '<td>'+fmt(r.paid)+'</td><td><input class="cell salpayamt" data-emp="'+r.id+'" type="number" min="0" max="'+payable+'" value="'+payable+'" '+(fullyPaid?'disabled':'')+'></td><td><span class="status '+(fullyPaid?'Recovered':'')+'">'+(fullyPaid?(r.paid>0?'Paid':'No payment due'):(r.paid>0?'Partially paid':'Unpaid'))+'</span></td>'+
           '<td class="'+(r.balance<0?'neg':(r.balance>0?'pos':''))+'">'+fmt(r.balance)+'</td>'+
           '<td><input class="rem" value="'+esc(r.remarks||'')+'" onchange="saveRow(\''+r.id+'\',\'remarks\',this.value)"></td>'+
         '</tr>';
       }).join('');
       var t=d.totals;
       el('host').innerHTML =
-        '<div class="card"><table>'+
-          '<thead><tr><th>Pay</th><th>S.No.</th><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance recovery</th><th>Net payable</th><th>Paid</th><th>Pay now</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
+        '<div class="card"><div class="bar" style="padding:12px;margin:0"><button class="btn mini ghost" id="selectPayable">Select all payable</button><button class="btn mini ghost" id="clearPaySelection">Clear selection</button><b id="paySelectionSummary">0 selected · ₹0</b><span class="muted">Only checked employees will be paid.</span></div><table>'+
+          '<thead><tr><th>Pay</th><th>S.No.</th><th class="l">Name</th><th class="l">Channel</th><th>Salary</th><th>Paid days</th><th>Salary amt</th><th>Advance recovery</th><th>Net payable</th><th>Paid</th><th>Pay now</th><th>Status</th><th>Balance</th><th class="l">Remarks</th></tr></thead>'+
           '<tbody>'+rows+'</tbody>'+
-          '<tfoot><tr><td></td><td></td><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>—</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td>'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td></td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
+          '<tfoot><tr><td></td><td></td><td class="l">TOTAL ('+d.rows.length+')</td><td></td><td>'+fmt(t.salary)+'</td><td>—</td><td>'+fmt(t.salaryAmt)+'</td><td>'+fmt(t.advance)+'</td><td>'+fmt(t.netPayable)+'</td><td>'+fmt(t.paid)+'</td><td></td><td></td><td class="'+(t.balance<0?'neg':'')+'">'+fmt(t.balance)+'</td><td></td></tr></tfoot>'+
         '</table></div>'+
         '<div class="card" style="margin-top:12px"><div class="advance-grid"><div><label>Salary paying cash</label><select id="sp_account">'+state.accounts.map(function(a){return '<option>'+esc(a)+'</option>';}).join('')+'</select></div><div><label>Payment date</label><input id="sp_date" type="date" value="'+new Date().toISOString().slice(0,10)+'"></div><div><label>Common proof</label><input id="sp_proof" type="file" accept="image/*,.pdf"></div><div><label>Reference</label><input id="sp_ref"></div><div style="align-self:end"><button class="btn" onclick="recordSalaryBatch()">Post selected salary payments</button></div></div></div><div class="conf">Salary payments debit the selected cash ledger. A negative payable automatically appears next month as “last month” advance/balance without creating a duplicate cash transaction.</div><button class="btn ghost" onclick="postPayrollLedgers()">Post '+esc(ymLabel(state.ym))+' salary earned in ledgers</button>';
+      function updatePaySelection(){var count=0,total=0;Array.prototype.forEach.call(document.querySelectorAll('.salpay:checked'),function(c){count++;var a=document.querySelector('.salpayamt[data-emp="'+c.dataset.emp+'"]');total+=+(a&&a.value)||0;});el('paySelectionSummary').textContent=count+' selected · '+fmt(total);}
+      el('selectPayable').onclick=function(){Array.prototype.forEach.call(document.querySelectorAll('.salpay:not(:disabled)'),function(c){c.checked=true;});updatePaySelection();};
+      el('clearPaySelection').onclick=function(){Array.prototype.forEach.call(document.querySelectorAll('.salpay'),function(c){c.checked=false;});updatePaySelection();};
+      Array.prototype.forEach.call(document.querySelectorAll('.salpay,.salpayamt'),function(x){x.onchange=updatePaySelection;x.oninput=updatePaySelection;});
     }
     window.saveRow = function(empId, field, val){
       var body={ empId:empId }; body[field]=val;
