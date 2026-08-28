@@ -85,5 +85,15 @@ test('photo splitter reconstruction uses OpenAI exclusively', () => {
   assert.match(source, /OPENAI_API_KEY/);
   assert.match(source, /api\.openai\.com\/v1\/images\/edits/);
   assert.match(source, /gpt-image-1\.5/);
+  const splitterVision = source.slice(source.indexOf('async function requestPhotoBoxes'), source.indexOf('async function detectPhotoBoxes'));
+  assert.match(splitterVision, /api\.openai\.com\/v1\/chat\/completions/);
+  assert.doesNotMatch(splitterVision, /api\.anthropic\.com|ANTHROPIC_API_KEY/);
   assert.doesNotMatch(source, /GEMINI_API_KEY|GOOGLE_API_KEY|generativelanguage\.googleapis\.com/);
+});
+
+test('photo splitter requires a destination batch before upload', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  assert.match(html, /id="czSplitChoose"/);
+  assert.match(html, /Create a destination batch first, then choose the collage photos/);
+  assert.match(html, /Photo splitter server error/);
 });

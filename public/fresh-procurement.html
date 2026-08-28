@@ -672,7 +672,7 @@
             <div class="czrow" style="align-items:flex-end">
               <div class="fld" style="min-width:220px;flex:1"><label>Destination batch</label><select id="czSplitBatch"></select></div>
               <div class="fld" style="min-width:180px"><label>Vendor</label><input id="czSplitVendor" placeholder="e.g. CHAOUFI" /></div>
-              <label class="btn ghost" style="cursor:pointer">Choose collage photos
+              <label class="btn ghost" id="czSplitChoose" style="cursor:pointer">Choose collage photos
                 <input id="czSplitInput" type="file" accept="image/*" multiple style="display:none" />
               </label>
             </div>
@@ -1888,7 +1888,12 @@
       var cats=czBatchCats(b).map(function(k){ return CAT_LABEL[k]||k; }).join(', ');
       return '<option value="'+escapeHtml(b.id)+'"'+(b.id===czActiveBatch?' selected':'')+'>'+escapeHtml(b.name||'Batch')+(cats?' — '+escapeHtml(cats):'')+'</option>';
     }).join('');
-    if(!sel.innerHTML) sel.innerHTML='<option value="">Create a batch first</option>';
+    var hasBatches=!!sel.innerHTML;
+    if(!hasBatches) sel.innerHTML='<option value="">Create a batch first</option>';
+    var input=el('czSplitInput'), choose=el('czSplitChoose'), st=el('czSplitStatus');
+    if(input) input.disabled=!hasBatches;
+    if(choose){ choose.style.opacity=hasBatches?'':'0.55'; choose.style.cursor=hasBatches?'pointer':'not-allowed'; }
+    if(!hasBatches && st) st.innerHTML='<span style="color:var(--warn)">Create a batch first. Then return here and choose the collage photos.</span>';
   }
   function czSplitDataFile(item){
     var parts=String(item.data||'').split(','), mime=item.mimeType||'image/jpeg';
@@ -1915,15 +1920,24 @@
   }
   function czSplitPhotos(files){
     var st=el('czSplitStatus'), fd=new FormData();
+    if(!(czBatches||[]).length || !el('czSplitBatch').value){
+      st.innerHTML='<span style="color:var(--err)">Create a destination batch first, then choose the collage photos.</span>';
+      return;
+    }
     Array.prototype.forEach.call(files||[],function(f){ if(/^image\//.test(f.type)) fd.append('photos',f); });
     if(!fd.getAll('photos').length){ st.innerHTML='<span style="color:var(--err)">Choose at least one collage photo.</span>'; return; }
     st.textContent='Finding and separating the individual photos…'; el('czSplitInput').disabled=true;
-    fetch('/api/casuals/photo-split',{method:'POST',body:fd}).then(function(r){ return r.json(); }).then(function(d){
+    fetch('/api/casuals/photo-split',{method:'POST',body:fd}).then(function(r){
+      return r.text().then(function(raw){
+        var d={}; try{ d=raw?JSON.parse(raw):{}; }catch(e){}
+        if(!r.ok || !d.success) throw new Error(d.error || ('Photo splitter server error ('+r.status+').'));
+        return d;
+      });
+    }).then(function(d){
       el('czSplitInput').disabled=false;
-      if(!d.success){ st.innerHTML='<span style="color:var(--err)">'+escapeHtml(d.error||'Could not split photos')+'</span>'; return; }
       czSplitResults=d.results||[]; czSplitSources={};(d.sources||[]).forEach(function(s){czSplitSources[s.sourceIndex]=s;});czSplitRender();
       st.innerHTML='<span style="color:var(--emerald-d)">✓ Prepared '+czSplitResults.length+' individual photo'+(czSplitResults.length===1?'':'s')+'. AI reconstructions are labelled—compare them with the original before approval.</span>'+(d.warnings&&d.warnings.length?'<div style="color:var(--warn);font-size:11px;margin-top:4px">'+escapeHtml(d.warnings.length+' reconstruction(s) could not be created and were omitted.')+'</div>':'');
-    }).catch(function(){ el('czSplitInput').disabled=false; st.innerHTML='<span style="color:var(--err)">Photo splitting failed. Try fewer or clearer collages.</span>'; });
+    }).catch(function(err){ el('czSplitInput').disabled=false; st.innerHTML='<span style="color:var(--err)">'+escapeHtml((err&&err.message)||'Photo splitting failed. Try fewer or clearer collages.')+'</span>'; });
   }
   function czSplitAddToBatch(){
     var st=el('czSplitStatus'), batch=el('czSplitBatch').value, vendor=(el('czSplitVendor').value||'').trim();

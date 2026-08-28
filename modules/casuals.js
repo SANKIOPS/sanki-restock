@@ -270,6 +270,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const AI_MODEL = process.env.CASUALS_AI_MODEL || process.env.FRESH_PROC_AI_MODEL || process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SPLITTER_IMAGE_MODEL = process.env.CASUALS_IMAGE_MODEL || process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5';
+const SPLITTER_VISION_MODEL = process.env.CASUALS_SPLITTER_VISION_MODEL || 'gpt-4.1-mini';
 
 function atomicWrite(fp, data) {
   const tmp = fp + '.tmp-' + process.pid + '-' + Date.now();
@@ -659,22 +660,23 @@ async function makeSplitFocusReference(img, box) {
 }
 
 async function requestPhotoBoxes(enc, prompt) {
+  if (!OPENAI_API_KEY) throw new Error('OpenAI photo splitting is not enabled. Set OPENAI_API_KEY in Railway.');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   let r;
   try {
-    r = await fetch('https://api.anthropic.com/v1/messages', {
+    r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST', signal: ctrl.signal,
-      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1800, temperature: 0, messages: [{ role:'user', content:[
-        { type:'image', source:{ type:'base64', media_type:enc.mediaType, data:enc.data } },
-        { type:'text', text:prompt }
-      ]}] })
+      headers: { authorization:'Bearer '+OPENAI_API_KEY, 'content-type':'application/json' },
+      body: JSON.stringify({ model:SPLITTER_VISION_MODEL, max_tokens:1800, temperature:0, response_format:{type:'json_object'}, messages:[{role:'user',content:[
+        {type:'text',text:prompt},
+        {type:'image_url',image_url:{url:'data:'+enc.mediaType+';base64,'+enc.data,detail:'high'}}
+      ]}]})
     });
   } finally { clearTimeout(timer); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j.error && j.error.message) || ('AI HTTP ' + r.status));
-  const parsed = extractJson((j.content || []).map(c => c.text || '').join('')) || {};
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('OpenAI HTTP ' + r.status));
+  const parsed = extractJson(j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || {};
   return validSplitBoxes(parsed.boxes);
 }
 
