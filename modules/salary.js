@@ -133,11 +133,11 @@ function julyImportedMarks(emp,encoded){
   return {attendance,paidDays:Math.max(0,round2(worked+paidLeaveAllowanceForMonth(emp,'2026-07')-1))};
 }
 function applyCorrectedJulyAttendanceV7(s){
-  const key='corrected_july_attendance_fixed_leave_allowance_v9';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  const key='corrected_july_attendance_fixed_leave_allowance_v10';s.oneTimeMigrations=s.oneTimeMigrations||{};
   if(s.oneTimeMigrations[key]||((s.payrollPostings||{})['2026-07'])||(((s.months||{})['2026-07']||{}).finalized))return false;
   const mo=ensureMonth(s,'2026-07'),updated=[];
   JULY_2026_IMPORT.forEach(([name,post,marks,,joiningDate])=>{
-    const emp=findImportedEmployee(s,name,post);if(!emp)return;if(joiningDate)emp.joiningDate=joiningDate;else if(emp.joiningDate&&emp.joiningDate>'2026-07-01')emp.joiningDate='2026-07-01';emp.monthlyPaidLeaveAllowance=String(name).toLowerCase()==='suraj'?1:4;
+    const emp=findImportedEmployee(s,name,post);if(!emp)return;if(joiningDate)emp.joiningDate=joiningDate;else if(emp.joiningDate&&emp.joiningDate>'2026-07-01')emp.joiningDate='2026-07-01';if(emp.lastWorkingDate&&emp.lastWorkingDate<'2026-07-31')emp.lastWorkingDate='2026-07-31';emp.monthlyPaidLeaveAllowance=String(name).toLowerCase()==='suraj'?1:4;
     const calculated=julyImportedMarks(emp,marks);mo.attendance[emp.id]=calculated.attendance;mo.rows[emp.id]=Object.assign({},mo.rows[emp.id],{paidDays:calculated.paidDays,advance:0,paid:0,remarks:'Corrected July attendance · A/WO retained · fixed paid-leave allowance · 31-day adjustment -1'});updated.push({empId:emp.id,name:emp.name,paidDays:calculated.paidDays});
   });
   const now=new Date().toISOString(),advanceIds=[];s.advances=s.advances||{};s.advanceSeq=num(s.advanceSeq);
