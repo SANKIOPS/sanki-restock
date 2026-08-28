@@ -853,6 +853,20 @@ test('finalizing removes every visible draft summary for that entity and bank',(
   assert.equal(view.body.draft,null);assert.equal(view.body.updatedThrough,'2026-08-27');
 });
 
+test('only Owner can discard an unfinalized bank statement draft',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),uploaded=path.join(tempDir,'discard-me.pdf');
+  fs.writeFileSync(uploaded,'temporary statement');
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
+  stored.bankReconciliationDrafts['BRD-DISCARD']={id:'BRD-DISCARD',account:'ICICI Bank 0993',nature:'PERSONAL',transactions:[],summary:{from:'2026-08-01',to:'2026-08-28'},resolutions:{},temporaryFile:uploaded,originalName:'statement.pdf',createdAt:new Date().toISOString(),expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const denied=invoke('POST','/api/expenses/bank-statements/discard',{role:'admin',body:{draftId:'BRD-DISCARD'}});
+  assert.equal(denied.status,403);assert.equal(fs.existsSync(uploaded),true);
+  const discarded=invoke('POST','/api/expenses/bank-statements/discard',{role:'owner',body:{draftId:'BRD-DISCARD'}});
+  assert.equal(discarded.status,200);assert.equal(fs.existsSync(uploaded),false);
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+  assert.equal(after.bankReconciliationDrafts['BRD-DISCARD'],undefined);
+});
+
 test('personal bank reconciliation UI uses Owner-only entity accounts and clears finalized actions',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/function bankAccountsForNature\(nature\)/);
@@ -887,6 +901,22 @@ test('PDF and image OCR statement text uses the same normalized bank rows', () =
   assert.match(telegram,/callback_data:'am:bank'/);
   assert.match(telegram,/Temporary statement preview ready/);
   assert.match(telegram,/Nothing has been stored in the official bank history/);
+});
+
+test('newest-first PDF statements derive the real opening and closing balances', () => {
+  const rows=parseBankStatementText([
+    '2026-08-25 R/KKBKR52026082500 0 200000 281650.40',
+    '2026-08-25 UPI/612835748021/DR 3000 0 81650.40',
+    '2026-08-24 UPI/313157351411/DR 2000 0 84650.40',
+    '2026-08-24 UPI/612787369858/DR 3500 0 86650.40',
+    '2026-08-23 UPI/313107864568/DR 5000 0 90150.40',
+    '2026-08-22 UPI/612673856994/DR 6560 0 95150.40',
+    '2026-08-22 UPI/313002086306/DR 5000 0 101710.40',
+    '2026-08-22 UPI/612652390234/DR 5000 0 106710.40'
+  ].join('\n'));
+  assert.equal(rows.statementSummary.openingBalance,111710.4);
+  assert.equal(rows.statementSummary.closingBalance,281650.4);
+  assert.equal(rows.statementSummary.validated,true);
 });
 
 test('ICICI PDF text keeps ISO dates and ignores embedded UPI reference numbers',()=>{
