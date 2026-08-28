@@ -216,26 +216,28 @@
             '<td><input class="cell" style="width:80px" type="number" value="'+e.salary+'" onchange="saveEmp(\''+e.id+'\',\'salary\',this.value)"></td>'+
             '<td class="l"><select onchange="saveEmp(\''+e.id+'\',\'channel\',this.value)">'+chOpts(e.channel)+'</select></td>'+
             '<td class="l"><select onchange="saveEmp(\''+e.id+'\',\'weekOffDay\',this.value)">'+weekOpts(e.weekOffDay)+'</select></td>'+
+            '<td><input class="cell" style="width:70px" type="number" min="0" value="'+(e.monthlyPaidLeaveAllowance==null?4:e.monthlyPaidLeaveAllowance)+'" onchange="saveEmp(\''+e.id+'\',\'monthlyPaidLeaveAllowance\',this.value)"></td>'+
             '<td><input type="date" value="'+esc(e.joiningDate||'')+'" onchange="saveEmp(\''+e.id+'\',\'joiningDate\',this.value)"></td>'+
             '<td><input type="date" value="'+esc(e.lastWorkingDate||'')+'" onchange="saveEmp(\''+e.id+'\',\'lastWorkingDate\',this.value)"></td>'+
             '<td><button class="btn mini ghost" onclick="toggleEmp(\''+e.id+'\','+(e.active===false)+')">'+(e.active===false?'Reactivate':'Deactivate')+'</button></td>'+
           '</tr>';
         }).join('');
         el('host').innerHTML =
-          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th class="l">Weekly off day</th><th>Joining date</th><th>Last working date</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th class="l">Weekly off day</th><th>Paid leaves/month</th><th>Joining date</th><th>Last working date</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
           '<div class="card" style="margin-top:14px"><div class="empform">'+
             '<div class="fld"><label>Name</label><input id="ne_name" placeholder="full name"></div>'+
             '<div class="fld"><label>Post</label><input id="ne_post" placeholder="e.g. Sales Executive"></div>'+
             '<div class="fld"><label>Monthly salary ₹</label><input id="ne_salary" type="number" placeholder="0"></div>'+
             '<div class="fld"><label>Channel</label><select id="ne_channel">'+chOpts('Shared')+'</select></div>'+
             '<div class="fld"><label>Weekly off day</label><select id="ne_weekoff">'+weekOpts('')+'</select></div>'+
+            '<div class="fld"><label>Paid leaves/month</label><input id="ne_paidleaves" type="number" min="0" value="4"></div>'+
             '<div class="fld"><label>Joining date</label><input id="ne_joining" type="date"></div>'+
             '<div class="fld"><label>Last working date (optional)</label><input id="ne_lastworking" type="date"></div>'+
             '<div class="fld" style="justify-content:flex-end"><button class="btn" id="addEmp">＋ Add employee</button></div>'+
           '</div></div>'+
           '<div class="conf">Channel decides which P&amp;L column the salary lands in — <b>POS</b> (store), <b>Website</b> (content/fulfilment), or <b>Shared</b> (split by revenue share).</div>';
         el('addEmp').addEventListener('click', function(){
-          var b = { name:el('ne_name').value.trim(), post:el('ne_post').value.trim(), salary:el('ne_salary').value, channel:el('ne_channel').value, weekOffDay:el('ne_weekoff').value, joiningDate:el('ne_joining').value, lastWorkingDate:el('ne_lastworking').value };
+          var b = { name:el('ne_name').value.trim(), post:el('ne_post').value.trim(), salary:el('ne_salary').value, channel:el('ne_channel').value, weekOffDay:el('ne_weekoff').value, monthlyPaidLeaveAllowance:el('ne_paidleaves').value, joiningDate:el('ne_joining').value, lastWorkingDate:el('ne_lastworking').value };
           if(!b.name){ flash('Name required.', false); return; }
           api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b) })
             .then(function(d){ if(!d.success){flash(d.error||'Could not add employee.',false);return;} flash('Added.', true); loadEmployees(); });
