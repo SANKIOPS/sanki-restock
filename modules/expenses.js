@@ -249,6 +249,10 @@ function loadStore() {
       s.oneTimeMigrations[counterCashResetKey]={appliedAt:new Date().toISOString(),account:DEFAULT_COUNTER_CASH,effectiveDate:COUNTER_CASH_RESET_DATE,before,after:5240,rule:'Exclude all earlier Counter Cash movements; round cash sales upward to ₹10'};
       audit(s,null,'COUNTER_CASH_RESET','account',DEFAULT_COUNTER_CASH,{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account:DEFAULT_COUNTER_CASH,before:{opening:before},after:{opening:5240,effectiveDate:COUNTER_CASH_RESET_DATE},note:'Owner-authorized Counter Cash reset'});saveStore(s);
     }
+    const icici0425OpeningKey='icici-0425-opening-2026-08-22-negative-2148837-66';
+    if(!s.oneTimeMigrations[icici0425OpeningKey]){
+      const account='Tiana 0425',effectiveDate='2026-08-22',amount=-2148837.66,before=num((s.openingBalances||{})[account]);s.openingBalances=s.openingBalances||{};s.openingBalanceDates=s.openingBalanceDates||{};s.openingBalances[account]=amount;s.openingBalanceDates[account]=effectiveDate;s.oneTimeMigrations[icici0425OpeningKey]={appliedAt:new Date().toISOString(),account,bankName:'ICICI Bank 0425',nature:'SANKI',effectiveDate,before,after:amount};audit(s,null,'OPENING_BALANCE_CORRECTED','account',account,{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account,before:{opening:before},after:{opening:amount,effectiveDate},note:'Owner-authorized one-time ICICI 0425 opening balance as of 22 Aug 2026'});saveStore(s);
+    }
     const correctionKey='delete-prashant-axis-3645-5000-through-2026-08-22';
     if(!s.oneTimeMigrations[correctionKey]){
       const account='Prashant Axis 3645',cutoff='2026-08-22',amount=5000,candidates=[];
@@ -561,6 +565,7 @@ function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
 function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&!/cash/i.test(name);}
+function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&String(name||'')!==PAYTM_CLEARING_ACCOUNT;}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
 function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting') || r.includes('samast_accounting') || r.includes('owner'); }
@@ -1573,7 +1578,7 @@ router.get('/api/expenses/balances', (req, res) => {
     const spent = round0(period.paidOut[name] || 0),topups=round0(period.adj[name]||0),transferredIn=round0(period.transferIn[name]||0),transferredOut=round0(period.transferOut[name]||0),received=round0(period.collected[name]||0);
     const closingBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name]);
     const issues = reconciliationIssues(s, nature, name);
-    return { name, opening: round0(opening), topups, received, transferredIn, transferredOut, spent, periodNet:round0(topups+received+transferredIn-transferredOut-spent), balance:round0(closingBalance), closingAsOf:to||'today', reconciled:issues.length===0, reconciliationIssues:issues };
+    const exact=isBankLedgerName(name),money=v=>exact?Math.round(num(v)*100)/100:round0(v);return { name, opening: money(opening), topups, received, transferredIn, transferredOut, spent, periodNet:money(topups+received+transferredIn-transferredOut-spent), balance:money(closingBalance), closingAsOf:to||'today', reconciled:issues.length===0, reconciliationIssues:issues };
   });
   res.json({ success: true, accounts });
 });
@@ -1683,7 +1688,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   if(account===DEFAULT_COUNTER_CASH)for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&!cashEntryIsVisible(account,entries[i].date))entries.splice(i,1);
   entries.forEach(x=>{const override=(s.bankDateOverrides||{})[x.id];if(override){x.originalDate=x.date;x.date=override.bankDate;x.bankDateOverride=override;}});
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
-  const preciseBalance=account===PAYTM_CLEARING_ACCOUNT;let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
+  const preciseBalance=account===PAYTM_CLEARING_ACCOUNT||isBankLedgerName(account);let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
   const issues = reconciliationIssues(s, nature, account);
