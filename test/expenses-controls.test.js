@@ -449,6 +449,7 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.equal(payment.amount, 339);
   assert.equal(payment.account, 'Counter Cash');
   assert.equal(payment.proof, '/api/expenses/photo/dashboard-pay.jpg');
+  assert.equal(payment.reference, created.body.expense.id + '/PAY-001');
   const byCategory=invoke('GET','/api/expenses/spending-dashboard',{query:{from:'2026-08-20',to:'2026-08-20',category:'FOOD EXPENSE'},role:'owner'}).body;
   assert.ok(byCategory.payments.length>0);
   assert.ok(byCategory.payments.every(x=>x.category==='FOOD EXPENSE'));
@@ -624,6 +625,9 @@ test('Owner can reimburse a SAMAST claimant from an authorised SANKI account', (
   assert.equal(claimantLedger.entries.find(x=>x.id===created.body.expense.id+'/PAY-001').debit,720);
   assert.equal(claimantLedger.entries.find(x=>x.id===created.body.expense.id+'/REIM-001/RECEIVED').credit,720);
   assert.equal(claimantLedger.balance,0);
+  const reimbursementHistory=invoke('GET','/api/expenses/reimbursements',{role:'owner',query:{status:'reimbursed'}}).body.reimbursements.find(x=>x.id===created.body.expense.id);
+  assert.equal(reimbursementHistory.closingBalance,0);
+  assert.equal(reimbursementHistory.reimbursementPayments.at(-1).transactionReference,created.body.expense.id+'/REIM-001');
   const claimantSummary=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SAMAST'}}).body;
   assert.equal(claimantSummary.accounts.find(x=>x.name==='Arshpreet 1919').balance,0);
 });
@@ -645,8 +649,10 @@ test('reimbursements UI groups transactions by person before showing expense det
   assert.match(html,/class="claim-card reimbursement-person"/);
   assert.match(html,/group\.items\.length\+' transaction'/);
   assert.match(html,/class="reimburse-person-select"/);
-  assert.match(html,/Select all for /);
-  assert.match(html,/class="claim-amount">'\+fmt\(group\.due\)\+' due/);
+  assert.match(html,/Select all pending for /);
+  assert.match(html,/Closing balance '\+fmt\(group\.due\)/);
+  assert.match(html,/Transaction reference/);
+  assert.match(html,/Reimbursed<\/th><th>Closing balance/);
 });
 
 test('batch reimbursement validates every expense before recording any payment',()=>{
@@ -855,6 +861,24 @@ test('amount-mismatch rows can correct an editable ledger entry with an audit tr
   assert.equal(invoke('POST','/api/expenses/bank-statements/correct-ledger-entry',{role:'admin',body:{draftId:'BRD-AMOUNT-FIX',rowId:'bank-0',amount:2505.90}}).status,400);
   const corrected=invoke('POST','/api/expenses/bank-statements/correct-ledger-entry',{role:'admin',body:{draftId:'BRD-AMOUNT-FIX',rowId:'bank-0',amount:2505.90,reason:'Bank amount is authoritative'}});assert.equal(corrected.status,200,JSON.stringify(corrected.body));assert.ok(corrected.body.rows.some(x=>x.status==='matched'&&x.app&&x.app.id==='TR-AMOUNT-FIX'));
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.transfers.find(x=>x.id==='TR-AMOUNT-FIX').amount,2505.90);assert.ok((after.auditLog||[]).some(x=>x.action==='BANK_RECONCILIATION_LEDGER_AMOUNT_CORRECTED'&&x.subjectId==='TR-AMOUNT-FIX'));
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('unrelated bank and app amounts remain separate missing entries',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString(),account='Prashant Axis 3645';
+  stored.receipts=stored.receipts||[];stored.receipts.push({id:'RCPT-UNRELATED-CREDIT',nature:'SANKI',account,date:'2026-09-30',source:'Transfer from Axis Bank 3448',amount:2247});
+  stored.adjustments=stored.adjustments||[];stored.adjustments.push({id:'ADJ-UNRELATED-DEBIT',nature:'SANKI',account,date:'2026-09-30',note:'Manish agencies',amount:-332});
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-UNRELATED']={id:'BRD-UNRELATED',account,nature:'SANKI',transactions:[
+    {date:'2026-09-30',description:'SANJAN SI UPI',reference:'660007395196',debit:0,credit:2000,balance:2000},
+    {date:'2026-09-30',description:'CHANDER PRAKASH UPI',reference:'623409923274',debit:6090,credit:0,balance:-4090}
+  ],summary:{from:'2026-09-30',to:'2026-09-30',openingBalance:0,closingBalance:-4090,totalDebits:6090,totalCredits:2000,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:'BRD-UNRELATED',account}}).body;
+  assert.equal(view.summary.amount_mismatch||0,0);
+  assert.equal(view.summary.missing_in_app,2);
+  assert.equal(view.summary.missing_in_bank,2);
+  assert.ok(view.rows.filter(x=>x.status==='missing_in_app').every(x=>x.bank&&!x.app));
+  assert.ok(view.rows.filter(x=>x.status==='missing_in_bank').every(x=>x.app&&!x.bank));
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
@@ -1095,6 +1119,7 @@ test('paying-account expense totals reconcile to ledger movements by payment dat
 test('a cross-entity expense appears in the ledger of the account that paid it', () => {
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
   stored.expenses['EX-CROSS-240']={id:'EX-CROSS-240',date:'2026-08-22',nature:'SAMAST',status:'paid',vendor:'Geeta Poojan Bhandar',particulars:'Cross-entity payment',amount:240,paidAmount:240,approvedAt:'2026-08-22T10:00:00.000Z',billPhoto:'/api/expenses/photo/cross-240.jpg',payments:[{id:'PAY-240',amount:240,date:'2026-08-22',account:'Prashant Axis 3645',proof:'/api/expenses/photo/pay-240.jpg',paidBy:'prashant'}]};
+  stored.expenses['EX-CROSS-PERSONAL-125']={id:'EX-CROSS-PERSONAL-125',date:'2026-08-22',nature:'PERSONAL',status:'paid',vendor:'Personal purchase',particulars:'Owner expense paid through company account',amount:125,paidAmount:125,approvedAt:'2026-08-22T11:00:00.000Z',billPhoto:'/api/expenses/photo/personal-125.jpg',payments:[{id:'PAY-125',amount:125,date:'2026-08-22',account:'Prashant Axis 3645',proof:'/api/expenses/photo/pay-125.jpg',paidBy:'owner-user'}]};
   fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-08-01',to:'2026-08-31'}}).body;
   const movement=ledger.entries.find(x=>x.id==='EX-CROSS-240/PAY-240');
@@ -1106,6 +1131,10 @@ test('a cross-entity expense appears in the ledger of the account that paid it',
   assert.ok(!personalOnly.entries.some(x=>x.id==='EX-CROSS-240/PAY-240'));
   const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2026-08-01',to:'2026-08-31'}}).body;
   assert.ok(balances.accounts.find(x=>x.name==='Prashant Axis 3645').spent>=240);
+  const refreshed=JSON.parse(fs.readFileSync(expenseFile,'utf8'));refreshed.bankReconciliationDrafts=refreshed.bankReconciliationDrafts||{};refreshed.bankReconciliationDrafts['BRD-CROSS-240']={id:'BRD-CROSS-240',account:'Prashant Axis 3645',nature:'SANKI',transactions:[{date:'2026-08-22',description:'UPI payment to Geeta Poojan Bhandar',reference:'623412221042',debit:240,credit:0,balance:125},{date:'2026-08-22',description:'Personal purchase',reference:'PERSONAL125',debit:125,credit:0,balance:0}],summary:{from:'2026-08-22',to:'2026-08-22',openingBalance:365,closingBalance:0,totalDebits:365,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(refreshed));
+  const reconciliation=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:'BRD-CROSS-240',account:'Prashant Axis 3645'}}).body;
+  assert.ok(reconciliation.rows.some(x=>x.status==='matched'&&x.bank&&x.app&&x.app.id==='EX-CROSS-240/PAY-240'));
+  assert.ok(reconciliation.rows.some(x=>x.status==='matched'&&x.bank&&x.app&&x.app.id==='EX-CROSS-PERSONAL-125/PAY-125'));
 });
 
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
@@ -1116,7 +1145,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /id="cf_from" value="'\+monthStart\(\)/);
   assert.match(html, /id="rf_from" value="'\+monthStart\(\)/);
   assert.match(html, /id="rf_nature"><option value="">All<\/option>/);
-  assert.match(html, /id="rf_status"><option value="pending" selected>Pending<\/option>/);
+  assert.match(html, /id="rf_status"><option value="" selected>All<\/option>/);
+  assert.match(html, /Transaction ref:/);
   assert.match(html, /nature='\+encodeURIComponent\(el\('rf_nature'\)\.value\)/);
   assert.match(html, /id="rv_from" value="'\+monthStart\(\)/);
   assert.match(html, /id="proofViewer" class="proof-viewer"/);
