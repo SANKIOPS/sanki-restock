@@ -909,6 +909,9 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
   assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
   assert.match(html,/Reconciliation history/);
+  assert.match(html,/Statement period: /);
+  assert.match(html,/Finalized: /);
+  assert.doesNotMatch(html,/Reconciled through '\+\(d\.lastReconciliation\.through/);
   assert.match(html,/bs_history/);
   assert.match(html,/Decision and actual reason/);
   assert.match(html,/Open original statement/);
