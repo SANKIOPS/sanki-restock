@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -1135,6 +1135,28 @@ test('a cross-entity expense appears in the ledger of the account that paid it',
   const reconciliation=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:'BRD-CROSS-240',account:'Prashant Axis 3645'}}).body;
   assert.ok(reconciliation.rows.some(x=>x.status==='matched'&&x.bank&&x.app&&x.app.id==='EX-CROSS-240/PAY-240'));
   assert.ok(reconciliation.rows.some(x=>x.status==='matched'&&x.bank&&x.app&&x.app.id==='EX-CROSS-PERSONAL-125/PAY-125'));
+});
+
+test('bank payment can split between a current expense and a paid pre-system vendor opening balance', () => {
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
+  stored.vendors.fnp={name:'FNP',notes:''};
+  stored.expenses['EX-FNP-100']={id:'EX-FNP-100',date:'2026-08-22',nature:'SANKI',status:'paid',vendor:'FNP',particulars:'Flowers for 22 August',ledger:'Flowers',amount:100,paidAmount:100,approvedAt:'2026-08-22T10:00:00.000Z',billPhoto:'/api/expenses/photo/fnp.jpg',payments:[{id:'PAY-001',amount:100,date:'2026-08-22',account:'Prashant Axis 3645',proof:'/api/expenses/photo/fnp-payment.jpg',paidBy:'prashant'}]};
+  const draft={id:'BRD-FNP-OPENING',account:'Prashant Axis 3645',nature:'SANKI',transactions:[{date:'2026-08-22',description:'UPI payment to Ferns n petals',reference:'623499417992',debit:300,credit:0,balance:1000}],summary:{from:'2026-08-22',to:'2026-08-22',openingBalance:1300,closingBalance:1000,totalDebits:300,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+  stored.bankReconciliationDrafts['BRD-FNP-OPENING']=draft;fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:draft.id,rowId:'bank-0',action:'opening_vendor_payable_split',appId:'EX-FNP-100/PAY-001',principalAmount:100,openingPayableAmount:200,vendor:'FNP',preSystemDates:'2026-08-20, 2026-08-21',reason:'Opening payable for flowers from 20 and 21 August; paid with 22 August expense',remark:'Split current expense and pre-system balance'}});
+  assert.equal(resolved.status,200,JSON.stringify(resolved.body));assert.equal(resolved.body.rows.find(x=>x.id==='bank-0').status,'resolved');assert.equal(resolved.body.rows.find(x=>x.app&&x.app.id==='EX-FNP-100/PAY-001').status,'resolved');
+  const afterResolve=JSON.parse(fs.readFileSync(expenseFile,'utf8')),savedDraft=afterResolve.bankReconciliationDrafts[draft.id];afterResolve.bankStatements['Prashant Axis 3645']={transactions:{fnp:{id:'BTX-FNP-300',date:'2026-08-22',description:'UPI payment to Ferns n petals',reference:'623499417992',debit:300,credit:0,balance:1000}},imports:[]};fs.writeFileSync(expenseFile,JSON.stringify(afterResolve));
+  applyFinalizedOpeningVendorPayables(savedDraft,'prashant');
+  const finalized=JSON.parse(fs.readFileSync(expenseFile,'utf8')),opening=finalized.vendorOpeningPayables.find(x=>x.reconciliationDraft===draft.id);
+  assert.equal(opening.amount,200);assert.equal(opening.paidAmount,200);assert.equal(opening.status,'paid');assert.equal(opening.bankTransactionId,'BTX-FNP-300');assert.equal(finalized.reconciliationExpenses.some(x=>x.reconciliationDraft===draft.id),false);
+  const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI',search:'FNP',from:'2026-08-22',to:'2026-08-22'}}).body.vendors,book=vendors.find(x=>x.name==='FNP');assert.equal(book.billed,300);assert.equal(book.paid,300);assert.equal(book.outstanding,0);assert.ok(book.entries.some(x=>x.source==='opening_vendor_payable'));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-08-22',to:'2026-08-22'}}).body.entries;assert.equal(ledger.find(x=>x.id==='EX-FNP-100/PAY-001').debit,100);assert.equal(ledger.find(x=>x.id===opening.adjustmentId).debit,200);
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('reconciliation UI offers the pre-system vendor payable split with an audit remark', () => {
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/Split: current expense \+ pre-system vendor payable/);assert.match(html,/opening_vendor_payable_split/);assert.match(html,/Pre-system opening payable/);assert.match(html,/does not enter the current-period P&amp;L/);
 });
 
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
