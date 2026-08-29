@@ -806,6 +806,8 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /Bank statement reconciliation/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
+  assert.match(html, /id="bs_discard"/);
+  assert.match(html, /bank-statements\/discard/);
 });
 
 test('bank statement rows are normalized from cumulative Excel exports', () => {
