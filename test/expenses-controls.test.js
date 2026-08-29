@@ -845,6 +845,14 @@ test('any manual ledger movement can be linked to a bank row, remarked and undon
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
+test('discarding a temporary bank preview removes only that draft and its temporary file',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),temporaryFile=path.join(tempDir,'discard-preview.csv');
+  fs.writeFileSync(temporaryFile,'temporary statement');stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-DISCARD']={id:'BRD-DISCARD',account:'Axis Bank 3448',nature:'SANKI',transactions:[],summary:{from:'2026-08-25',to:'2026-08-27'},resolutions:{'bank-0':{action:'exclude'}},temporaryFile,createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']=stored.bankStatements['Axis Bank 3448']||{transactions:{official:{id:'official'}},imports:[]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  assert.equal(invoke('POST','/api/expenses/bank-statements/discard-draft',{role:'admin',body:{draftId:'BRD-DISCARD'}}).status,400);
+  const discarded=invoke('POST','/api/expenses/bank-statements/discard-draft',{role:'admin',body:{draftId:'BRD-DISCARD',reason:'Restart with new reconciliation workflow'}});assert.equal(discarded.status,200,JSON.stringify(discarded.body));assert.equal(discarded.body.discarded.from,'2026-08-25');assert.equal(fs.existsSync(temporaryFile),false);
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankReconciliationDrafts['BRD-DISCARD'],undefined);assert.ok(after.bankStatements['Axis Bank 3448'].transactions.official);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
 test('personal bank reconciliation is Owner-only and stored separately from business books',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
   stored.bankStatements=stored.bankStatements||{};
@@ -892,14 +900,22 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/Decision and actual reason/);
   assert.match(html,/Open original statement/);
   assert.match(html,/Export CSV/);
-  assert.match(html,/Record missing bank transaction/);
-  assert.match(html,/Split \/ link existing/);
+  assert.match(html,/Create &amp; assign ledger entry/);
+  assert.match(html,/Link existing transaction/);
   assert.match(html,/split_allocation/);
-  assert.match(html,/Existing transfer references included in this settlement/);
-  assert.match(html,/customer membership/);
+  assert.match(html,/Connected transfer references/);
+  assert.match(html,/Other receipt description/);
   assert.match(html,/Link existing/);
   assert.match(html,/Undo decision/);
   assert.match(html,/Reconciliation-period remark/);
+  assert.match(html,/Transaction remark — required/);
+  assert.match(html,/sankiBankReconForm/);
+  assert.match(html,/Switching tabs will not remove it/);
+  assert.match(html,/Discard temporary preview/);
+  assert.match(html,/bank-statements\/discard-draft/);
+  assert.doesNotMatch(html,/resolvePaytmSettlement/);
+  assert.doesNotMatch(html,/Record missing bank transaction/);
+  assert.doesNotMatch(html,/>Paytm settlement<\/button>/);
 });
 
 test('stored bank statements can only be opened through an authorised reconciliation account',()=>{
