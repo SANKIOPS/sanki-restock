@@ -1012,7 +1012,7 @@ ICICI BANK LTD`;
   assert.equal(rows.length,1);
   assert.deepEqual({date:rows[0].date,reference:rows[0].reference,debit:rows[0].debit,credit:rows[0].credit,balance:rows[0].balance},{date:'2026-08-27',reference:'S16169495',debit:299000,credit:0,balance:-2447837.66});
   assert.match(rows[0].description,/INF\/INFT\/045660500 511\/GAGANLAMBA/);
-  assert.deepEqual(rows.statementSummary,{format:'ICICI Bank PDF',from:'2026-08-27',to:'2026-08-27',openingBalance:-2148837.66,closingBalance:-2447837.66,totalDebits:299000,totalCredits:0,validated:true});
+  assert.deepEqual(rows.statementSummary,{format:'ICICI Bank PDF',from:'2026-08-22',to:'2026-08-29',openingBalance:-2148837.66,closingBalance:-2447837.66,totalDebits:299000,totalCredits:0,validated:true});
 });
 
 test('ICICI 0425 one-time opening remains exact to paise from 22 August 2026',()=>{
@@ -1024,6 +1024,19 @@ test('ICICI 0425 one-time opening remains exact to paise from 22 August 2026',()
   const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));
   assert.equal(stored.openingBalanceDates['Tiana 0425'],'2026-08-22');
   assert.ok(stored.oneTimeMigrations['icici-0425-opening-2026-08-22-negative-2148837-66']);
+});
+
+test('legacy ICICI 0425 reconciliation history uses the statement-declared period',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=JSON.parse(fs.readFileSync(expenseFile,'utf8')),stored=JSON.parse(JSON.stringify(original));
+  delete stored.oneTimeMigrations['icici-0425-reconciliation-period-2026-08-22-to-2026-08-29'];
+  stored.bankStatements=stored.bankStatements||{};
+  stored.bankStatements['Tiana 0425']={transactions:{one:{id:'BTX-ICICI-ONE',date:'2026-08-27',debit:299000,credit:0,balance:-2447837.66}},reconciledThrough:'2026-08-27',lastReconciliation:{through:'2026-08-27',closingBalance:-2447837.66},imports:[{id:'BST-1788012502554',from:'2026-08-27',to:'2026-08-27',statementSummary:{format:'ICICI Bank PDF',from:'2026-08-27',to:'2026-08-27',openingBalance:-2148837.66,closingBalance:-2447837.66}}]};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  invoke('GET','/api/expenses/config',{role:'owner'});
+  const repaired=JSON.parse(fs.readFileSync(expenseFile,'utf8')),book=repaired.bankStatements['Tiana 0425'],record=book.imports[0];
+  assert.deepEqual({from:record.from,to:record.to,summaryFrom:record.statementSummary.from,summaryTo:record.statementSummary.to,reconciledThrough:book.reconciledThrough,lastThrough:book.lastReconciliation.through},{from:'2026-08-22',to:'2026-08-29',summaryFrom:'2026-08-22',summaryTo:'2026-08-29',reconciledThrough:'2026-08-29',lastThrough:'2026-08-29'});
+  assert.equal(repaired.oneTimeMigrations['icici-0425-reconciliation-period-2026-08-22-to-2026-08-29'].result,'corrected');
+  fs.writeFileSync(expenseFile,JSON.stringify(original));
 });
 
 test('legacy finalized payments without approvedAt remain visible in their account ledger', () => {
