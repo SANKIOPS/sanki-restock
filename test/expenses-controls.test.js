@@ -804,6 +804,8 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="editPersonalAccount"/);
   assert.match(html, /id="editBillFile"/);
   assert.match(html, /Upload bank statement for reconciliation/);
+  assert.match(html, /box\.appendChild\(recon\);loadBankStatement\(\)/);
+  assert.match(html, /id="ledgerRecon" style="display:none/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
 });
@@ -903,7 +905,7 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/id="bs_nature"/);
   assert.match(html,/bankAccountsByNature/);
   assert.match(html,/encodeURIComponent\(bankNature\)/);
-  assert.match(html,/The selected ledger is used automatically/);
+  assert.match(html,/selected account is automatic/);
   assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
   assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
   assert.match(html,/Reconciliation history/);
