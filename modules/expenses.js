@@ -31,6 +31,7 @@ const DATA_DIR = process.env.DATA_PATH
   ? path.dirname(process.env.DATA_PATH)
   : path.join(__dirname, '..');
 const EXP_PATH = path.join(DATA_DIR, 'expenses.json');
+const CREDIT_CARD_PATH = path.join(DATA_DIR, 'credit-cards.json');
 const PROC_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
 const SALES_PATH = process.env.SALES_PATH || path.join(DATA_DIR, 'sales.json');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
@@ -66,6 +67,10 @@ const proofUpload = multer({
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
 function roundCashSale(n) { const amount=num(n);return amount>0?Math.ceil(amount/10)*10:amount; }
+function loadCreditCards(){try{return JSON.parse(fs.readFileSync(CREDIT_CARD_PATH,'utf8'));}catch{return{cards:{}};}}
+function creditCardName(card){return card&&`${card.name} ${card.last4}`.trim();}
+function visibleCreditCards(req){return Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false&&(!card.ownerOnly||isOwner(req)));}
+function resolveCreditCard(req,value){const key=String(value||'').trim().toLowerCase();return visibleCreditCards(req).find(card=>card.id.toLowerCase()===key||creditCardName(card).toLowerCase()===key);}
 function cashEntryIsVisible(account,date) { return String(account||'')!==DEFAULT_COUNTER_CASH||String(date||'').slice(0,10)>=COUNTER_CASH_RESET_DATE; }
 function vendorKey(v) { return String(v || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 function fuzzyIncludes(text, query) {
@@ -707,6 +712,7 @@ router.get('/api/expenses/config', (req, res) => {
   // Only approved master vendors are reusable. A name typed by a claimant is
   // promoted into this list only when the related expense is approved.
   Object.keys(vendorsByNature).forEach(n => vendorsByNature[n].sort((a, b) => a.localeCompare(b)));
+  const creditCards=isAdmin(req)?visibleCreditCards(req).map(card=>({id:card.id,name:creditCardName(card)})):[];
   res.json({
     success: true,
     ledgers: pickableLedgers(s),
@@ -715,11 +721,11 @@ router.get('/api/expenses/config', (req, res) => {
     accounts: Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n])))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : [])])),
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? ledgerAccountsForNature(s,n).filter(name => !/cash/i.test(name)) : []])),
-    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) ? ledgerAccountsForNature(s,n) : []])),
+    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) ? Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name)))).sort((a,b)=>a.localeCompare(b)) : []])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) ? transferAccountsForNature(n) : []])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
-    types: TYPES, natures: allowed, channels: CHANNELS,
+    types: TYPES, natures: allowed, channels: CHANNELS, creditCards,
     approvalNatures: approvalNatures(req),
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
@@ -1041,9 +1047,10 @@ router.post('/api/expenses/batch-pay', (req, res) => {
   if (expenses.some(e => e.paidAlready || !['approved','partially_paid'].includes(e.status) || num(e.paidAmount)>=num(e.amount))) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
   const proof = String(b.paymentProof || '').trim();
   if (!proof) return res.status(400).json({ success:false, error:'Payment screenshot required — no proof, no payment.' });
-  const account = allowedPayingAccount(req, nature, String(b.account || '').trim());
-  if (!account) return res.status(400).json({ success:false, error:'Select a paying account assigned to this accounting entity.' });
-  const reconIssues = reconciliationIssues(s, nature, account), overrideReason = String(b.reconciliationOverrideReason || '').trim();
+  const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI'),card=paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
+  const account = card?creditCardName(card):allowedPayingAccount(req, nature, String(b.account || '').trim());
+  if (!account) return res.status(400).json({ success:false, error:paymentType==='Credit'?'Select the credit card used.':'Select a paying account assigned to this accounting entity.' });
+  const reconIssues = card?[]:reconciliationIssues(s, nature, account), overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
   const combinedOutstanding = round0(expenses.reduce((n,e)=>n+Math.max(0,num(e.amount)-num(e.paidAmount)),0));
   const requestedTotal = b.amount != null ? round0(num(b.amount)) : combinedOutstanding;
@@ -1060,7 +1067,7 @@ router.post('/api/expenses/batch-pay', (req, res) => {
     remaining=round0(remaining-amount); allocations.push({ expense:e, amount });
     e.account=account; e.paymentProof=proof; e.payments=Array.isArray(e.payments)?e.payments:[];
     e.payments.push({ id:'PAY-'+String(e.payments.length+1).padStart(3,'0'), batchPaymentId, batchTotal:requestedTotal, amount, date, account,
-      paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(e.paymentType||''), proof, note:String(b.note||'').trim(),
+      paymentType, creditCardId:card&&card.id||'', proof, note:String(b.note||'').trim(),
       paidBy, paidAt:new Date().toISOString(), reconciliationOverrideReason:overrideReason, reconciliationIssuesAtPayment:reconIssues });
     e.paidAmount=round0(num(e.paidAmount)+amount); e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
   });
@@ -1084,11 +1091,12 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   const b = req.body || {};
   const proof = String(b.paymentProof || e.paymentProof || '').trim();
   if (!proof) return res.status(400).json({ success: false, error: e.fundedBy === 'claimant' ? 'Reimbursement proof required — the claimant cannot be marked reimbursed without it.' : 'Payment screenshot required — no proof, no payment.' });
-  const account = String(b.account || '').trim();
-  if (!account) return res.status(400).json({ success: false, error: 'Select the account used for this payment.' });
-  const allowedAccount = allowedPayingAccount(req, e.nature, account);
-  if (!allowedAccount) return res.status(400).json({ success: false, error: 'Select a paying account assigned to this accounting entity.' });
-  const reconIssues = reconciliationIssues(s, normalizedNature(e.nature), allowedAccount);
+  const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(e.paymentType||'UPI'),card=paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
+  const account = card?creditCardName(card):String(b.account || '').trim();
+  if (!account) return res.status(400).json({ success: false, error: paymentType==='Credit'?'Select the credit card used.':'Select the account used for this payment.' });
+  const allowedAccount = card?account:allowedPayingAccount(req, e.nature, account);
+  if (!allowedAccount) return res.status(400).json({ success: false, error: paymentType==='Credit'?'Select an accessible credit card.':'Select a paying account assigned to this accounting entity.' });
+  const reconIssues = card?[]:reconciliationIssues(s, normalizedNature(e.nature), allowedAccount);
   const overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
   e.account = allowedAccount;
@@ -1108,7 +1116,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
     amount: pay,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
     account: e.account || '',
-    paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : (e.paymentType || ''),
+    paymentType, creditCardId:card&&card.id||'',
     proof,
     note: String(b.note || '').trim(),
     paidBy: (req.user && req.user.username) || 'admin',
@@ -1630,17 +1638,18 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const s = loadStore(), nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim();
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
-  if (!ledgerAccountsForNature(s, nature).some(a => a.toLowerCase() === account.toLowerCase())) return res.status(403).json({ success:false, error:'This account does not belong to the selected entity.' });
+  const creditCard=resolveCreditCard(req,account);
+  if (!creditCard&&!ledgerAccountsForNature(s, nature).some(a => a.toLowerCase() === account.toLowerCase())) return res.status(403).json({ success:false, error:'This account does not belong to the selected entity.' });
   const from = String(req.query.from || ''), to = String(req.query.to || ''), expenseNature = req.query.expenseNature ? normalizedNature(req.query.expenseNature) : '', entries = [];
   if(expenseNature&&!approvalNatures(req).includes(expenseNature))return res.status(403).json({success:false,error:'You cannot view expenses for this entity.'});
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  entries.push({ id: 'OPENING', date: account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:'', kind: 'opening', description: account===DEFAULT_COUNTER_CASH?'Opening balance effective 22 Aug 2026':'Opening balance', credit: num(openingMap[account]), debit: 0 });
+  entries.push({ id: 'OPENING', date: account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:'', kind: 'opening', description: creditCard?'Opening credit-card outstanding':(account===DEFAULT_COUNTER_CASH?'Opening balance effective 22 Aug 2026':'Opening balance'), credit: creditCard?num(creditCard.openingOutstanding):num(openingMap[account]), debit: 0 });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
   (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,by:x.createdBy}));
   (s.transfers || []).forEach(x => {
     const isOut=normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account,isIn=normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account;if(!isOut&&!isIn)return;
     const other=(isOut?(x.toNature||x.nature)+' · '+x.toAccount:(x.fromNature||x.nature)+' · '+x.fromAccount);
-    entries.push({id:x.id,date:x.date,kind:'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' '),credit:isIn?num(x.amount):0,debit:isOut?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy});
+    entries.push({id:x.id,date:x.date,kind:'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' '),credit:creditCard?(isOut?num(x.amount):0):(isIn?num(x.amount):0),debit:creditCard?(isIn?num(x.amount):0):(isOut?num(x.amount):0),proof:x.proof,note:x.note,by:x.createdBy});
   });
   // A bank ledger follows the account that moved, even when that account paid
   // an expense belonging to another entity (for example SANKI 3645 paying a
@@ -1649,7 +1658,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     const entryNature=normalizedNature(e.nature),entityLabel=' ['+entryNature+']';
     if (!approvalNatures(req).includes(entryNature)) return;
     const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
-    (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
+    (e.payments || []).filter(p => paymentIsPosted(e) && (p.account || e.account) === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:p.proof,by:p.paidBy,creditCardStatementId:p.creditCardStatementId||''}));
     (e.reimbursementPayments || []).filter(p => p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,by:p.paidBy}));
     (e.reimbursementPayments || []).filter(p => personalAccount === account).forEach(p => entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
   });
@@ -1685,7 +1694,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const preciseBalance=account===PAYTM_CLEARING_ACCOUNT;let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
-  const issues = reconciliationIssues(s, nature, account);
+  const issues = creditCard?[]:reconciliationIssues(s, nature, account);
   const finalBalance=preciseBalance?Math.round(running*100)/100:round0(running);res.json({ success:true, account, nature, expenseNature, entries:visible, balance:Math.abs(finalBalance)<.005?0:finalBalance, reconciled:issues.length===0, reconciliationIssues:issues });
 });
 

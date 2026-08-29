@@ -354,6 +354,8 @@
     function ledgerAccountsForNature(nature){ return (cfg.ledgerAccountsByNature&&cfg.ledgerAccountsByNature[nature])||accountsForNature(nature); }
     function transferAccountsForNature(nature){ return (cfg.transferAccountsByNature&&cfg.transferAccountsByNature[nature])||accountsForNature(nature); }
     function payingAccountsForNature(nature){ return (cfg.payingAccountsByNature&&cfg.payingAccountsByNature[nature])||[]; }
+    function creditCardOptions(selected){return (cfg.creditCards||[]).map(function(card){return '<option value="'+esc(card.id)+'"'+(card.id===selected||card.name===selected?' selected':'')+'>'+esc(card.name)+'</option>';}).join('');}
+    function setPaymentAccountOptions(nature,type,selected){if(type==='Credit'){el('payAcctLabel').textContent='Credit card used';el('payAcct').innerHTML='<option value="">Select credit card</option>'+creditCardOptions(selected);el('payAddAcct').style.display='none';}else{el('payAcctLabel').textContent=payMode==='reimburse'?'Reimburse from account':'Pay from account';el('payAcct').innerHTML=opts(payingAccountsForNature(nature),selected);el('payAddAcct').style.display='';}}
     function reimbursementAccountOptions(){
       var labels={};(cfg.approvalNatures||[]).forEach(function(n){(payingAccountsForNature(n)||[]).forEach(function(a){labels[a]=labels[a]||[];if(labels[a].indexOf(n)<0)labels[a].push(n);});});
       return Object.keys(labels).sort().map(function(a){return '<option value="'+esc(a)+'">'+esc(a)+' — '+esc(labels[a].join('/'))+'</option>';}).join('');
@@ -773,8 +775,8 @@
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
-      el('payAcct').innerHTML = opts(payingAccountsForNature(e.nature||'SANKI'));
       var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').max=totalDue;el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
+      setPaymentAccountOptions(e.nature||'SANKI',el('payType').value,e.creditCardId||e.account||'');
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
       el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';
       el('payDlg').showModal();
@@ -809,6 +811,7 @@
       el('payDate').value=today();el('payType').value='UPI';el('payNote').value='';el('payFile').value='';el('payPrev').style.display='none';el('payGo').disabled=true;el('payMsg').textContent='';el('payDlg').showModal();
     };
     el('payCancel').addEventListener('click', function(){ el('payDlg').close(); });
+    el('payType').addEventListener('change',function(){var e=expensesById[payId]||{};setPaymentAccountOptions(e.nature||'SANKI',this.value,'');});
     el('payAddAcct').addEventListener('click', function(){
       if(!cfg.isAdmin){ requestAccount(); return; }
       var name=prompt('New paying account name (for example, HDFC Bank 1234):');
@@ -832,7 +835,7 @@
       var isBatch=selected.length>1;
       var endpoint=payMode==='batch-reimburse'?'/api/expenses/reimbursements/batch':(isBatch?'/api/expenses/batch-pay':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay')));
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ expenseIds:selected,paymentProof:payUrl, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
+        body:JSON.stringify({ expenseIds:selected,paymentProof:payUrl, account:el('payAcct').value,creditCardId:el('payType').value==='Credit'?el('payAcct').value:'',amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
         if(d.success){ el('payDlg').close(); if(payMode==='reimburse'||payMode==='batch-reimburse') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg(payMode==='batch-reimburse'?'Selected expenses reimbursed together.':'Payment and proof saved.', true); }
         else {el('payMsg').textContent = d.error||'Could not pay.';if(d.requiresOverride){el('payOverrideWrap').style.display='';el('payOverrideReason').focus();}}
       });

@@ -810,6 +810,18 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="bs_reconcile"/);
 });
 
+test('an approved expense can post to a selected credit-card liability and Account Ledgers',()=>{
+  fs.writeFileSync(path.join(tempDir,'credit-cards.json'),JSON.stringify({cards:{'CC-TEST':{id:'CC-TEST',name:'HDFC Regalia',last4:'4321',openingOutstanding:1000,active:true}},statements:{},payments:[],merchantRules:{},audit:[]}));
+  const created=invoke('POST','/api/expenses',{body:{vendor:'Card Vendor',particulars:'Card purchase',amount:321,billPhoto:'/api/expenses/photo/card-bill.jpg',paymentType:'Credit'}}).body.expense;
+  invoke('POST','/api/expenses/:id',{role:'owner',params:{id:created.id},body:{ledger:'FOOD EXPENSE'}});
+  invoke('POST','/api/expenses/:id/approve',{role:'owner',params:{id:created.id}});
+  const paid=invoke('POST','/api/expenses/:id/pay',{role:'owner',params:{id:created.id},body:{paymentType:'Credit',creditCardId:'CC-TEST',account:'CC-TEST',paymentProof:'/api/expenses/photo/card-proof.jpg'}});
+  assert.equal(paid.status,200,JSON.stringify(paid.body));assert.equal(paid.body.expense.status,'paid');assert.equal(paid.body.expense.payments.at(-1).account,'HDFC Regalia 4321');assert.equal(paid.body.expense.payments.at(-1).creditCardId,'CC-TEST');
+  const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;assert.ok(config.creditCards.some(card=>card.id==='CC-TEST'));assert.ok(config.ledgerAccountsByNature.SANKI.includes('HDFC Regalia 4321'));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'HDFC Regalia 4321'}});assert.equal(ledger.status,200,JSON.stringify(ledger.body));assert.equal(ledger.body.balance,1321);assert.ok(ledger.body.entries.some(row=>row.id.startsWith(created.id+'/')&&row.credit===321));
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Credit card used/);assert.match(html,/creditCardId:el\('payType'\)\.value==='Credit'/);
+});
+
 test('bank statement rows are normalized from cumulative Excel exports', () => {
   const file=path.join(tempDir,'axis-3645.xlsx'),sheet=XLSX.utils.json_to_sheet([
     {Date:'24/08/2026',Narration:'UPI reimbursement',Reference:'UTR720',Debit:'720.00',Credit:'',Balance:'1527.00'},
