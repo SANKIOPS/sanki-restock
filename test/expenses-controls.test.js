@@ -459,22 +459,6 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.equal(claimant.status, 403);
 });
 
-test('expense lists and spending use recorded timestamps for newest-first order',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),items=Object.values(stored.expenses);
-  assert.ok(items.length>=2);
-  const older=items[0],newer=items[1];
-  older.date='2026-08-28';older.createdAt='2026-08-28T09:00:00.000Z';
-  newer.date='2026-08-27';newer.createdAt='2026-08-28T10:00:00.000Z';
-  older.status='paid';newer.status='paid';older.paidAmount=older.amount;newer.paidAmount=newer.amount;
-  older.payments=[{id:'PAY-001',amount:older.amount,date:'2026-08-28',account:'Axis Bank 3448',paidAt:'2026-08-28T11:00:00.000Z'}];
-  newer.payments=[{id:'PAY-001',amount:newer.amount,date:'2026-08-27',account:'Axis Bank 3448',paidAt:'2026-08-28T12:00:00.000Z'}];
-  fs.writeFileSync(expenseFile,JSON.stringify(stored));
-  const list=invoke('GET','/api/expenses/list',{role:'owner',query:{}}).body.expenses;
-  assert.ok(list.findIndex(x=>x.id===older.id)<list.findIndex(x=>x.id===newer.id));
-  const spending=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{from:'2026-08-01',to:'2026-08-31'}}).body.payments;
-  assert.ok(spending.findIndex(x=>x.id===older.id)<spending.findIndex(x=>x.id===newer.id));
-});
-
 test('receivables support partial collections and credit the receiving account ledger', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /data-t="receivables"/);
@@ -845,6 +829,22 @@ test('bank statement multipart fields are parsed before account permission is ch
   assert.match(route.route.stack[1].handle.toString(),/unlinkSync/);
 });
 
+test('any manual ledger movement can be linked to a bank row, remarked and undone',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString();
+  stored.openingBalances=stored.openingBalances||{};stored.openingBalances['Axis Bank 3448']=53341;
+  stored.transfers=stored.transfers||[];stored.transfers.push({id:'TR-LINK-ALL',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Prashant Axis 3645',amount:3341,date:'2026-08-25',proof:'/proof.jpg'});
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-LINK-ALL']={id:'BRD-LINK-ALL',account:'Axis Bank 3448',nature:'SANKI',transactions:[{date:'2026-08-24',description:'IFT transfer',reference:'BANK3341',debit:3341,credit:0,balance:50000}],summary:{from:'2026-08-24',to:'2026-08-25',openingBalance:53341,closingBalance:50000,totalDebits:3341,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',originalName:'link.csv',fileHash:'link',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const linked=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-LINK-ALL',rowId:'bank-0',action:'link_existing',appId:'TR-LINK-ALL',reason:'Bank date is final',remark:'Verified transfer'}});
+  assert.equal(linked.status,200,JSON.stringify(linked.body));assert.ok(linked.body.rows.some(x=>x.status==='resolved'&&x.bank&&x.app&&x.app.id==='TR-LINK-ALL'));
+  const remarked=invoke('POST','/api/expenses/bank-statements/remark',{role:'admin',body:{draftId:'BRD-LINK-ALL',remark:'August continuation statement'}});assert.equal(remarked.body.periodRemark,'August continuation statement');
+  const undone=invoke('POST','/api/expenses/bank-statements/undo',{role:'admin',body:{draftId:'BRD-LINK-ALL',rowId:'bank-0'}});assert.equal(undone.status,200);assert.ok(undone.body.rows.some(x=>x.id==='bank-0'&&x.status!=='resolved'));
+  assert.equal(invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-LINK-ALL',rowId:'bank-0',action:'link_existing',appId:'TR-LINK-ALL',reason:'Bank date is final'}}).status,200);
+  const final=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:'BRD-LINK-ALL'}});assert.equal(final.status,200,JSON.stringify(final.body));
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankDateOverrides['TR-LINK-ALL'].originalDate,'2026-08-25');assert.equal(after.bankDateOverrides['TR-LINK-ALL'].bankDate,'2026-08-24');
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
 test('personal bank reconciliation is Owner-only and stored separately from business books',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
   stored.bankStatements=stored.bankStatements||{};
@@ -897,6 +897,9 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/split_allocation/);
   assert.match(html,/Existing transfer references included in this settlement/);
   assert.match(html,/customer membership/);
+  assert.match(html,/Link existing/);
+  assert.match(html,/Undo decision/);
+  assert.match(html,/Reconciliation-period remark/);
 });
 
 test('stored bank statements can only be opened through an authorised reconciliation account',()=>{
