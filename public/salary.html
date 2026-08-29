@@ -85,8 +85,9 @@
     var el = function(id){ return document.getElementById(id); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); };
     var fmt = function(n){ n = Math.round((n||0)); return (n<0?'−₹':'₹') + Math.abs(n).toLocaleString('en-IN'); };
-    var MARKS = ['P','H','A','WO'];                    // cycle order (click)
-    var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'WO', 'WO':'' };
+    // WO is assigned automatically by the server when A falls on the
+    // employee's configured weekly-off day. It is not a manual choice.
+    var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'', 'WO':'' };
     var state = { view:'payroll', ym:'', data:null, employees:null, accounts:[], attendanceInfo:'', advanceFilters:{employee:'',month:'',status:'',account:''} };
 
     function pad(n){ return String(n).padStart(2,'0'); }
@@ -191,7 +192,7 @@
           '<tbody>'+body+'</tbody>'+
         '</table></div>'+
         '<div class="legend">Click a cell to cycle: '+
-          '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b class="m-WO">WO</b> Week-off · <b>·</b> clear'+
+          '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b>·</b> clear. Week-off is assigned automatically from the employee’s configured weekly-off day.'+
         '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+ 
         '<div class="conf">Attendance stores P, H, A or WO only. Payroll adds the employee’s configured monthly paid-leave allowance separately; when it is 0, every A or WO deducts salary.</div>'+ 
         '<details class="card"><summary>Bulk attendance import</summary><label>Validated JSON rows</label><textarea id="bulkAttendance" rows="8" style="width:100%" placeholder=\'[{"employeeName":"Employee name","marks":["P","A","HD"]}]\'></textarea><label><input id="confirmBulkAttendance" type="checkbox"> I confirm that supplied dates may replace existing attendance</label><button class="btn" id="saveBulkAttendance">Import this month atomically</button><div class="conf">All rows are validated before anything is saved. Blank marks clear those dates; HD is stored as Half Day.</div></details>';
