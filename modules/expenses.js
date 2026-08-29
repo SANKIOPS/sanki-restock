@@ -1657,8 +1657,19 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_advance',entity:'SANKI',description:'Salary advance · '+x.employee,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.by}));
   if (nature === 'SANKI') salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_payment',entity:'SANKI',description:'Salary payment · '+x.employeeName+' · '+x.ym,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.createdBy}));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
-  if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0}));
-  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).forEach(x=>entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Settled to '+x.bankAccount+' · Connected sales '+((x.orderIds||[]).map(n=>'#'+String(n).replace(/^#/,'')).join(', ')||'not specified')+(x.chargeAmount?' · Bank/Paytm charges ₹'+x.chargeAmount:''),credit:0,debit:num(x.grossAmount),settlement:x}));
+  if(nature==='SANKI'){
+    const automaticSales=salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account);
+    if(account===PAYTM_CLEARING_ACCOUNT){
+      const daily={};automaticSales.forEach(x=>{const day=daily[x.date]||(daily[x.date]={date:x.date,total:0,sales:[]});day.total+=num(x.amount);day.sales.push({id:x.id,orderId:x.orderId,orderNumber:x.orderNumber,amount:num(x.amount),description:x.description});});
+      Object.values(daily).forEach(x=>{const saleKeys=new Set(x.sales.flatMap(s=>[s.orderNumber,s.orderId,s.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,''))),linkedSettlements=(s.paytmSettlements||[]).filter(st=>(st.orderIds||[]).some(id=>saleKeys.has(String(id).replace(/^#/,'').replace(/^SHOPIFY\//,'')))||Math.abs(num(st.grossAmount)-x.total)<.01),knownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+num(st.chargeAmount),0)*100)/100,unknownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+Math.max(0,num(st.grossAmount)-num(st.netAmount)-num(st.chargeAmount)),0)*100)/100;entries.push({id:'PAYTM-RECEIPTS/'+x.date,date:x.date,kind:'paytm_customer_receipts',description:'Received from customers through Paytm',credit:Math.round(x.total*100)/100,debit:0,connectedSales:x.sales,paytmSummary:{knownCharges,unknownCharges,settlementIds:linkedSettlements.map(st=>st.id)}});});
+    }else automaticSales.forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0}));
+  }
+  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).forEach(x=>{
+    const bankBook=(s.bankStatements||{})[x.bankAccount]||{},bankTx=Object.values(bankBook.transactions||{}).find(t=>t.id===x.bankTransactionId),reference=String(x.bankReference||bankTx&&bankTx.reference||bankTx&&bankTx.description||x.bankTransactionId||''),net=Math.round(num(x.netAmount)*100)/100,charge=Math.round(num(x.chargeAmount)*100)/100,gross=Math.round(num(x.grossAmount||net+charge)*100)/100,unknown=Math.max(0,Math.round((gross-net-charge)*100)/100),settlement=Object.assign({},x,{bankReference:reference,unknownChargeAmount:unknown});
+    entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Settlement to '+x.bankAccount,reference,credit:0,debit:net,settlement});
+    if(charge>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm charges',reference,credit:0,debit:charge,settlement});
+    if(unknown>0)entries.push({id:x.id+'/UNKNOWN-CHARGES',date:x.date,kind:'paytm_unknown_charge',description:'Hidden / unknown Paytm charges',reference,credit:0,debit:unknown,settlement});
+  });
   // Once a bank period is finalized, its imported rows are the authoritative
   // bank ledger. Manual/app movements remain visible only after that cutoff,
   // preventing Shopify gross sales or matched expenses from doubling the bank.
@@ -1670,11 +1681,11 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   if(account===DEFAULT_COUNTER_CASH)for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&!cashEntryIsVisible(account,entries[i].date))entries.splice(i,1);
   entries.forEach(x=>{const override=(s.bankDateOverrides||{})[x.id];if(override){x.originalDate=x.date;x.date=override.bankDate;x.bankDateOverride=override;}});
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
-  let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit); x.balance = round0(running); });
+  const preciseBalance=account===PAYTM_CLEARING_ACCOUNT;let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
   const issues = reconciliationIssues(s, nature, account);
-  res.json({ success:true, account, nature, expenseNature, entries:visible, balance:round0(running), reconciled:issues.length===0, reconciliationIssues:issues });
+  const finalBalance=preciseBalance?Math.round(running*100)/100:round0(running);res.json({ success:true, account, nature, expenseNature, entries:visible, balance:Math.abs(finalBalance)<.005?0:finalBalance, reconciled:issues.length===0, reconciliationIssues:issues });
 });
 
 function statementDate(v){if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;}const s=String(v||'').trim(),m=s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;}return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):'';}
