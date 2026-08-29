@@ -2308,6 +2308,29 @@ router.post('/api/casuals/analyze', async (req, res) => {
   }
 });
 
+function normaliseAssortmentSlot(value) {
+  return String(value || '').trim().toLowerCase()
+    .replace(/[\u00b7\u2022|:]+/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function assortmentSlotCode(value) {
+  const match = normaliseAssortmentSlot(value).match(/^([a-z]+\s*\d+)\b/);
+  return match ? match[1].replace(/\s+/g, '') : '';
+}
+
+function resolveAssortmentSlot(value, slots) {
+  const normalised = normaliseAssortmentSlot(value);
+  if (!normalised || normalised === 'no match') return null;
+  const exact = slots.find(slot => normaliseAssortmentSlot(slot.name) === normalised);
+  if (exact) return exact;
+  const code = assortmentSlotCode(value);
+  if (!code) return null;
+  const matches = slots.filter(slot => assortmentSlotCode(slot.name) === code);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 // Match the current batch to the named assortment approved in the simplified
 // workflow. Returns both winners and rejected alternatives with reasons, so the
 // recommendation is inspectable rather than a silent first-N shortlist.
@@ -2332,22 +2355,21 @@ router.post('/api/casuals/simple-recommend', async (req, res) => {
       slice.forEach(c => { try { items.push({ id: c.id, buffer: fs.readFileSync(path.join(CAND_DIR, c.file)), mediaType: mediaTypeForFile(c.file) }); } catch {} });
       if (items.length) scored.push(...await scoreSimpleBatch(items, plan));
     }
-    const slotMap = {};
-    plan.mix.forEach(x => { slotMap[String(x.name || '').trim().toLowerCase()] = { name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1) }; });
+    const slots = plan.mix.map(x => ({ name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1) })).filter(x => x.name);
     const byId = new Map(pool.map(c => [c.id, c]));
     const used = new Set(); const selected = [];
-    Object.values(slotMap).forEach(slot => {
-      scored.filter(x => String(x.slot || '').trim().toLowerCase() === slot.name.toLowerCase() && x.score >= 65 && !used.has(x.id))
+    slots.forEach(slot => {
+      scored.filter(x => resolveAssortmentSlot(x.slot, slots) === slot && x.score >= 65 && !used.has(x.id))
         .sort((a, b) => b.score - a.score).slice(0, slot.need).forEach(x => { used.add(x.id); selected.push({ ...publicCandidate(byId.get(x.id)), ...x, slot: slot.name }); });
     });
     const excluded = scored.filter(x => !used.has(x.id)).sort((a, b) => b.score - a.score).map(x => {
-      const c = byId.get(x.id); const recognised = slotMap[String(x.slot || '').trim().toLowerCase()];
+      const c = byId.get(x.id); const recognised = resolveAssortmentSlot(x.slot, slots);
       let why = x.excludeReason;
       if (!why && recognised) why = 'Lower score than selected alternative';
       if (!why) why = x.slot === 'No match' ? 'Outside approved assortment' : 'Does not fill an open slot';
       return { ...publicCandidate(c), ...x, excludeReason: why };
     });
-    const missing = Object.values(slotMap).map(slot => ({ slot: slot.name, required: slot.need,
+    const missing = slots.map(slot => ({ slot: slot.name, required: slot.need,
       selected: selected.filter(x => x.slot === slot.name).length })).filter(x => x.selected < x.required);
     res.json({ success: true, evaluated: scored.length, eligibleBeforeLimit: all.length, ceiling,
       selected, excluded, missing, basis: { threshold: 65, dimensions: { slotMatch: 40, brandFit: 20, marketRelevance: 15, versatility: 15, visibleFinish: 10 } } });
@@ -2631,4 +2653,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, unsafeImportIp };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, unsafeImportIp, normaliseAssortmentSlot, assortmentSlotCode, resolveAssortmentSlot };
