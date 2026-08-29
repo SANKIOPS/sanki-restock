@@ -808,6 +808,13 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="bs_reconcile"/);
 });
 
+test('credit-card creation is not swallowed by the generic expense edit route',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+  assert.match(source,/RESERVED_POST[^\n]+['"]credit-cards['"]/);
+  assert.ok(server.indexOf("require('./modules/credit-cards').router")<server.indexOf("require('./modules/expenses').router"));
+});
+
 test('bank statement rows are normalized from cumulative Excel exports', () => {
   const file=path.join(tempDir,'axis-3645.xlsx'),sheet=XLSX.utils.json_to_sheet([
     {Date:'24/08/2026',Narration:'UPI reimbursement',Reference:'UTR720',Debit:'720.00',Credit:'',Balance:'1527.00'},
