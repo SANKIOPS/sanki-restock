@@ -952,7 +952,9 @@ async function scoreSimpleBatch(items, plan) {
     const enc = await shrinkForVision(it.buffer, it.mediaType);
     content.push({ type: 'image', source: { type: 'base64', media_type: enc.mediaType, data: enc.data } });
   }
-  const slots = (plan.mix || []).map((s, i) => `${i + 1}. ${String(s.name || '').trim()} (${Math.max(1, parseInt(s.styles) || 1)} style slot${Math.max(1, parseInt(s.styles) || 1) === 1 ? '' : 's'})`).join('\n');
+  const reqBySlot = new Map((plan.requirements || []).map(x => [String(x.slotName || ''), x]));
+  const slots = (plan.mix || []).map((s, i) => { const name = String(s.name || '').trim(), q = Math.max(1, parseInt(s.styles) || 1), req = reqBySlot.get(name);
+    return `${i + 1}. ${name} (${q} style slot${q === 1 ? '' : 's'})` + (req ? `\n   Required: type=${req.type || '-'}; design=${req.design || '-'}; surface=${req.surface || '-'}; colours=${(req.colours || []).join(', ') || '-'}` : ''); }).join('\n');
   content.push({ type: 'text', text:
 `You are the senior buyer for SANKI, an Indian premium-casual fashion brand. Compare EACH candidate image against this APPROVED buy plan.
 
@@ -969,7 +971,7 @@ For each candidate return:
 5) "reason" — max 18 words explaining the score using visible evidence.
 6) "excludeReason" — if score below 65 or slot is No match, max 12 words; otherwise empty.
 
-Be strict. A generic or wrong-gender product cannot score above 64. Do not invent fabric, price, measurements, stock or demand data from a photograph.
+Be strict. For a detailed requirement, judge the visible silhouette, design construction, pattern/surface and requested colours. A strong alternative may match the design but use another colour; say so clearly in reason. A generic or wrong-gender product cannot score above 64. Do not invent fabric, price, measurements, stock or demand data from a photograph.
 Return STRICT JSON ONLY: {"items":[{"slot":"..","silhouette":"..","colour":"..","score":78,"reason":"..","excludeReason":""}, ...]} with exactly ${items.length} objects in image order.` });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
@@ -1991,6 +1993,32 @@ router.get('/api/casuals/v2-plan', (req, res) => {
 router.post('/api/casuals/v2-plan', (req, res) => {
   const s = loadStore(); s.procurementV2 = cleanV2Plan(req.body); saveStore(s);
   res.json({ success: true, plan: s.procurementV2 });
+});
+router.post('/api/casuals/v2-plan/import', (req, res) => {
+  invoiceUpload.single('file')(req, res, err => {
+    if (err) return res.status(400).json({ success: false, error: err.message || 'Could not upload table' });
+    try {
+      if (!req.file || !XLSX) throw new Error('Choose an Excel or CSV sourcing table.');
+      const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      const val = (row, names) => { const keys = Object.keys(row); const k = keys.find(x => names.includes(String(x).toLowerCase().replace(/[^a-z0-9]/g, ''))); return k ? row[k] : ''; };
+      const parseSizes = text => { const out = {}; String(text || '').split(/[,;|]/).forEach(p => { const m = p.trim().match(/^([^:=x]+)\s*[:=x]\s*(\d+)$/i); if (m && +m[2] > 0) out[m[1].trim()] = +m[2]; }); return out; };
+      let commonSizes = {};
+      const slots = raw.map((row, i) => {
+        const colours = [val(row, ['colour1','color1']), val(row, ['colour2','color2'])].map(String).map(x => x.trim()).filter(Boolean);
+        if (!colours.length) String(val(row, ['colours','colors','requiredcolours','requiredcolors']) || '').split(/[,;|]/).map(x => x.trim()).filter(Boolean).forEach(x => colours.push(x));
+        const sizes = parseSizes(val(row, ['sizepack','sizes','sizespercolour','sizespercolor']));
+        if (Object.keys(sizes).length && !Object.keys(commonSizes).length) commonSizes = sizes;
+        return { id: 'import-' + (i + 1), type: String(val(row, ['garmenttype','trousertype','type','item']) || '').trim(),
+          design: String(val(row, ['specificdesignrequired','specificdesign','designrequirement','design']) || '').trim(),
+          surface: String(val(row, ['patternsurface','pattern','surface']) || '').trim(), colours };
+      }).filter(x => x.type || x.design || x.colours.length);
+      if (!slots.length) throw new Error('No sourcing rows found. Include Garment Type, Specific Design, Pattern/Surface and Colour columns.');
+      const current = (loadStore().procurementV2 || defaultV2Plan());
+      res.json({ success: true, plan: cleanV2Plan({ ...current, sizes: Object.keys(commonSizes).length ? commonSizes : current.sizes, slots }), importedRows: slots.length });
+    } catch (e) { res.status(400).json({ success: false, error: e.message || 'Could not read sourcing table' }); }
+  });
 });
 
 router.get('/api/casuals/candidates', (req, res) => {

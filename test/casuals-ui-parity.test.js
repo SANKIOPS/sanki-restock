@@ -120,3 +120,18 @@ test('fresh procurement UI offers ZIP file and ZIP link import', () => {
   assert.match(html, /id="czZipUrl"/);
   assert.match(html, /\/api\/casuals\/candidates\/import-zip-url/);
 });
+
+test('Procurement V2 duplicates the proven workflow and adds a controlling requirement table', () => {
+  const loader = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement-v2.html'), 'utf8');
+  const base = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement-simple.html'), 'utf8');
+  const addon = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement-v2-addon.js'), 'utf8');
+  assert.match(loader, /fresh-procurement-simple\.html/);
+  assert.match(loader, /fresh-procurement-v2-addon\.js/);
+  assert.match(addon, /Detailed sourcing requirement/);
+  assert.match(addon, /v2-plan\/import/);
+  assert.match(addon, /Approve requirement table & add vendor photos/);
+  assert.match(addon, /base\.addVendor\(\)/);
+  assert.match(addon, /base\.go\(2\)/);
+  assert.match(base, /fresh-procurement-v2.*SankiProcV2Base/);
+  assert.match(base, /fresh-procurement-v2.*sanki_v2_current/);
+});
