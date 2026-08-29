@@ -103,6 +103,8 @@ test('assigned weekly off converts an absent mark only on that weekday', () => {
   assert.equal(month.attendance[created.id]['23'],'WO'); assert.equal(month.attendance[created.id]['24'],'A');
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/Weekly off day/); assert.match(html,/cal-sunday/); assert.match(html,/cal-weekoff/); assert.match(html,/attendanceCellInfo/);
+  assert.match(html,/MARK_NEXT\s*=\s*\{\s*'':'P',\s*'P':'H',\s*'H':'A',\s*'A':'',\s*'WO':''\s*\}/);
+  assert.match(html,/Week-off is assigned automatically/);
 });
 
 test('bulk attendance validates every employee before replacing supplied days',()=>{
