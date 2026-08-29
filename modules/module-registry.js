@@ -53,6 +53,7 @@ const MODULES = [
 
   { key: 'procurement', title: 'Purchases',              desc: 'Generate SKUs, landed cost, create products / add stock', icon: '📦', href: '/procurement.html',           section: 'Purchases', status: 'live',   roles: ['admin', 'procurement', 'inventory'] },
   { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Plan a buy, upload vendor catalogues, review AI selections and create vendor POs', icon: '🧠', href: '/fresh-procurement-simple.html', section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
+  { key: 'fresh-proc-v2', title: 'Procurement V2 (Trial)', desc: 'Test exact design, colourway and size-pack planning without changing the existing system', icon: '🧪', href: '/fresh-procurement-v2.html', section: 'Purchases', status: 'beta', roles: ['admin', 'procurement'] },
   { key: 'size-tracker', title: 'Size Tracker',           desc: 'Match vendor (China) size charts to SANKI target sizes before every PO', icon: '📏', href: '/size-tracker.html',      section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
   { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },

@@ -1946,6 +1946,53 @@ router.post('/api/casuals/settings', (req, res) => {
   res.json({ success: true, settings: settingsWithDefaults(s) });
 });
 
+// Procurement V2 is deliberately isolated from the live/legacy planner. It has
+// its own saved document so testing the design-slot model cannot alter the
+// founder's existing category settings, candidates, purchases or PO history.
+const V2_TROUSER_SLOTS = [
+  ['Wide-leg','Clean high-waist, flat front','Solid','Black','Beige'],
+  ['Wide-leg','Single-pleat tailored','Solid','Chocolate','Cream'],
+  ['Wide-leg','Belted or defined-waist','Solid','Black','Stone'],
+  ['Wide-leg','Soft, fluid summer drape','Solid','Navy','Powder blue'],
+  ['Straight-leg','Classic tailored straight','Fine pinstripe','Black','Charcoal'],
+  ['Straight-leg','Relaxed full-length straight','Solid','Beige','Chocolate'],
+  ['Straight-leg','Ankle-length straight','Solid','Navy','Cream'],
+  ['Relaxed/pleated','Double-pleat relaxed fit','Solid','Black','Olive'],
+  ['Relaxed/pleated','Soft-drape relaxed fit','Subtle texture','Chocolate','Beige'],
+  ['Relaxed/pleated','Elasticated-back tailored','Solid','Navy','Olive'],
+  ['Flared','Clean boot-cut','Solid','Black','Burgundy'],
+  ['Flared','Fitted upper, wider flare','Solid','Chocolate','Butter yellow'],
+  ['Pull-on summer','Fluid straight/wide pull-on','Solid','Cream','Petrol blue'],
+  ['Pull-on summer','Linen-look relaxed trouser','Linen-look texture','Beige','Olive'],
+  ['Fashion test','Elevated barrel or soft cargo','Solid/utility','Black','Burgundy']
+].map((x, i) => ({ id: 'trouser-' + (i + 1), type: x[0], design: x[1], surface: x[2], colours: [x[3], x[4]] }));
+
+function defaultV2Plan() {
+  return { version: 2, name: "Women’s trousers — initial buy", gender: 'Women', category: 'Trouser',
+    landedCost: 1100, sizes: { '28': 1, '30': 2, '32': 2, '34': 1 }, slots: V2_TROUSER_SLOTS };
+}
+function cleanV2Plan(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const sizes = {}; Object.keys(b.sizes || {}).slice(0, 20).forEach(k => {
+    const n = Math.max(0, parseInt(b.sizes[k], 10) || 0); if (n) sizes[String(k).slice(0, 16)] = n;
+  });
+  const slots = (Array.isArray(b.slots) ? b.slots : []).slice(0, 200).map((x, i) => ({
+    id: String(x.id || ('slot-' + (i + 1))).slice(0, 80), type: String(x.type || '').trim().slice(0, 100),
+    design: String(x.design || '').trim().slice(0, 180), surface: String(x.surface || '').trim().slice(0, 100),
+    colours: (Array.isArray(x.colours) ? x.colours : []).map(v => String(v || '').trim().slice(0, 60)).filter(Boolean).slice(0, 8)
+  })).filter(x => x.type || x.design || x.colours.length);
+  return { version: 2, name: String(b.name || 'Procurement V2 plan').slice(0, 120),
+    gender: String(b.gender || 'Women').slice(0, 30), category: String(b.category || 'Trouser').slice(0, 50),
+    landedCost: Math.max(0, Math.round(Number(b.landedCost) || 0)), sizes: Object.keys(sizes).length ? sizes : { '28':1,'30':2,'32':2,'34':1 }, slots };
+}
+router.get('/api/casuals/v2-plan', (req, res) => {
+  const s = loadStore(); res.json({ success: true, plan: s.procurementV2 ? cleanV2Plan(s.procurementV2) : defaultV2Plan() });
+});
+router.post('/api/casuals/v2-plan', (req, res) => {
+  const s = loadStore(); s.procurementV2 = cleanV2Plan(req.body); saveStore(s);
+  res.json({ success: true, plan: s.procurementV2 });
+});
+
 router.get('/api/casuals/candidates', (req, res) => {
   const s = loadStore();
   const active = activeCands(s);
