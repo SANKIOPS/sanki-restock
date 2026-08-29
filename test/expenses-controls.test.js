@@ -882,6 +882,47 @@ test('unrelated bank and app amounts remain separate missing entries',()=>{
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
+test('same or nearby amounts never pair automatically when date or meaningful narration differs',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='Prashant Axis 3645';
+  stored.expenses['EX-STRICT-ALOK']={id:'EX-STRICT-ALOK',date:'2026-08-24',nature:'SANKI',status:'paid',vendor:'Alok Kumar',particulars:'Vendor payment',amount:600,paidAmount:600,approvedAt:'2026-08-24T10:00:00Z',payments:[{id:'PAY-001',date:'2026-08-24',amount:600,account}]};
+  stored.expenses['EX-STRICT-FNP']={id:'EX-STRICT-FNP',date:'2026-08-26',nature:'SANKI',status:'paid',vendor:'FNP',particulars:'Flowers',amount:100,paidAmount:100,approvedAt:'2026-08-26T10:00:00Z',payments:[{id:'PAY-001',date:'2026-08-26',amount:100,account}]};
+  stored.expenses['EX-STRICT-REIM']={id:'EX-STRICT-REIM',date:'2026-08-27',nature:'SANKI',status:'paid',vendor:'Local vendor',claimant:'shivam',particulars:'Reimbursement',amount:20,paidAmount:20,approvedAt:'2026-08-27T10:00:00Z',reimbursementPayments:[{id:'REIM-001',date:'2026-08-27',amount:20,account}]};
+  stored.bankReconciliationDrafts['BRD-STRICT-MATCH']={id:'BRD-STRICT-MATCH',account,nature:'SANKI',transactions:[
+    {date:'2026-08-22',description:'UPI payment to Shivam Kumar',reference:'623437186160',debit:610,credit:0,balance:1000},
+    {date:'2026-08-28',description:'UPI payment to Tushar Kumar',reference:'624022552635',debit:100,credit:0,balance:900},
+    {date:'2026-08-28',description:'UPI payment to Ranjit Kumar',reference:'624078183564',debit:20,credit:0,balance:880}
+  ],summary:{from:'2026-08-22',to:'2026-08-28',openingBalance:1490,closingBalance:880,totalDebits:730,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'strict_identity_v2',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:'BRD-STRICT-MATCH',account}}).body;
+  assert.equal(view.summary.matched||0,0);assert.equal(view.summary.possible_match||0,0);assert.equal(view.summary.amount_mismatch||0,0);assert.equal(view.summary.missing_in_app,3);assert.ok(view.rows.filter(x=>x.status==='missing_in_bank').some(x=>x.app&&x.app.id==='EX-STRICT-ALOK/PAY-001'));assert.ok(view.rows.filter(x=>x.status==='missing_in_bank').some(x=>x.app&&x.app.id==='EX-STRICT-FNP/PAY-001'));assert.ok(view.rows.filter(x=>x.status==='missing_in_bank').some(x=>x.app&&x.app.id==='EX-STRICT-REIM/REIM-001'));
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('three owner-confirmed false matches are isolated without changing active draft decisions',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),key='preserve-axis-3645-progress-and-separate-three-false-matches',account='Prashant Axis 3645';
+  delete stored.oneTimeMigrations[key];
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
+  const savedResolution={action:'exclude',reason:'Previously reviewed by owner',remark:'Keep this completed decision',resolvedBy:'prashant',resolvedAt:'2026-08-29T10:00:00.000Z'};
+  stored.bankReconciliationDrafts['BRD-PRESERVE-PROGRESS']={id:'BRD-PRESERVE-PROGRESS',account,nature:'SANKI',transactions:[
+    {date:'2026-08-22',description:'UPI payment to Shivam Kumar',reference:'623437186160',debit:610,credit:0,balance:1000},
+    {date:'2026-08-28',description:'UPI payment to Tushar Kumar',reference:'624022552635',debit:100,credit:0,balance:900},
+    {date:'2026-08-28',description:'UPI payment to Ranjit Kumar',reference:'624078183564',debit:20,credit:0,balance:880},
+    {date:'2026-08-28',description:'Unrelated reviewed row',reference:'KEEP-RESOLUTION',debit:50,credit:0,balance:830}
+  ],summary:{from:'2026-08-22',to:'2026-08-28',openingBalance:1440,closingBalance:830,totalDebits:780,totalCredits:0,validated:true},resolutions:{'bank-3':savedResolution},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));invoke('GET','/api/expenses/config',{role:'owner'});
+  const corrected=JSON.parse(fs.readFileSync(expenseFile,'utf8')),draft=corrected.bankReconciliationDrafts['BRD-PRESERVE-PROGRESS'];
+  assert.deepEqual(draft.resolutions['bank-3'],savedResolution);assert.deepEqual(Object.keys(draft.matchingExclusions).sort(),['bank-0','bank-1','bank-2']);assert.equal(draft.matchingPolicy,undefined);assert.equal(corrected.oneTimeMigrations[key].preservedExistingResolutions,true);
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:draft.id,account}}).body;
+  assert.ok(view.rows.slice(0,3).every(x=>x.status==='missing_in_app'&&x.matchingExclusion));assert.equal(view.rows.find(x=>x.id==='bank-3').status,'resolved');
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('owner-confirmed FNP expenses migrate from SAMAST to SANKI with vendor history preserved',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),key='move-all-fnp-expenses-from-samast-to-sanki';
+  delete stored.oneTimeMigrations[key];stored.vendorsByNature.SAMAST.fnp={name:'Fnp',notes:'Flower vendor'};delete stored.vendors.fnp;stored.expenses['EX-FNP-ENTITY-FIX']={id:'EX-FNP-ENTITY-FIX',date:'2026-08-22',nature:'SAMAST',status:'paid',vendor:'Fnp',particulars:'Flowers',ledger:'Flowers',amount:100,paidAmount:100,approvedAt:'2026-08-22T10:00:00Z',payments:[{id:'PAY-001',date:'2026-08-22',amount:100,account:'Prashant Axis 3645'}]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  invoke('GET','/api/expenses/config',{role:'owner'});const corrected=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(corrected.expenses['EX-FNP-ENTITY-FIX'].nature,'SANKI');assert.equal(corrected.vendors.fnp.name,'FNP');assert.equal(corrected.vendorsByNature.SAMAST.fnp,undefined);assert.deepEqual(corrected.oneTimeMigrations[key].changedExpenses,['EX-FNP-ENTITY-FIX']);assert.ok(corrected.auditLog.some(x=>x.action==='EXPENSE_ENTITY_CORRECTED'&&x.subjectId==='EX-FNP-ENTITY-FIX'));
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
 test('discarding a temporary bank preview removes only that draft and its temporary file',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),temporaryFile=path.join(tempDir,'discard-preview.csv');
   fs.writeFileSync(temporaryFile,'temporary statement');stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-DISCARD']={id:'BRD-DISCARD',account:'Axis Bank 3448',nature:'SANKI',transactions:[],summary:{from:'2026-08-25',to:'2026-08-27'},resolutions:{'bank-0':{action:'exclude'}},temporaryFile,createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']=stored.bankStatements['Axis Bank 3448']||{transactions:{official:{id:'official'}},imports:[]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
