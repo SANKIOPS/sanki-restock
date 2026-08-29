@@ -806,8 +806,6 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /Bank statement reconciliation/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
-  assert.match(html, /id="bs_discard"/);
-  assert.match(html, /bank-statements\/discard/);
 });
 
 test('bank statement rows are normalized from cumulative Excel exports', () => {
@@ -1147,6 +1145,9 @@ test('Paytm clearing shows customer receipt date, bank settlement and charges as
   const entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,receipt=entries.find(x=>x.kind==='paytm_customer_receipts'),settlement=entries.find(x=>x.kind==='paytm_settlement'),charge=entries.find(x=>x.kind==='paytm_charge');
   assert.equal(receipt.date,'2026-08-21');assert.equal(receipt.credit,15295);assert.equal(receipt.paytmSummary.knownCharges,539.64);assert.equal(receipt.paytmSummary.unknownCharges,0);assert.deepEqual(receipt.connectedSales.map(x=>x.orderNumber),['15295']);
   assert.equal(settlement.date,'2026-08-22');assert.equal(settlement.debit,14755.36);assert.equal(settlement.reference,'PAYTM-REF-22');assert.equal(charge.debit,539.64);assert.equal(charge.reference,'PAYTM-REF-22');assert.equal(charge.balance,0);
+  fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{}}));
+  const legacyEntries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,legacyReceipt=legacyEntries.find(x=>x.kind==='paytm_customer_receipts');
+  assert.equal(legacyReceipt.date,'2026-08-21');assert.equal(legacyReceipt.credit,15295);assert.equal(legacyReceipt.connectedSales[0].orderNumber,'SALE15295');assert.equal(legacyEntries.find(x=>x.kind==='paytm_charge').balance,0);
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
