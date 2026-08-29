@@ -965,6 +965,26 @@ test('Axis Bank PDF text ignores the statement-period header and validates the t
   assert.equal(rows.statementSummary.closingBalance,56717.22);
 });
 
+test('Axis salary-account PDF reads the declared period and every debit and credit column',()=>{
+  const text=`Statement of Axis Account No: 925010025223645 for the period (From: 22-08-2026 To: 28-08-2026)
+Tran DateChq NoParticularsDebitCreditBalanceInit.
+Br
+OPENING BALANCE 5090.00
+22-08-2026UPI/P2A/660007395196/SANJAN SI/KKBK/UPI/ 2000.00 7090.001101
+22-08-2026 UPI/P2A/623409923274/CHANDER PRAKASH /UPI/FEDERAL BANK 6090.00 1000.001101
+28-08-2026 UPI/P2M/624031462183/Vaibhav Filling Stati/UPI/YES BANK LIMITED YBS 967.08 32.921101
+TRANSACTION TOTAL 7057.08 2000.00
+CLOSING BALANCE 32.92`;
+  const rows=parseBankStatementText(text);
+  assert.equal(rows.length,3);
+  assert.deepEqual(rows.map(x=>({date:x.date,debit:x.debit,credit:x.credit,balance:x.balance})),[
+    {date:'2026-08-22',debit:0,credit:2000,balance:7090},
+    {date:'2026-08-22',debit:6090,credit:0,balance:1000},
+    {date:'2026-08-28',debit:967.08,credit:0,balance:32.92}
+  ]);
+  assert.deepEqual(rows.statementSummary,{format:'Axis Bank salary-account PDF',from:'2026-08-22',to:'2026-08-28',openingBalance:5090,closingBalance:32.92,totalDebits:7057.08,totalCredits:2000,validated:true});
+});
+
 test('ICICI detailed statement preserves its transaction fields and negative balances', () => {
   const text=`Detailed
 Statement
