@@ -314,6 +314,13 @@ function loadStore() {
       const samastVendors=((s.vendorsByNature||{}).SAMAST)||{};Object.keys(samastVendors).forEach(key=>{if(isFnp(samastVendors[key]&&samastVendors[key].name||key))delete samastVendors[key];});s.vendors=s.vendors||{};s.vendors.fnp=s.vendors.fnp||{name:'FNP',notes:''};
       s.oneTimeMigrations[fnpEntityCorrectionKey]={appliedAt:new Date().toISOString(),from:'SAMAST',to:'SANKI',changedExpenses,changedOpeningPayables};saveStore(s);
     }
+    const fnpOpeningPayableResolutionKey='resolve-fnp-300-as-current-100-and-opening-payable-200';
+    if(!s.oneTimeMigrations[fnpOpeningPayableResolutionKey]){
+      const bankReference='623499417992',account='Prashant Axis 3645',updated=[],candidates=[];
+      Object.values(s.expenses||{}).forEach(e=>{if(vendorKey(e.vendor)!=='fnp'&&vendorKey(e.vendor)!=='ferns n petals'&&vendorKey(e.vendor)!=='ferns and petals')return;(e.payments||[]).forEach(p=>{if((p.account||e.account)===account&&p.date==='2026-08-22'&&Math.abs(num(p.amount)-100)<.01)candidates.push(e.id+'/'+p.id);});});
+      if(candidates.length===1)Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===account).forEach(d=>{(d.transactions||[]).forEach((row,index)=>{if(!String(row.reference||'').includes(bankReference)&&!String(row.description||'').includes(bankReference))return;if(Math.abs(num(row.debit)-300)>.01||num(row.credit)>0)return;const rowId='bank-'+index;d.resolutions=d.resolutions||{};if(d.resolutions[rowId])return;d.resolutions[rowId]={action:'opening_vendor_payable_split',reason:'FNP payment combines the ₹100 flowers expense for 22 August with ₹200 pre-system dues for 20 and 21 August',category:'',chargeCategory:'',appId:candidates[0],grossAmount:0,chargeAmount:0,paytmChargeAmount:0,hiddenChargeAmount:0,orderIds:[],transferIds:[],otherReceipts:[],principalAmount:100,openingPayableAmount:200,openingNature:'SANKI',vendor:'FNP',preSystemDates:'2026-08-20, 2026-08-21',linkedRowId:'',remark:'Linked ₹100 current FNP expense and ₹200 SANKI opening payable',linkedTransferAmount:0,by:'gaganlambasanki',at:new Date().toISOString()};updated.push({draftId:d.id,rowId,appId:candidates[0],reference:bankReference});});});
+      s.oneTimeMigrations[fnpOpeningPayableResolutionKey]={appliedAt:new Date().toISOString(),account,reference:bankReference,candidates,updated,preservedOtherResolutions:true};saveStore(s);
+    }
     if(bankChargeRepairAdded)saveStore(s);
     return s;
   }
