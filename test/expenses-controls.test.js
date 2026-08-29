@@ -916,6 +916,16 @@ test('three owner-confirmed false matches are isolated without changing active d
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
+test('existing FNP bank row is resolved as current expense plus opening payable without touching other progress',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),key='resolve-fnp-300-as-current-100-and-opening-payable-200',account='Prashant Axis 3645';
+  delete stored.oneTimeMigrations[key];stored.expenses['EX-FNP-LIVE']={id:'EX-FNP-LIVE',date:'2026-08-22',nature:'SANKI',status:'paid',vendor:'FNP',particulars:'Flowers',amount:100,paidAmount:100,approvedAt:'2026-08-22T10:00:00Z',payments:[{id:'PAY-001',date:'2026-08-22',amount:100,account}]};
+  const savedResolution={action:'exclude',reason:'Existing completed decision',by:'prashant',at:'2026-08-29T09:00:00.000Z'};stored.bankReconciliationDrafts['BRD-FNP-LIVE']={id:'BRD-FNP-LIVE',account,nature:'SANKI',transactions:[{date:'2026-08-22',description:'Ferns n petals UPI',reference:'623499417992',debit:300,credit:0,balance:1000},{date:'2026-08-22',description:'Other row',reference:'OTHER-ROW',debit:50,credit:0,balance:950}],summary:{from:'2026-08-22',to:'2026-08-22',openingBalance:1300,closingBalance:950,totalDebits:350,totalCredits:0,validated:true},resolutions:{'bank-1':savedResolution},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));invoke('GET','/api/expenses/config',{role:'owner'});const corrected=JSON.parse(fs.readFileSync(expenseFile,'utf8')),draft=corrected.bankReconciliationDrafts['BRD-FNP-LIVE'];
+  assert.deepEqual(draft.resolutions['bank-1'],savedResolution);assert.equal(draft.resolutions['bank-0'].action,'opening_vendor_payable_split');assert.equal(draft.resolutions['bank-0'].appId,'EX-FNP-LIVE/PAY-001');assert.equal(draft.resolutions['bank-0'].principalAmount,100);assert.equal(draft.resolutions['bank-0'].openingPayableAmount,200);assert.equal(draft.resolutions['bank-0'].openingNature,'SANKI');
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:draft.id,account}}).body;const row=view.rows.find(x=>x.id==='bank-0');assert.equal(row.status,'resolved');assert.equal(row.app.id,'EX-FNP-LIVE/PAY-001');assert.equal(corrected.oneTimeMigrations[key].preservedOtherResolutions,true);
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
 test('owner-confirmed FNP expenses migrate from SAMAST to SANKI with vendor history preserved',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),key='move-all-fnp-expenses-from-samast-to-sanki';
   delete stored.oneTimeMigrations[key];stored.vendorsByNature.SAMAST.fnp={name:'Fnp',notes:'Flower vendor'};delete stored.vendors.fnp;stored.expenses['EX-FNP-ENTITY-FIX']={id:'EX-FNP-ENTITY-FIX',date:'2026-08-22',nature:'SAMAST',status:'paid',vendor:'Fnp',particulars:'Flowers',ledger:'Flowers',amount:100,paidAmount:100,approvedAt:'2026-08-22T10:00:00Z',payments:[{id:'PAY-001',date:'2026-08-22',amount:100,account:'Prashant Axis 3645'}]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
