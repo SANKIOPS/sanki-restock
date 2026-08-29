@@ -1015,6 +1015,17 @@ ICICI BANK LTD`;
   assert.deepEqual(rows.statementSummary,{format:'ICICI Bank PDF',from:'2026-08-27',to:'2026-08-27',openingBalance:-2148837.66,closingBalance:-2447837.66,totalDebits:299000,totalCredits:0,validated:true});
 });
 
+test('ICICI 0425 one-time opening remains exact to paise from 22 August 2026',()=>{
+  const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2026-08-22',to:'2026-08-22'}}).body;
+  const account=balances.accounts.find(x=>x.name==='Tiana 0425');
+  assert.equal(account.opening,-2148837.66);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Tiana 0425',from:'2026-08-22',to:'2026-08-22'}}).body;
+  assert.equal(ledger.entries.find(x=>x.kind==='opening').credit,-2148837.66);
+  const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));
+  assert.equal(stored.openingBalanceDates['Tiana 0425'],'2026-08-22');
+  assert.ok(stored.oneTimeMigrations['icici-0425-opening-2026-08-22-negative-2148837-66']);
+});
+
 test('legacy finalized payments without approvedAt remain visible in their account ledger', () => {
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
   stored.expenses['EX-LEGACY-240']={id:'EX-LEGACY-240',date:'2026-08-22',nature:'SANKI',status:'paid',vendor:'Legacy vendor',particulars:'Legacy bill',amount:240,paidAmount:240,account:'Prashant Axis 3645',payments:[{id:'PAY-001',amount:240,date:'2026-08-22',account:'Prashant Axis 3645',proof:'/api/expenses/photo/legacy-240.jpg',paidBy:'prashant'}]};
