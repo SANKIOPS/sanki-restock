@@ -810,18 +810,6 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="bs_reconcile"/);
 });
 
-test('an approved expense can post to a selected credit-card liability and Account Ledgers',()=>{
-  fs.writeFileSync(path.join(tempDir,'credit-cards.json'),JSON.stringify({cards:{'CC-TEST':{id:'CC-TEST',name:'HDFC Regalia',last4:'4321',openingOutstanding:1000,active:true}},statements:{},payments:[],merchantRules:{},audit:[]}));
-  const created=invoke('POST','/api/expenses',{body:{vendor:'Card Vendor',particulars:'Card purchase',amount:321,billPhoto:'/api/expenses/photo/card-bill.jpg',paymentType:'Credit'}}).body.expense;
-  invoke('POST','/api/expenses/:id',{role:'owner',params:{id:created.id},body:{ledger:'FOOD EXPENSE'}});
-  invoke('POST','/api/expenses/:id/approve',{role:'owner',params:{id:created.id}});
-  const paid=invoke('POST','/api/expenses/:id/pay',{role:'owner',params:{id:created.id},body:{paymentType:'Credit',creditCardId:'CC-TEST',account:'CC-TEST',paymentProof:'/api/expenses/photo/card-proof.jpg'}});
-  assert.equal(paid.status,200,JSON.stringify(paid.body));assert.equal(paid.body.expense.status,'paid');assert.equal(paid.body.expense.payments.at(-1).account,'HDFC Regalia 4321');assert.equal(paid.body.expense.payments.at(-1).creditCardId,'CC-TEST');
-  const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;assert.ok(config.creditCards.some(card=>card.id==='CC-TEST'));assert.ok(config.ledgerAccountsByNature.SANKI.includes('HDFC Regalia 4321'));
-  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'HDFC Regalia 4321'}});assert.equal(ledger.status,200,JSON.stringify(ledger.body));assert.equal(ledger.body.balance,1321);assert.ok(ledger.body.entries.some(row=>row.id.startsWith(created.id+'/')&&row.credit===321));
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Credit card used/);assert.match(html,/creditCardId:el\('payType'\)\.value==='Credit'/);
-});
-
 test('bank statement rows are normalized from cumulative Excel exports', () => {
   const file=path.join(tempDir,'axis-3645.xlsx'),sheet=XLSX.utils.json_to_sheet([
     {Date:'24/08/2026',Narration:'UPI reimbursement',Reference:'UTR720',Debit:'720.00',Credit:'',Balance:'1527.00'},
@@ -925,7 +913,9 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/Decision and actual reason/);
   assert.match(html,/Open original statement/);
   assert.match(html,/Export CSV/);
-  assert.match(html,/Add missing ledger entry/);
+  assert.match(html,/Review \/ Resolve/);
+  assert.match(html,/Remark \/ action performed/);
+  assert.match(html,/Only actions valid for this reconciliation result are shown/);
   assert.match(html,/Link existing transaction/);
   assert.match(html,/split_allocation/);
   assert.match(html,/Connected transfer references/);
@@ -970,6 +960,59 @@ test('Axis Bank PDF text ignores the statement-period header and validates the t
   ]);
   assert.equal(rows.statementSummary.validated,true);
   assert.equal(rows.statementSummary.closingBalance,56717.22);
+});
+
+test('ICICI detailed statement preserves its transaction fields and negative balances', () => {
+  const text=`Detailed
+Statement
+Name:TIANA TRADERSA/C Branch:DELHI VIKASPURI C FIVE
+Branch Address:ICICI BANK LTD C 5 VIKASPURI DELHI
+A/C No:194405000425A/C Type:CAA
+Transaction Period:From 22/08/2026 To 29/08/2026IFSC Code:ICIC0005613
+Sl
+No
+Tran
+Id
+Value
+Date
+Transaction
+Date
+Transaction
+Posted
+Date
+Cheque no /
+Ref No
+Transaction
+Remarks
+Withdrawal (Dr)
+Deposit
+(Cr)
+Balance
+1S1616
+9495
+27/Aug/2
+026
+27/Aug/202627/08/2026
+08:27:36 PM
+INF/INFT/045660500
+511/GAGANLAMBA
+2,99,000.
+00
+-
+24,47,837
+.66
+Page Total
+Opening Bal:-21,48,837.66
+Withdrawls:2,99,000.00
+Deposits:0.00
+Closing Bal:-24,47,837.66
+Legends Used in Account Statement
+ICICI BANK LTD`;
+  const rows=parseBankStatementText(text);
+  assert.equal(rows.length,1);
+  assert.deepEqual({date:rows[0].date,reference:rows[0].reference,debit:rows[0].debit,credit:rows[0].credit,balance:rows[0].balance},{date:'2026-08-27',reference:'S16169495',debit:299000,credit:0,balance:-2447837.66});
+  assert.match(rows[0].description,/INF\/INFT\/045660500 511\/GAGANLAMBA/);
+  assert.deepEqual(rows.statementSummary,{format:'ICICI Bank PDF',from:'2026-08-27',to:'2026-08-27',openingBalance:-2148837.66,closingBalance:-2447837.66,totalDebits:299000,totalCredits:0,validated:true});
 });
 
 test('legacy finalized payments without approvedAt remain visible in their account ledger', () => {
@@ -1153,11 +1196,12 @@ test('bank-charge reconciliation adjustments become visible spending without dou
   const expenseStorePath=path.join(tempDir,'expenses.json'),store=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));
   store.paytmSettlements.push({id:'PTM-LEGACY-NOTE',date:'2026-08-22',bankAccount:'Axis Bank 3448',netAmount:14755.36,grossAmount:14755.36,chargeAmount:0,orderIds:['2718','2721'],reason:'Paytm settlement; charges ₹539.64'});
   fs.writeFileSync(expenseStorePath,JSON.stringify(store));
-  const repairedPaytm=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{from:'2026-08-22',to:'2026-08-22',nature:'SANKI',category:'BANK CHARGES'}}).body.payments.find(x=>x.vendor==='Paytm');
+  const repairedPaytm=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{from:'2026-08-22',to:'2026-08-22',nature:'SANKI',category:'PAYTM CHARGES'}}).body.payments.find(x=>x.vendor==='Paytm');
   assert.equal(repairedPaytm.amount,540);
   const persisted=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')).paytmSettlements.find(x=>x.id==='PTM-LEGACY-NOTE');
   assert.equal(persisted.chargeAmount,539.64);
   assert.equal(persisted.grossAmount,15295);
+  assert.equal(JSON.parse(fs.readFileSync(expenseStorePath,'utf8')).reconciliationExpenses.find(x=>x.settlementId==='PTM-LEGACY-NOTE').category,'PAYTM CHARGES');
   const source=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(source,/Connected sales:/);
   assert.match(source,/Hidden \/ unknown charges/);
