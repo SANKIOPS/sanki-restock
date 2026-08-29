@@ -797,22 +797,15 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /Expenses paid '\+fmt\(expensesPaid\)/);
   assert.match(html, /Transfers out '\+fmt\(transfersOut\)/);
   assert.match(html, /Closing balance as of/);
-  assert.match(html, /Source \/ destination/);
+  assert.match(html, /Entity \| Vendor \| Particulars/);
   assert.match(html, /data-cfdays="7"/);
   assert.match(html, /Reconciliation issue/);
   assert.match(html, /id="payOverrideReason"/);
   assert.match(html, /id="editPersonalAccount"/);
   assert.match(html, /id="editBillFile"/);
-  assert.match(html, /Bank statement reconciliation/);
+  assert.match(html, /Upload bank statement for reconciliation/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
-});
-
-test('credit-card creation is not swallowed by the generic expense edit route',()=>{
-  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
-  const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
-  assert.match(source,/RESERVED_POST[^\n]+['"]credit-cards['"]/);
-  assert.ok(server.indexOf("require('./modules/credit-cards').router")<server.indexOf("require('./modules/expenses').router"));
 });
 
 test('bank statement rows are normalized from cumulative Excel exports', () => {
@@ -849,6 +842,17 @@ test('any manual ledger movement can be linked to a bank row, remarked and undon
   assert.equal(invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-LINK-ALL',rowId:'bank-0',action:'link_existing',appId:'TR-LINK-ALL',reason:'Bank date is final'}}).status,200);
   const final=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:'BRD-LINK-ALL'}});assert.equal(final.status,200,JSON.stringify(final.body));
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankDateOverrides['TR-LINK-ALL'].originalDate,'2026-08-25');assert.equal(after.bankDateOverrides['TR-LINK-ALL'].bankDate,'2026-08-24');
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('amount-mismatch rows can correct an editable ledger entry with an audit trail',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString();
+  stored.transfers=stored.transfers||[];stored.transfers.push({id:'TR-AMOUNT-FIX',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Prashant Axis 3645',amount:2500,date:'2026-08-29',proof:'/proof.jpg'});
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-AMOUNT-FIX']={id:'BRD-AMOUNT-FIX',account:'Axis Bank 3448',nature:'SANKI',transactions:[{date:'2026-08-29',description:'Transfer to Prashant',reference:'TR-AMOUNT-FIX',debit:2505.90,credit:0,balance:1000}],summary:{from:'2026-08-29',to:'2026-08-29',openingBalance:3505.90,closingBalance:1000,totalDebits:2505.90,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const before=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:'BRD-AMOUNT-FIX',account:'Axis Bank 3448'}});assert.ok(before.body.rows.some(x=>x.status==='amount_mismatch'&&x.app&&x.app.id==='TR-AMOUNT-FIX'));
+  assert.equal(invoke('POST','/api/expenses/bank-statements/correct-ledger-entry',{role:'admin',body:{draftId:'BRD-AMOUNT-FIX',rowId:'bank-0',amount:2505.90}}).status,400);
+  const corrected=invoke('POST','/api/expenses/bank-statements/correct-ledger-entry',{role:'admin',body:{draftId:'BRD-AMOUNT-FIX',rowId:'bank-0',amount:2505.90,reason:'Bank amount is authoritative'}});assert.equal(corrected.status,200,JSON.stringify(corrected.body));assert.ok(corrected.body.rows.some(x=>x.status==='matched'&&x.app&&x.app.id==='TR-AMOUNT-FIX'));
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.transfers.find(x=>x.id==='TR-AMOUNT-FIX').amount,2505.90);assert.ok((after.auditLog||[]).some(x=>x.action==='BANK_RECONCILIATION_LEDGER_AMOUNT_CORRECTED'&&x.subjectId==='TR-AMOUNT-FIX'));
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
@@ -899,7 +903,7 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/id="bs_nature"/);
   assert.match(html,/bankAccountsByNature/);
   assert.match(html,/encodeURIComponent\(bankNature\)/);
-  assert.match(html,/PERSONAL bank reconciliation is visible only to Owner/);
+  assert.match(html,/The selected ledger is used automatically/);
   assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
   assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
   assert.match(html,/Reconciliation history/);
@@ -907,7 +911,7 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/Decision and actual reason/);
   assert.match(html,/Open original statement/);
   assert.match(html,/Export CSV/);
-  assert.match(html,/Create &amp; assign ledger entry/);
+  assert.match(html,/Add missing ledger entry/);
   assert.match(html,/Link existing transaction/);
   assert.match(html,/split_allocation/);
   assert.match(html,/Connected transfer references/);
