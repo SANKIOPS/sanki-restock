@@ -1375,10 +1375,10 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
     if(categoryFilter&&String(e.ledger||'').trim().toLowerCase()!==categoryFilter)return;
     (e.payments || []).filter(p => paymentIsPosted(e) && inRange(String(p.date || ''))).forEach(p => {
       const account = p.account || e.account;
-      if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
+      if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', reference:e.id+'/'+(p.id||'PAYMENT'), date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
     });
   });
-  (s.reconciliationExpenses||[]).filter(e=>allowed.includes(normalizedNature(e.nature))&&(!nature||normalizedNature(e.nature)===nature)&&inRange(String(e.date||''))&&(!accountFilter||String(e.account||'').toLowerCase()===accountFilter)&&(!categoryFilter||String(e.category||'').toLowerCase()===categoryFilter)).forEach(e=>payments.push({id:e.id,paymentId:e.bankTransactionId||e.adjustmentId||'',date:e.date,entity:normalizedNature(e.nature),kind:'Bank-reconciled expense',vendor:e.vendor||'Bank',claimant:'',particulars:e.particulars||e.category,category:e.category,type:e.type||defaultType(e.category||''),expenseAmount:round0(e.amount),amount:round0(e.amount),account:e.account,paymentType:'Bank statement',proof:'',billPhoto:'',qrPhoto:'',approvedAt:e.createdAt||'',approvedBy:e.createdBy||'',paidBy:e.createdBy||''}));
+  (s.reconciliationExpenses||[]).filter(e=>allowed.includes(normalizedNature(e.nature))&&(!nature||normalizedNature(e.nature)===nature)&&inRange(String(e.date||''))&&(!accountFilter||String(e.account||'').toLowerCase()===accountFilter)&&(!categoryFilter||String(e.category||'').toLowerCase()===categoryFilter)).forEach(e=>payments.push({id:e.id,paymentId:e.bankTransactionId||e.adjustmentId||'',reference:e.bankTransactionId||e.adjustmentId||e.id,date:e.date,entity:normalizedNature(e.nature),kind:'Bank-reconciled expense',vendor:e.vendor||'Bank',claimant:'',particulars:e.particulars||e.category,category:e.category,type:e.type||defaultType(e.category||''),expenseAmount:round0(e.amount),amount:round0(e.amount),account:e.account,paymentType:'Bank statement',proof:'',billPhoto:'',qrPhoto:'',approvedAt:e.createdAt||'',approvedBy:e.createdBy||'',paidBy:e.createdBy||''}));
   payments.sort((a,b)=>String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId)));
   res.json({ success:true, range:{from,to}, totalPaid:round0(payments.reduce((n,p)=>n+num(p.amount),0)), count:payments.length, payments, accounts:storedAccountNames(s) });
 });
@@ -1399,10 +1399,17 @@ router.get('/api/expenses/reimbursements', (req, res) => {
     if (status && e.reimbursementStatus !== status) return false;
     if (person && !String(e.createdBy || e.claimant || '').toLowerCase().includes(person)) return false;
     if (todayOnly && e.date !== today) return false;
-    if (from && String(e.date||'') < from) return false;
-    if (to && String(e.date||'') > to) return false;
+    // Completed reimbursements stay in history according to the reimbursement
+    // transaction date, even when the original expense belongs to an older month.
+    const activityDates=(e.reimbursementPayments||[]).map(p=>String(p.date||'')).filter(Boolean);
+    if(!activityDates.length)activityDates.push(String(e.date||''));
+    if ((from || to) && !activityDates.some(d=>(!from||d>=from)&&(!to||d<=to))) return false;
     return true;
   });
+  list = list.map(e => Object.assign({}, e, {
+    closingBalance: round0(Math.max(0, num(e.personalPaidAmount) - num(e.reimbursementAmount))),
+    reimbursementPayments: (e.reimbursementPayments || []).map(p => Object.assign({}, p, { transactionReference:e.id+'/'+p.id }))
+  }));
   list.sort((a, b) => String(b.approvedAt || b.createdAt).localeCompare(String(a.approvedAt || a.createdAt)));
   res.json({
     success: true,
