@@ -1110,7 +1110,7 @@ test('Shopify Paytm sales use clearing while store-credit and test orders never 
   const axis=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448'},role:'owner'}).body.entries;
   const clearing=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Paytm Settlement Clearing'},role:'owner'}).body.entries;
   assert.equal(axis.some(x=>String(x.id).startsWith('SHOPIFY/')),false);
-  assert.equal(clearing.some(x=>x.id==='SHOPIFY/paytm'&&x.credit===50000),true);
+  const receipt=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-08-23');assert.equal(receipt.credit,50000);assert.deepEqual(receipt.connectedSales.map(x=>x.id),['SHOPIFY/paytm']);
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   assert.equal(config.ledgerAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),true);
@@ -1135,7 +1135,17 @@ test('bank-charge reconciliation adjustments become visible spending without dou
   assert.equal(persisted.grossAmount,15295);
   const source=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(source,/Connected sales:/);
-  assert.match(source,/Bank\/Paytm charges/);
+  assert.match(source,/Hidden \/ unknown charges/);
+});
+
+test('Paytm clearing shows customer receipt date, bank settlement and charges as separate rows',()=>{
+  const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
+  fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{sale:{id:'sale-15295',name:'#SALE15295',orderNumber:'SALE15295',createdAt:'2026-08-21T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:15295,refundAmount:0}}}));
+  stored.paytmSettlements=[{id:'PTM-DISPLAY',date:'2026-08-22',bankAccount:'Axis Bank 3448',bankTransactionId:'BTX-PAYTM-DISPLAY',netAmount:14755.36,grossAmount:15295,chargeAmount:539.64,orderIds:['SALE15295'],reason:'Daily Paytm settlement'}];stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']={transactions:{paytm:{id:'BTX-PAYTM-DISPLAY',date:'2026-08-22',credit:14755.36,debit:0,reference:'PAYTM-REF-22'}},imports:[]};fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
+  const entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,receipt=entries.find(x=>x.kind==='paytm_customer_receipts'),settlement=entries.find(x=>x.kind==='paytm_settlement'),charge=entries.find(x=>x.kind==='paytm_charge');
+  assert.equal(receipt.date,'2026-08-21');assert.equal(receipt.credit,15295);assert.equal(receipt.paytmSummary.knownCharges,539.64);assert.equal(receipt.paytmSummary.unknownCharges,0);assert.deepEqual(receipt.connectedSales.map(x=>x.orderNumber),['15295']);
+  assert.equal(settlement.date,'2026-08-22');assert.equal(settlement.debit,14755.36);assert.equal(settlement.reference,'PAYTM-REF-22');assert.equal(charge.debit,539.64);assert.equal(charge.reference,'PAYTM-REF-22');assert.equal(charge.balance,0);
+  fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
 test('Telegram approval and payment keep one expense isolated through its complete lifecycle', () => {
