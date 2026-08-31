@@ -154,7 +154,10 @@ test('Procurement V2 duplicates the proven workflow and adds a controlling requi
   assert.match(addon, /base\.addVendor\(\)/);
   assert.match(addon, /base\.go\(2\)/);
   assert.match(addon, /\/api\/casuals\/v2-recommend/);
-  assert.match(addon, /manifest\.json/);
+  assert.match(addon, /ordinary vendor photos/);
+  assert.match(addon, /zero-shot-image-classification/);
+  assert.match(addon, /Xenova\/clip-vit-base-patch32/);
+  assert.match(addon, /Judging photo/);
   assert.doesNotMatch(addon, /\/api\/casuals\/analyze|\/api\/casuals\/simple-recommend/);
   assert.match(base, /fresh-procurement-v2.*SankiProcV2Base/);
   assert.match(base, /fresh-procurement-v2.*sanki_v2_current/);
