@@ -113,7 +113,7 @@ test('bill remains mandatory at approval and payment proof is mandatory for cash
 
   const expenseFile = path.join(tempDir, 'expenses.json');
   const stored = JSON.parse(fs.readFileSync(expenseFile, 'utf8'));
-  stored.expenses[id].billPhoto = '';
+  stored.expenses[id].billPhoto = '';stored.expenses[id].billPhotos=[];
   fs.writeFileSync(expenseFile, JSON.stringify(stored));
   const blockedApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id }, role: 'admin' });
   assert.equal(blockedApproval.status, 400);
@@ -130,6 +130,18 @@ test('bill remains mandatory at approval and payment proof is mandatory for cash
   const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id }, body: { account: 'Counter Cash', paymentProof: '/api/expenses/photo/cash.jpg' }, role: 'admin' });
   assert.equal(paid.status, 200);
   assert.equal(paid.body.expense.status, 'paid');
+});
+
+test('one expense preserves multiple vendor bills and multiple payment proofs',()=>{
+  const bills=['/api/expenses/photo/bill-a.jpg','/api/expenses/photo/bill-b.jpg'];
+  const made=invoke('POST','/api/expenses',{body:{ledger:'FOOD EXPENSE',amount:450,bill:'printed',billPhoto:bills[0],billPhotos:bills,vendor:'Multi Proof Vendor',paymentType:'Cash'},role:'admin'});
+  assert.equal(made.status,200);assert.deepEqual(made.body.expense.billPhotos,bills);
+  const id=made.body.expense.id;assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id},role:'admin'}).status,200);
+  const proofs=['/api/expenses/photo/pay-a.jpg','/api/expenses/photo/pay-b.jpg'];
+  const paid=invoke('POST','/api/expenses/:id/pay',{params:{id},body:{account:'Counter Cash',paymentProof:proofs[0],paymentProofs:proofs},role:'admin'});
+  assert.equal(paid.status,200);assert.deepEqual(paid.body.expense.paymentProofs,proofs);assert.deepEqual(paid.body.expense.payments.at(-1).proofs,proofs);
+  const dashboard=invoke('GET','/api/expenses/spending-dashboard',{query:{},role:'admin'}).body.payments.find(x=>x.id===id);
+  assert.deepEqual(dashboard.billPhotos,bills);assert.deepEqual(dashboard.proofs,proofs);
 });
 
 test('claimant identity is automatic and claimant-only fields are enforced server-side', () => {
@@ -296,8 +308,8 @@ test('payment dialog lists stored accounts and lets Admin or Owner add one', () 
 test('claimant list defaults to all own entities and exposes payment proof', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /<option value="">All<\/option>/);
-  assert.match(html, /paymentProof=e\.paymentProof/);
-  assert.match(html, /alt="payment proof"/);
+  assert.match(html, /paymentProofs=e\.paymentProofs/);
+  assert.match(html, /proofGallery\(paymentProofs,'Payment'\)/);
 });
 
 test('expense deep links load only the selected record and normal lists are bounded', () => {

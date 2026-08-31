@@ -65,6 +65,7 @@ const proofUpload = multer({
 
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
+function proofList(value, fallback) { return Array.from(new Set([].concat(Array.isArray(value) ? value : [], fallback || []).map(x => String(x || '').trim()).filter(Boolean))); }
 function roundCashSale(n) { const amount=num(n);return amount>0?Math.ceil(amount/10)*10:amount; }
 function cashEntryIsVisible(account,date) { return String(account||'')!==DEFAULT_COUNTER_CASH||String(date||'').slice(0,10)>=COUNTER_CASH_RESET_DATE; }
 function vendorKey(v) { return String(v || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -207,8 +208,11 @@ function loadStore() {
     s.accounts = Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS), s.accounts || []).map(rename))).filter(a => a !== 'Federal Bank 7328');
     Object.values(s.expenses || {}).forEach(e => {
       e.account = rename(e.account);
-      (e.payments || []).forEach(p => { p.account = rename(p.account); });
-      (e.reimbursementPayments || []).forEach(p => { p.account = rename(p.account); });
+      e.billPhotos=proofList(e.billPhotos,e.billPhoto);e.billPhoto=e.billPhotos[0]||'';
+      e.purchasePaymentProofs=proofList(e.purchasePaymentProofs,e.purchasePaymentProof);e.purchasePaymentProof=e.purchasePaymentProofs[0]||'';
+      e.paymentProofs=proofList(e.paymentProofs,e.paymentProof);e.paymentProof=e.paymentProofs[0]||'';
+      (e.payments || []).forEach(p => { p.account = rename(p.account);p.proofs=proofList(p.proofs,p.proof);p.proof=p.proofs[0]||''; });
+      (e.reimbursementPayments || []).forEach(p => { p.account = rename(p.account);p.proofs=proofList(p.proofs,p.proof);p.proof=p.proofs[0]||''; });
       if (!e.approvedAt || e.status === 'rejected') return;
       const recorded = (e.payments || []).reduce((n, p) => n + num(p.amount), 0);
       e.paidAmount = Math.max(num(e.paidAmount), recorded);
@@ -235,7 +239,7 @@ function loadStore() {
     s.oneTimeMigrations=s.oneTimeMigrations||{};
     if(!s.oneTimeMigrations[removeTr9Key]){const i=(s.transfers||[]).findIndex(x=>x.id==='TR-00009'),before=i>=0?s.transfers[i]:null;if(i>=0)s.transfers.splice(i,1);audit(s,null,'TRANSFER_DELETED','transfer','TR-00009',{user:'gaganlambasanki',device:'System migration',nature:before&&before.fromNature||'SANKI',account:before&&before.fromAccount||'Axis Bank 3448',before,after:null,note:'Owner confirmed removal from both account ledgers; ADV-00001 remains the salary advance record'});s.oneTimeMigrations[removeTr9Key]={appliedAt:new Date().toISOString(),result:before?'deleted':'not_found',before};saveStore(s);}
     Object.values(s.receivables || {}).forEach(x => (x.collections || []).forEach(c => { c.account = rename(c.account); }));
-    Object.values((s.procurementAccounting || {}).paymentsByPo || {}).forEach(x => (x.payments || []).forEach(p => { p.account = rename(p.account); }));
+    Object.values((s.procurementAccounting || {}).paymentsByPo || {}).forEach(x => (x.payments || []).forEach(p => { p.account = rename(p.account);p.proofs=proofList(p.proofs,p.proof);p.proof=p.proofs[0]||''; }));
     const renameBalanceKeys = map => Object.entries(ACCOUNT_RENAMES).forEach(([oldName, newName]) => {
       if (map && map[oldName] != null) { map[newName] = num(map[newName]) + num(map[oldName]); delete map[oldName]; }
     });
@@ -735,7 +739,7 @@ router.post('/api/expenses/upload', proofUpload.single('photo'), (req, res) => {
 router.get('/api/expenses/photo/:file', (req, res) => {
   const name = path.basename(String(req.params.file || ''));
   if (name.startsWith('personal-')) {
-    const s=loadStore(),url='/api/expenses/photo/'+name,linked=Object.values(s.expenses||{}).find(e=>normalizedNature(e.nature)==='PERSONAL'&&[e.billPhoto,e.qrPhoto,e.purchasePaymentProof,e.paymentProof].concat((e.payments||[]).map(p=>p.proof)).includes(url));
+    const s=loadStore(),url='/api/expenses/photo/'+name,linked=Object.values(s.expenses||{}).find(e=>normalizedNature(e.nature)==='PERSONAL'&&[].concat(e.billPhotos||[],e.qrPhoto||[],e.purchasePaymentProofs||[],e.paymentProofs||[],...(e.payments||[]).map(p=>p.proofs||[]),...(e.reimbursementPayments||[]).map(p=>p.proofs||[])).includes(url));
     if (!linked || !canViewExpense(req,linked)) return res.status(403).end();
   }
   const fp = path.join(PROOF_DIR, name);
@@ -799,10 +803,10 @@ router.post('/api/expenses', (req, res) => {
   const channel = isAdmin(req) && CHANNELS.includes(b.channel) ? b.channel : 'Shared';
   const bill = ['printed', 'handwritten'].includes(b.bill) ? b.bill : 'printed';
   const paymentType = PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI';
-  const billPhoto = String(b.billPhoto || '').trim();
+  const billPhotos = proofList(b.billPhotos,b.billPhoto), billPhoto=billPhotos[0]||'';
   const qrPhoto = String(b.qrPhoto || '').trim();
   const paidAlready = b.paidAlready === true || b.paidAlready === 'true';
-  const personalPaymentProof = String(b.personalPaymentProof || '').trim();
+  const personalPaymentProofs=proofList(b.personalPaymentProofs,b.personalPaymentProof),personalPaymentProof=personalPaymentProofs[0]||'';
   if (!billPhoto) {
     return res.status(400).json({ success: false, error: 'Bill photo is required before an expense can be submitted.' });
   }
@@ -844,19 +848,19 @@ router.post('/api/expenses', (req, res) => {
     account: '',                                  // selected by approver when payment is made
     channel, bill, fundedBy: paidAlready ? 'claimant' : 'company', paymentType,
     qrPhoto: !paidAlready && (paymentType === 'UPI' || paymentType === 'Credit') ? qrPhoto : '',
-    billPhoto,                                    // normal printed/handwritten bill
-    purchasePaymentProof: paidAlready ? personalPaymentProof : '', exceptionEvidence: '', exceptionReason: '', billNote: '',
+    billPhoto, billPhotos,                         // one payment may cover several vendor bills
+    purchasePaymentProof: paidAlready ? personalPaymentProof : '', purchasePaymentProofs:paidAlready?personalPaymentProofs:[], exceptionEvidence: '', exceptionReason: '', billNote: '',
     paidAlready,
     personalPaidAmount: paidAlready ? requestedAmount : 0,
     reimbursementStatus: paidAlready ? 'awaiting_approval' : 'not_applicable',
     reimbursementAmount: 0,
     reimbursementPayments: [],
-    paymentProof: '',                             // company payment/reimbursement proof
+    paymentProof: '', paymentProofs:[],           // company payment/reimbursement proof(s)
     status: 'pending',                            // pending → approved → paid
     paidAmount: paidAlready ? requestedAmount : 0,
     payments: paidAlready ? [{
       id: 'PAY-001', amount: requestedAmount, date: String(b.date || now.slice(0, 10)).slice(0, 10),
-      account: personalAccount, paymentType, proof: personalPaymentProof,
+      account: personalAccount, paymentType, proof: personalPaymentProof, proofs:personalPaymentProofs,
       note: String(b.paymentNote || 'Paid personally by submitter').trim(),
       paidBy: claimant, paidAt: now, personalFunds: true
     }] : [],
@@ -954,10 +958,10 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (BILLS.includes(b.bill)) e.bill = b.bill;
   // Claimant identity is immutable: it always comes from the authenticated creator.
   if (b.account != null) e.account = String(b.account).trim();
-  if (b.billPhoto != null) e.billPhoto = String(b.billPhoto).trim();
+  if (b.billPhoto != null || b.billPhotos != null) { e.billPhotos=proofList(b.billPhotos,b.billPhoto);e.billPhoto=e.billPhotos[0]||''; }
   if (b.billNote != null) e.billNote = String(b.billNote).trim();
   if (PAID_BY.includes(b.fundedBy)) e.fundedBy = b.fundedBy;
-  if (b.purchasePaymentProof != null) e.purchasePaymentProof = String(b.purchasePaymentProof).trim();
+  if (b.purchasePaymentProof != null || b.purchasePaymentProofs != null) { e.purchasePaymentProofs=proofList(b.purchasePaymentProofs,b.purchasePaymentProof);e.purchasePaymentProof=e.purchasePaymentProofs[0]||''; }
   if (b.exceptionEvidence != null) e.exceptionEvidence = String(b.exceptionEvidence).trim();
   if (b.exceptionReason != null) { e.exceptionReason = String(b.exceptionReason).trim(); e.billNote = e.exceptionReason; }
   if (b.vendor != null) {
@@ -977,15 +981,15 @@ router.post('/api/expenses/:id', (req, res, next) => {
   }
   if (e.paidAlready) {
     const personalAccount = e.paymentType === 'Cash' ? (e.claimant || e.createdBy) + ' Cash' : String(b.personalAccount != null ? b.personalAccount : (((e.payments || [])[0] || {}).account || '')).trim();
-    const personalProof = String(b.personalPaymentProof != null ? b.personalPaymentProof : (e.purchasePaymentProof || '')).trim();
+    const personalProofs=(b.personalPaymentProof!=null||b.personalPaymentProofs!=null)?proofList(b.personalPaymentProofs,b.personalPaymentProof):proofList(e.purchasePaymentProofs,e.purchasePaymentProof),personalProof=personalProofs[0]||'';
     if (!personalProof) return res.status(400).json({ success:false, error:'Personal payment proof is required.' });
     if (e.paymentType !== 'Cash' && !personalAccount) return res.status(400).json({ success:false, error:'Enter the account used for the personal payment.' });
-    e.purchasePaymentProof = personalProof;
+    e.purchasePaymentProof = personalProof;e.purchasePaymentProofs=personalProofs;
     e.payments = Array.isArray(e.payments) ? e.payments : [];
     if (!e.payments.some(p => p.personalFunds)) e.payments.unshift({ id:'PAY-001', amount:num(e.requestedAmount || e.amount), date:e.date, paidBy:e.claimant || e.createdBy, paidAt:new Date().toISOString(), personalFunds:true });
     const personalPayment = e.payments.find(p => p.personalFunds);
     if (personalPayment && (personalPayment.personalFunds || e.status === 'pending')) {
-      personalPayment.account = personalAccount; personalPayment.paymentType = e.paymentType; personalPayment.proof = personalProof; personalPayment.amount = num(e.requestedAmount || e.amount);
+      personalPayment.account = personalAccount; personalPayment.paymentType = e.paymentType; personalPayment.proof = personalProof;personalPayment.proofs=personalProofs; personalPayment.amount = num(e.requestedAmount || e.amount);
     }
     e.fundedBy='claimant';e.personalPaidAmount=num(e.requestedAmount || e.amount);e.paidAmount=e.personalPaidAmount;e.reimbursementStatus=normalizedNature(e.nature)==='PERSONAL'?'not_applicable':(e.status==='pending'?'awaiting_approval':'pending');
   } else if (wasPaidAlready) {
@@ -999,7 +1003,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   }
   if (e.paymentType === 'Cash') e.qrPhoto = '';
   if (!e.paidAlready && finalized && e.status !== 'rejected') e.status = num(e.paidAmount) >= num(e.amount) ? 'paid' : (num(e.paidAmount) > 0 ? 'partially_paid' : 'approved');
-  const tracked = ['nature','date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billNote','fundedBy','purchasePaymentProof','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
+  const tracked = ['nature','date','particulars','amount','isInstallment','requestedAmount','type','ledger','channel','paymentType','qrPhoto','bill','account','billPhoto','billPhotos','billNote','fundedBy','purchasePaymentProof','purchasePaymentProofs','vendor','paidAlready','personalPaidAmount','paidAmount','reimbursementStatus'];
   const changes = tracked.filter(k => JSON.stringify(beforeEdit[k]) !== JSON.stringify(e[k])).map(k => ({ field:k, before:beforeEdit[k] == null ? '' : beforeEdit[k], after:e[k] == null ? '' : e[k] }));
   if (changes.length) {
     e.auditHistory = Array.isArray(e.auditHistory) ? e.auditHistory : [];
@@ -1086,8 +1090,8 @@ router.post('/api/expenses/batch-pay', (req, res) => {
   if (expenses.some(e => !canApproveExpenseNature(req,e))) return res.status(403).json({ success:false, error:'You cannot pay one of the selected accounting entities.' });
   if (expenses.some(e => normalizedNature(e.nature)!==nature || vendorKey(e.vendor)!==vendor)) return res.status(400).json({ success:false, error:'Combined payments must use the same entity and vendor.' });
   if (expenses.some(e => e.paidAlready || !['approved','partially_paid'].includes(e.status) || num(e.paidAmount)>=num(e.amount))) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
-  const proof = String(b.paymentProof || '').trim();
-  if (!proof) return res.status(400).json({ success:false, error:'Payment screenshot required — no proof, no payment.' });
+  const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
+  if (!proofs.length) return res.status(400).json({ success:false, error:'Payment proof is required — no proof, no payment.' });
   const account = allowedPayingAccount(req, nature, String(b.account || '').trim());
   if (!account) return res.status(400).json({ success:false, error:'Select a paying account assigned to this accounting entity.' });
   const reconIssues = reconciliationIssues(s, nature, account), overrideReason = String(b.reconciliationOverrideReason || '').trim();
@@ -1105,9 +1109,9 @@ router.post('/api/expenses/batch-pay', (req, res) => {
     const outstanding = round0(Math.max(0,num(e.amount)-num(e.paidAmount))), amount = Math.min(outstanding,remaining);
     if (!(amount > 0)) return;
     remaining=round0(remaining-amount); allocations.push({ expense:e, amount });
-    e.account=account; e.paymentProof=proof; e.payments=Array.isArray(e.payments)?e.payments:[];
+    e.account=account; e.paymentProof=proof;e.paymentProofs=proofs; e.payments=Array.isArray(e.payments)?e.payments:[];
     e.payments.push({ id:'PAY-'+String(e.payments.length+1).padStart(3,'0'), batchPaymentId, batchTotal:requestedTotal, amount, date, account,
-      paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(e.paymentType||''), proof, note:String(b.note||'').trim(),
+      paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(e.paymentType||''), proof, proofs, note:String(b.note||'').trim(),
       paidBy, paidAt:new Date().toISOString(), reconciliationOverrideReason:overrideReason, reconciliationIssuesAtPayment:reconIssues });
     e.paidAmount=round0(num(e.paidAmount)+amount); e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
   });
@@ -1129,8 +1133,8 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   if (e.status === 'pending') return res.status(400).json({ success: false, error: 'Approve it before paying.' });
   if (e.status === 'paid') return res.status(400).json({ success: false, error: 'This expense is already fully paid.' });
   const b = req.body || {};
-  const proof = String(b.paymentProof || e.paymentProof || '').trim();
-  if (!proof) return res.status(400).json({ success: false, error: e.fundedBy === 'claimant' ? 'Reimbursement proof required — the claimant cannot be marked reimbursed without it.' : 'Payment screenshot required — no proof, no payment.' });
+  const proofs=(b.paymentProof!=null||b.paymentProofs!=null)?proofList(b.paymentProofs,b.paymentProof):proofList(e.paymentProofs,e.paymentProof),proof=proofs[0]||'';
+  if (!proofs.length) return res.status(400).json({ success: false, error: e.fundedBy === 'claimant' ? 'Reimbursement proof required — the claimant cannot be marked reimbursed without it.' : 'Payment screenshot required — no proof, no payment.' });
   const account = String(b.account || '').trim();
   if (!account) return res.status(400).json({ success: false, error: 'Select the account used for this payment.' });
   const allowedAccount = allowedPayingAccount(req, e.nature, account);
@@ -1148,7 +1152,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   if (!(pay > 0)) return res.status(400).json({ success: false, error: 'Payment amount must be greater than 0.' });
   if (pay > outstanding) return res.status(400).json({ success: false, error: 'Payment cannot exceed the outstanding amount of ₹' + round0(outstanding) + '.' });
   e.paidAmount = num(e.paidAmount) + pay;
-  e.paymentProof = proof;
+  e.paymentProof = proof;e.paymentProofs=proofs;
   e.payments = Array.isArray(e.payments) ? e.payments : [];
   e.payments.push({
     id: 'PAY-' + String(e.payments.length + 1).padStart(3, '0'),
@@ -1156,7 +1160,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
     account: e.account || '',
     paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : (e.paymentType || ''),
-    proof,
+    proof,proofs,
     note: String(b.note || '').trim(),
     paidBy: (req.user && req.user.username) || 'admin',
     paidAt: new Date().toISOString(), reconciliationOverrideReason: overrideReason,
@@ -1181,8 +1185,8 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
   if (e.reimbursementStatus !== 'pending' && e.reimbursementStatus !== 'partially_reimbursed') {
     return res.status(400).json({ success: false, error: 'This expense has no approved reimbursement pending.' });
   }
-  const proof = String(b.paymentProof || '').trim();
-  if (!proof) return res.status(400).json({ success: false, error: 'Reimbursement payment proof is required.' });
+  const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
+  if (!proofs.length) return res.status(400).json({ success: false, error: 'Reimbursement payment proof is required.' });
   const due = Math.max(0, num(e.personalPaidAmount) - num(e.reimbursementAmount));
   const amount = b.amount != null ? num(b.amount) : due;
   if (!(amount > 0) || amount > due) return res.status(400).json({ success: false, error: 'Reimbursement must be greater than 0 and cannot exceed ₹' + round0(due) + '.' });
@@ -1195,7 +1199,7 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
     id: 'REIM-' + String(e.reimbursementPayments.length + 1).padStart(3, '0'), amount,
     date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
     account: reimbursementAccount, accountNatures:reimbursementAccountNatures, paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI',
-    proof, note: String(b.note || '').trim(), paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString()
+    proof,proofs, note: String(b.note || '').trim(), paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString()
   });
   e.reimbursementStatus = e.reimbursementAmount >= e.personalPaidAmount ? 'reimbursed' : 'partially_reimbursed';
   audit(s,req,'REIMBURSEMENT_RECORDED','expense',e.id,{nature:e.nature,account:reimbursementAccount,paymentId:e.reimbursementPayments.at(-1).id,after:e.reimbursementPayments.at(-1)});
@@ -1211,8 +1215,8 @@ router.post('/api/expenses/reimbursements/batch', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can reimburse.' });
   const s=loadStore(),b=req.body||{},ids=Array.from(new Set((Array.isArray(b.expenseIds)?b.expenseIds:[]).map(x=>String(x||'').trim()).filter(Boolean)));
   if (ids.length<2) return res.status(400).json({success:false,error:'Select at least two pending expenses to reimburse together.'});
-  const proof=String(b.paymentProof||'').trim();
-  if(!proof) return res.status(400).json({success:false,error:'Reimbursement payment proof is required.'});
+  const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
+  if(!proofs.length) return res.status(400).json({success:false,error:'Reimbursement payment proof is required.'});
   const reimbursementAccount=allowedReimbursementAccount(req,b.account);
   if(!reimbursementAccount) return res.status(400).json({success:false,error:'Select an authorised company or cash account for this reimbursement.'});
   const expenses=[];
@@ -1231,7 +1235,7 @@ router.post('/api/expenses/reimbursements/batch', (req, res) => {
   expenses.forEach(({e,due})=>{
     e.reimbursementAmount=num(e.reimbursementAmount)+due;
     e.reimbursementPayments=Array.isArray(e.reimbursementPayments)?e.reimbursementPayments:[];
-    const payment={id:'REIM-'+String(e.reimbursementPayments.length+1).padStart(3,'0'),batchId,amount:due,date,account:reimbursementAccount,accountNatures:reimbursementAccountNatures,paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI',proof,note:String(b.note||'').trim(),paidBy:(req.user&&req.user.username)||'admin',paidAt};
+    const payment={id:'REIM-'+String(e.reimbursementPayments.length+1).padStart(3,'0'),batchId,amount:due,date,account:reimbursementAccount,accountNatures:reimbursementAccountNatures,paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI',proof,proofs,note:String(b.note||'').trim(),paidBy:(req.user&&req.user.username)||'admin',paidAt};
     e.reimbursementPayments.push(payment);e.reimbursementStatus='reimbursed';
     audit(s,req,'REIMBURSEMENT_RECORDED','expense',e.id,{nature:e.nature,account:reimbursementAccount,batchId,paymentId:payment.id,after:payment});
   });
@@ -1379,15 +1383,15 @@ router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can pay.' });
   const s = loadStore(), b = req.body || {}, item = procurementPayables(s, true).find(x => x.id === req.params.id);
   if (!item) return res.status(404).json({ success: false, error: 'Purchase payable not found.' });
-  const proof = String(b.paymentProof || '').trim(), account = String(b.account || '').trim(), pay = num(b.amount);
-  if (!proof) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
+  const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'', account = String(b.account || '').trim(), pay = num(b.amount);
+  if (!proofs.length) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
   const allowedAccount = allowedPayingAccount(req, 'SANKI', account);
   if (!allowedAccount) return res.status(400).json({ success: false, error: 'Select a SANKI paying account.' });
   if (!(pay > 0) || pay > item.balanceDue) return res.status(400).json({ success: false, error: 'Payment must be greater than zero and cannot exceed ₹' + item.balanceDue + '.' });
   const cfg = procurementAccounting(s), state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
   state.payments = Array.isArray(state.payments) ? state.payments : [];
   state.payments.push({ id:'PPAY-'+String(state.payments.length+1).padStart(3,'0'), amount:pay, account:allowedAccount,
-    date:String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI', proof,
+    date:String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paymentType:PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI', proof,proofs,
     note:String(b.note || '').trim(), paidBy:(req.user&&req.user.username)||'admin', paidAt:new Date().toISOString() });
   audit(s,req,'PROCUREMENT_PAYMENT_RECORDED','procurement',item.id,{nature:'SANKI',account:allowedAccount,paymentId:state.payments.at(-1).id,after:state.payments.at(-1)});saveStore(s); res.json({ success:true, payable:procurementPayables(s, true).find(x=>x.id===item.id) });
 });
@@ -1406,7 +1410,7 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
     if(categoryFilter&&String(e.ledger||'').trim().toLowerCase()!==categoryFilter)return;
     (e.payments || []).filter(p => paymentIsPosted(e) && inRange(String(p.date || ''))).forEach(p => {
       const account = p.account || e.account;
-      if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', reference:e.id+'/'+(p.id||'PAYMENT'), date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', billPhoto:e.billPhoto||'', qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
+      if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', reference:e.id+'/'+(p.id||'PAYMENT'), date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.amount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', proofs:proofList(p.proofs,p.proof||e.paymentProof), billPhoto:e.billPhoto||'',billPhotos:proofList(e.billPhotos,e.billPhoto), qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
     });
   });
   (s.reconciliationExpenses||[]).filter(e=>allowed.includes(normalizedNature(e.nature))&&(!nature||normalizedNature(e.nature)===nature)&&inRange(String(e.date||''))&&(!accountFilter||String(e.account||'').toLowerCase()===accountFilter)&&(!categoryFilter||String(e.category||'').toLowerCase()===categoryFilter)).forEach(e=>payments.push({id:e.id,paymentId:e.bankTransactionId||e.adjustmentId||'',reference:e.bankTransactionId||e.adjustmentId||e.id,date:e.date,entity:normalizedNature(e.nature),kind:'Bank-reconciled expense',vendor:e.vendor||'Bank',claimant:'',particulars:e.particulars||e.category,category:e.category,type:e.type||defaultType(e.category||''),expenseAmount:round0(e.amount),amount:round0(e.amount),account:e.account,paymentType:'Bank statement',proof:'',billPhoto:'',qrPhoto:'',approvedAt:e.createdAt||'',approvedBy:e.createdBy||'',paidBy:e.createdBy||''}));
