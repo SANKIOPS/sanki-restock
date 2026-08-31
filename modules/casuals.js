@@ -506,6 +506,7 @@ function publicCandidate(c) {
     surface: c.surface || null, suggestedSlot: c.suggestedSlot || null,
     manifest: c.manifest === true, slotSource: c.slotSource || null,
     visualMatches: c.visualMatches && typeof c.visualMatches === 'object' ? c.visualMatches : null,
+    colourSource: c.colourSource || null, colourConfidence: Number.isFinite(c.colourConfidence) ? c.colourConfidence : null,
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 // Collapse already-ordered PO line items into product cards. A supplier bill
@@ -2418,6 +2419,7 @@ function buildManifestRecommendation(candidates, plan) {
     if (plan && plan.category && c.category && tokenOverlap(c.category, plan.category) === 0) failures.push('Wrong garment category');
     if (requiredColours.length && c.colour && tokenOverlap(c.colour, requiredColours.join(' ')) === 0) failures.push('Colour is outside the approved requirement');
     if (requiredColours.length && !c.colour) pending.push('Confirm one approved colour');
+    if (requiredColours.length && c.colour && c.colourSource === 'auto') pending.push('Confirm the auto-detected colour');
     pending.push('Confirm vendor supports the fixed size pack');
     return { failures, pending, requiredColours, requiredSizes: r.sizes && typeof r.sizes === 'object' ? r.sizes : {} };
   };
@@ -2491,6 +2493,8 @@ router.post('/api/casuals/candidate/:id/procurement-meta', express.json(), (req,
   if (Object.prototype.hasOwnProperty.call(b, 'designName')) c.designName = String(b.designName || '').trim() || null;
   if (Object.prototype.hasOwnProperty.call(b, 'surface')) c.surface = String(b.surface || '').trim() || null;
   if (Object.prototype.hasOwnProperty.call(b, 'colour')) c.colour = String(b.colour || '').trim() || null;
+  if (Object.prototype.hasOwnProperty.call(b, 'colourSource')) c.colourSource = ['auto','manual','manifest'].includes(String(b.colourSource||'')) ? String(b.colourSource) : null;
+  if (Object.prototype.hasOwnProperty.call(b, 'colourConfidence')) c.colourConfidence = Math.max(0, Math.min(1, Number(b.colourConfidence)||0));
   if (b.visualMatches && typeof b.visualMatches === 'object' && !Array.isArray(b.visualMatches)) {
     c.visualMatches = Object.fromEntries(Object.entries(b.visualMatches).slice(0, 50)
       .map(([k,v]) => [String(k).slice(0, 160), Math.max(0, Math.min(1, Number(v) || 0))]));
