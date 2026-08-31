@@ -504,7 +504,8 @@ function publicCandidate(c) {
     designId: c.designId || null, designName: c.designName || null,
     sourceName: c.sourceName || null, garmentType: c.garmentType || null,
     surface: c.surface || null, suggestedSlot: c.suggestedSlot || null,
-    manifest: c.manifest === true, slotSource: c.slotSource || null,
+    manifest: c.manifest === true,
+    slotSource: c.slotSource === 'manual' && c.colourSource !== 'manual' ? null : (c.slotSource || null),
     visualMatches: c.visualMatches && typeof c.visualMatches === 'object' ? c.visualMatches : null,
     colourSource: c.colourSource || null, colourConfidence: Number.isFinite(c.colourConfidence) ? c.colourConfidence : null,
     uploadedAt: c.uploadedAt, batch: c.batch || null };
@@ -2418,14 +2419,14 @@ function buildManifestRecommendation(candidates, plan) {
     const requiredColours = Array.isArray(r.colours) ? r.colours.filter(Boolean) : [];
     if (plan && plan.category && c.category && tokenOverlap(c.category, plan.category) === 0) failures.push('Wrong garment category');
     if (requiredColours.length && c.colour && tokenOverlap(c.colour, requiredColours.join(' ')) === 0) failures.push('Colour is outside the approved requirement');
-    if (requiredColours.length && !c.colour) pending.push('Confirm one approved colour');
+    if (requiredColours.length && !c.colour) failures.push('Colour was not detected or confirmed');
     if (requiredColours.length && c.colour && c.colourSource === 'auto') pending.push('Confirm the auto-detected colour');
     pending.push('Confirm vendor supports the fixed size pack');
     return { failures, pending, requiredColours, requiredSizes: r.sizes && typeof r.sizes === 'object' ? r.sizes : {} };
   };
   eligible.forEach(c => {
     const manualSlot = c.slotSource === 'manual' ? resolveAssortmentSlot(c.suggestedSlot, slots) : null;
-    if (manualSlot) { const hard=hardCheck(c,manualSlot); manual.push({ candidate:c, slot:manualSlot, score:100, reason:'Manually assigned; hard requirements still require confirmation', hard }); return; }
+    if (manualSlot) { const hard=hardCheck(c,manualSlot); if(hard.failures.length){blocked.set(c.id,[{slot:manualSlot,hard}]);return}manual.push({ candidate:c, slot:manualSlot, score:100, reason:'Manually assigned; hard requirements still require confirmation', hard }); return; }
     const visual = c.visualMatches && typeof c.visualMatches === 'object' ? c.visualMatches : {};
     const visualMax = Math.max(0, ...Object.values(visual).map(Number).filter(Number.isFinite));
     slots.forEach(s => {
@@ -2442,7 +2443,7 @@ function buildManifestRecommendation(candidates, plan) {
       const type = tokenOverlap(c.garmentType || c.category, r.type) * 5;
       const metadataScore = colour + design + surface + type;
       const score = Math.round(Math.min(100, visualScore + metadataScore));
-      if (visualMax > 0 || metadataScore > 0) edges.push({ candidate:c, slot:s, score, hard,
+      if (visualRaw > 0 || metadataScore > 0) edges.push({ candidate:c, slot:s, score, hard,
         reason: visualMax > 0 ? 'Hard-eligible; ranked by soft targets and preferences' : 'Hard-eligible metadata match; soft preferences ranked' });
     });
   });
