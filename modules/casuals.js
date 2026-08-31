@@ -505,6 +505,7 @@ function publicCandidate(c) {
     sourceName: c.sourceName || null, garmentType: c.garmentType || null,
     surface: c.surface || null, suggestedSlot: c.suggestedSlot || null,
     manifest: c.manifest === true, slotSource: c.slotSource || null,
+    visualMatches: c.visualMatches && typeof c.visualMatches === 'object' ? c.visualMatches : null,
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 // Collapse already-ordered PO line items into product cards. A supplier bill
@@ -2409,48 +2410,66 @@ function buildManifestRecommendation(candidates, plan) {
   const slots = (Array.isArray(plan && plan.mix) ? plan.mix : []).map((x, i) => ({
     name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1), requirement: requirements[i] || {}
   })).filter(x => x.name);
-  const scored = (candidates || []).filter(c => c && !c.dupeOf && !c.ordered).map(c => {
-    // Only a founder/user assignment is binding. Automated manifest and local
-    // visual labels are hypotheses; re-score them against the approved table.
+  const eligible = (candidates || []).filter(c => c && !c.dupeOf && !c.ordered);
+  const edges = []; const manual = []; const blocked = new Map();
+  const hardCheck = (c, s) => {
+    const r = s.requirement || {}, failures = [], pending = [];
+    const requiredColours = Array.isArray(r.colours) ? r.colours.filter(Boolean) : [];
+    if (plan && plan.category && c.category && tokenOverlap(c.category, plan.category) === 0) failures.push('Wrong garment category');
+    if (requiredColours.length && c.colour && tokenOverlap(c.colour, requiredColours.join(' ')) === 0) failures.push('Colour is outside the approved requirement');
+    if (requiredColours.length && !c.colour) pending.push('Confirm one approved colour');
+    pending.push('Confirm vendor supports the fixed size pack');
+    return { failures, pending, requiredColours, requiredSizes: r.sizes && typeof r.sizes === 'object' ? r.sizes : {} };
+  };
+  eligible.forEach(c => {
     const manualSlot = c.slotSource === 'manual' ? resolveAssortmentSlot(c.suggestedSlot, slots) : null;
-    let slot = manualSlot, score = slot ? 100 : 0;
-    let reason = slot ? 'Manually assigned to this requirement' : '';
-    if (!slot) {
-      const ranked = slots.map(s => {
-        const r = s.requirement || {};
-        // Silhouette/type is deliberately a SOFT guide. Catalogue photos and
-        // vendor terminology frequently label the same trouser as pull-on,
-        // relaxed, fluid or wide-leg. A type mismatch must never exclude an
-        // otherwise useful colourway; colour, purpose/design and surface carry
-        // the decision, with manual reassignment always available in review.
-        const type = tokenOverlap(c.garmentType || c.category, r.type) * 5;
-        const design = tokenOverlap(c.designName || c.fit, r.design) * 30;
-        const surface = tokenOverlap(c.surface || c.pattern, r.surface) * 20;
-        const colours = Array.isArray(r.colours) ? r.colours.join(' ') : '';
-        const colour = tokenOverlap(c.colour, colours) * 45;
-        return { slot: s, score: Math.round(type + design + surface + colour) };
-      }).sort((a, b) => b.score - a.score);
-      if (ranked[0] && ranked[0].score >= 25) {
-        slot = ranked[0].slot; score = ranked[0].score;
-        const req = slot.requirement || {};
-        const sameType = tokenOverlap(c.garmentType || c.category, req.type) > 0;
-        reason = sameType ? 'Suitable colour, purpose/design and surface match' : 'Acceptable alternative; silhouette label differs but type is only a soft guide';
-      }
-    }
-    return { candidate: c, slot, score, reason };
+    if (manualSlot) { const hard=hardCheck(c,manualSlot); manual.push({ candidate:c, slot:manualSlot, score:100, reason:'Manually assigned; hard requirements still require confirmation', hard }); return; }
+    const visual = c.visualMatches && typeof c.visualMatches === 'object' ? c.visualMatches : {};
+    const visualMax = Math.max(0, ...Object.values(visual).map(Number).filter(Number.isFinite));
+    slots.forEach(s => {
+      const r = s.requirement || {}, colours = Array.isArray(r.colours) ? r.colours.join(' ') : '';
+      const hard = hardCheck(c, s);
+      if (hard.failures.length) { const list=blocked.get(c.id)||[]; list.push({ slot:s, hard }); blocked.set(c.id,list); return; }
+      // Visual evidence distributes the catalogue across the whole requirement
+      // table. Metadata refines it; silhouette/type remains only a 5% guide.
+      const visualRaw = Number(visual[s.name] != null ? visual[s.name] : visual[assortmentSlotCode(s.name)]) || 0;
+      const visualScore = visualMax > 0 ? (visualRaw / visualMax) * 60 : 0;
+      const colour = tokenOverlap(c.colour, colours) * 25;
+      const design = tokenOverlap(c.designName || c.fit, r.design) * 10;
+      const surface = tokenOverlap(c.surface || c.pattern, r.surface) * 5;
+      const type = tokenOverlap(c.garmentType || c.category, r.type) * 5;
+      const metadataScore = colour + design + surface + type;
+      const score = Math.round(Math.min(100, visualScore + metadataScore));
+      if (visualMax > 0 || metadataScore > 0) edges.push({ candidate:c, slot:s, score, hard,
+        reason: visualMax > 0 ? 'Hard-eligible; ranked by soft targets and preferences' : 'Hard-eligible metadata match; soft preferences ranked' });
+    });
   });
-  const used = new Set(), selected = [];
-  slots.forEach(slot => {
-    scored.filter(x => x.slot === slot && !used.has(x.candidate.id)).sort((a, b) => b.score - a.score)
-      .slice(0, slot.need).forEach(x => { used.add(x.candidate.id); selected.push({ ...publicCandidate(x.candidate), slot: slot.name, score: x.score, reason: x.reason }); });
+  const used = new Set(), selected = [], filled = new Map(slots.map(s => [s.name, 0]));
+  manual.sort((a,b) => b.score-a.score).forEach(x => {
+    if (used.has(x.candidate.id) || filled.get(x.slot.name) >= x.slot.need) return;
+    used.add(x.candidate.id); filled.set(x.slot.name, filled.get(x.slot.name)+1);
+    selected.push({ ...publicCandidate(x.candidate), slot:x.slot.name, score:x.score, reason:x.reason,
+      hardRequirements:x.hard, hierarchy:{ hardLimits:'enforced', hardRequirements:x.hard.failures.length?'failed':'pending confirmation', softTargets:'ranked', softPreferences:'ranked only' } });
   });
-  const excluded = scored.filter(x => !used.has(x.candidate.id)).map(x => ({ ...publicCandidate(x.candidate),
-    slot: x.slot ? x.slot.name : 'Needs manual slot', score: x.score, reason: x.reason,
-    excludeReason: x.slot ? 'Slot already filled by a stronger metadata match' : 'Metadata is incomplete; choose a requirement slot manually' }));
+  edges.sort((a,b) => b.score-a.score).forEach(x => {
+    if (used.has(x.candidate.id) || filled.get(x.slot.name) >= x.slot.need) return;
+    used.add(x.candidate.id); filled.set(x.slot.name, filled.get(x.slot.name)+1);
+    selected.push({ ...publicCandidate(x.candidate), slot:x.slot.name, score:x.score, reason:x.reason,
+      hardRequirements:x.hard, hierarchy:{ hardLimits:'enforced', hardRequirements:x.hard.pending.length?'pending confirmation':'met', softTargets:'ranked', softPreferences:'ranked only' } });
+  });
+  const excluded = eligible.filter(c => !used.has(c.id)).map(c => {
+    const best = edges.filter(x => x.candidate.id === c.id).sort((a,b) => b.score-a.score)[0];
+    const hardBlocked = blocked.get(c.id) || [];
+    return { ...publicCandidate(c), slot: best ? best.slot.name : 'Needs manual slot', score: best ? best.score : 0,
+      reason: best ? best.reason : '', excludeReason: best ? 'Requirement slot filled by a stronger hard-eligible match' :
+        (hardBlocked.length ? hardBlocked[0].hard.failures.join(' · ') : 'Visual evidence is insufficient; choose a requirement slot manually') };
+  });
   const missing = slots.map(slot => ({ slot: slot.name, required: slot.need, selected: selected.filter(x => x.slot === slot.name).length }))
     .filter(x => x.selected < x.required);
-  return { selected, excluded, missing, evaluated: scored.length, basis: { type: 'deterministic-manifest', paidApi: false,
-    priorities: { colour: 45, purposeDesign: 30, surface: 20, silhouetteTypeSoftGuide: 5 }, typeMismatchExcludes: false } };
+  return { selected, excluded, missing, evaluated: eligible.length, basis: { type: 'hierarchical-procurement', paidApi: false,
+    stages:['hard-limits','hard-requirements','soft-targets','soft-preferences'], hardLimits:['budget','design capacity','colourway quantity','fixed size pack','gender','category'],
+    hardRequirements:['approved colour','size-pack confirmation','manual slot lock'], softTargets:['purpose/design','surface'], softPreferences:['silhouette/type','exact wording'],
+    priorities: { visualScorecard:60, colour:25, purposeDesign:10, surface:5, silhouetteTypeSoftGuide:5 }, typeMismatchExcludes: false } };
 }
 
 router.post('/api/casuals/v2-recommend', express.json(), (req, res) => {
@@ -2468,10 +2487,14 @@ router.post('/api/casuals/candidate/:id/procurement-meta', express.json(), (req,
   const b = req.body || {};
   c.suggestedSlot = String(b.slot || '').trim() || null;
   c.slotSource = ['manual', 'visual-auto', 'manifest'].includes(String(b.slotSource || '')) ? String(b.slotSource) : 'manual';
-  c.garmentType = String(b.garmentType || '').trim() || null;
-  c.designName = String(b.designName || '').trim() || null;
-  c.surface = String(b.surface || '').trim() || null;
-  c.colour = String(b.colour || '').trim() || null;
+  if (Object.prototype.hasOwnProperty.call(b, 'garmentType')) c.garmentType = String(b.garmentType || '').trim() || null;
+  if (Object.prototype.hasOwnProperty.call(b, 'designName')) c.designName = String(b.designName || '').trim() || null;
+  if (Object.prototype.hasOwnProperty.call(b, 'surface')) c.surface = String(b.surface || '').trim() || null;
+  if (Object.prototype.hasOwnProperty.call(b, 'colour')) c.colour = String(b.colour || '').trim() || null;
+  if (b.visualMatches && typeof b.visualMatches === 'object' && !Array.isArray(b.visualMatches)) {
+    c.visualMatches = Object.fromEntries(Object.entries(b.visualMatches).slice(0, 50)
+      .map(([k,v]) => [String(k).slice(0, 160), Math.max(0, Math.min(1, Number(v) || 0))]));
+  }
   c.manifest = true; saveStore(s);
   res.json({ success: true, candidate: publicCandidate(c) });
 });
