@@ -188,6 +188,14 @@ test('Procurement V2 enforces hard colour requirements before soft visual rankin
   assert.deepEqual(result.selected[0].hardRequirements.requiredSizes,{28:1,30:2,32:2,34:1});
 });
 
+test('Procurement V2 never selects an unknown colour into a hard colourway', () => {
+  const result = buildManifestRecommendation([
+    { id:'unknown', visualMatches:{ 'R1-C1 · Black':0.99 } }
+  ], { mix:[{ name:'R1-C1 · Black', styles:1 }], requirements:[{ colours:['Black'] }] });
+  assert.equal(result.selected.length,0);
+  assert.match(result.excluded[0].excludeReason,/Colour was not detected/);
+});
+
 test('ZIP link guard identifies local and private network addresses', () => {
   ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.2', '169.254.1.1', '::1', 'fd00::1'].forEach(ip => assert.equal(unsafeImportIp(ip), true));
   assert.equal(unsafeImportIp('8.8.8.8'), false);
