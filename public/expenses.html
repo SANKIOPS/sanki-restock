@@ -211,7 +211,7 @@
       <div class="fld"><label>Note (optional)</label><input id="payNote"></div>
     </div>
     <div id="payBatchWrap" class="fld" style="display:none;margin-top:10px"><label>Include other approved expenses for this vendor</label><div id="payBatchList" class="payment-history"></div><div class="hint">Enter any amount up to the selected total. It will settle the oldest selected bill first and partially pay the next bill when required.</div></div>
-    <div class="fld" style="margin-top:10px"><label id="payProofLabel">Payment proof — required</label><input type="file" id="payFile" accept="image/*" /></div>
+    <div class="fld" style="margin-top:10px"><label id="payProofLabel">Payment proof(s) — at least one required</label><input type="file" id="payFile" accept="image/*" multiple /></div>
     <div class="fld" id="payOverrideWrap" style="display:none;margin-top:10px"><label>Urgent payment override reason — required</label><input id="payOverrideReason" placeholder="Why must this payment proceed before reconciliation is fixed?"><div class="hint">The reason is recorded permanently with the payment.</div></div>
     <img id="payPrev" class="prev" style="display:none" />
     <div class="row-actions">
@@ -235,7 +235,7 @@
 
   <dialog id="editDlg"><div class="dlg">
     <h3>Edit expense</h3><input type="hidden" id="editId">
-    <div class="grid"><div class="fld"><label>Entity</label><select id="editNature"></select></div><div class="fld"><label>Date</label><input type="date" id="editDate"></div><div class="fld"><label>Amount ₹</label><input type="number" id="editAmount" min="1"></div><div class="fld full"><label>Particulars</label><input id="editParticulars"></div><div class="fld"><label>Vendor</label><input id="editVendor"></div><div class="fld"><label>Category</label><input id="editLedger" list="approvalLedgerList"></div><div class="fld"><label>Type</label><select id="editType"></select></div><div class="fld"><label>Already paid personally?</label><select id="editPaidAlready"><option value="false">No</option><option value="true">Yes</option></select></div><div class="fld"><label>Payment type</label><select id="editPaymentType"><option>UPI</option><option>Cash</option><option>Credit</option></select></div><div class="fld" id="editPayingAccountWrap"><label>Paying account used</label><select id="editPayingAccount"></select><div class="hint">Owner-only correction. This moves the existing payment to the selected ledger.</div></div><div class="fld" id="editPersonalAccountWrap"><label>Personal account used</label><input id="editPersonalAccount" placeholder="e.g. Axis 1234"></div><div class="fld"><label>Installment?</label><select id="editInstallment"><option value="false">No</option><option value="true">Yes</option></select></div><div class="fld"><label>Total agreed ₹</label><input type="number" id="editTotal"></div><div class="fld"><label>Payment required now ₹</label><input type="number" id="editRequested"></div><div class="fld"><label>Replace bill photo</label><input type="file" id="editBillFile" accept="image/*"></div><div class="fld"><label>Replace vendor QR</label><input type="file" id="editQrFile" accept="image/*"></div><div class="fld full"><label>Replace personal payment proof</label><input type="file" id="editPersonalFile" accept="image/*"></div></div>
+    <div class="grid"><div class="fld"><label>Entity</label><select id="editNature"></select></div><div class="fld"><label>Date</label><input type="date" id="editDate"></div><div class="fld"><label>Amount ₹</label><input type="number" id="editAmount" min="1"></div><div class="fld full"><label>Particulars</label><input id="editParticulars"></div><div class="fld"><label>Vendor</label><input id="editVendor"></div><div class="fld"><label>Category</label><input id="editLedger" list="approvalLedgerList"></div><div class="fld"><label>Type</label><select id="editType"></select></div><div class="fld"><label>Already paid personally?</label><select id="editPaidAlready"><option value="false">No</option><option value="true">Yes</option></select></div><div class="fld"><label>Payment type</label><select id="editPaymentType"><option>UPI</option><option>Cash</option><option>Credit</option></select></div><div class="fld" id="editPayingAccountWrap"><label>Paying account used</label><select id="editPayingAccount"></select><div class="hint">Owner-only correction. This moves the existing payment to the selected ledger.</div></div><div class="fld" id="editPersonalAccountWrap"><label>Personal account used</label><input id="editPersonalAccount" placeholder="e.g. Axis 1234"></div><div class="fld"><label>Installment?</label><select id="editInstallment"><option value="false">No</option><option value="true">Yes</option></select></div><div class="fld"><label>Total agreed ₹</label><input type="number" id="editTotal"></div><div class="fld"><label>Payment required now ₹</label><input type="number" id="editRequested"></div><div class="fld"><label>Replace bill photo(s)</label><input type="file" id="editBillFile" accept="image/*" multiple></div><div class="fld"><label>Replace vendor QR</label><input type="file" id="editQrFile" accept="image/*"></div><div class="fld full"><label>Replace personal payment proof(s)</label><input type="file" id="editPersonalFile" accept="image/*" multiple></div></div>
     <div class="fld" id="editReasonWrap" style="margin-top:10px;display:none"><label>Reason for changing an approved or paid expense — required</label><input id="editReason" placeholder="Explain this correction for the audit history"></div>
     <div class="row-actions"><button class="btn primary" id="editGo">Save changes</button><button class="btn ghost" id="editCancel">Cancel</button></div><div class="msg" id="editMsg"></div>
   </div></dialog>
@@ -315,7 +315,7 @@
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
     var fmtBank = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrl = '', payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null;
+    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null;
     function updatePaytmChargeSplit(){if(!bankReconForm||el('brKind').value!=='paytm')return;var row=bankReconRow(bankReconForm.rowId),net=Number(row&&row.bank&&row.bank.credit||0),gross=Number(el('brGross').value||0),hidden=Number(el('brHiddenCharge').value||0);el('brPaytmNet').value=net;el('brPaytmCharge').value=Math.max(0,Number((gross-net-hidden).toFixed(2)));saveBankReconForm();}
     el('brHiddenCharge').addEventListener('input',updatePaytmChargeSplit);el('brGross').addEventListener('input',updatePaytmChargeSplit);el('brPaytmCharge').addEventListener('input',saveBankReconForm);el('brChargeCategory').addEventListener('change',saveBankReconForm);
 
@@ -432,10 +432,10 @@
         '<div class="fld" id="paymentTypeWrap"><label>How will this be paid?</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
         '<div class="fld" id="personalAccountWrap" style="display:none"><label>Account used</label><select id="f_personalaccount">'+opts(cfg.personalAccounts||[])+'</select><div class="hint">Only accounts assigned to you are available. Cash is recorded automatically as '+esc(cfg.me)+' Cash.</div></div>'+
         '<div class="fld" id="qrPhotoWrap"><label id="qrLabel">Vendor QR-code photo (required for UPI)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_qrcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_qrphoto" accept="image/*" hidden></label></div></div>'+
-        '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof (required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_personalcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_personalproof" accept="image/*" hidden></label></div></div>'+
+        '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof(s) (at least one required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_personalcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_personalproof" accept="image/*" multiple hidden></label></div></div>'+
         (cfg.isAdmin?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
         '<div class="fld"><label>Bill type</label><select id="f_bill">'+opts(cfg.bills)+'</select></div>'+
-        '<div class="fld" id="billPhotoWrap"><label>Bill photo (required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_billcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_billfile" accept="image/*" hidden></label></div></div>'+
+        '<div class="fld" id="billPhotoWrap"><label>Bill photo(s) (at least one required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_billcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_billfile" accept="image/*" multiple hidden></label></div></div>'+
       '</div>'+
       '<div class="row-actions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
       '</div>'+(cfg.isOwner?'<div class="card"><b>Telegram notifications (Owner only)</b><div class="hint">A user can link more than one Telegram account. Generate a 15-minute link, open it in the additional Telegram account and tap Start. Existing links remain active.</div><div id="telegramBotStatus" class="hint">Checking bot connection…</div><div class="row-actions"><select id="telegramUser"><option value="">Loading users…</option></select><button class="btn ghost mini" id="linkTelegram">Add another Telegram</button><button class="btn ghost mini" id="testTelegram">Test all linked accounts</button><button class="btn ghost mini" id="unlinkTelegram">Disconnect all</button><button class="btn ghost mini" id="setupTelegram">Connect existing bot</button></div><div id="telegramUserStatus" class="hint"></div><div id="telegramConnections" class="hint"></div><div id="telegramLinkResult" class="hint"></div></div>':'');
@@ -515,19 +515,24 @@
     }
     function uploadFile(input, nature){
       if(!input.files || !input.files[0]) return Promise.resolve('');
-      var fd = new FormData(); fd.append('nature',nature||(el('f_nature')?el('f_nature').value:((expensesById[payId]||{}).nature||'SANKI'))); fd.append('photo', input.files[0]);
+      return uploadOneFile(input.files[0],nature);
+    }
+    function uploadOneFile(file,nature){
+      var fd = new FormData(); fd.append('nature',nature||(el('f_nature')?el('f_nature').value:((expensesById[payId]||{}).nature||'SANKI'))); fd.append('photo',file);
       return api('/api/expenses/upload', { method:'POST', body:fd }).then(function(d){ return d.url || ''; });
     }
+    function uploadFiles(files,nature){return Promise.all(Array.prototype.slice.call(files||[]).map(function(file){return uploadOneFile(file,nature);})).then(function(urls){return urls.filter(Boolean);});}
     function chosenFile(a,b){return (el(a).files&&el(a).files[0])?el(a):el(b);}
+    function chosenFiles(a,b){return [].concat(Array.prototype.slice.call(el(a).files||[]),Array.prototype.slice.call(el(b).files||[]));}
 
     function saveExpense(){
       var ledgerVal = el('f_ledger')?el('f_ledger').value.trim():'';
       if(el('f_ledger')&&!findLedger(ledgerVal)){ setMsg('Pick an existing category.', false); return; }
       if(!el('f_vendor').value.trim()){setMsg('Enter or select a vendor name.',false);return;}
-      var billInput=chosenFile('f_billcamera','f_billfile'),qrInput=chosenFile('f_qrcamera','f_qrphoto'),personalInput=chosenFile('f_personalcamera','f_personalproof');
-      if(!billInput.files[0]){ setMsg('Attach a printed or handwritten bill photo before submitting.', false); return; }
+      var billFiles=chosenFiles('f_billcamera','f_billfile'),qrInput=chosenFile('f_qrcamera','f_qrphoto'),personalFiles=chosenFiles('f_personalcamera','f_personalproof');
+      if(!billFiles.length){ setMsg('Attach at least one printed or handwritten bill photo before submitting.', false); return; }
       var paidAlready=el('f_paidalready').value==='true', paymentType=el('f_paymenttype').value;
-      if(paidAlready&&!personalInput.files[0]){ setMsg('Attach proof of the payment you made.', false); return; }
+      if(paidAlready&&!personalFiles.length){ setMsg('Attach at least one proof of the payment you made.', false); return; }
       if(paidAlready&&paymentType!=='Cash'&&!el('f_personalaccount').value){ setMsg('No personal payment account is assigned to this user.', false); return; }
       if(!paidAlready&&paymentType==='UPI'&&!qrInput.files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
       var installment=el('f_installment').value==='true';
@@ -536,15 +541,15 @@
       if(installment&&!(Number(el('f_requestedamount').value)>0)){setMsg('Enter the installment amount being logged now.',false);return;}
       if(installment&&Number(el('f_requestedamount').value)>totalAmount){setMsg('Payment being logged now cannot exceed the total agreed amount.',false);return;}
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
-      Promise.all([uploadFile(billInput),(!paidAlready&&(paymentType==='UPI'||paymentType==='Credit')&&qrInput.files[0])?uploadFile(qrInput):Promise.resolve(''),paidAlready?uploadFile(personalInput):Promise.resolve('')]).then(function(urls){
+      Promise.all([uploadFiles(billFiles),(!paidAlready&&(paymentType==='UPI'||paymentType==='Credit')&&qrInput.files[0])?uploadFile(qrInput):Promise.resolve(''),paidAlready?uploadFiles(personalFiles):Promise.resolve([])]).then(function(urls){
         var body = {
           date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value, nature:el('f_nature').value,
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
           isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
-          paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:urls[2],personalAccount:paymentType==='Cash'?(cfg.me+' Cash'):el('f_personalaccount').value,
+          paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:(urls[2]||[])[0]||'',personalPaymentProofs:urls[2]||[],personalAccount:paymentType==='Cash'?(cfg.me+' Cash'):el('f_personalaccount').value,
           channel:cfg.isAdmin&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
-          billPhoto:urls[0], qrPhoto:urls[1]
+          billPhoto:(urls[0]||[])[0]||'',billPhotos:urls[0]||[], qrPhoto:urls[1]
         };
         return api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
       }).then(function(d){
@@ -622,8 +627,9 @@
     }
     function paymentHistory(e){
       if(!(e.payments||[]).length) return '<span class="muted">No payment recorded yet.</span>';
-      return '<div class="payment-history">'+e.payments.map(function(p){var ref=e.id+'/'+(p.id||'PAYMENT');return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'<br><span class="muted">Transaction ref: '+esc(ref)+'</span></span><b>'+fmt(p.amount)+'</b>'+(p.proof?' <img class="thumb" src="'+esc(p.proof)+'" onclick="window.open(this.src)" alt="payment proof">':'')+'</div>';}).join('')+'</div>';
+      return '<div class="payment-history">'+e.payments.map(function(p){var ref=e.id+'/'+(p.id||'PAYMENT');return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'<br><span class="muted">Transaction ref: '+esc(ref)+'</span></span><b>'+fmt(p.amount)+'</b>'+proofGallery(p.proofs||[p.proof], 'Payment')+'</div>';}).join('')+'</div>';
     }
+    function proofGallery(urls,label){return Array.from(new Set((urls||[]).filter(Boolean))).map(function(url,i){return '<span class="claim-proof"><img class="thumb" src="'+esc(url)+'" onclick="window.open(this.src)" alt="'+esc(label)+' proof">'+esc(label)+' '+(i+1)+'</span>';}).join('');}
     function expenseCard(e,rowNo){
       var approvedNow=e.amount||0,due=Math.max(0,approvedNow-(e.paidAmount||0)),contractDue=due;
       var displayedAmount=e.payingAccountAmount!=null?e.payingAccountAmount:approvedNow;
@@ -632,9 +638,9 @@
       if(!payingAccounts.length&&e.paidAmount>0&&e.account) payingAccounts.push(e.account);
       var payingAccountLabel=payingAccounts.length?payingAccounts.join(', '):'Not paid';
       var latestPayment=(e.payments||[])[(e.payments||[]).length-1],latestReference=latestPayment?(e.id+'/'+(latestPayment.id||'PAYMENT')):'';
-      var recordedPaymentWithProof=(e.payments||[]).slice().reverse().find(function(p){return !!p.proof;});
-      var paymentProof=e.paymentProof||(recordedPaymentWithProof&&recordedPaymentWithProof.proof)||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
-      var proofs=(e.billPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" alt="bill proof">Bill</span>':'')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+(paymentProof?'<span class="claim-proof"><img class="thumb" src="'+esc(paymentProof)+'" onclick="window.open(this.src)" alt="payment proof">Payment</span>':'');
+      var recordedPaymentWithProof=(e.payments||[]).slice().reverse().find(function(p){return !!p.proof||(p.proofs||[]).length;});
+      var paymentProofs=e.paymentProofs||(recordedPaymentWithProof&&(recordedPaymentWithProof.proofs||[recordedPaymentWithProof.proof]))||((e.reimbursementPayments||[]).length?(e.reimbursementPayments[e.reimbursementPayments.length-1].proofs||[e.reimbursementPayments[e.reimbursementPayments.length-1].proof]):[]);
+      var proofs=proofGallery(e.billPhotos||[e.billPhoto],'Bill')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+proofGallery(paymentProofs,'Payment');
       var audits=(e.auditHistory||[]).length?'<div class="expense-section"><b>Edit history</b>'+(e.auditHistory||[]).slice().reverse().map(function(a){return '<div class="payment-entry"><span>'+esc((a.editedAt||'').replace('T',' ').slice(0,16))+' · '+esc(a.editedBy||'')+' · '+esc(a.reason||'')+'<br><span class="muted">'+(a.changes||[]).map(function(c){return esc(c.field+': '+String(c.before)+' → '+String(c.after));}).join(' · ')+'</span></span><b>'+((a.changes||[]).length)+' field(s)</b></div>';}).join('')+'</div>':'';
       return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+(latestReference?' │ Ref '+esc(latestReference):'')+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Transaction ref: '+esc(latestReference||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
     }
@@ -667,7 +673,7 @@
       Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(b){b.addEventListener('click',function(){var v=this.dataset.days;el('sd_from').value=v==='month'?today().slice(0,8)+'01':dateDaysAgo(Number(v));el('sd_to').value=today();Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});loadSpendingDashboard();});});
       el('sd_go').addEventListener('click',function(){spendingView='expenses';loadSpendingDashboard();});el('sd_category_go').addEventListener('click',function(){spendingView='category';loadSpendingDashboard();});el('sd_nature').addEventListener('change',loadSpendingDashboard);el('sd_account').addEventListener('change',loadSpendingDashboard);el('sd_category').addEventListener('change',loadSpendingDashboard);loadSpendingDashboard();
     }
-    function spendingPaymentCard(p,rowNo){var proofs=(p.billPhoto?'<img class="thumb" src="'+esc(p.billPhoto)+'" onclick="window.open(this.src)"> ':'')+(p.qrPhoto?'<img class="thumb" src="'+esc(p.qrPhoto)+'" onclick="window.open(this.src)"> ':'')+(p.proof?'<img class="thumb" src="'+esc(p.proof)+'" onclick="window.open(this.src)">':'');return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date"><b>#'+rowNo+'</b> · '+esc(p.date)+' · '+esc(p.id)+' · '+esc(p.entity)+'</div><span class="tag">'+esc(p.paymentType||p.kind)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(p.vendor||p.particulars)+'<div class="claim-vendor">'+esc(p.account||'Unspecified account')+' · Ref '+esc(p.reference||p.paymentId||'—')+'</div></div><div class="claim-amount">'+fmt(p.amount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>'+esc(p.kind)+'</span><span>Transaction ref: '+esc(p.reference||p.paymentId||'—')+'</span><span>Claimant: '+esc(p.claimant)+'</span><span>Category: '+esc(p.category||'—')+'</span><span>Expense total: '+fmt(p.expenseAmount)+'</span><span>Approved by: '+esc(p.approvedBy||'—')+'</span><span>Paid by: '+esc(p.paidBy||'—')+'</span></div><div class="claim-proofs">'+proofs+'</div></div></details>';}
+    function spendingPaymentCard(p,rowNo){var proofs=proofGallery(p.billPhotos||[p.billPhoto],'Bill')+(p.qrPhoto?'<img class="thumb" src="'+esc(p.qrPhoto)+'" onclick="window.open(this.src)"> ':'')+proofGallery(p.proofs||[p.proof],'Payment');return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date"><b>#'+rowNo+'</b> · '+esc(p.date)+' · '+esc(p.id)+' · '+esc(p.entity)+'</div><span class="tag">'+esc(p.paymentType||p.kind)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(p.vendor||p.particulars)+'<div class="claim-vendor">'+esc(p.account||'Unspecified account')+' · Ref '+esc(p.reference||p.paymentId||'—')+'</div></div><div class="claim-amount">'+fmt(p.amount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>'+esc(p.kind)+'</span><span>Transaction ref: '+esc(p.reference||p.paymentId||'—')+'</span><span>Claimant: '+esc(p.claimant)+'</span><span>Category: '+esc(p.category||'—')+'</span><span>Expense total: '+fmt(p.expenseAmount)+'</span><span>Approved by: '+esc(p.approvedBy||'—')+'</span><span>Paid by: '+esc(p.paidBy||'—')+'</span></div><div class="claim-proofs">'+proofs+'</div></div></details>';}
     function loadSpendingDashboard(){
       api('/api/expenses/spending-dashboard?from='+el('sd_from').value+'&to='+el('sd_to').value+'&nature='+encodeURIComponent(el('sd_nature').value)+'&account='+encodeURIComponent(el('sd_account').value)+'&category='+encodeURIComponent(el('sd_category').value.trim())).then(function(d){
         if(!d.success){setMsg(d.error||'Could not load dashboard.',false);return;}
@@ -678,9 +684,8 @@
       });
     }
     function claimantCard(e){
-      var paymentProof=e.paymentProof||((e.reimbursementPayments||[]).length?e.reimbursementPayments[e.reimbursementPayments.length-1].proof:'');
-      var proofs=(e.billPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" alt="bill proof">Bill</span>':'')+
-        (paymentProof?'<span class="claim-proof"><img class="thumb" src="'+esc(paymentProof)+'" onclick="window.open(this.src)" alt="payment proof">Payment proof</span>':'');
+      var paymentProofs=e.paymentProofs||((e.reimbursementPayments||[]).length?(e.reimbursementPayments[e.reimbursementPayments.length-1].proofs||[e.reimbursementPayments[e.reimbursementPayments.length-1].proof]):[]);
+      var proofs=proofGallery(e.billPhotos||[e.billPhoto],'Bill')+proofGallery(paymentProofs,'Payment');
       return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+'</div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div>'+
         '<div class="claim-main"><div class="claim-desc">'+esc(e.particulars||'Expense')+(e.vendor?'<div class="claim-vendor">'+esc(e.vendor)+'</div>':'')+'</div><div class="claim-amount">'+fmt(e.amount)+'</div></div></summary>'+
         '<div class="claim-detail"><div class="claim-meta"><span>'+esc(e.id)+'</span>'+(e.category?'<span>Category: '+esc(e.category)+'</span>':'')+'<span>Payment: '+esc(e.paymentType||e.account||'—')+'</span></div>'+
@@ -694,7 +699,7 @@
       var type=esc(e.paymentType||e.account||'—');
       return (e.paidAlready?'<span class="tag">paid personally</span>':'<span class="tag">'+type+'</span>')+
         (e.qrPhoto?' <img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" title="vendor QR code">':'')+
-        (e.purchasePaymentProof?' <img class="thumb" src="'+esc(e.purchasePaymentProof)+'" onclick="window.open(this.src)" title="personal payment proof">':'')+
+        proofGallery(e.purchasePaymentProofs||[e.purchasePaymentProof],'Personal payment')+
         ((e.payments||[]).length?'<div class="muted" style="font-size:10px">'+(e.payments||[]).length+' payment(s)</div>':'');
     }
     // ── Category cell: static tags when locked, inline nature/type selects while pending ──
@@ -713,23 +718,23 @@
     }
     // ── Bill cell: thumbnail, or attach control for legacy pending rows ──
     function billCell(e){
-      if(e.billPhoto) return '<img class="thumb" src="'+esc(e.billPhoto)+'" onclick="window.open(this.src)" title="bill photo">';
+      if(e.billPhoto) return proofGallery(e.billPhotos||[e.billPhoto],'Bill');
       if(e.bill==='none') return '<span class="badge b-nobill" title="'+esc(e.exceptionReason||e.billNote||'')+'">no-bill exception</span> '+
         (e.purchasePaymentProof?'<img class="thumb" src="'+esc(e.purchasePaymentProof)+'" onclick="window.open(this.src)" title="claimant payment proof">':'')+
         (e.exceptionEvidence?'<img class="thumb" src="'+esc(e.exceptionEvidence)+'" onclick="window.open(this.src)" title="alternative evidence">':'');
       if(e.status==='pending'){
         return '<label class="btn mini ghost" style="cursor:pointer;margin:0">📎 Attach'+
-          '<input type="file" accept="image/*" style="display:none" onchange="attachBill(\''+e.id+'\',this)"></label>';
+          '<input type="file" accept="image/*" multiple style="display:none" onchange="attachBill(\''+e.id+'\',this)"></label>';
       }
       return '<span class="muted">—</span>';
     }
     window.attachBill = function(id, input){
       if(!input.files[0]) return;
       setMsg('uploading bill…', true);
-      uploadFile(input,(expensesById[id]||{}).nature).then(function(url){
-        if(!url){ setMsg('Upload failed.', false); return; }
-        api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ billPhoto:url }) })
-          .then(function(){ setMsg('Bill attached — you can approve now.', true); loadList(); });
+      uploadFiles(input.files,(expensesById[id]||{}).nature).then(function(urls){
+        if(!urls.length){ setMsg('Upload failed.', false); return; }
+        api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ billPhoto:urls[0],billPhotos:urls }) })
+          .then(function(){ setMsg(urls.length+' bill file(s) attached — you can approve now.', true); loadList(); });
       });
     };
     window.editExpense = function(id){
@@ -738,7 +743,7 @@
     function toggleEditPayment(){var paid=el('editPaidAlready').value==='true',cash=el('editPaymentType').value==='Cash',e=expensesById[el('editId').value]||{},hasCompany=(e.payments||[]).some(function(p){return !p.personalFunds;});el('editPersonalAccountWrap').style.display=paid&&!cash?'':'none';el('editPayingAccountWrap').style.display=!paid&&hasCompany?'':'none';}
     el('editPaidAlready').onchange=toggleEditPayment;el('editPaymentType').onchange=toggleEditPayment;
     el('editCancel').onclick=function(){el('editDlg').close();};
-    el('editGo').onclick=function(){var id=el('editId').value,e=expensesById[id]||{},nature=el('editNature').value,installment=el('editInstallment').value==='true',paid=el('editPaidAlready').value==='true',type=el('editPaymentType').value,reason=el('editReason').value.trim(),amount=installment?el('editTotal').value:el('editAmount').value;if(!(Number(amount)>0)){el('editMsg').textContent='Enter a valid expense amount.';return;}if(e.status!=='pending'&&!reason){el('editMsg').textContent='Enter the reason for changing this finalized expense.';return;}if(paid&&type!=='Cash'&&!el('editPersonalAccount').value.trim()){el('editMsg').textContent='Enter the account used for the personal payment.';return;}Promise.all([el('editBillFile').files[0]?uploadFile(el('editBillFile'),nature):Promise.resolve(e.billPhoto||''),el('editQrFile').files[0]?uploadFile(el('editQrFile'),nature):Promise.resolve(e.qrPhoto||''),el('editPersonalFile').files[0]?uploadFile(el('editPersonalFile'),nature):Promise.resolve(e.purchasePaymentProof||'')]).then(function(urls){return api('/api/expenses/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:nature,date:el('editDate').value,particulars:el('editParticulars').value,amount:amount,ledger:el('editLedger').value,type:el('editType').value,vendor:el('editVendor').value,paidAlready:paid,paymentType:type,paymentAccount:el('editPayingAccount').value,personalAccount:el('editPersonalAccount').value,isInstallment:installment,requestedAmount:installment?el('editRequested').value:amount,billPhoto:urls[0],qrPhoto:urls[1],personalPaymentProof:urls[2],purchasePaymentProof:urls[2],editReason:reason})});}).then(function(x){if(x.success){el('editDlg').close();setMsg('Expense and linked ledger details updated.',true);loadConfig().then(loadList);}else el('editMsg').textContent=x.error||'Could not update.';}).catch(function(){el('editMsg').textContent='Could not upload or save changes.';});};
+    el('editGo').onclick=function(){var id=el('editId').value,e=expensesById[id]||{},nature=el('editNature').value,installment=el('editInstallment').value==='true',paid=el('editPaidAlready').value==='true',type=el('editPaymentType').value,reason=el('editReason').value.trim(),amount=installment?el('editTotal').value:el('editAmount').value;if(!(Number(amount)>0)){el('editMsg').textContent='Enter a valid expense amount.';return;}if(e.status!=='pending'&&!reason){el('editMsg').textContent='Enter the reason for changing this finalized expense.';return;}if(paid&&type!=='Cash'&&!el('editPersonalAccount').value.trim()){el('editMsg').textContent='Enter the account used for the personal payment.';return;}Promise.all([el('editBillFile').files.length?uploadFiles(el('editBillFile').files,nature):Promise.resolve(e.billPhotos||[e.billPhoto].filter(Boolean)),el('editQrFile').files[0]?uploadFile(el('editQrFile'),nature):Promise.resolve(e.qrPhoto||''),el('editPersonalFile').files.length?uploadFiles(el('editPersonalFile').files,nature):Promise.resolve(e.purchasePaymentProofs||[e.purchasePaymentProof].filter(Boolean))]).then(function(urls){return api('/api/expenses/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:nature,date:el('editDate').value,particulars:el('editParticulars').value,amount:amount,ledger:el('editLedger').value,type:el('editType').value,vendor:el('editVendor').value,paidAlready:paid,paymentType:type,paymentAccount:el('editPayingAccount').value,personalAccount:el('editPersonalAccount').value,isInstallment:installment,requestedAmount:installment?el('editRequested').value:amount,billPhoto:(urls[0]||[])[0]||'',billPhotos:urls[0]||[],qrPhoto:urls[1],personalPaymentProof:(urls[2]||[])[0]||'',personalPaymentProofs:urls[2]||[],purchasePaymentProof:(urls[2]||[])[0]||'',purchasePaymentProofs:urls[2]||[],editReason:reason})});}).then(function(x){if(x.success){el('editDlg').close();setMsg('Expense and linked ledger details updated.',true);loadConfig().then(loadList);}else el('editMsg').textContent=x.error||'Could not update.';}).catch(function(){el('editMsg').textContent='Could not upload or save changes.';});};
     window.quickEdit = function(id, patch){
       api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch) })
         .then(function(d){ if(!d.success) setMsg(d.error||'Could not update.', false); });
@@ -789,7 +794,7 @@
 
     // ── PAY dialog ──
     window.openPay = function(id, preselectedIds){
-      payId = id; payUrl=''; payMode='vendor';
+      payId = id; payUrls=[]; payMode='vendor';
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
@@ -810,7 +815,7 @@
     };
     window.openPurchasePay = function(id){ openPay(id); payMode='procurement'; el('payTitle').textContent='Pay logistics mediator · '+id; };
     window.openReimburse = function(id){
-      payId=id; payUrl=''; payMode='reimburse'; var e=expensesById[id]||{};
+      payId=id; payUrls=[]; payMode='reimburse'; var e=expensesById[id]||{};
       el('payTitle').textContent='Reimburse '+(e.createdBy||e.claimant||'claimant'); el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Company → claimant payment proof — required'; el('payGo').textContent='Save reimbursement';
       el('payAcct').innerHTML='<option value="">Select actual paying account</option>'+reimbursementAccountOptions(); el('payAmount').value=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));
@@ -820,7 +825,7 @@
     window.openBatchReimburse = function(){
       var selected=Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;});
       if(selected.length<2){setMsg('Select at least two pending expenses.',false);return;}
-      payId=selected[0];payUrl='';payMode='batch-reimburse';
+      payId=selected[0];payUrls=[];payMode='batch-reimburse';
       var total=selected.reduce(function(n,id){var e=expensesById[id]||{};return n+Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));},0);
       el('payTitle').textContent='Reimburse '+selected.length+' selected expenses';el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Common company → claimant payment proof — required';el('payGo').textContent='Reimburse selected together';
@@ -841,18 +846,18 @@
     el('payFile').addEventListener('change', function(){
       if(!this.files[0]) return;
       el('payMsg').textContent='uploading…';
-      uploadFile(this,(expensesById[payId]||{}).nature).then(function(url){
-        payUrl=url; el('payGo').disabled=!url;
-        if(url){ el('payPrev').src=url; el('payPrev').style.display=''; el('payMsg').textContent=''; }
+      uploadFiles(this.files,(expensesById[payId]||{}).nature).then(function(urls){
+        payUrls=urls; el('payGo').disabled=!urls.length;
+        if(urls.length){ el('payPrev').src=urls[0]; el('payPrev').style.display=''; el('payMsg').textContent=urls.length+' proof file(s) ready.'; }
       });
     });
     el('payGo').addEventListener('click', function(){
-      if(!payUrl){ el('payMsg').textContent='Screenshot required.'; return; }
+      if(!payUrls.length){ el('payMsg').textContent='At least one payment proof is required.'; return; }
       var selected=payMode==='vendor'?Array.prototype.map.call(document.querySelectorAll('.batch-expense:checked'),function(x){return x.value;}):(payMode==='batch-reimburse'?Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;}):[]);
       var isBatch=selected.length>1;
       var endpoint=payMode==='batch-reimburse'?'/api/expenses/reimbursements/batch':(isBatch?'/api/expenses/batch-pay':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay')));
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ expenseIds:selected,paymentProof:payUrl, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
+        body:JSON.stringify({ expenseIds:selected,paymentProof:payUrls[0],paymentProofs:payUrls, account:el('payAcct').value,amount:el('payAmount').value,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
         if(d.success){ el('payDlg').close(); if(payMode==='reimburse'||payMode==='batch-reimburse') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg(payMode==='batch-reimburse'?'Selected expenses reimbursed together.':'Payment and proof saved.', true); }
         else {el('payMsg').textContent = d.error||'Could not pay.';if(d.requiresOverride){el('payOverrideWrap').style.display='';el('payOverrideReason').focus();}}
       });
@@ -870,7 +875,7 @@
         el('rstats').innerHTML='<div class="stat"><div class="k">Pending reimbursement</div><div class="v">'+fmt(d.pendingTotal)+'</div></div><div class="stat"><div class="k">Reimbursed</div><div class="v">'+fmt(reimbursedTotal)+'</div></div><div class="stat"><div class="k">Closing balance</div><div class="v">'+fmt(closingTotal)+'</div></div><div class="row-actions"><span id="reimburseSelectedTotal" class="muted">0 selected · '+fmt(0)+'</span><button class="btn green" id="reimburseSelected" disabled>Reimburse selected</button></div>';
         if(!d.reimbursements.length){el('rtable').innerHTML='<span class="muted">No reimbursements found.</span>';return;}
         var people={},personOrder=[];d.reimbursements.forEach(function(e){var person=String(e.createdBy||e.claimant||'Unknown'),key=person.toLowerCase();if(!people[key]){people[key]={name:person,items:[],due:0};personOrder.push(key);}var due=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));people[key].items.push(e);people[key].due+=due;});
-        el('rtable').innerHTML='<div class="row-actions"><label><input type="checkbox" id="reimburseSelectAll" aria-label="Select all pending reimbursements"> Select every pending transaction</label></div><div class="claim-list">'+personOrder.map(function(key){var group=people[key],safeKey='rp-'+key.replace(/[^a-z0-9]+/g,'-');return '<details class="claim-card reimbursement-person"><summary><div class="claim-main"><div class="claim-desc">'+esc(group.name)+'<div class="claim-vendor">'+group.items.length+' transaction'+(group.items.length===1?'':'s')+'</div></div><div class="claim-amount">Closing balance '+fmt(group.due)+'</div></div></summary><div class="claim-detail"><div class="row-actions"><label><input type="checkbox" class="reimburse-person-select" data-person="'+esc(safeKey)+'"> Select all pending for '+esc(group.name)+'</label></div><table class="resp"><thead><tr><th></th><th>Date</th><th>Expense / vendor</th><th>Transaction reference</th><th>Proof</th><th>Original</th><th>Reimbursed</th><th>Closing balance</th><th>Status</th><th></th></tr></thead><tbody>'+group.items.map(function(e){var due=e.closingBalance!=null?e.closingBalance:Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0)),refs=(e.reimbursementPayments||[]).map(function(p){return esc(p.transactionReference||e.id+'/'+p.id);}).join('<br>')||'—',reimburseProof=(e.reimbursementPayments||[]).slice().reverse().find(function(p){return p.proof;});return '<tr><td data-label="Select">'+(due>0?'<input type="checkbox" class="reimburse-select '+esc(safeKey)+'" value="'+esc(e.id)+'" data-due="'+due+'" aria-label="Select '+esc(e.id)+'">':'')+'</td><td data-label="Date">'+esc(e.date)+'</td><td data-label="Expense / vendor"><b>'+esc(e.id)+'</b><div>'+esc(e.vendor||e.particulars||'—')+'</div></td><td data-label="Transaction reference">'+refs+'</td><td data-label="Proof">'+(reimburseProof?'<img class="thumb" src="'+esc(reimburseProof.proof)+'" onclick="window.open(this.src)" title="reimbursement proof">':e.purchasePaymentProof?'<img class="thumb" src="'+esc(e.purchasePaymentProof)+'" onclick="window.open(this.src)" title="personal payment proof">':'—')+'</td><td data-label="Original">'+fmt(e.personalPaidAmount)+'</td><td data-label="Reimbursed">'+fmt(e.reimbursementAmount||0)+'</td><td data-label="Closing balance"><b>'+fmt(due)+'</b></td><td data-label="Status"><span class="badge b-'+esc(e.reimbursementStatus)+'">'+esc(e.reimbursementStatus)+'</span></td><td data-label="">'+(due>0?'<button class="btn mini green" onclick="openReimburse(\''+e.id+'\')">Reimburse</button>':'')+'</td></tr>';}).join('')+'</tbody></table></div></details>';}).join('')+'</div>';
+        el('rtable').innerHTML='<div class="row-actions"><label><input type="checkbox" id="reimburseSelectAll" aria-label="Select all pending reimbursements"> Select every pending transaction</label></div><div class="claim-list">'+personOrder.map(function(key){var group=people[key],safeKey='rp-'+key.replace(/[^a-z0-9]+/g,'-');return '<details class="claim-card reimbursement-person"><summary><div class="claim-main"><div class="claim-desc">'+esc(group.name)+'<div class="claim-vendor">'+group.items.length+' transaction'+(group.items.length===1?'':'s')+'</div></div><div class="claim-amount">Closing balance '+fmt(group.due)+'</div></div></summary><div class="claim-detail"><div class="row-actions"><label><input type="checkbox" class="reimburse-person-select" data-person="'+esc(safeKey)+'"> Select all pending for '+esc(group.name)+'</label></div><table class="resp"><thead><tr><th></th><th>Date</th><th>Expense / vendor</th><th>Transaction reference</th><th>Proof</th><th>Original</th><th>Reimbursed</th><th>Closing balance</th><th>Status</th><th></th></tr></thead><tbody>'+group.items.map(function(e){var due=e.closingBalance!=null?e.closingBalance:Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0)),refs=(e.reimbursementPayments||[]).map(function(p){return esc(p.transactionReference||e.id+'/'+p.id);}).join('<br>')||'—',reimburseProof=(e.reimbursementPayments||[]).slice().reverse().find(function(p){return p.proof||(p.proofs||[]).length;}),proofs=reimburseProof?proofGallery(reimburseProof.proofs||[reimburseProof.proof],'Reimbursement'):proofGallery(e.purchasePaymentProofs||[e.purchasePaymentProof],'Personal payment');return '<tr><td data-label="Select">'+(due>0?'<input type="checkbox" class="reimburse-select '+esc(safeKey)+'" value="'+esc(e.id)+'" data-due="'+due+'" aria-label="Select '+esc(e.id)+'">':'')+'</td><td data-label="Date">'+esc(e.date)+'</td><td data-label="Expense / vendor"><b>'+esc(e.id)+'</b><div>'+esc(e.vendor||e.particulars||'—')+'</div></td><td data-label="Transaction reference">'+refs+'</td><td data-label="Proof">'+(proofs||'—')+'</td><td data-label="Original">'+fmt(e.personalPaidAmount)+'</td><td data-label="Reimbursed">'+fmt(e.reimbursementAmount||0)+'</td><td data-label="Closing balance"><b>'+fmt(due)+'</b></td><td data-label="Status"><span class="badge b-'+esc(e.reimbursementStatus)+'">'+esc(e.reimbursementStatus)+'</span></td><td data-label="">'+(due>0?'<button class="btn mini green" onclick="openReimburse(\''+e.id+'\')">Reimburse</button>':'')+'</td></tr>';}).join('')+'</tbody></table></div></details>';}).join('')+'</div>';
         function updateReimburseSelection(){var boxes=document.querySelectorAll('.reimburse-select:checked'),total=0;Array.prototype.forEach.call(boxes,function(x){total+=Number(x.getAttribute('data-due'))||0;});el('reimburseSelectedTotal').textContent=boxes.length+' selected · '+fmt(total);el('reimburseSelected').disabled=boxes.length<2;}
         Array.prototype.forEach.call(document.querySelectorAll('.reimburse-select'),function(x){x.addEventListener('change',updateReimburseSelection);});Array.prototype.forEach.call(document.querySelectorAll('.reimburse-person-select'),function(x){x.addEventListener('change',function(){var checked=this.checked,person=this.getAttribute('data-person');Array.prototype.forEach.call(document.querySelectorAll('.reimburse-select.'+person),function(box){box.checked=checked;});updateReimburseSelection();});});el('reimburseSelectAll').addEventListener('change',function(){var checked=this.checked;Array.prototype.forEach.call(document.querySelectorAll('.reimburse-select,.reimburse-person-select'),function(x){x.checked=checked;});updateReimburseSelection();});el('reimburseSelected').addEventListener('click',openBatchReimburse);
       });
