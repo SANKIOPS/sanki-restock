@@ -2413,66 +2413,37 @@ function buildManifestRecommendation(candidates, plan) {
     name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1), requirement: requirements[i] || {}
   })).filter(x => x.name);
   const eligible = (candidates || []).filter(c => c && !c.dupeOf && !c.ordered);
-  const edges = []; const manual = []; const blocked = new Map();
+  const used = new Set(), selected = [], filled = new Map(slots.map(s => [s.name, 0]));
+  const parentOf = s => String(s.requirement.parentSlot || s.name.split('-C')[0] || s.name);
+  const articleOf = c => String(c.designId || c.designName || c.fit || '').trim().toLowerCase() || null;
+  const colourConfidence = c => Number.isFinite(c.colourConfidence) ? c.colourConfidence : (c.colour ? 0.5 : 0);
   const hardCheck = (c, s) => {
     const r = s.requirement || {}, failures = [], pending = [];
     const requiredColours = Array.isArray(r.colours) ? r.colours.filter(Boolean) : [];
-    if (plan && plan.category && c.category && tokenOverlap(c.category, plan.category) === 0) failures.push('Wrong garment category');
     if (requiredColours.length && c.colour && tokenOverlap(c.colour, requiredColours.join(' ')) === 0) failures.push('Colour is outside the approved requirement');
     if (requiredColours.length && !c.colour) failures.push('Colour was not detected or confirmed');
     if (requiredColours.length && c.colour && c.colourSource === 'auto') pending.push('Confirm the auto-detected colour');
     pending.push('Confirm vendor supports the fixed size pack');
     return { failures, pending, requiredColours, requiredSizes: r.sizes && typeof r.sizes === 'object' ? r.sizes : {} };
   };
-  eligible.forEach(c => {
-    const manualSlot = c.slotSource === 'manual' ? resolveAssortmentSlot(c.suggestedSlot, slots) : null;
-    if (manualSlot) { const hard=hardCheck(c,manualSlot); if(hard.failures.length){blocked.set(c.id,[{slot:manualSlot,hard}]);return}manual.push({ candidate:c, slot:manualSlot, score:100, reason:'Manually assigned; hard requirements still require confirmation', hard }); return; }
-    const visual = c.visualMatches && typeof c.visualMatches === 'object' ? c.visualMatches : {};
-    const visualMax = Math.max(0, ...Object.values(visual).map(Number).filter(Number.isFinite));
-    slots.forEach(s => {
-      const r = s.requirement || {}, colours = Array.isArray(r.colours) ? r.colours.join(' ') : '';
-      const hard = hardCheck(c, s);
-      if (hard.failures.length) { const list=blocked.get(c.id)||[]; list.push({ slot:s, hard }); blocked.set(c.id,list); return; }
-      // Visual evidence distributes the catalogue across the whole requirement
-      // table. Metadata refines it; silhouette/type remains only a 5% guide.
-      const visualRaw = Number(visual[s.name] != null ? visual[s.name] : visual[assortmentSlotCode(s.name)]) || 0;
-      const visualScore = visualMax > 0 ? (visualRaw / visualMax) * 60 : 0;
-      const colour = tokenOverlap(c.colour, colours) * 25;
-      const design = tokenOverlap(c.designName || c.fit, r.design) * 10;
-      const surface = tokenOverlap(c.surface || c.pattern, r.surface) * 5;
-      const type = tokenOverlap(c.garmentType || c.category, r.type) * 5;
-      const metadataScore = colour + design + surface + type;
-      const score = Math.round(Math.min(100, visualScore + metadataScore));
-      if (visualRaw > 0 || metadataScore > 0) edges.push({ candidate:c, slot:s, score, hard,
-        reason: visualMax > 0 ? 'Hard-eligible; ranked by soft targets and preferences' : 'Hard-eligible metadata match; soft preferences ranked' });
-    });
-  });
-  const used = new Set(), selected = [], filled = new Map(slots.map(s => [s.name, 0]));
-  manual.sort((a,b) => b.score-a.score).forEach(x => {
-    if (used.has(x.candidate.id) || filled.get(x.slot.name) >= x.slot.need) return;
-    used.add(x.candidate.id); filled.set(x.slot.name, filled.get(x.slot.name)+1);
-    selected.push({ ...publicCandidate(x.candidate), slot:x.slot.name, score:x.score, reason:x.reason,
-      hardRequirements:x.hard, hierarchy:{ hardLimits:'enforced', hardRequirements:x.hard.failures.length?'failed':'pending confirmation', softTargets:'ranked', softPreferences:'ranked only' } });
-  });
-  edges.sort((a,b) => b.score-a.score).forEach(x => {
-    if (used.has(x.candidate.id) || filled.get(x.slot.name) >= x.slot.need) return;
-    used.add(x.candidate.id); filled.set(x.slot.name, filled.get(x.slot.name)+1);
-    selected.push({ ...publicCandidate(x.candidate), slot:x.slot.name, score:x.score, reason:x.reason,
-      hardRequirements:x.hard, hierarchy:{ hardLimits:'enforced', hardRequirements:x.hard.pending.length?'pending confirmation':'met', softTargets:'ranked', softPreferences:'ranked only' } });
+  const add = (c,s,reason,score) => { const hard=hardCheck(c,s); if(used.has(c.id)||hard.failures.length||filled.get(s.name)>=s.need)return false;used.add(c.id);filled.set(s.name,filled.get(s.name)+1);selected.push({ ...publicCandidate(c),slot:s.name,score,reason,articleGroup:articleOf(c),hardRequirements:hard,hierarchy:{hardLimits:'enforced',hardRequirements:hard.pending.length?'pending confirmation':'met',softTargets:'removed',softPreferences:'removed'} });return true };
+  eligible.forEach(c => { const s=c.slotSource==='manual'?resolveAssortmentSlot(c.suggestedSlot,slots):null;if(s)add(c,s,'Manually assigned exact colourway',100) });
+  const parents = new Map(); slots.forEach(s => { const key=parentOf(s);if(!parents.has(key))parents.set(key,[]);parents.get(key).push(s) });
+  parents.forEach(parentSlots => {
+    const open=parentSlots.filter(s => filled.get(s.name)<s.need);if(!open.length)return;
+    const keys=[...new Set(eligible.filter(c=>!used.has(c.id)&&articleOf(c)).map(articleOf))];
+    const complete=keys.map(key=>({key,total:open.reduce((n,s)=>{const best=eligible.filter(c=>!used.has(c.id)&&articleOf(c)===key&&!hardCheck(c,s).failures.length).sort((a,b)=>colourConfidence(b)-colourConfidence(a))[0];return best?n+colourConfidence(best):-999},0)})).filter(x=>x.total>=0).sort((a,b)=>b.total-a.total)[0];
+    if(complete) open.forEach(s=>{const c=eligible.filter(c=>!used.has(c.id)&&articleOf(c)===complete.key&&!hardCheck(c,s).failures.length).sort((a,b)=>colourConfidence(b)-colourConfidence(a))[0];if(c)add(c,s,'Exact colour from the same article group',Math.round(50+colourConfidence(c)*50))});
+    const preferred=selected.find(x=>parentOf({name:x.slot,requirement:requirements.find(r=>r.slotName===x.slot)||{}})===parentOf(open[0])&&x.articleGroup);
+    open.filter(s=>filled.get(s.name)<s.need).forEach(s=>{const c=eligible.filter(c=>!used.has(c.id)&&!hardCheck(c,s).failures.length).sort((a,b)=>((preferred&&articleOf(b)===preferred.articleGroup)?2:0)+colourConfidence(b)-(((preferred&&articleOf(a)===preferred.articleGroup)?2:0)+colourConfidence(a)))[0];if(c)add(c,s,preferred&&articleOf(c)===preferred.articleGroup?'Exact colour from the same article group':'Exact colour fallback from the next available article',Math.round(50+colourConfidence(c)*50))});
   });
   const excluded = eligible.filter(c => !used.has(c.id)).map(c => {
-    const best = edges.filter(x => x.candidate.id === c.id).sort((a,b) => b.score-a.score)[0];
-    const hardBlocked = blocked.get(c.id) || [];
-    return { ...publicCandidate(c), slot: best ? best.slot.name : 'Needs manual slot', score: best ? best.score : 0,
-      reason: best ? best.reason : '', excludeReason: best ? 'Requirement slot filled by a stronger hard-eligible match' :
-        (hardBlocked.length ? hardBlocked[0].hard.failures.join(' · ') : 'Visual evidence is insufficient; choose a requirement slot manually') };
+    const matching=slots.filter(s=>!hardCheck(c,s).failures.length),best=matching[0];
+    return { ...publicCandidate(c),slot:best?best.name:'Needs manual slot',score:Math.round(50+colourConfidence(c)*50),reason:best?'Exact colour available':'',excludeReason:best?'All matching colourway slots are already filled':(c.colour?'Colour is outside the approved requirement':'Colour was not detected or confirmed') };
   });
   const missing = slots.map(slot => ({ slot: slot.name, required: slot.need, selected: selected.filter(x => x.slot === slot.name).length }))
     .filter(x => x.selected < x.required);
-  return { selected, excluded, missing, evaluated: eligible.length, basis: { type: 'hierarchical-procurement', paidApi: false,
-    stages:['hard-limits','hard-requirements','soft-targets','soft-preferences'], hardLimits:['budget','design capacity','colourway quantity','fixed size pack','gender','category'],
-    hardRequirements:['approved colour','size-pack confirmation','manual slot lock'], softTargets:['purpose/design','surface'], softPreferences:['silhouette/type','exact wording'],
-    priorities: { visualScorecard:60, colour:25, purposeDesign:10, surface:5, silhouetteTypeSoftGuide:5 }, typeMismatchExcludes: false } };
+  return { selected, excluded, missing, evaluated: eligible.length, basis: { type:'colour-only-article-first',paidApi:false,stages:['exact-colour','same-article-pair','next-article-fallback','size-pack-confirmation'],hardLimits:['budget','colourway count','fixed size pack'],hardRequirements:['exact approved colour'],softTargets:[],softPreferences:[],typeFilter:false,designFilter:false,surfaceFilter:false } };
 }
 
 router.post('/api/casuals/v2-recommend', express.json(), (req, res) => {
