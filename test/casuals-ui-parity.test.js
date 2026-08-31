@@ -130,6 +130,19 @@ test('Procurement V2 matches manifest slots without a paid AI API', () => {
   assert.equal(result.excluded[0].excludeReason, 'Metadata is incomplete; choose a requirement slot manually');
 });
 
+test('Procurement V2 treats trouser type as a soft guide instead of an exclusion filter', () => {
+  const result = buildManifestRecommendation([
+    { id:'pull-on', garmentType:'Pull-on summer', designName:'Everyday casual', surface:'Solid', colour:'Black', vendor:'MAG' }
+  ], { mix:[{ name:'R1 · Wide-leg · Office casual', styles:1 }], requirements:[{
+    type:'Wide-leg', design:'Office casual', surface:'Solid', colours:['Black']
+  }] });
+  assert.equal(result.selected[0].id,'pull-on');
+  assert.match(result.selected[0].reason,/Acceptable alternative/);
+  assert.equal(result.basis.typeMismatchExcludes,false);
+  assert.equal(result.basis.priorities.silhouetteTypeSoftGuide,5);
+  assert.equal(result.basis.priorities.colour,45);
+});
+
 test('ZIP link guard identifies local and private network addresses', () => {
   ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.2', '169.254.1.1', '::1', 'fd00::1'].forEach(ip => assert.equal(unsafeImportIp(ip), true));
   assert.equal(unsafeImportIp('8.8.8.8'), false);
