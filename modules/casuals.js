@@ -2414,16 +2414,23 @@ function buildManifestRecommendation(candidates, plan) {
     if (!slot) {
       const ranked = slots.map(s => {
         const r = s.requirement || {};
-        const type = tokenOverlap(c.garmentType || c.category, r.type) * 35;
-        const design = tokenOverlap(c.designName || c.fit, r.design) * 35;
-        const surface = tokenOverlap(c.surface || c.pattern, r.surface) * 15;
+        // Silhouette/type is deliberately a SOFT guide. Catalogue photos and
+        // vendor terminology frequently label the same trouser as pull-on,
+        // relaxed, fluid or wide-leg. A type mismatch must never exclude an
+        // otherwise useful colourway; colour, purpose/design and surface carry
+        // the decision, with manual reassignment always available in review.
+        const type = tokenOverlap(c.garmentType || c.category, r.type) * 5;
+        const design = tokenOverlap(c.designName || c.fit, r.design) * 30;
+        const surface = tokenOverlap(c.surface || c.pattern, r.surface) * 20;
         const colours = Array.isArray(r.colours) ? r.colours.join(' ') : '';
-        const colour = tokenOverlap(c.colour, colours) * 15;
+        const colour = tokenOverlap(c.colour, colours) * 45;
         return { slot: s, score: Math.round(type + design + surface + colour) };
       }).sort((a, b) => b.score - a.score);
-      if (ranked[0] && ranked[0].score >= 35) {
+      if (ranked[0] && ranked[0].score >= 25) {
         slot = ranked[0].slot; score = ranked[0].score;
-        reason = 'Matched from garment, design, surface and colour metadata';
+        const req = slot.requirement || {};
+        const sameType = tokenOverlap(c.garmentType || c.category, req.type) > 0;
+        reason = sameType ? 'Suitable colour, purpose/design and surface match' : 'Acceptable alternative; silhouette label differs but type is only a soft guide';
       }
     }
     return { candidate: c, slot, score, reason };
@@ -2438,7 +2445,8 @@ function buildManifestRecommendation(candidates, plan) {
     excludeReason: x.slot ? 'Slot already filled by a stronger metadata match' : 'Metadata is incomplete; choose a requirement slot manually' }));
   const missing = slots.map(slot => ({ slot: slot.name, required: slot.need, selected: selected.filter(x => x.slot === slot.name).length }))
     .filter(x => x.selected < x.required);
-  return { selected, excluded, missing, evaluated: scored.length, basis: { type: 'deterministic-manifest', paidApi: false } };
+  return { selected, excluded, missing, evaluated: scored.length, basis: { type: 'deterministic-manifest', paidApi: false,
+    priorities: { colour: 45, purposeDesign: 30, surface: 20, silhouetteTypeSoftGuide: 5 }, typeMismatchExcludes: false } };
 }
 
 router.post('/api/casuals/v2-recommend', express.json(), (req, res) => {
