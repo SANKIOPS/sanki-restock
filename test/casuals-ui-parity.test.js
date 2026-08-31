@@ -119,15 +119,40 @@ test('Procurement V2 ZIP maps Photo Splitter manifest metadata to images', () =>
   assert.equal(pkg.images[0].meta.colour, 'Chocolate');
 });
 
-test('Procurement V2 matches manifest slots without a paid AI API', () => {
+test('Procurement V2 re-scores manifest slots without a paid AI API', () => {
   const result = buildManifestRecommendation([
     { id: 'brown', suggestedSlot: 'R2', colour: 'Chocolate', vendor: 'MAG' },
     { id: 'manual', colour: 'Cream', vendor: 'MAG' }
   ], { mix: [{ name: 'R2 · Wide-leg · Single pleat', styles: 1 }], requirements: [{ type: 'Wide-leg', design: 'Single pleat', colours: ['Chocolate'] }] });
   assert.equal(result.selected[0].id, 'brown');
-  assert.equal(result.selected[0].score, 100);
+  assert.equal(result.selected[0].score, 45);
   assert.equal(result.basis.paidApi, false);
   assert.equal(result.excluded[0].excludeReason, 'Metadata is incomplete; choose a requirement slot manually');
+});
+
+test('Procurement V2 does not hard-lock every automated candidate to the same manifest slot', () => {
+  const result = buildManifestRecommendation([
+    { id:'black', suggestedSlot:'R14', slotSource:'manifest', colour:'Black', surface:'Solid' },
+    { id:'beige', suggestedSlot:'R14', slotSource:'visual-auto', colour:'Beige', surface:'Solid' }
+  ], { mix:[
+    { name:'R1 · Office black', styles:1 },
+    { name:'R2 · Casual beige', styles:1 },
+    { name:'R14 · Pull-on summer', styles:1 }
+  ], requirements:[
+    { design:'Office', surface:'Solid', colours:['Black'] },
+    { design:'Casual', surface:'Solid', colours:['Beige'] },
+    { type:'Pull-on summer', design:'Linen-look', colours:['Olive'] }
+  ] });
+  assert.deepEqual(result.selected.map(x => x.slot).sort(), ['R1 · Office black', 'R2 · Casual beige']);
+  assert.ok(result.selected.every(x => !/Exact slot supplied/.test(x.reason)));
+});
+
+test('Procurement V2 preserves an explicit manual slot assignment', () => {
+  const result = buildManifestRecommendation([
+    { id:'manual', suggestedSlot:'R14', slotSource:'manual', colour:'Black' }
+  ], { mix:[{ name:'R14 · Pull-on summer', styles:1 }], requirements:[{}] });
+  assert.equal(result.selected[0].score, 100);
+  assert.equal(result.selected[0].reason, 'Manually assigned to this requirement');
 });
 
 test('Procurement V2 treats trouser type as a soft guide instead of an exclusion filter', () => {
