@@ -125,9 +125,9 @@ test('Procurement V2 re-scores manifest slots without a paid AI API', () => {
     { id: 'manual', colour: 'Cream', vendor: 'MAG' }
   ], { mix: [{ name: 'R2 · Wide-leg · Single pleat', styles: 1 }], requirements: [{ type: 'Wide-leg', design: 'Single pleat', colours: ['Chocolate'] }] });
   assert.equal(result.selected[0].id, 'brown');
-  assert.equal(result.selected[0].score, 45);
+  assert.equal(result.selected[0].score, 25);
   assert.equal(result.basis.paidApi, false);
-  assert.equal(result.excluded[0].excludeReason, 'Metadata is incomplete; choose a requirement slot manually');
+  assert.equal(result.excluded[0].excludeReason, 'Colour is outside the approved requirement');
 });
 
 test('Procurement V2 does not hard-lock every automated candidate to the same manifest slot', () => {
@@ -152,7 +152,16 @@ test('Procurement V2 preserves an explicit manual slot assignment', () => {
     { id:'manual', suggestedSlot:'R14', slotSource:'manual', colour:'Black' }
   ], { mix:[{ name:'R14 · Pull-on summer', styles:1 }], requirements:[{}] });
   assert.equal(result.selected[0].score, 100);
-  assert.equal(result.selected[0].reason, 'Manually assigned to this requirement');
+  assert.equal(result.selected[0].reason, 'Manually assigned; hard requirements still require confirmation');
+});
+
+test('Procurement V2 uses the complete visual scorecard to fill different open slots', () => {
+  const result = buildManifestRecommendation([
+    { id:'a', slotSource:'visual-auto', visualMatches:{ 'R1 · Office':0.9, 'R2 · Casual':0.4 } },
+    { id:'b', slotSource:'visual-auto', visualMatches:{ 'R1 · Office':0.5, 'R2 · Casual':0.88 } }
+  ], { mix:[{ name:'R1 · Office', styles:1 },{ name:'R2 · Casual', styles:1 }], requirements:[{},{}] });
+  assert.deepEqual(result.selected.map(x => x.slot).sort(), ['R1 · Office','R2 · Casual']);
+  assert.equal(result.basis.priorities.visualScorecard,60);
 });
 
 test('Procurement V2 treats trouser type as a soft guide instead of an exclusion filter', () => {
@@ -162,10 +171,21 @@ test('Procurement V2 treats trouser type as a soft guide instead of an exclusion
     type:'Wide-leg', design:'Office casual', surface:'Solid', colours:['Black']
   }] });
   assert.equal(result.selected[0].id,'pull-on');
-  assert.match(result.selected[0].reason,/Acceptable alternative/);
+  assert.match(result.selected[0].reason,/Hard-eligible metadata match/);
   assert.equal(result.basis.typeMismatchExcludes,false);
   assert.equal(result.basis.priorities.silhouetteTypeSoftGuide,5);
-  assert.equal(result.basis.priorities.colour,45);
+  assert.equal(result.basis.priorities.colour,25);
+});
+
+test('Procurement V2 enforces hard colour requirements before soft visual ranking', () => {
+  const result = buildManifestRecommendation([
+    { id:'wrong', colour:'Red', visualMatches:{ 'R1 · Black office':0.99 } },
+    { id:'right', colour:'Black', visualMatches:{ 'R1 · Black office':0.70 } }
+  ], { category:'Trouser', mix:[{ name:'R1 · Black office', styles:1 }], requirements:[{ colours:['Black'], sizes:{28:1,30:2,32:2,34:1} }] });
+  assert.equal(result.selected[0].id,'right');
+  assert.match(result.excluded[0].excludeReason,/Colour is outside/);
+  assert.deepEqual(result.basis.stages,['hard-limits','hard-requirements','soft-targets','soft-preferences']);
+  assert.deepEqual(result.selected[0].hardRequirements.requiredSizes,{28:1,30:2,32:2,34:1});
 });
 
 test('ZIP link guard identifies local and private network addresses', () => {
