@@ -215,8 +215,24 @@ test('Procurement V2 duplicates the proven workflow and adds a controlling requi
   assert.match(addon, /ordinary vendor photos/);
   assert.match(addon, /zero-shot-image-classification/);
   assert.match(addon, /Xenova\/clip-vit-base-patch32/);
-  assert.match(addon, /Judging photo/);
+  assert.match(addon, /Auto-detecting colour/);
   assert.doesNotMatch(addon, /\/api\/casuals\/analyze|\/api\/casuals\/simple-recommend/);
   assert.match(base, /fresh-procurement-v2.*SankiProcV2Base/);
   assert.match(base, /fresh-procurement-v2.*sanki_v2_current/);
+});
+
+test('Procurement V2 expands each design into no more than two hard colourway slots', () => {
+  const v2AddonHtml = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement-v2-addon.js'), 'utf8');
+  assert.match(v2AddonHtml, /function expandColourwayPlan/);
+  assert.match(v2AddonHtml, /filter\(Boolean\)\.slice\(0,2\)/);
+  assert.match(v2AddonHtml, /colourwayKey/);
+  assert.match(v2AddonHtml, /addvariant\{display:none!important\}/);
+});
+
+test('Procurement V2 auto-detects and displays catalogue colours', () => {
+  const v2AddonHtml = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement-v2-addon.js'), 'utf8');
+  assert.match(v2AddonHtml, /Auto-detected:/);
+  assert.match(v2AddonHtml, /colourSource:'auto'/);
+  assert.match(v2AddonHtml, /colourConfidence/);
+  assert.match(v2AddonHtml, /main fabric colour/);
 });
