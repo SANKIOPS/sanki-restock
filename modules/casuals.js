@@ -502,6 +502,9 @@ function publicCandidate(c) {
     printKey: printKeyOf(c), printOverride: c.printOverride === true,
     included: isIncluded(c),
     designId: c.designId || null, designName: c.designName || null,
+    sourceName: c.sourceName || null, garmentType: c.garmentType || null,
+    surface: c.surface || null, suggestedSlot: c.suggestedSlot || null,
+    manifest: c.manifest === true,
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 // Collapse already-ordered PO line items into product cards. A supplier bill
@@ -633,8 +636,55 @@ function safeZipImages(buffer) {
   return images;
 }
 
-async function importZipImages(buffer, body) {
+function manifestRows(raw, filename) {
+  const text = raw.toString('utf8').replace(/^\uFEFF/, '').trim();
+  if (!text) return [];
+  if (/\.json$/i.test(filename)) {
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { throw new Error('manifest.json is not valid JSON.'); }
+    const rows = Array.isArray(parsed) ? parsed : (parsed && (parsed.items || parsed.products || parsed.photos));
+    if (!Array.isArray(rows)) throw new Error('manifest.json must contain an items array.');
+    return rows;
+  }
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return [];
+  const separator = /\.tsv$/i.test(filename) ? '\t' : ',';
+  const split = line => {
+    const out = []; let value = '', quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"' && quoted && line[i + 1] === '"') { value += '"'; i++; }
+      else if (ch === '"') quoted = !quoted;
+      else if (ch === separator && !quoted) { out.push(value.trim()); value = ''; }
+      else value += ch;
+    }
+    out.push(value.trim()); return out;
+  };
+  const headers = split(lines.shift()).map(x => x.toLowerCase().replace(/[^a-z0-9]+/g, ''));
+  return lines.map(line => { const values = split(line), row = {}; headers.forEach((h, i) => { row[h] = values[i] || ''; }); return row; });
+}
+
+function safeZipPackage(buffer) {
   const images = safeZipImages(buffer);
+  const zip = new AdmZip(buffer); let rows = []; let manifestName = '';
+  for (const entry of zip.getEntries()) {
+    const name = String(entry.entryName || '').replace(/\\/g, '/');
+    if (entry.isDirectory || Number(entry.header && entry.header.size || 0) > 2 * 1024 * 1024) continue;
+    if (/(^|\/)(manifest|products|photos)\.(json|csv|tsv)$/i.test(name)) {
+      rows = manifestRows(entry.getData(), name); manifestName = path.basename(name); break;
+    }
+  }
+  const key = value => path.basename(String(value || '')).toLowerCase().replace(/\s+/g, '');
+  const byFile = new Map();
+  rows.forEach(row => {
+    const file = row.filename || row.file || row.image || row.imagename || row.source;
+    if (file) byFile.set(key(file), row);
+  });
+  return { images: images.map(image => ({ ...image, meta: byFile.get(key(image.name)) || null })), manifestName, manifestRows: rows.length };
+}
+
+async function importZipImages(buffer, body) {
+  const pkg = safeZipPackage(buffer), images = pkg.images;
   const vendor = String(body && body.vendor || '').trim();
   if (!vendor) throw new Error('Enter a vendor name first.');
   const s = loadStore();
@@ -644,17 +694,28 @@ async function importZipImages(buffer, body) {
   s.activeBatch = target.id;
   const created = [];
   try {
+    let manifestMatched = 0;
     for (const img of images) {
       const filename = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + img.ext;
       const fp = path.join(CAND_DIR, filename);
       fs.writeFileSync(fp, img.data); created.push(fp);
       const sig = await computeSignature(fp);
-      s.candidates.push({ id: crypto.randomBytes(8).toString('hex'), file: filename, vendor, batch: target.id,
-        category: null, fit: null, colour: null, pattern: null, uploadedAt: new Date().toISOString(),
+      const md = img.meta || {}; if (img.meta) manifestMatched++;
+      s.candidates.push({ id: crypto.randomBytes(8).toString('hex'), file: filename,
+        vendor: String(md.vendor || vendor).trim(), batch: target.id, sourceName: img.name,
+        category: String(md.category || '').trim() || null,
+        fit: String(md.fit || md.silhouette || '').trim() || null,
+        garmentType: String(md.garmentType || md.garmenttype || md.type || '').trim() || null,
+        designName: String(md.designName || md.designname || md.design || '').trim() || null,
+        surface: String(md.surface || md.pattern || '').trim() || null,
+        colour: String(md.colour || md.color || '').trim() || null,
+        suggestedSlot: String(md.slot || md.slotCode || md.slotcode || md.suggestedSlot || md.suggestedslot || '').trim() || null,
+        manifest: !!img.meta, pattern: String(md.pattern || '').trim() || null, uploadedAt: new Date().toISOString(),
         sha: fileSha(fp), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null });
     }
     const active = activeCands(s); const dupes = markDuplicates(active); saveStore(s);
-    return { added: images.length, total: active.length, dupes, batch: target, batches: batchList(s), activeBatch: s.activeBatch };
+    return { added: images.length, total: active.length, dupes, batch: target, batches: batchList(s), activeBatch: s.activeBatch,
+      manifest: { found: !!pkg.manifestName, filename: pkg.manifestName || null, rows: pkg.manifestRows, matched: manifestMatched, unmatched: images.length - manifestMatched } };
   } catch (e) { created.forEach(fp => { try { fs.unlinkSync(fp); } catch {} }); throw e; }
 }
 
@@ -2331,6 +2392,77 @@ function resolveAssortmentSlot(value, slots) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+function procurementTokens(value) {
+  return new Set(normaliseAssortmentSlot(value).split(' ').filter(x => x.length > 1));
+}
+
+function tokenOverlap(a, b) {
+  const left = procurementTokens(a), right = procurementTokens(b);
+  if (!left.size || !right.size) return 0;
+  let matched = 0; left.forEach(x => { if (right.has(x)) matched++; });
+  return matched / Math.max(left.size, right.size);
+}
+
+function buildManifestRecommendation(candidates, plan) {
+  const requirements = Array.isArray(plan && plan.requirements) ? plan.requirements : [];
+  const slots = (Array.isArray(plan && plan.mix) ? plan.mix : []).map((x, i) => ({
+    name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1), requirement: requirements[i] || {}
+  })).filter(x => x.name);
+  const scored = (candidates || []).filter(c => c && !c.dupeOf && !c.ordered).map(c => {
+    let slot = resolveAssortmentSlot(c.suggestedSlot, slots), score = slot ? 100 : 0;
+    let reason = slot ? 'Exact slot supplied by Photo Splitter manifest' : '';
+    if (!slot) {
+      const ranked = slots.map(s => {
+        const r = s.requirement || {};
+        const type = tokenOverlap(c.garmentType || c.category, r.type) * 35;
+        const design = tokenOverlap(c.designName || c.fit, r.design) * 35;
+        const surface = tokenOverlap(c.surface || c.pattern, r.surface) * 15;
+        const colours = Array.isArray(r.colours) ? r.colours.join(' ') : '';
+        const colour = tokenOverlap(c.colour, colours) * 15;
+        return { slot: s, score: Math.round(type + design + surface + colour) };
+      }).sort((a, b) => b.score - a.score);
+      if (ranked[0] && ranked[0].score >= 35) {
+        slot = ranked[0].slot; score = ranked[0].score;
+        reason = 'Matched from garment, design, surface and colour metadata';
+      }
+    }
+    return { candidate: c, slot, score, reason };
+  });
+  const used = new Set(), selected = [];
+  slots.forEach(slot => {
+    scored.filter(x => x.slot === slot && !used.has(x.candidate.id)).sort((a, b) => b.score - a.score)
+      .slice(0, slot.need).forEach(x => { used.add(x.candidate.id); selected.push({ ...publicCandidate(x.candidate), slot: slot.name, score: x.score, reason: x.reason }); });
+  });
+  const excluded = scored.filter(x => !used.has(x.candidate.id)).map(x => ({ ...publicCandidate(x.candidate),
+    slot: x.slot ? x.slot.name : 'Needs manual slot', score: x.score, reason: x.reason,
+    excludeReason: x.slot ? 'Slot already filled by a stronger metadata match' : 'Metadata is incomplete; choose a requirement slot manually' }));
+  const missing = slots.map(slot => ({ slot: slot.name, required: slot.need, selected: selected.filter(x => x.slot === slot.name).length }))
+    .filter(x => x.selected < x.required);
+  return { selected, excluded, missing, evaluated: scored.length, basis: { type: 'deterministic-manifest', paidApi: false } };
+}
+
+router.post('/api/casuals/v2-recommend', express.json(), (req, res) => {
+  try {
+    const plan = req.body && req.body.plan;
+    if (!plan || !Array.isArray(plan.mix) || !plan.mix.length) return res.status(400).json({ success: false, error: 'The approved requirement table is missing.' });
+    const s = loadStore(), result = buildManifestRecommendation(activeCands(s), plan);
+    res.json({ success: true, ...result });
+  } catch (err) { res.status(400).json({ success: false, error: err.message || 'Could not match the manifest.' }); }
+});
+
+router.post('/api/casuals/candidate/:id/procurement-meta', express.json(), (req, res) => {
+  const s = loadStore(), c = s.candidates.find(x => x.id === req.params.id);
+  if (!c) return res.status(404).json({ success: false, error: 'Product not found.' });
+  const b = req.body || {};
+  c.suggestedSlot = String(b.slot || '').trim() || null;
+  c.garmentType = String(b.garmentType || '').trim() || null;
+  c.designName = String(b.designName || '').trim() || null;
+  c.surface = String(b.surface || '').trim() || null;
+  c.colour = String(b.colour || '').trim() || null;
+  c.manifest = true; saveStore(s);
+  res.json({ success: true, candidate: publicCandidate(c) });
+});
+
 // Match the current batch to the named assortment approved in the simplified
 // workflow. Returns both winners and rejected alternatives with reasons, so the
 // recommendation is inspectable rather than a silent first-N shortlist.
@@ -2653,4 +2785,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, unsafeImportIp, normaliseAssortmentSlot, assortmentSlotCode, resolveAssortmentSlot };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, safeZipPackage, manifestRows, buildManifestRecommendation, unsafeImportIp, normaliseAssortmentSlot, assortmentSlotCode, resolveAssortmentSlot };
