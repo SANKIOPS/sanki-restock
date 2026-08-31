@@ -10,22 +10,33 @@ process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, _july2026Import, _providedAdvanceImport, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
-function invoke(method, routePath, { body={}, params={}, query={}, role='admin' }={}) {
+function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
   const layer=router.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);
   assert.ok(layer, 'route exists: '+method+' '+routePath); let status=200,result;
-  const req={body,params,query,user:{username:'tester',role,roles:[role]}};
+  const req={body,params,query,user:{username,role,roles:[role]}};
   const res={status(n){status=n;return this;},json(v){result=v;return this;}};
   let i=0; const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);}; next();
   return {status,body:result};
 }
 
-test('salary advances require proof, summarize balances and recover oldest first', () => {
+function postAdvance(emp,body={}){
+  const request=invoke('POST','/api/salary/advances',{body:Object.assign({empId:emp.id,amount:1000,date:'2026-08-22',account:'Axis Bank 3448',recoveryStartMonth:'2026-08'},body),role:'admin'}).body.request;
+  assert.ok(request&&request.id);assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'owner'}).status,200);
+  return invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{proofs:[body.proof||'/proof.jpg']},role:'admin'}).body.advance;
+}
+
+test('salary advances require owner approval and proof-backed posting, then recover oldest first', () => {
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Employee A',salary:30000,channel:'Shared'}}).body.employee;
-  const missing=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:1000,date:'2026-08-22',account:'Axis Bank 3448'}});
-  assert.equal(missing.status,400); assert.match(missing.body.error,/proof/i);
-  [1000,2000,2000].forEach((amount,i)=>{
-    const made=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount,date:'2026-08-'+String(22+i).padStart(2,'0'),account:'Axis Bank 3448',proof:'/proof-'+i+'.jpg',recoveryStartMonth:'2026-08'}});
-    assert.equal(made.status,200);
+  const request=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:1000,date:'2026-08-22',account:'Axis Bank 3448'}}).body.request;
+  assert.equal(invoke('GET','/api/salary/advances').body.advances.filter(x=>x.empId===emp.id).length,0);
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{proof:'/early.jpg'}}).status,400);
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'accounting'}).status,403);
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'owner'}).status,200);
+  const missing=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{}});assert.equal(missing.status,400);assert.match(missing.body.error,/proof/i);
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{proof:'/proof-first.jpg'}}).status,200);
+  [2000,2000].forEach((amount,i)=>{
+    const made=postAdvance(emp,{amount,date:'2026-08-'+String(23+i).padStart(2,'0'),account:'Axis Bank 3448',proof:'/proof-'+i+'.jpg',recoveryStartMonth:'2026-08'});
+    assert.ok(made.id);
   });
   let list=invoke('GET','/api/salary/advances',{query:{summaryMonth:'2026-08'}}).body;
   const summary=list.summary.find(x=>x.empId===emp.id); assert.equal(summary.total,5000); assert.equal(summary.thisMonth,5000); assert.equal(summary.outstanding,5000);
@@ -40,7 +51,7 @@ test('salary advances require proof, summarize balances and recover oldest first
 
 test('historical advances assigned to an earlier payroll month remain editable',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Historical Recovery',salary:30000}}).body.employee;
-  const made=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'}}).body.advance;
+  const made=postAdvance(emp,{amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'});
   assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000}}).status,200);
   let row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-11'}}).body.rows.find(x=>x.id===emp.id);
   assert.equal(row.loggedAdvanceRecovery,3000);
@@ -50,9 +61,9 @@ test('historical advances assigned to an earlier payroll month remain editable',
   const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,2000);
 });
 
-test('advance UI is collapsed by default and exposes account posting and audit concepts', () => {
+test('advance UI merges employee history and exposes approval and proof-backed posting', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
-  assert.match(html,/data-v="advances"/); assert.match(html,/<details class="card"><summary>Employee advance summary/); assert.match(html,/Payment proof \(required\)/); assert.match(html,/saveRecovery/); assert.match(html,/oldest eligible advance first/);
+  assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance summary · closing/); assert.match(html,/Advance approval queue/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);
   assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);
 });
 
@@ -153,7 +164,7 @@ test('zero paid-leave allowance converts legacy PL to absence and deducts salary
 test('payroll posting creates employee salary ledgers once and advances remain bank-backed',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Ledger Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,paidDays:30,paid:25000}});
-  invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:5000,date:'2026-09-10',account:'Axis Bank 3448',proof:'/axis-advance.jpg',reference:'UTR5000'}});
+  postAdvance(emp,{amount:5000,date:'2026-09-10',account:'Axis Bank 3448',proof:'/axis-advance.jpg',reference:'UTR5000',recoveryStartMonth:'2026-09'});
   invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,amount:5000}});
   assert.equal(invoke('POST','/api/salary/post/:ym',{params:{ym:'2026-09'}}).status,200);
   assert.equal(invoke('POST','/api/salary/post/:ym',{params:{ym:'2026-09'}}).status,409);
