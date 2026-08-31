@@ -504,7 +504,7 @@ function publicCandidate(c) {
     designId: c.designId || null, designName: c.designName || null,
     sourceName: c.sourceName || null, garmentType: c.garmentType || null,
     surface: c.surface || null, suggestedSlot: c.suggestedSlot || null,
-    manifest: c.manifest === true,
+    manifest: c.manifest === true, slotSource: c.slotSource || null,
     uploadedAt: c.uploadedAt, batch: c.batch || null };
 }
 // Collapse already-ordered PO line items into product cards. A supplier bill
@@ -710,7 +710,8 @@ async function importZipImages(buffer, body) {
         surface: String(md.surface || md.pattern || '').trim() || null,
         colour: String(md.colour || md.color || '').trim() || null,
         suggestedSlot: String(md.slot || md.slotCode || md.slotcode || md.suggestedSlot || md.suggestedslot || '').trim() || null,
-        manifest: !!img.meta, pattern: String(md.pattern || '').trim() || null, uploadedAt: new Date().toISOString(),
+        manifest: !!img.meta, slotSource: img.meta ? 'manifest' : null,
+        pattern: String(md.pattern || '').trim() || null, uploadedAt: new Date().toISOString(),
         sha: fileSha(fp), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null });
     }
     const active = activeCands(s); const dupes = markDuplicates(active); saveStore(s);
@@ -2409,8 +2410,11 @@ function buildManifestRecommendation(candidates, plan) {
     name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1), requirement: requirements[i] || {}
   })).filter(x => x.name);
   const scored = (candidates || []).filter(c => c && !c.dupeOf && !c.ordered).map(c => {
-    let slot = resolveAssortmentSlot(c.suggestedSlot, slots), score = slot ? 100 : 0;
-    let reason = slot ? 'Exact slot supplied by Photo Splitter manifest' : '';
+    // Only a founder/user assignment is binding. Automated manifest and local
+    // visual labels are hypotheses; re-score them against the approved table.
+    const manualSlot = c.slotSource === 'manual' ? resolveAssortmentSlot(c.suggestedSlot, slots) : null;
+    let slot = manualSlot, score = slot ? 100 : 0;
+    let reason = slot ? 'Manually assigned to this requirement' : '';
     if (!slot) {
       const ranked = slots.map(s => {
         const r = s.requirement || {};
@@ -2463,6 +2467,7 @@ router.post('/api/casuals/candidate/:id/procurement-meta', express.json(), (req,
   if (!c) return res.status(404).json({ success: false, error: 'Product not found.' });
   const b = req.body || {};
   c.suggestedSlot = String(b.slot || '').trim() || null;
+  c.slotSource = ['manual', 'visual-auto', 'manifest'].includes(String(b.slotSource || '')) ? String(b.slotSource) : 'manual';
   c.garmentType = String(b.garmentType || '').trim() || null;
   c.designName = String(b.designName || '').trim() || null;
   c.surface = String(b.surface || '').trim() || null;
