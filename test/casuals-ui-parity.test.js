@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, unsafeImportIp } = require('../modules/casuals');
+const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, safeZipPackage, buildManifestRecommendation, unsafeImportIp } = require('../modules/casuals');
 const AdmZip = require('adm-zip');
 
 test('Shirts and T-shirts support the same design-first target as Trousers', () => {
@@ -109,6 +109,27 @@ test('ZIP import keeps supported images and ignores metadata and non-images', ()
   assert.equal(images[0].name, 'look-1.JPG');
 });
 
+test('Procurement V2 ZIP maps Photo Splitter manifest metadata to images', () => {
+  const zip = new AdmZip();
+  zip.addFile('photos/brown.jpg', Buffer.from([1, 2, 3]));
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify({ items: [{ filename: 'brown.jpg', slot: 'R2', colour: 'Chocolate' }] })));
+  const pkg = safeZipPackage(zip.toBuffer());
+  assert.equal(pkg.manifestName, 'manifest.json');
+  assert.equal(pkg.images[0].meta.slot, 'R2');
+  assert.equal(pkg.images[0].meta.colour, 'Chocolate');
+});
+
+test('Procurement V2 matches manifest slots without a paid AI API', () => {
+  const result = buildManifestRecommendation([
+    { id: 'brown', suggestedSlot: 'R2', colour: 'Chocolate', vendor: 'MAG' },
+    { id: 'manual', colour: 'Cream', vendor: 'MAG' }
+  ], { mix: [{ name: 'R2 · Wide-leg · Single pleat', styles: 1 }], requirements: [{ type: 'Wide-leg', design: 'Single pleat', colours: ['Chocolate'] }] });
+  assert.equal(result.selected[0].id, 'brown');
+  assert.equal(result.selected[0].score, 100);
+  assert.equal(result.basis.paidApi, false);
+  assert.equal(result.excluded[0].excludeReason, 'Metadata is incomplete; choose a requirement slot manually');
+});
+
 test('ZIP link guard identifies local and private network addresses', () => {
   ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.2', '169.254.1.1', '::1', 'fd00::1'].forEach(ip => assert.equal(unsafeImportIp(ip), true));
   assert.equal(unsafeImportIp('8.8.8.8'), false);
@@ -132,6 +153,9 @@ test('Procurement V2 duplicates the proven workflow and adds a controlling requi
   assert.match(addon, /Approve requirement table & add vendor photos/);
   assert.match(addon, /base\.addVendor\(\)/);
   assert.match(addon, /base\.go\(2\)/);
+  assert.match(addon, /\/api\/casuals\/v2-recommend/);
+  assert.match(addon, /manifest\.json/);
+  assert.doesNotMatch(addon, /\/api\/casuals\/analyze|\/api\/casuals\/simple-recommend/);
   assert.match(base, /fresh-procurement-v2.*SankiProcV2Base/);
   assert.match(base, /fresh-procurement-v2.*sanki_v2_current/);
 });
