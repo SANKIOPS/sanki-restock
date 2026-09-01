@@ -202,9 +202,13 @@ test('positive and negative balances carry forward once and payroll respects emp
   assert.equal(june.openingBalanceCarry,1000);assert.equal(june.openingAdvanceCarry,0);assert.equal(june.openingPayableCarry,1000);assert.equal(june.netPayable,31000);
   const joiner=invoke('POST','/api/salary/employees',{body:{name:'August Joiner',salary:18000,joiningDate:'2026-08-15'}}).body.employee;
   const leaver=invoke('POST','/api/salary/employees',{body:{name:'July Leaver',salary:18000,lastWorkingDate:'2026-07-20'}}).body.employee;
+  const leaverWithBalance=invoke('POST','/api/salary/employees',{body:{name:'January Leaver With Balance',salary:18000,lastWorkingDate:'2027-01-20'}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2027-01'},body:{empId:leaverWithBalance.id,paidDays:0,advance:2400}});
   const july=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-07'}}).body.rows,august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows;
   assert.equal(july.some(x=>x.id===joiner.id),false);assert.equal(august.some(x=>x.id===joiner.id),true);
   assert.equal(july.some(x=>x.id===leaver.id),true);assert.equal(august.some(x=>x.id===leaver.id),false);
+  const february=invoke('GET','/api/salary/month/:ym',{params:{ym:'2027-02'}}).body.rows;
+  assert.equal(february.find(x=>x.id===leaverWithBalance.id).openingAdvanceCarry,2400,'a former employee remains visible until their balance is settled');
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
   const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
   assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/Gagan Sir Cash|Counter Cash/);
