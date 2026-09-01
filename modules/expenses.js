@@ -156,7 +156,10 @@ const CLAIMANT_ACCOUNTS = {
   namita: ['Namita 5464','Namita Cash']
 };
 const USER_PAYMENT_ACCOUNTS = {
-  prashant: ['Prashant Axis 3645', 'Prashant Cash', 'Counter Cash']
+  prashant: [
+    'Prashant Axis 3645', 'Prashant Cash', 'Counter Cash',
+    'IndusInd Bank 7883', 'ICICI Bank 0993', 'ICICI Bank 0992', 'Kirti Nagar Cash'
+  ]
 };
 const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash' };
 
@@ -559,7 +562,15 @@ function payingAccountsForReq(req, nature) {
   const username = String((req.user && req.user.username) || '').trim().toLowerCase();
   if (isOwner(req)) return companyAccountsForNature(nature);
   const assigned = USER_PAYMENT_ACCOUNTS[username] || [];
-  return companyAccountsForNature(nature).filter(account => assigned.some(name => name.toLowerCase() === account.toLowerCase()));
+  const assignedTo = entity => companyAccountsForNature(entity).filter(account => assigned.some(name => name.toLowerCase() === account.toLowerCase()));
+  const nativeAccounts = assignedTo(nature);
+  // A SAMAST expense can be funded from an account actually controlled in
+  // SANKI. Keep the expense in SAMAST, but show and post the real SANKI bank or
+  // cash movement selected by the paying admin.
+  if (normalizedNature(nature) === 'SAMAST') {
+    return Array.from(new Set(assignedTo('SANKI').concat(nativeAccounts)));
+  }
+  return nativeAccounts;
 }
 function allowedPayingAccount(req, nature, account) {
   const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');

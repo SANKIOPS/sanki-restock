@@ -201,6 +201,11 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   assert.equal(wrongBooks.status, 403);
   const samastApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'samast_accounting' });
   assert.equal(samastApproval.status, 200);
+  const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
+  assert.deepEqual(adminConfig.body.payingAccountsByNature.SAMAST, ['Prashant Axis 3645','Counter Cash','Prashant Cash','IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
+  const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, role: 'admin', body: { account:'Prashant Axis 3645',paymentProof:'/api/expenses/photo/samast-payment.jpg' } });
+  assert.equal(paid.status, 200, JSON.stringify(paid.body));
+  assert.equal(paid.body.expense.payments.at(-1).account, 'Prashant Axis 3645');
   assert.deepEqual(summaryForPL(), sankiPlBefore, 'SAMAST must never enter the SANKI P&L');
 
   const samastList = invoke('GET', '/api/expenses/list', { query: {}, role: 'samast_accounting' });
@@ -1249,6 +1254,10 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/recordedPaymentWithProof=\(e\.payments\|\|\[\]\)\.slice\(\)\.reverse\(\)\.find/);
   assert.match(html,/function reimbursementAccountOptions\(\)/);
   assert.match(html,/Select actual paying account/);
+  assert.match(html,/String\(nature\|\|'SANKI'\)\.trim\(\)\.toUpperCase\(\)/);
+  assert.match(html,/function populateVendorPayAccounts\(nature,refreshIfEmpty\)/);
+  assert.match(html,/populateVendorPayAccounts\(e\.nature\|\|'SANKI',true\)/);
+  assert.match(html,/Refreshing paying accounts/);
   assert.match(html,/<label>Expense entity<\/label><select id="lg_expense_nature"><option value="">All<\/option>/);
   assert.match(html,/expenseNature='\+encodeURIComponent\(el\('lg_expense_nature'\)\.value\)/);
   assert.match(html,/id="editPayingAccount"/);

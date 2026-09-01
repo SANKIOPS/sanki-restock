@@ -104,7 +104,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/sizetracker/',          roles: ['admin', 'procurement'] },
   { prefix: '/api/sales',                 roles: ['admin', 'sales'] },
   { prefix: '/api/racks',                 roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
-  { prefix: '/api/stock-search',          roles: ['admin', 'inventory', 'sales', 'warehouse', 'stocksearch'] },
+  { prefix: '/api/stock-search',          roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
   { prefix: '/api/showroom/',             roles: ['admin', 'inventory', 'warehouse'] },
   { prefix: '/api/velocity/',             roles: ['admin', 'sales'] },
   { prefix: '/api/orders-ledger',         roles: ['admin', 'sales', 'revenue', 'warehouse'] },
@@ -117,7 +117,7 @@ const API_ROLE_RULES = [
   { path: '/api/products',                roles: ['admin', 'inventory', 'sales', 'procurement', 'warehouse', 'stocksearch'] },
   { path: '/api/inventory',               roles: ['admin', 'inventory', 'sales', 'warehouse', 'stocksearch'] },
   { path: '/api/collections',             roles: ['admin', 'inventory', 'sales', 'procurement'] },
-  { path: '/api/identify-product',        roles: ['admin', 'inventory', 'procurement', 'sales', 'warehouse', 'stocksearch'] },
+  { path: '/api/identify-product',        roles: ['admin', 'inventory', 'procurement'] },
   { path: '/api/health/full',             roles: ['admin'] }
 ];
 
@@ -178,10 +178,7 @@ function gate(req, res, next) {
     // API callers get a clean 401; browsers are sent to the login page
     // (instead of the old native Basic-auth popup).
     if (p.startsWith('/api/')) return res.status(401).json({ success: false, error: 'Unauthorized' });
-    // Preserve the requested in-app page so a direct link (for example a
-    // procurement workspace) resumes after a successful login.
-    const requested = String(req.originalUrl || p || '/');
-    return res.redirect(302, '/login.html?next=' + encodeURIComponent(requested));
+    return res.redirect(302, '/login.html');
   }
   req.user = user;
 

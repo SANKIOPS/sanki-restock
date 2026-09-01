@@ -22,19 +22,6 @@
   .btn { background:var(--accent); color:#fff; padding:11px 16px; font-weight:600; font-size:14px; }
   .btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
-  .photo-actions { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 14px; }
-  .photo-btn { background:#fff; color:#6b2f91; border:1px solid #9b59b6; padding:9px 13px; font-weight:600; }
-  .photo-results { display:grid; gap:8px; margin:0 0 16px; }
-  .photo-card { display:flex; align-items:center; gap:11px; padding:10px; background:#fff; border:1px solid var(--line); border-radius:10px; cursor:pointer; }
-  .photo-card:hover { border-color:#9b59b6; background:#fcf8ff; }
-  .photo-copy { flex:1; min-width:0; }
-  .photo-copy b,.photo-copy span { display:block; }
-  .photo-copy span { color:var(--muted); font-size:12px; margin-top:2px; }
-  .confidence { font-weight:700; color:#6b2f91; white-space:nowrap; }
-  .camera { display:none; position:fixed; inset:0; background:rgba(0,0,0,.86); z-index:1000; align-items:center; justify-content:center; flex-direction:column; padding:20px; }
-  .camera video { max-width:100%; max-height:68vh; border-radius:12px; background:#000; }
-  .camera-actions { display:flex; gap:10px; margin-top:14px; }
-  .camera-error { color:#fff; margin-top:10px; max-width:440px; text-align:center; }
   .meta { font-size:12px; color:var(--muted); margin:2px 0 14px; }
   .meta .stale { color:#b45309; font-weight:600; }
   table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line);
@@ -59,14 +46,7 @@
 <body>
 <div class="wrap">
   <h1>🔍 Stock Search &amp; Rack Locations</h1>
-  <p class="sub">Search by SKU or product details, or upload/take a garment photo. See live stock and the exact rack location.</p>
-
-  <div class="photo-actions">
-    <button class="photo-btn" id="cameraBtn" type="button">📷 Take Photo</button>
-    <button class="photo-btn" id="uploadBtn" type="button">🖼️ Upload Image</button>
-    <input id="photoFile" type="file" accept="image/*" hidden>
-  </div>
-  <div class="photo-results" id="photoResults"></div>
+  <p class="sub">Search inventory by any parameter — SKU, product, size, vendor, tag, or rack — and assign a rack code to each variant so anyone can find it fast.</p>
 
   <div class="bar">
     <input id="q" type="text" placeholder="Search SKU, product, size, vendor, tag, rack…" autocomplete="off">
@@ -87,15 +67,6 @@
   </table>
 </div>
 
-<div class="camera" id="cameraModal">
-  <video id="cameraVideo" autoplay playsinline muted></video>
-  <div class="camera-actions">
-    <button class="btn" id="captureBtn" type="button">📸 Capture</button>
-    <button class="btn ghost" id="closeCameraBtn" type="button">Cancel</button>
-  </div>
-  <div class="camera-error" id="cameraError"></div>
-</div>
-
 <script src="/sidebar.js"></script>
 <script>
 (function () {
@@ -108,80 +79,7 @@
   var refreshBtn = document.getElementById('refreshBtn');
   var risBtn = document.getElementById('risBtn');
   var risMetaEl = document.getElementById('risMeta');
-  var photoFileEl = document.getElementById('photoFile');
-  var photoResultsEl = document.getElementById('photoResults');
-  var cameraModalEl = document.getElementById('cameraModal');
-  var cameraVideoEl = document.getElementById('cameraVideo');
-  var cameraErrorEl = document.getElementById('cameraError');
   var timer = null, seq = 0;
-  var cameraStream = null;
-
-  function resizePhoto(file) {
-    return new Promise(function (resolve, reject) {
-      var reader = new FileReader();
-      reader.onerror = function () { reject(new Error('Could not read this image.')); };
-      reader.onload = function () {
-        var img = new Image();
-        img.onerror = function () { reject(new Error('Could not decode this image.')); };
-        img.onload = function () {
-          var scale = Math.min(1, 1024 / Math.max(img.width, img.height));
-          var canvas = document.createElement('canvas');
-          canvas.width = Math.round(img.width * scale); canvas.height = Math.round(img.height * scale);
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', .85).split(',')[1]);
-        };
-        img.src = reader.result;
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  function showPhotoMatches(matches) {
-    photoResultsEl.textContent = '';
-    if (!matches.length) { photoResultsEl.textContent = 'No close catalog match found. Try a clearer photo of the full garment.'; return; }
-    matches.forEach(function (match) {
-      var product = match.product || {};
-      var variants = product.variants || [];
-      var sku = (variants.find(function (v) { return v.sku; }) || {}).sku || '';
-      var card = document.createElement('button'); card.type = 'button'; card.className = 'photo-card';
-      if (product.image) { var img = document.createElement('img'); img.className = 'thumb'; img.src = product.image; img.alt = ''; card.appendChild(img); }
-      var copy = document.createElement('span'); copy.className = 'photo-copy';
-      var name = document.createElement('b'); name.textContent = product.name || 'Catalog match'; copy.appendChild(name);
-      var detail = document.createElement('span'); detail.textContent = [sku, match.reason].filter(Boolean).join(' · '); copy.appendChild(detail); card.appendChild(copy);
-      var confidence = document.createElement('span'); confidence.className = 'confidence'; confidence.textContent = (parseInt(match.confidence, 10) || 0) + '%'; card.appendChild(confidence);
-      card.addEventListener('click', function () { qEl.value = sku || product.name || ''; search(); window.scrollTo({ top: qEl.offsetTop - 20, behavior: 'smooth' }); });
-      photoResultsEl.appendChild(card);
-    });
-  }
-
-  function identifyBase64(base64) {
-    photoResultsEl.innerHTML = '<span class="spin"></span> Matching this photo with the Shopify catalog…';
-    return fetch('/api/identify-product', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ image:base64, mediaType:'image/jpeg' }) })
-      .then(function (r) { return r.json().then(function (j) { return { ok:r.ok, data:j }; }); })
-      .then(function (out) { if (!out.ok || !out.data.success) throw new Error(out.data.error || 'Identification failed.'); showPhotoMatches(out.data.matches || []); })
-      .catch(function (err) { photoResultsEl.textContent = 'Photo search failed: ' + err.message; });
-  }
-
-  function closeCamera() {
-    if (cameraStream) { cameraStream.getTracks().forEach(function (track) { track.stop(); }); cameraStream = null; }
-    cameraVideoEl.srcObject = null; cameraModalEl.style.display = 'none';
-  }
-
-  document.getElementById('uploadBtn').addEventListener('click', function () { photoFileEl.click(); });
-  photoFileEl.addEventListener('change', function () { var file = photoFileEl.files[0]; photoFileEl.value = ''; if (file) resizePhoto(file).then(identifyBase64).catch(function (e) { photoResultsEl.textContent = e.message; }); });
-  document.getElementById('cameraBtn').addEventListener('click', function () {
-    cameraErrorEl.textContent = ''; cameraModalEl.style.display = 'flex';
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { cameraErrorEl.textContent = 'Camera is not available. Use Upload Image instead.'; return; }
-    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false }).then(function (stream) { cameraStream = stream; cameraVideoEl.srcObject = stream; }).catch(function () { cameraErrorEl.textContent = 'Camera permission was denied. Use Upload Image or allow camera access.'; });
-  });
-  document.getElementById('closeCameraBtn').addEventListener('click', closeCamera);
-  document.getElementById('captureBtn').addEventListener('click', function () {
-    if (!cameraVideoEl.videoWidth) return;
-    var scale = Math.min(1, 1024 / Math.max(cameraVideoEl.videoWidth, cameraVideoEl.videoHeight));
-    var canvas = document.createElement('canvas'); canvas.width = Math.round(cameraVideoEl.videoWidth * scale); canvas.height = Math.round(cameraVideoEl.videoHeight * scale);
-    canvas.getContext('2d').drawImage(cameraVideoEl, 0, 0, canvas.width, canvas.height);
-    var base64 = canvas.toDataURL('image/jpeg', .85).split(',')[1]; closeCamera(); identifyBase64(base64);
-  });
 
   function fmtAgo(ts) {
     if (!ts) return 'never';

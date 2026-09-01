@@ -31,8 +31,6 @@ test('sales can use order, velocity, manual-sale, and messaging APIs', () => {
   assert.equal(apiAllowedForUser(sales, '/api/velocity/shipments'), true);
   assert.equal(apiAllowedForUser(sales, '/api/sales/record'), true);
   assert.equal(apiAllowedForUser(sales, '/api/whatsapp/send'), true);
-  assert.equal(apiAllowedForUser(sales, '/api/stock-search?q=SA116'), true);
-  assert.equal(apiAllowedForUser(sales, '/api/identify-product'), true);
 });
 
 test('procurement is confined to purchasing and size workflows', () => {
@@ -71,8 +69,6 @@ test('warehouse and stock-search roles receive only operational stock access', (
   assert.equal(apiAllowedForUser(user('warehouse'), '/api/orders-ledger'), true);
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/stock-search'), true);
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/racks/set'), true);
-  assert.equal(apiAllowedForUser(user('warehouse'), '/api/identify-product'), true);
-  assert.equal(apiAllowedForUser(user('stocksearch'), '/api/identify-product'), true);
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/showroom/settings'), false);
 });
 

@@ -37,10 +37,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
-const dns     = require('dns').promises;
-const net     = require('net');
 const multer  = require('multer');
-const AdmZip  = require('adm-zip');
 let Jimp = null; try { Jimp = require('jimp'); } catch { /* dedup degrades to off */ }
 let XLSX = null; try { XLSX = require('xlsx'); } catch { /* Excel invoice parsing degrades to off */ }
 
@@ -271,9 +268,6 @@ try { fs.mkdirSync(CAND_DIR, { recursive: true }); } catch { /* exists */ }
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const AI_MODEL = process.env.CASUALS_AI_MODEL || process.env.FRESH_PROC_AI_MODEL || process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SPLITTER_IMAGE_MODEL = process.env.CASUALS_IMAGE_MODEL || process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5';
-const SPLITTER_VISION_MODEL = process.env.CASUALS_SPLITTER_VISION_MODEL || 'gpt-4.1-mini';
 
 function atomicWrite(fp, data) {
   const tmp = fp + '.tmp-' + process.pid + '-' + Date.now();
@@ -554,110 +548,6 @@ const candidateUpload = multer({
   fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
 });
 
-const ZIP_MAX_BYTES = 50 * 1024 * 1024;
-const ZIP_MAX_FILES = 200;
-const ZIP_MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const ZIP_MAX_EXPANDED_BYTES = 300 * 1024 * 1024;
-const zipUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: ZIP_MAX_BYTES, files: 1 } });
-const ZIP_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
-
-function unsafeImportIp(ip) {
-  if (net.isIPv4(ip)) {
-    const p = ip.split('.').map(Number);
-    return p[0] === 10 || p[0] === 127 || p[0] === 0 ||
-      (p[0] === 169 && p[1] === 254) || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
-      (p[0] === 192 && p[1] === 168) || (p[0] === 100 && p[1] >= 64 && p[1] <= 127) || p[0] >= 224;
-  }
-  const v = String(ip || '').toLowerCase();
-  return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe8') || v.startsWith('fe9') || v.startsWith('fea') || v.startsWith('feb');
-}
-
-async function assertSafeImportUrl(raw) {
-  let u;
-  try { u = new URL(String(raw || '').trim()); } catch { throw new Error('Enter a valid public HTTPS ZIP link.'); }
-  if (u.protocol !== 'https:') throw new Error('Only public HTTPS ZIP links are accepted.');
-  if (!u.hostname || u.username || u.password || u.hostname.toLowerCase() === 'localhost') throw new Error('This ZIP link is not allowed.');
-  const resolved = await dns.lookup(u.hostname, { all: true });
-  if (!resolved.length || resolved.some(x => unsafeImportIp(x.address))) throw new Error('Private or local network ZIP links are not allowed.');
-  return u;
-}
-
-async function downloadZip(raw) {
-  let u = await assertSafeImportUrl(raw);
-  for (let redirects = 0; redirects <= 3; redirects++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
-    let response;
-    try { response = await fetch(u, { redirect: 'manual', signal: controller.signal }); }
-    catch (e) { clearTimeout(timer); throw new Error(e && e.name === 'AbortError' ? 'ZIP download timed out.' : 'Could not download that ZIP link.'); }
-    clearTimeout(timer);
-    if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
-      if (redirects === 3) throw new Error('The ZIP link redirected too many times.');
-      u = await assertSafeImportUrl(new URL(response.headers.get('location'), u).toString());
-      continue;
-    }
-    if (!response.ok) throw new Error('ZIP download failed (HTTP ' + response.status + ').');
-    const declared = Number(response.headers.get('content-length') || 0);
-    if (declared > ZIP_MAX_BYTES) throw new Error('ZIP is larger than 50 MB.');
-    const chunks = []; let total = 0;
-    for await (const chunk of response.body) {
-      total += chunk.length;
-      if (total > ZIP_MAX_BYTES) throw new Error('ZIP is larger than 50 MB.');
-      chunks.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
-  }
-  throw new Error('Could not download that ZIP link.');
-}
-
-function safeZipImages(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 4 || buffer.readUInt32LE(0) !== 0x04034b50) throw new Error('The selected file is not a valid ZIP archive.');
-  let entries;
-  try { entries = new AdmZip(buffer).getEntries(); } catch { throw new Error('The ZIP archive could not be read.'); }
-  const images = []; let expanded = 0;
-  for (const entry of entries) {
-    const name = String(entry.entryName || '').replace(/\\/g, '/');
-    if (entry.isDirectory || !name || name.startsWith('/') || name.split('/').includes('..') || name.includes('/__MACOSX/') || name.startsWith('__MACOSX/')) continue;
-    const base = path.basename(name);
-    if (!base || base.startsWith('.') || !ZIP_IMAGE_EXTS.has(path.extname(base).toLowerCase())) continue;
-    if (images.length >= ZIP_MAX_FILES) throw new Error('ZIP contains more than 200 images.');
-    const size = Number(entry.header && entry.header.size || 0);
-    if (size > ZIP_MAX_IMAGE_BYTES) throw new Error(base + ' is larger than 25 MB.');
-    expanded += size;
-    if (expanded > ZIP_MAX_EXPANDED_BYTES) throw new Error('ZIP expands beyond the 300 MB safety limit.');
-    const data = entry.getData();
-    if (!data.length) continue;
-    images.push({ name: base, ext: path.extname(base).toLowerCase(), data });
-  }
-  if (!images.length) throw new Error('No JPG, PNG or WebP images were found in the ZIP.');
-  return images;
-}
-
-async function importZipImages(buffer, body) {
-  const images = safeZipImages(buffer);
-  const vendor = String(body && body.vendor || '').trim();
-  if (!vendor) throw new Error('Enter a vendor name first.');
-  const s = loadStore();
-  const reqBatch = String(body && body.batch || '').trim();
-  const target = s.batches.find(b => b.id === reqBatch);
-  if (!target) throw new Error('Open a destination batch first.');
-  s.activeBatch = target.id;
-  const created = [];
-  try {
-    for (const img of images) {
-      const filename = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + img.ext;
-      const fp = path.join(CAND_DIR, filename);
-      fs.writeFileSync(fp, img.data); created.push(fp);
-      const sig = await computeSignature(fp);
-      s.candidates.push({ id: crypto.randomBytes(8).toString('hex'), file: filename, vendor, batch: target.id,
-        category: null, fit: null, colour: null, pattern: null, uploadedAt: new Date().toISOString(),
-        sha: fileSha(fp), phash: sig ? sig.phash : null, avg: sig ? sig.avg : null, dupeOf: null });
-    }
-    const active = activeCands(s); const dupes = markDuplicates(active); saveStore(s);
-    return { added: images.length, total: active.length, dupes, batch: target, batches: batchList(s), activeBatch: s.activeBatch };
-  } catch (e) { created.forEach(fp => { try { fs.unlinkSync(fp); } catch {} }); throw e; }
-}
-
 // ── Photo Splitter ──────────────────────────────────────────────
 // Supplier screenshots often contain several colourway/product photos in one
 // collage. Detect the individual photo rectangles, crop them server-side and
@@ -680,12 +570,7 @@ function validSplitBoxes(raw) {
     const x1 = Math.max(0, Math.min(1, n[2])), y1 = Math.max(0, Math.min(1, n[3]));
     if (x1 - x0 < 0.08 || y1 - y0 < 0.08) return;
     // Avoid duplicate boxes returned with tiny coordinate differences.
-    if (boxes.some(q => {
-      if (Math.abs(q[0]-x0)<0.025 && Math.abs(q[1]-y0)<0.025 && Math.abs(q[2]-x1)<0.025 && Math.abs(q[3]-y1)<0.025) return true;
-      const ix=Math.max(0,Math.min(q[2],x1)-Math.max(q[0],x0)), iy=Math.max(0,Math.min(q[3],y1)-Math.max(q[1],y0));
-      const inter=ix*iy, union=(q[2]-q[0])*(q[3]-q[1])+(x1-x0)*(y1-y0)-inter;
-      return inter/Math.max(0.001,union) >= 0.86;
-    })) return;
+    if (boxes.some(q => Math.abs(q[0]-x0)<0.025 && Math.abs(q[1]-y0)<0.025 && Math.abs(q[2]-x1)<0.025 && Math.abs(q[3]-y1)<0.025)) return;
     boxes.push([x0,y0,x1,y1]);
   });
   return boxes.slice(0, 30);
@@ -697,93 +582,66 @@ function splitDetectionNeedsDetail(boxes) {
   return (b[2] - b[0]) * (b[3] - b[1]) >= 0.42;
 }
 
-function splitBoxesNeedFocusCards(boxes) {
-  for (let i = 0; i < (boxes || []).length; i++) {
-    for (let j = i + 1; j < boxes.length; j++) {
-      const a = boxes[i], b = boxes[j];
-      const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
-      const iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
-      const smaller = Math.min((a[2]-a[0])*(a[3]-a[1]), (b[2]-b[0])*(b[3]-b[1]));
-      if ((ix * iy) / Math.max(0.001, smaller) >= 0.08) return true;
+function verticalOverlapRatio(a, b) {
+  const overlap = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  return overlap / Math.max(0.001, Math.min(a[3] - a[1], b[3] - b[1]));
+}
+
+// Garments on a supplier rail often physically overlap. Vision correctly finds
+// their centres, but independent tight bounding boxes then repeat large pieces
+// of neighbouring colours. Convert each horizontal lineup into mutually
+// exclusive visual columns, divided at the midpoint between adjacent garment
+// centres. This keeps colour identification clear and guarantees no repeated
+// pixels between crops from the same row.
+function separateHorizontalSplitBoxes(raw) {
+  const boxes = (raw || []).map(b => b.slice());
+  const unused = new Set(boxes.map((_, i) => i));
+  const output = [];
+  while (unused.size) {
+    const seed = unused.values().next().value;
+    const group = [seed]; unused.delete(seed);
+    for (let p = 0; p < group.length; p++) {
+      for (const i of Array.from(unused)) {
+        if (verticalOverlapRatio(boxes[group[p]], boxes[i]) >= 0.68) {
+          group.push(i); unused.delete(i);
+        }
+      }
     }
+    if (group.length < 2) { output.push(boxes[seed]); continue; }
+    const row = group.map(i => boxes[i]).sort((a, b) => ((a[0]+a[2])/2) - ((b[0]+b[2])/2));
+    const centres = row.map(b => (b[0] + b[2]) / 2);
+    const left = Math.max(0, Math.min(...row.map(b => b[0])) - 0.01);
+    const right = Math.min(1, Math.max(...row.map(b => b[2])) + 0.01);
+    const top = Math.max(0, Math.min(...row.map(b => b[1])) - 0.015);
+    const bottom = Math.min(1, Math.max(...row.map(b => b[3])) + 0.015);
+    const edges = [left];
+    for (let i = 0; i < centres.length - 1; i++) edges.push((centres[i] + centres[i+1]) / 2);
+    edges.push(right);
+    row.forEach((b, i) => {
+      if (edges[i+1] - edges[i] >= 0.06) output.push([edges[i], top, edges[i+1], bottom]);
+      else output.push(b);
+    });
   }
-  return false;
-}
-
-const splitSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function reconstructSplitGarment(referenceBuffer) {
-  if (!OPENAI_API_KEY) throw new Error('OpenAI reconstruction is not enabled. Set OPENAI_API_KEY in Railway.');
-  const prompt = 'The green rectangle identifies ONE garment colourway in a supplier photograph. Create a clean isolated product-reference image of ONLY that selected garment. Reconstruct only portions hidden by neighbouring garments, conservatively continuing the visible fabric, colour, cut, length, waistband, pockets, seams and hem. Preserve the selected garment\'s exact visible colour, silhouette, proportions and design; do not copy a neighbour\'s colour or details and do not redesign it. Show the complete garment from top to hem, front-facing, centered on a plain light-grey background with even margins. No person, hanger, rack, other garments, text, labels, watermark, collage, border or green rectangle. Output exactly one garment. This is an AI reconstruction for procurement review, not a final product listing.';
-  let last;
-  for (let attempt=1; attempt<=3; attempt++) {
-    const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 120000);
-    try {
-      const form=new FormData();
-      form.append('model',SPLITTER_IMAGE_MODEL);
-      form.append('prompt',prompt);
-      form.append('size','1024x1536');
-      form.append('quality','medium');
-      form.append('output_format','png');
-      form.append('image',new Blob([referenceBuffer],{type:'image/jpeg'}),'selected-garment.jpg');
-      const r = await fetch('https://api.openai.com/v1/images/edits', {
-        method:'POST', signal:ctrl.signal,
-        headers:{authorization:'Bearer '+OPENAI_API_KEY}, body:form
-      });
-      clearTimeout(timer);
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { const e=new Error('OpenAI '+r.status+': '+(((j.error&&j.error.message)||'image error').slice(0,180))); e.status=r.status; throw e; }
-      const data=j.data&&j.data[0]&&j.data[0].b64_json;
-      if (!data) throw new Error('OpenAI returned no reconstructed image.');
-      return {buffer:Buffer.from(data,'base64'),mimeType:'image/png'};
-    } catch (e) {
-      clearTimeout(timer); last=e;
-      if (![429,500,502,503].includes(e.status) || attempt===3) throw e;
-      await splitSleep(1000*Math.pow(2,attempt));
-    }
-  }
-  throw last;
-}
-
-async function splitMapLimit(items, limit, worker) {
-  const out = new Array(items.length); let next=0;
-  async function run(){ while(next<items.length){ const i=next++; out[i]=await worker(items[i],i); } }
-  await Promise.all(Array.from({length:Math.min(limit,items.length)},run));
-  return out;
-}
-
-async function makeSplitFocusReference(img, box) {
-  const W=img.bitmap.width,H=img.bitmap.height;
-  const x=Math.max(0,Math.floor(box[0]*W)),y=Math.max(0,Math.floor(box[1]*H));
-  const w=Math.max(1,Math.min(W-x,Math.ceil((box[2]-box[0])*W))),h=Math.max(1,Math.min(H-y,Math.ceil((box[3]-box[1])*H)));
-  const focus=img.clone().brightness(-0.42);
-  focus.composite(img.clone().crop(x,y,w,h),x,y);
-  const line=Math.max(3,Math.round(Math.min(W,H)*0.006)),green=Jimp.rgbaToInt(16,185,129,255);
-  for(let n=0;n<line;n++){
-    for(let px=x;px<Math.min(W,x+w);px++){ if(y+n<H)focus.setPixelColor(green,px,y+n); if(y+h-1-n>=0)focus.setPixelColor(green,px,y+h-1-n); }
-    for(let py=y;py<Math.min(H,y+h);py++){ if(x+n<W)focus.setPixelColor(green,x+n,py); if(x+w-1-n>=0)focus.setPixelColor(green,x+w-1-n,py); }
-  }
-  if(focus.bitmap.width>1400||focus.bitmap.height>1400)focus.scaleToFit(1400,1400);
-  focus.quality(84); return focus.getBufferAsync(Jimp.MIME_JPEG);
+  return output.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
 }
 
 async function requestPhotoBoxes(enc, prompt) {
-  if (!OPENAI_API_KEY) throw new Error('OpenAI photo splitting is not enabled. Set OPENAI_API_KEY in Railway.');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
   let r;
   try {
-    r = await fetch('https://api.openai.com/v1/chat/completions', {
+    r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', signal: ctrl.signal,
-      headers: { authorization:'Bearer '+OPENAI_API_KEY, 'content-type':'application/json' },
-      body: JSON.stringify({ model:SPLITTER_VISION_MODEL, max_tokens:1800, temperature:0, response_format:{type:'json_object'}, messages:[{role:'user',content:[
-        {type:'text',text:prompt},
-        {type:'image_url',image_url:{url:'data:'+enc.mediaType+';base64,'+enc.data,detail:'high'}}
-      ]}]})
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 1800, temperature: 0, messages: [{ role:'user', content:[
+        { type:'image', source:{ type:'base64', media_type:enc.mediaType, data:enc.data } },
+        { type:'text', text:prompt }
+      ]}] })
     });
   } finally { clearTimeout(timer); }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j.error && j.error.message) || ('OpenAI HTTP ' + r.status));
-  const parsed = extractJson(j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || {};
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('AI HTTP ' + r.status));
+  const parsed = extractJson((j.content || []).map(c => c.text || '').join('')) || {};
   return validSplitBoxes(parsed.boxes);
 }
 
@@ -791,14 +649,14 @@ async function detectPhotoBoxes(buffer, mediaType) {
   const enc = await shrinkForVision(buffer, mediaType);
   const primary = await requestPhotoBoxes(enc,
     'Split this supplier image into INDIVIDUAL garment colourways/products. A single continuous rack, row, collage panel, or shared background may contain several colours: make ONE separate crop for EACH visible garment/colourway, even when garments touch or overlap slightly. Do not return one box around an entire row when multiple garments are visible. For model photos, keep the complete model and garment. Exclude captions, app controls, blank margins, logos and tiny unrelated thumbnails. Coordinates are normalized against the whole image. If exactly one garment is visible, return one useful crop. Before answering, count the visible garments and ensure the box count matches. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
-  if (!splitDetectionNeedsDetail(primary)) return primary;
+  if (!splitDetectionNeedsDetail(primary)) return separateHorizontalSplitBoxes(primary);
 
   // A large single box is commonly the whole rack/collage. Ask a second,
   // deliberately garment-level pass so same-background colour lineups are not
   // silently accepted as a successful one-photo split.
   const detailed = await requestPhotoBoxes(enc,
-    'The earlier detector found only one large region. Audit the image specifically for MULTIPLE garment colourways inside that region. Count every separately visible trouser, shirt, T-shirt or other garment, including a row hanging on one rail or models shown side by side on the same background. Return ONE full-garment bounding box PER colourway. Boxes MAY overlap when the garments overlap; never cut off a garment merely to avoid overlap. Never group a multi-colour lineup into one box. If there truly is only one garment, return one box. Exclude UI, text-only areas and blank bars. Normalized coordinates. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
-  return detailed.length > primary.length ? detailed : primary;
+    'The earlier detector found only one large region. Audit the image specifically for MULTIPLE garment colourways inside that region. Count every separately visible trouser, shirt, T-shirt or other garment, including a row hanging on one rail or models shown side by side on the same background. Return ONE crop PER colourway, centred on that colour and wide enough to identify it. Place boundaries between adjacent garments; do not repeat the same neighbouring garment in multiple crops. Never group a multi-colour lineup into one crop. If there truly is only one garment, return one box. Exclude UI, text-only areas and blank bars. Normalized coordinates. STRICT JSON ONLY: {"boxes":[[x0,y0,x1,y1]]}.');
+  return separateHorizontalSplitBoxes(detailed.length > primary.length ? detailed : primary);
 }
 
 router.post('/api/casuals/photo-split', (req, res) => {
@@ -808,43 +666,26 @@ router.post('/api/casuals/photo-split', (req, res) => {
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ success:false, error:'Choose at least one collage photo.' });
     try {
-      const results = [], sources = [], warnings = [], splitRun = crypto.randomBytes(6).toString('hex');
+      const results = [], splitRun = crypto.randomBytes(6).toString('hex');
       for (let fi=0; fi<files.length; fi++) {
         const f = files[fi];
         const boxes = await detectPhotoBoxes(f.buffer, f.mimetype);
         if (!boxes.length) continue;
         const img = await Jimp.read(f.buffer), W = img.bitmap.width, H = img.bitmap.height;
-        const useFocusCards = splitBoxesNeedFocusCards(boxes);
-        const preview=img.clone(); if(preview.bitmap.width>1200||preview.bitmap.height>1200)preview.scaleToFit(1200,1200); preview.quality(75);
-        const previewBuf=await preview.getBufferAsync(Jimp.MIME_JPEG);
-        sources.push({sourceIndex:fi,sourceName:f.originalname||('Photo '+(fi+1)),mimeType:'image/jpeg',data:'data:image/jpeg;base64,'+previewBuf.toString('base64')});
-        if(useFocusCards){
-          const made=await splitMapLimit(boxes,3,async(b,bi)=>{
-            try{
-              const ref=await makeSplitFocusReference(img,b),gen=await reconstructSplitGarment(ref);
-              return {b,bi,gen};
-            }catch(e){ warnings.push((f.originalname||('Photo '+(fi+1)))+' colour '+(bi+1)+': '+e.message); return null; }
-          });
-          for(const rec of made.filter(Boolean)){
-            const ext=rec.gen.mimeType==='image/png'?'png':rec.gen.mimeType==='image/webp'?'webp':'jpg';
-            results.push({id:'split-'+splitRun+'-'+fi+'-'+rec.bi,sourceIndex:fi,sourceName:f.originalname||('Photo '+(fi+1)),designGroup:'split-design-'+splitRun+'-'+fi,index:rec.bi+1,box:rec.b,aiReconstructed:true,mimeType:rec.gen.mimeType,data:'data:'+rec.gen.mimeType+';base64,'+rec.gen.buffer.toString('base64'),extension:ext});
-          }
-          continue;
-        }
         for (let bi=0; bi<boxes.length; bi++) {
           const b = boxes[bi];
           const x = Math.max(0, Math.floor(b[0]*W)), y = Math.max(0, Math.floor(b[1]*H));
           const w = Math.max(1, Math.min(W-x, Math.ceil((b[2]-b[0])*W)));
           const h = Math.max(1, Math.min(H-y, Math.ceil((b[3]-b[1])*H)));
-          let resultImage=img.clone().crop(x,y,w,h);
-          if (resultImage.bitmap.width > 1800 || resultImage.bitmap.height > 1800) resultImage.scaleToFit(1800,1800);
-          resultImage.quality(90);
-          const out = await resultImage.getBufferAsync(Jimp.MIME_JPEG);
+          const crop = img.clone().crop(x,y,w,h);
+          if (crop.bitmap.width > 1800 || crop.bitmap.height > 1800) crop.scaleToFit(1800,1800);
+          crop.quality(90);
+          const out = await crop.getBufferAsync(Jimp.MIME_JPEG);
           results.push({ id:'split-'+splitRun+'-'+fi+'-'+bi, sourceIndex:fi, sourceName:f.originalname || ('Photo '+(fi+1)), designGroup:'split-design-'+splitRun+'-'+fi, index:bi+1, box:b, mimeType:'image/jpeg', data:'data:image/jpeg;base64,'+out.toString('base64') });
         }
       }
       if (!results.length) return res.status(422).json({ success:false, error:'No separate product photos could be detected. Try a clearer collage.' });
-      res.json({ success:true, results, sources, warnings });
+      res.json({ success:true, results });
     } catch (e) {
       res.status(e && e.name === 'AbortError' ? 504 : 502).json({ success:false, error:e && e.name === 'AbortError' ? 'Photo splitting timed out. Try fewer photos at once.' : ('Could not split the photos: '+e.message) });
     }
@@ -952,9 +793,7 @@ async function scoreSimpleBatch(items, plan) {
     const enc = await shrinkForVision(it.buffer, it.mediaType);
     content.push({ type: 'image', source: { type: 'base64', media_type: enc.mediaType, data: enc.data } });
   }
-  const reqBySlot = new Map((plan.requirements || []).map(x => [String(x.slotName || ''), x]));
-  const slots = (plan.mix || []).map((s, i) => { const name = String(s.name || '').trim(), q = Math.max(1, parseInt(s.styles) || 1), req = reqBySlot.get(name);
-    return `${i + 1}. ${name} (${q} style slot${q === 1 ? '' : 's'})` + (req ? `\n   Required: type=${req.type || '-'}; design=${req.design || '-'}; surface=${req.surface || '-'}; colours=${(req.colours || []).join(', ') || '-'}` : ''); }).join('\n');
+  const slots = (plan.mix || []).map((s, i) => `${i + 1}. ${String(s.name || '').trim()} (${Math.max(1, parseInt(s.styles) || 1)} style slot${Math.max(1, parseInt(s.styles) || 1) === 1 ? '' : 's'})`).join('\n');
   content.push({ type: 'text', text:
 `You are the senior buyer for SANKI, an Indian premium-casual fashion brand. Compare EACH candidate image against this APPROVED buy plan.
 
@@ -971,7 +810,7 @@ For each candidate return:
 5) "reason" — max 18 words explaining the score using visible evidence.
 6) "excludeReason" — if score below 65 or slot is No match, max 12 words; otherwise empty.
 
-Be strict. For a detailed requirement, judge the visible silhouette, design construction, pattern/surface and requested colours. A strong alternative may match the design but use another colour; say so clearly in reason. A generic or wrong-gender product cannot score above 64. Do not invent fabric, price, measurements, stock or demand data from a photograph.
+Be strict. A generic or wrong-gender product cannot score above 64. Do not invent fabric, price, measurements, stock or demand data from a photograph.
 Return STRICT JSON ONLY: {"items":[{"slot":"..","silhouette":"..","colour":"..","score":78,"reason":"..","excludeReason":""}, ...]} with exactly ${items.length} objects in image order.` });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 90000);
@@ -1948,79 +1787,6 @@ router.post('/api/casuals/settings', (req, res) => {
   res.json({ success: true, settings: settingsWithDefaults(s) });
 });
 
-// Procurement V2 is deliberately isolated from the live/legacy planner. It has
-// its own saved document so testing the design-slot model cannot alter the
-// founder's existing category settings, candidates, purchases or PO history.
-const V2_TROUSER_SLOTS = [
-  ['Wide-leg','Clean high-waist, flat front','Solid','Black','Beige'],
-  ['Wide-leg','Single-pleat tailored','Solid','Chocolate','Cream'],
-  ['Wide-leg','Belted or defined-waist','Solid','Black','Stone'],
-  ['Wide-leg','Soft, fluid summer drape','Solid','Navy','Powder blue'],
-  ['Straight-leg','Classic tailored straight','Fine pinstripe','Black','Charcoal'],
-  ['Straight-leg','Relaxed full-length straight','Solid','Beige','Chocolate'],
-  ['Straight-leg','Ankle-length straight','Solid','Navy','Cream'],
-  ['Relaxed/pleated','Double-pleat relaxed fit','Solid','Black','Olive'],
-  ['Relaxed/pleated','Soft-drape relaxed fit','Subtle texture','Chocolate','Beige'],
-  ['Relaxed/pleated','Elasticated-back tailored','Solid','Navy','Olive'],
-  ['Flared','Clean boot-cut','Solid','Black','Burgundy'],
-  ['Flared','Fitted upper, wider flare','Solid','Chocolate','Butter yellow'],
-  ['Pull-on summer','Fluid straight/wide pull-on','Solid','Cream','Petrol blue'],
-  ['Pull-on summer','Linen-look relaxed trouser','Linen-look texture','Beige','Olive'],
-  ['Fashion test','Elevated barrel or soft cargo','Solid/utility','Black','Burgundy']
-].map((x, i) => ({ id: 'trouser-' + (i + 1), type: x[0], design: x[1], surface: x[2], colours: [x[3], x[4]] }));
-
-function defaultV2Plan() {
-  return { version: 2, name: "Women’s trousers — initial buy", gender: 'Women', category: 'Trouser',
-    landedCost: 1100, sizes: { '28': 1, '30': 2, '32': 2, '34': 1 }, slots: V2_TROUSER_SLOTS };
-}
-function cleanV2Plan(body) {
-  const b = body && typeof body === 'object' ? body : {};
-  const sizes = {}; Object.keys(b.sizes || {}).slice(0, 20).forEach(k => {
-    const n = Math.max(0, parseInt(b.sizes[k], 10) || 0); if (n) sizes[String(k).slice(0, 16)] = n;
-  });
-  const slots = (Array.isArray(b.slots) ? b.slots : []).slice(0, 200).map((x, i) => ({
-    id: String(x.id || ('slot-' + (i + 1))).slice(0, 80), type: String(x.type || '').trim().slice(0, 100),
-    design: String(x.design || '').trim().slice(0, 180), surface: String(x.surface || '').trim().slice(0, 100),
-    colours: (Array.isArray(x.colours) ? x.colours : []).map(v => String(v || '').trim().slice(0, 60)).filter(Boolean).slice(0, 8)
-  })).filter(x => x.type || x.design || x.colours.length);
-  return { version: 2, name: String(b.name || 'Procurement V2 plan').slice(0, 120),
-    gender: String(b.gender || 'Women').slice(0, 30), category: String(b.category || 'Trouser').slice(0, 50),
-    landedCost: Math.max(0, Math.round(Number(b.landedCost) || 0)), sizes: Object.keys(sizes).length ? sizes : { '28':1,'30':2,'32':2,'34':1 }, slots };
-}
-router.get('/api/casuals/v2-plan', (req, res) => {
-  const s = loadStore(); res.json({ success: true, plan: s.procurementV2 ? cleanV2Plan(s.procurementV2) : defaultV2Plan() });
-});
-router.post('/api/casuals/v2-plan', (req, res) => {
-  const s = loadStore(); s.procurementV2 = cleanV2Plan(req.body); saveStore(s);
-  res.json({ success: true, plan: s.procurementV2 });
-});
-router.post('/api/casuals/v2-plan/import', (req, res) => {
-  invoiceUpload.single('file')(req, res, err => {
-    if (err) return res.status(400).json({ success: false, error: err.message || 'Could not upload table' });
-    try {
-      if (!req.file || !XLSX) throw new Error('Choose an Excel or CSV sourcing table.');
-      const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
-      const val = (row, names) => { const keys = Object.keys(row); const k = keys.find(x => names.includes(String(x).toLowerCase().replace(/[^a-z0-9]/g, ''))); return k ? row[k] : ''; };
-      const parseSizes = text => { const out = {}; String(text || '').split(/[,;|]/).forEach(p => { const m = p.trim().match(/^([^:=x]+)\s*[:=x]\s*(\d+)$/i); if (m && +m[2] > 0) out[m[1].trim()] = +m[2]; }); return out; };
-      let commonSizes = {};
-      const slots = raw.map((row, i) => {
-        const colours = [val(row, ['colour1','color1']), val(row, ['colour2','color2'])].map(String).map(x => x.trim()).filter(Boolean);
-        if (!colours.length) String(val(row, ['colours','colors','requiredcolours','requiredcolors']) || '').split(/[,;|]/).map(x => x.trim()).filter(Boolean).forEach(x => colours.push(x));
-        const sizes = parseSizes(val(row, ['sizepack','sizes','sizespercolour','sizespercolor']));
-        if (Object.keys(sizes).length && !Object.keys(commonSizes).length) commonSizes = sizes;
-        return { id: 'import-' + (i + 1), type: String(val(row, ['garmenttype','trousertype','type','item']) || '').trim(),
-          design: String(val(row, ['specificdesignrequired','specificdesign','designrequirement','design']) || '').trim(),
-          surface: String(val(row, ['patternsurface','pattern','surface']) || '').trim(), colours };
-      }).filter(x => x.type || x.design || x.colours.length);
-      if (!slots.length) throw new Error('No sourcing rows found. Include Garment Type, Specific Design, Pattern/Surface and Colour columns.');
-      const current = (loadStore().procurementV2 || defaultV2Plan());
-      res.json({ success: true, plan: cleanV2Plan({ ...current, sizes: Object.keys(commonSizes).length ? commonSizes : current.sizes, slots }), importedRows: slots.length });
-    } catch (e) { res.status(400).json({ success: false, error: e.message || 'Could not read sourcing table' }); }
-  });
-});
-
 router.get('/api/casuals/candidates', (req, res) => {
   const s = loadStore();
   const active = activeCands(s);
@@ -2141,22 +1907,6 @@ router.post('/api/casuals/candidates', async (req, res) => {
   saveStore(s);
   res.json({ success: true, added, total: active.length, dupes,
     categories: categoryCounts(active), batches: batchList(s), activeBatch: s.activeBatch, batch: target });
-});
-
-router.post('/api/casuals/candidates/import-zip', (req, res) => {
-  zipUpload.single('zip')(req, res, async err => {
-    if (err) return res.status(400).json({ success: false, error: err.code === 'LIMIT_FILE_SIZE' ? 'ZIP is larger than 50 MB.' : (err.message || 'ZIP upload failed.') });
-    if (!req.file || !req.file.buffer) return res.status(400).json({ success: false, error: 'Choose a ZIP file first.' });
-    try { res.json({ success: true, ...(await importZipImages(req.file.buffer, req.body)) }); }
-    catch (e) { res.status(400).json({ success: false, error: e.message || 'Could not import ZIP.' }); }
-  });
-});
-
-router.post('/api/casuals/candidates/import-zip-url', express.json(), async (req, res) => {
-  try {
-    const buffer = await downloadZip(req.body && req.body.url);
-    res.json({ success: true, ...(await importZipImages(buffer, req.body)) });
-  } catch (e) { res.status(400).json({ success: false, error: e.message || 'Could not import ZIP link.' }); }
 });
 
 router.get('/api/casuals/candidate/:id', (req, res) => {
@@ -2308,29 +2058,6 @@ router.post('/api/casuals/analyze', async (req, res) => {
   }
 });
 
-function normaliseAssortmentSlot(value) {
-  return String(value || '').trim().toLowerCase()
-    .replace(/[\u00b7\u2022|:]+/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
-function assortmentSlotCode(value) {
-  const match = normaliseAssortmentSlot(value).match(/^([a-z]+\s*\d+)\b/);
-  return match ? match[1].replace(/\s+/g, '') : '';
-}
-
-function resolveAssortmentSlot(value, slots) {
-  const normalised = normaliseAssortmentSlot(value);
-  if (!normalised || normalised === 'no match') return null;
-  const exact = slots.find(slot => normaliseAssortmentSlot(slot.name) === normalised);
-  if (exact) return exact;
-  const code = assortmentSlotCode(value);
-  if (!code) return null;
-  const matches = slots.filter(slot => assortmentSlotCode(slot.name) === code);
-  return matches.length === 1 ? matches[0] : null;
-}
-
 // Match the current batch to the named assortment approved in the simplified
 // workflow. Returns both winners and rejected alternatives with reasons, so the
 // recommendation is inspectable rather than a silent first-N shortlist.
@@ -2355,21 +2082,22 @@ router.post('/api/casuals/simple-recommend', async (req, res) => {
       slice.forEach(c => { try { items.push({ id: c.id, buffer: fs.readFileSync(path.join(CAND_DIR, c.file)), mediaType: mediaTypeForFile(c.file) }); } catch {} });
       if (items.length) scored.push(...await scoreSimpleBatch(items, plan));
     }
-    const slots = plan.mix.map(x => ({ name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1) })).filter(x => x.name);
+    const slotMap = {};
+    plan.mix.forEach(x => { slotMap[String(x.name || '').trim().toLowerCase()] = { name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1) }; });
     const byId = new Map(pool.map(c => [c.id, c]));
     const used = new Set(); const selected = [];
-    slots.forEach(slot => {
-      scored.filter(x => resolveAssortmentSlot(x.slot, slots) === slot && x.score >= 65 && !used.has(x.id))
+    Object.values(slotMap).forEach(slot => {
+      scored.filter(x => String(x.slot || '').trim().toLowerCase() === slot.name.toLowerCase() && x.score >= 65 && !used.has(x.id))
         .sort((a, b) => b.score - a.score).slice(0, slot.need).forEach(x => { used.add(x.id); selected.push({ ...publicCandidate(byId.get(x.id)), ...x, slot: slot.name }); });
     });
     const excluded = scored.filter(x => !used.has(x.id)).sort((a, b) => b.score - a.score).map(x => {
-      const c = byId.get(x.id); const recognised = resolveAssortmentSlot(x.slot, slots);
+      const c = byId.get(x.id); const recognised = slotMap[String(x.slot || '').trim().toLowerCase()];
       let why = x.excludeReason;
       if (!why && recognised) why = 'Lower score than selected alternative';
       if (!why) why = x.slot === 'No match' ? 'Outside approved assortment' : 'Does not fill an open slot';
       return { ...publicCandidate(c), ...x, excludeReason: why };
     });
-    const missing = slots.map(slot => ({ slot: slot.name, required: slot.need,
+    const missing = Object.values(slotMap).map(slot => ({ slot: slot.name, required: slot.need,
       selected: selected.filter(x => x.slot === slot.name).length })).filter(x => x.selected < x.required);
     res.json({ success: true, evaluated: scored.length, eligibleBeforeLimit: all.length, ceiling,
       selected, excluded, missing, basis: { threshold: 65, dimensions: { slotMatch: 40, brandFit: 20, marketRelevance: 15, versatility: 15, visibleFinish: 10 } } });
@@ -2653,4 +2381,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, splitBoxesNeedFocusCards, safeZipImages, unsafeImportIp, normaliseAssortmentSlot, assortmentSlotCode, resolveAssortmentSlot };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes };
