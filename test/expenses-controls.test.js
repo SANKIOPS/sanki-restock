@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -34,6 +34,42 @@ test('26 August perfume sale posts ₹1,000 to Counter Cash and ₹799 to Paytm 
   assert.equal(store.auditLog.length,2);assert.equal(store.auditLog.every(x=>x.action==='PRODUCT_SALE_RECEIPT_RECORDED'),true);
   assert.equal(applyMissingPerfumeSale(store),false,'the split sale cannot be duplicated on another load');
   assert.equal(store.receipts.length,2);
+});
+
+test('owner-confirmed Axis 3645 cases preserve unrelated reconciliation progress and post exact ledger effects',()=>{
+  const account='Prashant Axis 3645',paid=(id,date,vendor,amount)=>({id,date,nature:'SANKI',status:'paid',approvedAt:date+'T10:00:00Z',vendor,particulars:vendor,amount,paidAmount:amount,payments:[{id:'PAY-001',date,amount,account}]}),store={
+    expenses:{
+      'EX-PERSONAL-HARYANA':{id:'EX-PERSONAL-HARYANA',date:'2026-08-22',nature:'PERSONAL',status:'paid',approvedAt:'2026-08-22T10:00:00Z',vendor:'Haryana Trading Company',particulars:'Owner purchase',amount:6560,paidAmount:6560,paidAlready:true,fundedBy:'claimant',personalPaidAmount:6560,reimbursementStatus:'not_applicable',payments:[{id:'PAY-001',date:'2026-08-22',amount:6560,account:'ICICI Bank 0993',personalFunds:true}]},
+      'EX-00031':paid('EX-00031','2026-08-24','FNP',100),'EX-00038':paid('EX-00038','2026-08-24','FNP',100),'EX-00032':paid('EX-00032','2026-08-23','Kalu Fruits and Flowers',200),
+      'EX-00095':{id:'EX-00095',date:'2026-08-27',nature:'SANKI',status:'approved',approvedAt:'2026-08-27T10:00:00Z',vendor:'Kalu Fruits and Flowers',particulars:'Fruit',amount:160,paidAmount:0,payments:[]},
+      'EX-00027':paid('EX-00027','2026-08-23','Alok Kumar',600),'EX-00035':paid('EX-00035','2026-08-24','Alok Kumar',600),
+      'EX-00033':{id:'EX-00033',date:'2026-08-27',nature:'SANKI',status:'paid',approvedAt:'2026-08-27T10:00:00Z',amount:46,paidAmount:46,reimbursementPayments:[{id:'REIM-001',date:'2026-08-27',amount:46,account}]},
+      'EX-00037':{id:'EX-00037',date:'2026-08-27',nature:'SANKI',status:'paid',approvedAt:'2026-08-27T10:00:00Z',amount:20,paidAmount:20,reimbursementPayments:[{id:'REIM-001',date:'2026-08-27',amount:20,account}]},
+      'EX-00083':{id:'EX-00083',date:'2026-08-27',nature:'SANKI',status:'paid',approvedAt:'2026-08-27T10:00:00Z',amount:73,paidAmount:73,reimbursementPayments:[{id:'REIM-001',date:'2026-08-27',amount:73,account}]},
+      'EX-00120':paid('EX-00120','2026-08-28','Vi Recharge',652)
+    },vendors:{'kalu fruits and flowers':{name:'Kalu Fruits and Flowers'}},vendorsByNature:{PERSONAL:{}},vendorAdvances:[],oneTimeMigrations:{},auditLog:[],auditSeq:0,adjustments:[],receipts:[],openingBalances:{},openingBalancesByNature:{PERSONAL:{}},bankDateOverrides:{},transferSeq:8,adjSeq:0,
+    transfers:[
+      {id:'TR-00006',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:account,amount:20000,date:'2026-08-26',proof:'/cash.jpg'},
+      {id:'TR-00007',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Axis Bank 3448',amount:20000,date:'2026-08-26',proof:'/paytm.jpg'},
+      {id:'TR-00008',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:account,amount:1203,date:'2026-08-26',proof:'/first.jpg'}
+    ],bankReconciliationDrafts:{'BRD-CASES':{id:'BRD-CASES',account,nature:'SANKI',transactions:[
+      {date:'2026-08-22',reference:'612673856994',description:'GAGAN LAM',debit:0,credit:6560},{date:'2026-08-22',reference:'623430655870',description:'HARYANATRADING CO',debit:6560,credit:0},
+      {date:'2026-08-24',reference:'623647818325',description:'Ferns n petals',debit:200,credit:0},{date:'2026-08-24',reference:'623662965347',description:'Kalu Fruits',debit:418,credit:0},
+      {date:'2026-08-24',reference:'623646085829',description:'ANOKHMAL BAIRWA',debit:1200,credit:0},
+      {date:'2026-08-26',description:'THIRD PARTY CASH DEP',debit:0,credit:19500},{date:'2026-08-26',description:'THIRD PARTY CASH DEP',debit:0,credit:500},{date:'2026-08-26',reference:'623833323062',description:'SANKI THE CRAZY ATTIR',debit:20000,credit:0},
+      {date:'2026-08-26',description:'TPARTY TRAN BHARAT SAMAST GARMENTS',debit:0,credit:1203},{date:'2026-08-26',description:'TPARTY TRAN BHARAT SAMAST GARMENTS',debit:0,credit:1203},
+      {date:'2026-08-26',reference:'623818860235',description:'SHIVAM KUMAR',debit:139,credit:0},{date:'2026-08-27',reference:'660545756771',description:'Euronet Services Indi',debit:651.90,credit:0},
+      {date:'2026-08-28',reference:'KEEP',description:'Previously resolved',debit:50,credit:0}
+    ],summary:{from:'2026-08-22',to:'2026-08-28'},resolutions:{'bank-12':{action:'exclude',reason:'Keep me'}},matchingPolicy:'strict_identity_v2'}}
+  };
+  assert.equal(applyOwnerConfirmedAxis3645Cases(store),true);
+  assert.deepEqual(store.bankReconciliationDrafts['BRD-CASES'].resolutions['bank-12'],{action:'exclude',reason:'Keep me'});
+  const personal=store.expenses['EX-PERSONAL-HARYANA'],personalTransfer=store.transfers.find(x=>x.ownerConfirmedMigration&&x.classification==='reimbursement');assert.equal(personal.payments[0].account,account);assert.equal(personal.nature,'PERSONAL');assert.equal(personalTransfer.fromAccount,'ICICI Bank 0993');assert.equal(personalTransfer.toAccount,account);
+  const advance=store.vendorAdvances[0];assert.equal(advance.amount,218);assert.equal(advance.remainingAmount,58);assert.equal(store.expenses['EX-00095'].paidAmount,160);assert.equal(store.expenses['EX-00095'].status,'paid');
+  assert.equal(store.transfers.find(x=>x.id==='TR-00006').amount,19500);assert.ok(store.transfers.some(x=>x.fromAccount==='Counter Cash'&&x.toAccount===account&&x.amount===500));assert.equal(store.transfers.find(x=>x.id==='TR-00007').toAccount,'Paytm Settlement Clearing');
+  assert.equal(store.transfers.filter(x=>x.fromAccount==='Axis Bank 3448'&&x.toAccount===account&&x.amount===1203).length,2);assert.equal(store.adjustments.find(x=>x.bankReference==='660545756771').amount,.10);
+  assert.deepEqual(store.bankReconciliationDrafts['BRD-CASES'].resolutions['bank-10'].appIds,['EX-00033/REIM-001','EX-00037/REIM-001','EX-00083/REIM-001']);
+  assert.equal(applyOwnerConfirmedAxis3645Cases(store),false,'all seven corrections are idempotent');
 });
 
 function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant' } = {}) {
@@ -890,6 +926,18 @@ test('any manual ledger movement can be linked to a bank row, remarked and undon
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankDateOverrides['TR-LINK-ALL'].originalDate,'2026-08-25');assert.equal(after.bankDateOverrides['TR-LINK-ALL'].bankDate,'2026-08-24');
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
+
+test('a missing internal transfer can be created from an official bank row without fabricated proof',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString(),account='Prashant Axis 3645',id='BRD-CREATE-TRANSFER';
+  stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date:'2026-08-26',description:'Second transfer from Axis 3448',reference:'BANK-SECOND',debit:0,credit:1203,balance:1203}],summary:{from:'2026-08-26',to:'2026-08-26',openingBalance:0,closingBalance:1203,totalDebits:0,totalCredits:1203,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:id,rowId:'bank-0',action:'create_internal_transfer',otherAccount:'Axis Bank 3448',reason:'Second bank-confirmed transfer'}});assert.equal(resolved.status,200,JSON.stringify(resolved.body));assert.equal(resolved.body.rows.find(x=>x.id==='bank-0').status,'resolved');
+  const afterResolve=JSON.parse(fs.readFileSync(expenseFile,'utf8'));applyFinalizedInternalTransfers(afterResolve.bankReconciliationDrafts[id],'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),transfer=after.transfers.find(x=>x.reconciliationDraft===id);
+  assert.equal(transfer.fromAccount,'Axis Bank 3448');assert.equal(transfer.toAccount,account);assert.equal(transfer.amount,1203);assert.equal(transfer.bankStatementEvidence,true);assert.equal((after.auditLog||[]).some(x=>x.action==='BANK_CONFIRMED_TRANSFER_CREATED'&&x.subjectId===transfer.id),true);
+  const issues=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account}}).body.reconciliationIssues;assert.equal(issues.some(x=>x.reference===transfer.id&&x.code==='missing_transfer_proof'),false);
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('bank review offers a bank-confirmed internal transfer action',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);});
 
 test('amount-mismatch rows can correct an editable ledger entry with an audit trail',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString();
