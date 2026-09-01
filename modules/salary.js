@@ -386,7 +386,7 @@ function payrollBalanceCarryIn(s,e,ym){
   return carry;
 }
 function computeMonth(s, ym) {
-  return Object.values(s.employees).filter(e=>employeeInPayrollMonth(e,ym)).sort(byEmployeeName).map(e => {
+  return Object.values(s.employees).filter(e=>employeeInPayrollMonth(e,ym)||Math.abs(payrollBalanceCarryIn(s,e,ym))>=.005).sort(byEmployeeName).map(e => {
     const x=employeeMonthBase(s,e,ym),openingBalanceCarry=payrollBalanceCarryIn(s,e,ym),openingAdvanceCarry=round2(Math.max(0,-openingBalanceCarry)),openingPayableCarry=round2(Math.max(0,openingBalanceCarry)),advance=round2(x.currentAdvance+openingAdvanceCarry),netPayable=x.salaryAmt-x.currentAdvance+openingBalanceCarry;
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
