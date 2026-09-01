@@ -37,7 +37,8 @@ function load() {
     const employeeRepair=applySunnyGuardAndSurajRepair(s);
     const correctedJuly=applyCorrectedJulyAttendanceV7(s);
     const normalizedLeaveMarks=applyStoredLeaveAllowancesV11(s);
-    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks) save(s);
+    const finalJulyPayroll=applyFinalJuly2026PayrollV12(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -91,6 +92,45 @@ const PROVIDED_ADVANCE_IMPORT = [
   ['2026-08-07','Guard','Security',3000],
   ['2026-08-09','TUSHAR','PACKING HELPER',2000],
   ['2026-08-09','Shivam','SALES EXECUTIVE',500]
+];
+
+// Owner-confirmed July payroll. Paid days and paid amounts are frozen to the
+// supplied historical sheet; advances remain individually dated above.
+const FINAL_JULY_2026_PAYROLL = [
+  ['ARSHPREET SINGH','MANAGER',30000,30,5000,'2000 Last Month + 50000 This Month'],
+  ['Guard','Security',15000,30,12000,''],
+  ['SUNNY SHARMA','SALES EXECUTIVE',24000,22,0,'7000 Last Month'],
+  ['PARDEEP','EXECUTIVE',19000,21.5,13500,''],
+  ['NANDANI','SALES EXECUTIVE',17000,29,16500,''],
+  ['SHIVAM','SALES EXECUTIVE',17000,30,15500,''],
+  ['ISHA','SALES EXECUTIVE',18000,30,18000,''],
+  ['HITESH','PHOTOGRAPHER',20000,27,18000,''],
+  ['AJAY','VIDEO EDITOR',18000,29,17500,'Salary Delay'],
+  ['PIYUSH','TAILOR',18500,28,17000,''],
+  ['UMAIR','DRIVER',28000,27.5,9000,''],
+  ['TUSHAR','PACKING HELPER',15000,31,13500,''],
+  ['NIDA','LOGISTIC',25000,29,24000,''],
+  ['GAURAV','EDITOR',18500,28.5,17500,''],
+  ['PRASHANT','ACCOUNTS',26000,29.5,13000,'7467 Last Month + 10000 This Month'],
+  ['Suraj','Office Boy',18000,25,13500,''],
+  ['TUSHAR','Model',30000,30,30000,''],
+  ['Indervir','ACCOUNTS',17000,28.5,12000,''],
+  ['CSH','MARKETING',15000,30,15000,'Final: 30 paid days'],
+  ['Ravi','DRIVER',26000,9,4000,''],
+  ['Pooja','Model',20000,10,6500,'']
+];
+
+// Complete owner-confirmed August recovery. The `knownExisting` rows are
+// matched to their live transactions; only the other four should be created
+// on production. A fresh data set still receives the complete final history.
+const FINAL_AUGUST_2026_ADVANCES = [
+  ['2026-08-12','Ravi','DRIVER',500,false],
+  ['2026-08-14','Suraj','Office Boy',500,false],
+  ['2026-08-14','Shivam','SALES EXECUTIVE',500,false],
+  ['2026-08-19','Ravi','DRIVER',6000,false],
+  ['2026-08-26','ARSHPREET SINGH','MANAGER',2500,true],
+  ['2026-08-27','Ravi','DRIVER',1000,true],
+  ['2026-08-27','Suraj','Office Boy',1000,true]
 ];
 
 function findImportedEmployee(s,name,post){
@@ -151,6 +191,64 @@ function applyCorrectedJulyAttendanceV7(s){
   s.oneTimeMigrations[key]={appliedAt:now,month:'2026-07',employees:updated,advanceIds,advanceTotal:round2(PROVIDED_ADVANCE_IMPORT.reduce((n,x)=>n+num(x[3]),0)),rules:{attendanceLabelsRetained:true,fixedMonthlyAllowance:true,partialMonthAllowanceLimited:true,calendar31Deduction:1,allProvidedAdvancesRecoveredInJuly:true}};
   return true;
 }
+
+function applyFinalJuly2026PayrollV12(s){
+  const key='final_july_payroll_and_august_advances_v12';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const now=new Date().toISOString(),mo=ensureMonth(s,'2026-07'),updatedEmployees=[];
+  mo.rows=mo.rows||{};
+
+  FINAL_JULY_2026_PAYROLL.forEach(([name,post,salary,paidDays,paid,remarks])=>{
+    const emp=findImportedEmployee(s,name,post);if(!emp)return;
+    emp.salary=round2(salary);
+    const row=mo.rows[emp.id]=Object.assign({},mo.rows[emp.id]);
+    row.historicalPaidDays=round2(paidDays);
+    row.paid=round2(paid);
+    row.advance=0;
+    if(remarks)row.remarks=remarks;
+    updatedEmployees.push({empId:emp.id,name:emp.name,salary:emp.salary,paidDays:row.historicalPaidDays,paid:row.paid});
+  });
+
+  // July recovered only the advances listed in the confirmed July summary.
+  // Rebuild those recoveries deterministically instead of adding another one.
+  let julyRecoveryTotal=0;
+  PROVIDED_ADVANCE_IMPORT.forEach(([date,name,post,amount],index)=>{
+    const emp=findImportedEmployee(s,name,post),sourceKey='provided-advance-sheet-'+date+'-'+index;
+    if(!emp)return;
+    let advance=Object.values(s.advances||{}).find(a=>a.sourceKey===sourceKey);
+    if(!advance){
+      s.advanceSeq=num(s.advanceSeq)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0');
+      advance=s.advances[id]={id,createdAt:now,createdBy:'System migration'};
+    }
+    Object.assign(advance,{empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account:'',proof:'',proofs:[],note:'Historical advance imported from supplied July payroll sheet',reference:'HIST-'+date.replace(/-/g,'')+'-'+String(index+1).padStart(2,'0'),sourceKey,recoveryStartMonth:'2026-07',recoveries:[{ym:'2026-07',amount:round2(amount),by:'System migration',at:now}],active:true,historicalImport:true});
+    julyRecoveryTotal+=num(amount);
+  });
+
+  const augustAdvanceIds=[],createdAugustAdvanceIds=[];
+  FINAL_AUGUST_2026_ADVANCES.forEach(([date,name,post,amount,knownExisting],index)=>{
+    const emp=findImportedEmployee(s,name,post);if(!emp)return;
+    const finalPayrollSourceKey='final-august-payroll-'+date+'-'+String(index+1).padStart(2,'0');
+    let advance=Object.values(s.advances||{}).find(a=>a.finalPayrollSourceKey===finalPayrollSourceKey)||Object.values(s.advances||{}).find(a=>a.active!==false&&a.empId===emp.id&&String(a.date)===date&&Math.abs(num(a.amount)-num(amount))<.001);
+    if(!advance){
+      do{s.advanceSeq=num(s.advanceSeq)+1;}while(s.advances['ADV-'+String(s.advanceSeq).padStart(5,'0')]);
+      const id='ADV-'+String(s.advanceSeq).padStart(5,'0');advance=s.advances[id]={id,empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account:'',proof:'',proofs:[],note:'Historical August advance imported from confirmed payroll sheet',reference:'HIST-AUG-'+date.replace(/-/g,'')+'-'+String(index+1).padStart(2,'0'),sourceKey:'final-august-advance-sheet-'+date+'-'+String(index+1).padStart(2,'0'),active:true,historicalImport:true,createdAt:now,createdBy:'System migration'};createdAugustAdvanceIds.push(id);
+    }
+    advance.finalPayrollSourceKey=finalPayrollSourceKey;advance.recoveryStartMonth='2026-08';
+    const otherRecoveries=(advance.recoveries||[]).filter(r=>r.ym!=='2026-08'),previouslyRecovered=round2(otherRecoveries.reduce((n,r)=>n+num(r.amount),0)),augustRecovery=round2(Math.max(0,num(advance.amount)-previouslyRecovered));
+    advance.recoveries=otherRecoveries.concat(augustRecovery?[{ym:'2026-08',amount:augustRecovery,by:'System migration',at:now}]:[]);
+    augustAdvanceIds.push(advance.id);
+  });
+
+  // A historical payroll posting records salary earned and the sheet's paid
+  // amounts in employee ledgers only. No salaryPayments or cash entries exist.
+  const postingRows=computeMonth(s,'2026-07').filter(r=>r.salaryAmt||r.advance||r.paid).map(r=>({empId:r.id,employeeName:r.name,salaryAmt:r.salaryAmt,advanceRecovery:r.loggedAdvanceRecovery,legacyAdvance:r.legacyAdvance,legacyPaid:r.legacyPaid,paid:r.paid,netPayable:r.netPayable}));
+  s.payrollPostings=s.payrollPostings||{};
+  const existingPosting=s.payrollPostings['2026-07']||{};
+  s.payrollPostings['2026-07']=Object.assign({},existingPosting,{ym:'2026-07',rows:postingRows,postedAt:existingPosting.postedAt||now,postedBy:existingPosting.postedBy||'System migration',historicalImport:true,correctedAt:now});
+  s.oneTimeMigrations[key]={appliedAt:now,month:'2026-07',updatedEmployees,julyRecoveryTotal:round2(julyRecoveryTotal),julyPaidTotal:round2(FINAL_JULY_2026_PAYROLL.reduce((n,x)=>n+num(x[4]),0)),augustAdvanceIds,createdAugustAdvanceIds,augustRecoveryTotal:round2(FINAL_AUGUST_2026_ADVANCES.reduce((n,x)=>n+num(x[3]),0)),rules:{signedPayrollCarry:true,noBankOrCashPosting:true,existingAugustAdvancesMatchedNotDuplicated:true,pendingRequestsUntouched:true}};
+  return true;
+}
+
 function normalizedAbsentMark(e,ym,day){
   const date=ym+'-'+String(day).padStart(2,'0'),weekday=WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()];
   return e&&e.weekOffDay===weekday?'WO':'A';
@@ -269,29 +367,29 @@ function auditAdvanceRequest(s, req, action, requestId, details) { s.advanceRequ
 function employeeMonthBase(s,e,ym){
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
-  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),paidDays=computed!=null?computed:(row.paidDays!=null?num(row.paidDays):null);
+  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),historicalPaidDays=row.historicalPaidDays!=null?num(row.historicalPaidDays):null,paidDays=historicalPaidDays!=null?historicalPaidDays:(computed!=null?computed:(row.paidDays!=null?num(row.paidDays):null));
   const salaryAmt=paidDays!=null?(num(e.salary)/div*paidDays):0,legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery);
   const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
-  return {row,computed,paidDays,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,legacyPaid,transactionPaid,paid};
+  return {row,computed,historicalPaidDays,paidDays,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,legacyPaid,transactionPaid,paid};
 }
-function payrollCarryIn(s,e,ym){
+function payrollBalanceCarryIn(s,e,ym){
   let carry=0;
   Object.keys(s.months||{}).filter(m=>m<ym).sort().forEach(m=>{
     if(!employeeInPayrollMonth(e,m))return;
-    const x=employeeMonthBase(s,e,m),net=x.salaryAmt-x.currentAdvance-carry,balance=net-x.paid;
-    carry=round2(Math.max(0,-balance));
+    const x=employeeMonthBase(s,e,m),net=x.salaryAmt-x.currentAdvance+carry,balance=net-x.paid;
+    carry=round2(balance);
   });
   return carry;
 }
 function computeMonth(s, ym) {
   return Object.values(s.employees).filter(e=>employeeInPayrollMonth(e,ym)).sort(byEmployeeName).map(e => {
-    const x=employeeMonthBase(s,e,ym),openingAdvanceCarry=payrollCarryIn(s,e,ym),advance=round2(x.currentAdvance+openingAdvanceCarry),netPayable=x.salaryAmt-advance;
+    const x=employeeMonthBase(s,e,ym),openingBalanceCarry=payrollBalanceCarryIn(s,e,ym),openingAdvanceCarry=round2(Math.max(0,-openingBalanceCarry)),openingPayableCarry=round2(Math.max(0,openingBalanceCarry)),advance=round2(x.currentAdvance+openingAdvanceCarry),netPayable=x.salaryAmt-x.currentAdvance+openingBalanceCarry;
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
-      salary: num(e.salary), paidDays:x.paidDays, computedPaidDays:x.computed,
-      salaryAmt: round2(x.salaryAmt), advance, currentAdvance:x.currentAdvance, openingAdvanceCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, netPayable: round2(netPayable),
+      salary: num(e.salary), paidDays:x.paidDays, computedPaidDays:x.computed, historicalPaidDays:x.historicalPaidDays,
+      salaryAmt: round2(x.salaryAmt), advance, currentAdvance:x.currentAdvance, openingBalanceCarry, openingAdvanceCarry, openingPayableCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, netPayable: round2(netPayable),
       outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
-      paid:x.paid, legacyPaid:x.legacyPaid, transactionPaid:x.transactionPaid, balance:round2(netPayable-x.paid), carryForwardAdvance:round2(Math.max(0,-(netPayable-x.paid))),remarks:x.row.remarks||''
+      paid:x.paid, legacyPaid:x.legacyPaid, transactionPaid:x.transactionPaid, balance:round2(netPayable-x.paid), carryForwardAdvance:round2(Math.max(0,-(netPayable-x.paid))),carryForwardPayable:round2(Math.max(0,netPayable-x.paid)),remarks:x.row.remarks||''
     };
   });
 }
@@ -547,7 +645,7 @@ function seedIfEmpty() {
   if (fs.existsSync(SAL_PATH)) return;
   // [name, post, salary, channel, paidDays, advance, paid, remarks]  (July 2026)
   const SEED = [
-    ['ARSHPREET SINGH', 'MANAGER', 30000, 'Shared', 30, 52000, 0, '2000 Last Month + 50000 This Month'],
+    ['ARSHPREET SINGH', 'MANAGER', 30000, 'Shared', 30, 52000, 5000, '2000 Last Month + 50000 This Month'],
     ['Guard', 'Security', 15000, 'Shared', 30, 3000, 12000, ''],
     ['SUNNY SHARMA', 'SALES EXECUTIVE', 24000, 'POS', 22, 20000, 0, '7000 Last Month'],
     ['PARDEEP', 'EXECUTIVE', 19000, 'Shared', 21.5, 0, 13500, ''],
@@ -556,16 +654,16 @@ function seedIfEmpty() {
     ['ISHA', 'SALES EXECUTIVE', 18000, 'POS', 30, 100, 18000, ''],
     ['HITESH', 'PHOTOGRAPHER', 20000, 'Website', 27, 0, 18000, ''],
     ['AJAY', 'VIDEO EDITOR', 18000, 'Website', 29, 0, 17500, 'Salary Delay'],
-    ['PIYUSH', 'TAILOR', 18500, 'Shared', 28, 0, 0, ''],
+    ['PIYUSH', 'TAILOR', 18500, 'Shared', 28, 0, 17000, ''],
     ['UMAIR', 'DRIVER', 28000, 'Shared', 27.5, 17000, 9000, ''],
     ['TUSHAR(INV)', 'PACKING HELPER', 15000, 'Shared', 31, 2000, 13500, ''],
     ['NIDA', 'LOGISTIC', 25000, 'Shared', 29, 0, 24000, ''],
     ['GAURAV', 'EDITOR', 18500, 'Website', 28.5, 0, 17500, ''],
     ['PRASHANT', 'ACCOUNTS', 26000, 'Shared', 29.5, 17467, 13000, '7467 Last Month + 10000 This Month'],
     ['Suraj(OB)', 'Office Boy', 18000, 'Shared', 25, 1500, 13500, ''],
-    ['TUSHAR(MOD)', 'Model', 28000, 'Website', 30, 0, 28000, ''],
+    ['TUSHAR(MOD)', 'Model', 30000, 'Website', 30, 0, 30000, ''],
     ['Indervir', 'ACCOUNTS', 17000, 'Shared', 28.5, 4000, 12000, ''],
-    ['CSH', 'MARKETING', 15000, 'Website', null, 0, 0, 'Confirmation'],
+    ['CSH', 'MARKETING', 15000, 'Website', 30, 0, 15000, 'Final: 30 paid days'],
     ['Ravi', 'DRIVER', 26000, 'Shared', 9, 6500, 4000, ''],
     ['Pooja', 'MODEL', 20000, 'Website', 10, 0, 6500, '']
   ];
@@ -583,4 +681,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair };

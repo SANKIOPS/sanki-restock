@@ -45,7 +45,7 @@ const MODULES = [
   { key: 'velocity',     title: 'Velocity Intelligence', desc: 'How fast every product is selling',                  icon: '⚡', href: '/velocity.html',                  section: 'Main',      status: 'hidden', roles: ['admin', 'sales', 'inventory'] },
   { key: 'analytics',    title: 'Analytics',             desc: 'Sales & performance dashboards',                     icon: '📊', href: '/analytics.html',                 section: 'Main',      status: 'hidden', roles: ['admin', 'sales'] },
   { key: 'inv-stats',    title: 'Inventory Statistics',  desc: 'Stock levels & valuation',                           icon: '📈', href: '/inventory-stats.html',           section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
-  { key: 'stock-search', title: 'Stock Search',          desc: 'Find stock by SKU or photo and see its rack location', icon: '🔍', href: '/rack-locations.html',           section: 'Sales',     status: 'live', roles: ['admin', 'owner', 'sales', 'inventory', 'stocksearch', 'warehouse'] },
+  { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'hidden', roles: ['admin', 'stocksearch', 'warehouse'] },
 
   { key: 'orders',       title: 'Orders',                desc: 'Every Shopify sale (POS + Website) + dispatch tracking', icon: '🧾', href: '/orders.html',                section: 'Sales',     status: 'live',   roles: ['admin', 'sales', 'revenue', 'warehouse'] },
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.
@@ -53,7 +53,6 @@ const MODULES = [
 
   { key: 'procurement', title: 'Purchases',              desc: 'Generate SKUs, landed cost, create products / add stock', icon: '📦', href: '/procurement.html',           section: 'Purchases', status: 'live',   roles: ['admin', 'procurement', 'inventory'] },
   { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Plan a buy, upload vendor catalogues, review AI selections and create vendor POs', icon: '🧠', href: '/fresh-procurement-simple.html', section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
-  { key: 'fresh-proc-v2', title: 'Procurement V2 (Trial)', desc: 'Test exact design, colourway and size-pack planning without changing the existing system', icon: '🧪', href: '/fresh-procurement-v2.html', section: 'Purchases', status: 'beta', roles: ['admin', 'procurement'] },
   { key: 'size-tracker', title: 'Size Tracker',           desc: 'Match vendor (China) size charts to SANKI target sizes before every PO', icon: '📏', href: '/size-tracker.html',      section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
   { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },
