@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyEx00122CashPaymentCorrection } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -22,6 +22,18 @@ test('EX-00122 keeps its ₹58 expense while correcting Counter Cash from ₹34 
   assert.equal(expense.amount,58);assert.equal(payment.amount,60);assert.equal(payment.cashRoundingAmount,2);assert.equal(expense.paidAmount,60);assert.equal(expense.status,'paid');assert.equal(expense.cashSettlementDifference,2);
   assert.equal(store.auditLog.at(-1).action,'PAYMENT_AMOUNT_CORRECTED');assert.equal(store.auditLog.at(-1).before.payment.amount,34);assert.equal(store.auditLog.at(-1).after.payment.amount,60);
   assert.equal(applyEx00122CashPaymentCorrection(store),false,'the production correction is idempotent');
+});
+
+test('26 August perfume sale posts ₹1,000 to Counter Cash and ₹799 to Paytm clearing once',()=>{
+  const store={receipts:[],receiptSeq:4,oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyMissingPerfumeSale(store),true);
+  assert.equal(store.receipts.length,2);
+  const cash=store.receipts.find(x=>x.account==='Counter Cash'),paytm=store.receipts.find(x=>x.account==='Paytm Settlement Clearing');
+  assert.equal(cash.amount,1000);assert.equal(paytm.amount,799);assert.equal(cash.receiptType,'product_sale');assert.equal(paytm.receiptType,'product_sale');
+  assert.equal(cash.manualSaleId,paytm.manualSaleId);assert.equal(cash.saleTotal,1799);assert.equal(paytm.saleTotal,1799);assert.equal(paytm.inventoryStatus,'unmapped_no_sku');
+  assert.equal(store.auditLog.length,2);assert.equal(store.auditLog.every(x=>x.action==='PRODUCT_SALE_RECEIPT_RECORDED'),true);
+  assert.equal(applyMissingPerfumeSale(store),false,'the split sale cannot be duplicated on another load');
+  assert.equal(store.receipts.length,2);
 });
 
 function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant' } = {}) {

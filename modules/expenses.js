@@ -222,6 +222,30 @@ function applyEx00122CashPaymentCorrection(s) {
   s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),expenseId:'EX-00122',paymentId:'PAY-001',account:'Counter Cash',from:34,to:60,expenseAmount:58,cashRoundingAmount:2,result};
   return true;
 }
+function applyMissingPerfumeSale(s) {
+  const key='record-2026-08-26-perfume-sale-counter-cash-1000-paytm-799';
+  const saleId='MANUAL-SALE-20260826-PERFUME-1799';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  s.receipts=Array.isArray(s.receipts)?s.receipts:[];
+  const existing=s.receipts.filter(x=>x.manualSaleId===saleId);
+  let result='already_present',created=[];
+  if(!existing.length){
+    const now=new Date().toISOString(),parts=[
+      {account:DEFAULT_COUNTER_CASH,amount:1000,paymentPart:'cash',note:'Cash portion of an unbilled perfume sale; product had no SKU at the time of sale'},
+      {account:PAYTM_CLEARING_ACCOUNT,amount:799,paymentPart:'paytm_upi',note:'Paytm UPI portion of an unbilled perfume sale; awaiting Paytm settlement reconciliation'}
+    ];
+    parts.forEach(part=>{
+      s.receiptSeq=num(s.receiptSeq)+1;
+      const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:'SANKI',account:part.account,amount:part.amount,receiptType:'product_sale',source:'Perfume sale',date:'2026-08-26',note:part.note,proof:'',proofException:'Owner-confirmed historical sale; no SKU/order existed when sold',createdBy:'prashant',createdAt:now,manualSaleId:saleId,paymentPart:part.paymentPart,saleTotal:1799,inventoryStatus:'unmapped_no_sku'};
+      s.receipts.push(receipt);created.push(receipt);
+      audit(s,null,'PRODUCT_SALE_RECEIPT_RECORDED','receipt',receipt.id,{user:'prashant',device:'System migration',nature:'SANKI',account:receipt.account,after:receipt,note:'Owner-confirmed split receipt for the 26 Aug 2026 perfume sale'});
+    });
+    result='recorded';
+  }
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),saleId,date:'2026-08-26',product:'Perfume',total:1799,payments:{counterCash:1000,paytmSettlementClearing:799},inventoryStatus:'unmapped_no_sku',receiptIds:created.map(x=>x.id),result};
+  return true;
+}
 function loadStore() {
   try {
     const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
@@ -261,6 +285,7 @@ function loadStore() {
     const removeTr9Key='owner-delete-tr-00009-both-ledger-sides';
     s.oneTimeMigrations=s.oneTimeMigrations||{};
     if(applyEx00122CashPaymentCorrection(s))saveStore(s);
+    if(applyMissingPerfumeSale(s))saveStore(s);
     if(!s.oneTimeMigrations[removeTr9Key]){const i=(s.transfers||[]).findIndex(x=>x.id==='TR-00009'),before=i>=0?s.transfers[i]:null;if(i>=0)s.transfers.splice(i,1);audit(s,null,'TRANSFER_DELETED','transfer','TR-00009',{user:'gaganlambasanki',device:'System migration',nature:before&&before.fromNature||'SANKI',account:before&&before.fromAccount||'Axis Bank 3448',before,after:null,note:'Owner confirmed removal from both account ledgers; ADV-00001 remains the salary advance record'});s.oneTimeMigrations[removeTr9Key]={appliedAt:new Date().toISOString(),result:before?'deleted':'not_found',before};saveStore(s);}
     Object.values(s.receivables || {}).forEach(x => (x.collections || []).forEach(c => { c.account = rename(c.account); }));
     Object.values((s.procurementAccounting || {}).paymentsByPo || {}).forEach(x => (x.payments || []).forEach(p => { p.account = rename(p.account);p.proofs=proofList(p.proofs,p.proof);p.proof=p.proofs[0]||''; }));
@@ -1734,7 +1759,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
   entries.push({ id: 'OPENING', date: account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:'', kind: 'opening', description: account===DEFAULT_COUNTER_CASH?'Opening balance effective 22 Aug 2026':'Opening balance', credit: num(openingMap[account]), debit: 0 });
   (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
-  (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,by:x.createdBy}));
+  (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='product_sale'?'Product sale':x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,by:x.createdBy,manualSaleId:x.manualSaleId||''}));
   (s.transfers || []).forEach(x => {
     const isOut=normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account,isIn=normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account;if(!isOut&&!isIn)return;
     const other=(isOut?(x.toNature||x.nature)+' · '+x.toAccount:(x.fromNature||x.nature)+' · '+x.fromAccount);
@@ -2263,4 +2288,4 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyEx00122CashPaymentCorrection };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale };
