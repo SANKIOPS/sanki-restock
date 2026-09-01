@@ -8,11 +8,20 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyEx00122CashPaymentCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test('EX-00122 keeps its ₹58 expense while correcting Counter Cash from ₹34 to ₹60',()=>{
+  const store={expenses:{'EX-00122':{id:'EX-00122',nature:'SANKI',amount:58,paidAmount:34,status:'partially_paid',payments:[{id:'PAY-001',amount:34,account:'Counter Cash',paymentType:'Cash'}]}},oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyEx00122CashPaymentCorrection(store),true);
+  const expense=store.expenses['EX-00122'],payment=expense.payments[0];
+  assert.equal(expense.amount,58);assert.equal(payment.amount,60);assert.equal(payment.cashRoundingAmount,2);assert.equal(expense.paidAmount,60);assert.equal(expense.status,'paid');assert.equal(expense.cashSettlementDifference,2);
+  assert.equal(store.auditLog.at(-1).action,'PAYMENT_AMOUNT_CORRECTED');assert.equal(store.auditLog.at(-1).before.payment.amount,34);assert.equal(store.auditLog.at(-1).after.payment.amount,60);
+  assert.equal(applyEx00122CashPaymentCorrection(store),false,'the production correction is idempotent');
 });
 
 function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant' } = {}) {

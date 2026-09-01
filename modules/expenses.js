@@ -202,6 +202,26 @@ function blankStore() {
     seq: 0, receivableSeq: 0, adjSeq: 0, transferSeq: 0, receiptSeq: 0, reqSeq: 0, auditSeq: 0
   };
 }
+function applyEx00122CashPaymentCorrection(s) {
+  const key='correct-ex-00122-counter-cash-payment-34-to-60';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const e=s.expenses&&s.expenses['EX-00122'],p=e&&Array.isArray(e.payments)&&e.payments.find(x=>x.id==='PAY-001');
+  let result='not_found_or_already_changed',before=null;
+  if(e&&p&&p.account==='Counter Cash'&&Math.abs(num(p.amount)-34)<.01&&Math.abs(num(e.amount)-58)<.01){
+    before={expenseAmount:num(e.amount),paidAmount:num(e.paidAmount),status:e.status,payment:Object.assign({},p)};
+    p.amount=60;
+    p.cashRoundingAmount=2;
+    p.cashRoundingReason='₹58 expense settled with ₹60 Counter Cash payment';
+    e.paidAmount=round0((e.payments||[]).reduce((n,x)=>n+num(x.amount),0));
+    e.status='paid';
+    e.cashSettlementDifference=round0(e.paidAmount-num(e.amount));
+    audit(s,null,'PAYMENT_AMOUNT_CORRECTED','expense',e.id,{user:'prashant',device:'System migration',nature:e.nature,account:p.account,paymentId:p.id,before,after:{expenseAmount:num(e.amount),paidAmount:e.paidAmount,status:e.status,payment:Object.assign({},p)},note:'Admin confirmed the actual cash handed over was ₹60 for the ₹58 Rapido expense; replaces the incorrectly stored ₹34 payment'});
+    result='corrected';
+  }
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),expenseId:'EX-00122',paymentId:'PAY-001',account:'Counter Cash',from:34,to:60,expenseAmount:58,cashRoundingAmount:2,result};
+  return true;
+}
 function loadStore() {
   try {
     const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
@@ -240,6 +260,7 @@ function loadStore() {
     (s.transfers || []).forEach(x => { x.fromAccount = rename(x.fromAccount); x.toAccount = rename(x.toAccount); });
     const removeTr9Key='owner-delete-tr-00009-both-ledger-sides';
     s.oneTimeMigrations=s.oneTimeMigrations||{};
+    if(applyEx00122CashPaymentCorrection(s))saveStore(s);
     if(!s.oneTimeMigrations[removeTr9Key]){const i=(s.transfers||[]).findIndex(x=>x.id==='TR-00009'),before=i>=0?s.transfers[i]:null;if(i>=0)s.transfers.splice(i,1);audit(s,null,'TRANSFER_DELETED','transfer','TR-00009',{user:'gaganlambasanki',device:'System migration',nature:before&&before.fromNature||'SANKI',account:before&&before.fromAccount||'Axis Bank 3448',before,after:null,note:'Owner confirmed removal from both account ledgers; ADV-00001 remains the salary advance record'});s.oneTimeMigrations[removeTr9Key]={appliedAt:new Date().toISOString(),result:before?'deleted':'not_found',before};saveStore(s);}
     Object.values(s.receivables || {}).forEach(x => (x.collections || []).forEach(c => { c.account = rename(c.account); }));
     Object.values((s.procurementAccounting || {}).paymentsByPo || {}).forEach(x => (x.payments || []).forEach(p => { p.account = rename(p.account);p.proofs=proofList(p.proofs,p.proof);p.proof=p.proofs[0]||''; }));
@@ -2242,4 +2263,4 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyEx00122CashPaymentCorrection };
