@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -189,12 +189,17 @@ test('one salary batch posts multiple employees atomically from the payroll tabl
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Select all payable/);assert.match(html,/Clear selection/);assert.match(html,/Only checked employees will be paid/);assert.match(html,/Partially paid/);
 });
 
-test('negative payable carries forward once and payroll respects employment months',()=>{
+test('positive and negative balances carry forward once and payroll respects employment months',()=>{
   const carryEmp=invoke('POST','/api/salary/employees',{body:{name:'Carry Forward Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-05'},body:{empId:carryEmp.id,paidDays:0,advance:5000}});
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-06'},body:{empId:carryEmp.id,paidDays:30}});
   let june=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-06'}}).body.rows.find(x=>x.id===carryEmp.id);
-  assert.equal(june.openingAdvanceCarry,5000);assert.equal(june.netPayable,25000);assert.equal(june.carryForwardAdvance,0);
+  assert.equal(june.openingBalanceCarry,-5000);assert.equal(june.openingAdvanceCarry,5000);assert.equal(june.openingPayableCarry,0);assert.equal(june.netPayable,25000);assert.equal(june.carryForwardAdvance,0);
+  const payableEmp=invoke('POST','/api/salary/employees',{body:{name:'Positive Carry Employee',salary:30000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-05'},body:{empId:payableEmp.id,paidDays:30,paid:29000}});
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-06'},body:{empId:payableEmp.id,paidDays:30}});
+  june=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-06'}}).body.rows.find(x=>x.id===payableEmp.id);
+  assert.equal(june.openingBalanceCarry,1000);assert.equal(june.openingAdvanceCarry,0);assert.equal(june.openingPayableCarry,1000);assert.equal(june.netPayable,31000);
   const joiner=invoke('POST','/api/salary/employees',{body:{name:'August Joiner',salary:18000,joiningDate:'2026-08-15'}}).body.employee;
   const leaver=invoke('POST','/api/salary/employees',{body:{name:'July Leaver',salary:18000,lastWorkingDate:'2026-07-20'}}).body.employee;
   const july=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-07'}}).body.rows,august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows;
@@ -203,7 +208,7 @@ test('negative payable carries forward once and payroll respects employment mont
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
   const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
   assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/Gagan Sir Cash|Counter Cash/);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying cash/);assert.match(html,/last month/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying cash/);assert.match(html,/last month deduction/);assert.match(html,/last month payable/);assert.match(html,/positive balances remain payable/);
 });
 
 test('July 2026 historical attendance prepares payroll with paid-off and 31-day rules',()=>{
@@ -215,18 +220,27 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   const expected=new Map(_july2026Import.map(x=>{const emp={monthlyPaidLeaveAllowance:String(x[0]).toLowerCase()==='suraj'?1:4,joiningDate:x[4]||''};return[x[0].toLowerCase()+'|'+x[1].toLowerCase(),{paidDays:_julyImportedMarks(emp,x[2]).paidDays}];}));
   const imported=month.rows.filter(r=>expected.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
   assert.equal(imported.length,19);
-  imported.forEach(r=>{const x=expected.get(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase());assert.equal(r.paidDays,x.paidDays,r.name);assert.equal(r.paid,0,r.name+' is not marked salary-paid');});
+  const finalRows=new Map(_finalJuly2026Payroll.map(x=>[String(x[0]).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(x[1]).toLowerCase(),{paidDays:x[3],paid:x[4]}]));
+  imported.forEach(r=>{const key=String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase(),x=finalRows.get(key);assert.ok(x,r.name+' has a final July row');assert.equal(r.paidDays,x.paidDays,r.name);assert.equal(r.paid,x.paid,r.name+' historical payment');});
   assert.equal(_providedAdvanceImport.reduce((n,x)=>n+x[3],0),125067);
   assert.equal(month.totals.advance,125067,'every supplied July and August advance is recovered in July payroll');
-  const history=invoke('GET','/api/salary/advances').body.advances.filter(x=>x.historicalImport);
+  const allHistorical=invoke('GET','/api/salary/advances').body.advances.filter(x=>x.historicalImport),history=allHistorical.filter(x=>String(x.sourceKey).startsWith('provided-advance-sheet-')),augustHistory=allHistorical.filter(x=>String(x.sourceKey).startsWith('final-august-advance-sheet-'));
   assert.equal(history.length,22);assert.equal(history.reduce((n,x)=>n+x.amount,0),125067);assert.ok(history.every(x=>x.status==='Recovered'&&!x.account&&!x.proof));
+  assert.equal(augustHistory.length,7);assert.equal(augustHistory.reduce((n,x)=>n+x.amount,0),12000);assert.ok(augustHistory.every(x=>x.status==='Recovered'&&x.recoveryStartMonth==='2026-08'));
+  assert.equal(_finalAugust2026Advances.reduce((n,x)=>n+x[3],0),12000);
+  assert.equal(month.totals.paid,291000);assert.equal(Math.round(imported.reduce((n,r)=>n+r.balance,0)*100)/100,-36658.65);
   assert.equal(month.rows.find(r=>r.name==='Pooja').paidDays,10);
   assert.equal(month.rows.find(r=>r.name==='Ravi').paidDays,9);
   const sunny=month.rows.find(r=>r.name==='SUNNY SHARMA'),guard=month.rows.find(r=>r.name==='Guard'),suraj=month.rows.find(r=>/^Suraj/i.test(r.name));
-  assert.equal(sunny.salary,24000);assert.equal(sunny.paidDays,26);assert.equal(sunny.advance,20000);assert.equal(sunny.netPayable,800);
+  assert.equal(sunny.salary,24000);assert.equal(sunny.paidDays,22);assert.equal(sunny.advance,20000);assert.equal(sunny.netPayable,-2400);
   assert.equal(guard.advance,3000);assert.equal(guard.netPayable,12000);
   assert.equal(suraj.paidDays,25);assert.equal(suraj.advance,1500);assert.equal(suraj.netPayable,13500);
   const employeeMaster=invoke('GET','/api/salary/employees').body.employees;assert.equal(employeeMaster.find(e=>e.id===suraj.id).monthlyPaidLeaveAllowance,1);assert.equal(employeeMaster.find(e=>e.id===sunny.id).monthlyPaidLeaveAllowance,4);
+  const arshpreet=month.rows.find(r=>/^Arshpreet/i.test(r.name)),ravi=month.rows.find(r=>r.name==='Ravi');
+  const august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows,finalNames=new Set(_finalJuly2026Payroll.map(x=>String(x[0]).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(x[1]).toLowerCase())),finalAugust=august.filter(r=>finalNames.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
+  assert.equal(august.find(r=>r.id===arshpreet.id).advance,29500);assert.equal(august.find(r=>r.id===ravi.id).advance,10200);assert.equal(august.find(r=>r.id===suraj.id).advance,1500);
+  assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);
+  assert.equal(Math.round(finalAugust.reduce((n,r)=>n+r.netPayable,0)*100)/100,-48658.65,'signed July balances and ₹12,000 August advances combine once');
   const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
   assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');
   assert.equal(sundayOff.attendance['01'],'A','ordinary absence remains visibly marked A');

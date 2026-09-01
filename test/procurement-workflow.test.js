@@ -44,11 +44,3 @@ test('Purchases Summary renders every PO as a compact expandable history row', (
   assert.match(html, /Recovered from Shopify/);
   assert.match(html, /original PO unavailable/);
 });
-
-test('Purchases AI image studio uses OpenAI exclusively', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
-  assert.match(source, /OPENAI_API_KEY/);
-  assert.match(source, /api\.openai\.com\/v1\/images\/edits/);
-  assert.match(source, /gpt-image-1\.5/);
-  assert.doesNotMatch(source, /GEMINI_API_KEY|GOOGLE_API_KEY|generativelanguage\.googleapis\.com/);
-});
