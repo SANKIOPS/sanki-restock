@@ -213,6 +213,8 @@ test('positive and negative balances carry forward once and payroll respects emp
 
 test('July 2026 historical attendance prepares payroll with paid-off and 31-day rules',()=>{
   assert.equal(_findImportedEmployee({employees:{x:{id:'x',name:'Arshpreet Singh Arora',post:'Manager'}}},'ARSHPREET SINGH','MANAGER').id,'x','longer employee-master name is matched safely by post');
+  assert.equal(_findImportedEmployee({employees:{x:{id:'x',name:'Nandini',post:'Sales Executive'}}},'NANDANI','SALES EXECUTIVE').id,'x','Nandini production spelling matches the supplied NANDANI row');
+  assert.equal(_findImportedEmployee({employees:{x:{id:'x',name:'Pradeep',post:'Executive'}}},'PARDEEP','EXECUTIVE').id,'x','Pradeep production spelling matches the supplied PARDEEP row');
   const missingGuard={employees:{},seq:0},guardMonth={rows:{}};const restoredGuard=_ensureHistoricalGuard(missingGuard,guardMonth);assert.equal(restoredGuard.name,'Guard');assert.equal(restoredGuard.salary,15000);assert.equal(guardMonth.rows[restoredGuard.id].paidDays,30);
   const collision={seq:22,employees:{E022:{id:'E022',name:'Guard',post:'Security',salary:15000}},advances:{a:{empId:'E022',employeeName:'SUNNY SHARMA',historicalImport:true}}};assert.equal(_repairGuardSunnyCollision(collision),true);assert.equal(collision.employees.E022.name,'SUNNY SHARMA');const safeGuard=_ensureHistoricalGuard(collision,{rows:{}});assert.equal(safeGuard.id,'E023');assert.equal(collision.employees.E022.name,'SUNNY SHARMA');
   assert.ok(_july2026Import.every(x=>x[2].length===31),'every supplied employee has exactly 31 source cells');

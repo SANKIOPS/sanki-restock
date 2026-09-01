@@ -37,7 +37,7 @@ function load() {
     const employeeRepair=applySunnyGuardAndSurajRepair(s);
     const correctedJuly=applyCorrectedJulyAttendanceV7(s);
     const normalizedLeaveMarks=applyStoredLeaveAllowancesV11(s);
-    const finalJulyPayroll=applyFinalJuly2026PayrollV12(s);
+    const finalJulyPayroll=applyFinalJuly2026PayrollV13(s);
     if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll) save(s);
     return s;
   } catch { return blank(); }
@@ -134,8 +134,12 @@ const FINAL_AUGUST_2026_ADVANCES = [
 ];
 
 function findImportedEmployee(s,name,post){
-  const target=String(name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase();
-  const sameName=Object.values(s.employees||{}).filter(e=>{const live=String(e.name||'').replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase();return live===target||live.startsWith(target+' ')||target.startsWith(live+' ');});
+  const canonicalName=value=>{
+    const normalized=String(value||'').replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase();
+    return ({pardeep:'pradeep',nandani:'nandini'})[normalized]||normalized;
+  };
+  const target=canonicalName(name);
+  const sameName=Object.values(s.employees||{}).filter(e=>{const live=canonicalName(e.name);return live===target||live.startsWith(target+' ')||target.startsWith(live+' ');});
   return sameName.find(e=>String(e.post||'').localeCompare(post,'en',{sensitivity:'base'})===0)||sameName[0];
 }
 function nextEmployeeId(s){
@@ -192,8 +196,8 @@ function applyCorrectedJulyAttendanceV7(s){
   return true;
 }
 
-function applyFinalJuly2026PayrollV12(s){
-  const key='final_july_payroll_and_august_advances_v12';s.oneTimeMigrations=s.oneTimeMigrations||{};
+function applyFinalJuly2026PayrollV13(s){
+  const key='final_july_payroll_and_august_advances_v13';s.oneTimeMigrations=s.oneTimeMigrations||{};
   if(s.oneTimeMigrations[key])return false;
   const now=new Date().toISOString(),mo=ensureMonth(s,'2026-07'),updatedEmployees=[];
   mo.rows=mo.rows||{};
