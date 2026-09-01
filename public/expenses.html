@@ -372,7 +372,29 @@
     function bankAccountsForNature(nature){return ((cfg.bankAccountsByNature&&cfg.bankAccountsByNature[nature])||accountsForNature(nature)).filter(function(name){return !/cash/i.test(name);});}
     function ledgerAccountsForNature(nature){ return (cfg.ledgerAccountsByNature&&cfg.ledgerAccountsByNature[nature])||accountsForNature(nature); }
     function transferAccountsForNature(nature){ return (cfg.transferAccountsByNature&&cfg.transferAccountsByNature[nature])||accountsForNature(nature); }
-    function payingAccountsForNature(nature){ return (cfg.payingAccountsByNature&&cfg.payingAccountsByNature[nature])||[]; }
+    function payingAccountsForNature(nature){
+      var key=String(nature||'SANKI').trim().toUpperCase(),byNature=cfg.payingAccountsByNature||{},accounts=byNature[key];
+      if(!Array.isArray(accounts)){
+        var matchedKey=Object.keys(byNature).find(function(k){return String(k).trim().toUpperCase()===key;});
+        accounts=matchedKey?byNature[matchedKey]:[];
+      }
+      return Array.isArray(accounts)?accounts:[];
+    }
+    function populateVendorPayAccounts(nature,refreshIfEmpty){
+      var accounts=payingAccountsForNature(nature),select=el('payAcct');
+      select.innerHTML='<option value="">Select actual paying account</option>'+opts(accounts);
+      if(accounts.length||!refreshIfEmpty)return Promise.resolve(accounts);
+      el('payMsg').textContent='Refreshing paying accounts…';
+      return loadConfig().then(function(){
+        accounts=payingAccountsForNature(nature);
+        select.innerHTML='<option value="">Select actual paying account</option>'+opts(accounts);
+        el('payMsg').textContent=accounts.length?'':'No paying account is available for this entity. Refresh the page or contact an administrator.';
+        return accounts;
+      }).catch(function(){
+        el('payMsg').textContent='Could not refresh paying accounts. Refresh the page and try again.';
+        return [];
+      });
+    }
     function reimbursementAccountOptions(){
       var labels={};(cfg.approvalNatures||[]).forEach(function(n){(payingAccountsForNature(n)||[]).forEach(function(a){labels[a]=labels[a]||[];if(labels[a].indexOf(n)<0)labels[a].push(n);});});
       return Object.keys(labels).sort().map(function(a){return '<option value="'+esc(a)+'">'+esc(a)+' — '+esc(labels[a].join('/'))+'</option>';}).join('');
@@ -798,7 +820,7 @@
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
-      el('payAcct').innerHTML = opts(payingAccountsForNature(e.nature||'SANKI'));
+      populateVendorPayAccounts(e.nature||'SANKI',true);
       var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').max=totalDue;el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
       el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';

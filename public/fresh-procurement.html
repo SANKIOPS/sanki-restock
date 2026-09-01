@@ -651,16 +651,6 @@
               <div style="font-size:12px; margin-top:4px">One mixed pile — the AI sorts each photo into category &amp; fit.</div>
               <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
             </div>
-            <div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fafcfb">
-              <div style="font-weight:700;font-size:13px;margin-bottom:4px">📦 Or import a ZIP of photos</div>
-              <div class="muted" style="font-size:12px;margin-bottom:9px">Upload a ZIP here, or paste a public direct-download HTTPS ZIP link from another computer or Codex task. JPG, PNG and WebP images will be added to this open batch.</div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                <label class="btn ghost sm" style="cursor:pointer">Choose ZIP file<input id="czZipFile" type="file" accept=".zip,application/zip" style="display:none"></label>
-                <input id="czZipUrl" type="url" placeholder="https://…/photos.zip" style="flex:1;min-width:250px">
-                <button class="btn ghost sm" id="czZipLinkBtn" type="button">Import ZIP link</button>
-              </div>
-              <div id="czZipStatus" class="muted" style="font-size:12px;margin-top:7px"></div>
-            </div>
           </div>
           <div id="czDesignMode" style="display:none">
             <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> Create one design card (your design folder), set its category, fit and name, then upload <b>all colour photos for that design at once</b>. The AI detects each colour and every colourway keeps its real photo as a separate SKU.</div>
@@ -682,7 +672,7 @@
             <div class="czrow" style="align-items:flex-end">
               <div class="fld" style="min-width:220px;flex:1"><label>Destination batch</label><select id="czSplitBatch"></select></div>
               <div class="fld" style="min-width:180px"><label>Vendor</label><input id="czSplitVendor" placeholder="e.g. CHAOUFI" /></div>
-              <label class="btn ghost" id="czSplitChoose" style="cursor:pointer">Choose collage photos
+              <label class="btn ghost" style="cursor:pointer">Choose collage photos
                 <input id="czSplitInput" type="file" accept="image/*" multiple style="display:none" />
               </label>
             </div>
@@ -1857,28 +1847,6 @@
     send(0, 1);
   }
 
-  function czImportZip(file, url){
-    var status = el('czZipStatus');
-    var vendor = (el('czVendor').value||'').trim();
-    var act = czActiveBatchObj();
-    if(!vendor){ status.innerHTML='<span style="color:var(--err)">Enter the vendor name above first.</span>'; el('czVendor').focus(); return; }
-    if(!act){ status.innerHTML='<span style="color:var(--err)">Open a destination batch first.</span>'; return; }
-    var endpoint, options;
-    if(file){
-      var fd = new FormData(); fd.append('zip', file); fd.append('vendor', vendor); fd.append('batch', act.id);
-      endpoint='/api/casuals/candidates/import-zip'; options={method:'POST',body:fd};
-    } else {
-      url=String(url||'').trim(); if(!url){ status.innerHTML='<span style="color:var(--err)">Paste a public HTTPS ZIP link first.</span>'; return; }
-      endpoint='/api/casuals/candidates/import-zip-url'; options={method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:url,vendor:vendor,batch:act.id})};
-    }
-    status.textContent=file?'Uploading and extracting ZIP…':'Downloading and extracting ZIP…';
-    fetch(endpoint,options).then(function(r){ return r.json(); }).then(function(d){
-      if(!d.success){ status.innerHTML='<span style="color:var(--err)">'+escapeHtml(d.error||'ZIP import failed')+'</span>'; return; }
-      status.innerHTML='<span style="color:var(--emerald-d)">✓ Added '+d.added+' photos to “'+escapeHtml(act.name)+'”.</span>';
-      el('czZipUrl').value=''; czPhotosOpen=true; czLoadCandidates();
-    }).catch(function(){ status.innerHTML='<span style="color:var(--err)">ZIP import failed — check the file or link and try again.</span>'; });
-  }
-
   // ── DESIGN-WISE upload mode ─────────────────────────────────────
   // The founder builds each design (a fit + a name) and drops ONE photo per
   // colourway. On save every colour becomes a candidate carrying category / fit /
@@ -1887,7 +1855,7 @@
   // fill themselves from the real photos. No AI segregation needed.
   var czDMode = false;                 // compatibility flag: true only in by-design mode
   var czUploadMode = 'pile';
-  var czSplitResults = [], czSplitSources = {};
+  var czSplitResults = [];
   var czDesigns = [];                  // [{id, name, cat, fit, cols:[{id, colour, file, url, detecting}]}]
   var czDSeq = 0;
   // The categories this batch spans (multi-category aware). czDCat = the DEFAULT
@@ -1920,30 +1888,22 @@
       var cats=czBatchCats(b).map(function(k){ return CAT_LABEL[k]||k; }).join(', ');
       return '<option value="'+escapeHtml(b.id)+'"'+(b.id===czActiveBatch?' selected':'')+'>'+escapeHtml(b.name||'Batch')+(cats?' — '+escapeHtml(cats):'')+'</option>';
     }).join('');
-    var hasBatches=!!sel.innerHTML;
-    if(!hasBatches) sel.innerHTML='<option value="">Create a batch first</option>';
-    var input=el('czSplitInput'), choose=el('czSplitChoose'), st=el('czSplitStatus');
-    if(input) input.disabled=!hasBatches;
-    if(choose){ choose.style.opacity=hasBatches?'':'0.55'; choose.style.cursor=hasBatches?'pointer':'not-allowed'; }
-    if(!hasBatches && st) st.innerHTML='<span style="color:var(--warn)">Create a batch first. Then return here and choose the collage photos.</span>';
+    if(!sel.innerHTML) sel.innerHTML='<option value="">Create a batch first</option>';
   }
   function czSplitDataFile(item){
     var parts=String(item.data||'').split(','), mime=item.mimeType||'image/jpeg';
     var bin=atob(parts[1]||''), bytes=new Uint8Array(bin.length);
     for(var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-    return new File([bytes], 'split-'+(item.sourceIndex+1)+'-'+item.index+'.'+(item.extension||'jpg'), {type:mime});
+    return new File([bytes], 'split-'+(item.sourceIndex+1)+'-'+item.index+'.jpg', {type:mime});
   }
   function czSplitRender(){
     var host=el('czSplitResults'), add=el('czSplitAdd'); if(!host||!add) return;
     host.innerHTML='';
     czSplitResults.forEach(function(it){
       var card=document.createElement('div'); card.style.cssText='border:1px solid #e2e8f0;border-radius:9px;padding:7px;background:#fff';
-      card.innerHTML='<img src="'+it.data+'" style="width:100%;height:150px;object-fit:contain;background:#f8fafc;border-radius:6px;display:block;cursor:zoom-in">'
-        +'<div style="font-size:11px;color:#64748b;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+escapeHtml(it.sourceName)+'">'+escapeHtml(it.sourceName)+' · '+(it.aiReconstructed?'AI reconstructed ':'crop ')+it.index+'</div>'
-        +(it.aiReconstructed?'<div style="display:flex;gap:5px;align-items:center;margin-top:4px"><span style="font-size:10px;background:#fef3c7;color:#92400e;border-radius:999px;padding:2px 6px">AI reconstructed</span><button type="button" data-original style="border:none;background:none;color:#2563eb;padding:0;cursor:pointer;font-size:10px">View original</button></div>':'')
+      card.innerHTML='<img src="'+it.data+'" style="width:100%;height:150px;object-fit:contain;background:#f8fafc;border-radius:6px;display:block">'
+        +'<div style="font-size:11px;color:#64748b;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+escapeHtml(it.sourceName)+'">'+escapeHtml(it.sourceName)+' · crop '+it.index+'</div>'
         +'<button type="button" data-remove style="border:none;background:none;color:#dc2626;padding:4px 0 0;cursor:pointer;font-size:11px">Remove crop</button>';
-      card.querySelector('img').addEventListener('click',function(){ lbList=[{src:it.data,cap:(it.aiReconstructed?'AI reconstruction — verify against original':'Crop'),rich:false,d:null}];lbIdx=0;lbShow();el('lightbox').classList.add('show'); });
-      var ob=card.querySelector('[data-original]'); if(ob) ob.addEventListener('click',function(){ var src=czSplitSources[it.sourceIndex];if(!src)return;lbList=[{src:src.data,cap:'Original supplier photo — '+(src.sourceName||''),rich:false,d:null}];lbIdx=0;lbShow();el('lightbox').classList.add('show'); });
       card.querySelector('[data-remove]').addEventListener('click',function(){ czSplitResults=czSplitResults.filter(function(x){ return x.id!==it.id; }); czSplitRender(); });
       host.appendChild(card);
     });
@@ -1952,24 +1912,15 @@
   }
   function czSplitPhotos(files){
     var st=el('czSplitStatus'), fd=new FormData();
-    if(!(czBatches||[]).length || !el('czSplitBatch').value){
-      st.innerHTML='<span style="color:var(--err)">Create a destination batch first, then choose the collage photos.</span>';
-      return;
-    }
     Array.prototype.forEach.call(files||[],function(f){ if(/^image\//.test(f.type)) fd.append('photos',f); });
     if(!fd.getAll('photos').length){ st.innerHTML='<span style="color:var(--err)">Choose at least one collage photo.</span>'; return; }
     st.textContent='Finding and separating the individual photos…'; el('czSplitInput').disabled=true;
-    fetch('/api/casuals/photo-split',{method:'POST',body:fd}).then(function(r){
-      return r.text().then(function(raw){
-        var d={}; try{ d=raw?JSON.parse(raw):{}; }catch(e){}
-        if(!r.ok || !d.success) throw new Error(d.error || ('Photo splitter server error ('+r.status+').'));
-        return d;
-      });
-    }).then(function(d){
+    fetch('/api/casuals/photo-split',{method:'POST',body:fd}).then(function(r){ return r.json(); }).then(function(d){
       el('czSplitInput').disabled=false;
-      czSplitResults=d.results||[]; czSplitSources={};(d.sources||[]).forEach(function(s){czSplitSources[s.sourceIndex]=s;});czSplitRender();
-      st.innerHTML='<span style="color:var(--emerald-d)">✓ Prepared '+czSplitResults.length+' individual photo'+(czSplitResults.length===1?'':'s')+'. AI reconstructions are labelled—compare them with the original before approval.</span>'+(d.warnings&&d.warnings.length?'<div style="color:var(--warn);font-size:11px;margin-top:4px">'+escapeHtml(d.warnings.length+' reconstruction(s) could not be created and were omitted.')+'</div>':'');
-    }).catch(function(err){ el('czSplitInput').disabled=false; st.innerHTML='<span style="color:var(--err)">'+escapeHtml((err&&err.message)||'Photo splitting failed. Try fewer or clearer collages.')+'</span>'; });
+      if(!d.success){ st.innerHTML='<span style="color:var(--err)">'+escapeHtml(d.error||'Could not split photos')+'</span>'; return; }
+      czSplitResults=d.results||[]; czSplitRender();
+      st.innerHTML='<span style="color:var(--emerald-d)">✓ Found '+czSplitResults.length+' individual photo'+(czSplitResults.length===1?'':'s')+'. Review the crops below.</span>';
+    }).catch(function(){ el('czSplitInput').disabled=false; st.innerHTML='<span style="color:var(--err)">Photo splitting failed. Try fewer or clearer collages.</span>'; });
   }
   function czSplitAddToBatch(){
     var st=el('czSplitStatus'), batch=el('czSplitBatch').value, vendor=(el('czSplitVendor').value||'').trim();
@@ -1989,7 +1940,7 @@
     }).then(function(a){
       el('czSplitAdd').disabled=false;
       if(!a.success) throw new Error(a.error||'Segregation failed');
-      var n=czSplitResults.length; czSplitResults=[]; czSplitSources={}; czSplitRender();
+      var n=czSplitResults.length; czSplitResults=[]; czSplitRender();
       st.innerHTML='<span style="color:var(--emerald-d)">✓ Added and segregated '+n+' individual photo'+(n===1?'':'s')+' in the selected batch. They are now included in its procurement workflow.</span>';
       return czLoadCandidates().then(czLoadPlan);
     }).catch(function(e){ el('czSplitAdd').disabled=false; st.innerHTML='<span style="color:var(--err)">'+escapeHtml(e.message||'Could not add photos')+'</span>'; });
@@ -3896,8 +3847,6 @@
   // Wiring (casuals)
   el('czDrop').addEventListener('click', function(){ el('czInput').click(); });
   el('czInput').addEventListener('change', function(){ czUpload(el('czInput').files); el('czInput').value=''; });
-  el('czZipFile').addEventListener('change', function(){ var f=this.files&&this.files[0]; this.value=''; if(f) czImportZip(f, null); });
-  el('czZipLinkBtn').addEventListener('click', function(){ czImportZip(null, el('czZipUrl').value); });
   ['dragover','dragenter'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.add('drag'); }); });
   ['dragleave','drop'].forEach(function(ev){ el('czDrop').addEventListener(ev, function(e){ e.preventDefault(); el('czDrop').classList.remove('drag'); }); });
   el('czDrop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) czUpload(e.dataTransfer.files); });
