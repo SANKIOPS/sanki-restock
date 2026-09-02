@@ -280,6 +280,23 @@ test('audit log groups each expense into a readable complete lifecycle with user
   assert.equal(reconstructed.timeline[0].action,'CREATED');assert.match(reconstructed.timeline[0].note,/reconstructed/i);assert.equal(reconstructed.timeline[0].user,'arshpreet');
 });
 
+test('deleted expenses remain visible in audit logs with snapshot, actor and required reason', () => {
+  const created=invoke('POST','/api/expenses',{role:'claimant',body:{nature:'SANKI',vendor:'Deleted Audit Vendor',particulars:'Incorrect duplicate expense',amount:777,billPhoto:'/api/expenses/photo/deleted-audit.jpg',paymentType:'Cash'}}).body.expense;
+  const refused=invoke('DELETE','/api/expenses/:id',{role:'admin',params:{id:created.id},body:{}});
+  assert.equal(refused.status,400);
+  const removed=invoke('DELETE','/api/expenses/:id',{role:'admin',params:{id:created.id},body:{reason:'Duplicate entered by mistake'}});
+  assert.equal(removed.status,200);
+  const result=invoke('GET','/api/expenses/audit-log',{role:'owner',query:{subject:created.id,action:'DELETED'}});
+  const record=result.body.records.find(x=>x.id===created.id);
+  assert.ok(record);
+  assert.equal(record.status,'deleted');
+  assert.equal(record.vendor,'Deleted Audit Vendor');
+  const deleted=record.timeline.find(x=>x.action==='DELETED');
+  assert.equal(deleted.note,'Duplicate entered by mistake');
+  assert.equal(deleted.before.amount,777);
+  assert.ok(deleted.user);
+});
+
 test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="f_vendor"/);
@@ -969,6 +986,16 @@ test('owner-confirmed FNP expenses migrate from SAMAST to SANKI with vendor hist
   delete stored.oneTimeMigrations[key];stored.vendorsByNature.SAMAST.fnp={name:'Fnp',notes:'Flower vendor'};delete stored.vendors.fnp;stored.expenses['EX-FNP-ENTITY-FIX']={id:'EX-FNP-ENTITY-FIX',date:'2026-08-22',nature:'SAMAST',status:'paid',vendor:'Fnp',particulars:'Flowers',ledger:'Flowers',amount:100,paidAmount:100,approvedAt:'2026-08-22T10:00:00Z',payments:[{id:'PAY-001',date:'2026-08-22',amount:100,account:'Prashant Axis 3645'}]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
   invoke('GET','/api/expenses/config',{role:'owner'});const corrected=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(corrected.expenses['EX-FNP-ENTITY-FIX'].nature,'SANKI');assert.equal(corrected.vendors.fnp.name,'FNP');assert.equal(corrected.vendorsByNature.SAMAST.fnp,undefined);assert.deepEqual(corrected.oneTimeMigrations[key].changedExpenses,['EX-FNP-ENTITY-FIX']);assert.ok(corrected.auditLog.some(x=>x.action==='EXPENSE_ENTITY_CORRECTED'&&x.subjectId==='EX-FNP-ENTITY-FIX'));
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('a missing outgoing bank row can create and link a normal paid expense',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString();
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-DIRECT-EXPENSE']={id:'BRD-DIRECT-EXPENSE',account:'Axis Bank 3448',nature:'SANKI',transactions:[{date:'2026-09-02',description:'UPI PAUL MOTOR',reference:'UTR2300',debit:2300,credit:0,balance:5000}],summary:{from:'2026-09-02',to:'2026-09-02',openingBalance:7300,closingBalance:5000,totalDebits:2300,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const missingBill=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'admin',body:{draftId:'BRD-DIRECT-EXPENSE',rowId:'bank-0',ledger:'FOOD EXPENSE',vendor:'Paul Motor',particulars:'Motor repair',remark:'Verified statement debit'}});assert.equal(missingBill.status,400);
+  const made=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'admin',body:{draftId:'BRD-DIRECT-EXPENSE',rowId:'bank-0',ledger:'FOOD EXPENSE',vendor:'Paul Motor',particulars:'Motor repair',bill:'printed',billPhoto:'/api/expenses/photo/paul.jpg',remark:'Verified statement debit'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.expense.status,'paid');assert.equal(made.body.expense.amount,2300);assert.equal(made.body.expense.payments[0].account,'Axis Bank 3448');assert.equal(made.body.expense.reconciliationSource.rowId,'bank-0');assert.ok(made.body.rows.some(x=>x.id==='bank-0'&&x.status==='resolved'&&x.resolution.action==='create_expense'));
+  const duplicate=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'admin',body:{draftId:'BRD-DIRECT-EXPENSE',rowId:'bank-0',ledger:'FOOD EXPENSE',vendor:'Paul Motor',particulars:'Duplicate',billPhoto:'/api/expenses/photo/paul.jpg',remark:'Duplicate'}});assert.notEqual(duplicate.status,200);
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok((after.auditLog||[]).some(x=>x.action==='CREATED_FROM_BANK_RECONCILIATION'&&x.subjectId===made.body.expense.id));fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
 test('discarding a temporary bank preview removes only that draft and its temporary file',()=>{
