@@ -1007,6 +1007,16 @@ test('unrelated same-date bank and ledger entries are never presented as an amou
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
+test('masked account suffixes match exact bank payments and reconciliation rows sort newest first',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993';
+  stored.expenses['EX-MASKED-200']={id:'EX-MASKED-200',date:'2026-08-30',nature:'PERSONAL',status:'paid',vendor:'xxx0465ptyes',particulars:'Transfer',amount:200,paidAmount:200,payments:[{id:'PAY-001',date:'2026-08-30',amount:200,account}]};
+  stored.expenses['EX-MASKED-310']={id:'EX-MASKED-310',date:'2026-08-30',nature:'PERSONAL',status:'paid',vendor:'xxx0465ptyes',particulars:'Transfer',amount:310,paidAmount:310,payments:[{id:'PAY-001',date:'2026-08-30',amount:310,account}]};
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-MASKED-SUFFIX']={id:'BRD-MASKED-SUFFIX',account,nature:'PERSONAL',transactions:[{date:'2026-08-29',description:'Older unrelated payment',reference:'OLD100',debit:100,credit:0,balance:510},{date:'2026-08-30',description:'UPI/9891900465/Payment fr/BANK OF BA',reference:'9891900465',debit:310,credit:0,balance:200},{date:'2026-08-30',description:'UPI/9891900465/Payment fr/BANK OF BA',reference:'9891900465',debit:200,credit:0,balance:0}],summary:{from:'2026-08-29',to:'2026-08-30',openingBalance:610,closingBalance:0,totalDebits:610,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:'BRD-MASKED-SUFFIX',account}}).body,matched=view.rows.filter(x=>x.status==='matched');
+  assert.equal(matched.length,2);assert.deepEqual(matched.map(x=>x.bank.debit).sort((a,b)=>a-b),[200,310]);assert.equal(view.rows[0].bank.date,'2026-08-30');assert.equal(view.rows.at(-1).bank.date,'2026-08-29');
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
 test('incoming reconciliation records an internal transfer in both account ledgers',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993';
   stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-INCOMING-TRANSFER']={id:'BRD-INCOMING-TRANSFER',account,nature:'PERSONAL',transactions:[{date:'2026-08-31',description:'Sent using GAGAN LAMB',reference:'9810863742',debit:0,credit:3000,balance:3000}],summary:{from:'2026-08-31',to:'2026-08-31',openingBalance:0,closingBalance:3000,totalDebits:0,totalCredits:3000,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
