@@ -1014,6 +1014,7 @@ test('incoming reconciliation records an internal transfer in both account ledge
   assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.amount,3000);assert.equal(made.body.transfer.toAccount,account);assert.ok(made.body.rows.some(x=>x.id==='bank-0'&&x.status==='resolved'&&x.resolution.action==='create_transfer'));
   const source=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body,destination=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'PERSONAL',account}}).body;
   assert.ok(source.entries.some(x=>x.id===made.body.transfer.id&&x.debit===3000));assert.ok(destination.entries.some(x=>x.id===made.body.transfer.id&&x.credit===3000));
+  const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'PERSONAL',from:'2026-08-31',to:'2026-08-31'}}).body,received=balances.accounts.find(x=>x.name===account);assert.equal(received.transferredIn,3000);assert.equal(received.reconciliationIssues.some(x=>x.reference===made.body.transfer.id),false);
   assert.notEqual(invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:'BRD-INCOMING-TRANSFER',rowId:'bank-0',sourceKind:'internal',fromNature:'SANKI',fromAccount:'Axis Bank 3448',classification:'owner_withdrawal',note:'duplicate'}}).status,200);
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });

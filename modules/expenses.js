@@ -440,7 +440,7 @@ function reconciliationIssues(s, nature, account) {
     if (x.id) seen.add(x.id);
     if (!x.fromAccount || !x.toAccount || !(num(x.amount) > 0)) issues.push({ code:'incomplete_transfer', reference:x.id || '(missing)', message:'Transfer is missing its source, destination, or amount.' });
     if (x.fromAccount === x.toAccount) issues.push({ code:'same_account_transfer', reference:x.id || '(missing)', message:'Transfer source and destination are the same.' });
-    if (!x.proof) issues.push({ code:'missing_transfer_proof', reference:x.id || '(missing)', message:'Transfer proof is missing.' });
+    if (!x.proof && !(x.bankReconciliationEvidence&&x.bankReconciliationEvidence.draftId)) issues.push({ code:'missing_transfer_proof', reference:x.id || '(missing)', message:'Transfer proof is missing.' });
   });
   return issues;
 }
