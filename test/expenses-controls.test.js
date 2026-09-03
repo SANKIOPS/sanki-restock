@@ -1002,6 +1002,19 @@ test('confirming a displayed possible match needs no second bank selection and f
 
 test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),render=html.slice(html.indexOf('function renderBankReconciliation'),html.indexOf('function bankDecisionLabel'));assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
 
+test('reviewed bank transactions can finalize while the closing balance remains pending',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draftId='BRD-DEFER-BALANCE';
+  const store={expenses:{'EX-DEFER':{id:'EX-DEFER',date:'2098-02-01',nature:'SANKI',status:'paid',approvedAt:'2098-02-01T10:00:00Z',vendor:'Acme Supplies',particulars:'Acme Supplies',amount:100,paidAmount:100,payments:[{id:'PAY-001',date:'2098-02-01',amount:100,account}]}},receivables:{},vendors:{'acme supplies':{name:'Acme Supplies'}},vendorsByNature:{SAMAST:{},PERSONAL:{}},accounts:[],people:[],openingBalances:{[account]:0},openingBalancesByNature:{SAMAST:{},PERSONAL:{}},adjustments:[],transfers:[],receipts:[],vendorOpeningPayables:[],vendorAdvances:[],paytmSettlements:[],reconciliationExpenses:[],bankDateOverrides:{},bankStatements:{},bankReconciliationDrafts:{[draftId]:{id:draftId,account,nature:'SANKI',transactions:[{date:'2098-02-01',description:'UPI/ACME SUPPLIES',reference:'ACME-100',debit:100,credit:0,balance:0}],summary:{from:'2098-02-01',to:'2098-02-01',openingBalance:100,totalDebits:100,totalCredits:0,closingBalance:0,validated:true},resolutions:{},matchingPolicy:'strict_identity_v3',createdAt:'2098-02-01T12:00:00Z',expiresAt:'2098-02-08T12:00:00Z'}},auditLog:[],auditSeq:0,oneTimeMigrations:{}};
+  try{
+    fs.writeFileSync(expenseFile,JSON.stringify(store));
+    const blocked=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId}});assert.equal(blocked.status,409);assert.match(blocked.body.error,/closing balance differs/i);
+    const finalized=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId,deferClosingBalance:true}});assert.equal(finalized.status,200,JSON.stringify(finalized.body));assert.equal(finalized.body.balanceReconciled,false);assert.equal(finalized.body.balanceDifference,100);
+    const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8')),book=saved.bankStatements[account],record=book.imports.at(-1);assert.equal(saved.openingBalances[account],0,'no opening-balance adjustment is posted');assert.equal(saved.bankReconciliationDrafts[draftId],undefined);assert.equal(book.lastReconciliation.transactionsReconciled,true);assert.equal(book.lastReconciliation.balanceReconciled,false);assert.equal(book.lastReconciliation.reconciled,false);assert.equal(record.closingBalanceDeferred,true);assert.equal(record.balanceDifference,100);
+  }finally{fs.writeFileSync(expenseFile,original);}
+});
+
+test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
+
 test('a missing internal transfer can be created from an official bank row without fabricated proof',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString(),account='Prashant Axis 3645',id='BRD-CREATE-TRANSFER';
   stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date:'2026-08-26',description:'Second transfer from Axis 3448',reference:'BANK-SECOND',debit:0,credit:1203,balance:1203}],summary:{from:'2026-08-26',to:'2026-08-26',openingBalance:0,closingBalance:1203,totalDebits:0,totalCredits:1203,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
@@ -1212,7 +1225,7 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/encodeURIComponent\(bankNature\)/);
   assert.match(html,/selected account is automatic/);
   assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
-  assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent='Reconciliation finalized through/);
+  assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent=d\.balanceReconciled\?/);
   assert.match(html,/Reconciliation history/);
   assert.match(html,/Statement period: /);
   assert.match(html,/Finalized: /);
