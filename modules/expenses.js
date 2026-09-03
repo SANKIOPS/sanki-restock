@@ -66,6 +66,7 @@ const proofUpload = multer({
 
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
+function roundMoney(n) { return Math.round(num(n) * 100) / 100; }
 function proofList(value, fallback) { return Array.from(new Set([].concat(Array.isArray(value) ? value : [], fallback || []).map(x => String(x || '').trim()).filter(Boolean))); }
 function roundCashSale(n) { const amount=num(n);return amount>0?Math.ceil(amount/10)*10:amount; }
 function loadCreditCards(){try{return JSON.parse(fs.readFileSync(CREDIT_CARD_PATH,'utf8'));}catch{return{cards:{}};}}
@@ -1296,9 +1297,13 @@ router.get('/api/expenses/:id/payment-candidates', (req, res) => {
   const expenses = Object.values(s.expenses).filter(e => {
     if (e.id === source.id || e.paidAlready || !['approved','partially_paid'].includes(e.status)) return false;
     return normalizedNature(e.nature) === nature && vendorKey(e.vendor) === vendor && num(e.paidAmount) < num(e.amount);
-  }).map(e => ({ id:e.id, date:e.date, vendor:e.vendor, particulars:e.particulars, amount:round0(e.amount), paidAmount:round0(e.paidAmount), balanceDue:round0(Math.max(0,num(e.amount)-num(e.paidAmount))) }))
+  }).map(e => ({ id:e.id, date:e.date, vendor:e.vendor, particulars:e.particulars, amount:roundMoney(e.amount), paidAmount:roundMoney(e.paidAmount), balanceDue:roundMoney(Math.max(0,num(e.amount)-num(e.paidAmount))) }))
     .sort((a,b) => String(b.date+b.id).localeCompare(String(a.date+a.id)));
-  res.json({ success:true, source:{ id:source.id, nature, vendor:source.vendor }, expenses });
+  const vendorAdvances=(s.vendorAdvances||[]).filter(a=>normalizedNature(a.nature)===nature&&vendorKey(a.vendor)===vendor&&num(a.remainingAmount)>0)
+    .sort((a,b)=>String((a.date||'')+(a.id||'')).localeCompare(String((b.date||'')+(b.id||''))));
+  const availableVendorCredit=roundMoney(vendorAdvances.reduce((sum,a)=>sum+num(a.remainingAmount),0));
+  res.json({ success:true, source:{ id:source.id, nature, vendor:source.vendor }, expenses, availableVendorCredit,
+    vendorAdvances:vendorAdvances.map(a=>({id:a.id,date:a.date,amount:roundMoney(a.amount),remainingAmount:roundMoney(a.remainingAmount)})) });
 });
 
 // One bank/cash transaction may settle several approved bills for the same
@@ -1315,38 +1320,64 @@ router.post('/api/expenses/batch-pay', (req, res) => {
   if (expenses.some(e => !canApproveExpenseNature(req,e))) return res.status(403).json({ success:false, error:'You cannot pay one of the selected accounting entities.' });
   if (expenses.some(e => normalizedNature(e.nature)!==nature || vendorKey(e.vendor)!==vendor)) return res.status(400).json({ success:false, error:'Combined payments must use the same entity and vendor.' });
   if (expenses.some(e => e.paidAlready || !['approved','partially_paid'].includes(e.status) || num(e.paidAmount)>=num(e.amount))) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
+  const combinedOutstanding = roundMoney(expenses.reduce((n,e)=>n+Math.max(0,num(e.amount)-num(e.paidAmount)),0));
+  const matchingAdvances=(s.vendorAdvances||[]).filter(a=>normalizedNature(a.nature)===nature&&vendorKey(a.vendor)===vendor&&num(a.remainingAmount)>0)
+    .sort((a,b)=>String((a.date||'')+(a.id||'')).localeCompare(String((b.date||'')+(b.id||''))));
+  const availableVendorCredit=roundMoney(matchingAdvances.reduce((sum,a)=>sum+num(a.remainingAmount),0));
+  const vendorCreditApplied=b.applyVendorCredit===true?roundMoney(Math.min(availableVendorCredit,combinedOutstanding)):0;
+  const maximumBankPayment=roundMoney(combinedOutstanding-vendorCreditApplied);
+  const requestedTotal=b.amount!=null?roundMoney(num(b.amount)):maximumBankPayment;
+  if (requestedTotal < 0 || (!(requestedTotal > 0) && !(vendorCreditApplied > 0))) return res.status(400).json({ success:false, error:'Payment or vendor-credit amount must be greater than 0.' });
+  if (requestedTotal > maximumBankPayment) return res.status(400).json({ success:false, error:vendorCreditApplied>0?'After applying vendor credit of ₹'+vendorCreditApplied+', the bank payment cannot exceed ₹'+maximumBankPayment+'.':'Payment cannot exceed the combined outstanding amount of ₹'+combinedOutstanding+'.' });
   const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
-  if (!proofs.length) return res.status(400).json({ success:false, error:'Payment proof is required — no proof, no payment.' });
-  const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI'),card=paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
-  const account = card?creditCardName(card):allowedPayingAccount(req, nature, String(b.account || '').trim());
-  if (!account) return res.status(400).json({ success:false, error:paymentType==='Credit'?'Select the credit card used.':'Select a paying account assigned to this accounting entity.' });
-  const reconIssues = card?[]:reconciliationIssues(s, nature, account), overrideReason = String(b.reconciliationOverrideReason || '').trim();
+  if (requestedTotal>0&&!proofs.length) return res.status(400).json({ success:false, error:'Payment proof is required — no proof, no payment.' });
+  const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI'),card=requestedTotal>0&&paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
+  const account = requestedTotal>0?(card?creditCardName(card):allowedPayingAccount(req, nature, String(b.account || '').trim())):'';
+  if (requestedTotal>0&&!account) return res.status(400).json({ success:false, error:paymentType==='Credit'?'Select the credit card used.':'Select a paying account assigned to this accounting entity.' });
+  const reconIssues = requestedTotal>0?(card?[]:reconciliationIssues(s, nature, account)):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
-  const combinedOutstanding = round0(expenses.reduce((n,e)=>n+Math.max(0,num(e.amount)-num(e.paidAmount)),0));
-  const requestedTotal = b.amount != null ? round0(num(b.amount)) : combinedOutstanding;
-  if (!(requestedTotal > 0)) return res.status(400).json({ success:false, error:'Payment amount must be greater than 0.' });
-  if (requestedTotal > combinedOutstanding) return res.status(400).json({ success:false, error:'Payment cannot exceed the combined outstanding amount of ₹'+combinedOutstanding+'.' });
   const date = String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paidBy = (req.user&&req.user.username)||'admin';
   const batchPaymentId = 'BPAY-' + Date.now().toString(36).toUpperCase();
+  const orderedExpenses=expenses.slice().sort((a,b)=>String((a.date||'')+a.id).localeCompare(String((b.date||'')+b.id)));
+  let creditRemaining=vendorCreditApplied;const vendorCreditAllocations=[];
+  orderedExpenses.forEach(e=>{
+    let expenseRemaining=roundMoney(Math.max(0,num(e.amount)-num(e.paidAmount)));
+    matchingAdvances.forEach(advance=>{
+      const amount=roundMoney(Math.min(expenseRemaining,creditRemaining,num(advance.remainingAmount)));
+      if(!(amount>0))return;
+      const appliedAt=new Date().toISOString();
+      advance.remainingAmount=roundMoney(num(advance.remainingAmount)-amount);advance.applications=Array.isArray(advance.applications)?advance.applications:[];
+      advance.applications.push({expenseId:e.id,date,amount,batchPaymentId,appliedBy:paidBy,appliedAt});
+      e.vendorAdvanceApplications=Array.isArray(e.vendorAdvanceApplications)?e.vendorAdvanceApplications:[];
+      e.vendorAdvanceApplications.push({vendorAdvanceId:advance.id,amount,date,appliedBy:paidBy,appliedAt,batchPaymentId});
+      e.paidAmount=roundMoney(num(e.paidAmount)+amount);e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid';e.paidAt=appliedAt;e.paidBy=paidBy;
+      expenseRemaining=roundMoney(expenseRemaining-amount);creditRemaining=roundMoney(creditRemaining-amount);
+      vendorCreditAllocations.push({expense:e,advance,amount});
+    });
+  });
   let remaining = requestedTotal; const allocations = [];
   // Allocate oldest bills first. This is predictable for recurring expenses and
   // leaves the newest selected bill partially paid when the payment is short.
-  expenses.slice().sort((a,b)=>String((a.date||'')+a.id).localeCompare(String((b.date||'')+b.id))).forEach(e => {
-    const outstanding = round0(Math.max(0,num(e.amount)-num(e.paidAmount))), amount = Math.min(outstanding,remaining);
+  orderedExpenses.forEach(e => {
+    const outstanding = roundMoney(Math.max(0,num(e.amount)-num(e.paidAmount))), amount = roundMoney(Math.min(outstanding,remaining));
     if (!(amount > 0)) return;
-    remaining=round0(remaining-amount); allocations.push({ expense:e, amount });
+    remaining=roundMoney(remaining-amount); allocations.push({ expense:e, amount });
     e.account=account; e.paymentProof=proof;e.paymentProofs=proofs; e.payments=Array.isArray(e.payments)?e.payments:[];
     e.payments.push({ id:'PAY-'+String(e.payments.length+1).padStart(3,'0'), batchPaymentId, batchTotal:requestedTotal, amount, date, account,
       paymentType, creditCardId:card&&card.id||'', proof, proofs, note:String(b.note||'').trim(),
       paidBy, paidAt:new Date().toISOString(), reconciliationOverrideReason:overrideReason, reconciliationIssuesAtPayment:reconIssues });
-    e.paidAmount=round0(num(e.paidAmount)+amount); e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
+    e.paidAmount=roundMoney(num(e.paidAmount)+amount); e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
   });
   const allocatedIds=allocations.map(x=>x.expense.id);
   allocations.forEach(x=>{x.expense.payments.at(-1).linkedExpenseIds=allocatedIds;});
+  vendorCreditAllocations.forEach(x=>audit(s,req,'VENDOR_ADVANCE_APPLIED','expense',x.expense.id,{nature:x.expense.nature,account:'Vendor advance',paymentId:x.advance.id,after:{batchPaymentId,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount,status:x.expense.status}}));
   allocations.forEach(x=>audit(s,req,'PAYMENT_ALLOCATED','expense',x.expense.id,{nature:x.expense.nature,account,paymentId:x.expense.payments.at(-1).id,after:{batchPaymentId,amount:x.amount,linkedExpenseIds:allocatedIds,status:x.expense.status}}));
   saveStore(s);
-  allocations.forEach(x => notifyExpenseUser(x.expense,x.expense.status==='paid'?'paid':'partially_paid',x.amount));
-  res.json({ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:round0(Math.max(0,num(x.expense.amount)-num(x.expense.paidAmount)))})), expenses });
+  const notificationAmounts={};allocations.concat(vendorCreditAllocations).forEach(x=>{notificationAmounts[x.expense.id]=roundMoney(num(notificationAmounts[x.expense.id])+x.amount);});
+  Object.keys(notificationAmounts).forEach(id=>{const e=s.expenses[id];notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',notificationAmounts[id]);});
+  res.json({ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, availableVendorCredit, vendorCreditApplied,
+    vendorCreditAllocations:vendorCreditAllocations.map(x=>({expenseId:x.expense.id,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount})),
+    allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:roundMoney(Math.max(0,num(x.expense.amount)-num(x.expense.paidAmount)))})), expenses });
 });
 
 // ── Pay (GATE 2: payment screenshot required) ────────────────────
