@@ -317,6 +317,23 @@ test('audit log groups each expense into a readable complete lifecycle with user
   assert.equal(reconstructed.timeline[0].action,'CREATED');assert.match(reconstructed.timeline[0].note,/reconstructed/i);assert.equal(reconstructed.timeline[0].user,'arshpreet');
 });
 
+test('deleted expenses remain visible in audit logs with snapshot, actor and required reason', () => {
+  const created=invoke('POST','/api/expenses',{role:'claimant',body:{nature:'SANKI',vendor:'Deleted Audit Vendor',particulars:'Incorrect duplicate expense',amount:777,billPhoto:'/api/expenses/photo/deleted-audit.jpg',paymentType:'Cash'}}).body.expense;
+  const refused=invoke('DELETE','/api/expenses/:id',{role:'admin',params:{id:created.id},body:{}});
+  assert.equal(refused.status,400);
+  const removed=invoke('DELETE','/api/expenses/:id',{role:'admin',params:{id:created.id},body:{reason:'Duplicate entered by mistake'}});
+  assert.equal(removed.status,200);
+  const result=invoke('GET','/api/expenses/audit-log',{role:'owner',query:{subject:created.id,action:'DELETED'}});
+  const record=result.body.records.find(x=>x.id===created.id);
+  assert.ok(record);
+  assert.equal(record.status,'deleted');
+  assert.equal(record.vendor,'Deleted Audit Vendor');
+  const deleted=record.timeline.find(x=>x.action==='DELETED');
+  assert.equal(deleted.note,'Duplicate entered by mistake');
+  assert.equal(deleted.before.amount,777);
+  assert.ok(deleted.user);
+});
+
 test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="f_vendor"/);
@@ -1035,6 +1052,47 @@ test('owner-confirmed FNP expenses migrate from SAMAST to SANKI with vendor hist
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),key='move-all-fnp-expenses-from-samast-to-sanki';
   delete stored.oneTimeMigrations[key];stored.vendorsByNature.SAMAST.fnp={name:'Fnp',notes:'Flower vendor'};delete stored.vendors.fnp;stored.expenses['EX-FNP-ENTITY-FIX']={id:'EX-FNP-ENTITY-FIX',date:'2026-08-22',nature:'SAMAST',status:'paid',vendor:'Fnp',particulars:'Flowers',ledger:'Flowers',amount:100,paidAmount:100,approvedAt:'2026-08-22T10:00:00Z',payments:[{id:'PAY-001',date:'2026-08-22',amount:100,account:'Prashant Axis 3645'}]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
   invoke('GET','/api/expenses/config',{role:'owner'});const corrected=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(corrected.expenses['EX-FNP-ENTITY-FIX'].nature,'SANKI');assert.equal(corrected.vendors.fnp.name,'FNP');assert.equal(corrected.vendorsByNature.SAMAST.fnp,undefined);assert.deepEqual(corrected.oneTimeMigrations[key].changedExpenses,['EX-FNP-ENTITY-FIX']);assert.ok(corrected.auditLog.some(x=>x.action==='EXPENSE_ENTITY_CORRECTED'&&x.subjectId==='EX-FNP-ENTITY-FIX'));
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('a missing outgoing bank row can create and link a normal paid expense',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString();
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-DIRECT-EXPENSE']={id:'BRD-DIRECT-EXPENSE',account:'Axis Bank 3448',nature:'SANKI',transactions:[{date:'2026-09-02',description:'UPI PAUL MOTOR',reference:'UTR2300',debit:2300,credit:0,balance:5000}],summary:{from:'2026-09-02',to:'2026-09-02',openingBalance:7300,closingBalance:5000,totalDebits:2300,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const missingBill=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'admin',body:{draftId:'BRD-DIRECT-EXPENSE',rowId:'bank-0',ledger:'FOOD EXPENSE',vendor:'Paul Motor',particulars:'Motor repair',remark:'Verified statement debit'}});assert.equal(missingBill.status,400);
+  const made=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'admin',body:{draftId:'BRD-DIRECT-EXPENSE',rowId:'bank-0',ledger:'FOOD EXPENSE',vendor:'Paul Motor',particulars:'Motor repair',bill:'printed',billPhoto:'/api/expenses/photo/paul.jpg',remark:'Verified statement debit'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.expense.status,'paid');assert.equal(made.body.expense.amount,2300);assert.equal(made.body.expense.payments[0].account,'Axis Bank 3448');assert.equal(made.body.expense.reconciliationSource.rowId,'bank-0');assert.ok(made.body.rows.some(x=>x.id==='bank-0'&&x.status==='resolved'&&x.resolution.action==='create_expense'));
+  const duplicate=invoke('POST','/api/expenses/bank-statements/create-expense',{role:'admin',body:{draftId:'BRD-DIRECT-EXPENSE',rowId:'bank-0',ledger:'FOOD EXPENSE',vendor:'Paul Motor',particulars:'Duplicate',billPhoto:'/api/expenses/photo/paul.jpg',remark:'Duplicate'}});assert.notEqual(duplicate.status,200);
+  const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok((after.auditLog||[]).some(x=>x.action==='CREATED_FROM_BANK_RECONCILIATION'&&x.subjectId===made.body.expense.id));fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('unrelated same-date bank and ledger entries are never presented as an amount mismatch',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993';
+  stored.expenses['EX-GENNI-STRICT']={id:'EX-GENNI-STRICT',date:'2026-09-01',nature:'PERSONAL',status:'paid',vendor:'Genni Di',particulars:'Genni Di',ledger:'FOOD EXPENSE',amount:10000,paidAmount:10000,payments:[{id:'PAY-001',date:'2026-09-01',amount:10000,account}]};
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-IDENTITY-STRICT']={id:'BRD-IDENTITY-STRICT',account,nature:'PERSONAL',transactions:[{date:'2026-09-01',description:'UPIIntent Blinkit',reference:'797523596495',debit:186,credit:0,balance:100}],summary:{from:'2026-09-01',to:'2026-09-01',openingBalance:286,closingBalance:100,totalDebits:186,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:'BRD-IDENTITY-STRICT',account}}).body;
+  assert.equal(view.summary.amount_mismatch||0,0);assert.ok(view.rows.some(x=>x.status==='missing_in_app'&&x.bank&&x.bank.debit===186));assert.ok(view.rows.some(x=>x.status==='missing_in_bank'&&x.app&&x.app.debit===10000));
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('masked account suffixes match exact bank payments and reconciliation rows sort newest first',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993';
+  stored.expenses['EX-MASKED-200']={id:'EX-MASKED-200',date:'2026-08-30',nature:'PERSONAL',status:'paid',vendor:'xxx0465ptyes',particulars:'Transfer',amount:200,paidAmount:200,payments:[{id:'PAY-001',date:'2026-08-30',amount:200,account}]};
+  stored.expenses['EX-MASKED-310']={id:'EX-MASKED-310',date:'2026-08-30',nature:'PERSONAL',status:'paid',vendor:'xxx0465ptyes',particulars:'Transfer',amount:310,paidAmount:310,payments:[{id:'PAY-001',date:'2026-08-30',amount:310,account}]};
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-MASKED-SUFFIX']={id:'BRD-MASKED-SUFFIX',account,nature:'PERSONAL',transactions:[{date:'2026-08-29',description:'Older unrelated payment',reference:'OLD100',debit:100,credit:0,balance:510},{date:'2026-08-30',description:'UPI/9891900465/Payment fr/BANK OF BA',reference:'9891900465',debit:310,credit:0,balance:200},{date:'2026-08-30',description:'UPI/9891900465/Payment fr/BANK OF BA',reference:'9891900465',debit:200,credit:0,balance:0}],summary:{from:'2026-08-29',to:'2026-08-30',openingBalance:610,closingBalance:0,totalDebits:610,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:'BRD-MASKED-SUFFIX',account}}).body,matched=view.rows.filter(x=>x.status==='matched');
+  assert.equal(matched.length,2);assert.deepEqual(matched.map(x=>x.bank.debit).sort((a,b)=>a-b),[200,310]);assert.equal(view.rows[0].bank.date,'2026-08-30');assert.equal(view.rows.at(-1).bank.date,'2026-08-29');
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('incoming reconciliation records an internal transfer in both account ledgers',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993';
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-INCOMING-TRANSFER']={id:'BRD-INCOMING-TRANSFER',account,nature:'PERSONAL',transactions:[{date:'2026-08-31',description:'Sent using GAGAN LAMB',reference:'9810863742',debit:0,credit:3000,balance:3000}],summary:{from:'2026-08-31',to:'2026-08-31',openingBalance:0,closingBalance:3000,totalDebits:0,totalCredits:3000,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const made=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:'BRD-INCOMING-TRANSFER',rowId:'bank-0',sourceKind:'internal',fromNature:'SANKI',fromAccount:'Axis Bank 3448',classification:'owner_withdrawal',note:'Business account funded personal account'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.amount,3000);assert.equal(made.body.transfer.toAccount,account);assert.ok(made.body.rows.some(x=>x.id==='bank-0'&&x.status==='resolved'&&x.resolution.action==='create_transfer'));
+  const source=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body,destination=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'PERSONAL',account}}).body;
+  assert.ok(source.entries.some(x=>x.id===made.body.transfer.id&&x.debit===3000));assert.ok(destination.entries.some(x=>x.id===made.body.transfer.id&&x.credit===3000));
+  const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'PERSONAL',from:'2026-08-31',to:'2026-08-31'}}).body,received=balances.accounts.find(x=>x.name===account);assert.equal(received.transferredIn,3000);assert.equal(received.reconciliationIssues.some(x=>x.reference===made.body.transfer.id),false);
+  assert.notEqual(invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:'BRD-INCOMING-TRANSFER',rowId:'bank-0',sourceKind:'internal',fromNature:'SANKI',fromAccount:'Axis Bank 3448',classification:'owner_withdrawal',note:'duplicate'}}).status,200);
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 

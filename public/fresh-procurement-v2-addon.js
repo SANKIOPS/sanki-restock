@@ -1,244 +1,45 @@
-(function () {
-  var base = window.SankiProcV2Base;
-  if (!base) return;
+(function(){
+var base=window.SankiProcV2Base;if(!base)return;var state=base.state,plan={sizes:{},slots:[]},submitting=false,$=function(s,p){return(p||document).querySelector(s)},esc=function(s){return String(s==null?'':s).replace(/[&<>\"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'})[c]})};
+$('h1').textContent='Fresh Procurement V2';$('.sub').textContent='The complete existing workflow, controlled by your editable design, colourway and size-pack sourcing table.';$('.legacy').innerHTML='Trial workspace — existing system is untouched.<br><a href="/fresh-procurement-simple.html">Open existing Fresh Procurement</a>';
+$('#panel3 h2').textContent='Rule-based buying recommendation';$('#panel3 .hint').textContent='Products are matched from the Photo Splitter manifest and your requirement table. No paid AI credits are used.';
+var css=document.createElement('style');css.textContent='.v2box{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}.v2bar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.v2metrics{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.v2tablewrap{overflow:auto}.v2table{border-collapse:collapse;min-width:1050px;width:100%}.v2table th,.v2table td{border:1px solid var(--line);padding:7px}.v2table th{font-size:10px;text-transform:uppercase;color:var(--muted);background:#eef3ef}.v2table input{width:100%;min-width:95px;padding:8px;border:1px solid var(--line);border-radius:7px}.v2size{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}.v2size label{display:grid;grid-template-columns:45px 58px;align-items:center;gap:4px}.v2size input{width:58px;padding:7px}.v2remove{border:0;background:#f1e6e2;color:var(--red);border-radius:7px;padding:7px;cursor:pointer}.v2upload{border:1px dashed var(--line);border-radius:10px;padding:11px;background:#faf8f1}.v2formula{background:#eff6f1;border-left:4px solid var(--green);padding:7px;margin:7px 0;border-radius:6px;font-size:11px}.v2validation{min-height:20px;margin-top:8px}.v2validation.error{color:var(--red)}.v2reviewfix{display:grid;grid-template-columns:minmax(220px,1fr) 130px auto;gap:8px;align-items:center;min-width:520px}.v2reviewfix select,.v2reviewfix input{padding:10px;border:1px solid var(--line);border-radius:8px}#panel3{padding:16px}.products{grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:9px}.product img{aspect-ratio:4/5;max-height:220px}.pcopy{padding:8px}.pcopy h3{font-size:12px}.scoreline,.qty{margin-top:6px}.addvariant{display:none!important}@media(max-width:700px){.v2reviewfix{min-width:0;grid-template-columns:1fr}.excluded-row{align-items:start}.products{grid-template-columns:repeat(2,minmax(0,1fr))}}';document.head.appendChild(css);
+var baseRenderItems=base.renderItems;base.renderItems=function(){baseRenderItems();var empty=$('#products .empty');if(empty)empty.textContent='No product passed the hard requirements with enough evidence. Review the stated gaps and alternatives below.';var selected=(state.recommend&&state.recommend.selected)||[],blocked=false;$('#products').querySelectorAll('.product').forEach(function(card){var it=state.items[+card.dataset.i],source=selected.find(function(x){return x.id===it.id}),hard=source&&source.hardRequirements||{},colours=hard.requiredColours||[],sizes=hard.requiredSizes||{},normal=function(v){return String(v||'').trim().toLowerCase()},colourOk=!colours.length||colours.some(function(c){return normal(c)===normal(it.colour)}),sizesOk=Object.keys(sizes).every(function(k){return (+it.sizes[k]||0)===(+sizes[k]||0)})&&Object.keys(it.sizes).every(function(k){return Object.prototype.hasOwnProperty.call(sizes,k)||!(+it.sizes[k])}),ok=colourOk&&sizesOk&&it.hardConfirmed===true;if(!it.excluded&&!ok)blocked=true;var note=document.createElement('div');note.className='v2formula';note.innerHTML='<b>Hard requirements:</b> '+(colourOk?'✓ approved colour':'enter one of: '+esc(colours.join(', ')))+' · '+(sizesOk?'✓ fixed size pack':'restore the approved size pack')+'<br><label><input type="checkbox" class="hardconfirm" '+(it.hardConfirmed?'checked':'')+'> I confirmed this colour and complete size pack with the vendor</label>';card.querySelector('.price').before(note);note.querySelector('.hardconfirm').onchange=function(){it.hardConfirmed=this.checked;base.renderItems()}});if(blocked){$('#makePO').disabled=true;$('#makePO').title='Confirm every hard colour and size-pack requirement before creating POs'}};
+var hardRenderItems=base.renderItems;base.renderItems=function(){hardRenderItems();var selected=(state.recommend&&state.recommend.selected)||[],parents=new Set(selected.map(function(x){return String(x.slot||'').split('-C')[0]})),first=$('#planSummary .pill');if(first)first.textContent=parents.size+' designs · '+selected.length+'/'+((state.planInput&&state.planInput.requirements||[]).length||0)+' colourways';$('#products').querySelectorAll('.product').forEach(function(card){var it=state.items[+card.dataset.i],source=selected.find(function(x){return x.id===it.id});if(!source||source.colourSource!=='auto')return;var field=card.querySelector('.maincolour'),tag=document.createElement('div');tag.className='meta';tag.textContent='Auto-detected: '+(source.colour||'Unknown')+(source.colourConfidence!=null?' · '+Math.round(source.colourConfidence*100)+'% confidence':'')+' — confirm below';field.parentNode.insertBefore(tag,field)});};
+var oldRecipe=$('.recipe'),create=$('#createPlan');oldRecipe.style.display='none';var box=document.createElement('div');box.className='v2box';box.innerHTML='<div class="v2bar"><div><h3 style="margin:0">Detailed sourcing requirement</h3><div class="meta">Upload Excel/CSV or enter the table manually. Every field stays editable.</div></div><div class="v2upload"><input id="v2file" type="file" accept=".xlsx,.xls,.csv,.tsv"> <button class="btn secondary" id="v2import" type="button">Upload table</button></div></div><div class="v2metrics" id="v2metrics"></div><div><b>Size pack per colourway</b><div class="v2size" id="v2sizes"></div><button class="add" id="v2addsize" type="button">＋ Add size</button></div><div class="v2formula"><b>Controlling:</b> budget, colourways, size pack and quantities. <b>Soft guidance only:</b> silhouette/type and exact design wording. A type mismatch will not reject a trouser.</div><div class="v2tablewrap"><table class="v2table"><thead><tr><th>No.</th><th>Preferred silhouette / type<br><small>soft guide</small></th><th>Purpose / preferred design<br><small>soft guide</small></th><th>Pattern / surface</th><th>Colour 1</th><th>Colour 2</th><th>Qty / colour</th><th>Total</th><th></th></tr></thead><tbody id="v2rows"></tbody></table></div><button class="add" id="v2add" type="button">＋ Add requirement row</button><div id="v2status" class="meta"></div>';oldRecipe.parentNode.insertBefore(box,oldRecipe);create.textContent='Approve requirement table & add vendor photos →';create.insertAdjacentHTML('afterend','<div id="v2validation" class="v2validation meta" aria-live="polite"></div>');
+function setQty(){return Object.keys(plan.sizes||{}).reduce(function(n,k){return n+(parseInt(plan.sizes[k])||0)},0)}
+function validationMessage(){if(!plan.slots.length)return'Add or upload at least one requirement row.';if(!setQty())return'Enter at least one size-pack quantity.';return''}
+function syncApprovalState(){var message=validationMessage(),validation=$('#v2validation');create.disabled = submitting || Boolean(message);create.title=message;validation.textContent=message;validation.className='v2validation meta'+(message?' error':'')}
+function expandColourwayPlan(p){if(!p||!Array.isArray(p.requirements))return p;if(p.requirements.some(function(r){return r.colourwayKey}))return p;var requirements=[],mix=[];p.requirements.forEach(function(r,i){var colours=(r.colours||[]).filter(Boolean).slice(0,2);colours.forEach(function(colour,j){var parent='R'+(i+1),name=parent+'-C'+(j+1)+' · '+colour+' · '+(r.type||'')+' · '+(r.design||'');var child=Object.assign({},r,{id:(r.id||parent)+'-c'+(j+1),slotName:name,parentSlot:parent,colourwayKey:parent+'-C'+(j+1),colours:[colour]});requirements.push(child);mix.push({name:name,styles:1,role:'Hard colourway',reason:[r.design,r.surface].filter(Boolean).join(' · '),colourDirection:colour})})});return Object.assign({},p,{styleTarget:new Set(requirements.map(function(r){return r.parentSlot})).size,requirements:requirements,mix:mix,colourwayTarget:requirements.length})}
+function metrics(){var cw=plan.slots.reduce(function(n,s){return n+(s.colours||[]).filter(Boolean).length},0),q=setQty(),pc=cw*q,cost=+plan.landedCost||0;$('#v2metrics').innerHTML='<span class="pill good">'+plan.slots.length+' designs</span><span class="pill">'+cw+' colourways</span><span class="pill">'+q+' pieces / colour</span><span class="pill good">'+pc+' total pieces</span><span class="pill">₹'+(pc*cost).toLocaleString('en-IN')+' estimated</span>';document.querySelectorAll('[data-v2q]').forEach(function(x){x.textContent=q});document.querySelectorAll('[data-v2total]').forEach(function(x){var s=plan.slots[+x.dataset.v2total];x.textContent=(s.colours||[]).filter(Boolean).length*q});syncApprovalState()}
+function renderSizes(){var h=$('#v2sizes');h.innerHTML='';Object.keys(plan.sizes||{}).forEach(function(k){var l=document.createElement('label');l.innerHTML='<b>'+esc(k)+'</b><input type="number" min="0" value="'+plan.sizes[k]+'">';l.querySelector('input').oninput=function(){plan.sizes[k]=+this.value||0;metrics()};h.appendChild(l)});metrics()}
+function renderRows(){var h=$('#v2rows');h.innerHTML='';plan.slots.forEach(function(s,i){var c=s.colours||[],tr=document.createElement('tr');tr.innerHTML='<td>'+(i+1)+'</td><td><input value="'+esc(s.type)+'"></td><td><input value="'+esc(s.design)+'"></td><td><input value="'+esc(s.surface)+'"></td><td><input value="'+esc(c[0]||'')+'"></td><td><input value="'+esc(c[1]||'')+'"></td><td data-v2q>'+setQty()+'</td><td data-v2total="'+i+'">0</td><td><button class="v2remove" type="button">×</button></td>';var ins=tr.querySelectorAll('input');ins.forEach(function(x){x.oninput=function(){s.type=ins[0].value;s.design=ins[1].value;s.surface=ins[2].value;s.colours=[ins[3].value.trim(),ins[4].value.trim()].filter(Boolean);metrics()}});tr.querySelector('button').onclick=function(){plan.slots.splice(i,1);renderRows()};h.appendChild(tr)});metrics()}
+function hydrate(p){plan=p||{sizes:{},slots:[]};$('#gender').value=plan.gender||'Women';$('#category').value=plan.category||'Trouser';$('#planName').value=plan.name||'';renderSizes();renderRows();syncApprovalState()}
+$('#v2add').onclick=function(){plan.slots.push({id:'slot-'+Date.now(),type:'',design:'',surface:'',colours:['']});renderRows()};$('#v2addsize').onclick=function(){var k=prompt('Size label:');if(k&&plan.sizes[k]==null){plan.sizes[k]=0;renderSizes()}};
+$('#v2import').onclick=async function(){var f=$('#v2file').files[0];if(!f){alert('Choose an Excel or CSV table.');return}var fd=new FormData();fd.append('file',f);$('#v2status').textContent='Reading table…';try{var r=await fetch('/api/casuals/v2-plan/import',{method:'POST',body:fd}),d=await r.json();if(!d.success)throw Error(d.error);hydrate(d.plan);$('#v2status').textContent='✓ '+d.importedRows+' requirement rows imported. Review and edit before approval.'}catch(e){$('#v2status').textContent='Could not import: '+e.message}};
+create.onclick=async function(){var message=validationMessage();if(message){syncApprovalState();return}submitting=true;syncApprovalState();$('#v2status').textContent='Saving requirement table and opening vendor catalogues…';try{plan.name=$('#planName').value||'Procurement V2 plan';plan.gender=$('#gender').value;plan.category=$('#category').value;var save=await fetch('/api/casuals/v2-plan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(plan)}),saved=await save.json();if(!saved.success)throw Error(saved.error||'Could not save requirement');plan=saved.plan;var requirements=plan.slots.map(function(s,i){return{id:s.id,slotName:'R'+(i+1)+' · '+s.type+' · '+s.design,type:s.type,design:s.design,surface:s.surface,colours:s.colours,sizes:plan.sizes}}),mix=requirements.map(function(x){return{name:x.slotName,styles:1,role:'Requirement',reason:[x.design,x.surface].filter(Boolean).join(' · '),colourDirection:x.colours.join(', ')}}),pieces=plan.slots.reduce(function(n,s){return n+s.colours.length*setQty()},0),p={gender:plan.gender,category:plan.category,styleTarget:plan.slots.length,budget:+$('#budget').value||pieces*(plan.landedCost||0),launchDate:$('#launchDate').value,name:plan.name,mix:mix,requirements:requirements};var br=await fetch('/api/casuals/batches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:p.name,categories:[p.category]})}),bd=await br.json();if(!bd.success)throw Error(bd.error||'Could not create batch');state.batch=bd.batch;state.planInput=p;state.aiPlanReady=true;localStorage.setItem('sanki_v2_current',JSON.stringify({step:2,batch:bd.batch,planInput:p}));$('#v2status').textContent='✓ Requirement approved. Opening vendor catalogues…';base.addVendor();base.go(2)}catch(e){$('#v2status').textContent='Could not continue: '+e.message}finally{submitting=false;syncApprovalState()}};
+['gender', 'category', 'styleTarget', 'launchDate', 'budget', 'planName'].forEach(function(id){$('#'+id).addEventListener('change', syncApprovalState)});
 
-  var state = base.state;
-  var plan = { sizes: {}, slots: [] };
-  var submitting = false;
-  var $ = function (selector, parent) {
-    return (parent || document).querySelector(selector);
-  };
-  var esc = function (value) {
-    return String(value == null ? '' : value).replace(/[&<>\"]/g, function (character) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[character];
-    });
-  };
 
-  $('h1').textContent = 'Fresh Procurement V2';
-  $('.sub').textContent = 'The complete existing workflow, controlled by your editable design, colourway and size-pack sourcing table.';
-  $('.legacy').innerHTML = 'Trial workspace — existing system is untouched.<br><a href="/fresh-procurement-simple.html">Open existing Fresh Procurement</a>';
 
-  var css = document.createElement('style');
-  css.textContent = '.v2box{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}.v2bar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.v2metrics{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.v2tablewrap{overflow:auto}.v2table{border-collapse:collapse;min-width:1050px;width:100%}.v2table th,.v2table td{border:1px solid var(--line);padding:7px}.v2table th{font-size:10px;text-transform:uppercase;color:var(--muted);background:#eef3ef}.v2table input{width:100%;min-width:95px;padding:8px;border:1px solid var(--line);border-radius:7px}.v2size{display:flex;gap:7px;flex-wrap:wrap;margin:9px 0}.v2size label{display:grid;grid-template-columns:45px 58px;align-items:center;gap:4px}.v2size input{width:58px;padding:7px}.v2remove{border:0;background:#f1e6e2;color:var(--red);border-radius:7px;padding:7px;cursor:pointer}.v2upload{border:1px dashed var(--line);border-radius:10px;padding:11px;background:#faf8f1}.v2formula{background:#eff6f1;border-left:4px solid var(--green);padding:10px;margin:10px 0;border-radius:6px}.v2validation{min-height:20px;margin-top:8px}.v2validation.error{color:var(--red)}';
-  document.head.appendChild(css);
 
-  var oldRecipe = $('.recipe');
-  var create = $('#createPlan');
-  oldRecipe.style.display = 'none';
-  var box = document.createElement('div');
-  box.className = 'v2box';
-  box.innerHTML = '<div class="v2bar"><div><h3 style="margin:0">Detailed sourcing requirement</h3><div class="meta">Upload Excel/CSV or enter the table manually. Every field stays editable.</div></div><div class="v2upload"><input id="v2file" type="file" accept=".xlsx,.xls,.csv,.tsv"> <button class="btn secondary" id="v2import" type="button">Upload table</button></div></div><div class="v2metrics" id="v2metrics"></div><div><b>Size pack per colourway</b><div class="v2size" id="v2sizes"></div><button class="add" id="v2addsize" type="button">＋ Add size</button></div><div class="v2formula">Total pieces = total colourways × size-pack quantity. Changing estimated price or budget does not silently change quantities.</div><div class="v2tablewrap"><table class="v2table"><thead><tr><th>No.</th><th>Garment type</th><th>Specific design required</th><th>Pattern / surface</th><th>Colour 1</th><th>Colour 2</th><th>Qty / colour</th><th>Total</th><th></th></tr></thead><tbody id="v2rows"></tbody></table></div><button class="add" id="v2add" type="button">＋ Add requirement row</button><div id="v2status" class="meta"></div>';
-  oldRecipe.parentNode.insertBefore(box, oldRecipe);
-  create.textContent = 'Approve requirement table & add vendor photos →';
-  create.insertAdjacentHTML('afterend', '<div id="v2validation" class="v2validation meta" aria-live="polite"></div>');
+var panel2=$('#panel2'),zipBox=document.createElement('div');zipBox.className='v2box';zipBox.innerHTML='<h3>Optional ZIP import</h3><p class="hint">You can upload ordinary vendor photos below. Procurement V2 will judge them against R1–R15 locally in this browser, without paid API credits.</p><div class="vendor-row"><div class="field"><label>Vendor</label><input id="v2zipvendor" placeholder="Vendor name"></div><div class="field"><label>ZIP file (optional)</label><input id="v2zipfile" type="file" accept=".zip,application/zip"></div><button class="btn secondary" id="v2zipupload" type="button">Import ZIP</button></div><div id="v2zipstatus" class="meta"></div><div id="v2corrections"></div>';panel2.insertBefore(zipBox,$('#vendorList'));
+$('#analyze').textContent='Match products to requirement table →';
+function requirementOptions(selected){return '<option value="">Choose requirement…</option>'+(state.planInput&&state.planInput.requirements||[]).map(function(r){return '<option '+(r.slotName===selected?'selected':'')+' value="'+esc(r.slotName)+'">'+esc(r.slotName)+'</option>'}).join('')}
+async function refreshV2(){await base.refreshCandidates();var host=$('#v2corrections'),list=(state.candidates||[]).filter(function(c){return !c.suggestedSlot});host.innerHTML=list.length?'<h4>Products needing a slot</h4>'+list.map(function(c){return '<div class="vendor-row" data-cid="'+c.id+'"><img src="'+esc(c.url)+'" style="width:58px;height:70px;object-fit:cover;border-radius:7px"><select>'+requirementOptions(c.suggestedSlot)+'</select><input class="v2colour" placeholder="Colour" value="'+esc(c.colour||'')+'"><button class="btn secondary v2save">Save</button></div>'}).join(''):'<div class="status">✓ Every imported product has a requirement slot.</div>';host.querySelectorAll('[data-cid]').forEach(function(row){row.querySelector('.v2save').onclick=async function(){var r=await fetch('/api/casuals/candidate/'+row.dataset.cid+'/procurement-meta',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slot:row.querySelector('select').value,colour:row.querySelector('.v2colour').value})}),d=await r.json();if(!d.success)return alert(d.error);refreshV2()}})}
+function wireReviewCorrections(rec){var list=rec.excluded||[];$('#exclusions').querySelectorAll('.excluded-row').forEach(function(row){var item=list[+row.dataset.x];if(!item)return;var action=row.querySelector('.manualadd');action.style.display='none';var controls=document.createElement('div');controls.className='v2reviewfix';controls.innerHTML='<select>'+requirementOptions('')+'</select><input placeholder="Colour" value="'+esc(item.colour||'')+'"><button class="btn secondary" type="button">Save slot & rematch</button>';row.appendChild(controls);controls.querySelector('button').onclick=async function(){var slot=controls.querySelector('select').value,colour=controls.querySelector('input').value;if(!slot||!colour){alert('Choose the matching requirement and confirm its colour first.');return}this.disabled=true;this.textContent='Saving…';try{var r=await fetch('/api/casuals/candidate/'+item.id+'/procurement-meta',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slot:slot,colour:colour,colourSource:'manual',slotSource:'manual'})}),d=await r.json();if(!d.success)throw Error(d.error);$('#analyze').click()}catch(e){alert(e.message);this.disabled=false;this.textContent='Save slot & rematch'}}})}
+var localJudge=null;
+function gateUncertainColours(rec){var min=rec&&rec.basis&&rec.basis.autoColourMinConfidence||.65,moved=[];rec.selected=(rec.selected||[]).filter(function(x){if(x.colourSource==='auto'&&(+x.colourConfidence||0)<min){x.excludeReason='Auto-detected '+(x.colour||'colour')+' at '+Math.round((+x.colourConfidence||0)*100)+'% confidence — confirm or correct the colour manually';x.reason='Needs buyer colour confirmation';moved.push(x);return false}return true});rec.excluded=moved.concat(rec.excluded||[]);var counts={};rec.selected.forEach(function(x){counts[x.slot]=(counts[x.slot]||0)+1});rec.missing=(state.planInput&&state.planInput.requirements||[]).map(function(r){return{slot:r.slotName,required:1,selected:counts[r.slotName]||0}}).filter(function(x){return x.selected<x.required});return rec}
 
-  function setQty() {
-    return Object.keys(plan.sizes || {}).reduce(function (quantity, size) {
-      return quantity + (parseInt(plan.sizes[size]) || 0);
-    }, 0);
-  }
+async function judgeUnassignedPhotos(){await base.refreshCandidates();var pending=(state.candidates||[]).filter(function(c){return c.slotSource!=='manual'&&!c.dupeOf});if(!pending.length)return 0;var requirements=state.planInput&&state.planInput.requirements||[];if(!requirements.length)throw Error('The colourway requirement table is missing.');var labels=requirements.map(function(r){return r.slotName+' — required colour '+((r.colours||[]).join(' or ')||'flexible')+', purpose or preferred design '+(r.design||'versatile trouser')+', surface '+(r.surface||'flexible')+', with '+(r.type||'any suitable silhouette')+' as an optional silhouette guide only'}),palette=[];requirements.forEach(function(r){(r.colours||[]).forEach(function(c){if(c&&!palette.some(function(x){return x.toLowerCase()===c.toLowerCase()}))palette.push(c)})});['Black','White','Cream','Beige','Brown','Chocolate','Grey','Charcoal','Navy','Blue','Olive','Green','Burgundy','Red','Yellow','Pink','Purple'].forEach(function(c){if(!palette.some(function(x){return x.toLowerCase()===c.toLowerCase()}))palette.push(c)});var colourLabels=palette.map(function(c){return 'trousers whose main fabric colour is '+c});$('#analysisStatus').textContent='Loading the local garment and colour model… First use may take a few minutes.';if(!localJudge){var lib=await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');lib.env.allowLocalModels=false;localJudge=await lib.pipeline('zero-shot-image-classification','Xenova/clip-vit-base-patch32',{quantized:true})}for(var i=0;i<pending.length;i++){var c=pending[i];$('#analysisStatus').textContent='Auto-detecting colour and judging photo '+(i+1)+' of '+pending.length+' across every required colourway…';var result=await localJudge(location.origin+c.url,labels,{hypothesis_template:'This is {}.'}),colourResult=await localJudge(location.origin+c.url,colourLabels,{hypothesis_template:'This is {}.'});if(!result||!result.length||!colourResult||!colourResult.length)continue;var best=result[0],idx=labels.indexOf(best.label),req=requirements[idx],slot=req&&req.slotName,bestColour=colourResult[0],colourIndex=colourLabels.indexOf(bestColour.label),detectedColour=palette[colourIndex]||'';if(!slot)continue;var visualMatches={};result.forEach(function(x){var ri=labels.indexOf(x.label),rr=requirements[ri];if(rr&&rr.slotName)visualMatches[rr.slotName]=+x.score||0});var saved=await fetch('/api/casuals/candidate/'+c.id+'/procurement-meta',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({slot:slot,slotSource:'visual-auto',visualMatches:visualMatches,colour:detectedColour,colourSource:'auto',colourConfidence:+bestColour.score||0,garmentType:c.garmentType||''})}),data=await saved.json();if(!data.success)throw Error(data.error||'Could not save the visual scorecard and detected colour.')}await base.refreshCandidates();return pending.length}
+$('#v2zipupload').onclick=async function(){var file=$('#v2zipfile').files[0],vendor=$('#v2zipvendor').value.trim(),status=$('#v2zipstatus');if(!file||!vendor){status.textContent='Choose a ZIP and enter the vendor.';return}var fd=new FormData();fd.append('zip',file);fd.append('vendor',vendor);fd.append('batch',state.batch.id);status.textContent='Importing package…';try{var r=await fetch('/api/casuals/candidates/import-zip',{method:'POST',body:fd}),d=await r.json();if(!d.success)throw Error(d.error);status.textContent='✓ '+d.added+' photos imported. '+(d.manifest&&d.manifest.found?d.manifest.matched+' matched from '+d.manifest.filename:d.added+' need manual slots because no manifest was found.');await refreshV2()}catch(e){status.textContent='Could not import: '+e.message}};
+$('#analyze').onclick=async function(){base.go(3);$('#analysisStatus').className='status';$('#analysisStatus').textContent='Preparing local R1–R15 visual judging…';$('#products').innerHTML='';$('#exclusions').innerHTML='';try{var judged=await judgeUnassignedPhotos();var r=await fetch('/api/casuals/v2-recommend',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({plan:state.planInput})}),rec=await r.json();if(!rec.success)throw Error(rec.error);state.recommend=rec;state.items=(rec.selected||[]).map(function(c){var req=(state.planInput.requirements||[]).find(function(x){return x.slotName===c.slot});return{id:c.id,url:c.url,vendor:c.vendor||'Unassigned vendor',fit:c.designName||c.slot,slot:c.slot,colour:c.colour||'Confirm colour',score:c.score||0,reason:c.reason||'Local visual match',sizes:Object.assign({},req&&req.sizes||{}),price:0,variants:[],excluded:false}});base.renderItems();wireReviewCorrections(rec);$('#analysisStatus').textContent='✓ '+rec.evaluated+' products matched to R1–R15 in this browser'+(judged?' · '+judged+' newly judged':'')+'. Review uncertain alternatives below.'}catch(e){$('#analysisStatus').className='status error';$('#analysisStatus').textContent='Local visual judging could not finish: '+e.message+' You can still assign slots manually below.'}};
+var runColourwayAnalysis=$('#analyze').onclick;$('#analyze').onclick=async function(){state.planInput=expandColourwayPlan(state.planInput);try{localStorage.setItem('sanki_v2_current',JSON.stringify({step:3,batch:state.batch,planInput:state.planInput}))}catch(e){}await runColourwayAnalysis.call(this);if(state.recommend){state.recommend=gateUncertainColours(state.recommend);state.items=(state.recommend.selected||[]).map(function(c){var req=(state.planInput.requirements||[]).find(function(x){return x.slotName===c.slot});return{id:c.id,url:c.url,vendor:c.vendor||'Unassigned vendor',fit:c.designName||c.slot,slot:c.slot,colour:c.colour||'Confirm colour',score:c.score||0,reason:c.reason||'Local visual match',sizes:Object.assign({},req&&req.sizes||{}),price:0,variants:[],excluded:false}});base.renderItems();wireReviewCorrections(state.recommend)}};
+setTimeout(function(){var status=$('#analysisStatus');if(/anthropic|credit balance|segregation failed/i.test(status.textContent||'')){status.className='status';status.textContent='The retired AI attempt was cleared. Return to Catalogues and use “Match products to requirement table”.';base.go(2);refreshV2()}},0);
+fetch('/api/casuals/v2-plan').then(function(r){return r.json()}).then(function(d){hydrate(d.plan)}).catch(function(e){$('#v2status').textContent=e.message});
 
-  function validationMessage() {
-    if (!plan.slots.length) return 'Add or upload at least one requirement row.';
-    if (!setQty()) return 'Enter at least one size-pack quantity.';
-    return '';
-  }
 
-  function syncApprovalState() {
-    var message = validationMessage();
-    var validation = $('#v2validation');
-    create.disabled = submitting || Boolean(message);
-    create.title = message;
-    validation.textContent = message;
-    validation.className = 'v2validation meta' + (message ? ' error' : '');
-  }
-
-  function metrics() {
-    var colourways = plan.slots.reduce(function (count, slot) {
-      return count + (slot.colours || []).filter(Boolean).length;
-    }, 0);
-    var quantity = setQty();
-    var pieces = colourways * quantity;
-    var cost = +plan.landedCost || 0;
-    $('#v2metrics').innerHTML = '<span class="pill good">' + plan.slots.length + ' designs</span><span class="pill">' + colourways + ' colourways</span><span class="pill">' + quantity + ' pieces / colour</span><span class="pill good">' + pieces + ' total pieces</span><span class="pill">₹' + (pieces * cost).toLocaleString('en-IN') + ' estimated</span>';
-    document.querySelectorAll('[data-v2q]').forEach(function (element) {
-      element.textContent = quantity;
-    });
-    document.querySelectorAll('[data-v2total]').forEach(function (element) {
-      var slot = plan.slots[+element.dataset.v2total];
-      element.textContent = (slot.colours || []).filter(Boolean).length * quantity;
-    });
-    syncApprovalState();
-  }
-
-  function renderSizes() {
-    var holder = $('#v2sizes');
-    holder.innerHTML = '';
-    Object.keys(plan.sizes || {}).forEach(function (size) {
-      var label = document.createElement('label');
-      label.innerHTML = '<b>' + esc(size) + '</b><input type="number" min="0" value="' + plan.sizes[size] + '">';
-      label.querySelector('input').oninput = function () {
-        plan.sizes[size] = +this.value || 0;
-        metrics();
-      };
-      holder.appendChild(label);
-    });
-    metrics();
-  }
-
-  function renderRows() {
-    var holder = $('#v2rows');
-    holder.innerHTML = '';
-    plan.slots.forEach(function (slot, index) {
-      var colours = slot.colours || [];
-      var row = document.createElement('tr');
-      row.innerHTML = '<td>' + (index + 1) + '</td><td><input value="' + esc(slot.type) + '"></td><td><input value="' + esc(slot.design) + '"></td><td><input value="' + esc(slot.surface) + '"></td><td><input value="' + esc(colours[0] || '') + '"></td><td><input value="' + esc(colours[1] || '') + '"></td><td data-v2q>' + setQty() + '</td><td data-v2total="' + index + '">0</td><td><button class="v2remove" type="button">×</button></td>';
-      var inputs = row.querySelectorAll('input');
-      inputs.forEach(function (input) {
-        input.oninput = function () {
-          slot.type = inputs[0].value;
-          slot.design = inputs[1].value;
-          slot.surface = inputs[2].value;
-          slot.colours = [inputs[3].value.trim(), inputs[4].value.trim()].filter(Boolean);
-          metrics();
-        };
-      });
-      row.querySelector('button').onclick = function () {
-        plan.slots.splice(index, 1);
-        renderRows();
-      };
-      holder.appendChild(row);
-    });
-    metrics();
-  }
-
-  function hydrate(savedPlan) {
-    plan = savedPlan || { sizes: {}, slots: [] };
-    $('#gender').value = plan.gender || 'Women';
-    $('#category').value = plan.category || 'Trouser';
-    $('#planName').value = plan.name || '';
-    renderSizes();
-    renderRows();
-  }
-
-  // These fields still have legacy Fresh Procurement listeners attached. Run the
-  // V2 validator after those listeners so editing plan details never leaves this
-  // button disabled by the hidden "generate AI plan again" workflow.
-  ['gender', 'category', 'styleTarget', 'launchDate', 'budget', 'planName'].forEach(function (id) {
-    $('#' + id).addEventListener('change', syncApprovalState);
-  });
-
-  $('#v2add').onclick = function () {
-    plan.slots.push({ id: 'slot-' + Date.now(), type: '', design: '', surface: '', colours: [''] });
-    renderRows();
-  };
-  $('#v2addsize').onclick = function () {
-    var size = prompt('Size label:');
-    if (size && plan.sizes[size] == null) {
-      plan.sizes[size] = 0;
-      renderSizes();
-    }
-  };
-  $('#v2import').onclick = async function () {
-    var file = $('#v2file').files[0];
-    if (!file) {
-      alert('Choose an Excel or CSV table.');
-      return;
-    }
-    var formData = new FormData();
-    formData.append('file', file);
-    $('#v2status').textContent = 'Reading table…';
-    try {
-      var response = await fetch('/api/casuals/v2-plan/import', { method: 'POST', body: formData });
-      var result = await response.json();
-      if (!result.success) throw Error(result.error);
-      hydrate(result.plan);
-      $('#v2status').textContent = '✓ ' + result.importedRows + ' requirement rows imported. Review and edit before approval.';
-    } catch (error) {
-      $('#v2status').textContent = 'Could not import: ' + error.message;
-    }
-  };
-
-  create.onclick = async function () {
-    var message = validationMessage();
-    if (message) {
-      syncApprovalState();
-      return;
-    }
-    submitting = true;
-    syncApprovalState();
-    try {
-      plan.name = $('#planName').value || 'Procurement V2 plan';
-      plan.gender = $('#gender').value;
-      plan.category = $('#category').value;
-      var saveResponse = await fetch('/api/casuals/v2-plan', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(plan)
-      });
-      var saved = await saveResponse.json();
-      if (!saved.success) throw Error(saved.error || 'Could not save requirement');
-      plan = saved.plan;
-      var requirements = plan.slots.map(function (slot, index) {
-        return {
-          id: slot.id,
-          slotName: 'R' + (index + 1) + ' · ' + slot.type + ' · ' + slot.design,
-          type: slot.type,
-          design: slot.design,
-          surface: slot.surface,
-          colours: slot.colours,
-          sizes: plan.sizes
-        };
-      });
-      var mix = requirements.map(function (requirement) {
-        return {
-          name: requirement.slotName,
-          styles: 1,
-          role: 'Requirement',
-          reason: [requirement.design, requirement.surface].filter(Boolean).join(' · '),
-          colourDirection: requirement.colours.join(', ')
-        };
-      });
-      var pieces = plan.slots.reduce(function (count, slot) {
-        return count + slot.colours.length * setQty();
-      }, 0);
-      var planInput = {
-        gender: plan.gender,
-        category: plan.category,
-        styleTarget: plan.slots.length,
-        budget: +$('#budget').value || pieces * (plan.landedCost || 0),
-        launchDate: $('#launchDate').value,
-        name: plan.name,
-        mix: mix,
-        requirements: requirements
-      };
-      var batchResponse = await fetch('/api/casuals/batches', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: planInput.name, categories: [planInput.category] })
-      });
-      var batchResult = await batchResponse.json();
-      if (!batchResult.success) throw Error(batchResult.error || 'Could not create batch');
-      state.batch = batchResult.batch;
-      state.planInput = planInput;
-      state.aiPlanReady = true;
-      localStorage.setItem('sanki_v2_current', JSON.stringify({ step: 2, batch: batchResult.batch, planInput: planInput }));
-      base.addVendor();
-      base.go(2);
-    } catch (error) {
-      alert(error.message);
-    } finally {
-      submitting = false;
-      syncApprovalState();
-    }
-  };
-
-  syncApprovalState();
-  fetch('/api/casuals/v2-plan')
-    .then(function (response) { return response.json(); })
-    .then(function (result) { hydrate(result.plan); })
-    .catch(function (error) {
-      $('#v2status').textContent = error.message;
-      syncApprovalState();
-    });
+var resultCss=document.createElement('style');resultCss.textContent='.vendorcode{display:inline-block;background:#173f34;color:#fff;border-radius:5px;padding:3px 6px;margin:4px 0;font-weight:800;font-size:11px}.v2resultswrap{margin:14px 0 20px;overflow:auto;border:1px solid var(--line);border-radius:10px}.v2results{border-collapse:collapse;min-width:1050px;width:100%;font-size:12px}.v2results th,.v2results td{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:middle}.v2results th{background:#eef3ef;font-size:10px;text-transform:uppercase;color:var(--muted);position:sticky;top:0}.v2results img{width:42px;height:52px;object-fit:cover;border-radius:5px;cursor:zoom-in}.v2results .missing{color:var(--red);font-weight:800}.v2results .done{color:var(--green);font-weight:800}';document.head.appendChild(resultCss);
+function vendorCodeOf(x){var raw=x&&(x.designId||x.sourceName||x.designName||x.id)||'';return String(raw).replace(/\.[a-z0-9]{2,5}$/i,'').trim()||'Not detected'}
+function renderResultTable(){var rec=state.recommend||{},selected=rec.selected||[],requirements=state.planInput&&state.planInput.requirements||[],old=$('#v2results');if(old)old.remove();var host=document.createElement('div');host.id='v2results';host.innerHTML='<h3 style="margin:0 0 8px">Selection summary by requirement and vendor code</h3><div class="meta" style="margin-bottom:8px">The same colourway rows as the uploaded requirement table. Missing means no exact-colour product was available.</div><div class="v2resultswrap"><table class="v2results"><thead><tr><th>Requirement</th><th>Preferred type</th><th>Preferred design</th><th>Surface</th><th>Required colour</th><th>Vendor</th><th>Vendor / article code</th><th>Detected colour</th><th>Match method</th><th>Status</th><th>Photo</th></tr></thead><tbody>'+requirements.map(function(req){var found=selected.find(function(x){return x.slot===req.slotName}),code=vendorCodeOf(found),required=(req.colours||[])[0]||'';return '<tr><td><b>'+esc(req.colourwayKey||String(req.slotName||'').split(' · ')[0])+'</b></td><td>'+esc(req.type||'—')+'</td><td>'+esc(req.design||'—')+'</td><td>'+esc(req.surface||'—')+'</td><td><b>'+esc(required)+'</b></td><td>'+esc(found&&found.vendor||'—')+'</td><td><b>'+esc(found?code:'—')+'</b></td><td>'+esc(found&&found.colour||'—')+'</td><td>'+esc(found&&found.reason||'No exact-colour match')+'</td><td class="'+(found?'done':'missing')+'">'+(found?'Selected':'Missing')+'</td><td>'+(found?'<img class="zoomable" src="'+esc(found.url)+'" title="'+esc(code)+'">':'—')+'</td></tr>'}).join('')+'</tbody></table></div>';$('#products').parentNode.insertBefore(host,$('#products'));selected.forEach(function(source){var card=$('#products .product[data-i="'+state.items.findIndex(function(it){return it.id===source.id})+'"]');if(!card)return;var h=card.querySelector('.pcopy h3'),tag=document.createElement('div');tag.className='vendorcode';tag.textContent='Vendor code: '+vendorCodeOf(source);h.parentNode.insertBefore(tag,h)});}
+var tableRenderItems=base.renderItems;base.renderItems=function(){tableRenderItems();renderResultTable()};
 })();
