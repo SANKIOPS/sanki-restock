@@ -182,6 +182,18 @@ test('vendor ledger UI offers Delete only when its entry count is zero', () => {
   assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
 });
 
+test('owner vendor maintenance uses an in-page dialog and safely supports exact bulk cleanup', () => {
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/id="vendorManageDlg"/);
+  assert.match(html,/id="bulkDeleteVendors"/);
+  assert.match(html,/Every ledger is rechecked against all expenses, including pending and rejected entries/);
+  assert.match(html,/window\.editVendorLedger=function\(nature,name\)\{openVendorManager\('edit',nature,name\);\}/);
+  assert.match(html,/window\.deleteVendorLedger=function\(nature,name\)\{openVendorManager\('delete',nature,name\);\}/);
+  assert.doesNotMatch(html,/window\.deleteVendorLedger=function\(nature,name\)\{var reason=prompt/);
+  assert.doesNotMatch(html,/window\.editVendorLedger=function\(nature,name\)\{var next=prompt/);
+  assert.match(html,/invalid or inaccessible entity/);
+});
+
 test('vendor ledgers can sort current outstanding amounts in both directions',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/id="vf_sort"/);
