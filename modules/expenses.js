@@ -324,7 +324,7 @@ function applyOwnerConfirmedAxis3645Cases(s) {
 
   if(!state.completed.shivamReimbursement){const ids=['EX-00033/REIM-001','EX-00037/REIM-001','EX-00083/REIM-001'],found=ids.map(id=>{const [eid,pid]=id.split('/'),e=(s.expenses||{})[eid],p=e&&(e.reimbursementPayments||[]).find(x=>x.id===pid);return p&&Math.abs(num(p.amount)-({"EX-00033":46,"EX-00037":20,"EX-00083":73}[eid]))<.01;});if(found.every(Boolean)){const links=linkReference('623818860235',139,'debit',()=>decision('link_multiple_existing','One ₹139 Shivam reimbursement links ₹46 (EX-00033), ₹20 (EX-00037) and ₹73 (EX-00083)',{appIds:ids,description:'Shivam reimbursement · 3 linked existing entries'}));if(links.length){state.completed.shivamReimbursement=true;state.results.shivamReimbursement={appIds:ids,correctedSpokenReference:'EX-00083, not EX-00053'};changed=true;}}}
 
-  if(!state.completed.rounding){const principal=exactPayment('EX-00120','PAY-001');if(principal&&Math.abs(num(principal.payment.amount)-652)<.01){s.adjSeq=num(s.adjSeq)+1;const adjustment={id:'ADJ-'+String(s.adjSeq).padStart(4,'0'),nature:'SANKI',account,amount:.10,date:'2026-08-27',note:'Rounding off: ₹652 logged expense settled by ₹651.90 bank debit',reconciliationDraft:'owner-confirmed',bankReference:'660545756771',createdBy:'prashant',createdAt:now,ownerConfirmedMigration:migrationKey};s.adjustments.push(adjustment);linkReference('660545756771',651.90,'debit',()=>decision('link_multiple_existing','₹652 expense linked to ₹651.90 bank debit with ₹0.10 Rounding Off credit',{appIds:[principal.id,adjustment.id],description:'Vi Recharge · expense + rounding off'}));state.completed.rounding=true;state.results.rounding={expensePaymentId:principal.id,adjustmentId:adjustment.id,roundingCredit:.10};changed=true;}}
+  if(!state.completed.rounding){const principal=exactPayment('EX-00120','PAY-001');if(principal&&Math.abs(num(principal.payment.amount)-652)<.01){s.adjSeq=num(s.adjSeq)+1;const adjustment={id:'ADJ-'+String(s.adjSeq).padStart(4,'0'),nature:'SANKI',account,amount:.10,date:'2026-08-27',note:'Rounding off: ₹652 logged expense settled by ₹651.90 bank debit',reconciliationDraft:'owner-confirmed',bankReference:'660545756771',createdBy:'prashant',createdAt:now,ownerConfirmedMigration:migrationKey};s.adjustments.push(adjustment);linkReference('660545756771',651.90,'debit',()=>decision('link_multiple_existing','₹652 expense linked to ₹651.90 bank debit with ₹0.10 Rounding Off credit',{appIds:[principal.id,adjustment.id],description:'Vi Recharge · expense + rounding off'}));state.completed.rounding=true;state.results.rounding={expensePaymentId:principal.id,adjustmentId:adjustment.id,roundingCredit:.10};changed=true;}else if(principal&&Math.abs(num(principal.payment.amount)-651.90)<.01&&s.oneTimeMigrations['correct-ex-00120-to-651-90-remove-adj-0003-v1']){state.completed.rounding=true;state.results.rounding={expensePaymentId:principal.id,result:'superseded_by_exact_bank_amount_correction'};changed=true;}}
 
   state.complete=['haryanaPersonal','kaluAdvance','alokCombined','cashPaytmRoute','duplicateTransfer','shivamReimbursement','rounding'].every(k=>state.completed[k]);state.updatedAt=now;s.oneTimeMigrations[migrationKey]=state;
   return changed;
@@ -354,6 +354,43 @@ function applyKaluFlowersFruitsVendorMerge(s){
   const key='merge-sanki-vijay-vijay-kumar-kalu-flower-into-kalu-flowers-fruits-v1';s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
   const result=mergeVendorRecords(s,'SANKI',['Vijay','Vijay Kumar','Kalu flower'],'Kalu Flowers & Fruits',{user:'prashant',device:'System migration',note:'Admin-authorized consolidation of the three SANKI vendor aliases; SAMAST Vijay Kumar remains separate'});
   s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),preservedOtherEntities:true,preservedTransactionDetails:true,result};return true;
+}
+function applyEx00120ExactBankAmountCorrection(s){
+  const key='correct-ex-00120-to-651-90-remove-adj-0003-v1',expenseId='EX-00120',paymentId='PAY-001',adjustmentId='ADJ-0003',appId=expenseId+'/'+paymentId,amount=651.90,now=new Date().toISOString();
+  s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
+  const expense=s.expenses&&s.expenses[expenseId],payment=expense&&Array.isArray(expense.payments)&&expense.payments.find(x=>x.id===paymentId);
+  if(!expense||!payment)return false;
+  s.adjustments=Array.isArray(s.adjustments)?s.adjustments:[];s.reconciliationExpenses=Array.isArray(s.reconciliationExpenses)?s.reconciliationExpenses:[];s.bankDateOverrides=s.bankDateOverrides||{};
+  const drafts=Object.values(s.bankReconciliationDrafts||{}),beforeMovementIds=new Map(drafts.map(d=>[d.id,appBankMovements(s,d.account,d.nature).map(x=>x.id)])),before={expenseAmount:num(expense.amount),requestedAmount:num(expense.requestedAmount),paidAmount:num(expense.paidAmount),status:expense.status,payment:Object.assign({},payment)},removedAdjustments=s.adjustments.filter(x=>x.id===adjustmentId).map(x=>Object.assign({},x));
+
+  expense.amount=amount;expense.requestedAmount=amount;payment.amount=amount;
+  expense.paidAmount=Math.round((expense.payments||[]).reduce((n,x)=>n+num(x.amount),0)*100)/100;
+  expense.status=expense.paidAmount>=expense.amount?'paid':(expense.paidAmount>0?'partially_paid':'approved');
+  expense.auditHistory=Array.isArray(expense.auditHistory)?expense.auditHistory:[];
+  expense.auditHistory.push({id:'EDIT-'+String(expense.auditHistory.length+1).padStart(3,'0'),reason:'Correct expense and payment to the exact ₹651.90 bank debit; remove the obsolete ₹0.10 rounding adjustment',changes:[{field:'amount',before:before.expenseAmount,after:amount},{field:'requestedAmount',before:before.requestedAmount,after:amount},{field:'paidAmount',before:before.paidAmount,after:expense.paidAmount}],editedBy:'prashant',editedAt:now});
+  s.adjustments=s.adjustments.filter(x=>x.id!==adjustmentId);
+  s.reconciliationExpenses=s.reconciliationExpenses.filter(x=>x.adjustmentId!==adjustmentId);
+  delete s.bankDateOverrides[adjustmentId];
+
+  drafts.forEach(d=>{
+    const oldIds=beforeMovementIds.get(d.id)||[],newIds=appBankMovements(s,d.account,d.nature).map(x=>x.id),rowMap={};
+    oldIds.forEach((id,index)=>{const nextIndex=newIds.indexOf(id);if(nextIndex>=0)rowMap['app-'+index]='app-'+nextIndex;});
+    const next={};
+    Object.entries(d.resolutions||{}).forEach(([rowId,resolution])=>{
+      const refs=[resolution.appId].concat(resolution.appIds||[]).filter(Boolean);
+      if(refs.includes(adjustmentId))return;
+      const mappedRow=rowId.startsWith('app-')?rowMap[rowId]:rowId;if(!mappedRow)return;
+      const copy=Object.assign({},resolution);
+      if(copy.linkedRowId&&copy.linkedRowId.startsWith('app-'))copy.linkedRowId=rowMap[copy.linkedRowId]||'';
+      next[mappedRow]=copy;
+    });
+    d.resolutions=next;
+  });
+
+  const after={expenseAmount:expense.amount,requestedAmount:expense.requestedAmount,paidAmount:expense.paidAmount,status:expense.status,payment:Object.assign({},payment),removedAdjustmentIds:removedAdjustments.map(x=>x.id)};
+  audit(s,null,'EXPENSE_BANK_AMOUNT_CORRECTED','expense',expenseId,{user:'prashant',device:'System migration',nature:expense.nature,account:payment.account,paymentId,before:Object.assign({},before,{adjustments:removedAdjustments}),after,note:'Owner-directed correction: EX-00120 and PAY-001 now equal the official ₹651.90 bank debit; ADJ-0003 was removed without changing the Axis 3645 net movement'});
+  s.oneTimeMigrations[key]={appliedAt:now,expenseId,paymentId,appId,amount,removedAdjustmentId:adjustmentId,preservedUnrelatedReconciliationResolutions:true,before,after};
+  return true;
 }
 function loadStore() {
   try {
@@ -397,6 +434,7 @@ function loadStore() {
     s.oneTimeMigrations=s.oneTimeMigrations||{};
     if(applyEx00122CashPaymentCorrection(s))saveStore(s);
     if(applyMissingPerfumeSale(s))saveStore(s);
+    if(applyEx00120ExactBankAmountCorrection(s))saveStore(s);
     if(!s.oneTimeMigrations[removeTr9Key]){const i=(s.transfers||[]).findIndex(x=>x.id==='TR-00009'),before=i>=0?s.transfers[i]:null;if(i>=0)s.transfers.splice(i,1);audit(s,null,'TRANSFER_DELETED','transfer','TR-00009',{user:'gaganlambasanki',device:'System migration',nature:before&&before.fromNature||'SANKI',account:before&&before.fromAccount||'Axis Bank 3448',before,after:null,note:'Owner confirmed removal from both account ledgers; ADV-00001 remains the salary advance record'});s.oneTimeMigrations[removeTr9Key]={appliedAt:new Date().toISOString(),result:before?'deleted':'not_found',before};saveStore(s);}
     Object.values(s.receivables || {}).forEach(x => (x.collections || []).forEach(c => { c.account = rename(c.account); }));
     Object.values((s.procurementAccounting || {}).paymentsByPo || {}).forEach(x => (x.payments || []).forEach(p => { p.account = rename(p.account);p.proofs=proofList(p.proofs,p.proof);p.proof=p.proofs[0]||''; }));
@@ -2530,5 +2568,5 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;

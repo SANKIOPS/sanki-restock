@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -34,6 +34,22 @@ test('26 August perfume sale posts ₹1,000 to Counter Cash and ₹799 to Paytm 
   assert.equal(store.auditLog.length,2);assert.equal(store.auditLog.every(x=>x.action==='PRODUCT_SALE_RECEIPT_RECORDED'),true);
   assert.equal(applyMissingPerfumeSale(store),false,'the split sale cannot be duplicated on another load');
   assert.equal(store.receipts.length,2);
+});
+
+test('EX-00120 uses the exact ₹651.90 bank amount and removes only ADJ-0003',()=>{
+  const account='Prashant Axis 3645',store={
+    expenses:{'EX-00120':{id:'EX-00120',nature:'SANKI',amount:652,requestedAmount:652,paidAmount:652,status:'paid',payments:[{id:'PAY-001',amount:652,date:'2026-08-28',account}]}},
+    adjustments:[{id:'ADJ-0003',nature:'SANKI',account,amount:.10,date:'2026-08-27',bankReference:'660545756771'},{id:'ADJ-KEEP',nature:'SANKI',account,amount:25,date:'2026-08-27'}],
+    reconciliationExpenses:[{id:'BRE-ADJ-0003',adjustmentId:'ADJ-0003'},{id:'BRE-KEEP',adjustmentId:'ADJ-KEEP'}],bankDateOverrides:{'ADJ-0003':{bankDate:'2026-08-27'},'EX-00120/PAY-001':{bankDate:'2026-08-27'},'ADJ-KEEP':{bankDate:'2026-08-27'}},
+    bankReconciliationDrafts:{D1:{id:'D1',nature:'SANKI',account,transactions:[],summary:{},resolutions:{'bank-61':{action:'link_multiple_existing',appIds:['EX-00120/PAY-001','ADJ-0003'],reason:'Old rounding link'},'app-0':{action:'exclude',appId:'ADJ-0003',reason:'Old adjustment'},'app-1':{action:'exclude',appId:'ADJ-KEEP',reason:'Keep this resolution'},'bank-55':{action:'exclude',reason:'Unrelated bank decision'}}}},
+    oneTimeMigrations:{},auditLog:[],auditSeq:0,transfers:[],receipts:[],vendorAdvances:[],vendorOpeningPayables:[],paytmSettlements:[]
+  };
+  assert.equal(applyEx00120ExactBankAmountCorrection(store),true);
+  const expense=store.expenses['EX-00120'];assert.equal(expense.amount,651.90);assert.equal(expense.requestedAmount,651.90);assert.equal(expense.payments[0].amount,651.90);assert.equal(expense.paidAmount,651.90);assert.equal(expense.status,'paid');
+  assert.equal(store.adjustments.some(x=>x.id==='ADJ-0003'),false);assert.equal(store.adjustments.some(x=>x.id==='ADJ-KEEP'),true);assert.equal(store.reconciliationExpenses.some(x=>x.adjustmentId==='ADJ-0003'),false);assert.equal(store.reconciliationExpenses.some(x=>x.adjustmentId==='ADJ-KEEP'),true);assert.equal(store.bankDateOverrides['ADJ-0003'],undefined);assert.ok(store.bankDateOverrides['EX-00120/PAY-001']);
+  assert.equal(store.bankReconciliationDrafts.D1.resolutions['bank-61'],undefined);assert.equal(store.bankReconciliationDrafts.D1.resolutions['app-0'].appId,'ADJ-KEEP');assert.deepEqual(store.bankReconciliationDrafts.D1.resolutions['bank-55'],{action:'exclude',reason:'Unrelated bank decision'});
+  assert.equal(store.auditLog.at(-1).action,'EXPENSE_BANK_AMOUNT_CORRECTED');assert.equal(store.auditLog.at(-1).before.expenseAmount,652);assert.equal(store.auditLog.at(-1).after.expenseAmount,651.90);
+  assert.equal(applyEx00120ExactBankAmountCorrection(store),false,'the correction is idempotent');
 });
 
 test('Kalu vendor aliases merge within SANKI while preserving transactions, credits and SAMAST',()=>{
