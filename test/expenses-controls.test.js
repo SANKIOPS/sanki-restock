@@ -980,6 +980,8 @@ test('a missing internal transfer can be created from an official bank row witho
 
 test('bank review offers a bank-confirmed internal transfer action',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);});
 
+test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple existing entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
+
 test('Prashant admin can create a bank-confirmed transfer to Paytm clearing',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),id='BRD-ADMIN-PAYTM',account='Prashant Axis 3645';
   stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date:'2026-09-01',description:'Paytm load',reference:'PAYTM-LOAD',debit:20000,credit:0,balance:-20000}],summary:{from:'2026-09-01',to:'2026-09-01',openingBalance:0,closingBalance:-20000,totalDebits:20000,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
