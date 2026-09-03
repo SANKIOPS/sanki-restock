@@ -362,13 +362,23 @@
     <div class="msg" id="bankDiscardMsg"></div>
   </div></dialog>
 
+  <dialog id="vendorManageDlg" style="max-width:560px"><div class="dlg">
+    <h3 id="vendorManageTitle">Manage vendor ledger</h3>
+    <div id="vendorManageSummary" class="sub" style="margin-bottom:12px"></div>
+    <div class="fld" id="vendorRenameWrap"><label>New vendor name</label><input id="vendorRenameName" autocomplete="off"></div>
+    <div class="fld" id="vendorDeleteListWrap" style="display:none"><label>Empty vendor ledgers to delete — one per line</label><textarea id="vendorDeleteList" rows="10" placeholder="SANKI | Vendor name&#10;SAMAST | Vendor name"></textarea><div class="hint">Use the exact entity and vendor name. Every ledger is rechecked against all expenses, including pending and rejected entries; any ledger with a link is skipped.</div></div>
+    <div class="fld" id="vendorDeleteReasonWrap" style="display:none;margin-top:10px"><label>Deletion reason — required</label><textarea id="vendorDeleteReason" rows="3" placeholder="Why are these empty ledgers being removed?"></textarea></div>
+    <div class="row-actions"><button class="btn primary" id="vendorManageGo">Save</button><button class="btn ghost" id="vendorManageCancel">Cancel</button></div>
+    <div class="msg" id="vendorManageMsg"></div>
+  </div></dialog>
+
   <script src="/sidebar.js"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
     var fmtBank = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null;
+    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null;
     function updatePaytmChargeSplit(){if(!bankReconForm||el('brKind').value!=='paytm')return;var row=bankReconRow(bankReconForm.rowId),net=Number(row&&row.bank&&row.bank.credit||0),gross=Number(el('brGross').value||0),hidden=Number(el('brHiddenCharge').value||0);el('brPaytmNet').value=net;el('brPaytmCharge').value=Math.max(0,Number((gross-net-hidden).toFixed(2)));saveBankReconForm();}
     el('brHiddenCharge').addEventListener('input',updatePaytmChargeSplit);el('brGross').addEventListener('input',updatePaytmChargeSplit);el('brPaytmCharge').addEventListener('input',saveBankReconForm);el('brChargeCategory').addEventListener('change',saveBankReconForm);
 
@@ -988,13 +998,14 @@
 
     // ── VENDORS ──
     function renderVendors(){
-      el('panel').innerHTML = '<div class="card"><div class="preset-row"><button class="btn mini primary" data-vsource="expense">Expense vendors</button><button class="btn mini ghost" data-vsource="sourcing">Sourcing vendors</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="vf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="vf_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="vf_to" value="'+today()+'"></div><div class="fld"><label>Vendor / particulars / expense no.</label><input id="vf_search" placeholder="Name, details or 57"></div><div class="fld"><label>Category</label><input id="vf_category" list="vendorCategoryList" placeholder="All categories"><datalist id="vendorCategoryList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist></div><div class="fld"><label>Sort by amount</label><select id="vf_sort"><option value="">Default order</option><option value="amount_desc">Amount: high to low</option><option value="amount_asc">Amount: low to high</option></select></div><button class="btn ghost mini" id="vf_go">Search</button></div><div class="row-actions"><input id="newVendor" placeholder="add approved vendor name"><button class="btn ghost mini" id="addVendor">Add</button></div><div id="vtable" class="muted" style="margin-top:12px">Loading…</div></div>';
-      el('panel').dataset.vsource='expense';Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(b){b.onclick=function(){el('panel').dataset.vsource=this.dataset.vsource;Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});loadVendors();};});
+      el('panel').innerHTML = '<div class="card"><div class="preset-row"><button class="btn mini primary" data-vsource="expense">Expense vendors</button><button class="btn mini ghost" data-vsource="sourcing">Sourcing vendors</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="vf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="vf_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="vf_to" value="'+today()+'"></div><div class="fld"><label>Vendor / particulars / expense no.</label><input id="vf_search" placeholder="Name, details or 57"></div><div class="fld"><label>Category</label><input id="vf_category" list="vendorCategoryList" placeholder="All categories"><datalist id="vendorCategoryList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist></div><div class="fld"><label>Sort by amount</label><select id="vf_sort"><option value="">Default order</option><option value="amount_desc">Amount: high to low</option><option value="amount_asc">Amount: low to high</option></select></div><button class="btn ghost mini" id="vf_go">Search</button></div><div class="row-actions"><input id="newVendor" placeholder="add approved vendor name"><button class="btn ghost mini" id="addVendor">Add</button>'+(cfg.isOwner?'<button class="btn danger mini" id="bulkDeleteVendors">Bulk delete empty</button>':'')+'</div><div id="vtable" class="muted" style="margin-top:12px">Loading…</div></div>';
+      el('panel').dataset.vsource='expense';Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(b){b.onclick=function(){el('panel').dataset.vsource=this.dataset.vsource;Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});if(el('bulkDeleteVendors'))el('bulkDeleteVendors').style.display=this.dataset.vsource==='expense'?'':'none';loadVendors();};});
       el('vf_go').onclick=loadVendors;el('vf_nature').onchange=loadVendors;el('vf_sort').onchange=loadVendors;
       el('addVendor').addEventListener('click', function(){
         var nm = el('newVendor').value.trim(); if(!nm) return;
         api('/api/expenses/vendors', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:nm,nature:el('vf_nature').value||selectedNature}) }).then(function(){ el('newVendor').value=''; loadConfig().then(loadVendors); });
       });
+      if(el('bulkDeleteVendors'))el('bulkDeleteVendors').addEventListener('click',openBulkVendorDelete);
       loadVendors();
     }
     function loadVendors(){
@@ -1009,9 +1020,57 @@
         el('vtable').innerHTML = '<div class="claim-list">'+rows+'</div><div class="stat" style="margin-top:12px"><div class="k">Total owed</div><div class="v neg">'+fmt(d.totalOutstanding)+'</div></div>';
       });
     }
-    window.editVendorLedger=function(nature,name){var next=prompt('New name for '+name+':',name);if(!next||!next.trim()||next.trim()===name)return;api('/api/expenses/vendors/manage/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:nature,name:name,newName:next.trim()})}).then(function(d){if(!d.success){setMsg(d.error||'Could not edit vendor ledger.',false);return;}setMsg('Vendor renamed. '+d.updatedExpenses+' linked expense(s) updated.',true);loadConfig().then(loadVendors);});};
+    function openVendorManager(mode,nature,name){
+      if(!cfg.isOwner){setMsg('Owner only.',false);return;}
+      vendorManageState={mode:mode,nature:nature||'',name:name||''};
+      el('vendorManageMsg').className='msg';el('vendorManageMsg').textContent='';
+      el('vendorRenameWrap').style.display=mode==='edit'?'':'none';
+      el('vendorDeleteListWrap').style.display=mode==='bulk-delete'?'':'none';
+      el('vendorDeleteReasonWrap').style.display=mode==='edit'?'none':'';
+      if(mode==='edit'){
+        el('vendorManageTitle').textContent='Rename vendor ledger';
+        el('vendorManageSummary').textContent=nature+' · '+name+' — every linked expense remains attached to the renamed ledger.';
+        el('vendorRenameName').value=name;el('vendorManageGo').textContent='Rename vendor';el('vendorManageGo').className='btn primary';
+      }else if(mode==='delete'){
+        el('vendorManageTitle').textContent='Delete empty vendor ledger';
+        el('vendorManageSummary').textContent=nature+' · '+name+' — the server will refuse deletion if any expense, including a pending or rejected entry, is linked.';
+        el('vendorDeleteReason').value='';el('vendorManageGo').textContent='Delete empty ledger';el('vendorManageGo').className='btn danger';
+      }else{
+        el('vendorManageTitle').textContent='Bulk delete empty vendor ledgers';
+        el('vendorManageSummary').textContent='Only the exact ledgers listed below will be attempted. Every ledger is independently rechecked before deletion.';
+        el('vendorDeleteList').value='';el('vendorDeleteReason').value='';el('vendorManageGo').textContent='Delete listed empty ledgers';el('vendorManageGo').className='btn danger';
+      }
+      el('vendorManageDlg').showModal();
+      setTimeout(function(){(mode==='edit'?el('vendorRenameName'):mode==='bulk-delete'?el('vendorDeleteList'):el('vendorDeleteReason')).focus();},0);
+    }
+    function openBulkVendorDelete(){openVendorManager('bulk-delete','','');}
+    window.editVendorLedger=function(nature,name){openVendorManager('edit',nature,name);};
     window.mergeVendorLedger=function(nature,name){var target=prompt('Merge '+name+' into which existing vendor ledger?\nType the exact target vendor name:');if(!target||!target.trim())return;if(!confirm('Merge '+name+' into '+target.trim()+'? All linked expenses will use the target vendor name.'))return;api('/api/expenses/vendors/manage/merge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:nature,sourceName:name,targetName:target.trim()})}).then(function(d){if(!d.success){setMsg(d.error||'Could not merge vendor ledgers.',false);return;}setMsg('Ledgers merged. '+d.updatedExpenses+' linked expense(s) preserved and moved.',true);loadConfig().then(loadVendors);});};
-    window.deleteVendorLedger=function(nature,name){var reason=prompt('Delete empty vendor ledger '+name+'?\nEnter the reason:');if(!reason||!reason.trim())return;if(!confirm('Delete '+name+'? This works only when it has no linked expenses.'))return;api('/api/expenses/vendors/manage/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:nature,name:name,reason:reason.trim()})}).then(function(d){if(!d.success){setMsg(d.error||'Could not delete vendor ledger.',false);return;}setMsg('Empty vendor ledger deleted.',true);loadConfig().then(loadVendors);});};
+    window.deleteVendorLedger=function(nature,name){openVendorManager('delete',nature,name);};
+    el('vendorManageCancel').addEventListener('click',function(){el('vendorManageDlg').close();vendorManageState=null;});
+    el('vendorManageGo').addEventListener('click',async function(){
+      var state=vendorManageState,btn=this;if(!state)return;
+      el('vendorManageMsg').className='msg';el('vendorManageMsg').textContent='';
+      if(state.mode==='edit'){
+        var next=el('vendorRenameName').value.trim();if(!next||next===state.name){el('vendorManageMsg').className='msg err';el('vendorManageMsg').textContent='Enter a different vendor name.';return;}
+        btn.disabled=true;var renamed=await api('/api/expenses/vendors/manage/edit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:state.nature,name:state.name,newName:next})});btn.disabled=false;
+        if(!renamed.success){el('vendorManageMsg').className='msg err';el('vendorManageMsg').textContent=renamed.error||'Could not edit vendor ledger.';return;}
+        el('vendorManageDlg').close();vendorManageState=null;setMsg('Vendor renamed. '+renamed.updatedExpenses+' linked expense(s) updated.',true);loadConfig().then(loadVendors);return;
+      }
+      var reason=el('vendorDeleteReason').value.trim();if(!reason){el('vendorManageMsg').className='msg err';el('vendorManageMsg').textContent='Enter the deletion reason.';return;}
+      var targets=state.mode==='delete'?[{nature:state.nature,name:state.name}]:el('vendorDeleteList').value.split(/\r?\n/).map(function(line){var parts=line.split('|');return {nature:String(parts.shift()||'').trim().toUpperCase(),name:parts.join('|').trim()};}).filter(function(x){return x.nature&&x.name;});
+      var seen={},clean=[];targets.forEach(function(x){var key=x.nature+'|'+x.name.toLowerCase();if(!seen[key]){seen[key]=true;clean.push(x);}});targets=clean;
+      if(!targets.length){el('vendorManageMsg').className='msg err';el('vendorManageMsg').textContent='List at least one ledger as ENTITY | Vendor name.';return;}
+      btn.disabled=true;var deleted=[],skipped=[],allowed={};(cfg.approvalNatures||cfg.natures||[]).forEach(function(n){allowed[String(n).toUpperCase()]=true;});
+      for(var i=0;i<targets.length;i++){
+        var target=targets[i];if(!allowed[target.nature]){skipped.push(target.nature+' · '+target.name+' — invalid or inaccessible entity');continue;}
+        try{var result=await api('/api/expenses/vendors/manage/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nature:target.nature,name:target.name,reason:reason})});if(result.success)deleted.push(target.nature+' · '+target.name);else skipped.push(target.nature+' · '+target.name+' — '+(result.error||'not deleted'));}
+        catch(err){skipped.push(target.nature+' · '+target.name+' — request failed');}
+      }
+      btn.disabled=false;
+      if(skipped.length){el('vendorManageMsg').className='msg err';el('vendorManageMsg').textContent='Deleted '+deleted.length+'. Skipped '+skipped.length+': '+skipped.join('; ');loadConfig().then(loadVendors);return;}
+      el('vendorManageDlg').close();vendorManageState=null;setMsg('Deleted '+deleted.length+' empty vendor ledger(s).',true);loadConfig().then(loadVendors);
+    });
 
     // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS ──
     function renderSalaryLedgers(){
