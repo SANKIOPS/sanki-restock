@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -34,6 +34,27 @@ test('26 August perfume sale posts ₹1,000 to Counter Cash and ₹799 to Paytm 
   assert.equal(store.auditLog.length,2);assert.equal(store.auditLog.every(x=>x.action==='PRODUCT_SALE_RECEIPT_RECORDED'),true);
   assert.equal(applyMissingPerfumeSale(store),false,'the split sale cannot be duplicated on another load');
   assert.equal(store.receipts.length,2);
+});
+
+test('Kalu vendor aliases merge within SANKI while preserving transactions, credits and SAMAST',()=>{
+  const store={
+    expenses:{
+      'EX-KALU':{id:'EX-KALU',nature:'SANKI',status:'partially_paid',vendor:'Kalu flower',amount:720,paidAmount:400},
+      'EX-VIJAY':{id:'EX-VIJAY',nature:'SANKI',status:'approved',vendor:'Vijay',amount:160,paidAmount:0},
+      'EX-VIJAY-KUMAR':{id:'EX-VIJAY-KUMAR',nature:'SANKI',status:'approved',vendor:'Vijay Kumar',amount:380,paidAmount:0},
+      'EX-SAMAST':{id:'EX-SAMAST',nature:'SAMAST',status:'approved',vendor:'Vijay Kumar',amount:99,paidAmount:0}
+    },
+    vendors:{'kalu flower':{name:'Kalu flower'},vijay:{name:'Vijay'},'vijay kumar':{name:'Vijay Kumar'}},vendorsByNature:{SAMAST:{'vijay kumar':{name:'Vijay Kumar'}}},
+    vendorOpeningPayables:[{id:'VOP-1',nature:'SANKI',vendor:'Vijay',amount:100,paidAmount:100}],vendorAdvances:[{id:'VADV-1',nature:'SANKI',vendor:'Kalu flower',amount:218,remainingAmount:18}],
+    bankReconciliationDrafts:{D1:{id:'D1',nature:'SANKI',resolutions:{'bank-1':{action:'vendor_advance_split',vendor:'Vijay Kumar'}}}},oneTimeMigrations:{},auditLog:[],auditSeq:0
+  };
+  assert.equal(applyKaluFlowersFruitsVendorMerge(store),true);
+  assert.equal(applyKaluFlowersFruitsVendorMerge(store),false,'the production merge is idempotent');
+  assert.equal(store.expenses['EX-KALU'].vendor,'Kalu Flowers & Fruits');assert.equal(store.expenses['EX-VIJAY'].vendor,'Kalu Flowers & Fruits');assert.equal(store.expenses['EX-VIJAY-KUMAR'].vendor,'Kalu Flowers & Fruits');
+  assert.equal(store.expenses['EX-SAMAST'].vendor,'Vijay Kumar');assert.equal(store.vendorsByNature.SAMAST['vijay kumar'].name,'Vijay Kumar');
+  assert.equal(store.vendorOpeningPayables[0].vendor,'Kalu Flowers & Fruits');assert.equal(store.vendorAdvances[0].vendor,'Kalu Flowers & Fruits');assert.equal(store.bankReconciliationDrafts.D1.resolutions['bank-1'].vendor,'Kalu Flowers & Fruits');
+  assert.deepEqual(Object.keys(store.vendors),['kalu flowers & fruits']);assert.equal(store.oneTimeMigrations['merge-sanki-vijay-vijay-kumar-kalu-flower-into-kalu-flowers-fruits-v1'].result.after.outstanding,842);
+  assert.equal(store.auditLog.filter(x=>x.action==='VENDOR_MERGED').length,3);
 });
 
 test('owner-confirmed Axis 3645 cases preserve unrelated reconciliation progress and post exact ledger effects',()=>{

@@ -329,6 +329,32 @@ function applyOwnerConfirmedAxis3645Cases(s) {
   state.complete=['haryanaPersonal','kaluAdvance','alokCombined','cashPaytmRoute','duplicateTransfer','shivamReimbursement','rounding'].every(k=>state.completed[k]);state.updatedAt=now;s.oneTimeMigrations[migrationKey]=state;
   return changed;
 }
+function vendorBalanceForNames(s,nature,names){
+  const n=normalizedNature(nature),keys=new Set([].concat(names||[]).map(x=>String(x||'').trim().toLowerCase()).filter(Boolean));let billed=0,paid=0,count=0;
+  Object.values(s.expenses||{}).forEach(e=>{if(normalizedNature(e.nature)!==n||!keys.has(String(e.vendor||'').trim().toLowerCase())||!['approved','partially_paid','paid'].includes(e.status))return;billed+=num(e.amount);paid+=num(e.paidAmount);count+=1;});
+  (s.vendorOpeningPayables||[]).forEach(e=>{if(normalizedNature(e.nature)!==n||!keys.has(String(e.vendor||'').trim().toLowerCase()))return;billed+=num(e.amount);paid+=num(e.paidAmount);count+=1;});
+  (s.vendorAdvances||[]).forEach(e=>{if(normalizedNature(e.nature)!==n||!keys.has(String(e.vendor||'').trim().toLowerCase()))return;paid+=Math.max(0,num(e.remainingAmount));count+=1;});
+  return{billed:round0(billed),paid:round0(paid),outstanding:round0(billed-paid),count};
+}
+function mergeVendorRecords(s,nature,sourceNames,targetName,options){
+  const n=normalizedNature(nature),target=String(targetName||'').trim(),targetKey=target.toLowerCase(),sources=Array.from(new Set([].concat(sourceNames||[]).map(x=>String(x||'').trim()).filter(x=>x&&x.toLowerCase()!==targetKey))),sourceKeys=new Set(sources.map(x=>x.toLowerCase())),master=vendorMasterForNature(s,n),before=vendorBalanceForNames(s,n,[target].concat(sources)),changedExpenses=[],changedOpeningPayables=[],changedAdvances=[],changedDraftResolutions=[];
+  if(!target)return{success:false,error:'Target vendor name is required.'};
+  const sourceLedgers=sources.map(name=>master[name.toLowerCase()]).filter(Boolean),existingTarget=master[targetKey];master[targetKey]=existingTarget||{name:target,notes:''};master[targetKey].name=target;
+  const notes=Array.from(new Set([master[targetKey].notes].concat(sourceLedgers.map(x=>x.notes)).map(x=>String(x||'').trim()).filter(Boolean)));master[targetKey].notes=notes.join(' · ');
+  Object.values(s.expenses||{}).forEach(e=>{if(normalizedNature(e.nature)===n&&sourceKeys.has(String(e.vendor||'').trim().toLowerCase())){changedExpenses.push(e.id);e.vendor=target;}});
+  (s.vendorOpeningPayables||[]).forEach(e=>{if(normalizedNature(e.nature)===n&&sourceKeys.has(String(e.vendor||'').trim().toLowerCase())){changedOpeningPayables.push(e.id);e.vendor=target;}});
+  (s.vendorAdvances||[]).forEach(e=>{if(normalizedNature(e.nature)===n&&sourceKeys.has(String(e.vendor||'').trim().toLowerCase())){changedAdvances.push(e.id);e.vendor=target;}});
+  Object.values(s.bankReconciliationDrafts||{}).forEach(d=>{if(normalizedNature(d.nature)!==n)return;Object.entries(d.resolutions||{}).forEach(([rowId,r])=>{if(sourceKeys.has(String(r.vendor||'').trim().toLowerCase())){r.vendor=target;changedDraftResolutions.push({draftId:d.id,rowId});}});});
+  sources.forEach(name=>{const key=name.toLowerCase();if(master[key])delete master[key];});
+  const after=vendorBalanceForNames(s,n,[target]),result={success:true,nature:n,targetName:target,sourceNames:sources,updatedExpenses:changedExpenses.length,updatedOpeningPayables:changedOpeningPayables.length,updatedAdvances:changedAdvances.length,updatedDraftResolutions:changedDraftResolutions.length,changedExpenses,changedOpeningPayables,changedAdvances,changedDraftResolutions,before,after};
+  if(!(options&&options.skipAudit))sources.forEach(sourceName=>audit(s,options&&options.req||null,'VENDOR_MERGED','vendor',sourceName,{user:options&&options.user,device:options&&options.device,nature:n,before:{source:sourceName,target,balance:before},after:{name:target,linkedExpenses:changedExpenses,balance:after},note:options&&options.note||'Vendor aliases consolidated without changing transaction amounts, dates, references, proofs or payment accounts'}));
+  return result;
+}
+function applyKaluFlowersFruitsVendorMerge(s){
+  const key='merge-sanki-vijay-vijay-kumar-kalu-flower-into-kalu-flowers-fruits-v1';s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
+  const result=mergeVendorRecords(s,'SANKI',['Vijay','Vijay Kumar','Kalu flower'],'Kalu Flowers & Fruits',{user:'prashant',device:'System migration',note:'Admin-authorized consolidation of the three SANKI vendor aliases; SAMAST Vijay Kumar remains separate'});
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),preservedOtherEntities:true,preservedTransactionDetails:true,result};return true;
+}
 function loadStore() {
   try {
     const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
@@ -353,6 +379,7 @@ function loadStore() {
     s.reconciliationExpenses=Array.isArray(s.reconciliationExpenses)?s.reconciliationExpenses:[];
     s.vendorOpeningPayables=Array.isArray(s.vendorOpeningPayables)?s.vendorOpeningPayables:[];
     s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];
+    if(applyKaluFlowersFruitsVendorMerge(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
     // the official bank row remains the sole Axis balance movement.
@@ -1723,9 +1750,8 @@ router.post('/api/expenses/vendors/manage/merge', (req, res) => {
   const master=vendorMasterForNature(s,nature),sourceKey=sourceName.toLowerCase(),targetKey=targetName.toLowerCase(),source=master[sourceKey],target=master[targetKey];
   if(!source) return res.status(404).json({success:false,error:'Source vendor ledger not found.'});
   if(!target) return res.status(404).json({success:false,error:'Target vendor ledger not found.'});
-  const linked=vendorLinkedExpenses(s,nature,sourceName);linked.forEach(e=>{e.vendor=target.name;});if(!target.notes&&source.notes)target.notes=source.notes;delete master[sourceKey];
-  audit(s,req,'VENDOR_MERGED','vendor',sourceName,{nature,before:{source:source.name,target:target.name},after:{name:target.name,linkedExpenses:linked.map(e=>e.id)}});
-  saveStore(s);res.json({success:true,name:target.name,updatedExpenses:linked.length});
+  const result=mergeVendorRecords(s,nature,[sourceName],target.name,{req});
+  saveStore(s);res.json(Object.assign({name:target.name},result));
 });
 router.post('/api/expenses/vendors/manage/delete', (req, res) => {
   if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can delete vendor ledgers.' });
@@ -2495,4 +2521,4 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge };
