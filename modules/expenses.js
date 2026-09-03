@@ -2086,7 +2086,9 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   if(b.action==='accept_match'&&!row.app)return res.status(400).json({success:false,error:'There is no suggested ledger entry to match.'});
   if(['link_multiple_existing','link_with_rounding','vendor_advance_split'].includes(b.action)){
     const appIds=Array.from(new Set((Array.isArray(b.appIds)?b.appIds:String(b.appIds||b.appId||'').split(',')).map(x=>String(x).trim()).filter(Boolean))),movements=appBankMovements(s,draft.account,draft.nature),linked=appIds.map(id=>movements.find(x=>x.id===id)).filter(Boolean),bankNet=num(row.bank&&row.bank.credit)-num(row.bank&&row.bank.debit),appNet=linked.reduce((n,x)=>n+num(x.credit)-num(x.debit),0);
-    if(!row.bank||!appIds.length||linked.length!==appIds.length)return res.status(400).json({success:false,error:'Enter valid existing ledger references, separated by commas.'});
+    const selectableIds=new Set(view.rows.filter(x=>x.app&&x.app.id&&!x.resolution&&x.status!=='matched'&&(x.id===row.id||x.status==='missing_in_bank')).map(x=>x.app.id)),unavailable=appIds.filter(id=>!selectableIds.has(id));
+    if(!row.bank||!appIds.length||linked.length!==appIds.length)return res.status(400).json({success:false,error:'Select valid existing ledger entries.'});
+    if(unavailable.length)return res.status(409).json({success:false,error:'One or more selected ledger entries are already matched or resolved. Refresh the candidate list and choose available entries.'});
     if(bankNet&&appNet&&Math.sign(bankNet)!==Math.sign(appNet))return res.status(400).json({success:false,error:'The linked entries must have the same money-in or money-out direction as the bank transaction.'});
     b.appIds=appIds;b.appNet=Math.round(appNet*100)/100;
     if(b.action==='link_multiple_existing'&&Math.abs(bankNet-appNet)>.01)return res.status(400).json({success:false,error:'The selected ledger references must total exactly the bank transaction amount.'});
