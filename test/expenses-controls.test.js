@@ -1071,6 +1071,8 @@ test('bank review exposes multi-entry linking directly for unmatched debits',()=
 
 test('bank reconciliation provides a searchable selectable ledger-entry picker',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/id="brAppSearch"[^>]+Search by amount, expense\/payment reference, vendor, narration or date/);assert.match(html,/id="brAppCandidates"/);assert.match(html,/toggleBankAppCandidate/);assert.match(html,/selected · /);assert.match(html,/Difference /);});
 
+test('bank interest has a valid category and is suggested from statement narration',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.ok(config.ledgers.some(x=>x.name==='Bank Interest Paid'));assert.match(html,/suggestedLedger=.*Bank Interest Paid/);assert.match(html,/\\bint\\\.\?\\s\*c\\b/);});
+
 test('one ledger movement cannot be selected twice in the same reconciliation',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='Prashant Axis 3645',id='BRD-NO-DOUBLE-LINK',date='2026-09-01';
   stored.expenses['EX-NO-DOUBLE-A']={id:'EX-NO-DOUBLE-A',date,nature:'SANKI',status:'paid',approvedAt:date+'T10:00:00Z',vendor:'Alok',amount:600,paidAmount:600,payments:[{id:'PAY-001',date,amount:600,account}]};stored.expenses['EX-NO-DOUBLE-B']={id:'EX-NO-DOUBLE-B',date,nature:'SANKI',status:'paid',approvedAt:date+'T10:00:00Z',vendor:'Alok',amount:600,paidAmount:600,payments:[{id:'PAY-001',date,amount:600,account}]};
