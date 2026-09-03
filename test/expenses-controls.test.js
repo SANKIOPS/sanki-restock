@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -967,6 +967,18 @@ test('any manual ledger movement can be linked to a bank row, remarked and undon
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankDateOverrides['TR-LINK-ALL'].originalDate,'2026-08-25');assert.equal(after.bankDateOverrides['TR-LINK-ALL'].bankDate,'2026-08-24');
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
+
+test('confirming a displayed possible match needs no second bank selection and finalizes with the bank date',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='Axis Bank 3448',id='BRD-CONFIRM-DISPLAYED',appId='TR-CONFIRM-DISPLAYED',amount=4321.23;
+  stored.transfers=stored.transfers||[];stored.transfers.push({id:appId,nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Prashant Axis 3645',amount,date:'2098-01-01',proof:'/proof.jpg'});
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date:'2098-01-02',description:'Miscellaneous official debit',reference:'QZ983274',debit:amount,credit:0,balance:0}],summary:{from:'2098-01-01',to:'2098-01-02',openingBalance:amount,closingBalance:0,totalDebits:amount,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',originalName:'confirm.csv',fileHash:'confirm',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const before=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:id,account}});assert.equal(before.status,200);const suggested=before.body.rows.find(x=>x.bank&&x.app&&x.app.id===appId);assert.equal(suggested.status,'possible_match');
+  const confirmed=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:id,rowId:suggested.id,action:'accept_match'}});assert.equal(confirmed.status,200,JSON.stringify(confirmed.body));assert.equal(confirmed.body.rows.find(x=>x.id===suggested.id).resolution.appId,appId);
+  const aligned=invoke('POST','/api/expenses/bank-statements/resolve-balance',{role:'admin',body:{draftId:id,amount:confirmed.body.proposedOpening+confirmed.body.balanceDifference,reason:'Align isolated confirmation test'}});assert.equal(aligned.status,200);assert.equal(aligned.body.canFinalize,true);
+  const draftSnapshot=JSON.parse(JSON.stringify(JSON.parse(fs.readFileSync(expenseFile,'utf8')).bankReconciliationDrafts[id])),finalized=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:id}});assert.equal(finalized.status,200,JSON.stringify(finalized.body));applyFinalizedConfirmedMatches(draftSnapshot,'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankDateOverrides[appId].originalDate,'2098-01-01');assert.equal(after.bankDateOverrides[appId].bankDate,'2098-01-02');assert.match(after.bankDateOverrides[appId].remark,/Confirmed displayed match/);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('confirm suggested match does not reopen an unrelated saved link form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/renderBankReconciliation\(d,true\)/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
 
 test('a missing internal transfer can be created from an official bank row without fabricated proof',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString(),account='Prashant Axis 3645',id='BRD-CREATE-TRANSFER';
