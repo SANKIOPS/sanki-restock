@@ -866,12 +866,40 @@ test('approved expenses for the same vendor can be paid together with one proof'
   assert.equal(paid.body.expenses[0].payments.at(-1).batchPaymentId,paid.body.expenses[1].payments.at(-1).batchPaymentId);
 });
 
+test('consolidated vendor payment consumes available advance before creating the bank outflow', () => {
+  function approved(amount,date) {
+    const made=invoke('POST','/api/expenses',{body:{date,vendor:'Vendor Credit Test',amount,billPhoto:'/api/expenses/photo/credit-bill.jpg',qrPhoto:'/api/expenses/photo/credit-qr.jpg',paymentType:'UPI'}});
+    invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
+    invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
+    return made.body.expense.id;
+  }
+  const older=approved(400,'2026-09-01'),newer=approved(300,'2026-09-02');
+  const expenseStorePath=path.join(path.dirname(process.env.DATA_PATH),'expenses.json');
+  const store=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));store.vendorAdvances=store.vendorAdvances||[];
+  store.vendorAdvances.push({id:'VADV-CREDIT-TEST',nature:'SANKI',vendor:'Vendor Credit Test',date:'2026-08-31',amount:18,remainingAmount:18,applications:[]});
+  fs.writeFileSync(expenseStorePath,JSON.stringify(store));
+  const candidates=invoke('GET','/api/expenses/:id/payment-candidates',{params:{id:newer},role:'owner'});
+  assert.equal(candidates.body.availableVendorCredit,18);assert.equal(candidates.body.vendorAdvances[0].id,'VADV-CREDIT-TEST');
+  const paid=invoke('POST','/api/expenses/batch-pay',{role:'owner',body:{expenseIds:[newer,older],amount:682,applyVendorCredit:true,account:'Counter Cash',paymentProof:'/api/expenses/photo/net-payment.jpg',date:'2026-09-03'}});
+  assert.equal(paid.status,200);assert.equal(paid.body.combinedOutstanding,700);assert.equal(paid.body.vendorCreditApplied,18);assert.equal(paid.body.total,682);
+  assert.equal(paid.body.expenses.every(x=>x.status==='paid'),true);
+  assert.equal(paid.body.allocations.reduce((sum,x)=>sum+x.amount,0),682);assert.equal(paid.body.vendorCreditAllocations.reduce((sum,x)=>sum+x.amount,0),18);
+  const saved=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),advance=saved.vendorAdvances.find(x=>x.id==='VADV-CREDIT-TEST');
+  assert.equal(advance.remainingAmount,0);assert.equal(advance.applications.reduce((sum,x)=>sum+x.amount,0),18);
+  const selected=[saved.expenses[older],saved.expenses[newer]];
+  assert.equal(selected.reduce((sum,e)=>sum+(e.payments||[]).reduce((n,p)=>n+p.amount,0),0),682);
+  assert.equal(selected.reduce((sum,e)=>sum+(e.vendorAdvanceApplications||[]).reduce((n,a)=>n+a.amount,0),0),18);
+  assert.ok(saved.auditLog.some(x=>x.action==='VENDOR_ADVANCE_APPLIED'&&x.paymentId==='VADV-CREDIT-TEST'));
+});
+
 test('All Expenses exposes a clear same-vendor consolidated payment selector', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/class="combined-pay-select"/);
   assert.match(html,/Select to combine/);
   assert.match(html,/Pay selected together/);
   assert.match(html,/openPay\(ids\[0\],ids\)/);
+  assert.match(html,/Apply available vendor advance/);
+  assert.match(html,/applyVendorCredit:applyVendorCredit/);
 });
 
 test('one consolidated payment partially allocates across selected bills oldest first', () => {
