@@ -978,7 +978,12 @@ test('vendor overpayment is one ledger payment and the excess remains as vendor 
   ]);
   assert.equal(ledger.ledgerRows.filter(x=>x.type==='Payment').length,1);assert.equal(ledger.ledgerRows.some(x=>x.type==='Vendor advance'),false);
   const expenseStorePath=path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),saved=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));
-  assert.equal(saved.expenses[first].payments[0].amount,200);assert.equal(saved.vendorAdvances.find(x=>x.id===advance.id).remainingAmount,218);
+  const storedPayment=saved.expenses[first].payments[0];assert.equal(storedPayment.amount,200);assert.equal(storedPayment.grossPaymentAmount,418);assert.equal(storedPayment.vendorAdvanceAmount,218);assert.equal(saved.vendorAdvances.find(x=>x.id===advance.id).remainingAmount,218);
+  const spending=invoke('GET','/api/expenses/spending-dashboard',{role:'owner',query:{nature:'SANKI',from:'2097-08-24',to:'2097-08-24'}}).body.payments.filter(x=>x.id===first);
+  assert.equal(spending.length,1);assert.equal(spending[0].amount,418);assert.equal(spending[0].expenseAllocationAmount,200);assert.equal(spending[0].vendorAdvanceAmount,218);
+  const account=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash',from:'2097-08-24',to:'2097-08-24'}}).body.entries.filter(x=>x.id===first+'/PAY-001');
+  assert.equal(account.length,1);assert.equal(account[0].debit,418);assert.equal(account[0].vendorAdvanceAmount,218);
+  const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2097-08-24',to:'2097-08-24'}}).body.accounts.find(x=>x.name==='Counter Cash');assert.equal(balances.spent,418);
 });
 
 test('All Expenses exposes a clear same-vendor consolidated payment selector', () => {
@@ -990,6 +995,8 @@ test('All Expenses exposes a clear same-vendor consolidated payment selector', (
   assert.match(html,/Apply available vendor advance/);
   assert.match(html,/applyVendorCredit:applyVendorCredit/);
   assert.match(html,/New vendor advance/);
+  assert.match(html,/Number\(p\.grossPaymentAmount\)\|\|Number\(p\.amount\)/);
+  assert.match(html,/applied to this expense/);
   assert.match(html,/Enter the actual amount paid/);
   assert.match(html,/<div id="payCreditSummary"[^>]*><\/div><label class="payment-entry">/);
   assert.match(html,/payMode==='vendor'\?'\/api\/expenses\/vendor-payments\/batch'/);
