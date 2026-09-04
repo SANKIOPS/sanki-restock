@@ -2806,9 +2806,5 @@ function summaryForPL(from, to) {
   return out;
 }
 
-// Run idempotent store repairs/corrections when the service starts, rather
-// than waiting for the first user to open an Expenses screen.
-loadStore();
-
 module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
