@@ -45,7 +45,7 @@ const DEFAULT_COUNTER_CASH = 'Counter Cash';
 const PAYTM_CLEARING_ACCOUNT = 'Paytm Settlement Clearing';
 const SALES_LEDGER_FROM = '2026-08-21';
 const COUNTER_CASH_RESET_DATE = '2026-08-22';
-const ACCOUNTING_BUILD = '2026-08-26-bank-charge-ledgers-v2';
+const ACCOUNTING_BUILD = '2026-08-26-bank-charge-ledgers-v2';const BANK_RECONCILIATION_RESET_KEY = 'owner-reset-all-bank-reconciliation-2026-09-04-v1';
 
 // Proof images (bill + payment screenshot) live on the /data volume, same
 // pattern as procurement photos.
@@ -408,6 +408,61 @@ function applyStrictReconciliationIdentityPolicy(s){
   s.oneTimeMigrations[key]={appliedAt:now,matchingPolicy:'strict_identity_v3',rule:'same date + same direction + exact/near amount + matching party identity',preservedManualResolutions:true,updatedDrafts};
   return true;
 }
+function reconciliationFile(root,value) {
+  const resolvedRoot=path.resolve(root),candidate=String(value||'').trim();
+  if(!candidate)return '';
+  const resolved=path.resolve(path.isAbsolute(candidate)?candidate:path.join(resolvedRoot,path.basename(candidate)));
+  return resolved===resolvedRoot||!resolved.startsWith(resolvedRoot+path.sep)?'':resolved;
+}
+function resetBankReconciliationData(s,options={}) {
+  s.expenses=s.expenses||{};s.adjustments=Array.isArray(s.adjustments)?s.adjustments:[];s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.receipts=Array.isArray(s.receipts)?s.receipts:[];s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];s.vendorOpeningPayables=Array.isArray(s.vendorOpeningPayables)?s.vendorOpeningPayables:[];s.paytmSettlements=Array.isArray(s.paytmSettlements)?s.paytmSettlements:[];s.reconciliationExpenses=Array.isArray(s.reconciliationExpenses)?s.reconciliationExpenses:[];
+  const books=s.bankStatements||{},drafts=s.bankReconciliationDrafts||{},removedFiles=[],removedSettlementIds=new Set(s.paytmSettlements.filter(x=>x.reconciliationDraft).map(x=>x.id)),removedAdvanceIds=new Set(s.vendorAdvances.filter(x=>x.reconciliationDraft).map(x=>x.id)),removedAdjustmentIds=new Set(s.adjustments.filter(x=>x.reconciliationDraft).map(x=>x.id));
+  const summary={
+    statementBooks:Object.keys(books).length,
+    statementImports:Object.values(books).reduce((n,x)=>n+(Array.isArray(x&&x.imports)?x.imports.length:0),0),
+    statementTransactions:Object.values(books).reduce((n,x)=>n+Object.keys(x&&x.transactions||{}).length,0),
+    drafts:Object.keys(drafts).length,
+    bankDateOverrides:Object.keys(s.bankDateOverrides||{}).length,
+    adjustments:removedAdjustmentIds.size,
+    transfers:s.transfers.filter(x=>x.reconciliationDraft).length,
+    receipts:s.receipts.filter(x=>x.reconciliationDraft||removedSettlementIds.has(x.paytmSettlementId)).length,
+    vendorAdvances:removedAdvanceIds.size,
+    vendorOpeningPayables:s.vendorOpeningPayables.filter(x=>x.reconciliationDraft).length,
+    paytmSettlements:removedSettlementIds.size,
+    reconciliationExpenses:s.reconciliationExpenses.filter(x=>x.reconciliationDraft||removedAdjustmentIds.has(x.adjustmentId)||removedSettlementIds.has(x.settlementId)).length,
+    expenses:0,
+    expensePayments:0,
+    vendorAdvanceApplications:0,
+    restoredManualTransfers:0,
+    storedFiles:0
+  };
+  const files=[];Object.values(books).forEach(book=>(book&&book.imports||[]).forEach(record=>{const file=reconciliationFile(STATEMENT_DIR,record&&record.file);if(file)files.push(file);}));Object.values(drafts).forEach(draft=>{const file=reconciliationFile(STATEMENT_DRAFT_DIR,draft&&draft.temporaryFile);if(file)files.push(file);});
+  if(options.removeFiles!==false)Array.from(new Set(files)).forEach(file=>{try{if(fs.existsSync(file)){fs.unlinkSync(file);removedFiles.push(path.basename(file));}}catch{}});summary.storedFiles=removedFiles.length;
+  s.paytmSettlements.filter(x=>removedSettlementIds.has(x.id)).forEach(settlement=>(settlement.transferIds||[]).forEach(id=>{const transfer=s.transfers.find(x=>x.id===id);if(!transfer||transfer.reconciliationDraft||transfer.settledThroughPaytm!==settlement.id)return;if(transfer.originalToAccount)transfer.toAccount=transfer.originalToAccount;delete transfer.originalToAccount;delete transfer.settledThroughPaytm;summary.restoredManualTransfers+=1;}));
+  Object.entries(s.expenses).forEach(([id,e])=>{
+    if(e&&e.reconciliationSource&&e.reconciliationSource.draftId){delete s.expenses[id];summary.expenses+=1;return;}
+    const payments=Array.isArray(e.payments)?e.payments:[],keptPayments=payments.filter(p=>!p.bankReconciliationDraft);summary.expensePayments+=payments.length-keptPayments.length;e.payments=keptPayments;
+    const applications=Array.isArray(e.vendorAdvanceApplications)?e.vendorAdvanceApplications:[],keptApplications=applications.filter(a=>!removedAdvanceIds.has(a.vendorAdvanceId));summary.vendorAdvanceApplications+=applications.length-keptApplications.length;e.vendorAdvanceApplications=keptApplications;
+    const paid=roundMoney(keptPayments.reduce((n,p)=>n+num(p.amount),0)+keptApplications.reduce((n,a)=>n+num(a.amount),0));e.paidAmount=paid;
+    if(e.status!=='rejected'&&e.approvedAt)e.status=paid>=num(e.amount)?'paid':(paid>0?'partially_paid':'approved');
+    if(e.paidAlready)e.vendorPaymentCompleted=paid>=num(e.amount);
+  });
+  s.adjustments=s.adjustments.filter(x=>!x.reconciliationDraft);
+  s.transfers=s.transfers.filter(x=>!x.reconciliationDraft);
+  s.receipts=s.receipts.filter(x=>!x.reconciliationDraft&&!removedSettlementIds.has(x.paytmSettlementId));
+  s.vendorAdvances=s.vendorAdvances.filter(x=>!x.reconciliationDraft);
+  s.vendorOpeningPayables=s.vendorOpeningPayables.filter(x=>!x.reconciliationDraft);
+  s.paytmSettlements=s.paytmSettlements.filter(x=>!removedSettlementIds.has(x.id));
+  s.reconciliationExpenses=s.reconciliationExpenses.filter(x=>!x.reconciliationDraft&&!removedAdjustmentIds.has(x.adjustmentId)&&!removedSettlementIds.has(x.settlementId));
+  s.bankDateOverrides={};s.bankStatements={};s.bankReconciliationDrafts={};
+  return summary;
+}
+function applyOwnerRequestedBankReconciliationReset(s) {
+  s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[BANK_RECONCILIATION_RESET_KEY])return false;
+  const appliedAt=new Date().toISOString(),summary=resetBankReconciliationData(s);
+  audit(s,null,'BANK_RECONCILIATION_RESET','system','all',{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account:'All bank accounts',before:summary,after:{bankStatements:0,bankReconciliationDrafts:0,bankDateOverrides:0},note:'Owner requested a complete bank-reconciliation reset while preserving manually recorded ledger entries.'});
+  s.oneTimeMigrations[BANK_RECONCILIATION_RESET_KEY]={appliedAt,result:'reset',summary,futureLedgerRule:'Bank-statement rows remain in reconciliation reports and never replace manually recorded account-ledger entries.'};return true;
+}
 function loadStore() {
   try {
     const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
@@ -548,7 +603,7 @@ function loadStore() {
     }
     if(applyOwnerConfirmedAxis3645Cases(s))saveStore(s);
     if(applyStrictReconciliationIdentityPolicy(s))saveStore(s);
-    if(bankChargeRepairAdded)saveStore(s);
+    if(bankChargeRepairAdded)saveStore(s);if(applyOwnerRequestedBankReconciliationReset(s))saveStore(s);
     return s;
   }
   catch { return blankStore(); }
@@ -2006,14 +2061,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     if(charge>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm charges',reference,credit:0,debit:charge,settlement});
     if(unknown>0)entries.push({id:x.id+'/UNKNOWN-CHARGES',date:x.date,kind:'paytm_unknown_charge',description:'Hidden / unknown Paytm charges',reference,credit:0,debit:unknown,settlement});
   });
-  // Once a bank period is finalized, its imported rows are the authoritative
-  // bank ledger. Manual/app movements remain visible only after that cutoff,
-  // preventing Shopify gross sales or matched expenses from doubling the bank.
-  const bankBook=(s.bankStatements||{})[account],coveredThrough=bankBook&&bankBook.reconciledThrough;
-  if(bankBook&&coveredThrough){
-    for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&entries[i].date<=coveredThrough)entries.splice(i,1);
-    Object.values(bankBook.transactions||{}).forEach(tx=>{const settlement=(s.paytmSettlements||[]).find(x=>x.bankTransactionId===tx.id);entries.push({id:tx.id,date:tx.date,kind:'bank_statement',description:tx.description||'Bank transaction',credit:num(tx.credit),debit:num(tx.debit),reference:tx.reference||'',settlement:settlement||null});});
-  }
+  // Bank-statement rows stay in reconciliation reports only; Excluded / PSNL rows never become operational ledger entries.
   if(account===DEFAULT_COUNTER_CASH)for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&!cashEntryIsVisible(account,entries[i].date))entries.splice(i,1);
   entries.forEach(x=>{const override=(s.bankDateOverrides||{})[x.id];if(override){x.originalDate=x.date;x.date=override.bankDate;x.bankDateOverride=override;}});
   const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
@@ -2615,5 +2663,5 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
