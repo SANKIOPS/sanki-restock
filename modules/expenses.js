@@ -644,8 +644,12 @@ function loadStore() {
 }
 function saveStore(s) {
   const tmp = EXP_PATH + '.tmp-' + process.pid + '-' + Date.now();
-  fs.writeFileSync(tmp, JSON.stringify(s));
-  fs.renameSync(tmp, EXP_PATH);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(s));
+    fs.renameSync(tmp, EXP_PATH);
+  } finally {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+  }
 }
 function audit(s, req, action, subjectType, subjectId, data) {
   s.auditLog=Array.isArray(s.auditLog)?s.auditLog:[];s.auditSeq=(s.auditSeq||0)+1;
