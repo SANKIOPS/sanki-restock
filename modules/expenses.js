@@ -440,6 +440,25 @@ function applyOwnerRequestedKaluPaymentRemovals(s){
   s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),results};
   return true;
 }
+function applyOwnerConfirmedEx00032GrossPayment(s){
+  const key='correct-ex-00032-gross-payment-418-v1';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const expense=(s.expenses||{})['EX-00032'],payment=expense&&(expense.payments||[]).find(x=>x.id==='PAY-001'),reference='EX-00032/PAY-001';
+  const valid=expense&&payment&&String(expense.date||'')==='2026-08-23'&&String(payment.date||'')==='2026-08-24'&&Math.abs(num(expense.amount)-200)<.01&&Math.abs(num(payment.amount)-200)<.01&&/kalu\s+flowers/i.test(String(expense.vendor||''))&&String(payment.account||expense.account||'')==='Prashant Axis 3645';
+  if(!valid){s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),result:'identity_mismatch'};return true;}
+  const existing=(s.vendorAdvances||[]).find(x=>x.paymentReference===reference&&Math.abs(num(x.grossPaymentAmount)-418)<.01);
+  if(existing){s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),result:'already_correct',vendorAdvanceId:existing.id};return applyVendorOverpaymentDisplayMetadata(s)||true;}
+  let sequence=(s.vendorAdvances||[]).length+1,advanceId='';
+  do{advanceId='VADV-'+String(sequence++).padStart(5,'0');}while((s.vendorAdvances||[]).some(x=>x.id===advanceId));
+  const batchPaymentId=payment.batchPaymentId||'BPAY-EX00032-GROSS-418',createdAt=new Date().toISOString(),proofs=proofList(payment.proofs,payment.proof||expense.paymentProof),proof=proofs[0]||'';
+  Object.assign(payment,{batchPaymentId,batchTotal:418,grossPaymentAmount:418,expenseAllocationAmount:200,vendorAdvanceAmount:218,vendorAdvanceId:advanceId});
+  const advance={id:advanceId,nature:normalizedNature(expense.nature),vendor:expense.vendor,date:payment.date,amount:218,remainingAmount:218,account:payment.account||expense.account,paymentType:payment.paymentType||expense.paymentType||'UPI',paymentReference:reference,proof,proofs,note:payment.note||'Excess amount from ₹418 vendor payment',applications:[],batchPaymentId,grossPaymentAmount:418,allocatedExpenseAmount:200,createdBy:payment.paidBy||'prashant',createdAt};
+  s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];s.vendorAdvances.push(advance);
+  audit(s,null,'VENDOR_PAYMENT_GROSS_AMOUNT_CORRECTED','expense',expense.id,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:expense.nature,account:advance.account,paymentId:payment.id,before:{expenseAllocationAmount:200,grossPaymentAmount:200,vendorAdvanceAmount:0},after:{expenseAllocationAmount:200,grossPaymentAmount:418,vendorAdvanceAmount:218,vendorAdvanceId:advanceId},note:'Owner confirmed the bank payment was ₹418: ₹200 settled EX-00032 and ₹218 remained as vendor advance.'});
+  s.oneTimeMigrations[key]={appliedAt:createdAt,result:'corrected',expenseId:expense.id,paymentId:payment.id,vendorAdvanceId:advanceId,grossPaymentAmount:418,expenseAllocationAmount:200,vendorAdvanceAmount:218};
+  return true;
+}
 function applyVendorOverpaymentDisplayMetadata(s){
   let changed=false;
   (s.vendorAdvances||[]).filter(x=>x.batchPaymentId&&num(x.grossPaymentAmount)>0).forEach(advance=>{
@@ -460,7 +479,9 @@ function applyBalancedDateAmountReconciliationPolicy(s){
   Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>{
     const previousPolicy=draft.matchingPolicy||'legacy_date_amount',resolutionCount=Object.keys(draft.resolutions||{}).length,exclusionCount=Object.keys(draft.matchingExclusions||{}).length;
     draft.matchingPolicy='balanced_date_amount_v5';
-    updatedDrafts.push({draftId:draft.id,account:draft.account,nature:normalizedNature(draft.nature),previousPolicy,matchingPolicy:draft.matchingPolicy,preservedResolutionCount:resolutionCount,preservedExclusionCount:exclusionCount});
+    const after=draftReconciliation(s,draft);
+    updatedDrafts.push({draftId:draft.id,account:draft.account,nature:normalizedNature(draft.nature),previousPolicy,matchingPolicy:draft.matchingPolicy,preservedResolutionCount:resolutionCount,preservedExclusionCount:exclusionCount,automaticMatches:after.summary.matched||0,unresolvedAfter:after.unresolved});
+    audit(s,null,'BANK_AUTO_MATCH_POLICY_UPDATED','account',draft.account,{user:'gaganlambasanki',device:'System migration',nature:draft.nature,account:draft.account,before:{matchingPolicy:previousPolicy},after:{matchingPolicy:draft.matchingPolicy,automaticMatches:after.summary.matched||0},note:'Automatically match exact same-date, same-amount and same-direction entries when the bank and ledger group counts agree; preserve manual decisions and exclusions.'});
   });
   s.oneTimeMigrations[key]={appliedAt:now,matchingPolicy:'balanced_date_amount_v5',rule:'same account + same date + same direction + exact amount; duplicate groups require equal counts',preservedManualResolutions:true,preservedMatchingExclusions:true,updatedDrafts};
   return true;
@@ -489,6 +510,7 @@ function loadStore() {
     s.reconciliationExpenses=Array.isArray(s.reconciliationExpenses)?s.reconciliationExpenses:[];
     s.vendorOpeningPayables=Array.isArray(s.vendorOpeningPayables)?s.vendorOpeningPayables:[];
     s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];
+    if(applyOwnerConfirmedEx00032GrossPayment(s))saveStore(s);
     if(applyVendorOverpaymentDisplayMetadata(s))saveStore(s);
     if(applyKaluFlowersFruitsVendorMerge(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
@@ -2781,5 +2803,5 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
