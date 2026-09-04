@@ -19,8 +19,14 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // leave a truncated/corrupt JSON file that bricks loading on next boot.
 function atomicWrite(filePath, data) {
   const tmp = filePath + '.tmp-' + process.pid + '-' + Date.now();
-  fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, filePath);
+  try {
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, filePath);
+  } finally {
+    // A full volume can leave a large partial temp file behind. Removing that
+    // failed artifact prevents every later save from inheriting ENOSPC.
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+  }
 }
 
 const app  = express();
