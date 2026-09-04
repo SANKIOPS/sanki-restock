@@ -67,6 +67,44 @@ const RUNTIME_DATA_DIR       = process.env.DATA_PATH
                              ? path.dirname(process.env.DATA_PATH)
                              : __dirname;
 
+// Reclaim abandoned uploads before any module tries to atomically save its
+// JSON store. A filename is retained whenever any persisted JSON record still
+// references it; only unreferenced files in known upload/statement folders and
+// failed atomic-write temporary files are removed.
+function sweepAbandonedRuntimeFiles() {
+  let jsonCorpus='';
+  try {
+    for(const name of fs.readdirSync(RUNTIME_DATA_DIR)){
+      if(!name.endsWith('.json'))continue;
+      try { jsonCorpus+='\n'+fs.readFileSync(path.join(RUNTIME_DATA_DIR,name),'utf8'); } catch {}
+    }
+  } catch { return {removed:0,freedBytes:0}; }
+  const managedDirs=['expense-proofs','bank-statement-drafts','bank-statements','credit-card-statements','fresh-candidates','casuals-candidates','procurement-photos'];
+  let removed=0,freedBytes=0;
+  for(const dirName of managedDirs){
+    const dir=path.join(RUNTIME_DATA_DIR,dirName);let names=[];
+    try { names=fs.readdirSync(dir); } catch { continue; }
+    for(const name of names){
+      const file=path.join(dir,name);let stat;
+      try { stat=fs.statSync(file); } catch { continue; }
+      if(!stat.isFile()||jsonCorpus.includes(name))continue;
+      try { fs.unlinkSync(file);removed++;freedBytes+=stat.size; } catch {}
+    }
+  }
+  try {
+    for(const name of fs.readdirSync(RUNTIME_DATA_DIR)){
+      if(!/\.tmp-(?:cc-)?\d+-\d+$/.test(name))continue;
+      const file=path.join(RUNTIME_DATA_DIR,name);let stat;
+      try { stat=fs.statSync(file);if(!stat.isFile())continue;fs.unlinkSync(file);removed++;freedBytes+=stat.size; } catch {}
+    }
+  } catch {}
+  return {removed,freedBytes};
+}
+try {
+  const swept=sweepAbandonedRuntimeFiles();
+  if(swept.removed)console.log('[storage] removed '+swept.removed+' abandoned file(s), freed '+(swept.freedBytes/1048576).toFixed(2)+' MB');
+} catch(error) { console.error('[storage] abandoned-file sweep failed safely:',error); }
+
 // Owner-confirmed one-time accounting reset: preserve master/configuration
 // data while removing transactions before 22 August 2026.
 if (String(process.env.RAILWAY_ENVIRONMENT_NAME || '').toLowerCase() === 'production') {
