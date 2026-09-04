@@ -9,6 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
+const { applyFinalizedBankTruth } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -1157,6 +1158,17 @@ test('reviewed bank transactions can finalize while the closing balance remains 
 });
 
 test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: finalize transactions only/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
+
+test('excluded statement rows remain bank truth without becoming expenses or P&L',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draft={id:'BRD-BANK-TRUTH',nature:'SANKI',account,transactions:[{date:'2098-04-01',description:'Personal purchase',reference:'PSNL-100',debit:100,credit:0},{date:'2098-04-01',description:'Personal receipt',reference:'PSNL-40',debit:0,credit:40}],resolutions:{'bank-0':{action:'exclude',reason:'PSNL'},'bank-1':{action:'exclude',reason:'PSNL'}}};
+  try{
+    const store=JSON.parse(original);store.bankTruthMovements=[];store.bankReconciliationDrafts={};store.oneTimeMigrations=store.oneTimeMigrations||{};store.oneTimeMigrations['owner-reset-all-bank-reconciliation-2026-09-04-v2']={result:'already_applied'};fs.writeFileSync(expenseFile,JSON.stringify(store));
+    applyFinalizedBankTruth(draft,'prashant');applyFinalizedBankTruth(draft,'prashant');
+    const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(saved.bankTruthMovements.length,2,'finalization is idempotent');assert.equal(saved.bankTruthMovements.reduce((n,x)=>n+x.credit-x.debit,0),-60);assert.equal(saved.reconciliationExpenses.some(x=>x.reconciliationDraft===draft.id),false);
+    const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account,from:'2098-04-01',to:'2098-04-01'}}).body;assert.equal(ledger.entries.filter(x=>x.kind==='bank_truth').length,2);
+    const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2098-04-01',to:'2098-04-01'}}).body,summary=balances.accounts.find(x=>x.name===account);assert.equal(summary.excludedBankIn,40);assert.equal(summary.excludedBankOut,100);assert.equal(summary.periodNet,-60);
+  }finally{fs.writeFileSync(expenseFile,original);}
+});
 
 test('a missing internal transfer can be created from an official bank row without fabricated proof',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString(),account='Prashant Axis 3645',id='BRD-CREATE-TRANSFER';
