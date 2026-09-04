@@ -1887,3 +1887,9 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
   assert.equal(paid.status, 200);
   assert.equal(paid.body.expense.payments.at(-1).reconciliationOverrideReason, 'Urgent approved vendor payment');
 });
+
+test('a store repair failure cannot hide the persisted financial records', () => {
+  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  assert.match(source,/Could not read expenses\.json:[\s\S]*return blankStore\(\)/);
+  assert.match(source,/Store repair failed; serving the original financial records:[\s\S]*return s/);
+});
