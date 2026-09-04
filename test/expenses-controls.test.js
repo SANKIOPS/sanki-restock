@@ -205,6 +205,33 @@ test('vendor ledgers can sort current outstanding amounts in both directions',()
   assert.match(html,/Number\(b\.outstanding\|\|0\)-Number\(a\.outstanding\|\|0\)/);
 });
 
+test('vendor ledger UI uses In and Out with status-coloured running balances',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/<th>Date<\/th><th>Particulars<\/th><th>Type<\/th><th>Expense \/ transaction reference<\/th><th class="r">In<\/th><th class="r">Out<\/th><th class="r">Balance<\/th>/);
+  assert.match(html,/function vendorBalanceHtml\(value\)/);
+  assert.match(html,/n<0\?'<span class="pos">/);
+  assert.match(html,/<span class="neg"><b>'\+fmt\(n\)\+'<\/b> due<\/span>/);
+  assert.match(html,/<span class="muted"><b>'\+fmt\(0\)\+'<\/b> clear<\/span>/);
+  assert.match(html,/<b>In<\/b> = payment or advance given to vendor/);
+});
+
+test('vendor ledger API returns chronological In and Out rows with a period opening balance',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),store=JSON.parse(original),vendor='Ledger Format Test Vendor',key=vendor.toLowerCase();
+  try{
+    store.vendors=store.vendors||{};store.vendors[key]={name:vendor,notes:''};store.expenses=store.expenses||{};store.vendorAdvances=store.vendorAdvances||[];
+    store.expenses['EX-LEDGER-FORMAT-1']={id:'EX-LEDGER-FORMAT-1',date:'2097-01-01',nature:'SANKI',status:'partially_paid',approvedAt:'2097-01-01T10:00:00.000Z',vendor,particulars:'First flower bill',ledger:'FLOWERS',amount:300,paidAmount:100,payments:[{id:'PAY-001',date:'2097-01-02',amount:100,account:'Counter Cash',note:'Part payment'}]};
+    store.expenses['EX-LEDGER-FORMAT-2']={id:'EX-LEDGER-FORMAT-2',date:'2097-01-03',nature:'SANKI',status:'approved',approvedAt:'2097-01-03T10:00:00.000Z',vendor,particulars:'Second flower bill',ledger:'FLOWERS',amount:50,paidAmount:0,payments:[]};
+    store.vendorAdvances.push({id:'VADV-LEDGER-FORMAT',date:'2097-01-02',nature:'SANKI',vendor,amount:25,remainingAmount:25,bankReference:'BANK-ADVANCE-25',note:'Advance paid'});
+    fs.writeFileSync(expenseFile,JSON.stringify(store));
+    const full=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI',from:'2097-01-01',to:'2097-01-03',search:'Ledger Format Test'}}).body.vendors[0];
+    assert.equal(full.ledgerOpeningBalance,0);assert.equal(full.ledgerClosingBalance,225);assert.equal(full.ledgerTransactionCount,4);
+    assert.deepEqual(full.ledgerRows.map(x=>[x.date,x.type,x.in,x.out,x.balance]),[['2097-01-01','Expense',0,300,300],['2097-01-02','Vendor advance',25,0,275],['2097-01-02','Payment',100,0,175],['2097-01-03','Expense',0,50,225]]);
+    assert.equal(full.ledgerRows[0].reference,'EX-LEDGER-FORMAT-1');assert.equal(full.ledgerRows[1].reference,'BANK-ADVANCE-25');assert.equal(full.ledgerRows[2].reference,'EX-LEDGER-FORMAT-1/PAY-001');
+    const period=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI',from:'2097-01-03',to:'2097-01-03',search:'Ledger Format Test'}}).body;
+    assert.equal(period.vendors[0].ledgerOpeningBalance,175);assert.equal(period.vendors[0].ledgerRows[0].out,50);assert.equal(period.vendors[0].ledgerClosingBalance,225);assert.equal(period.totalDue,225);assert.equal(period.totalAdvance,0);
+  }finally{fs.writeFileSync(expenseFile,original);}
+});
+
 test('expense reference filter accepts partial numbers and compact rows are numbered', () => {
   const created=invoke('POST','/api/expenses',{body:{vendor:'Reference Search Vendor',amount:57,billPhoto:'/api/expenses/photo/bill.jpg',paymentType:'Cash'}}).body.expense;
   const digits=created.id.replace(/\D/g,'').replace(/^0+/, '');
@@ -1044,7 +1071,7 @@ test('loading an account ledger never auto-opens an unfinished reconciliation fo
 
 test('reviewed bank transactions can finalize while the closing balance remains pending',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draftId='BRD-DEFER-BALANCE';
-  const store={expenses:{'EX-DEFER':{id:'EX-DEFER',date:'2098-02-01',nature:'SANKI',status:'paid',approvedAt:'2098-02-01T10:00:00Z',vendor:'Acme Supplies',particulars:'Acme Supplies',amount:100,paidAmount:100,payments:[{id:'PAY-001',date:'2098-02-01',amount:100,account}]}},receivables:{},vendors:{'acme supplies':{name:'Acme Supplies'}},vendorsByNature:{SAMAST:{},PERSONAL:{}},accounts:[],people:[],openingBalances:{[account]:0},openingBalancesByNature:{SAMAST:{},PERSONAL:{}},adjustments:[],transfers:[],receipts:[],vendorOpeningPayables:[],vendorAdvances:[],paytmSettlements:[],reconciliationExpenses:[],bankDateOverrides:{},bankStatements:{},bankReconciliationDrafts:{[draftId]:{id:draftId,account,nature:'SANKI',transactions:[{date:'2098-02-01',description:'UPI/ACME SUPPLIES',reference:'ACME-100',debit:100,credit:0,balance:0}],summary:{from:'2098-02-01',to:'2098-02-01',openingBalance:100,totalDebits:100,totalCredits:0,closingBalance:0,validated:true},resolutions:{},matchingPolicy:'strict_identity_v3',createdAt:'2098-02-01T12:00:00Z',expiresAt:'2098-02-08T12:00:00Z'}},auditLog:[],auditSeq:0,oneTimeMigrations:{}};
+  const store={expenses:{'EX-DEFER':{id:'EX-DEFER',date:'2098-02-01',nature:'SANKI',status:'paid',approvedAt:'2098-02-01T10:00:00Z',vendor:'Acme Supplies',particulars:'Acme Supplies',amount:100,paidAmount:100,payments:[{id:'PAY-001',date:'2098-02-01',amount:100,account}]}},receivables:{},vendors:{'acme supplies':{name:'Acme Supplies'}},vendorsByNature:{SAMAST:{},PERSONAL:{}},accounts:[],people:[],openingBalances:{[account]:0},openingBalancesByNature:{SAMAST:{},PERSONAL:{}},adjustments:[],transfers:[],receipts:[],vendorOpeningPayables:[],vendorAdvances:[],paytmSettlements:[],reconciliationExpenses:[],bankDateOverrides:{},bankStatements:{},bankReconciliationDrafts:{[draftId]:{id:draftId,account,nature:'SANKI',transactions:[{date:'2098-02-01',description:'UPI/ACME SUPPLIES',reference:'ACME-100',debit:100,credit:0,balance:0}],summary:{from:'2098-02-01',to:'2098-02-01',openingBalance:100,totalDebits:100,totalCredits:0,closingBalance:0,validated:true},resolutions:{},matchingPolicy:'strict_identity_v3',createdAt:'2098-02-01T12:00:00Z',expiresAt:'2098-02-08T12:00:00.000Z'}},auditLog:[],auditSeq:0,oneTimeMigrations:{'owner-reset-all-bank-reconciliation-2026-09-04-v2':{result:'already_applied'}}};
   try{
     fs.writeFileSync(expenseFile,JSON.stringify(store));
     const blocked=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId}});assert.equal(blocked.status,409);assert.match(blocked.body.error,/closing balance differs/i);
