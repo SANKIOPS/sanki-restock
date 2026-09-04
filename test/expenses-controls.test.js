@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -205,6 +205,17 @@ test('vendor ledgers can sort current outstanding amounts in both directions',()
   assert.match(html,/Number\(b\.outstanding\|\|0\)-Number\(a\.outstanding\|\|0\)/);
 });
 
+test('owner-requested Kalu correction removes only the two later payment records',()=>{
+  const payment=(amount,date)=>({id:'PAY-001',amount,date,account:'Prashant Axis 3645',proof:'/proof.jpg'}),store={expenses:{
+    'EX-00073':{id:'EX-00073',date:'2026-08-25',nature:'SANKI',amount:100,paidAmount:100,status:'paid',payments:[payment(100,'2026-08-25')]},
+    'EX-00077':{id:'EX-00077',date:'2026-08-26',nature:'SANKI',amount:100,paidAmount:100,status:'paid',payments:[payment(100,'2026-08-26')]},
+    'EX-OTHER':{id:'EX-OTHER',date:'2026-08-26',nature:'SANKI',amount:100,paidAmount:100,status:'paid',payments:[payment(100,'2026-08-26')]}
+  },oneTimeMigrations:{},auditLog:[],auditSeq:0,bankDateOverrides:{'EX-00073/PAY-001':{},'EX-00077/PAY-001':{},'EX-OTHER/PAY-001':{}}};
+  assert.equal(applyOwnerRequestedKaluPaymentRemovals(store),true);assert.equal(store.expenses['EX-00073'].payments.length,0);assert.equal(store.expenses['EX-00077'].payments.length,0);assert.equal(store.expenses['EX-OTHER'].payments.length,1);
+  assert.equal(store.expenses['EX-00073'].status,'approved');assert.equal(store.expenses['EX-00077'].status,'approved');assert.ok(store.bankDateOverrides['EX-OTHER/PAY-001']);assert.equal(store.auditLog.filter(x=>x.action==='PAYMENT_REMOVED').length,2);
+  assert.equal(applyOwnerRequestedKaluPaymentRemovals(store),false);
+});
+
 test('vendor ledger UI uses In and Out with status-coloured running balances',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/<th>Date<\/th><th>Particulars<\/th><th>Type<\/th><th>Expense \/ transaction reference<\/th><th class="r">In<\/th><th class="r">Out<\/th><th class="r">Balance<\/th>/);
@@ -397,6 +408,20 @@ test('audit log groups each expense into a readable complete lifecycle with user
   stored.auditLog=stored.auditLog.filter(x=>!(x.subjectId===created.id&&x.action==='CREATED'));fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const reconstructed=invoke('GET','/api/expenses/audit-log',{role:'owner',query:{subject:created.id}}).body.records.find(x=>x.id===created.id);
   assert.equal(reconstructed.timeline[0].action,'CREATED');assert.match(reconstructed.timeline[0].note,/reconstructed/i);assert.equal(reconstructed.timeline[0].user,'arshpreet');
+});
+
+test('an audited payment correction removes only the selected payment and reopens the expense',()=>{
+  const created=invoke('POST','/api/expenses',{role:'admin',body:{nature:'SANKI',vendor:'Payment Correction Vendor',particulars:'Keep the expense',ledger:'General Expense',amount:200,billPhoto:'/api/expenses/photo/correction-bill.jpg',paymentType:'Cash'}}).body.expense;
+  invoke('POST','/api/expenses/:id/approve',{role:'admin',params:{id:created.id}});
+  invoke('POST','/api/expenses/:id/pay',{role:'admin',params:{id:created.id},body:{amount:200,account:'Counter Cash',paymentType:'Cash',paymentProof:'/api/expenses/photo/wrong-payment.jpg'}});
+  const refused=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'admin',params:{id:created.id,paymentId:'PAY-001'},body:{}});
+  assert.equal(refused.status,400);
+  const removed=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'admin',params:{id:created.id,paymentId:'PAY-001'},body:{reason:'Payment needs to be modified'}});
+  assert.equal(removed.status,200);assert.equal(removed.body.removedPayment.amount,200);assert.equal(removed.body.expense.id,created.id);assert.equal(removed.body.expense.payments.length,0);assert.equal(removed.body.expense.paidAmount,0);assert.equal(removed.body.expense.status,'approved');assert.equal(removed.body.expense.paymentProof,'');
+  const auditResult=invoke('GET','/api/expenses/audit-log',{role:'owner',query:{subject:created.id,action:'PAYMENT_REMOVED'}});
+  const event=auditResult.body.records.find(x=>x.id===created.id).timeline.find(x=>x.action==='PAYMENT_REMOVED');
+  assert.equal(event.paymentId,'PAY-001');assert.equal(event.before.amount,200);assert.deepEqual(event.after,{paidAmount:0,status:'approved'});assert.equal(event.note,'Payment needs to be modified');
+  assert.equal(invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'admin',params:{id:created.id,paymentId:'PAY-001'},body:{reason:'Duplicate request'}}).status,404);
 });
 
 test('deleted expenses remain visible in audit logs with snapshot, actor and required reason', () => {
@@ -931,6 +956,26 @@ test('consolidated vendor payment consumes available advance before creating the
   assert.ok(saved.auditLog.some(x=>x.action==='VENDOR_ADVANCE_APPLIED'&&x.paymentId==='VADV-CREDIT-TEST'));
 });
 
+test('vendor overpayment is one ledger payment and the excess remains as vendor advance', () => {
+  function approved(amount,date,particulars) {
+    const made=invoke('POST','/api/expenses',{body:{date,vendor:'Running Balance Vendor',particulars,amount,billPhoto:'/api/expenses/photo/running-bill.jpg',qrPhoto:'/api/expenses/photo/running-qr.jpg',paymentType:'UPI'}});
+    invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
+    invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
+    return made.body.expense.id;
+  }
+  const first=approved(200,'2097-08-23','Opening flower expense'),second=approved(100,'2097-08-25','Second flower expense'),third=approved(100,'2097-08-26','Third flower expense');
+  const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[first],amount:418,account:'Counter Cash',paymentProof:'/api/expenses/photo/payment-418.jpg',date:'2097-08-24',paymentType:'UPI',note:'One payment including vendor advance'}});
+  assert.equal(paid.status,200,JSON.stringify(paid.body));assert.equal(paid.body.total,418);assert.equal(paid.body.allocations[0].amount,200);assert.equal(paid.body.vendorAdvanceCreated,218);
+  const advance=paid.body.newVendorAdvance;assert.equal(advance.amount,218);assert.equal(advance.remainingAmount,218);assert.equal(advance.grossPaymentAmount,418);assert.equal(advance.allocatedExpenseAmount,200);
+  const ledger=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI',from:'2097-08-23',to:'2097-08-26',search:'Running Balance Vendor'}}).body.vendors[0];
+  assert.deepEqual(ledger.ledgerRows.map(x=>[x.date,x.type,x.in,x.out,x.balance]),[
+    ['2097-08-23','Expense',0,200,200],['2097-08-24','Payment',418,0,-218],['2097-08-25','Expense',0,100,-118],['2097-08-26','Expense',0,100,-18]
+  ]);
+  assert.equal(ledger.ledgerRows.filter(x=>x.type==='Payment').length,1);assert.equal(ledger.ledgerRows.some(x=>x.type==='Vendor advance'),false);
+  const expenseStorePath=path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),saved=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));
+  assert.equal(saved.expenses[first].payments[0].amount,200);assert.equal(saved.vendorAdvances.find(x=>x.id===advance.id).remainingAmount,218);
+});
+
 test('All Expenses exposes a clear same-vendor consolidated payment selector', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/class="combined-pay-select"/);
@@ -939,6 +984,9 @@ test('All Expenses exposes a clear same-vendor consolidated payment selector', (
   assert.match(html,/openPay\(ids\[0\],ids\)/);
   assert.match(html,/Apply available vendor advance/);
   assert.match(html,/applyVendorCredit:applyVendorCredit/);
+  assert.match(html,/New vendor advance/);
+  assert.match(html,/payMode==='vendor'\?'\/api\/expenses\/vendor-payments\/batch'/);
+  assert.doesNotMatch(html,/payAmount'\)\.max=/);
 });
 
 test('one consolidated payment partially allocates across selected bills oldest first', () => {
@@ -954,7 +1002,7 @@ test('one consolidated payment partially allocates across selected bills oldest 
   assert.deepEqual(paid.body.allocations.map(x=>[x.expenseId,x.amount,x.status,x.balanceDue]),[[older,5000,'paid',0],[newer,2000,'partially_paid',3000]]);
   assert.equal(paid.body.expenses.find(x=>x.id===newer).payments.at(-1).batchTotal,7000);
   const over=invoke('POST','/api/expenses/batch-pay',{role:'owner',body:{expenseIds:[newer],amount:3001,account:'Counter Cash',paymentProof:'/api/expenses/photo/over.jpg'}});
-  assert.equal(over.status,400);assert.match(over.body.error,/combined outstanding/i);
+  assert.equal(over.status,200);assert.equal(over.body.allocations[0].amount,3000);assert.equal(over.body.vendorAdvanceCreated,1);
 });
 
 test('approved self-paid expenses appear once in spending, vendor and personal account ledgers', () => {
