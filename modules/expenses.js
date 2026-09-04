@@ -452,6 +452,7 @@ function applyVendorOverpaymentDisplayMetadata(s){
     if(advance.paymentReference!==primary.reference){advance.paymentReference=primary.reference;changed=true;}
   });
   return changed;
+}
 function applyBalancedDateAmountReconciliationPolicy(s){
   const key='auto-match-balanced-same-date-amount-groups-v1',now=new Date().toISOString();
   s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
