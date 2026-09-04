@@ -34,6 +34,7 @@ const EXP_PATH = path.join(DATA_DIR, 'expenses.json');
 const CREDIT_CARD_PATH = path.join(DATA_DIR, 'credit-cards.json');
 const PROC_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
 const SALES_PATH = process.env.SALES_PATH || path.join(DATA_DIR, 'sales.json');
+const SALARY_PATH = path.join(DATA_DIR, 'salary.json');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
 const STATEMENT_DIR = path.join(DATA_DIR, 'bank-statements');
 const STATEMENT_DRAFT_DIR = path.join(DATA_DIR, 'bank-statement-drafts');
@@ -843,10 +844,12 @@ function storedAccountNames(s) {
 }
 function salaryAdvanceEntries() {
   try {
-    const sal = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'salary.json'), 'utf8'));
-    return Object.values(sal.advances || {}).filter(a => a.active !== false && num(a.amount) > 0 && a.account).map(a => ({ id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:a.account,amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'' }));
+    const sal = JSON.parse(fs.readFileSync(SALARY_PATH, 'utf8'));
+    return Object.values(sal.advances || {}).filter(a => a.active !== false && num(a.amount) > 0 && a.account).map(a => ({ id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:a.account,amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,empId:a.empId||'',reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'',fundingTransferId:a.fundingTransferId||'',fundingToAccount:a.fundingToAccount||'' }));
   } catch (_) { return []; }
 }
+function loadSalaryStore(){try{return JSON.parse(fs.readFileSync(SALARY_PATH,'utf8'));}catch(_){return null;}}
+function saveSalaryStore(s){const tmp=SALARY_PATH+'.tmp-'+process.pid+'-'+Date.now();fs.writeFileSync(tmp,JSON.stringify(s,null,2));fs.renameSync(tmp,SALARY_PATH);}
 function salaryPaymentEntries(){try{const sal=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'salary.json'),'utf8'));return (sal.salaryPayments||[]).filter(p=>p.active!==false&&num(p.amount)>0);}catch(_){return[];}}
 function companyAccountsForNature(nature) {
   return (ENTITY_ACCOUNTS[normalizedNature(nature)] || []).slice();
@@ -2052,7 +2055,10 @@ router.get('/api/expenses/balances', (req, res) => {
     });
     (s.vendorAdvances||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{paidOut[x.account]=(paidOut[x.account]||0)+num(x.amount);});
     if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
-    if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
+    // A linked advance is still outstanding against the employee, but its bank
+    // movement is represented by the internal transfer. Do not debit the source
+    // account a second time here.
+    if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
     if (nature === 'SANKI') salaryPaymentEntries().filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
     (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && posted(x.account,x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
     Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>posted(c.account,c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
@@ -2107,6 +2113,10 @@ router.post('/api/expenses/transfers/:id/delete', (req,res) => {
   if(index<0)return res.status(404).json({success:false,error:'Transfer not found.'});
   if(!reason)return res.status(400).json({success:false,error:'Reason for deleting the transfer is required.'});
   const transfer=s.transfers[index];
+  if(transfer.salaryAdvanceId){
+    const salaryStore=loadSalaryStore(),advance=salaryStore&&salaryStore.advances&&salaryStore.advances[transfer.salaryAdvanceId];
+    if(advance&&advance.fundingTransferId===transfer.id){delete advance.fundingTransferId;delete advance.fundingToAccount;delete advance.fundingLinkedAt;delete advance.fundingLinkedBy;salaryStore.advanceAudit=salaryStore.advanceAudit||[];salaryStore.advanceAudit.push({at:new Date().toISOString(),by:req.user&&req.user.username||'owner',action:'FUNDING_TRANSFER_UNLINKED',advanceId:advance.id,details:{transferId:transfer.id,reason}});saveSalaryStore(salaryStore);}
+  }
   audit(s,req,'TRANSFER_DELETED','transfer',id,{nature:transfer.fromNature||transfer.nature,account:transfer.fromAccount,before:transfer,note:reason});
   s.transfers.splice(index,1);saveStore(s);res.json({success:true,deleted:id});
 });
@@ -2159,7 +2169,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     (e.reimbursementPayments || []).filter(p => personalAccount === account).forEach(p => entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
   });
   if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',entity:'SANKI',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport [SANKI]',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
-  if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_advance',entity:'SANKI',description:'Salary advance · '+x.employee,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.by}));
+  if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_advance',entity:'SANKI',description:'Salary advance · '+x.employee,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.by}));
   if (nature === 'SANKI') salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_payment',entity:'SANKI',description:'Salary payment · '+x.employeeName+' · '+x.ym,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.createdBy}));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
   if(nature==='SANKI'){
@@ -2256,7 +2266,7 @@ function appBankMovements(s,account,nature){const rows=[],n=normalizedNature(nat
   // belong to SAMAST or PERSONAL while being paid by a SANKI bank account.
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p=>rows.push({id:e.id+'/'+p.id,date:p.date,createdAt:p.paidAt||e.createdAt,description:(e.vendor||e.particulars||e.id),particulars:e.particulars||'',category:e.ledger||'',reference:p.bankReference||e.reconciliationSource&&e.reconciliationSource.bankReference||'',proof:p.proof||e.billPhoto||e.paymentProof||'',debit:num(p.amount),credit:0,entity:normalizedNature(e.nature)}));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account).forEach(p=>rows.push({id:e.id+'/'+p.id,date:p.date,createdAt:p.paidAt||e.createdAt,description:'Reimbursement '+(e.claimant||e.createdBy||''),reference:p.bankReference||'',proof:p.proof||'',debit:num(p.amount),credit:0,entity:normalizedNature(e.nature)}));});
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===n).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>rows.push({id:x.id+'/'+c.id,date:c.date,description:x.party,credit:num(c.amount),debit:0})));
-  if(n==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:x.description,reference:x.reference||'',proof:x.proof||'',credit:num(x.amount),debit:0}));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:p.id+'/'+x.id,date:x.date,createdAt:x.paidAt,description:p.vendor||p.id,reference:x.bankReference||'',proof:x.proof||'',debit:num(x.amount),credit:0})));salaryAdvanceEntries().filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary advance · '+x.employee+(x.note?' · '+x.note:''),reference:x.reference||x.id,proof:x.proof||'',proofs:x.proofs||[],category:'Employee salary advance',debit:num(x.amount),credit:0}));salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary payment · '+x.employeeName+(x.note?' · '+x.note:''),reference:x.reference||x.batchId||x.id,proof:x.proof||'',category:'Salary payment',debit:num(x.amount),credit:0}));}return rows.map(x=>{const override=(s.bankDateOverrides||{})[x.id];return override?Object.assign({},x,{originalDate:x.date,date:override.bankDate,bankDateOverride:override}):x;});}
+  if(n==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:x.description,reference:x.reference||'',proof:x.proof||'',credit:num(x.amount),debit:0}));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:p.id+'/'+x.id,date:x.date,createdAt:x.paidAt,description:p.vendor||p.id,reference:x.bankReference||'',proof:x.proof||'',debit:num(x.amount),credit:0})));salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary advance · '+x.employee+(x.note?' · '+x.note:''),reference:x.reference||x.id,proof:x.proof||'',proofs:x.proofs||[],category:'Employee salary advance',debit:num(x.amount),credit:0}));salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary payment · '+x.employeeName+(x.note?' · '+x.note:''),reference:x.reference||x.batchId||x.id,proof:x.proof||'',category:'Salary payment',debit:num(x.amount),credit:0}));}return rows.map(x=>{const override=(s.bankDateOverrides||{})[x.id];return override?Object.assign({},x,{originalDate:x.date,date:override.bankDate,bankDateOverride:override}):x;});}
 const RECONCILIATION_IDENTITY_STOP_WORDS=new Set(['bank','payment','payments','transfer','transferred','transaction','account','limited','india','indusind','federal','axis','state','yes','upi','imps','neft','rtgs','ift','inb','p2a','p2m','kumar','singh','private','services']);
 function reconciliationIdentityTokens(value){return Array.from(new Set(String(value||'').toLowerCase().split(/[^a-z0-9]+/).filter(x=>x.length>=4&&!RECONCILIATION_IDENTITY_STOP_WORDS.has(x)&&!/^[0-9]+$/.test(x))));}
 function reconciliationIdentityMatches(bank,app){const bankText=String((bank&&bank.reference)||'')+' '+String((bank&&bank.description)||''),appText=String((app&&app.id)||'')+' '+String((app&&app.description)||''),reference=String((bank&&bank.reference)||'').trim().toLowerCase(),confirmedReference=String(app&&app.bankDateOverride&&app.bankDateOverride.bankReference||'').trim().toLowerCase();if(confirmedReference.length>=5&&bankText.toLowerCase().includes(confirmedReference))return true;if(reference.length>=5&&appText.toLowerCase().includes(reference))return true;const appTokens=new Set(reconciliationIdentityTokens(appText));return reconciliationIdentityTokens(bankText).some(x=>appTokens.has(x));}
@@ -2321,6 +2331,13 @@ function setLedgerMovementExcluded(s,id,excluded,reason,user){
   return false;
 }
 router.post('/api/expenses/bank-statements/correct-ledger-entry',(req,res)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId],amount=num(b.amount),reason=String(b.reason||'').trim();if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot edit this reconciliation.'});if(!(amount>0)||!reason)return res.status(400).json({success:false,error:'A corrected amount and reason are required.'});const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId);if(!row||row.status!=='amount_mismatch'||!row.app||!row.bank)return res.status(400).json({success:false,error:'Choose an amount-mismatch row with both ledger and bank entries.'});const change=correctLedgerMovementAmount(s,row.app.id,amount);if(!change)return res.status(400).json({success:false,error:'This ledger source cannot be edited here. Link it or create an explicit adjustment instead.'});audit(s,req,'BANK_RECONCILIATION_LEDGER_AMOUNT_CORRECTED','ledger_entry',row.app.id,{nature:draft.nature,account:draft.account,before:{amount:change.before},after:{amount:change.after},note:reason,draftId:draft.id,bankDate:row.bank.date});saveStore(s);res.json(draftReconciliation(s,draft));});
+router.get('/api/expenses/salary-advance-transfer-candidates',(req,res)=>{
+  if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});
+  const sal=loadSalaryStore(),amount=num(req.query.amount),source=String(req.query.sourceAccount||'').trim().toLowerCase();
+  if(!sal)return res.status(500).json({success:false,error:'Salary records are unavailable.'});
+  const advances=Object.values(sal.advances||{}).filter(a=>a.active!==false&&num(a.amount)>0&&!a.fundingTransferId&&(!amount||Math.abs(num(a.amount)-amount)<.01)&&(!source||String(a.account||'').trim().toLowerCase()===source)).map(a=>({id:a.id,employeeId:a.empId||'',employeeName:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,amount:num(a.amount),date:a.date,sourceAccount:a.account,reference:a.reference||a.id,note:a.note||''})).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
+  res.json({success:true,advances});
+});
 router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
@@ -2337,10 +2354,21 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     if(!approvalNatures(req).includes(fromNature)||!approvalNatures(req).includes(toNature))return res.status(403).json({success:false,error:'You cannot transfer funds for one of these accounting entities.'});
     if(!fromAccount)return res.status(400).json({success:false,error:'Choose the internal source account.'});
     if(fromNature===toNature&&fromAccount.toLowerCase()===toAccount.toLowerCase())return res.status(400).json({success:false,error:'Source and receiving accounts must be different.'});
-    if(fromNature!==toNature&&!['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification))return res.status(400).json({success:false,error:'Choose why money is moving between these entities.'});
+    if(fromNature!==toNature&&!['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement','salary_advance_funding'].includes(classification))return res.status(400).json({success:false,error:'Choose why money is moving between these entities.'});
+    let salaryStore=null,salaryAdvance=null;
+    if(classification==='salary_advance_funding'){
+      if(fromNature!=='SANKI'||toNature!=='SANKI')return res.status(400).json({success:false,error:'A salary advance funding transfer must stay inside the SANKI entity.'});
+      salaryStore=loadSalaryStore();salaryAdvance=salaryStore&&salaryStore.advances&&salaryStore.advances[String(b.salaryAdvanceId||'')];
+      if(!salaryAdvance||salaryAdvance.active===false)return res.status(400).json({success:false,error:'Choose a posted, active salary advance.'});
+      if(salaryAdvance.fundingTransferId)return res.status(409).json({success:false,error:'This salary advance is already linked to transfer '+salaryAdvance.fundingTransferId+'.'});
+      if(Math.abs(num(salaryAdvance.amount)-amount)>.01)return res.status(400).json({success:false,error:'The salary advance amount must exactly equal this incoming bank transaction.'});
+      if(String(salaryAdvance.account||'').trim().toLowerCase()!==fromAccount.toLowerCase())return res.status(400).json({success:false,error:'The selected salary advance was paid from a different source account.'});
+    }
     s.transferSeq=(s.transferSeq||0)+1;transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:fromNature,fromNature,toNature,classification,fromAccount,toAccount,amount,date:bank.date,proof:'',note,createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:b.rowId,reference:String(bank.reference||''),description:String(bank.description||'')}};
+    if(salaryAdvance){transfer.salaryAdvanceId=salaryAdvance.id;transfer.employeeId=salaryAdvance.empId||'';transfer.employeeName=salaryAdvance.employeeName||((salaryStore.employees||{})[salaryAdvance.empId]||{}).name||'';transfer.advanceDate=salaryAdvance.date;salaryAdvance.fundingTransferId=transfer.id;salaryAdvance.fundingToAccount=toAccount;salaryAdvance.fundingLinkedAt=now;salaryAdvance.fundingLinkedBy=user;salaryStore.advanceAudit=salaryStore.advanceAudit||[];salaryStore.advanceAudit.push({at:now,by:user,action:'FUNDING_TRANSFER_LINKED',advanceId:salaryAdvance.id,details:{transferId:transfer.id,fromAccount,toAccount,amount,bankDate:bank.date,draftId:draft.id,rowId:b.rowId}});}
     s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:'create_transfer',reason:note,remark:note,appId:transfer.id,transferId:transfer.id,by:user,at:now};
     audit(s,req,'CREATED_FROM_BANK_RECONCILIATION','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer,note,draftId:draft.id,bankRowId:b.rowId});
+    if(salaryStore)saveSalaryStore(salaryStore);
   }else if(sourceKind==='external'){
     if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can classify an external receipt from bank reconciliation.'});
     const source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim();
@@ -2569,7 +2597,7 @@ function recordedAccountBalance(s,nature,account,asOf){
   (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
-  if(nature==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));salaryAdvanceEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));salaryPaymentEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
+  if(nature==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));salaryPaymentEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
   return round0(total);
 }
 router.get('/api/expenses/balance-sheet',(req,res)=>{
