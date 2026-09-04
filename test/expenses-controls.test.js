@@ -1144,7 +1144,7 @@ test('a missing internal transfer can be created from an official bank row witho
 
 test('bank review offers a bank-confirmed internal transfer action',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);});
 
-test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple existing entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
+test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple (?:existing )?entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
 
 test('bank reconciliation provides a searchable selectable ledger-entry picker',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/id="brAppSearch"[^>]+Search by amount, expense\/payment reference, vendor, narration or date/);assert.match(html,/id="brAppCandidates"/);assert.match(html,/toggleBankAppCandidate/);assert.match(html,/selected · /);assert.match(html,/Difference /);});
 
