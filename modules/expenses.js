@@ -2384,9 +2384,16 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot resolve this bank reconciliation.'});
-  const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),allowed=['accept_match','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','paytm_settlement','split_allocation','opening_vendor_payable_split','timing_difference','exclude'];
+  const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),allowed=['accept_match','unmatch_suggestion','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','create_adjustment','create_split_adjustment','create_internal_transfer','paytm_settlement','split_allocation','opening_vendor_payable_split','timing_difference','exclude'];
   if(!row)return res.status(404).json({success:false,error:'Difference was not found.'});
   if(!allowed.includes(b.action))return res.status(400).json({success:false,error:'Choose a valid resolution.'});
+  if(b.action==='unmatch_suggestion'){
+    const reason=String(b.reason||'').trim();
+    if(!reason)return res.status(400).json({success:false,error:'Enter a reason for unmatching this suggested pair.'});
+    if(!['possible_match','amount_mismatch'].includes(row.status)||!row.bank||!row.app)return res.status(400).json({success:false,error:'Only a suggested bank and ledger pair can be unmatched.'});
+    draft.matchingExclusions=draft.matchingExclusions||{};draft.matchingExclusions[b.rowId]={appId:row.app.id,reason,by:req.user.username,at:new Date().toISOString()};draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'unmatch_suggestion',rowId:b.rowId,appId:row.app.id,reason,by:req.user.username,at:new Date().toISOString()});
+    audit(s,req,'BANK_RECONCILIATION_SUGGESTION_UNMATCHED','bank_reconciliation',draft.id,{nature:draft.nature,account:draft.account,bankRowId:b.rowId,appId:row.app.id,note:reason});saveStore(s);return res.json(draftReconciliation(s,draft));
+  }
   if(b.action==='link_multiple_bank_entries'){
     const appId=String(b.appId||row.app&&row.app.id||'').trim(),bankRowIds=Array.from(new Set((Array.isArray(b.bankRowIds)?b.bankRowIds:[]).map(x=>String(x).trim()).filter(Boolean))),target=view.rows.find(x=>x.app&&x.app.id===appId),selected=bankRowIds.map(id=>view.rows.find(x=>x.id===id)).filter(Boolean);
     if(!target||!target.app||target.status!=='missing_in_bank')return res.status(400).json({success:false,error:'Choose an unmatched ledger entry.'});
