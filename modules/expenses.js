@@ -638,9 +638,17 @@ function loadStore() {
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
 }
 function saveStore(s) {
+  // Failed atomic writes must not leave partial files behind and make every
+  // later accounting save fail.
+  const dir=path.dirname(EXP_PATH),prefix=path.basename(EXP_PATH)+'.tmp-';
+  try { fs.readdirSync(dir).filter(name=>name.startsWith(prefix)).forEach(name=>{try{fs.unlinkSync(path.join(dir,name));}catch{}}); } catch {}
   const tmp = EXP_PATH + '.tmp-' + process.pid + '-' + Date.now();
-  fs.writeFileSync(tmp, JSON.stringify(s));
-  fs.renameSync(tmp, EXP_PATH);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(s));
+    fs.renameSync(tmp, EXP_PATH);
+  } finally {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+  }
 }
 function audit(s, req, action, subjectType, subjectId, data) {
   s.auditLog=Array.isArray(s.auditLog)?s.auditLog:[];s.auditSeq=(s.auditSeq||0)+1;
@@ -2802,6 +2810,14 @@ function summaryForPL(from, to) {
 // Run idempotent store repairs/corrections when the service starts, rather
 // than waiting for the first user to open an Expenses screen.
 loadStore();
+
+// Keep API failures machine-readable so the page can display the real failure
+// instead of silently trying to parse Express's HTML error page.
+router.use((error,req,res,next)=>{
+  console.error('[expenses] API request failed:',req.method,req.path,error);
+  if(res.headersSent)return next(error);
+  res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
+});
 
 module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
