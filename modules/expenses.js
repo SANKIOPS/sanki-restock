@@ -1772,36 +1772,55 @@ router.get('/api/expenses/vendors', (req, res) => {
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const search=String(req.query.search||'').trim().toLowerCase(), category=String(req.query.category||'').trim().toLowerCase(), source=String(req.query.source||'expense'), from=String(req.query.from||''), to=String(req.query.to||'');
   const books = {};
+  const addLedgerEntry=(book,entry,entryType)=>{
+    const baseParticulars=String(entry.particulars||entry.supplier||entry.ledger||entry.billNo||entry.id||'Vendor entry');
+    if(entryType==='Vendor advance'){
+      book.ledgerItems.push({date:String(entry.date||''),particulars:String(entry.note||'Advance paid to vendor'),type:entryType,reference:String(entry.bankReference||entry.id||''),in:roundMoney(entry.amount),out:0,entryId:entry.id||'',kind:'advance',order:20});
+      return;
+    }
+    book.ledgerItems.push({date:String(entry.date||''),particulars:baseParticulars,type:entryType,reference:String(entry.id||entry.billNo||''),in:0,out:roundMoney(entry.amount),entryId:entry.id||'',kind:'expense',source:entry.source||'',order:10});
+    (entry.payments||[]).forEach(payment=>book.ledgerItems.push({date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',kind:'payment',source:entry.source||'',order:20}));
+  };
   const natures=nature?[nature]:approvalNatures(req);
-  natures.forEach(n=>{const master=n==='SANKI'?s.vendors:(((s.vendorsByNature||{})[n])||{});Object.values(master).forEach(v=>{const key=n+'|'+v.name.toLowerCase();books[key]={name:v.name,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:v.notes||'',entries:[]};});});
+  natures.forEach(n=>{const master=n==='SANKI'?s.vendors:(((s.vendorsByNature||{})[n])||{});Object.values(master).forEach(v=>{const key=n+'|'+v.name.toLowerCase();books[key]={name:v.name,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:v.notes||'',entries:[],ledgerItems:[]};});});
   Object.values(s.expenses).forEach(e => {
     const n=normalizedNature(e.nature),key=n+'|'+String(e.vendor||'').toLowerCase();
     if (!natures.includes(n)||!e.vendor||!books[key]||!['approved','partially_paid','paid'].includes(e.status)) return;
     if(category&&!String(e.ledger||'').toLowerCase().includes(category))return;
+    addLedgerEntry(books[key],e,'Expense');
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
     const b=books[key];b.billed+=e.amount;b.paid+=num(e.paidAmount);b.count+=1;b.entries.push(e);
   });
   (s.vendorOpeningPayables||[]).forEach(e=>{
     const n=normalizedNature(e.nature),key=n+'|'+String(e.vendor||'').toLowerCase();
     if(!natures.includes(n)||!e.vendor)return;
+    if(category&&!String(e.ledger||'Opening payable').toLowerCase().includes(category))return;
     const master=vendorMasterForNature(s,n),saved=master[String(e.vendor).toLowerCase()];
-    const b=books[key]||(books[key]={name:saved&&saved.name||e.vendor,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:saved&&saved.notes||'',entries:[]});
+    const b=books[key]||(books[key]={name:saved&&saved.name||e.vendor,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:saved&&saved.notes||'',entries:[],ledgerItems:[]});
+    addLedgerEntry(b,e,'Opening payable');
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
     b.billed+=num(e.amount);b.paid+=num(e.paidAmount);b.count+=1;b.entries.push(e);
   });
   (s.vendorAdvances||[]).forEach(e=>{
     const n=normalizedNature(e.nature),key=n+'|'+String(e.vendor||'').toLowerCase();
     if(!natures.includes(n)||!e.vendor)return;
+    if(category&&!String('Vendor advance').toLowerCase().includes(category))return;
     const master=vendorMasterForNature(s,n),saved=master[String(e.vendor).toLowerCase()],remaining=Math.max(0,num(e.remainingAmount));
-    const b=books[key]||(books[key]={name:saved&&saved.name||e.vendor,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:saved&&saved.notes||'',entries:[]});
+    const b=books[key]||(books[key]={name:saved&&saved.name||e.vendor,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:saved&&saved.notes||'',entries:[],ledgerItems:[]});
+    addLedgerEntry(b,e,'Vendor advance');
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
     b.paid+=remaining;b.count+=1;b.entries.push(Object.assign({},e,{source:'vendor_advance_credit',originalAmount:num(e.amount),amount:0,paidAmount:remaining,status:remaining>0?'credit_available':'applied'}));
   });
-  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementPayables(s,true).filter(p=>(!from||String(p.date||'')>=from)&&(!to||String(p.date||'')<=to)).forEach(p=>{const key='SANKI|'+p.vendor.toLowerCase(),b=books[key]||(books[key]={name:p.vendor,nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[]});b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
-  const list = Object.values(books).map(b => ({
-    name:b.name,nature:b.nature,count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,entries:b.entries.sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)))
-  })).filter(b=>(!category||b.count>0)&&(!search||fuzzyIncludes(b.name,search)||b.entries.some(e=>fuzzyIncludes(e.particulars,search)||fuzzyIncludes(e.ledger,search)||String(e.id||'').toLowerCase().includes(search)||String(e.billNo||'').toLowerCase().includes(search)))).sort((a,b)=>a.name.localeCompare(b.name));
-  res.json({ success: true, vendors: list, totalOutstanding: list.reduce((n, b) => n + b.outstanding, 0) });
+  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementPayables(s,true).forEach(p=>{const key='SANKI|'+p.vendor.toLowerCase(),b=books[key]||(books[key]={name:p.vendor,nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[],ledgerItems:[]});addLedgerEntry(b,p,'Procurement expense');if(from&&String(p.date||'')<from)return;if(to&&String(p.date||'')>to)return;b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
+  const list = Object.values(books).map(b => {
+    const all=b.ledgerItems.slice().sort((a,c)=>String(a.date).localeCompare(String(c.date))||num(a.order)-num(c.order)||String(a.reference).localeCompare(String(c.reference)));
+    const opening=roundMoney(all.filter(x=>from&&x.date<from).reduce((n,x)=>n+num(x.out)-num(x.in),0));
+    const period=all.filter(x=>(!from||x.date>=from)&&(!to||x.date<=to));let balance=opening;
+    const ledgerRows=period.map(x=>{balance=roundMoney(balance+num(x.out)-num(x.in));return Object.assign({},x,{balance});});
+    return {name:b.name,nature:b.nature,count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,entries:b.entries.sort((a,c)=>String(c.date+c.id).localeCompare(String(a.date+a.id))),ledgerOpeningBalance:opening,ledgerRows,ledgerClosingBalance:balance,ledgerTransactionCount:ledgerRows.length};
+  }).filter(b=>(!category||b.ledgerTransactionCount>0)&&(!search||fuzzyIncludes(b.name,search)||b.ledgerRows.some(x=>fuzzyIncludes(x.particulars,search)||fuzzyIncludes(x.type,search)||String(x.reference||'').toLowerCase().includes(search)||String(x.in||'').includes(search)||String(x.out||'').includes(search)))).sort((a,b)=>a.name.localeCompare(b.name));
+  const totalDue=roundMoney(list.reduce((n,b)=>n+Math.max(0,num(b.ledgerClosingBalance)),0)),totalAdvance=roundMoney(list.reduce((n,b)=>n+Math.max(0,-num(b.ledgerClosingBalance)),0));
+  res.json({ success: true, vendors: list, totalOutstanding: list.reduce((n, b) => n + b.outstanding, 0), totalDue, totalAdvance });
 });
 router.post('/api/expenses/vendors', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
