@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -203,6 +203,11 @@ test('vendor ledgers can sort current outstanding amounts in both directions',()
   assert.match(html,/sort==='amount_desc'/);
   assert.match(html,/Number\(a\.outstanding\|\|0\)-Number\(b\.outstanding\|\|0\)/);
   assert.match(html,/Number\(b\.outstanding\|\|0\)-Number\(a\.outstanding\|\|0\)/);
+});
+
+test('balanced date-amount policy upgrades drafts without removing manual work',()=>{
+  const store={oneTimeMigrations:{},auditLog:[],auditSeq:0,bankReconciliationDrafts:{D1:{id:'D1',account:'ICICI Bank 0993',nature:'PERSONAL',transactions:[],summary:{},matchingPolicy:'strict_identity_v3',resolutions:{'bank-1':{action:'exclude',reason:'Keep reviewed row'}},matchingExclusions:{'bank-2':{reason:'Known false match'}}}},adjustments:[],vendorAdvances:[],receipts:[],transfers:[],receivables:{},vendorOpeningPayables:[],paytmSettlements:[],expenses:{},bankStatements:{},bankDateOverrides:{},openingBalancesByNature:{PERSONAL:{}}};
+  assert.equal(applyBalancedDateAmountReconciliationPolicy(store),true);assert.equal(store.bankReconciliationDrafts.D1.matchingPolicy,'balanced_date_amount_v5');assert.deepEqual(store.bankReconciliationDrafts.D1.resolutions['bank-1'],{action:'exclude',reason:'Keep reviewed row'});assert.deepEqual(store.bankReconciliationDrafts.D1.matchingExclusions['bank-2'],{reason:'Known false match'});assert.equal(store.oneTimeMigrations['auto-match-balanced-same-date-amount-groups-v1'].preservedManualResolutions,true);assert.equal(applyBalancedDateAmountReconciliationPolicy(store),false);
 });
 
 test('owner-requested Kalu correction removes only the two later payment records',()=>{
@@ -1147,6 +1152,30 @@ test('bank review offers a bank-confirmed internal transfer action',()=>{const h
 test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple (?:existing )?entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
 
 test('unmatched reconciliation rows are grouped into chronological date blocks',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/dateLabel\+' — unmatched entries'/);assert.match(html,/x\.status==='missing_in_app'\|\|x\.status==='missing_in_bank'/);assert.match(source,/if\(gx===2\)return rowDate\(x\)\.localeCompare\(rowDate\(y\)\)/);assert.match(source,/missing_in_app:2,missing_in_bank:2/);});
+
+test('balanced policy auto-matches unique exact date amount and direction despite different narration',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993',date='2098-03-01';
+  stored.expenses['EX-ZOMATO-UNIQUE']={id:'EX-ZOMATO-UNIQUE',date,nature:'PERSONAL',status:'paid',approvedAt:date+'T10:00:00Z',vendor:'Onl UPI',particulars:'Meal',amount:571.17,paidAmount:571.17,payments:[{id:'PAY-001',date,amount:571.17,account}]};
+  stored.bankReconciliationDrafts['BRD-BALANCED-UNIQUE']={id:'BRD-BALANCED-UNIQUE',account,nature:'PERSONAL',transactions:[{date,description:'Zomato Online UPI merchant payment',reference:'209347145867',debit:571.17,credit:0,balance:100}],summary:{from:date,to:date,openingBalance:671.17,closingBalance:100,totalDebits:571.17,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:'BRD-BALANCED-UNIQUE',account}}).body,row=view.rows.find(x=>x.bank);
+  assert.equal(row.status,'matched');assert.equal(row.app.id,'EX-ZOMATO-UNIQUE/PAY-001');assert.match(row.matchExplanation,/unique same-date amount and direction/);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('balanced policy auto-matches equal-count duplicate groups in stable order',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993',date='2098-03-02';
+  stored.transfers.push({id:'TR-DUP-1',nature:'PERSONAL',fromNature:'SANKI',toNature:'PERSONAL',fromAccount:'IndusInd Bank 7883',toAccount:account,amount:5000,date,createdAt:date+'T09:00:00Z'},{id:'TR-DUP-2',nature:'PERSONAL',fromNature:'SANKI',toNature:'PERSONAL',fromAccount:'IndusInd Bank 7883',toAccount:account,amount:5000,date,createdAt:date+'T10:00:00Z'});
+  stored.bankReconciliationDrafts['BRD-BALANCED-DUP']={id:'BRD-BALANCED-DUP',account,nature:'PERSONAL',transactions:[{date,description:'GAGAN LAMB UPI first',reference:'REF-DUP-1',debit:0,credit:5000,balance:5000},{date,description:'GAGAN LAMB UPI second',reference:'REF-DUP-2',debit:0,credit:5000,balance:10000}],summary:{from:date,to:date,openingBalance:0,closingBalance:10000,totalDebits:0,totalCredits:10000,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:'BRD-BALANCED-DUP',account}}).body,matched=view.rows.filter(x=>x.status==='matched');
+  assert.equal(matched.length,2);assert.deepEqual(matched.sort((a,b)=>a.id.localeCompare(b.id)).map(x=>x.app.id),['TR-DUP-1','TR-DUP-2']);assert.ok(matched.every(x=>/balanced duplicate group: 2 bank and 2 ledger entries/.test(x.matchExplanation)));fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('balanced policy does not auto-match a duplicate group when counts differ',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993',date='2098-03-03';
+  stored.transfers.push({id:'TR-DUP-ONLY',nature:'PERSONAL',fromNature:'SANKI',toNature:'PERSONAL',fromAccount:'IndusInd Bank 7883',toAccount:account,amount:5000,date});
+  stored.bankReconciliationDrafts['BRD-UNBALANCED-DUP']={id:'BRD-UNBALANCED-DUP',account,nature:'PERSONAL',transactions:[{date,description:'Incoming transfer one',reference:'BANK-A',debit:0,credit:5000,balance:5000},{date,description:'Incoming transfer two',reference:'BANK-B',debit:0,credit:5000,balance:10000}],summary:{from:date,to:date,openingBalance:0,closingBalance:10000,totalDebits:0,totalCredits:10000,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:'BRD-UNBALANCED-DUP',account}}).body;
+  assert.equal(view.summary.matched||0,0);assert.equal(view.rows.filter(x=>x.status==='missing_in_app').length+view.rows.filter(x=>x.status==='possible_match').length,2);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
 
 test('bank reconciliation provides a searchable selectable ledger-entry picker',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/id="brAppSearch"[^>]+Search by amount, expense\/payment reference, vendor, narration or date/);assert.match(html,/id="brAppCandidates"/);assert.match(html,/toggleBankAppCandidate/);assert.match(html,/selected · /);assert.match(html,/Difference /);});
 
