@@ -985,6 +985,8 @@ test('All Expenses exposes a clear same-vendor consolidated payment selector', (
   assert.match(html,/Apply available vendor advance/);
   assert.match(html,/applyVendorCredit:applyVendorCredit/);
   assert.match(html,/New vendor advance/);
+  assert.match(html,/Enter the actual amount paid/);
+  assert.match(html,/<div id="payCreditSummary"[^>]*><\/div><label class="payment-entry">/);
   assert.match(html,/payMode==='vendor'\?'\/api\/expenses\/vendor-payments\/batch'/);
   assert.doesNotMatch(html,/payAmount'\)\.max=/);
 });
