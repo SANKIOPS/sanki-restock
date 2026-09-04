@@ -460,9 +460,7 @@ function applyBalancedDateAmountReconciliationPolicy(s){
   Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>{
     const previousPolicy=draft.matchingPolicy||'legacy_date_amount',resolutionCount=Object.keys(draft.resolutions||{}).length,exclusionCount=Object.keys(draft.matchingExclusions||{}).length;
     draft.matchingPolicy='balanced_date_amount_v5';
-    const after=draftReconciliation(s,draft);
-    updatedDrafts.push({draftId:draft.id,account:draft.account,nature:normalizedNature(draft.nature),previousPolicy,matchingPolicy:draft.matchingPolicy,preservedResolutionCount:resolutionCount,preservedExclusionCount:exclusionCount,automaticMatches:after.summary.matched||0,unresolvedAfter:after.unresolved});
-    audit(s,null,'BANK_AUTO_MATCH_POLICY_UPDATED','account',draft.account,{user:'gaganlambasanki',device:'System migration',nature:draft.nature,account:draft.account,before:{matchingPolicy:previousPolicy},after:{matchingPolicy:draft.matchingPolicy,automaticMatches:after.summary.matched||0},note:'Automatically match exact same-date, same-amount and same-direction entries when the bank and ledger group counts agree; preserve manual decisions and exclusions.'});
+    updatedDrafts.push({draftId:draft.id,account:draft.account,nature:normalizedNature(draft.nature),previousPolicy,matchingPolicy:draft.matchingPolicy,preservedResolutionCount:resolutionCount,preservedExclusionCount:exclusionCount});
   });
   s.oneTimeMigrations[key]={appliedAt:now,matchingPolicy:'balanced_date_amount_v5',rule:'same account + same date + same direction + exact amount; duplicate groups require equal counts',preservedManualResolutions:true,preservedMatchingExclusions:true,updatedDrafts};
   return true;
