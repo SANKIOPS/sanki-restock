@@ -389,7 +389,7 @@
     function updatePaytmChargeSplit(){if(!bankReconForm||el('brKind').value!=='paytm')return;var row=bankReconRow(bankReconForm.rowId),net=Number(row&&row.bank&&row.bank.credit||0),gross=Number(el('brGross').value||0),hidden=Number(el('brHiddenCharge').value||0);el('brPaytmNet').value=net;el('brPaytmCharge').value=Math.max(0,Number((gross-net-hidden).toFixed(2)));saveBankReconForm();}
     el('brHiddenCharge').addEventListener('input',updatePaytmChargeSplit);el('brGross').addEventListener('input',updatePaytmChargeSplit);el('brPaytmCharge').addEventListener('input',saveBankReconForm);el('brChargeCategory').addEventListener('change',saveBankReconForm);
 
-    function api(url, opts){ return fetch(url, opts).then(function(r){return r.text().then(function(raw){var data;try{data=JSON.parse(raw);}catch(e){data={success:false,error:r.ok?'The server returned an unreadable response. Please refresh and try again.':'The server could not complete this action (HTTP '+r.status+').'};}if(!r.ok&&data.success!==false)data.success=false;if(!r.ok&&!data.error)data.error='The server could not complete this action (HTTP '+r.status+').';return data;});}).catch(function(){return{success:false,error:'The server could not be reached. Please check the connection and try again.'};}); }
+    function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
     function monthStart(){ return today().slice(0,8)+'01'; }
     function setMsg(t, ok){ el('msg').className='msg '+(ok?'ok':'err'); el('msg').textContent=t||''; }
