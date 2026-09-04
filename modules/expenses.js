@@ -479,16 +479,18 @@ function applyBalancedDateAmountReconciliationPolicy(s){
   Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>{
     const previousPolicy=draft.matchingPolicy||'legacy_date_amount',resolutionCount=Object.keys(draft.resolutions||{}).length,exclusionCount=Object.keys(draft.matchingExclusions||{}).length;
     draft.matchingPolicy='balanced_date_amount_v5';
-    updatedDrafts.push({draftId:draft.id,account:draft.account,nature:normalizedNature(draft.nature),previousPolicy,matchingPolicy:draft.matchingPolicy,preservedResolutionCount:resolutionCount,preservedExclusionCount:exclusionCount});
+    const after=draftReconciliation(s,draft);
+    updatedDrafts.push({draftId:draft.id,account:draft.account,nature:normalizedNature(draft.nature),previousPolicy,matchingPolicy:draft.matchingPolicy,preservedResolutionCount:resolutionCount,preservedExclusionCount:exclusionCount,automaticMatches:after.summary.matched||0,unresolvedAfter:after.unresolved});
+    audit(s,null,'BANK_AUTO_MATCH_POLICY_UPDATED','account',draft.account,{user:'gaganlambasanki',device:'System migration',nature:draft.nature,account:draft.account,before:{matchingPolicy:previousPolicy},after:{matchingPolicy:draft.matchingPolicy,automaticMatches:after.summary.matched||0},note:'Automatically match exact same-date, same-amount and same-direction entries when the bank and ledger group counts agree; preserve manual decisions and exclusions.'});
   });
   s.oneTimeMigrations[key]={appliedAt:now,matchingPolicy:'balanced_date_amount_v5',rule:'same account + same date + same direction + exact amount; duplicate groups require equal counts',preservedManualResolutions:true,preservedMatchingExclusions:true,updatedDrafts};
   return true;
 }
 function loadStore() {
-  let s;
-  try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
-  catch(error) { console.error('[expenses] Could not read expenses.json:',error);return blankStore(); }
+  let loadedStore=null;
   try {
+    const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
+    loadedStore=s;
     // Repair records finalized under the old instalment rule, which marked the
     // whole agreement paid when only "payment required now" had been paid.
     const rename = value => ACCOUNT_RENAMES[String(value || '')] || value;
@@ -635,7 +637,10 @@ function loadStore() {
     if(bankChargeRepairAdded)saveStore(s);if(applyOwnerRequestedKaluPaymentRemovals(s))saveStore(s);
     return s;
   }
-  catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
+  catch (error) {
+    console.error('[expenses] Loaded accounting data, but a startup repair or save failed:', error);
+    return loadedStore||blankStore();
+  }
 }
 function saveStore(s) {
   const tmp = EXP_PATH + '.tmp-' + process.pid + '-' + Date.now();
