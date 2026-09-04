@@ -1320,7 +1320,7 @@ test('personal bank reconciliation is Owner-only and stored separately from busi
   assert.deepEqual(ownerConfig.bankAccountsByNature.PERSONAL,['ICICI Bank 0992','ICICI Bank 0993','IndusInd Bank 7883','Namita 5464']);
 });
 
-test('finalizing removes every visible draft summary for that entity and bank',()=>{
+test('finalizing one reconciliation period preserves other unfinished periods',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),now=new Date().toISOString();
   stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
   ['BRD-PERSONAL-CURRENT','BRD-PERSONAL-OLDER'].forEach((id,i)=>{stored.bankReconciliationDrafts[id]={id,account:'Namita 5464',nature:'PERSONAL',transactions:[],summary:{from:'2026-08-01',to:'2026-08-27',openingBalance:0,closingBalance:0,totalDebits:0,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',originalName:'personal.csv',fileHash:'hash-'+i,createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};});
@@ -1328,10 +1328,11 @@ test('finalizing removes every visible draft summary for that entity and bank',(
   const finalized=invoke('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId:'BRD-PERSONAL-CURRENT'}});
   assert.equal(finalized.status,200);assert.equal(finalized.body.summary,undefined);
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
-  assert.equal(Object.values(after.bankReconciliationDrafts).filter(x=>x.account==='Namita 5464'&&x.nature==='PERSONAL').length,0);
+  assert.equal(Object.values(after.bankReconciliationDrafts).filter(x=>x.account==='Namita 5464'&&x.nature==='PERSONAL').length,1);
+  assert.ok(after.bankReconciliationDrafts['BRD-PERSONAL-OLDER']);
   assert.equal(after.bankStatements['PERSONAL|Namita 5464'].reconciledThrough,'2026-08-27');
   const view=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'PERSONAL',account:'Namita 5464'}});
-  assert.equal(view.body.draft,null);assert.equal(view.body.updatedThrough,'2026-08-27');
+  assert.equal(view.body.draft.draftId,'BRD-PERSONAL-OLDER');assert.equal(view.body.draftOptions.length,1);assert.equal(view.body.updatedThrough,'2026-08-27');
 });
 
 test('personal bank reconciliation UI uses Owner-only entity accounts and clears finalized actions',()=>{
