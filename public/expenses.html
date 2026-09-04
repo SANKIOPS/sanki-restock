@@ -718,7 +718,7 @@
       refresh();
     }
     function paymentHistory(e){
-      var payments=(e.payments||[]).map(function(p){var ref=e.id+'/'+(p.id||'PAYMENT');return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'<br><span class="muted">Transaction ref: '+esc(ref)+'</span></span><b>'+fmt(p.amount)+'</b>'+proofGallery(p.proofs||[p.proof], 'Payment')+'</div>';});
+      var payments=(e.payments||[]).map(function(p){var ref=e.id+'/'+(p.id||'PAYMENT'),gross=Number(p.grossPaymentAmount)||Number(p.amount)||0,advance=Number(p.vendorAdvanceAmount)||0,breakdown=advance?'<br><span class="muted">'+fmt(p.expenseAllocationAmount||p.amount)+' applied to this expense · '+fmt(advance)+' vendor advance</span>':'';return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'<br><span class="muted">Transaction ref: '+esc(ref)+'</span>'+breakdown+'</span><b>'+fmt(gross)+'</b>'+proofGallery(p.proofs||[p.proof], 'Payment')+'</div>';});
       var advances=(e.vendorAdvanceApplications||[]).map(function(a){return '<div class="payment-entry"><span>'+esc(a.date||e.date||'')+' · Vendor advance applied<br><span class="muted">Advance ref: '+esc(a.vendorAdvanceId||'—')+' · no new bank debit</span></span><b>'+fmt(a.amount)+'</b></div>';});
       if(!payments.length&&!advances.length)return '<span class="muted">No payment recorded yet.</span>';return '<div class="payment-history">'+payments.concat(advances).join('')+'</div>';
     }
