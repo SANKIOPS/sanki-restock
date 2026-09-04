@@ -1321,7 +1321,7 @@ router.get('/api/expenses/:id/payment-candidates', (req, res) => {
 // One bank/cash transaction may settle several approved bills for the same
 // entity and vendor. Each allocation is stored on its original expense so all
 // existing ledgers and dashboards remain correct.
-router.post('/api/expenses/batch-pay', (req, res) => {
+function recordBatchVendorPayment(req, res) {
   if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can pay.' });
   const s = loadStore(), b = req.body || {};
   const ids = [...new Set((Array.isArray(b.expenseIds) ? b.expenseIds : []).map(String))];
@@ -1390,7 +1390,10 @@ router.post('/api/expenses/batch-pay', (req, res) => {
   res.json({ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, availableVendorCredit, vendorCreditApplied,
     vendorCreditAllocations:vendorCreditAllocations.map(x=>({expenseId:x.expense.id,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount})),
     allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:roundMoney(Math.max(0,num(x.expense.amount)-num(x.expense.paidAmount)))})), expenses });
-});
+}
+// Keep the legacy direct-call route and expose an unambiguous live route.
+router.post('/api/expenses/batch-pay', recordBatchVendorPayment);
+router.post('/api/expenses/vendor-payments/batch', recordBatchVendorPayment);
 
 // ── Pay (GATE 2: payment screenshot required) ────────────────────
 router.post('/api/expenses/:id/pay', (req, res) => {
