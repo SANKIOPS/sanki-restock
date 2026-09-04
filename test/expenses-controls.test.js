@@ -1890,6 +1890,6 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
 
 test('a store repair failure cannot hide the persisted financial records', () => {
   const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
-  assert.match(source,/Could not read expenses\.json:[\s\S]*return blankStore\(\)/);
-  assert.match(source,/Store repair failed; serving the original financial records:[\s\S]*return s/);
+  assert.match(source,/loadedStore=s/);
+  assert.match(source,/Loaded accounting data, but a startup repair or save failed:[\s\S]*return loadedStore\|\|blankStore\(\)/);
 });
