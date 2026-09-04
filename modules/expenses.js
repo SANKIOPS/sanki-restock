@@ -420,6 +420,26 @@ function resetBankReconciliationData(s,options={}) {s.expenses=s.expenses||{};s.
   audit(s,null,'BANK_RECONCILIATION_RESET','system','all',{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account:'All bank accounts',before:summary,after:{bankStatements:0,bankReconciliationDrafts:0,bankDateOverrides:0},note:'Owner requested a complete bank-reconciliation reset while preserving manually recorded ledger entries.'});
   s.oneTimeMigrations[BANK_RECONCILIATION_RESET_KEY]={appliedAt,result:'reset',summary,futureLedgerRule:'Bank-statement rows remain in reconciliation reports and never replace manually recorded account-ledger entries.'};return true;
 }
+function applyOwnerRequestedKaluPaymentRemovals(s){
+  const key='remove-ex-00073-ex-00077-pay-001-v1';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const expected=[{expenseId:'EX-00073',paymentId:'PAY-001',date:'2026-08-25',amount:100},{expenseId:'EX-00077',paymentId:'PAY-001',date:'2026-08-26',amount:100}],results=[];
+  expected.forEach(target=>{
+    const expense=(s.expenses||{})[target.expenseId],payments=expense&&Array.isArray(expense.payments)?expense.payments:[],index=payments.findIndex(x=>x.id===target.paymentId),payment=index>=0?payments[index]:null;
+    if(!expense||!payment){results.push(Object.assign({},target,{result:'not_found'}));return;}
+    if(String(expense.date||'')!==target.date||Math.abs(num(expense.amount)-target.amount)>.01||Math.abs(num(payment.amount)-target.amount)>.01){results.push(Object.assign({},target,{result:'identity_mismatch'}));return;}
+    const before=JSON.parse(JSON.stringify(payment));payments.splice(index,1);expense.payments=payments;
+    expense.paidAmount=roundMoney(payments.reduce((n,x)=>n+num(x.amount),0)+(expense.vendorAdvanceApplications||[]).reduce((n,x)=>n+num(x.amount),0));
+    expense.status=expense.paidAmount>=num(expense.amount)?'paid':(expense.paidAmount>0?'partially_paid':'approved');
+    if(!payments.length){expense.account='';expense.paymentProof='';expense.paymentProofs=[];expense.paidAt=null;expense.paidBy=null;}
+    delete (s.bankDateOverrides||{})[target.expenseId+'/'+target.paymentId];
+    audit(s,null,'PAYMENT_REMOVED','expense',target.expenseId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:expense.nature,account:before.account,paymentId:target.paymentId,before,after:{paidAmount:expense.paidAmount,status:expense.status},note:'Owner requested removal so the ₹418 payment can be recorded once against the vendor running account'});
+    results.push(Object.assign({},target,{result:'removed'}));
+  });
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),results};
+  return true;
+}
 function loadStore() {
   try {
     const s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8')));
@@ -560,7 +580,7 @@ function loadStore() {
     }
     if(applyOwnerConfirmedAxis3645Cases(s))saveStore(s);
     if(applyStrictReconciliationIdentityPolicy(s))saveStore(s);
-    if(bankChargeRepairAdded)saveStore(s);if(applyOwnerRequestedBankReconciliationReset(s))saveStore(s);
+    if(bankChargeRepairAdded)saveStore(s);if(applyOwnerRequestedBankReconciliationReset(s))saveStore(s);if(applyOwnerRequestedKaluPaymentRemovals(s))saveStore(s);
     return s;
   }
   catch { return blankStore(); }
@@ -1337,10 +1357,9 @@ function recordBatchVendorPayment(req, res) {
     .sort((a,b)=>String((a.date||'')+(a.id||'')).localeCompare(String((b.date||'')+(b.id||''))));
   const availableVendorCredit=roundMoney(matchingAdvances.reduce((sum,a)=>sum+num(a.remainingAmount),0));
   const vendorCreditApplied=b.applyVendorCredit===true?roundMoney(Math.min(availableVendorCredit,combinedOutstanding)):0;
-  const maximumBankPayment=roundMoney(combinedOutstanding-vendorCreditApplied);
-  const requestedTotal=b.amount!=null?roundMoney(num(b.amount)):maximumBankPayment;
+  const amountNeededForBills=roundMoney(combinedOutstanding-vendorCreditApplied);
+  const requestedTotal=b.amount!=null?roundMoney(num(b.amount)):amountNeededForBills;
   if (requestedTotal < 0 || (!(requestedTotal > 0) && !(vendorCreditApplied > 0))) return res.status(400).json({ success:false, error:'Payment or vendor-credit amount must be greater than 0.' });
-  if (requestedTotal > maximumBankPayment) return res.status(400).json({ success:false, error:vendorCreditApplied>0?'After applying vendor credit of ₹'+vendorCreditApplied+', the bank payment cannot exceed ₹'+maximumBankPayment+'.':'Payment cannot exceed the combined outstanding amount of ₹'+combinedOutstanding+'.' });
   const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
   if (requestedTotal>0&&!proofs.length) return res.status(400).json({ success:false, error:'Payment proof is required — no proof, no payment.' });
   const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI'),card=requestedTotal>0&&paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
@@ -1382,12 +1401,25 @@ function recordBatchVendorPayment(req, res) {
   });
   const allocatedIds=allocations.map(x=>x.expense.id);
   allocations.forEach(x=>{x.expense.payments.at(-1).linkedExpenseIds=allocatedIds;});
+  let newVendorAdvance=null;
+  if(remaining>0){
+    let sequence=(s.vendorAdvances||[]).length+1,advanceId='';
+    do{advanceId='VADV-'+String(sequence++).padStart(5,'0');}while((s.vendorAdvances||[]).some(x=>x.id===advanceId));
+    const allocatedExpenseAmount=roundMoney(requestedTotal-remaining),createdAt=new Date().toISOString();
+    const firstAllocation=allocations[0],paymentReference=firstAllocation?firstAllocation.expense.id+'/'+firstAllocation.expense.payments.at(-1).id:advanceId;
+    newVendorAdvance={id:advanceId,nature,vendor:first.vendor,date,amount:remaining,remainingAmount:remaining,account,paymentType,paymentReference,
+      proof,proofs,note:String(b.note||'').trim(),applications:[],batchPaymentId,grossPaymentAmount:requestedTotal,
+      allocatedExpenseAmount,createdBy:paidBy,createdAt,reconciliationOverrideReason:overrideReason,reconciliationIssuesAtPayment:reconIssues};
+    s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];s.vendorAdvances.push(newVendorAdvance);
+    audit(s,req,'VENDOR_ADVANCE_RECORDED','vendor',first.vendor,{nature,account,paymentId:advanceId,after:{batchPaymentId,grossPaymentAmount:requestedTotal,allocatedExpenseAmount,amount:remaining,remainingAmount:remaining}});
+  }
   vendorCreditAllocations.forEach(x=>audit(s,req,'VENDOR_ADVANCE_APPLIED','expense',x.expense.id,{nature:x.expense.nature,account:'Vendor advance',paymentId:x.advance.id,after:{batchPaymentId,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount,status:x.expense.status}}));
   allocations.forEach(x=>audit(s,req,'PAYMENT_ALLOCATED','expense',x.expense.id,{nature:x.expense.nature,account,paymentId:x.expense.payments.at(-1).id,after:{batchPaymentId,amount:x.amount,linkedExpenseIds:allocatedIds,status:x.expense.status}}));
   saveStore(s);
   const notificationAmounts={};allocations.concat(vendorCreditAllocations).forEach(x=>{notificationAmounts[x.expense.id]=roundMoney(num(notificationAmounts[x.expense.id])+x.amount);});
   Object.keys(notificationAmounts).forEach(id=>{const e=s.expenses[id];notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',notificationAmounts[id]);});
   res.json({ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, availableVendorCredit, vendorCreditApplied,
+    vendorAdvanceCreated:newVendorAdvance?roundMoney(newVendorAdvance.amount):0,newVendorAdvance,
     vendorCreditAllocations:vendorCreditAllocations.map(x=>({expenseId:x.expense.id,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount})),
     allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:roundMoney(Math.max(0,num(x.expense.amount)-num(x.expense.paidAmount)))})), expenses });
 }
@@ -1446,6 +1478,45 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   saveStore(s);
   notifyExpenseUser(e, e.status === 'paid' ? 'paid' : 'partially_paid', pay);
   res.json({ success: true, expense: e });
+});
+
+// Remove one incorrectly recorded vendor payment without deleting the expense.
+// The payment snapshot remains in the audit log so the correction is traceable.
+router.delete('/api/expenses/:id/payments/:paymentId', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success:false, error:'Only accounting/admin can remove a payment.' });
+  const s=loadStore(),e=s.expenses[req.params.id];
+  if(!e)return res.status(404).json({success:false,error:'Expense not found.'});
+  if(!canApproveExpenseNature(req,e))return res.status(403).json({success:false,error:'You cannot correct payments for this accounting entity.'});
+  const reason=String((req.body||{}).reason||'').trim();
+  if(!reason)return res.status(400).json({success:false,error:'A removal reason is required so the audit trail remains complete.'});
+  e.payments=Array.isArray(e.payments)?e.payments:[];
+  const index=e.payments.findIndex(p=>String(p.id)===String(req.params.paymentId));
+  if(index<0)return res.status(404).json({success:false,error:'Payment not found.'});
+  const removed=JSON.parse(JSON.stringify(e.payments[index])),appId=e.id+'/'+removed.id;
+  e.payments.splice(index,1);
+
+  // A consolidated payment stores cross-links on every allocation. Remove the
+  // deleted expense from its surviving siblings to avoid a dangling reference.
+  if(removed.batchPaymentId)Object.values(s.expenses||{}).forEach(x=>(x.payments||[]).forEach(p=>{
+    if(p.batchPaymentId!==removed.batchPaymentId||!Array.isArray(p.linkedExpenseIds))return;
+    p.linkedExpenseIds=p.linkedExpenseIds.filter(id=>id!==e.id);
+  }));
+
+  const applications=Array.isArray(e.vendorAdvanceApplications)?e.vendorAdvanceApplications:[];
+  e.paidAmount=roundMoney(e.payments.reduce((n,p)=>n+num(p.amount),0)+applications.reduce((n,a)=>n+num(a.amount),0));
+  if(e.status!=='rejected')e.status=e.approvedAt?(e.paidAmount>=num(e.amount)?'paid':(e.paidAmount>0?'partially_paid':'approved')):'pending';
+  if(e.paidAlready)e.vendorPaymentCompleted=e.paidAmount>=num(e.amount);
+  const latest=e.payments.slice().sort((a,b)=>String(a.paidAt||a.date||'').localeCompare(String(b.paidAt||b.date||''))).at(-1);
+  if(latest){e.account=latest.account||'';e.paymentProof=latest.proof||'';e.paymentProofs=proofList(latest.proofs,latest.proof);e.paidAt=latest.paidAt||null;e.paidBy=latest.paidBy||null;}
+  else{e.account='';e.paymentProof='';e.paymentProofs=[];e.paidAt=null;e.paidBy=null;}
+
+  if(s.bankDateOverrides)delete s.bankDateOverrides[appId];
+  Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>{
+    Object.keys(draft.resolutions||{}).forEach(rowId=>{const resolution=draft.resolutions[rowId]||{};if(resolution.appId===appId||(Array.isArray(resolution.appIds)&&resolution.appIds.includes(appId)))delete draft.resolutions[rowId];});
+  });
+  audit(s,req,'PAYMENT_REMOVED','expense',e.id,{nature:e.nature,account:removed.account,paymentId:removed.id,before:removed,after:{paidAmount:e.paidAmount,status:e.status},note:reason});
+  saveStore(s);
+  res.json({success:true,removedPayment:removed,expense:e});
 });
 
 // Reimbursing the submitter clears a liability; it never increases vendor paid
@@ -1772,14 +1843,16 @@ router.get('/api/expenses/vendors', (req, res) => {
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const search=String(req.query.search||'').trim().toLowerCase(), category=String(req.query.category||'').trim().toLowerCase(), source=String(req.query.source||'expense'), from=String(req.query.from||''), to=String(req.query.to||'');
   const books = {};
+  const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
   const addLedgerEntry=(book,entry,entryType)=>{
     const baseParticulars=String(entry.particulars||entry.supplier||entry.ledger||entry.billNo||entry.id||'Vendor entry');
     if(entryType==='Vendor advance'){
-      book.ledgerItems.push({date:String(entry.date||''),particulars:String(entry.note||'Advance paid to vendor'),type:entryType,reference:String(entry.bankReference||entry.id||''),in:roundMoney(entry.amount),out:0,entryId:entry.id||'',kind:'advance',order:20});
+      const gross=num(entry.grossPaymentAmount),isOverpayment=gross>0&&entry.batchPaymentId;
+      book.ledgerItems.push({date:String(entry.date||''),particulars:String(entry.note||(isOverpayment?'Payment to vendor':'Advance paid to vendor'))+(entry.account?' · '+entry.account:''),type:isOverpayment?'Payment':entryType,reference:String(entry.bankReference||entry.transactionReference||entry.paymentReference||entry.id||''),in:roundMoney(isOverpayment?gross:entry.amount),out:0,entryId:entry.id||'',kind:isOverpayment?'payment':'advance',order:20});
       return;
     }
     book.ledgerItems.push({date:String(entry.date||''),particulars:baseParticulars,type:entryType,reference:String(entry.id||entry.billNo||''),in:0,out:roundMoney(entry.amount),entryId:entry.id||'',kind:'expense',source:entry.source||'',order:10});
-    (entry.payments||[]).forEach(payment=>book.ledgerItems.push({date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',kind:'payment',source:entry.source||'',order:20}));
+    (entry.payments||[]).forEach(payment=>{if(grossPaymentBatches.has(payment.batchPaymentId))return;book.ledgerItems.push({date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',kind:'payment',source:entry.source||'',order:20});});
   };
   const natures=nature?[nature]:approvalNatures(req);
   natures.forEach(n=>{const master=n==='SANKI'?s.vendors:(((s.vendorsByNature||{})[n])||{});Object.values(master).forEach(v=>{const key=n+'|'+v.name.toLowerCase();books[key]={name:v.name,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:v.notes||'',entries:[],ledgerItems:[]};});});
@@ -2642,13 +2715,5 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 loadStore();
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
-
-                                                                                                                                                                                                                                                                                                                                
-      // Audited correction for a s
-
-// Audited correction for a single incorrectly reco
-
-// Audited correction for a single incorrectly record
-(()=>{const s=loadStore(),k='remove-ex-00032-pay-001-v1';s.oneTimeMigrations??={};if(s.oneTimeMigrations[k])return;const e=s.expenses?.['EX-00032'],i=e?.payments?.findIndex(p=>p.id==='PAY-001')??-1;if(i<0){s.oneTimeMigrations[k]={result:'not_found'};return saveStore(s)}const p=e.payments.splice(i,1)[0];e.paidAmount=roundMoney((e.payments||[]).reduce((n,p)=>n+num(p.amount),0)+(e.vendorAdvanceApplications||[]).reduce((n,a)=>n+num(a.amount),0));e.status=e.paidAmount?e.paidAmount>=num(e.amount)?'paid':'partially_paid':'approved';if(!e.payments.length){e.account='';e.paymentProof='';e.paymentProofs=[];e.paidAt=null;e.paidBy=null}delete(s.bankDateOverrides||{})['EX-00032/PAY-001'];audit(s,null,'PAYMENT_REMOVED','expense',e.id,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:e.nature,account:p.account,paymentId:p.id,before:p,after:{paidAmount:e.paidAmount,status:e.status},note:'Owner requested removal because the payment needs modification'});s.oneTimeMigrations[k]={at:new Date().toISOString(),result:'removed'};saveStore(s)})();
