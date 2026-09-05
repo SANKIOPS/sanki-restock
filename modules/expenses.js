@@ -152,7 +152,7 @@ const PAID_BY = ['company', 'claimant'];
 const PAYMENT_TYPES = ['UPI', 'Cash', 'Credit'];
 const PERSONAL_CATEGORIES = ['Food & Dining','Household Staff','Children & Education','Medical & Healthcare','Travel & Transport','Home & Utilities','Shopping','Subscriptions','Personal Care','Gifts & Charity','Entertainment','Financial Charges','Miscellaneous Personal'];
 const ENTITY_ACCOUNTS = {
-  SANKI: ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash'],
+  SANKI: ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash'],
   SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
   PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']
 };
@@ -165,7 +165,7 @@ const CLAIMANT_ACCOUNTS = {
 const USER_PAYMENT_ACCOUNTS = {
   prashant: [
     'Prashant Axis 3645', 'Prashant Cash', 'Counter Cash',
-    'IndusInd Bank 7883', 'ICICI Bank 0993', 'ICICI Bank 0992', 'Kirti Nagar Cash'
+    'IndusInd Bank 7883', 'ICICI Bank 0993', 'ICICI Bank 0992', 'IndusInd Bank 8181', 'Kirti Nagar Cash'
   ]
 };
 const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash', 'prashant Cash':'Prashant Cash' };
@@ -632,6 +632,10 @@ function loadStore() {
     const icici0425OpeningKey='icici-0425-opening-2026-08-22-negative-2148837-66';
     if(!s.oneTimeMigrations[icici0425OpeningKey]){
       const account='Tiana 0425',effectiveDate='2026-08-22',amount=-2148837.66,before=num((s.openingBalances||{})[account]);s.openingBalances=s.openingBalances||{};s.openingBalanceDates=s.openingBalanceDates||{};s.openingBalances[account]=amount;s.openingBalanceDates[account]=effectiveDate;s.oneTimeMigrations[icici0425OpeningKey]={appliedAt:new Date().toISOString(),account,bankName:'ICICI Bank 0425',nature:'SANKI',effectiveDate,before,after:amount};audit(s,null,'OPENING_BALANCE_CORRECTED','account',account,{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account,before:{opening:before},after:{opening:amount,effectiveDate},note:'Owner-authorized one-time ICICI 0425 opening balance as of 22 Aug 2026'});saveStore(s);
+    }
+    const indus8181OpeningKey='register-indusind-8181-sanki-opening-2026-09-05';
+    if(!s.oneTimeMigrations[indus8181OpeningKey]){
+      const account='IndusInd Bank 8181',effectiveDate='2026-09-05',amount=0;s.openingBalances=s.openingBalances||{};s.openingBalanceDates=s.openingBalanceDates||{};const before=Object.prototype.hasOwnProperty.call(s.openingBalances,account)?num(s.openingBalances[account]):null;s.openingBalances[account]=amount;s.openingBalanceDates[account]=effectiveDate;s.oneTimeMigrations[indus8181OpeningKey]={appliedAt:new Date().toISOString(),account,bankName:'IndusInd Bank',last4:'8181',nature:'SANKI',effectiveDate,before,after:amount,access:['owner','prashant']};audit(s,null,'BANK_ACCOUNT_REGISTERED','account',account,{user:'gaganlambasanki',device:'System migration',nature:'SANKI',account,before:before==null?null:{opening:before},after:{opening:amount,effectiveDate,access:['owner','prashant']},note:'Owner registered IndusInd Bank 8181 as a complete SANKI bank account'});saveStore(s);
     }
     const icici0425PeriodKey='icici-0425-reconciliation-period-2026-08-22-to-2026-08-29';
     if(!s.oneTimeMigrations[icici0425PeriodKey]){

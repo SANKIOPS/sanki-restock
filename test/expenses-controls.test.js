@@ -359,7 +359,7 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   const samastApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'samast_accounting' });
   assert.equal(samastApproval.status, 200);
   const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
-  assert.deepEqual(adminConfig.body.payingAccountsByNature.SAMAST, ['Prashant Axis 3645','Counter Cash','Prashant Cash','IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
+  assert.deepEqual(adminConfig.body.payingAccountsByNature.SAMAST, ['Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Prashant Cash','IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
   const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, role: 'admin', body: { account:'Prashant Axis 3645',paymentProof:'/api/expenses/photo/samast-payment.jpg' } });
   assert.equal(paid.status, 200, JSON.stringify(paid.body));
   assert.equal(paid.body.expense.payments.at(-1).account, 'Prashant Axis 3645');
@@ -881,7 +881,7 @@ test('personally paid non-cash expense requires the account used and cash is nam
 test('payment accounts are scoped by claimant and accounting entity', () => {
   const claimantConfig = invoke('GET', '/api/expenses/config').body;
   assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
-  assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','Counter Cash','Gagan Sir Cash','Prashant Cash']);
+  assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
@@ -1949,6 +1949,16 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
   const paid = invoke('POST', '/api/expenses/:id/pay', { params:{id:created.body.expense.id}, role:'owner', body:{account:'Counter Cash',paymentProof:'/api/expenses/photo/pay.jpg',reconciliationOverrideReason:'Urgent approved vendor payment'} });
   assert.equal(paid.status, 200);
   assert.equal(paid.body.expense.payments.at(-1).reconciliationOverrideReason, 'Urgent approved vendor payment');
+});
+
+test('IndusInd 8181 is a complete SANKI bank account from 5 September 2026',()=>{
+  const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+  assert.ok(config.accountsByNature.SANKI.includes('IndusInd Bank 8181'));
+  const balances=invoke('GET','/api/expenses/balances',{role:'admin',query:{nature:'SANKI',from:'2026-09-05',to:'2026-09-05'}}).body,account=balances.accounts.find(x=>x.name==='IndusInd Bank 8181');
+  assert.equal(account.opening,0);assert.equal(account.balance,0);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'SANKI',account:'IndusInd Bank 8181',from:'2026-09-05',to:'2026-09-05'}});assert.equal(ledger.status,200);
+  const statements=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'SANKI',account:'IndusInd Bank 8181'}});assert.equal(statements.status,200);
+  const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));assert.equal(stored.openingBalances['IndusInd Bank 8181'],0);assert.equal(stored.openingBalanceDates['IndusInd Bank 8181'],'2026-09-05');assert.ok(stored.oneTimeMigrations['register-indusind-8181-sanki-opening-2026-09-05']);
 });
 
 test('a store repair failure cannot hide the persisted financial records', () => {
