@@ -168,7 +168,14 @@ const USER_PAYMENT_ACCOUNTS = {
     'IndusInd Bank 7883', 'ICICI Bank 0993', 'ICICI Bank 0992', 'Kirti Nagar Cash'
   ]
 };
-const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash' };
+const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash', 'prashant Cash':'Prashant Cash' };
+
+function canonicalAccountName(value) {
+  const raw=String(value||'').trim();
+  if(!raw)return '';
+  const match=Object.entries(ACCOUNT_RENAMES).find(([oldName])=>oldName.toLowerCase()===raw.toLowerCase());
+  return match?match[1]:raw;
+}
 
 // Accounts the founder actually pays from are added in-app (with approval) —
 // start minimal instead of the old guessed list.
@@ -442,6 +449,61 @@ function applyOwnerRequestedKaluPaymentRemovals(s){
   s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),results};
   return true;
 }
+
+function mergeAccountRecords(s,oldName,newName,salaryStore) {
+  const same=value=>String(value||'').trim().toLowerCase()===String(oldName).toLowerCase()&&String(value||'').trim()!==newName;
+  const summary={renamedFields:0,mergedMapKeys:0,salaryFields:0};
+  const renameField=(record,field,counter='renamedFields')=>{if(record&&same(record[field])){record[field]=newName;summary[counter]+=1;}};
+  const mergeMoneyKey=map=>{
+    if(!map)return;
+    const keys=Object.keys(map).filter(key=>same(key));
+    keys.forEach(key=>{map[newName]=num(map[newName])+num(map[key]);delete map[key];summary.mergedMapKeys+=1;});
+  };
+  const moveSimpleKey=map=>{
+    if(!map)return;
+    Object.keys(map).filter(key=>same(key)).forEach(key=>{if(map[newName]==null)map[newName]=map[key];delete map[key];summary.mergedMapKeys+=1;});
+  };
+  const mergeStatementBook=(target,source)=>{
+    if(!target)return source;
+    if(!source)return target;
+    target.transactions=Object.assign({},source.transactions||{},target.transactions||{});
+    const imports=[].concat(source.imports||[],target.imports||[]),seen=new Set();
+    target.imports=imports.filter(record=>{const key=String(record&&record.id||JSON.stringify(record));if(seen.has(key))return false;seen.add(key);return true;});
+    if(String(source.reconciledThrough||'')>String(target.reconciledThrough||''))target.reconciledThrough=source.reconciledThrough;
+    if(String(source.lastReconciliation&&source.lastReconciliation.at||'')>String(target.lastReconciliation&&target.lastReconciliation.at||''))target.lastReconciliation=source.lastReconciliation;
+    return target;
+  };
+  s.accounts=Array.from(new Set((s.accounts||[]).map(account=>same(account)?newName:account)));
+  Object.values(s.expenses||{}).forEach(expense=>{renameField(expense,'account');(expense.payments||[]).forEach(payment=>renameField(payment,'account'));(expense.reimbursementPayments||[]).forEach(payment=>renameField(payment,'account'));});
+  (s.adjustments||[]).forEach(record=>renameField(record,'account'));
+  (s.receipts||[]).forEach(record=>renameField(record,'account'));
+  (s.vendorAdvances||[]).forEach(record=>renameField(record,'account'));
+  (s.vendorOpeningPayables||[]).forEach(record=>renameField(record,'account'));
+  (s.bankTruthMovements||[]).forEach(record=>renameField(record,'account'));
+  (s.reconciliationExpenses||[]).forEach(record=>renameField(record,'account'));
+  (s.paytmSettlements||[]).forEach(record=>renameField(record,'bankAccount'));
+  (s.transfers||[]).forEach(record=>{renameField(record,'fromAccount');renameField(record,'toAccount');renameField(record,'originalToAccount');});
+  Object.values(s.receivables||{}).forEach(record=>(record.collections||[]).forEach(collection=>renameField(collection,'account')));
+  Object.values((s.procurementAccounting||{}).paymentsByPo||{}).forEach(record=>(record.payments||[]).forEach(payment=>renameField(payment,'account')));
+  Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>{renameField(draft,'account');Object.values(draft.resolutions||{}).forEach(resolution=>renameField(resolution,'otherAccount'));});
+  mergeMoneyKey(s.openingBalances);
+  Object.values(s.openingBalancesByNature||{}).forEach(mergeMoneyKey);
+  moveSimpleKey(s.openingBalanceDates);
+  moveSimpleKey(s.odConfig);
+  if(s.bankStatements){
+    Object.keys(s.bankStatements).filter(key=>same(key)||key.startsWith('PERSONAL|')&&same(key.slice(9))).forEach(key=>{
+      const targetKey=key.startsWith('PERSONAL|')?'PERSONAL|'+newName:newName;
+      s.bankStatements[targetKey]=mergeStatementBook(s.bankStatements[targetKey],s.bankStatements[key]);
+      delete s.bankStatements[key];summary.mergedMapKeys+=1;
+    });
+  }
+  if(salaryStore){
+    Object.values(salaryStore.advances||{}).forEach(record=>{renameField(record,'account','salaryFields');renameField(record,'fundingToAccount','salaryFields');});
+    Object.values(salaryStore.advanceRequests||{}).forEach(record=>renameField(record,'account','salaryFields'));
+    (salaryStore.salaryPayments||[]).forEach(record=>renameField(record,'account','salaryFields'));
+  }
+  return summary;
+}
 function applyOwnerConfirmedEx00032GrossPayment(s){
   const key='correct-ex-00032-gross-payment-418-v1';
   s.oneTimeMigrations=s.oneTimeMigrations||{};
@@ -491,9 +553,18 @@ function loadStore() {
   try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
   catch(error) { console.error('[expenses] Could not read expenses.json:',error);return blankStore(); }
   try {
+    s.oneTimeMigrations=s.oneTimeMigrations||{};
+    const prashantCashMergeKey='owner-merge-prashant-cash-case-variant-v1';
+    if(!s.oneTimeMigrations[prashantCashMergeKey]){
+      const salaryStore=loadSalaryStore(),summary=mergeAccountRecords(s,'prashant Cash','Prashant Cash',salaryStore),now=new Date().toISOString();
+      if(salaryStore&&summary.salaryFields)saveSalaryStore(salaryStore);
+      s.oneTimeMigrations[prashantCashMergeKey]={appliedAt:now,from:'prashant Cash',to:'Prashant Cash',summary};
+      audit(s,null,'ACCOUNT_MERGED','account','Prashant Cash',{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:'Prashant Cash',before:{account:'prashant Cash'},after:{account:'Prashant Cash'},note:'Owner confirmed both cash ledgers are the same account; all linked movements were retained under Prashant Cash.',summary});
+      saveStore(s);
+    }
     // Repair records finalized under the old instalment rule, which marked the
     // whole agreement paid when only "payment required now" had been paid.
-    const rename = value => ACCOUNT_RENAMES[String(value || '')] || value;
+    const rename = canonicalAccountName;
     s.accounts = Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS), s.accounts || []).map(rename))).filter(a => a !== 'Federal Bank 7328');
     Object.values(s.expenses || {}).forEach(e => {
       e.account = rename(e.account);
@@ -509,10 +580,16 @@ function loadStore() {
       if (e.paidAlready) e.vendorPaymentCompleted = e.paidAmount >= num(e.amount);
     });
     (s.adjustments || []).forEach(x => { x.account = rename(x.account); });
+    (s.receipts || []).forEach(x => { x.account = rename(x.account); });
     s.reconciliationExpenses=Array.isArray(s.reconciliationExpenses)?s.reconciliationExpenses:[];
     s.bankTruthMovements=Array.isArray(s.bankTruthMovements)?s.bankTruthMovements:[];
     s.vendorOpeningPayables=Array.isArray(s.vendorOpeningPayables)?s.vendorOpeningPayables:[];
     s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];
+    s.reconciliationExpenses.forEach(x=>{x.account=rename(x.account);});
+    s.bankTruthMovements.forEach(x=>{x.account=rename(x.account);});
+    s.vendorOpeningPayables.forEach(x=>{x.account=rename(x.account);});
+    s.vendorAdvances.forEach(x=>{x.account=rename(x.account);});
+    (s.paytmSettlements||[]).forEach(x=>{x.bankAccount=rename(x.bankAccount);});
     if(applyOwnerConfirmedEx00032GrossPayment(s))saveStore(s);
     if(applyVendorOverpaymentDisplayMetadata(s))saveStore(s);
     if(applyKaluFlowersFruitsVendorMerge(s))saveStore(s);
@@ -842,17 +919,17 @@ function storedAccountNames(s) {
     (e.reimbursementPayments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
   });
   salaryAdvanceEntries().forEach(x => { if (x.account) names.add(x.account); });
-  return Array.from(names).map(x => String(x).trim()).filter(x => x && x !== '(unspecified)').sort((a, b) => a.localeCompare(b));
+  return Array.from(new Set(Array.from(names).map(canonicalAccountName))).map(x => String(x).trim()).filter(x => x && x !== '(unspecified)').sort((a, b) => a.localeCompare(b));
 }
 function salaryAdvanceEntries() {
   try {
     const sal = JSON.parse(fs.readFileSync(SALARY_PATH, 'utf8'));
-    return Object.values(sal.advances || {}).filter(a => a.active !== false && num(a.amount) > 0 && a.account).map(a => ({ id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:a.account,amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,empId:a.empId||'',reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'',fundingTransferId:a.fundingTransferId||'',fundingToAccount:a.fundingToAccount||'' }));
+    return Object.values(sal.advances || {}).filter(a => a.active !== false && num(a.amount) > 0 && a.account).map(a => ({ id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:canonicalAccountName(a.account),amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,empId:a.empId||'',reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'',fundingTransferId:a.fundingTransferId||'',fundingToAccount:canonicalAccountName(a.fundingToAccount)||'' }));
   } catch (_) { return []; }
 }
 function loadSalaryStore(){try{return JSON.parse(fs.readFileSync(SALARY_PATH,'utf8'));}catch(_){return null;}}
 function saveSalaryStore(s){const tmp=SALARY_PATH+'.tmp-'+process.pid+'-'+Date.now();fs.writeFileSync(tmp,JSON.stringify(s,null,2));fs.renameSync(tmp,SALARY_PATH);}
-function salaryPaymentEntries(){try{const sal=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'salary.json'),'utf8'));return (sal.salaryPayments||[]).filter(p=>p.active!==false&&num(p.amount)>0);}catch(_){return[];}}
+function salaryPaymentEntries(){try{const sal=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'salary.json'),'utf8'));return (sal.salaryPayments||[]).filter(p=>p.active!==false&&num(p.amount)>0).map(p=>Object.assign({},p,{account:canonicalAccountName(p.account)}));}catch(_){return[];}}
 function companyAccountsForNature(nature) {
   return (ENTITY_ACCOUNTS[normalizedNature(nature)] || []).slice();
 }
@@ -884,7 +961,7 @@ function payingAccountsForReq(req, nature) {
   return nativeAccounts;
 }
 function allowedPayingAccount(req, nature, account) {
-  const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
+  const candidate = canonicalAccountName(account);
   const allowed=payingAccountsForReq(req,nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
   return exact||(matches.length===1?matches[0]:undefined);
 }
@@ -908,19 +985,19 @@ function ledgerAccountsForNature(s, nature) {
     if (normalizedNature(x.fromNature || x.nature) === n) names.add(String(x.fromAccount));
     if (x.classification!=='credit_card_payment'&&normalizedNature(x.toNature || x.nature) === n) names.add(String(x.toAccount));
   });
-  return Array.from(names).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+  return Array.from(new Set(Array.from(names).map(canonicalAccountName))).filter(Boolean).sort((a,b)=>a.localeCompare(b));
 }
 function allowedCompanyAccount(s, nature, account) {
-  const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
+  const candidate = canonicalAccountName(account);
   const allowed=companyAccountsForNature(nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
   return exact||(matches.length===1?matches[0]:undefined);
 }
 function allowedTransferAccount(nature, account) {
-  const candidate=ACCOUNT_RENAMES[String(account||'')]||String(account||''),allowed=transferAccountsForNature(nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
+  const candidate=canonicalAccountName(account),allowed=transferAccountsForNature(nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
   return exact||(matches.length===1?matches[0]:undefined);
 }
 function allowedReimbursementAccount(req, account) {
-  const candidate = ACCOUNT_RENAMES[String(account || '')] || String(account || '');
+  const candidate = canonicalAccountName(account);
   const allowed = Array.from(new Set([].concat(...approvalNatures(req).map(n => payingAccountsForReq(req, n)))));
   const exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
   return exact||(matches.length===1?matches[0]:undefined);
@@ -2890,6 +2967,6 @@ router.use((error,req,res,next)=>{
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata };
+module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
 module.exports.applyFinalizedBankTruth = applyFinalizedBankTruth;
