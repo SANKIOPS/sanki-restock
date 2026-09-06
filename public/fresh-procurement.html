@@ -1787,16 +1787,32 @@
     czSetWorkflow(true);
     czRenderCandidates(czLastCands, czLastCats);
   }
-  function czSetActiveBatch(id){
-    return fetch('/api/casuals/batches/'+encodeURIComponent(id)+'/active',{method:'PUT',headers:{'accept':'application/json'}})
-      .then(function(r){
+  function czActivateRequest(url, options){
+    return fetch(url, options).then(function(r){
+      return r.text().then(function(raw){
         var type = String(r.headers.get('content-type') || '');
-        if(type.indexOf('application/json') < 0) throw new Error('The server could not open this batch. Refresh after the latest deployment finishes.');
-        return r.json().then(function(d){
-          if(!r.ok || !d.success) throw new Error(d.error || 'Could not open this batch.');
-          return d;
-        });
-      }).then(function(){ return czLoadCandidates().then(czLoadPlan); });
+        if(type.indexOf('application/json') < 0){
+          var preview = raw.replace(/\s+/g, ' ').trim().slice(0, 90);
+          var err = new Error('Batch activation returned HTTP '+r.status+(preview ? ': '+preview : '.'));
+          err.nonJson = true;
+          throw err;
+        }
+        var d;
+        try { d = JSON.parse(raw); } catch(parseErr){ throw new Error('Batch activation returned invalid JSON (HTTP '+r.status+').'); }
+        if(!r.ok || !d.success) throw new Error(d.error || 'Could not open this batch.');
+        return d;
+      });
+    });
+  }
+  function czSetActiveBatch(id){
+    var encoded = encodeURIComponent(id);
+    return czActivateRequest('/api/casuals/batches/'+encoded+'/active',{method:'PUT',headers:{'accept':'application/json'}})
+      .catch(function(firstErr){
+        if(!firstErr.nonJson) throw firstErr;
+        return czActivateRequest('/api/casuals/batches/active',{method:'POST',headers:{'content-type':'application/json','accept':'application/json'},body:JSON.stringify({id:id})})
+          .catch(function(secondErr){ throw new Error(firstErr.message+' Fallback failed: '+secondErr.message); });
+      })
+      .then(function(){ return czLoadCandidates().then(czLoadPlan); });
   }
   // ＋ New batch no longer creates a batch straight away — it asks WHICH categories
   // first (a batch spans one or more), then czCreateBatchFor makes the batch.

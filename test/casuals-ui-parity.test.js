@@ -46,7 +46,8 @@ test('legacy Casual UI presents shared upper and trouser workflow', () => {
 
 test('Casual batch rows use the explicit activation endpoint and expose failures', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
-  assert.match(html, /fetch\('\/api\/casuals\/batches\/'\+encodeURIComponent\(id\)\+'\/active',\{method:'PUT'/);
+  assert.match(html, /czActivateRequest\('\/api\/casuals\/batches\/'\+encoded\+'\/active',\{method:'PUT'/);
+  assert.match(html, /czActivateRequest\('\/api\/casuals\/batches\/active',\{method:'POST'/);
   assert.match(html, /czBatchError/);
   assert.match(html, /setAttribute\('role', 'button'\)/);
 
