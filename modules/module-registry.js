@@ -52,7 +52,7 @@ const MODULES = [
   { key: 'sales',        title: 'Record a Sale',         desc: 'Log walk-in / IG / WhatsApp / phone sales',          icon: '📝', href: '/sales.html',                     section: 'Sales',     status: 'hidden', roles: ['admin', 'sales'] },
 
   { key: 'procurement', title: 'Purchases',              desc: 'Generate SKUs, landed cost, create products / add stock', icon: '📦', href: '/procurement.html',           section: 'Purchases', status: 'live',   roles: ['admin', 'procurement', 'inventory'] },
-  { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Plan a buy, upload vendor catalogues, review AI selections and create vendor POs', icon: '🧠', href: '/fresh-procurement-simple.html', section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
+  { key: 'fresh-proc',  title: 'Fresh Procurement',      desc: 'Build new sourcing batches, review colourways and create vendor POs', icon: '🧠', href: '/fresh-procurement.html', section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
   { key: 'size-tracker', title: 'Size Tracker',           desc: 'Match vendor (China) size charts to SANKI target sizes before every PO', icon: '📏', href: '/size-tracker.html',      section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
   { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },

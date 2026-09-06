@@ -608,7 +608,7 @@
       <div class="panel">
         <div class="czhead">
           <h2>① The Casual Feed — upload everything together</h2>
-          <p class="sub">Trousers, shirts and tees can go into one batch. On <b>Organise</b>, the app uses the batch category you selected; you confirm <b>fit and colour</b>, then <b>build the plan</b>.</p>
+          <p class="sub">Trousers, shirts and tees can go into one batch. On <b>Organise</b>, the app uses the batch category you selected. For Trousers, confirm only each photo's <b>colour</b>; shirts and tees retain fit and colour.</p>
         </div>
         <div class="czbatchbar" id="czBatchBar">
           <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to open it; drop photos &amp; plan inside the open batch</span></div>
@@ -649,12 +649,12 @@
             <div class="drop" style="margin-top:4px" id="czDrop">
               <div style="font-size:32px">⬆</div>
               <div><b>Drop casual-wear photos here</b> or click to browse</div>
-              <div style="font-size:12px; margin-top:4px">One mixed pile — the batch category is applied automatically; you confirm fit and colour.</div>
+              <div style="font-size:12px; margin-top:4px">One mixed pile — the batch category is applied automatically. For Trousers, only colour is required.</div>
               <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
             </div>
           </div>
           <div id="czDesignMode" style="display:none">
-            <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> Create one design card (your design folder), set its category, fit and name, then upload <b>all colour photos for that design at once</b>. The AI detects each colour and every colourway keeps its real photo as a separate SKU.</div>
+            <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> For Trousers, name the design, upload <b>all of its colour photos together</b>, then choose the colour under each photo. Every colourway keeps its own photograph; no fit or paid AI is used.</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;padding:10px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:9px">
               <label class="btn ghost sm" style="cursor:pointer">📁 Upload segregated design folder
                 <input id="czDesignFolder" type="file" accept="image/*" webkitdirectory directory multiple style="display:none" />
@@ -686,7 +686,7 @@
       <!-- ② Design-first plan — one consistent workflow per category -->
       <div class="panel">
         <h2 style="margin:0 0 3px">② Plan setup — per category</h2>
-        <p class="sub">Trousers, Shirts and T-shirts now use the same design-first setup. Enter the required designs, size run, colour mix and fit; Shirts and T-shirts also retain their print mix.</p>
+        <p class="sub">Trousers use a simple design, size-run and colour plan only. Shirts and T-shirts retain their existing print and fit setup.</p>
       </div>
 
       <!-- ③ Categories — enable + budget + editable % (fit / size / colour) -->
@@ -694,14 +694,14 @@
 
       <div style="text-align:center; margin:22px 0">
         <button class="btn lg" id="czAnalyzeBtn">▶ Organise photos</button>
-        <div class="sub" style="margin-top:6px">Uses the category already chosen for this batch. You confirm fit and colour, then build the plan — no paid AI.</div>
+        <div class="sub" style="margin-top:6px">Uses the category already chosen for this batch. Trousers need only colour confirmation; shirts and tees retain fit and colour — no paid AI.</div>
         <div id="czAnalyzeStatus" class="sub" style="margin-top:8px"></div>
       </div>
 
       <!-- Stage 1: segregation review — confirm fit/colour tags before planning -->
       <div id="czSegPanel" style="display:none">
-        <h2 style="margin:0 0 4px">Review segregation — fix fits &amp; colours</h2>
-        <p class="sub" id="czSegSummary">The batch category is applied without a paid AI service. Confirm each <b>fit</b> and <b>colour</b>; uncertain photos stay clearly unassigned until you choose. Then build the buy plan.</p>
+        <h2 style="margin:0 0 4px">Review uploaded photos</h2>
+        <p class="sub" id="czSegSummary">For Trousers, confirm only the <b>colour</b>. Shirts and T-shirts retain their existing fields. Unassigned photos stay visible until you choose, then you build the buy plan.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
           <button class="btn lg" id="czPlanFromSegBtn" type="button">✓ Confirm &amp; build plan →</button>
           <button class="btn ghost" id="czReSegBtn" type="button">↻ Refresh organisation</button>
@@ -1467,13 +1467,12 @@
         body.appendChild(pnote);
       }
 
-      // FIT, SIZE and COLOUR are each decided by %. Colour % is the TARGET mix
-      // WITHIN each fit; the plan matches it when it must hold designs back and
-      // flags any colour it is short of as "needs sourcing".
+      // Trousers use only size + colour. Uppers retain their existing print,
+      // size, colour and fit workflow until they are redesigned separately.
       var isUpper = CZ_PRINT_CATS.indexOf(catKey) >= 0;
       // Use the same operational order for every category. Uppers insert print as
       // step ②, so their size/colour/fit steps are numbered one place later.
-      var kinds = ['sizes','colours','fits'];
+      var kinds = isTrouser ? ['sizes','colours'] : ['sizes','colours','fits'];
       kinds.forEach(function(kind){
         var stepBase = isTrouser ? 2 : 3;
         var title = isTrouser
@@ -1535,7 +1534,7 @@
       var colNote = document.createElement('div'); colNote.className = 'czsub';
       colNote.style.textTransform = 'none'; colNote.style.letterSpacing = '0';
       colNote.innerHTML = isTrouser
-        ? '<span style="color:var(--muted)">The plan below is a <b>colour × fit grid</b> — both are <b>HARD caps</b>. Each cell shows designs to buy (raw → rounded), and the <b>Source more</b> list is your exact shopping list per colour × fit. Upload photos <b>after</b> this — the app fills the grid and never backfills a gap from another colour or fit.</span>'
+        ? '<span style="color:var(--muted)">The Trouser plan uses <b>colour only</b>. The entered colour weights are normalised to 100% and become exact design targets. Surplus colourways are held and shortages remain visible. Fit, pattern and rating do not affect the order.</span>'
         : '<span style="color:var(--muted)">The plan below uses the same design-first workflow as trousers. <b>Print</b> and <b>colour</b> remain HARD caps for uppers, while fit guides the best combination. Use <b>By design</b> above to upload every colourway together; exact shortages and an order sheet appear in the summary.</span>';
       body.appendChild(colNote);
 
@@ -1992,7 +1991,7 @@
     var fits = czDFits(cat);
     // Collapse existing designs so the list stays compact; open only the new one.
     czDesigns.forEach(function(x){ x.collapsed = true; });
-    czDesigns.push({ id: ++czDSeq, name: '', cat: cat, fit: fits[0] || '', cols: [], collapsed: false });
+    czDesigns.push({ id: ++czDSeq, name: '', cat: cat, fit: cat==='Trouser' ? '' : (fits[0] || ''), cols: [], collapsed: false });
     czDRender();
   }
   // Import a computer folder that is already segregated by design:
@@ -2036,10 +2035,10 @@
     order.forEach(function(key){
       var g=groups[key], fits=czDFits(g.cat);
       czDesigns.forEach(function(x){ x.collapsed=true; });
-      var d={id:++czDSeq,name:g.name,cat:g.cat,fit:fits[0]||'',cols:[],collapsed:false};
+      var d={id:++czDSeq,name:g.name,cat:g.cat,fit:g.cat==='Trouser'?'':(fits[0]||''),cols:[],collapsed:false};
       czDesigns.push(d); czDAddPhotos(d.id,g.files);
     });
-    st.innerHTML='<span style="color:var(--emerald-d)">✓ Read '+files.length+' photo'+(files.length===1?'':'s')+' from '+order.length+' design folder'+(order.length===1?'':'s')+'. Review the category/fit and detected colours, then click Upload these designs.</span>';
+    st.innerHTML='<span style="color:var(--emerald-d)">✓ Read '+files.length+' photo'+(files.length===1?'':'s')+' from '+order.length+' design folder'+(order.length===1?'':'s')+'. For Trousers, choose the colour under every photo, then click Upload these designs.</span>';
     czDRender();
   }
   // Match an AI-detected colour string to one of THIS category's plan colours
@@ -2068,6 +2067,13 @@
     });
     if(!fresh.length) return;
     czDRender();
+    // Trouser colours are confirmed by the buyer. Do not call a paid or
+    // unreliable image model; reveal the colour picker immediately.
+    if(cat === 'Trouser'){
+      fresh.forEach(function(cl){ cl.detecting = false; });
+      czDRender();
+      return;
+    }
     var fd = new FormData();
     fresh.forEach(function(cl){ fd.append('images', cl.file); fd.append('ids', 'c'+cl.id); });
     fetch('/api/casuals/invoice/classify', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(res){
@@ -2117,8 +2123,8 @@
         '<div class="dbody"'+(open?'':' style="display:none"')+'>'+
           '<div class="dh">'+
             catFld+
-            '<div class="fld" style="min-width:120px"><label>Fit</label><select data-fit>'+fitOpts+'</select></div>'+
-            '<div class="fld" style="flex:1;min-width:150px"><label>Design name (optional)</label><input data-name placeholder="e.g. Cargo Pocket" value="'+escapeHtml(d.name||'')+'" /></div>'+
+            (cat==='Trouser' ? '' : '<div class="fld" style="min-width:120px"><label>Fit</label><select data-fit>'+fitOpts+'</select></div>')+
+            '<div class="fld" style="flex:1;min-width:150px"><label>Design name'+(cat==='Trouser'?'':' (optional)')+'</label><input data-name placeholder="e.g. Cargo Pocket" value="'+escapeHtml(d.name||'')+'" /></div>'+
           '</div>'+
           '<label class="czdaddphotos" data-addlabel><span data-addtxt>⬆ Upload all photos for this design</span>'+
             '<input type="file" accept="image/*" multiple data-photos style="display:none" /></label>'+
@@ -2163,11 +2169,12 @@
         d.cat = this.value;
         // Category changed → its fit list & plan colours differ, so reset the design's
         // fit to the new category's first fit and clear each colour slot's mapping.
-        var nf = czDFits(d.cat); d.fit = nf[0] || '';
+        var nf = czDFits(d.cat); d.fit = d.cat==='Trouser' ? '' : (nf[0] || '');
         d.cols.forEach(function(cl){ cl.colour = ''; cl._aiColour = null; });
         czDRender();
       });
-      card.querySelector('[data-fit]').addEventListener('change', function(){ d.fit = this.value; });
+      var fitSel = card.querySelector('[data-fit]');
+      if(fitSel) fitSel.addEventListener('change', function(){ d.fit = this.value; });
       card.querySelector('[data-name]').addEventListener('input', function(){ d.name = this.value; });
       card.querySelector('[data-drm]').addEventListener('click', function(){ czDesigns = czDesigns.filter(function(x){ return x.id !== d.id; }); if(!czDesigns.length) czDAddDesign(); else czDRender(); });
       var pin = card.querySelector('[data-photos]');
@@ -2181,6 +2188,8 @@
     var st = el('czUploadStatus');
     var vendor = (el('czVendor').value||'').trim();
     if(!vendor){ st.innerHTML = '<span style="color:var(--err)">Enter a vendor name first.</span>'; el('czVendor').focus(); return; }
+    var unnamedTrouser = czDesigns.some(function(d){ return czDCatOf(d)==='Trouser' && d.cols.some(function(cl){ return !!cl.file; }) && !(d.name||'').trim(); });
+    if(unnamedTrouser){ st.innerHTML = '<span style="color:var(--err)">Enter a name for every Trouser design before uploading. Its colour photos must stay grouped under that name.</span>'; return; }
     // If the AI is still naming colours, don't skip those slots — ask to wait.
     var stillDetecting = 0;
     czDesigns.forEach(function(d){ d.cols.forEach(function(cl){ if(cl.file && cl.detecting) stillDetecting++; }); });
@@ -2390,7 +2399,7 @@
         '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+
           '<button class="czexclbtn" type="button" title="Remove from PO">✕ Exclude</button>'+
           '<span class="pomoney">'+fmtINR(total)+' pc</span></div>'+
-        '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(fitLabel)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
+        '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span>'+(cat.colourOnly?'':'<span class="potag">'+escapeHtml(fitLabel)+'</span>')+'<span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
         '<div class="poset"><label>Sets</label>'+
           '<button class="posetbtn" type="button" data-op="-">–</button>'+
           '<input class="posetin" type="number" min="0" step="1" value="'+sets+'">'+
@@ -2417,13 +2426,13 @@
   function czBuildExclRow(c, cat, fitLabel){
     var xrow = document.createElement('div'); xrow.className='czporow czexcl';
     var reason = (c.excludedReason==='manual') ? 'removed by you'
-      : (c.excludedReason==='budget') ? 'fit budget full'
-      : (c.excludedReason==='variety') ? 'beyond this fit’s colour mix' : 'held back';
+      : (c.excludedReason==='budget') ? (cat.colourOnly?'not selected':'fit budget full')
+      : (c.excludedReason==='variety') ? (cat.colourOnly?'beyond this colour’s target':'beyond this fit’s colour mix') : 'held back';
     xrow.innerHTML =
       '<div class="cand"'+czCandAttrs(c, cat.label, fitLabel, '')+'><img src="'+c.url+'" loading="lazy" alt=""/></div>'+
       '<div class="poinfo">'+
         '<div class="potop"><span class="pov">'+escapeHtml(c.vendor||'Vendor —')+'</span>'+czRateBadge(c)+'<span class="czexwhy">'+escapeHtml(reason)+'</span></div>'+
-        '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span><span class="potag">'+escapeHtml(fitLabel)+'</span><span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
+        '<div class="pometa"><span class="potag">'+escapeHtml(cat.label)+'</span>'+(cat.colourOnly?'':'<span class="potag">'+escapeHtml(fitLabel)+'</span>')+'<span class="potag col">'+escapeHtml(c.colour||'—')+'</span></div>'+
         '<button class="czinclbtn" type="button">＋ Include in PO</button>'+
       '</div>';
     xrow.querySelector('.czinclbtn').addEventListener('click', function(){ czSetInclude(c.id, true); });
@@ -2462,7 +2471,7 @@
     });
 
     var intro = document.createElement('div'); intro.className='czsub'; intro.style.textTransform='none'; intro.style.letterSpacing='0';
-    intro.innerHTML = '<b>By design</b> — each uploaded design with its colour photos and the size set each buys. Edit any size / set / price inline. Under each design: sizes with no coverage. Below all designs: budget &amp; pieces still to source, then any ungrouped / already-ordered photos.';
+    intro.innerHTML = '<b>By design</b> — each named design keeps all its colourway photos together. The colour target decides which colourways enter the order; held colourways remain visible and can be included manually. Each selected colourway buys one editable size set.';
     body.appendChild(intro);
 
     gorder.forEach(function(dn){
@@ -2965,10 +2974,30 @@
         (onWay>0 ? '<span class="cs ok"><i>On the way</i><b>'+fmtINR(onWay)+' pc</b></span>' : '')+
         '<span class="cs"><i>To source</i><b>'+fmtINR(toSrc)+' pc</b></span>'
       ) : '')+
-      '<span class="cs"><i>Products</i><b>'+products+'</b></span>'+
+      '<span class="cs"><i>'+(pc.colourOnly?'Colourways':'Products')+'</i><b>'+products+'</b></span>'+
       '<span class="cs" title="Pieces your uploaded photos add up to so far — not the target"><i>In PO now</i><b>'+fmtINR(inPO)+' pc</b></span>'+
     '</div>';
     wrap.innerHTML = head;
+    if(pc.colourOnly && (pc.colourPlan||[]).length){
+      var trouserDesigns = [];
+      (pc.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(d){ trouserDesigns.push(d); }); });
+      var colourRows = (pc.colourPlan||[]).map(function(r){
+        var chosen = trouserDesigns.filter(function(d){ return d.included!==false && (d.colour||'')===r.label; })
+          .map(function(d){ return escapeHtml(d.designName||'Unnamed design'); });
+        var heldNames = trouserDesigns.filter(function(d){ return d.included===false && (d.colour||'')===r.label; })
+          .map(function(d){ return escapeHtml(d.designName||'Unnamed design'); });
+        return '<tr><td><b>'+escapeHtml(r.label)+'</b><br><span style="color:#64748b">'+r.pct+'%</span></td>'+
+          '<td style="text-align:center"><b>'+r.target+'</b></td>'+
+          '<td>'+(chosen.length?chosen.join(', '):'<span style="color:#94a3b8">—</span>')+'</td>'+
+          '<td style="text-align:center;color:'+(r.shortage?'#b45309':'#059669')+';font-weight:700">'+(r.shortage?('+'+r.shortage):'Covered')+'</td>'+
+          '<td>'+(heldNames.length?heldNames.join(', '):'<span style="color:#94a3b8">—</span>')+'</td></tr>';
+      }).join('');
+      var colourTable = document.createElement('div'); colourTable.style.marginTop='10px';
+      colourTable.innerHTML = '<div class="czsub" style="text-transform:none;letter-spacing:0"><b>Colour-only buying summary</b> — selected colourways stay grouped under their design names below.</div>'+
+        '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px">Colour</th><th style="padding:6px">Target designs</th><th style="text-align:left;padding:6px">Selected designs</th><th style="padding:6px">Source more</th><th style="text-align:left;padding:6px">Held colourways</th></tr></thead><tbody>'+colourRows+'</tbody></table></div>';
+      [].forEach.call(colourTable.querySelectorAll('tbody tr'),function(row){ row.style.borderTop='1px solid #eef2f7'; [].forEach.call(row.children,function(td){ td.style.padding='7px 6px'; }); });
+      wrap.appendChild(colourTable);
+    }
     if(c.enabled && shortPc>0){
       var note = document.createElement('div'); note.className='czcatsum-note';
       note.innerHTML = 'Your photos cover <b>'+fmtINR(inPO)+' pc</b>'+(onWay>0?(' and <b>'+fmtINR(onWay)+' pc</b> is on the way'):'')+
@@ -3292,7 +3321,7 @@
     }
     // FIRST-LEVEL fit breakdown — fit is category-wide too (filled from any print),
     // so show designs SELECTED per fit and which fits still need photos sourced.
-    if(c.enabled && ((sums||[]).some(function(f){ return f.products>0; }) || (pc.fitShort||[]).length)){
+    if(!pc.colourOnly && c.enabled && ((sums||[]).some(function(f){ return f.products>0; }) || (pc.fitShort||[]).length)){
       var fchip = 'display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:10px;font-size:12px;';
       var fsel = (sums||[]).filter(function(f){ return f.products>0; })
         .sort(function(a,b){ return b.products-a.products; })
@@ -3336,7 +3365,7 @@
         wrap.appendChild(dM);
       }
     }
-    if(sums.length){
+    if(!pc.colourOnly && sums.length){
       var lines = document.createElement('div'); lines.className='czcatsum-fits'; var any=false;
       sums.forEach(function(f){
         if(!f.products) return; any=true;
@@ -3351,7 +3380,7 @@
     // #5 — more products the budget can still fund → which fits + colours.
     var totMore = sums.reduce(function(s,f){ return s + (f.moreProd||0); }, 0);
     var needFits = sums.filter(function(f){ return (f.moreProd||0)>0 || (f.colourShort||[]).length; });
-    if(totMore>0 || needFits.length){
+    if(!pc.colourOnly && (totMore>0 || needFits.length)){
       var d1 = document.createElement('details'); d1.className='czexp need';
       var inner = needFits.map(function(f){
         var cs = (f.colourShort||[]).map(function(s){ return '<span class="csneed">'+escapeHtml(s.label)+' +'+s.need+'</span>'; }).join('');
@@ -3391,7 +3420,7 @@
           var total = lines.reduce(function(a,x){ return a + x.qty; }, 0);
           if(!total) return;
           var v = c.vendor || 'Unspecified vendor';
-          (byVendor[v] = byVendor[v] || []).push({ url:c.url, cat:cat.label, fit:f.label, colour:c.colour||'—', lines:lines, total:total });
+          (byVendor[v] = byVendor[v] || []).push({ url:c.url, cat:cat.label, fit:cat.colourOnly?'':f.label, design:c.designName||'', colour:c.colour||'—', lines:lines, total:total });
         });
       });
     });
@@ -3417,7 +3446,7 @@
       h += '<div class="vend"><h2>'+escapeHtml(v)+'</h2><table><thead><tr><th>Photo</th><th>Item</th><th>Sizes &amp; qty</th><th style="text-align:center">Pieces</th></tr></thead><tbody>';
       items.forEach(function(it){ vt += it.total; grand += it.total;
         var szt = it.lines.map(function(l){ return escapeHtml(l.size)+' <b>'+l.qty+'</b>'; }).join('  ·  ');
-        h += '<tr><td><img src="'+abs(it.url)+'"></td><td>'+escapeHtml(it.cat)+' · '+escapeHtml(it.fit)+'<br><span style="color:#666">'+escapeHtml(it.colour)+'</span></td><td class="sz">'+szt+'</td><td class="tot">'+it.total+'</td></tr>';
+        h += '<tr><td><img src="'+abs(it.url)+'"></td><td>'+escapeHtml(it.cat)+(it.design?(' · '+escapeHtml(it.design)):'')+(it.fit?(' · '+escapeHtml(it.fit)):'')+'<br><span style="color:#666">'+escapeHtml(it.colour)+'</span></td><td class="sz">'+szt+'</td><td class="tot">'+it.total+'</td></tr>';
       });
       h += '</tbody><tfoot><tr><td colspan="3">'+escapeHtml(v)+' — total</td><td class="tot">'+vt+'</td></tr></tfoot></table></div>';
     });
@@ -3430,8 +3459,9 @@
   function czRenderPlan(d){
     if(!d || !d.categories){ return; }
     czLastPlan = d;
+    if(d.settings) czSettings = d.settings;
     el('czPlanPanel').style.display = '';
-    var summary = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per size. Colours come from your confirmation.';
+    var summary = 'Each selected colourway buys one predefined <b>size set</b>, editable per size. Trousers are allocated only by your colour percentages; Shirts and T-shirts retain their existing workflow.';
     if(czPriced){
       var grandCost = 0;
       (d.categories||[]).forEach(function(cat){ if(!cat.enabled) return; (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){ if(c.included === false) return; grandCost += czRowCost(c, cat); }); }); });
@@ -3517,7 +3547,7 @@
       bb.buckets.forEach(function(b){
         if(!b.designs.length) return;
         var grp = document.createElement('div'); grp.className = 'czseggrp'+(b.unassigned?' un':'');
-        grp.innerHTML = '<div class="czseggrphd">'+escapeHtml(b.label)+'<span class="m">'+b.designs.length+'</span></div>';
+        grp.innerHTML = '<div class="czseggrphd">'+escapeHtml(cat.colourOnly?'Colour review':b.label)+'<span class="m">'+b.designs.length+'</span></div>';
         var grid = document.createElement('div'); grid.className = 'czseggrid';
         b.designs.forEach(function(c){
           var cell = document.createElement('div'); cell.className = 'czsegcell';
@@ -3526,11 +3556,12 @@
             '<div class="czsegv">'+escapeHtml(c.vendor||'Vendor —')+'</div>'+
             (cat.hasPrint ? '<label class="czsegl">Print'+(c.printOverride?' <span class="czsegfx">✓ fixed</span>':'')+
               '<select class="czsegprint">'+czSegPrintOpts(cat.category, c.printKey||'')+'</select></label>' : '')+
-            '<label class="czsegl">Fit'+(c.fitOverride?' <span class="czsegfx">✓ fixed</span>':'')+
-              '<select class="czsegfit">'+czSegFitOpts(bb.opts, c.fit||'')+'</select></label>'+
+            (cat.colourOnly ? '' : '<label class="czsegl">Fit'+(c.fitOverride?' <span class="czsegfx">✓ fixed</span>':'')+
+              '<select class="czsegfit">'+czSegFitOpts(bb.opts, c.fit||'')+'</select></label>')+
             '<label class="czsegl">Colour'+(c.colourOverride?' <span class="czsegfx">✓ fixed</span>':'')+
               '<select class="czsegcol">'+czSegColourOpts(cat.category, c.colour||'')+'</select></label>';
-          cell.querySelector('.czsegfit').addEventListener('change', function(){ czSetTag(c.id, { fit: this.value }); });
+          var fitPick = cell.querySelector('.czsegfit');
+          if(fitPick) fitPick.addEventListener('change', function(){ czSetTag(c.id, { fit: this.value }); });
           cell.querySelector('.czsegcol').addEventListener('change', function(){ czSetTag(c.id, { colour: this.value }); });
           var _pf = cell.querySelector('.czsegprint');
           if(_pf) _pf.addEventListener('change', function(){ czSetTag(c.id, { print: this.value }); });
@@ -3727,8 +3758,8 @@
   function czInvCatOptions(sel){ return '<option value="">— skip —</option>' + (czInv.cats||[]).map(function(c){ return '<option value="'+c.key+'"'+(c.key===sel?' selected':'')+'>'+escapeHtml(c.label)+'</option>'; }).join(''); }
   function czInvFitOptions(cat, sel){ return '<option value="">— pick fit —</option>' + ((czInv.fits[cat])||[]).map(function(f){ return '<option value="'+f.key+'"'+(f.key===sel?' selected':'')+'>'+escapeHtml(f.label)+'</option>'; }).join(''); }
   function czInvIsUpper(cat){ return !!(cat && (czInv.prints[cat]||[]).length); }
-  // Trousers run a colour×fit HARD grid — so the PO import asks WHICH grid colour
-  // each line fills (dropdown of this batch's colour mix), with an explicit
+  // The PO import asks which planned colour each Trouser line fills (using this
+  // batch's colour mix), with an explicit
   // "Other — off-plan" escape that lands the line as an already-bought extra row.
   function czInvHasColours(cat){ return !!(cat && czSettings && czSettings.categories && czSettings.categories[cat] && czSettings.categories[cat].colours && Object.keys(czSettings.categories[cat].colours).length); }
   function czInvColourPicker(cat){ return czInvHasColours(cat) && !czInvIsUpper(cat); }
@@ -3904,8 +3935,10 @@
     // Render once photos are analysed OR when a spec-driven grid exists (Trouser
     // designs mode): the colour×fit source-more grid must show BEFORE photos so the
     // founder knows what to source, even with zero uploads (have=0 everywhere).
-    var hasSpecGrid = d.success && (d.categories||[]).some(function(c){ return c.enabled && c.grid && c.grid.cells && c.grid.cells.length; });
+    var hasSpecGrid = d.success && (d.categories||[]).some(function(c){ return c.enabled && ((c.grid && c.grid.cells && c.grid.cells.length) || (c.colourOnly && c.colourPlan && c.colourPlan.length)); });
+    if(d.success && d.settings) czSettings = d.settings;
     if(d.success && (d.analysed || hasSpecGrid)) czRenderPlan(d);
+    else if(d.success){ czLastPlan = d; czRenderCats(); }
   }).catch(function(){}); }
 
   // Wiring (casuals)

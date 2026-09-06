@@ -50,11 +50,8 @@ const router = express.Router();
 const CASUALS_SPEC = [
   {
     key: 'Trouser', label: 'Trousers',
-    designNote: 'Baggy vs Normal; colour + fit are HARD caps',
-    fitHard: true,   // Trousers run a colour×fit HARD grid (see selectIncluded)
-    // Trousers run a 2-fit HARD grid (Baggy / Normal). Both fit AND colour are
-    // hard caps: the colour×fit grid targets are largest-remainder rounded and a
-    // cell that can't be filled becomes a "source more" instruction (no backfill).
+    designNote: 'Colour-only buying plan',
+    colourOnly: true,
     fits: [
       { key: 'baggy',  label: 'Baggy',  pct: 50, kw: ['baggy', 'wide', 'wide leg', 'wide-leg', 'loose', 'oversized', 'controlled baggy', 'balloon', 'parachute'] },
       { key: 'normal', label: 'Normal', pct: 50, kw: ['normal', 'regular', 'straight', 'relaxed straight', 'relaxed', 'slim', 'tapered', 'chino', 'fitted', 'classic', 'pleated', 'flared'] }
@@ -343,7 +340,10 @@ function newBatch(s, name, category) {
   const cats = [];
   rawCats.forEach(k => { if (CAT_BY_KEY[k] && cats.indexOf(k) < 0) cats.push(k); });
   const b = { id: crypto.randomBytes(6).toString('hex'), num, name: (name && String(name).trim()) || batchDateName(num, createdAt), createdAt,
-    categories: cats, category: cats.length === 1 ? cats[0] : null };   // keep .category for single-cat back-compat
+    categories: cats, category: cats.length === 1 ? cats[0] : null,
+    // Each batch owns a snapshot so editing a new colour mix cannot rewrite an
+    // older batch's plan. The store-level copy remains the starting template.
+    planSettings: JSON.parse(JSON.stringify(settingsWithDefaults(s))) };
   s.batches.push(b);
   return b;
 }
@@ -481,6 +481,14 @@ function settingsWithDefaults(s) {
     budgetMode: 'perCategory',
     categories
   };
+}
+
+function settingsForActiveBatch(s, persistLegacy) {
+  const batch = s && Array.isArray(s.batches) ? s.batches.find(b => b.id === s.activeBatch) : null;
+  if (batch && batch.planSettings) return settingsWithDefaults({ settings: batch.planSettings });
+  const current = settingsWithDefaults(s);
+  if (batch && persistLegacy) batch.planSettings = JSON.parse(JSON.stringify(current));
+  return current;
 }
 
 // Curation: the AI rating is NO LONGER an inclusion factor — every design is
@@ -787,60 +795,6 @@ async function scoreBatch(items) {
   return out;
 }
 
-// ── Simple Procurement: auditable assortment matching ───────────
-// The simplified UI first defines named assortment slots, then asks this pass
-// to compare every viable catalogue image against those slots. This is kept
-// separate from the legacy fit/colour planner so the old workflow is unchanged.
-async function scoreSimpleBatch(items, plan) {
-  const content = [];
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    content.push({ type: 'text', text: 'CANDIDATE ' + (i + 1) + ':' });
-    const enc = await shrinkForVision(it.buffer, it.mediaType);
-    content.push({ type: 'image', source: { type: 'base64', media_type: enc.mediaType, data: enc.data } });
-  }
-  const slots = (plan.mix || []).map((s, i) => `${i + 1}. ${String(s.name || '').trim()} (${Math.max(1, parseInt(s.styles) || 1)} style slot${Math.max(1, parseInt(s.styles) || 1) === 1 ? '' : 's'})`).join('\n');
-  content.push({ type: 'text', text:
-`You are the senior buyer for SANKI, an Indian premium-casual fashion brand. Compare EACH candidate image against this APPROVED buy plan.
-
-Gender: ${String(plan.gender || '')}
-Category: ${String(plan.category || '')}
-Approved assortment slots:
-${slots}
-
-For each candidate return:
-1) "slot" — EXACT approved slot name it best matches, or "No match".
-2) "silhouette" — specific visible garment silhouette, max 7 words.
-3) "colour" — dominant visible colour.
-4) "score" — integer 0-100, using exactly: slot match 0-40 + SANKI brand fit 0-20 + current Indian-market relevance 0-15 + versatility 0-15 + visible finish 0-10.
-5) "reason" — max 18 words explaining the score using visible evidence.
-6) "excludeReason" — if score below 65 or slot is No match, max 12 words; otherwise empty.
-
-Be strict. A generic or wrong-gender product cannot score above 64. Do not invent fabric, price, measurements, stock or demand data from a photograph.
-Return STRICT JSON ONLY: {"items":[{"slot":"..","silhouette":"..","colour":"..","score":78,"reason":"..","excludeReason":""}, ...]} with exactly ${items.length} objects in image order.` });
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 90000);
-  let r;
-  try {
-    r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, max_tokens: 3500, temperature: 0, messages: [{ role: 'user', content }] }),
-      signal: ctrl.signal
-    });
-  } finally { clearTimeout(timer); }
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
-  const parsed = extractJson((j.content || []).map(c => c.text || '').join(''));
-  const arr = parsed && Array.isArray(parsed.items) ? parsed.items : [];
-  return items.map((it, i) => {
-    const o = arr[i] || {};
-    return { id: it.id, slot: String(o.slot || 'No match').trim(), silhouette: String(o.silhouette || '').trim().slice(0, 80),
-      colour: String(o.colour || '').trim().slice(0, 40), score: Math.max(0, Math.min(100, parseInt(o.score) || 0)),
-      reason: String(o.reason || '').trim().slice(0, 180), excludeReason: String(o.excludeReason || '').trim().slice(0, 120) };
-  });
-}
-
 // ── Invoice ingest: read a supplier bill → already-ordered line items ────
 // The founder uploads the vendor's invoice (photo, PDF or Excel) for stock
 // that is ALREADY ordered / on the way. We read it and return line items so
@@ -1025,6 +979,7 @@ function buildPlan(cands, settings) {
     // to 1. In 'designs' mode it's exactly what the founder typed.
     const catDesigns = (cfg.sizeMode === 'designs') ? Math.max(0, cfg.designs || 0) : Math.round(catUnits / SET);
 
+    const colourOnly = catKey === 'Trouser';
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
     // HIERARCHY step 1 — category BUDGET flows to the fits by fit %.
@@ -1046,14 +1001,14 @@ function buildPlan(cands, settings) {
     const hasPrint = catHasPrintTypes(catKey);
     // Trousers run a colour×fit HARD grid: fit is a hard cap too (not the soft
     // category-wide guide the tops use). Flag comes from the spec.
-    const fitHard = !!spec.fitHard;
+    const fitHard = !colourOnly && !!spec.fitHard;
 
     // Already-ordered PO members, bucketed by the SAME cell key the buy plan uses
     // ("print::fit" for uppers, bare fit for trousers). Each cell's ordered qty
     // nets its piece target; the items list renders as read-only cards below.
     const orderedByCell = {};
     orderedPool.forEach(c => {
-      const key = hasPrint ? (printKeyOf(c) + '::' + c.fit) : c.fit;
+      const key = colourOnly ? '_all' : (hasPrint ? (printKeyOf(c) + '::' + c.fit) : c.fit);
       if (!key) return;
       const o = orderedByCell[key] = orderedByCell[key] || { qty: 0, priceQty: 0, items: [] };
       const q = Math.max(0, c.orderedQty || 0);
@@ -1094,6 +1049,7 @@ function buildPlan(cands, settings) {
     let catSourceMore = []; // TROUSER detailed shopping list: [{ colour,fit,fitLabel,need,needPieces,have }]
     let catCoverage = null; // TROUSER zero-coverage nudge: colours with a % that the buy is too small to include → source 1 design each. { colours:[{colour,pct}], addDesigns }
     let catOrderSheet = null; // TROUSER common-design order sheet (staircase): { set, fits:[{key,label,slots:[{slot,colours[],pieces}], bought:[{colour,designs,pieces}], toSourceDesigns, toSourceSkus, toSourcePieces, boughtDesigns}] }
+    let catColourPlan = null; // TROUSER colour-only target / selected / shortage rows.
     let catCalc = null;     // TRANSPARENT math: how each %/level turns into a target qty
     // NESTED BALANCE: PRINT (hard) → COLOUR (hard) → FIT (adaptive) → size.
     //   1. PRINT is the first cut: the category's design count splits by print %
@@ -1135,7 +1091,7 @@ function buildPlan(cands, settings) {
       fitKeys.forEach(fk => { fitW[fk] = Math.max(0, +cfg.fits[fk] || 0); fwTot += fitW[fk]; });
       if (fitKeys.length && fwTot <= 0) fitKeys.forEach(fk => fitW[fk] = 1);
 
-      const assigned = pool.filter(c => c.fit && isIncluded(c));   // not manually excluded
+      const assigned = pool.filter(c => (colourOnly ? c.colour : c.fit) && isIncluded(c));
 
       // No colour mix configured → can't balance, keep every design.
       if (!haveMix) {
@@ -1146,7 +1102,55 @@ function buildPlan(cands, settings) {
 
       const byRatingSort = (a, b) =>
         ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
-        ((b.rating || 0) - (a.rating || 0));
+        ((b.rating || 0) - (a.rating || 0)) ||
+        String(a.designName || a.uploadedAt || a.id).localeCompare(String(b.designName || b.uploadedAt || b.id));
+
+      // TROUSERS: colour is the only allocation rule. Each candidate is one
+      // colourway photo linked to its named design. The colour percentages split
+      // the requested slots; fit, pattern and AI scoring are deliberately absent.
+      if (colourOnly) {
+        const colTarget = splitInts(catDesigns, colW);
+        const byColour = {}, colUploaded = {}, colSelected = {};
+        colKeys.forEach(ck => { byColour[ck] = []; colUploaded[ck] = 0; colSelected[ck] = 0; });
+        assigned.forEach(c => {
+          const ck = canonColour(c.colour, colKeys);
+          if (colKeys.indexOf(ck) < 0) {
+            if (c.includeOverride === true) inc.add(c.id);
+            else excludeInfo[c.id] = { colour: (c.colour && String(c.colour).trim()) || 'Unspecified', offList: true, have: 1, target: 0 };
+            return;
+          }
+          colUploaded[ck]++; byColour[ck].push(c);
+        });
+        colKeys.forEach(ck => {
+          const target = Math.max(0, colTarget[ck] || 0);
+          const list = byColour[ck].slice().sort((a, b) =>
+            ((b.includeOverride === true ? 1 : 0) - (a.includeOverride === true ? 1 : 0)) ||
+            String(a.designName || a.uploadedAt || a.id).localeCompare(String(b.designName || b.uploadedAt || b.id)));
+          let taken = 0;
+          list.forEach(c => {
+            if (c.includeOverride === true && !inc.has(c.id)) { inc.add(c.id); taken++; colSelected[ck]++; }
+          });
+          list.forEach(c => {
+            if (inc.has(c.id)) return;
+            if (taken < target) { inc.add(c.id); taken++; colSelected[ck]++; }
+            else excludeInfo[c.id] = { colour: ck, offList: false, colourCapped: true, target, have: colUploaded[ck] };
+          });
+        });
+        catColourPlan = colKeys.map(ck => {
+          const target = Math.max(0, colTarget[ck] || 0), uploaded = colUploaded[ck] || 0, selected = colSelected[ck] || 0;
+          return { key: ck, label: ck, pct: cwTot ? Math.round(colW[ck] / cwTot * 100) : 0,
+            target, uploaded, selected, shortage: Math.max(0, target - selected), held: Math.max(0, uploaded - selected) };
+        });
+        catColourShort = catColourPlan.filter(r => r.shortage > 0).map(r => ({ key:r.key, label:r.label, have:r.uploaded, want:r.target, need:r.shortage }));
+        catColourOver = catColourPlan.filter(r => r.held > 0).map(r => ({ key:r.key, label:r.label, target:r.target, selected:r.selected, over:0, held:r.held }));
+        catSourceMore = catColourShort.map(r => ({ colour:r.label, need:r.need, needPieces:r.need * SET, have:r.have }));
+        let sizeTotal = 0; Object.keys(activeSizes).forEach(sk => { sizeTotal += Math.max(0, +activeSizes[sk] || 0); });
+        catCalc = { base: catDesigns, catUnits, set: SET, totalUploaded: assigned.length, prints: [], fits: [],
+          colours: catColourPlan.map(r => ({ key:r.key, label:r.label, pct:r.pct, target:r.target, have:r.uploaded })),
+          sizes: sizePctRows.map(s => ({ key:s.key, label:s.label, pct:sizeTotal ? Math.round(Math.max(0, +activeSizes[s.key] || 0) / sizeTotal * 100) : 0 })) };
+        pool.forEach(c => { if (c.includeOverride === true) inc.add(c.id); });
+        return inc;
+      }
 
       // ── TROUSER MODE — COLOUR × FIT HARD GRID ──────────────────────
       // Both colour AND fit are hard caps. The design count is split across a
@@ -1595,7 +1599,10 @@ function buildPlan(cands, settings) {
     };
 
     let fits = [], printGroups = null;
-    if (hasPrint) {
+    if (colourOnly) {
+      includedIds = selectIncluded();
+      fits = [buildFit({ key: '_all', label: 'Trousers', pct: 100, share: 1 }, budget, pool, '_all')];
+    } else if (hasPrint) {
       // Step 1 — category budget → print-type %.
       const printRows = pctRows(cfg.printTypes, k => (PRINT_BY_KEY[k] || { label: k }).label);
       const printBudget = splitInts(budget, cfg.printTypes);
@@ -1633,7 +1640,7 @@ function buildPlan(cands, settings) {
     // Designs the AI couldn't assign a fit to — shown at the end so the founder
     // can still tag them. Kept in flat `fits` (export sees it) and rendered
     // outside the print groups for uppers.
-    const noFit = pool.filter(c => !c.fit);
+    const noFit = colourOnly ? [] : pool.filter(c => !c.fit);
     let unassigned = null;
     if (noFit.length) {
       unassigned = { key: '_unassigned', label: 'Fit not detected', pct: 0, share: 0, budget: 0, estUnits: 0, photoCount: noFit.length,
@@ -1672,6 +1679,7 @@ function buildPlan(cands, settings) {
       sourceMore: (enabled ? catSourceMore : []),
       coverage: (enabled ? catCoverage : null),
       orderSheet: (enabled ? catOrderSheet : null),
+      colourOnly, colourPlan: (enabled ? catColourPlan : null),
       fitHard,
       calc: (enabled ? catCalc : null),
       fits, printGroups, unassigned,
@@ -1692,72 +1700,17 @@ router.get('/api/casuals/spec', (req, res) => {
   res.json({ success: true, categories: CASUALS_SPEC });
 });
 
-// Generate the assortment itself for the simplified workflow. This is a
-// strategic planning pass, separate from the later visual catalogue matching.
-router.post('/api/casuals/simple-plan', async (req, res) => {
-  try {
-    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI planning is not enabled. Set ANTHROPIC_API_KEY in Railway.' });
-    const b = req.body || {};
-    const gender = String(b.gender || '').trim();
-    const category = String(b.category || '').trim();
-    const styleTarget = Math.max(1, Math.min(30, parseInt(b.styleTarget) || 0));
-    const budget = Math.max(0, parseInt(b.budget) || 0);
-    const launchDate = String(b.launchDate || '').trim() || 'next available launch';
-    if (!gender || !category || !styleTarget || !budget) return res.status(400).json({ success: false, error: 'Gender, category, style count and budget are required.' });
-    const prompt = `You are the senior merchandise planner for SANKI, an Indian premium-casual fashion brand that buys ready-stock, white-label garments from specialist Chinese vendors. Create a disciplined MICRO-BUY assortment plan.
-
-Gender: ${gender}
-Category: ${category}
-Total distinct styles required: ${styleTarget}
-Maximum total buying budget: INR ${budget} (validation ceiling only; do not change the assortment or style counts because of it)
-Target launch date: ${launchDate}
-
-Rules:
-- Recommend gender-specific silhouettes, never resized opposite-gender garments.
-- Keep the assortment independent of budget. Prices are not known yet; budget is checked later after landed costs are entered.
-- Focus the assortment: commercially strong core pieces first, controlled fashion second, at most one experimental direction.
-- Use specific product/silhouette names a visual model can match from vendor photographs.
-- The sum of every "styles" value MUST equal exactly ${styleTarget}.
-- Do not invent sales figures, vendor prices, market shares or claim live web research.
-- "role" must be one of Core, Fashion, Experiment.
-- "reason" must be max 18 words and explain the commercial job of that slot.
-- "colourDirection" must be 1-3 practical colour families, max 8 words.
-
-Return STRICT JSON ONLY:
-{"summary":"max 24 words","mix":[{"name":"specific silhouette","styles":2,"role":"Core","reason":"...","colourDirection":"..."}]}`;
-    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 90000);
-    let r;
-    try {
-      r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
-        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 1800, temperature: 0, messages: [{ role: 'user', content: prompt }] }), signal: ctrl.signal });
-    } finally { clearTimeout(timer); }
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
-    const parsed = extractJson((j.content || []).map(c => c.text || '').join('')) || {};
-    let mix = Array.isArray(parsed.mix) ? parsed.mix.map(x => ({ name: String(x.name || '').trim().slice(0, 80),
-      styles: Math.max(1, parseInt(x.styles) || 1), role: ['Core','Fashion','Experiment'].includes(x.role) ? x.role : 'Fashion',
-      reason: String(x.reason || '').trim().slice(0, 180), colourDirection: String(x.colourDirection || '').trim().slice(0, 100) })).filter(x => x.name) : [];
-    if (!mix.length) throw new Error('AI returned no assortment slots');
-    let total = mix.reduce((n, x) => n + x.styles, 0);
-    while (total > styleTarget) { const x = mix.slice().reverse().find(y => y.styles > 1); if (x) x.styles--; else mix.pop(); total = mix.reduce((n, y) => n + y.styles, 0); }
-    if (total < styleTarget) mix[0].styles += styleTarget - total;
-    res.json({ success: true, summary: String(parsed.summary || '').trim().slice(0, 240), mix,
-      basis: { gender, category, styleTarget, budget, launchDate, liveWebData: false } });
-  } catch (err) {
-    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'AI planning timed out. Try again.' });
-    res.status(502).json({ success: false, error: 'AI planning failed: ' + (err.message || 'unknown') });
-  }
-});
-
 router.get('/api/casuals/settings', (req, res) => {
-  res.json({ success: true, settings: settingsWithDefaults(loadStore()) });
+  const s = loadStore();
+  const settings = settingsForActiveBatch(s, true);
+  saveStore(s);
+  res.json({ success: true, settings });
 });
 
 router.post('/api/casuals/settings', (req, res) => {
   const s = loadStore();
   const b = req.body || {};
-  const cur = settingsWithDefaults(s);
+  const cur = settingsForActiveBatch(s, true);
   // Store a normalised, complete settings blob (simplest + safest).
   const next = { budgetMode: 'perCategory', categories: {} };
   CAT_KEYS.forEach(k => {
@@ -1788,9 +1741,11 @@ router.post('/api/casuals/settings', (req, res) => {
       extraColours: Array.isArray(inc.extraColours) ? inc.extraColours.filter(x => x && x.key) : c.extraColours
     };
   });
-  s.settings = next;
+  s.settings = next; // template for the next newly-created batch
+  const activeBatch = s.batches.find(x => x.id === s.activeBatch);
+  if (activeBatch) activeBatch.planSettings = JSON.parse(JSON.stringify(next));
   saveStore(s);
-  res.json({ success: true, settings: settingsWithDefaults(s) });
+  res.json({ success: true, settings: settingsForActiveBatch(s) });
 });
 
 router.get('/api/casuals/candidates', (req, res) => {
@@ -1951,19 +1906,34 @@ router.delete('/api/casuals/candidate/:id', (req, res) => {
     batches: batchList(s), activeBatch: s.activeBatch });
 });
 
-// Manual include / exclude override for one design. body.include:
-//   true  → force into the PO, false → force out, null → back to AI's rating gate.
+// Manual include / exclude override for one colourway. In the colour-only
+// Trouser plan, including a held colourway swaps out one automatically selected
+// colourway of the same colour so the requested colour quota stays intact.
 router.post('/api/casuals/candidate/:id/include', (req, res) => {
   const s = loadStore();
   const c = s.candidates.find(x => x.id === req.params.id);
   if (!c) return res.status(404).json({ success: false, error: 'Not found' });
   const v = req.body ? req.body.include : undefined;
-  if (v === true) c.includeOverride = true;
-  else if (v === false) c.includeOverride = false;
-  else delete c.includeOverride; // null/undefined → clear, fall back to rating
-  saveStore(s);
-  const settings = settingsWithDefaults(s);
+  const settings = settingsForActiveBatch(s);
   const active = activeCands(s);
+  if (v === true) {
+    if (c.category === 'Trouser' && c.colour) {
+      const before = buildPlan(active, settings).categories.find(x => x.category === 'Trouser');
+      const selected = before && before.fits && before.fits[0]
+        ? before.fits[0].designs.filter(x => x.id !== c.id && x.included && x.colour === c.colour)
+        : [];
+      const targetRow = before && (before.colourPlan || []).find(x => x.label === c.colour);
+      if (targetRow && selected.length >= targetRow.target) {
+        const victimPublic = selected.slice().reverse().find(x => x.includeOverride !== true);
+        const victim = victimPublic && s.candidates.find(x => x.id === victimPublic.id);
+        if (victim) victim.includeOverride = false;
+      }
+    }
+    c.includeOverride = true;
+  }
+  else if (v === false) c.includeOverride = false;
+  else delete c.includeOverride;
+  saveStore(s);
   markDuplicates(active);
   res.json({ success: true, analysed: active.some(x => x.category), settings,
     categories: categoryCounts(active), batches: batchList(s), activeBatch: s.activeBatch,
@@ -2009,7 +1979,7 @@ router.post('/api/casuals/candidate/:id/tag', (req, res) => {
     else if (spec.printTypes.some(p => p.key === b.print)) { c.printType = b.print; c.printOverride = true; }
   }
   saveStore(s);
-  const settings = settingsWithDefaults(s);
+  const settings = settingsForActiveBatch(s);
   const active = activeCands(s);
   markDuplicates(active);
   res.json({ success: true, settings, categories: categoryCounts(active),
@@ -2071,61 +2041,12 @@ router.post('/api/casuals/analyze', (req, res) => {
       classified++;
     });
     saveStore(s);
-    const settings = settingsWithDefaults(s);
+    const settings = settingsForActiveBatch(s);
     const active = activeCands(s);
     res.json({ success: true, classified, dupes, mode: 'local', category: category || null, settings, categories: categoryCounts(active),
       batches: batchList(s), activeBatch: s.activeBatch, ...buildPlan(active, settings) });
   } catch (err) {
     res.status(500).json({ success: false, error: 'Could not organise the photos: ' + (err.message || 'unknown') });
-  }
-});
-
-// Match the current batch to the named assortment approved in the simplified
-// workflow. Returns both winners and rejected alternatives with reasons, so the
-// recommendation is inspectable rather than a silent first-N shortlist.
-router.post('/api/casuals/simple-recommend', async (req, res) => {
-  try {
-    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI selection is not enabled. Set ANTHROPIC_API_KEY in Railway.' });
-    const plan = req.body && req.body.plan;
-    if (!plan || !Array.isArray(plan.mix) || !plan.mix.length) return res.status(400).json({ success: false, error: 'The approved assortment plan is missing.' });
-    const s = loadStore();
-    const wantedCat = String(plan.category || '');
-    const all = activeCands(s).filter(c => !c.dupeOf && !c.ordered && (!wantedCat || c.category === wantedCat));
-    if (!all.length) return res.status(400).json({ success: false, error: 'No non-duplicate products match this category.' });
-
-    // Rank the strongest broad candidates first, but keep a generous ceiling so
-    // specific approved silhouettes are not crowded out by generic high ratings.
-    const ceiling = 80;
-    const pool = all.slice().sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, ceiling);
-    const scored = [];
-    for (let i = 0; i < pool.length; i += VISION_BATCH) {
-      const slice = pool.slice(i, i + VISION_BATCH);
-      const items = [];
-      slice.forEach(c => { try { items.push({ id: c.id, buffer: fs.readFileSync(path.join(CAND_DIR, c.file)), mediaType: mediaTypeForFile(c.file) }); } catch {} });
-      if (items.length) scored.push(...await scoreSimpleBatch(items, plan));
-    }
-    const slotMap = {};
-    plan.mix.forEach(x => { slotMap[String(x.name || '').trim().toLowerCase()] = { name: String(x.name || '').trim(), need: Math.max(1, parseInt(x.styles) || 1) }; });
-    const byId = new Map(pool.map(c => [c.id, c]));
-    const used = new Set(); const selected = [];
-    Object.values(slotMap).forEach(slot => {
-      scored.filter(x => String(x.slot || '').trim().toLowerCase() === slot.name.toLowerCase() && x.score >= 65 && !used.has(x.id))
-        .sort((a, b) => b.score - a.score).slice(0, slot.need).forEach(x => { used.add(x.id); selected.push({ ...publicCandidate(byId.get(x.id)), ...x, slot: slot.name }); });
-    });
-    const excluded = scored.filter(x => !used.has(x.id)).sort((a, b) => b.score - a.score).map(x => {
-      const c = byId.get(x.id); const recognised = slotMap[String(x.slot || '').trim().toLowerCase()];
-      let why = x.excludeReason;
-      if (!why && recognised) why = 'Lower score than selected alternative';
-      if (!why) why = x.slot === 'No match' ? 'Outside approved assortment' : 'Does not fill an open slot';
-      return { ...publicCandidate(c), ...x, excludeReason: why };
-    });
-    const missing = Object.values(slotMap).map(slot => ({ slot: slot.name, required: slot.need,
-      selected: selected.filter(x => x.slot === slot.name).length })).filter(x => x.selected < x.required);
-    res.json({ success: true, evaluated: scored.length, eligibleBeforeLimit: all.length, ceiling,
-      selected, excluded, missing, basis: { threshold: 65, dimensions: { slotMatch: 40, brandFit: 20, marketRelevance: 15, versatility: 15, visibleFinish: 10 } } });
-  } catch (err) {
-    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'AI selection timed out. Try again.' });
-    res.status(502).json({ success: false, error: 'AI selection failed: ' + (err.message || 'unknown') });
   }
 });
 
@@ -2160,7 +2081,7 @@ router.post('/api/casuals/invoice/parse', async (req, res) => {
     });
     const items = await scoreInvoice(content);
     // Fit options per category (spec + any custom fits) for the review dropdowns.
-    const merged = settingsWithDefaults(loadStore());
+    const merged = settingsForActiveBatch(loadStore());
     const fits = {};
     CAT_KEYS.forEach(k => {
       const cfg = merged.categories[k];
@@ -2184,7 +2105,7 @@ router.post('/api/casuals/invoice/parse', async (req, res) => {
 // to render the review table, but there's no AI parse step. Mirrors exactly the
 // {fits, prints, cats} the parse endpoint returns.
 router.get('/api/casuals/invoice/meta', (req, res) => {
-  const merged = settingsWithDefaults(loadStore());
+  const merged = settingsForActiveBatch(loadStore());
   const fits = {};
   CAT_KEYS.forEach(k => {
     const cfg = merged.categories[k];
@@ -2270,7 +2191,7 @@ router.post('/api/casuals/invoice/apply', async (req, res) => {
   if (res.headersSent) return;
   if (!r.ok) return res.status(400).json({ success: false, error: r.error });
   const s = loadStore();
-  const merged = settingsWithDefaults(s);
+  const merged = settingsForActiveBatch(s);
   // The PO lands in whatever batch is being planned right now (creating one if the
   // store somehow has none) — "upload a PO into THIS batch".
   let target = s.batches.find(b => b.id === s.activeBatch) || newBatch(s);
@@ -2329,7 +2250,7 @@ router.post('/api/casuals/invoice/apply', async (req, res) => {
     applied++;
   });
   saveStore(s);
-  const settings = settingsWithDefaults(s);
+  const settings = settingsForActiveBatch(s);
   const active = activeCands(s);
   markDuplicates(active);
   res.json({ success: true, applied, skipped, analysed: active.some(c => c.category),
@@ -2364,7 +2285,7 @@ router.delete('/api/casuals/imported-po/:poId', (req, res) => {
   const doomedIds = new Set(doomed.map(c => c.id));
   s.candidates = s.candidates.filter(c => !doomedIds.has(c.id));
   saveStore(s);
-  const settings = settingsWithDefaults(s);
+  const settings = settingsForActiveBatch(s);
   const active = activeCands(s);
   markDuplicates(active);
   res.json({ success: true, removed: doomed.length, poId, analysed: active.some(c => c.category),
@@ -2374,7 +2295,7 @@ router.delete('/api/casuals/imported-po/:poId', (req, res) => {
 
 router.get('/api/casuals/plan', (req, res) => {
   const s = loadStore();
-  const settings = settingsWithDefaults(s);
+  const settings = settingsForActiveBatch(s);
   const active = activeCands(s);
   markDuplicates(active);
   const analysed = active.some(c => c.category);

@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const { router, buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes } = require('../modules/casuals');
 
-test('Shirts and T-shirts support the same design-first target as Trousers', () => {
+test('all Casual categories support a design-first target while only uppers use fit', () => {
   const settings = settingsWithDefaults({ settings: {} });
   for (const key of ['Trouser', 'Shirt', 'T-shirt']) {
     settings.categories[key].sizeMode = 'designs';
@@ -19,7 +19,8 @@ test('Shirts and T-shirts support the same design-first target as Trousers', () 
     assert.equal(category.estUnits, 10 * category.set);
     assert.ok(category.calc, `${key} exposes transparent target calculations`);
     assert.ok(category.calc.colours.length, `${key} exposes colour coverage`);
-    assert.ok(category.calc.fits.length, `${key} exposes fit coverage`);
+    if (key === 'Trouser') assert.equal(category.calc.fits.length, 0, 'Trouser has no fit allocation');
+    else assert.ok(category.calc.fits.length, `${key} exposes fit coverage`);
   }
   for (const key of ['Shirt', 'T-shirt']) {
     const category = plan.categories.find(c => c.category === key);
@@ -28,10 +29,10 @@ test('Shirts and T-shirts support the same design-first target as Trousers', () 
   }
 });
 
-test('legacy Casual UI presents shared upper and trouser workflow', () => {
+test('detailed Casual UI presents the design-first workflow', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
   assert.match(html, /Available for Trousers, Shirts and T-shirts/);
-  assert.match(html, /same design-first setup/);
+  assert.match(html, /upload <b>all of its colour photos together<\/b>/);
   assert.match(html, /SHIRT \/ T-SHIRT OPERATIONAL PARITY/);
   assert.match(html, /<b>Coverage table<\/b>/);
   assert.match(html, /<b>Design order sheet<\/b>/);
@@ -76,6 +77,52 @@ test('Fresh Procurement organises pile uploads without a paid AI provider', () =
   assert.match(source, /typeof b\.category === 'string'/);
   assert.doesNotMatch(source, /AI segregation is not enabled/);
   assert.doesNotMatch(html, /On <b>Segregate<\/b>/);
+});
+
+test('Trouser planning selects named colourways by colour only', () => {
+  const settings = settingsWithDefaults({ settings: {} });
+  settings.categories.Trouser.enabled = true;
+  settings.categories.Shirt.enabled = false;
+  settings.categories['T-shirt'].enabled = false;
+  settings.categories.Trouser.sizeMode = 'designs';
+  settings.categories.Trouser.designs = 4;
+  settings.categories.Trouser.sizeSystem = 'numeric';
+  settings.categories.Trouser.sizes = { 26:1, 28:1, 30:1, 32:1, 34:1, 36:1, 38:0, 40:0 };
+  settings.categories.Trouser.colours = { Black:50, Beige:50 };
+
+  const candidates = [
+    { id:'a', category:'Trouser', colour:'Black', designName:'Design A', uploadedAt:'2026-01-01', dupeOf:null },
+    { id:'b', category:'Trouser', colour:'Black', designName:'Design B', uploadedAt:'2026-01-02', dupeOf:null },
+    { id:'c', category:'Trouser', colour:'Black', designName:'Design C', uploadedAt:'2026-01-03', dupeOf:null },
+    { id:'d', category:'Trouser', colour:'Black', designName:'Design D', uploadedAt:'2026-01-04', dupeOf:null },
+    { id:'e', category:'Trouser', colour:'Beige', designName:'Design E', uploadedAt:'2026-01-05', dupeOf:null }
+  ];
+  const trouser = buildPlan(candidates, settings).categories.find(c => c.category === 'Trouser');
+  assert.equal(trouser.colourOnly, true);
+  assert.equal(trouser.set, 6);
+  assert.equal(trouser.estUnits, 24);
+  assert.deepEqual(trouser.colourPlan.map(r => [r.label,r.target,r.selected,r.shortage,r.held]), [
+    ['Black',2,2,0,2], ['Beige',2,1,1,0]
+  ]);
+  assert.deepEqual(trouser.fits[0].designs.filter(d => d.included).map(d => d.designName), ['Design A','Design B','Design E']);
+  assert.ok(trouser.fits[0].designs.every(d => d.fit == null));
+});
+
+test('Trouser UI omits fit from setup, review and exported rows', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  assert.match(html, /isTrouser \? \['sizes','colours'\]/);
+  assert.match(html, /cat\.colourOnly \? '' : '<label class="czsegl">Fit/);
+  assert.match(html, /fit:cat\.colourOnly\?'':f\.label/);
+  assert.match(html, /Trouser plan uses <b>colour only<\/b>/);
+});
+
+test('Casual planning settings are snapshotted per batch', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  assert.match(source, /planSettings: JSON\.parse\(JSON\.stringify\(settingsWithDefaults\(s\)\)\)/);
+  assert.match(source, /function settingsForActiveBatch\(s, persistLegacy\)/);
+  assert.match(source, /activeBatch\.planSettings = JSON\.parse\(JSON\.stringify\(next\)\)/);
+  assert.match(html, /if\(d\.success && d\.settings\) czSettings = d\.settings/);
 });
 
 test('photo splitter sanitizes crop boxes and removes near duplicates', () => {
