@@ -9,7 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth } = require('../modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -2013,6 +2013,14 @@ test('later reconciliation periods use the finalized cutoff and do not re-reconc
   assert.equal(view.continuityCutoff,'2026-09-03');assert.equal(view.effectiveFrom,'2026-09-04');
   assert.equal(view.rows.find(x=>x.id==='bank-0').status,'already_reconciled');
   assert.equal(view.rows.find(x=>x.id==='bank-1').status,'missing_in_app');
+});
+
+test('consecutive statement uploads merge into one workspace without duplicate overlap or lost decisions',()=>{
+  const account='Prashant Axis 3645',overlap={date:'2026-09-03',description:'Shared overlap',reference:'REF-3',debit:100,credit:0,balance:900},store={bankReconciliationApprovals:{OLD:{id:'OLD',draftId:'BRD-LATE',status:'pending'}},bankReconciliationDrafts:{
+    'BRD-EARLY':{id:'BRD-EARLY',nature:'SANKI',account,createdAt:'2026-09-03T10:00:00Z',originalName:'early.pdf',fileHash:'early',transactions:[{date:'2026-08-22',description:'First',reference:'REF-1',debit:50,credit:0,balance:950},overlap],resolutions:{'bank-0':{action:'exclude',reason:'Personal'},'bank-1':{action:'accept_match',appId:'EX-3'}},summary:{from:'2026-08-22',to:'2026-09-03',openingBalance:1000,closingBalance:900,validated:true}},
+    'BRD-LATE':{id:'BRD-LATE',nature:'SANKI',account,createdAt:'2026-09-06T10:00:00Z',originalName:'late.pdf',fileHash:'late',transactions:[overlap,{date:'2026-09-04',description:'Next',reference:'REF-4',debit:25,credit:0,balance:875}],resolutions:{'bank-1':{action:'timing_difference',reason:'Recorded next day'}},summary:{from:'2026-09-03',to:'2026-09-06',openingBalance:900,closingBalance:875,validated:true}}
+  }};
+  const merged=mergeActiveBankReconciliationDrafts(store,account,'SANKI');assert.equal(merged.id,'BRD-EARLY');assert.equal(Object.keys(store.bankReconciliationDrafts).length,1);assert.equal(merged.summary.from,'2026-08-22');assert.equal(merged.summary.to,'2026-09-06');assert.equal(merged.transactions.length,3,'overlapping bank row is stored once');assert.equal(merged.resolutions['bank-0'].reason,'Personal');assert.equal(merged.resolutions['bank-1'].appId,'EX-3');assert.equal(merged.resolutions['bank-2'].reason,'Recorded next day');assert.equal(merged.sourceStatements.length,2);assert.equal(store.bankReconciliationApprovals.OLD,undefined);
 });
 
 test('Prashant requests Owner approval before final bank reconciliation is posted',()=>{
