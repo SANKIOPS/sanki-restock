@@ -2715,6 +2715,16 @@ const TELEGRAM_EMPLOYEE_ACCOUNTS={
   Shivam:['Shivam 4807'],
   Pradeep:['Pradeep 8606']
 };
+const COMPANY_FUNDS_EMPLOYEE_ACCOUNTS=[{employee:'Prashant',account:'Prashant Axis 3645',nature:'SANKI'}];
+function telegramCompanyFundsBalance(s,nature,account,asOf){
+  const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d),openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{});let total=num(openingMap[account]);
+  (s.adjustments||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
+  (s.receipts||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
+  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
+  Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
+  (s.bankTruthMovements||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.credit)-num(x.debit));
+  return roundMoney(total);
+}
 function telegramEmployeeSettlements(expenses,asOf){
   const totals={};
   expenses.filter(e=>e.status!=='rejected'&&e.approvedAt&&normalizedNature(e.nature)!=='PERSONAL'&&String(e.date||'').slice(0,10)<=asOf).forEach(e=>{
@@ -2740,8 +2750,9 @@ function telegramAccountingSummary(from,to,store){
   const employeeFunding=(s.transfers||[]).filter(x=>!x.accountingExcluded&&inside(x.date)&&employeeAccountNames.has(String(x.toAccount||'').toLowerCase())&&!employeeAccountNames.has(String(x.fromAccount||'').toLowerCase())&&!/salary[_\s-]*advance/i.test(String(x.classification||'')+' '+String(x.note||''))).map(x=>({id:x.id,from:x.fromAccount||'Unspecified',to:x.toAccount||'Unspecified',amount:roundMoney(x.amount),date:x.date}));
   const pending=recorded.filter(e=>['pending','approved','partially_paid'].includes(String(e.status||''))).map(e=>({id:e.id,vendor:e.vendor||e.particulars||e.id,amount:roundMoney(Math.max(0,num(e.amount)-num(e.paidAmount))),status:e.status,nature:normalizedNature(e.nature)})).filter(x=>x.amount>0);
   const settlements=telegramEmployeeSettlements(expenses,end);
+  const employeeFunds=COMPANY_FUNDS_EMPLOYEE_ACCOUNTS.map(x=>Object.assign({},x,{balance:telegramCompanyFundsBalance(s,x.nature,x.account,end)}));
   const sum=list=>roundMoney(list.reduce((n,x)=>n+num(x.amount),0));
-  return{from:start,to:end,recorded:{total:sum(recorded),business:sum(recorded.filter(e=>normalizedNature(e.nature)!=='PERSONAL')),personal:sum(recorded.filter(e=>normalizedNature(e.nature)==='PERSONAL')),count:recorded.length},payments,totalPayments:sum(payments),employeeFunding,totalEmployeeFunding:sum(employeeFunding),reimbursements,totalReimbursements:sum(reimbursements),pending,approvedPending:pending.filter(x=>x.status!=='pending'),awaitingApproval:pending.filter(x=>x.status==='pending'),settlements};
+  return{from:start,to:end,recorded:{total:sum(recorded),business:sum(recorded.filter(e=>normalizedNature(e.nature)!=='PERSONAL')),personal:sum(recorded.filter(e=>normalizedNature(e.nature)==='PERSONAL')),count:recorded.length},payments,totalPayments:sum(payments),employeeFunding,totalEmployeeFunding:sum(employeeFunding),reimbursements,totalReimbursements:sum(reimbursements),pending,approvedPending:pending.filter(x=>x.status!=='pending'),awaitingApproval:pending.filter(x=>x.status==='pending'),settlements,employeeFunds};
 }
 router.get('/api/expenses/balance-sheet',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),asOf=String(req.query.asOf||new Date().toISOString().slice(0,10)).slice(0,10),selected=req.query.nature?normalizedNature(req.query.nature):'',natures=selected?[selected]:approvalNatures(req);
