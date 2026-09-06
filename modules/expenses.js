@@ -2749,6 +2749,21 @@ router.post('/api/expenses/balances', (req, res) => {
   const b = req.body || {};
   const nature = normalizedNature(b.nature);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
+  let reconciledClosingResult=null;
+  if(b.setReconciledClosing&&b.setReconciledClosing.account){
+    if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can set a reconciled closing balance.'});
+    const account=allowedCompanyAccount(s,nature,b.setReconciledClosing.account),target=Number(b.setReconciledClosing.target),reason=String(b.setReconciledClosing.reason||'').trim();
+    if(nature!=='SANKI'||account!=='Prashant Axis 3645')return res.status(400).json({success:false,error:'Reconciled closing corrections are enabled only for Prashant Axis 3645.'});
+    if(!Number.isFinite(target))return res.status(400).json({success:false,error:'Enter a valid corrected balance.'});
+    if(!reason)return res.status(400).json({success:false,error:'Reason is required for the reconciliation audit trail.'});
+    const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)],reconciliation=book&&book.lastReconciliation;
+    if(!reconciliation)return res.status(409).json({success:false,error:'Finalize a reconciliation before correcting its closing balance.'});
+    const effectiveDate=String(reconciliation.through||new Date().toISOString().slice(0,10)),before=recordedAccountBalance(s,nature,account,''),difference=roundMoney(target-before);
+    if(Math.abs(difference)>=.01){s.adjSeq=num(s.adjSeq)+1;s.adjustments.push({id:'ADJ-'+s.adjSeq,account,nature,date:effectiveDate,amount:difference,note:reason+' (Owner-adjusted after reconciliation)',reconciledClosingCorrection:true,reconciliationId:reconciliation.draftId||'',calculatedBalance:before,targetBalance:target,createdBy:req.user.username,createdAt:new Date().toISOString()});}
+    reconciliation.companyAdjustedClosingBalance=target;reconciliation.calculatedCompanyBalance=before;reconciliation.closingBalanceAdjustment=difference;reconciliation.closingBalanceAdjustmentReason=reason;reconciliation.closingBalanceAdjustedBy=req.user.username;reconciliation.closingBalanceAdjustedAt=new Date().toISOString();
+    const latest=(book.imports||[]).at(-1);if(latest){latest.companyAdjustedClosingBalance=target;latest.calculatedCompanyBalance=before;latest.closingBalanceAdjustment=difference;latest.closingBalanceAdjustmentReason=reason;latest.closingBalanceAdjustedBy=req.user.username;latest.closingBalanceAdjustedAt=reconciliation.closingBalanceAdjustedAt;}
+    audit(s,req,'RECONCILED_CLOSING_BALANCE_CHANGED','account',account,{nature,account,reconciliationId:reconciliation.draftId||'',before:{calculatedBalance:before},after:{targetBalance:target,adjustment:difference,effectiveDate},note:reason});reconciledClosingResult={target,adjustment:difference,before,effectiveDate};
+  }
   if (b.setOpening && b.setOpening.account) {
     if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can set an opening balance.' });
     const openingAccount = allowedCompanyAccount(s, nature, b.setOpening.account);
@@ -2786,7 +2801,7 @@ router.post('/api/expenses/balances', (req, res) => {
     audit(s,req,'ADJUSTMENT_RECORDED','account',adjustmentAccount,{nature,account:adjustmentAccount,after:s.adjustments.at(-1),note});
   }
   saveStore(s);
-  res.json({ success: true });
+  res.json(Object.assign({ success: true },reconciledClosingResult||{}));
 });
 
 function usesCompanyAdjustedBankTruth(nature,account){return normalizedNature(nature)==='SANKI'&&String(account||'').trim().toLowerCase()==='prashant axis 3645';}
