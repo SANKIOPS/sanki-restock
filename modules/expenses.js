@@ -2725,7 +2725,9 @@ function telegramCompanyFundsBalance(s,nature,account,asOf){
   (s.receipts||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
-  (s.bankTruthMovements||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.credit)-num(x.debit));
+  // Excluded reconciliation rows remain authoritative for the real bank
+  // balance even though they are excluded from the company's P&L/books.
+  (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.credit)-num(x.debit));
   return roundMoney(total);
 }
 function telegramEmployeeSettlements(expenses,asOf){
