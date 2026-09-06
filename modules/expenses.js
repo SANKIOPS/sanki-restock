@@ -53,14 +53,7 @@ const ACCOUNTING_BUILD = '2026-08-26-bank-charge-ledgers-v2';const BANK_RECONCIL
 const PROOF_DIR = path.join(DATA_DIR, 'expense-proofs');
 try { fs.mkdirSync(PROOF_DIR, { recursive: true }); } catch { /* exists */ }
 const proofUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, PROOF_DIR),
-    filename: (req, file, cb) => {
-      const ext = (path.extname(file.originalname || '') || '.jpg').toLowerCase().replace(/[^.a-z0-9]/g, '');
-      const privacy = normalizedNature(req.body && req.body.nature) === 'PERSONAL' ? 'personal-' : '';
-      cb(null, privacy + Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg'));
-    }
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 30 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const mime=String(file.mimetype||'').toLowerCase(),ext=path.extname(file.originalname||'').toLowerCase();
@@ -1142,7 +1135,12 @@ router.use((req,res,next)=>{
 // ── Proof image upload / serve ───────────────────────────────────
 router.post('/api/expenses/upload', proofUpload.single('photo'), (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, error: 'No image received.' });
-  res.json({ success: true, url: '/api/expenses/photo/' + req.file.filename });
+  try{
+    fs.mkdirSync(PROOF_DIR,{recursive:true});
+    const ext=(path.extname(req.file.originalname||'')||'.jpg').toLowerCase().replace(/[^.a-z0-9]/g,'')||'.jpg',privacy=normalizedNature(req.body&&req.body.nature)==='PERSONAL'?'personal-':'',filename=privacy+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,finalPath=path.join(PROOF_DIR,filename),temporary=finalPath+'.tmp-'+process.pid;
+    fs.writeFileSync(temporary,req.file.buffer);fs.renameSync(temporary,finalPath);
+    res.json({success:true,url:'/api/expenses/photo/'+filename});
+  }catch(error){console.error('[expenses] Proof storage failed:',error);res.status(500).json({success:false,error:'The image reached the server but could not be stored. Please retry once.'});}
 });
 router.get('/api/expenses/photo/:file', (req, res) => {
   const name = path.basename(String(req.params.file || ''));
