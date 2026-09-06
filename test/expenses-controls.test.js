@@ -1164,7 +1164,7 @@ test('reviewed bank transactions can finalize while the closing balance remains 
   }finally{fs.writeFileSync(expenseFile,original);}
 });
 
-test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: finalize transactions only/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
+test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: submit transactions for finalization/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
 
 test('excluded statement rows remain bank truth without becoming expenses or P&L',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draft={id:'BRD-BANK-TRUTH',nature:'SANKI',account,transactions:[{date:'2098-04-01',description:'Personal purchase',reference:'PSNL-100',debit:100,credit:0},{date:'2098-04-01',description:'Personal receipt',reference:'PSNL-40',debit:0,credit:40}],resolutions:{'bank-0':{action:'exclude',reason:'PSNL'},'bank-1':{action:'exclude',reason:'PSNL'}}};
@@ -2013,6 +2013,17 @@ test('later reconciliation periods use the finalized cutoff and do not re-reconc
   assert.equal(view.continuityCutoff,'2026-09-03');assert.equal(view.effectiveFrom,'2026-09-04');
   assert.equal(view.rows.find(x=>x.id==='bank-0').status,'already_reconciled');
   assert.equal(view.rows.find(x=>x.id==='bank-1').status,'missing_in_app');
+});
+
+test('Prashant requests Owner approval before final bank reconciliation is posted',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='IndusInd Bank 8181',id='BRD-OWNER-APPROVAL';stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationApprovals={};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[],summary:{from:'2099-01-01',to:'2099-01-01',openingBalance:0,closingBalance:0,totalDebits:0,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString(),createdBy:'prashant'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const approvalLayer=router.stack.find(item=>!item.route&&String(item.handle).includes('BANK_RECONCILIATION_FINALIZATION_REQUESTED'));assert.ok(approvalLayer,'Owner-approval middleware exists');
+  function runApproval(role,body,downstream){const req={method:'POST',path:'/api/expenses/bank-statements/finalize',body,headers:{'user-agent':'SANKI Test Mobile','x-forwarded-for':'203.0.113.10'},get(name){return this.headers[String(name).toLowerCase()]||'';},ip:'203.0.113.10',user:{username:role==='admin'?'prashant':role+'-user',role,roles:[role]}};let status=200,result,nextCalled=false;const res={status(code){status=code;return this;},json(value){result=value;return this;}};approvalLayer.handle(req,res,()=>{nextCalled=true;if(downstream)res.json(downstream);});return{status,body:result,nextCalled};}
+  const requested=runApproval('admin',{draftId:id});assert.equal(requested.status,202);assert.equal(requested.body.approvalPending,true);assert.equal(requested.nextCalled,false);
+  let saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok(saved.bankReconciliationDrafts[id],'requesting approval must not finalize or remove the draft');const approval=Object.values(saved.bankReconciliationApprovals).find(x=>x.draftId===id);assert.equal(approval.status,'pending');
+  const blocked=runApproval('owner',{draftId:id});assert.equal(blocked.status,409);assert.equal(blocked.body.approvalRequired,true);assert.equal(blocked.nextCalled,false);
+  const approved=runApproval('owner',{draftId:id,approveRequestId:approval.id},{success:true,reconciledThrough:'2099-01-01'});assert.equal(approved.status,200);assert.equal(approved.nextCalled,true);
+  saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok(saved.bankReconciliationDrafts[id],'the middleware leaves final posting to the protected finalize route');assert.equal(saved.bankReconciliationApprovals[approval.id].status,'approved');assert.ok(saved.auditLog.some(x=>x.action==='BANK_RECONCILIATION_FINALIZATION_APPROVED'&&x.subjectId===id));
 });
 
 test('a store repair failure cannot hide the persisted financial records', () => {
