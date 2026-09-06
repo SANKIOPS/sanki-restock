@@ -1406,6 +1406,14 @@ test('salary advance funding links one internal transfer without double-counting
   fs.writeFileSync(expenseFile,JSON.stringify(expenseBaseline));if(salaryBaseline===null)fs.unlinkSync(salaryFile);else fs.writeFileSync(salaryFile,salaryBaseline);
 });
 
+test('incoming salary-advance selector renders returned candidates without getting stuck',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const loader=html.match(/function loadSalaryAdvanceCandidates\(\)[\s\S]*?\n\s*function syncBankIncomingClassification/)[0];
+  assert.match(loader,/fmt\(a\.amount\)/);
+  assert.doesNotMatch(loader,/money\(a\.amount\)/);
+  assert.match(loader,/if\(!d\.success\)/);
+});
+
 test('discarding a temporary bank preview removes only that draft and its temporary file',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),temporaryFile=path.join(tempDir,'discard-preview.csv');
   fs.writeFileSync(temporaryFile,'temporary statement');stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-DISCARD']={id:'BRD-DISCARD',account:'Axis Bank 3448',nature:'SANKI',transactions:[],summary:{from:'2026-08-25',to:'2026-08-27'},resolutions:{'bank-0':{action:'exclude'}},temporaryFile,createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']=stored.bankStatements['Axis Bank 3448']||{transactions:{official:{id:'official'}},imports:[]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
