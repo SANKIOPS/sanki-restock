@@ -416,6 +416,13 @@ test('audit log groups each expense into a readable complete lifecycle with user
   assert.equal(reconstructed.timeline[0].action,'CREATED');assert.match(reconstructed.timeline[0].note,/reconstructed/i);assert.equal(reconstructed.timeline[0].user,'arshpreet');
 });
 
+test('All Expenses ignores stale responses after the date range changes', () => {
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/listRequestSeq=0/);
+  assert.match(html,/var requestSeq=\+\+listRequestSeq/);
+  assert.match(html,/if\(requestSeq!==listRequestSeq\)return/);
+});
+
 test('an audited payment correction removes only the selected payment and reopens the expense',()=>{
   const created=invoke('POST','/api/expenses',{role:'admin',body:{nature:'SANKI',vendor:'Payment Correction Vendor',particulars:'Keep the expense',ledger:'General Expense',amount:200,billPhoto:'/api/expenses/photo/correction-bill.jpg',paymentType:'Cash'}}).body.expense;
   invoke('POST','/api/expenses/:id/approve',{role:'admin',params:{id:created.id}});

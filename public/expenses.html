@@ -386,7 +386,7 @@
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
     var fmtBank = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null;
+    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null, listRequestSeq=0;
     function updatePaytmChargeSplit(){if(!bankReconForm||el('brKind').value!=='paytm')return;var row=bankReconRow(bankReconForm.rowId),net=Number(row&&row.bank&&row.bank.credit||0),gross=Number(el('brGross').value||0),hidden=Number(el('brHiddenCharge').value||0);el('brPaytmNet').value=net;el('brPaytmCharge').value=Math.max(0,Number((gross-net-hidden).toFixed(2)));saveBankReconForm();}
     el('brHiddenCharge').addEventListener('input',updatePaytmChargeSplit);el('brGross').addEventListener('input',updatePaytmChargeSplit);el('brPaytmCharge').addEventListener('input',saveBankReconForm);el('brChargeCategory').addEventListener('change',saveBankReconForm);
 
@@ -674,10 +674,14 @@
       loadList();
     }
     function loadList(){
+      var requestSeq=++listRequestSeq;
       var focused = focusedExpenseId;
       var sv=focused?'':el('lf_status').value,isCredit=sv==='credit';
       var q = '?nature='+encodeURIComponent(focused?'':el('lf_nature').value)+'&from='+(focused?'':el('lf_from').value)+'&to='+(focused?'':el('lf_to').value)+'&status='+(isCredit?'':sv)+'&paymentType='+(isCredit?'Credit':'')+'&missingBill='+(missingBillOnly?'true':'')+'&reference='+encodeURIComponent(focused?'':el('lf_reference').value)+'&claimant='+encodeURIComponent(focused?'':(el('lf_claimant')?el('lf_claimant').value:''))+'&payingAccount='+encodeURIComponent(focused?'':(el('lf_account')?el('lf_account').value:''))+'&type='+(focused?'':(el('lf_type')?el('lf_type').value:''))+'&limit=75'+(focused?'&id='+encodeURIComponent(focused):'');
       api('/api/expenses/list'+q).then(function(d){
+        // A filter can be changed while the initial month request is still in
+        // flight. Never let that older response overwrite the newer range.
+        if(requestSeq!==listRequestSeq)return;
         if(!d.success){ el('ltable').innerHTML='<span class="muted">No data.</span>'; return; }
         expensesById={}; d.expenses.forEach(function(e){expensesById[e.id]=e;});
         var t = d.totals;
