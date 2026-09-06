@@ -66,6 +66,7 @@ test('Fresh Procurement organises pile uploads without a paid AI provider', () =
   const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
 
   assert.match(html, />▶ Organise photos</);
+  assert.match(html, /Pile &amp; organise/);
   assert.match(html, /no paid AI/);
   assert.match(html, /czsegcatpick/);
   assert.match(html, /Nothing is guessed from the image/);
@@ -74,6 +75,7 @@ test('Fresh Procurement organises pile uploads without a paid AI provider', () =
   assert.match(source, /organisedBy = 'batch-category'/);
   assert.match(source, /typeof b\.category === 'string'/);
   assert.doesNotMatch(source, /AI segregation is not enabled/);
+  assert.doesNotMatch(html, /On <b>Segregate<\/b>/);
 });
 
 test('photo splitter sanitizes crop boxes and removes near duplicates', () => {

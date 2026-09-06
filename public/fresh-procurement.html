@@ -608,7 +608,7 @@
       <div class="panel">
         <div class="czhead">
           <h2>① The Casual Feed — upload everything together</h2>
-          <p class="sub">Trousers, shirts and tees all in one pile. On <b>Segregate</b> the app sorts every photo into its <b>category</b> and <b>fit</b> — you review &amp; fix any wrong fits/colours, then <b>build the plan</b>.</p>
+          <p class="sub">Trousers, shirts and tees can go into one batch. On <b>Organise</b>, the app uses the batch category you selected; you confirm <b>fit and colour</b>, then <b>build the plan</b>.</p>
         </div>
         <div class="czbatchbar" id="czBatchBar">
           <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to open it; drop photos &amp; plan inside the open batch</span></div>
@@ -642,7 +642,7 @@
                build each design, one photo per colourway — no AI needed, the
                order sheet's design slots fill themselves. Same plan math either way. -->
           <div class="czmodetog" style="display:flex;gap:6px;margin:0 0 10px">
-            <button type="button" class="czmodebtn on" id="czModePile">🗂 Pile &amp; segregate</button>
+            <button type="button" class="czmodebtn on" id="czModePile">🗂 Pile &amp; organise</button>
             <button type="button" class="czmodebtn" id="czModeDesign">🎨 By design</button>
           </div>
           <div id="czPileMode">
@@ -3431,7 +3431,7 @@
     if(!d || !d.categories){ return; }
     czLastPlan = d;
     el('czPlanPanel').style.display = '';
-    var summary = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per size. Colours are read from your photos.';
+    var summary = 'Total budget <b>₹'+fmtINR(d.totalBudget||0)+'</b> across the enabled categories. Budget flows Category → Fit as money; each design buys a predefined <b>size set</b> — one set per design/colour by default, editable per size. Colours come from your confirmation.';
     if(czPriced){
       var grandCost = 0;
       (d.categories||[]).forEach(function(cat){ if(!cat.enabled) return; (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){ if(c.included === false) return; grandCost += czRowCost(c, cat); }); }); });
