@@ -24,6 +24,7 @@ const XLSX = require('xlsx');
 const pdfParse = require('pdf-parse');
 const { createWorker } = require('tesseract.js');
 const tesseractEnglish = require('@tesseract.js-data/eng');
+const Jimp = require('jimp');
 
 const router = express.Router();
 
@@ -1133,14 +1134,16 @@ router.use((req,res,next)=>{
 });
 
 // ── Proof image upload / serve ───────────────────────────────────
-router.post('/api/expenses/upload', proofUpload.single('photo'), (req, res) => {
+router.post('/api/expenses/upload', proofUpload.single('photo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, error: 'No image received.' });
   try{
     fs.mkdirSync(PROOF_DIR,{recursive:true});
-    const ext=(path.extname(req.file.originalname||'')||'.jpg').toLowerCase().replace(/[^.a-z0-9]/g,'')||'.jpg',privacy=normalizedNature(req.body&&req.body.nature)==='PERSONAL'?'personal-':'',filename=privacy+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,finalPath=path.join(PROOF_DIR,filename),temporary=finalPath+'.tmp-'+process.pid;
-    fs.writeFileSync(temporary,req.file.buffer);fs.renameSync(temporary,finalPath);
+    let stored=req.file.buffer,ext=(path.extname(req.file.originalname||'')||'.jpg').toLowerCase().replace(/[^.a-z0-9]/g,'')||'.jpg';
+    try{const image=await Jimp.read(req.file.buffer),max=2000;if(image.bitmap.width>max||image.bitmap.height>max)image.scaleToFit(max,max);stored=await image.quality(82).getBufferAsync(Jimp.MIME_JPEG);ext='.jpg';}catch{/* Preserve valid formats Jimp cannot decode, such as HEIC. */}
+    const privacy=normalizedNature(req.body&&req.body.nature)==='PERSONAL'?'personal-':'',filename=privacy+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,finalPath=path.join(PROOF_DIR,filename),temporary=finalPath+'.tmp-'+process.pid;
+    fs.writeFileSync(temporary,stored);try{fs.renameSync(temporary,finalPath);}catch(renameError){try{fs.writeFileSync(finalPath,stored);fs.unlinkSync(temporary);}catch{throw renameError;}}
     res.json({success:true,url:'/api/expenses/photo/'+filename});
-  }catch(error){console.error('[expenses] Proof storage failed:',error);res.status(500).json({success:false,error:'The image reached the server but could not be stored. Please retry once.'});}
+  }catch(error){console.error('[expenses] Proof storage failed:',error);const code=String(error&&error.code||'WRITE_FAILED');res.status(500).json({success:false,error:code==='ENOSPC'?'Proof storage is full. No expense was submitted; contact the Owner to free storage.':'The image reached the server but could not be stored ('+code+'). Please retry once.'});}
 });
 router.get('/api/expenses/photo/:file', (req, res) => {
   const name = path.basename(String(req.params.file || ''));

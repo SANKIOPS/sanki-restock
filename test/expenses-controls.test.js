@@ -1981,3 +1981,11 @@ test('expense and transfer proof uploads preserve real upload errors instead of 
   assert.match(source,/fileSize: 30 \* 1024 \* 1024/);
   assert.match(source,/jpe\?g\|png\|webp\|heic\|heif/);
 });
+
+test('expense proof upload compresses phone photos and reports safe storage error codes',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  assert.match(source,/image\.scaleToFit\(max,max\)/);
+  assert.match(source,/image\.quality\(82\)\.getBufferAsync\(Jimp\.MIME_JPEG\)/);
+  assert.match(source,/Proof storage is full/);
+  assert.match(source,/could not be stored \('\+code\+'\)/);
+});
