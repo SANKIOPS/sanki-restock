@@ -21,3 +21,9 @@ test('summary date controls use India time and accept both date formats',()=>{
   assert.deepEqual(telegram.summaryRange('yesterday',new Date('2026-09-05T18:00:00Z')),{from:'2026-09-04',to:'2026-09-04',label:'Yesterday · 2026-09-04'});
   assert.equal(telegram.parseSummaryDate('05-09-2026'),'2026-09-05');assert.equal(telegram.parseSummaryDate('summary 2026-09-05'),'2026-09-05');
 });
+
+test('Prashant summary excludes every PERSONAL expense and pending item',()=>{
+  const store={openingBalances:{'Prashant Axis 3645':0},expenses:{business:{id:'EX-B',date:'2026-09-05',amount:250,nature:'SANKI',status:'pending',vendor:'Business vendor',payments:[]},personal:{id:'EX-P',date:'2026-09-05',amount:900,nature:'PERSONAL',status:'pending',vendor:'Owner private vendor',payments:[]}},transfers:[{id:'TR-PRIVATE',date:'2026-09-05',nature:'PERSONAL',fromNature:'PERSONAL',toNature:'SANKI',fromAccount:'Owner Personal 0993',toAccount:'Prashant Axis 3645',amount:700}],adjustments:[],receipts:[],bankTruthMovements:[]};
+  const out=expenses.telegramAccountingSummary('2026-09-05','2026-09-05',store,{includePersonal:false}),text=telegram.formatAccountingSummary(out,'5 September 2026');
+  assert.equal(out.recorded.total,250);assert.equal(out.recorded.personal,0);assert.equal(out.awaitingApproval.length,1);assert.equal(out.awaitingApproval[0].id,'EX-B');assert.equal(out.employeeFunding.length,0);assert.match(text,/Business only/);assert.doesNotMatch(text,/Owner private vendor|Owner Personal|Personal ₹|₹900|₹700/);
+});

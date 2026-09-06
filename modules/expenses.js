@@ -2720,11 +2720,11 @@ const TELEGRAM_EMPLOYEE_ACCOUNTS={
   Pradeep:['Pradeep 8606']
 };
 const COMPANY_FUNDS_EMPLOYEE_ACCOUNTS=[{employee:'Prashant',account:'Prashant Axis 3645',nature:'SANKI'}];
-function telegramCompanyFundsBalance(s,nature,account,asOf){
+function telegramCompanyFundsBalance(s,nature,account,asOf,includePersonal=true){
   const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d),openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{});let total=num(openingMap[account]);
   (s.adjustments||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
-  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
+  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)&&(includePersonal||(normalizedNature(x.fromNature||x.nature)!=='PERSONAL'&&normalizedNature(x.toNature||x.nature)!=='PERSONAL'))).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   // Most accounts show their raw bank truth. Prashant Axis 3645 is explicitly
   // treated as company funds with an employee, so excluded personal movements
@@ -2746,20 +2746,20 @@ function telegramEmployeeSettlements(expenses,asOf){
   });
   return Object.values(totals).sort((a,b)=>b.amount-a.amount||a.employee.localeCompare(b.employee));
 }
-function telegramAccountingSummary(from,to,store){
-  const s=store||loadStore(),start=String(from||'').slice(0,10),end=String(to||from||'').slice(0,10),inside=d=>String(d||'').slice(0,10)>=start&&String(d||'').slice(0,10)<=end;
-  const expenses=Object.values(s.expenses||{}),recorded=expenses.filter(e=>inside(e.date)&&e.status!=='rejected'),payments=[],reimbursements=[];
+function telegramAccountingSummary(from,to,store,options){
+  const s=store||loadStore(),includePersonal=!(options&&options.includePersonal===false),start=String(from||'').slice(0,10),end=String(to||from||'').slice(0,10),inside=d=>String(d||'').slice(0,10)>=start&&String(d||'').slice(0,10)<=end;
+  const expenses=Object.values(s.expenses||{}).filter(e=>includePersonal||normalizedNature(e.nature)!=='PERSONAL'),recorded=expenses.filter(e=>inside(e.date)&&e.status!=='rejected'),payments=[],reimbursements=[];
   expenses.forEach(e=>{
     (e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&inside(p.date)&&!p.personalFunds).forEach(p=>payments.push({id:e.id+'/'+p.id,vendor:e.vendor||e.particulars||e.id,amount:roundMoney(p.amount),account:p.account||e.account||'Unspecified',date:p.date,nature:normalizedNature(e.nature)}));
     (e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&inside(p.date)).forEach(p=>reimbursements.push({id:e.id+'/'+p.id,employee:e.claimant||e.createdBy||'Employee',amount:roundMoney(p.amount),account:p.account||'Unspecified',date:p.date}));
   });
   const employeeAccountNames=new Set(Object.values(TELEGRAM_EMPLOYEE_ACCOUNTS).flat().map(x=>x.toLowerCase()));
-  const employeeFunding=(s.transfers||[]).filter(x=>!x.accountingExcluded&&inside(x.date)&&employeeAccountNames.has(String(x.toAccount||'').toLowerCase())&&!employeeAccountNames.has(String(x.fromAccount||'').toLowerCase())&&!/salary[_\s-]*advance/i.test(String(x.classification||'')+' '+String(x.note||''))).map(x=>({id:x.id,from:x.fromAccount||'Unspecified',to:x.toAccount||'Unspecified',amount:roundMoney(x.amount),date:x.date}));
+  const employeeFunding=(s.transfers||[]).filter(x=>!x.accountingExcluded&&inside(x.date)&&(includePersonal||(normalizedNature(x.fromNature||x.nature)!=='PERSONAL'&&normalizedNature(x.toNature||x.nature)!=='PERSONAL'))&&employeeAccountNames.has(String(x.toAccount||'').toLowerCase())&&!employeeAccountNames.has(String(x.fromAccount||'').toLowerCase())&&!/salary[_\s-]*advance/i.test(String(x.classification||'')+' '+String(x.note||''))).map(x=>({id:x.id,from:x.fromAccount||'Unspecified',to:x.toAccount||'Unspecified',amount:roundMoney(x.amount),date:x.date}));
   const pending=recorded.filter(e=>['pending','approved','partially_paid'].includes(String(e.status||''))).map(e=>({id:e.id,vendor:e.vendor||e.particulars||e.id,amount:roundMoney(Math.max(0,num(e.amount)-num(e.paidAmount))),status:e.status,nature:normalizedNature(e.nature)})).filter(x=>x.amount>0);
   const settlements=telegramEmployeeSettlements(expenses,end);
-  const employeeFunds=COMPANY_FUNDS_EMPLOYEE_ACCOUNTS.map(x=>Object.assign({},x,{balance:telegramCompanyFundsBalance(s,x.nature,x.account,end)}));
+  const employeeFunds=COMPANY_FUNDS_EMPLOYEE_ACCOUNTS.map(x=>Object.assign({},x,{balance:telegramCompanyFundsBalance(s,x.nature,x.account,end,includePersonal)}));
   const sum=list=>roundMoney(list.reduce((n,x)=>n+num(x.amount),0));
-  return{from:start,to:end,recorded:{total:sum(recorded),business:sum(recorded.filter(e=>normalizedNature(e.nature)!=='PERSONAL')),personal:sum(recorded.filter(e=>normalizedNature(e.nature)==='PERSONAL')),count:recorded.length},payments,totalPayments:sum(payments),employeeFunding,totalEmployeeFunding:sum(employeeFunding),reimbursements,totalReimbursements:sum(reimbursements),pending,approvedPending:pending.filter(x=>x.status!=='pending'),awaitingApproval:pending.filter(x=>x.status==='pending'),settlements,employeeFunds};
+  return{from:start,to:end,includePersonal,recorded:{total:sum(recorded),business:sum(recorded.filter(e=>normalizedNature(e.nature)!=='PERSONAL')),personal:sum(recorded.filter(e=>normalizedNature(e.nature)==='PERSONAL')),count:recorded.length},payments,totalPayments:sum(payments),employeeFunding,totalEmployeeFunding:sum(employeeFunding),reimbursements,totalReimbursements:sum(reimbursements),pending,approvedPending:pending.filter(x=>x.status!=='pending'),awaitingApproval:pending.filter(x=>x.status==='pending'),settlements,employeeFunds};
 }
 router.get('/api/expenses/balance-sheet',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),asOf=String(req.query.asOf||new Date().toISOString().slice(0,10)).slice(0,10),selected=req.query.nature?normalizedNature(req.query.nature):'',natures=selected?[selected]:approvalNatures(req);
