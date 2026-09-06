@@ -61,6 +61,21 @@ test('Casual batch rows use the explicit activation endpoint and expose failures
   assert.match(source, /catch \(err\)[\s\S]*active batch is using runtime fallback/);
 });
 
+test('Fresh Procurement organises pile uploads without a paid AI provider', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
+
+  assert.match(html, />▶ Organise photos</);
+  assert.match(html, /no paid AI/);
+  assert.match(html, /czsegcatpick/);
+  assert.match(html, /Nothing is guessed from the image/);
+
+  assert.match(source, /mode: 'local'/);
+  assert.match(source, /organisedBy = 'batch-category'/);
+  assert.match(source, /typeof b\.category === 'string'/);
+  assert.doesNotMatch(source, /AI segregation is not enabled/);
+});
+
 test('photo splitter sanitizes crop boxes and removes near duplicates', () => {
   assert.deepEqual(validSplitBoxes([
     [0.05, 0.10, 0.45, 0.90],

@@ -30,7 +30,7 @@
 //   GET  /api/casuals/candidate/:id            → serve image
 //   DELETE /api/casuals/candidate/:id          → drop one
 //   POST /api/casuals/candidates/clear         → empty the pool
-//   POST /api/casuals/analyze     → vision: category + fit + colour + pattern
+//   POST /api/casuals/analyze     → local batch-category organisation
 //   GET  /api/casuals/plan        → hierarchy-wise buy allocation
 // ═══════════════════════════════════════════════════════════════
 const express = require('express');
@@ -123,7 +123,8 @@ const CAT_BY_KEY = CASUALS_SPEC.reduce((m, c) => (m[c.key] = c, m), {});
 // hint on a batch row — the real count is decided in the buy sheet.
 const SET_PIECES = { Trouser: 10, Shirt: 10, 'T-shirt': 10 };
 
-// Map a free-text garment word from the vision pass onto a Casuals category.
+// Map a free-text garment word onto a Casuals category. This is also used for
+// descriptive legacy batch names; it does not inspect the photograph.
 // Anything that isn't one of our three casual categories returns null (it will
 // be shown under "Unsorted" so the founder can see stray uploads).
 function normCasualCategory(raw) {
@@ -1980,6 +1981,20 @@ router.post('/api/casuals/candidate/:id/tag', (req, res) => {
   const c = s.candidates.find(x => x.id === req.params.id);
   if (!c) return res.status(404).json({ success: false, error: 'Not found' });
   const b = req.body || {};
+  // Category can also be corrected here. This is the no-paid-AI path for a
+  // mixed/legacy batch: the buyer assigns only the genuinely uncertain photos.
+  if (typeof b.category === 'string') {
+    const next = String(b.category).trim();
+    const batch = s.batches.find(x => x.id === c.batch);
+    const allowed = batchCats(batch);
+    if (next && (!CAT_BY_KEY[next] || (allowed.length && !allowed.includes(next)))) {
+      return res.status(400).json({ success: false, error: 'That category is not enabled for this batch.' });
+    }
+    c.category = next || null;
+    const nextSpec = CAT_BY_KEY[c.category];
+    if (!nextSpec || !nextSpec.fits.some(f => f.key === c.fit)) { c.fit = null; delete c.fitOverride; }
+    if (!catHasPrintTypes(c.category)) { delete c.printType; delete c.printOverride; }
+  }
   const spec = CAT_BY_KEY[c.category];
   if (typeof b.fit === 'string') {
     if (!b.fit) { c.fit = spec ? normFit(c.category, c.aiFit) : null; delete c.fitOverride; }   // back to AI
@@ -2034,42 +2049,34 @@ router.get('/api/casuals/disk', (req, res) => {
   res.json({ success: true, dataDir: DATA_DIR, totalMB: +(out.reduce((s, x) => s + x.MB, 0)).toFixed(2), entries: out });
 });
 
-router.post('/api/casuals/analyze', async (req, res) => {
+router.post('/api/casuals/analyze', (req, res) => {
   try {
-    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI segregation is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
     const s = loadStore();
     const cands = activeCands(s);
     if (!cands.length) return res.status(400).json({ success: false, error: 'No photos in this batch yet — upload some casual-wear photos first.' });
-    const force = req.body && (req.body.force === true || req.body.force === 'true');
     const dupes = markDuplicates(cands);
-    // Re-score anything not yet categorised OR still missing an AI rating — so
-    // batches segregated before the rating feature existed get rated on next run.
-    const todo = cands.filter(c => !c.dupeOf && !c.ordered && (force || !c.category || c.rating == null));
+    const batch = s.batches.find(b => b.id === s.activeBatch);
+    const declared = batchCats(batch);
+    // One-category batches already contain the decisive category information.
+    // A descriptive legacy batch name ("Women's trousers", "Shirts", etc.) is
+    // an equally explicit signal. We use it without inspecting or guessing the
+    // photograph. Mixed/unnamed batches stay Unsorted for a human category pick.
+    const category = declared.length === 1 ? declared[0]
+      : (!declared.length ? normCasualCategory(batch && batch.name) : null);
     let classified = 0;
-    for (let i = 0; i < todo.length; i += VISION_BATCH) {
-      const slice = todo.slice(i, i + VISION_BATCH);
-      const items = [];
-      slice.forEach(c => { try { items.push({ id: c.id, buffer: fs.readFileSync(path.join(CAND_DIR, c.file)), mediaType: mediaTypeForFile(c.file) }); } catch {} });
-      if (!items.length) continue;
-      const map = await scoreBatch(items);
-      slice.forEach(c => {
-        const r = map[c.id];
-        if (r) {
-          c.category = r.category;
-          if (!c.fitOverride) { c.fit = r.fit; c.aiFit = r.aiFit; }   // keep a manual fit correction
-          if (!c.colourOverride) c.colour = r.colour;                 // keep a manual colour correction
-          c.pattern = r.pattern; c.rating = r.rating; c.ratingReason = r.reason; classified++;
-        }
-      });
-      saveStore(s);
-    }
+    cands.forEach(c => {
+      if (c.dupeOf || c.ordered || c.category || !category) return;
+      c.category = category;
+      c.organisedBy = 'batch-category';
+      classified++;
+    });
+    saveStore(s);
     const settings = settingsWithDefaults(s);
     const active = activeCands(s);
-    res.json({ success: true, classified, dupes, settings, categories: categoryCounts(active),
+    res.json({ success: true, classified, dupes, mode: 'local', category: category || null, settings, categories: categoryCounts(active),
       batches: batchList(s), activeBatch: s.activeBatch, ...buildPlan(active, settings) });
   } catch (err) {
-    if (err && err.name === 'AbortError') return res.status(504).json({ success: false, error: 'Segregation timed out. Try again — sorted photos are saved.' });
-    res.status(502).json({ success: false, error: 'Segregation failed: ' + (err.message || 'unknown') });
+    res.status(500).json({ success: false, error: 'Could not organise the photos: ' + (err.message || 'unknown') });
   }
 });
 

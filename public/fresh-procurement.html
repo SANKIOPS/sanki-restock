@@ -649,7 +649,7 @@
             <div class="drop" style="margin-top:4px" id="czDrop">
               <div style="font-size:32px">⬆</div>
               <div><b>Drop casual-wear photos here</b> or click to browse</div>
-              <div style="font-size:12px; margin-top:4px">One mixed pile — the AI sorts each photo into category &amp; fit.</div>
+              <div style="font-size:12px; margin-top:4px">One mixed pile — the batch category is applied automatically; you confirm fit and colour.</div>
               <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
             </div>
           </div>
@@ -693,18 +693,18 @@
       <div id="czCats"></div>
 
       <div style="text-align:center; margin:22px 0">
-        <button class="btn lg" id="czAnalyzeBtn">▶ Segregate photos</button>
-        <div class="sub" style="margin-top:6px">AI sorts each photo into category &amp; fit. You review &amp; fix the fits/colours, then build the buy plan.</div>
+        <button class="btn lg" id="czAnalyzeBtn">▶ Organise photos</button>
+        <div class="sub" style="margin-top:6px">Uses the category already chosen for this batch. You confirm fit and colour, then build the plan — no paid AI.</div>
         <div id="czAnalyzeStatus" class="sub" style="margin-top:8px"></div>
       </div>
 
-      <!-- Stage 1: segregation review — fix AI fit/colour tags before planning -->
+      <!-- Stage 1: segregation review — confirm fit/colour tags before planning -->
       <div id="czSegPanel" style="display:none">
         <h2 style="margin:0 0 4px">Review segregation — fix fits &amp; colours</h2>
-        <p class="sub" id="czSegSummary">The AI sorted your photos by fit. Wherever it guessed wrong, correct the <b>fit</b> or <b>colour</b> — your fixes are final and won't be overwritten if you re-segregate. When it looks right, build the buy plan.</p>
+        <p class="sub" id="czSegSummary">The batch category is applied without a paid AI service. Confirm each <b>fit</b> and <b>colour</b>; uncertain photos stay clearly unassigned until you choose. Then build the buy plan.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
           <button class="btn lg" id="czPlanFromSegBtn" type="button">✓ Confirm &amp; build plan →</button>
-          <button class="btn ghost" id="czReSegBtn" type="button">↻ Re-segregate (keeps your fixes)</button>
+          <button class="btn ghost" id="czReSegBtn" type="button">↻ Refresh organisation</button>
         </div>
         <div id="czSeg"></div>
       </div>
@@ -2224,15 +2224,19 @@
 
   function czAnalyze(){
     var btn = el('czAnalyzeBtn'); btn.disabled = true;
-    el('czAnalyzeStatus').innerHTML = '<span class="muted">Segregating photos by category &amp; fit…</span>';
+    el('czAnalyzeStatus').innerHTML = '<span class="muted">Organising photos from the batch category…</span>';
     fetch('/api/casuals/analyze', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({}) })
       .then(function(r){ return r.json(); }).then(function(d){
         btn.disabled = false;
         if(!d.success){ el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Failed')+'</span>'; return; }
-        var msg = '✓ Sorted '+d.classified+' photo'+(d.classified===1?'':'s')+' — review the fits below, fix any wrong ones, then confirm'; if(d.dupes) msg += ' · '+d.dupes+' near-dupe'+(d.dupes===1?'':'s')+' set aside';
+        var msg = '✓ Photos organised without paid AI';
+        if(d.category) msg += ' as '+d.category;
+        msg += ' — confirm fit and colour below, then continue';
+        if(d.unsorted&&d.unsorted.length) msg += ' · '+d.unsorted.length+' photo'+(d.unsorted.length===1?' needs':'s need')+' a category';
+        if(d.dupes) msg += ' · '+d.dupes+' exact duplicate'+(d.dupes===1?'':'s')+' set aside';
         el('czAnalyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">'+msg+'</span>';
         czLoadCandidates(); czRenderSegregation(d);
-      }).catch(function(){ btn.disabled = false; el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">Segregation failed — try again.</span>'; });
+      }).catch(function(){ btn.disabled = false; el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">Could not organise the photos — try again.</span>'; });
   }
 
   var czLastPlan = null;
@@ -3536,7 +3540,25 @@
       });
       host.appendChild(card);
     });
-    if(!anyCat){ host.innerHTML = '<p class="sub" style="margin:0">No categories enabled — enable a category and set its budget above, then segregate.</p>'; }
+    // Mixed or legacy batches may not declare one safe category. Keep those
+    // photographs visible and let the buyer assign just this one reliable fact;
+    // the card then moves into the normal fit/colour review immediately.
+    if((d.unsorted||[]).length){
+      var active=(d.batches||[]).filter(function(b){return b.id===d.activeBatch;})[0];
+      var allowed=(active&&active.batchCategories&&active.batchCategories.length)?active.batchCategories:['Trouser','Shirt','T-shirt'];
+      var labels={Trouser:'Trousers',Shirt:'Shirts','T-shirt':'T-Shirts & Polos'};
+      var uns=document.createElement('div');uns.className='czsegcat';
+      uns.innerHTML='<div class="czsegcathd"><b>Category needed</b><span class="m">'+d.unsorted.length+' photo'+(d.unsorted.length===1?'':'s')+'</span></div><p class="sub" style="padding:0 12px">Choose only the garment category. Nothing is guessed from the image.</p>';
+      var ug=document.createElement('div');ug.className='czseggrid';ug.style.padding='10px 12px';
+      d.unsorted.forEach(function(c){
+        var cell=document.createElement('div');cell.className='czsegcell';
+        cell.innerHTML='<div class="czsegimg"><img src="'+c.url+'" loading="lazy" alt=""/></div><div class="czsegv">'+escapeHtml(c.vendor||'Vendor —')+'</div><label class="czsegl">Category<select class="czsegcatpick"><option value="">— choose —</option>'+allowed.map(function(k){return '<option value="'+escapeHtml(k)+'">'+escapeHtml(labels[k]||k)+'</option>';}).join('')+'</select></label>';
+        cell.querySelector('.czsegcatpick').addEventListener('change',function(){if(this.value)czSetTag(c.id,{category:this.value});});
+        ug.appendChild(cell);
+      });
+      uns.appendChild(ug);host.appendChild(uns);
+    }
+    if(!anyCat&&!(d.unsorted||[]).length){ host.innerHTML = '<p class="sub" style="margin:0">No categories are enabled for this batch.</p>'; }
   }
 
   // ── Already-ordered invoice: upload a supplier bill → AI reads it →
