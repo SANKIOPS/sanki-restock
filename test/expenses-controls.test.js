@@ -1989,3 +1989,12 @@ test('expense proof upload compresses phone photos and reports safe storage erro
   assert.match(source,/Proof storage is full/);
   assert.match(source,/could not be stored \('\+code\+'\)/);
 });
+
+test('full-volume recovery compresses only oversized historical JPEG proofs in place',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+  assert.match(source,/async function recoverExpenseProofStorage\(\)/);
+  assert.match(source,/before<350\*1024/);
+  assert.match(source,/image\.scaleToFit\(1800,1800\)/);
+  assert.match(source,/replacement\.length>=before\*\.95/);
+  assert.match(source,/fs\.writeFileSync\(fp,replacement\)/);
+});

@@ -7,6 +7,7 @@ const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
 const multer  = require('multer');
+const Jimp    = require('jimp');
 const { gate } = require('./auth');
 const { shopifyClient } = require('./modules/shopify-client');
 require('dotenv').config();
@@ -104,6 +105,21 @@ try {
   const swept=sweepAbandonedRuntimeFiles();
   if(swept.removed)console.log('[storage] removed '+swept.removed+' abandoned file(s), freed '+(swept.freedBytes/1048576).toFixed(2)+' MB');
 } catch(error) { console.error('[storage] abandoned-file sweep failed safely:',error); }
+
+// One-time/resumable recovery for a full volume. Historical JPEG proofs are
+// decoded completely before their original file is touched, then overwritten
+// only when the readable replacement is materially smaller. A restart simply
+// resumes with any remaining oversized files; accounting JSON is never edited.
+async function recoverExpenseProofStorage(){
+  const dir=path.join(RUNTIME_DATA_DIR,'expense-proofs');let names=[];
+  try{names=fs.readdirSync(dir).filter(name=>/\.jpe?g$/i.test(name));}catch{return;}
+  let compressed=0,freedBytes=0;
+  for(const name of names){
+    const fp=path.join(dir,name);let before=0;
+    try{before=fs.statSync(fp).size;if(before<350*1024)continue;const image=await Jimp.read(fp);if(image.bitmap.width>1800||image.bitmap.height>1800)image.scaleToFit(1800,1800);const replacement=await image.quality(80).getBufferAsync(Jimp.MIME_JPEG);if(replacement.length>=before*.95)continue;fs.writeFileSync(fp,replacement);compressed++;freedBytes+=before-replacement.length;}catch(error){console.warn('[storage] skipped proof '+name+': '+String(error&&error.code||error&&error.message||error));}
+  }
+  if(compressed)console.log('[storage] compressed '+compressed+' historical proof(s), freed '+(freedBytes/1048576).toFixed(2)+' MB');
+}
 
 // Owner-confirmed one-time accounting reset: preserve master/configuration
 // data while removing transactions before 22 August 2026.
@@ -2605,6 +2621,7 @@ app.listen(PORT, async () => {
   console.log(`   Velocity:  ${hasVelocity ? '✅ configured' : '⚠️  set VELOCITY_USERNAME + VELOCITY_PASSWORD in Render'}`);
   console.log(`   Bitespeed: ${BITESPEED_API_KEY ? '✅ configured' : '⚠️  key missing'}`);
   console.log(`   Velocity Webhook URL: ${SELF_URL}/api/webhooks/velocity`);
+  setImmediate(()=>recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)));
 
   // Phase 0 — seed the first admin from DASH_USER/DASH_PASS if no users exist
   // yet (no-lockout migration: the shared login you already use keeps working,
