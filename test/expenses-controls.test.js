@@ -2035,6 +2035,7 @@ test('an older pending workspace absorbs an already-finalized later period as lo
 });
 
 test('account ledger UI displays account and row reconciliation status',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/Reconciled through:/);assert.match(html,/ledgerReconciliationLabel/);assert.match(source,/ledgerReconciliationStatus/);assert.match(source,/✓ Reconciled/);});
+test('opening a reconciled bank ledger widens its date filter to the finalized period',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/accountChanged&&d\.lastReconciliation&&d\.lastReconciliation\.from/);assert.match(html,/el\('lg_from'\)\.value=d\.lastReconciliation\.from/);assert.match(source,/from:book\.lastReconciliation\.from\|\|latest&&latest\.from/);});
 test('final reconciliation control stays visible and explains unresolved blockers',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/bs_finalize'\)\.style\.display='inline-flex'/);assert.match(html,/Resolve '\+d\.unresolved\+' remaining/);assert.match(html,/Every missing or suggested entry needs a decision/);});
 
 test('Prashant requests Owner approval before final bank reconciliation is posted',()=>{
