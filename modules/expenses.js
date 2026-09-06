@@ -61,8 +61,13 @@ const proofUpload = multer({
       cb(null, privacy + Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg'));
     }
   }),
-  limits: { fileSize: 15 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => cb(null, /^image\//.test(file.mimetype))
+  limits: { fileSize: 30 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const mime=String(file.mimetype||'').toLowerCase(),ext=path.extname(file.originalname||'').toLowerCase();
+    const imageMime=/^image\//.test(mime),imageExt=/^\.(?:jpe?g|png|webp|heic|heif|gif|bmp|tiff?)$/.test(ext);
+    if(imageMime||imageExt)return cb(null,true);
+    cb(new Error('Choose an image file (JPG, PNG, WEBP, HEIC, GIF, BMP or TIFF).'));
+  }
 });
 
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
@@ -2998,6 +3003,8 @@ loadStore();
 router.use((error,req,res,next)=>{
   console.error('[expenses] API request failed:',req.method,req.path,error);
   if(res.headersSent)return next(error);
+  if(error&&error.code==='LIMIT_FILE_SIZE')return res.status(413).json({success:false,error:'This image is larger than 30 MB. Choose a smaller image or screenshot.'});
+  if(req.path==='/api/expenses/upload'&&error&&error.message)return res.status(400).json({success:false,error:error.message});
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 

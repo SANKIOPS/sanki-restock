@@ -612,7 +612,7 @@
     }
     function uploadOneFile(file,nature){
       var fd = new FormData(); fd.append('nature',nature||(el('f_nature')?el('f_nature').value:((expensesById[payId]||{}).nature||'SANKI'))); fd.append('photo',file);
-      return api('/api/expenses/upload', { method:'POST', body:fd }).then(function(d){ return d.url || ''; });
+      return api('/api/expenses/upload', { method:'POST', body:fd }).then(function(d){if(!d.success||!d.url)throw new Error(d.error||'The selected image could not be uploaded.');return d.url;});
     }
     function uploadFiles(files,nature){return Promise.all(Array.prototype.slice.call(files||[]).map(function(file){return uploadOneFile(file,nature);})).then(function(urls){return urls.filter(Boolean);});}
     function chosenFile(a,b){return (el(a).files&&el(a).files[0])?el(a):el(b);}
@@ -649,7 +649,7 @@
         btn.disabled=false; el('upState').textContent='';
         if(d.success){ setMsg('Logged '+d.expense.id+' — pending approval.', true); loadConfig().then(renderLog); }
         else setMsg(d.error||'Could not save.', false);
-      }).catch(function(){ btn.disabled=false; el('upState').textContent=''; setMsg('Upload/save failed.', false); });
+      }).catch(function(error){ btn.disabled=false; el('upState').textContent=''; setMsg(error&&error.message||'Upload/save failed.', false); });
     }
 
     // ── LIST ──
@@ -1137,7 +1137,7 @@
     function recordTransfer(){
       var fromNature=el('tr_from_nature').value,toNature=el('tr_to_nature').value,from=el('tr_from').value,to=el('tr_to').value,amount=Number(el('tr_amount').value||0),btn=el('tr_go');
       if(fromNature===toNature&&from===to){setMsg('Choose two different accounts.',false);return;} if(!(amount>0)){setMsg('Enter a transfer amount.',false);return;} if(!el('tr_proof').files[0]){setMsg('Transfer proof is required.',false);return;}
-      btn.disabled=true; uploadFile(el('tr_proof'),fromNature).then(function(proof){return api('/api/expenses/transfers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromNature:fromNature,toNature:toNature,classification:el('tr_class').value,fromAccount:from,toAccount:to,amount:amount,date:el('tr_date').value,note:el('tr_note').value,proof:proof})});}).then(function(d){btn.disabled=false;if(!d.success){setMsg(d.error||'Transfer failed.',false);return;}setMsg('Transfer '+d.transfer.id+' recorded in both entity ledgers.',true);el('tr_amount').value='';el('tr_note').value='';el('tr_proof').value='';loadCash();loadAccountLedger();}).catch(function(){btn.disabled=false;setMsg('Transfer upload failed.',false);});
+      btn.disabled=true; uploadFile(el('tr_proof'),fromNature).then(function(proof){return api('/api/expenses/transfers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromNature:fromNature,toNature:toNature,classification:el('tr_class').value,fromAccount:from,toAccount:to,amount:amount,date:el('tr_date').value,note:el('tr_note').value,proof:proof})});}).then(function(d){btn.disabled=false;if(!d.success){setMsg(d.error||'Transfer failed.',false);return;}setMsg('Transfer '+d.transfer.id+' recorded in both entity ledgers.',true);el('tr_amount').value='';el('tr_note').value='';el('tr_proof').value='';loadCash();loadAccountLedger();}).catch(function(error){btn.disabled=false;setMsg(error&&error.message||'Transfer upload failed.',false);});
     }
     function ledgerDisplayParts(x){var entity=x.entity||selectedNature,raw=String(x.description||''),clean=raw.replace(/\s*\[[A-Z]+\]\s*/g,' ').trim(),bits=clean.split(' · ').map(function(v){return v.trim();}).filter(Boolean),vendor='General',particulars=clean;if(/^Transfer (from|to) /i.test(clean)){vendor=(bits[0]||clean).replace(/^Transfer (from|to)\s+/i,'');particulars=bits.slice(1).join(' · ')||'Internal transfer';}else if(bits.length>1){vendor=bits[0];particulars=bits.slice(1).join(' · ');}else if(x.kind==='opening'){vendor='Opening balance';particulars='Opening balance';}return{entity:entity,vendor:vendor,particulars:particulars};}
     function bankDisplayParts(row){var narration=String(row.description||''),segments=narration.split('/').map(function(v){return v.trim();}).filter(Boolean),vendor='Bank transaction',named=narration.match(/(?:Payment\s+fr|Payee|To)\s*\|?\s*([^|/]+)/i)||narration.match(/^(.+?)\s+UPI\//i);if(named&&named[1])vendor=named[1].trim();else if(segments.length>=2&&/^UPI$/i.test(segments[0]))vendor=segments[1];else if(/cash dep/i.test(narration))vendor='Cash deposit';else if(/charge/i.test(narration))vendor='Bank charges';return{entity:bankNature,vendor:vendor,particulars:narration};}

@@ -1973,3 +1973,11 @@ test('a store repair failure cannot hide the persisted financial records', () =>
   assert.match(source,/Could not read expenses\.json:[\s\S]*return blankStore\(\)/);
   assert.match(source,/Store repair failed; serving the original financial records:[\s\S]*return s/);
 });
+
+test('expense and transfer proof uploads preserve real upload errors instead of submitting empty proof',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  assert.match(html,/if\(!d\.success\|\|!d\.url\)throw new Error\(d\.error/);
+  assert.match(html,/catch\(function\(error\)\{btn\.disabled=false;setMsg\(error&&error\.message\|\|'Transfer upload failed\.'/);
+  assert.match(source,/fileSize: 30 \* 1024 \* 1024/);
+  assert.match(source,/jpe\?g\|png\|webp\|heic\|heif/);
+});
