@@ -2715,14 +2715,19 @@ const TELEGRAM_EMPLOYEE_ACCOUNTS={
   Shivam:['Shivam 4807'],
   Pradeep:['Pradeep 8606']
 };
-function telegramAccountBalance(s,account,asOf){
-  const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d);let total=num((s.openingBalances||{})[account]);
-  (s.adjustments||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)==='SANKI'&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
-  (s.receipts||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)==='SANKI'&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
-  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)==='SANKI'&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)==='SANKI'&&x.toAccount===account)total+=num(x.amount);});
-  Object.values(s.expenses||{}).forEach(e=>{const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));if(personalAccount===account)(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&on(p.date)).forEach(p=>total+=num(p.amount));});
-  (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)==='SANKI'&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.credit)-num(x.debit));
-  return roundMoney(total);
+function telegramEmployeeSettlements(expenses,asOf){
+  const totals={};
+  expenses.filter(e=>e.status!=='rejected'&&e.approvedAt&&normalizedNature(e.nature)!=='PERSONAL'&&String(e.date||'').slice(0,10)<=asOf).forEach(e=>{
+    const personalPayments=(e.payments||[]).filter(p=>!p.accountingExcluded&&p.personalFunds&&(!p.date||String(p.date).slice(0,10)<=asOf));
+    const reimbursementPayments=(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&(!p.date||String(p.date).slice(0,10)<=asOf));
+    const personallyPaid=personalPayments.length?personalPayments.reduce((n,p)=>n+num(p.amount),0):(e.paidAlready?num(e.personalPaidAmount||e.amount):0);
+    const reimbursed=reimbursementPayments.length?reimbursementPayments.reduce((n,p)=>n+num(p.amount),0):num(e.reimbursementAmount);
+    const due=roundMoney(Math.max(0,personallyPaid-reimbursed));
+    if(due<.01)return;
+    const raw=String(e.claimant||e.createdBy||'Employee').trim()||'Employee',employee=raw.replace(/\b\w/g,c=>c.toUpperCase());
+    totals[employee]=totals[employee]||{employee,amount:0,count:0};totals[employee].amount=roundMoney(totals[employee].amount+due);totals[employee].count++;
+  });
+  return Object.values(totals).sort((a,b)=>b.amount-a.amount||a.employee.localeCompare(b.employee));
 }
 function telegramAccountingSummary(from,to,store){
   const s=store||loadStore(),start=String(from||'').slice(0,10),end=String(to||from||'').slice(0,10),inside=d=>String(d||'').slice(0,10)>=start&&String(d||'').slice(0,10)<=end;
@@ -2734,7 +2739,7 @@ function telegramAccountingSummary(from,to,store){
   const employeeAccountNames=new Set(Object.values(TELEGRAM_EMPLOYEE_ACCOUNTS).flat().map(x=>x.toLowerCase()));
   const employeeFunding=(s.transfers||[]).filter(x=>!x.accountingExcluded&&inside(x.date)&&employeeAccountNames.has(String(x.toAccount||'').toLowerCase())&&!employeeAccountNames.has(String(x.fromAccount||'').toLowerCase())&&!/salary[_\s-]*advance/i.test(String(x.classification||'')+' '+String(x.note||''))).map(x=>({id:x.id,from:x.fromAccount||'Unspecified',to:x.toAccount||'Unspecified',amount:roundMoney(x.amount),date:x.date}));
   const pending=recorded.filter(e=>['pending','approved','partially_paid'].includes(String(e.status||''))).map(e=>({id:e.id,vendor:e.vendor||e.particulars||e.id,amount:roundMoney(Math.max(0,num(e.amount)-num(e.paidAmount))),status:e.status,nature:normalizedNature(e.nature)})).filter(x=>x.amount>0);
-  const settlements=[];Object.entries(TELEGRAM_EMPLOYEE_ACCOUNTS).forEach(([employee,accounts])=>{const balance=roundMoney(accounts.reduce((n,account)=>n+telegramAccountBalance(s,account,end),0));if(Math.abs(balance)>=.01)settlements.push({employee,balance,accounts});});
+  const settlements=telegramEmployeeSettlements(expenses,end);
   const sum=list=>roundMoney(list.reduce((n,x)=>n+num(x.amount),0));
   return{from:start,to:end,recorded:{total:sum(recorded),business:sum(recorded.filter(e=>normalizedNature(e.nature)!=='PERSONAL')),personal:sum(recorded.filter(e=>normalizedNature(e.nature)==='PERSONAL')),count:recorded.length},payments,totalPayments:sum(payments),employeeFunding,totalEmployeeFunding:sum(employeeFunding),reimbursements,totalReimbursements:sum(reimbursements),pending,approvedPending:pending.filter(x=>x.status!=='pending'),awaitingApproval:pending.filter(x=>x.status==='pending'),settlements};
 }
