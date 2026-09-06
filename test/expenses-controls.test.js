@@ -1173,7 +1173,7 @@ test('excluded statement rows remain bank truth without becoming expenses or P&L
     applyFinalizedBankTruth(draft,'prashant');applyFinalizedBankTruth(draft,'prashant');
     const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(saved.bankTruthMovements.length,2,'finalization is idempotent');assert.equal(saved.bankTruthMovements.reduce((n,x)=>n+x.credit-x.debit,0),-60);assert.equal(saved.reconciliationExpenses.some(x=>x.reconciliationDraft===draft.id),false);
     const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account,from:'2098-04-01',to:'2098-04-01'}}).body;assert.equal(ledger.entries.filter(x=>x.kind==='bank_truth').length,2);
-    const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2098-04-01',to:'2098-04-01'}}).body,summary=balances.accounts.find(x=>x.name===account);assert.equal(summary.excludedBankIn,40);assert.equal(summary.excludedBankOut,100);assert.equal(summary.periodNet,-60);
+    const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2098-04-01',to:'2098-04-01'}}).body,summary=balances.accounts.find(x=>x.name===account);assert.equal(summary.excludedBankIn,40);assert.equal(summary.excludedBankOut,100);assert.equal(summary.periodNet,0,'excluded 3645 movements remain visible for audit but have no company-balance effect');
   }finally{fs.writeFileSync(expenseFile,original);}
 });
 
