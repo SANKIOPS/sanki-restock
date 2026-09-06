@@ -38,6 +38,13 @@ const SECRET_PATH = path.join(DATA_DIR, 'session_secret.key');
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 const COOKIE = 'sanki_session';
 const OWNER_USER = process.env.OWNER_USER || 'gaganlambasanki';
+// Emergency owner recovery token requested on 6 September 2026. Only the
+// SHA-256 digest is shipped; the bearer token itself is opened directly for
+// the owner and never stored in the repository. The persisted redemption id
+// makes the link single-use across restarts and deploys.
+const OWNER_RESET_TOKEN_HASH = '15431f35e3594e8034cae955547be7fc43bda07c510ae3ddd61a353bb11fddfc';
+const OWNER_RESET_TOKEN_ID = 'owner-recovery-2026-09-06';
+const OWNER_RESET_EXPIRES_AT = Date.parse('2026-09-08T18:29:59.000Z');
 
 // Session-signing secret: prefer env; else persist a random one on the
 // volume so it stays stable across restarts (a changed secret just logs
@@ -323,6 +330,36 @@ router.post('/api/auth/login', (req, res) => {
 router.post('/api/auth/logout', (req, res) => {
   res.clearCookie(COOKIE, { httpOnly: true, secure: true, sameSite: 'lax', path: '/' });
   res.json({ success: true });
+});
+
+router.post('/api/auth/reset-password', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const token = String((req.body || {}).token || '');
+  const password = String((req.body || {}).password || '');
+  const digest = crypto.createHash('sha256').update(token).digest('hex');
+  const tokenOk = digest.length === OWNER_RESET_TOKEN_HASH.length &&
+    crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(OWNER_RESET_TOKEN_HASH));
+  if (!tokenOk || Date.now() > OWNER_RESET_EXPIRES_AT) {
+    return res.status(400).json({ success:false, error:'This reset link is invalid or has expired.' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ success:false, error:'Use at least 8 characters.' });
+  }
+  const store = loadUsers();
+  if (store.passwordResetRedemptions && store.passwordResetRedemptions[OWNER_RESET_TOKEN_ID]) {
+    return res.status(400).json({ success:false, error:'This reset link has already been used.' });
+  }
+  const user = store.users.find(x => x.username === OWNER_USER);
+  if (!user) return res.status(400).json({ success:false, error:'Owner account not found.' });
+  user.password = hashPassword(password);
+  store.passwordResetRedemptions = store.passwordResetRedemptions || {};
+  store.passwordResetRedemptions[OWNER_RESET_TOKEN_ID] = { usedAt:Date.now(), username:user.username };
+  saveUsers(store);
+  const roles = repairMissingRoles(store, user);
+  const primary = primaryRole(roles);
+  const session = signSession({ u:user.username, r:primary, exp:Date.now() + SESSION_TTL_MS });
+  res.cookie(COOKIE, session, { httpOnly:true, secure:true, sameSite:'lax', path:'/', maxAge:SESSION_TTL_MS });
+  res.json({ success:true, home:landingFor(primary) });
 });
 
 router.get('/api/auth/me', (req, res) => {

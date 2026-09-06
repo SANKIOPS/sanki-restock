@@ -154,6 +154,7 @@ function gate(req, res, next) {
       p === '/api/health' ||
       p === '/healthz' ||
       p === '/login.html' ||
+      p === '/reset-password.html' ||
       p === '/sw.js' ||
       p === '/manifest.webmanifest' ||
       p === '/icon-192.png' ||
@@ -162,6 +163,7 @@ function gate(req, res, next) {
       p === '/apple-touch-icon.png' ||
       p === '/api/auth/diagnostic' ||
       p === '/api/auth/login' ||
+      p === '/api/auth/reset-password' ||
       p === '/api/auth/logout') {
     return next();
   }

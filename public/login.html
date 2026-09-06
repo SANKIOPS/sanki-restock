@@ -33,6 +33,7 @@
     }
     button:hover { background:#134d86; }
     button:disabled { opacity:.6; cursor:not-allowed; }
+    .help { display:block; margin-top:14px; text-align:center; font-size:13px; color:var(--blue); }
     .msg { margin-top:14px; font-size:13px; min-height:18px; text-align:center; }
     .msg.err { color:#b42318; }
     .msg.ok  { color:#047857; }
@@ -52,6 +53,7 @@
       <button id="submit-btn" type="submit">Sign in</button>
       <div class="msg" id="msg"></div>
       <div class="msg" id="session-diagnostic" style="display:none"></div>
+      <a class="help" href="/reset-password.html">Forgot password?</a>
     </form>
   </div>
 
