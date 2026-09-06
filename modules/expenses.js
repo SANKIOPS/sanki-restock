@@ -2705,6 +2705,36 @@ function recordedAccountBalance(s,nature,account,asOf){
   if(nature==='SANKI'){salesLedgerEntries().filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));salaryPaymentEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
   return round0(total);
 }
+
+const TELEGRAM_EMPLOYEE_ACCOUNTS={
+  Prashant:['Prashant Axis 3645','Prashant Cash'],
+  Arshpreet:['Arshpreet 1919'],
+  Shivam:['Shivam 4807'],
+  Pradeep:['Pradeep 8606']
+};
+function telegramAccountBalance(s,account,asOf){
+  const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d);let total=num((s.openingBalances||{})[account]);
+  (s.adjustments||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)==='SANKI'&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
+  (s.receipts||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)==='SANKI'&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
+  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)==='SANKI'&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)==='SANKI'&&x.toAccount===account)total+=num(x.amount);});
+  Object.values(s.expenses||{}).forEach(e=>{const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));if(personalAccount===account)(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&on(p.date)).forEach(p=>total+=num(p.amount));});
+  (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)==='SANKI'&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.credit)-num(x.debit));
+  return roundMoney(total);
+}
+function telegramAccountingSummary(from,to,store){
+  const s=store||loadStore(),start=String(from||'').slice(0,10),end=String(to||from||'').slice(0,10),inside=d=>String(d||'').slice(0,10)>=start&&String(d||'').slice(0,10)<=end;
+  const expenses=Object.values(s.expenses||{}),recorded=expenses.filter(e=>inside(e.date)&&e.status!=='rejected'),payments=[],reimbursements=[];
+  expenses.forEach(e=>{
+    (e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&inside(p.date)&&!p.personalFunds).forEach(p=>payments.push({id:e.id+'/'+p.id,vendor:e.vendor||e.particulars||e.id,amount:roundMoney(p.amount),account:p.account||e.account||'Unspecified',date:p.date,nature:normalizedNature(e.nature)}));
+    (e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&inside(p.date)).forEach(p=>reimbursements.push({id:e.id+'/'+p.id,employee:e.claimant||e.createdBy||'Employee',amount:roundMoney(p.amount),account:p.account||'Unspecified',date:p.date}));
+  });
+  const employeeAccountNames=new Set(Object.values(TELEGRAM_EMPLOYEE_ACCOUNTS).flat().map(x=>x.toLowerCase()));
+  const employeeFunding=(s.transfers||[]).filter(x=>!x.accountingExcluded&&inside(x.date)&&employeeAccountNames.has(String(x.toAccount||'').toLowerCase())&&!employeeAccountNames.has(String(x.fromAccount||'').toLowerCase())&&!/salary[_\s-]*advance/i.test(String(x.classification||'')+' '+String(x.note||''))).map(x=>({id:x.id,from:x.fromAccount||'Unspecified',to:x.toAccount||'Unspecified',amount:roundMoney(x.amount),date:x.date}));
+  const pending=recorded.filter(e=>['pending','approved','partially_paid'].includes(String(e.status||''))).map(e=>({id:e.id,vendor:e.vendor||e.particulars||e.id,amount:roundMoney(Math.max(0,num(e.amount)-num(e.paidAmount))),status:e.status,nature:normalizedNature(e.nature)})).filter(x=>x.amount>0);
+  const settlements=[];Object.entries(TELEGRAM_EMPLOYEE_ACCOUNTS).forEach(([employee,accounts])=>{const balance=roundMoney(accounts.reduce((n,account)=>n+telegramAccountBalance(s,account,end),0));if(Math.abs(balance)>=.01)settlements.push({employee,balance,accounts});});
+  const sum=list=>roundMoney(list.reduce((n,x)=>n+num(x.amount),0));
+  return{from:start,to:end,recorded:{total:sum(recorded),business:sum(recorded.filter(e=>normalizedNature(e.nature)!=='PERSONAL')),personal:sum(recorded.filter(e=>normalizedNature(e.nature)==='PERSONAL')),count:recorded.length},payments,totalPayments:sum(payments),employeeFunding,totalEmployeeFunding:sum(employeeFunding),reimbursements,totalReimbursements:sum(reimbursements),pending,approvedPending:pending.filter(x=>x.status!=='pending'),awaitingApproval:pending.filter(x=>x.status==='pending'),settlements};
+}
 router.get('/api/expenses/balance-sheet',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});const s=loadStore(),asOf=String(req.query.asOf||new Date().toISOString().slice(0,10)).slice(0,10),selected=req.query.nature?normalizedNature(req.query.nature):'',natures=selected?[selected]:approvalNatures(req);
   if(selected&&!approvalNatures(req).includes(selected))return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});const accounts=[];natures.forEach(n=>ledgerAccountsForNature(s,n).forEach(name=>accounts.push({nature:n,name,balance:recordedAccountBalance(s,n,name,asOf)})));
@@ -2971,6 +3001,6 @@ router.use((error,req,res,next)=>{
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 
-module.exports = { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
+module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
 module.exports.applyFinalizedBankTruth = applyFinalizedBankTruth;
