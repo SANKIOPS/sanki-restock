@@ -122,6 +122,7 @@ test('Casual planning settings are snapshotted per batch', () => {
   assert.match(source, /planSettings: JSON\.parse\(JSON\.stringify\(settingsWithDefaults\(s\)\)\)/);
   assert.match(source, /function settingsForActiveBatch\(s, persistLegacy\)/);
   assert.match(source, /activeBatch\.planSettings = JSON\.parse\(JSON\.stringify\(next\)\)/);
+  assert.match(source, /router\.get\('\/api\/casuals\/settings'[\s\S]*?settingsForActiveBatch\(s\);[\s\S]*?res\.json\(\{ success: true, settings \}\);/);
   assert.match(html, /if\(d\.success && d\.settings\) czSettings = d\.settings/);
 });
 

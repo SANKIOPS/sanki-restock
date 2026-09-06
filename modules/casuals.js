@@ -1702,15 +1702,16 @@ router.get('/api/casuals/spec', (req, res) => {
 
 router.get('/api/casuals/settings', (req, res) => {
   const s = loadStore();
-  const settings = settingsForActiveBatch(s, true);
-  saveStore(s);
+  // A read-only page load must never write the procurement store. If a mounted
+  // volume has a transient read problem, saving the fallback would erase it.
+  const settings = settingsForActiveBatch(s);
   res.json({ success: true, settings });
 });
 
 router.post('/api/casuals/settings', (req, res) => {
   const s = loadStore();
   const b = req.body || {};
-  const cur = settingsForActiveBatch(s, true);
+  const cur = settingsForActiveBatch(s);
   // Store a normalised, complete settings blob (simplest + safest).
   const next = { budgetMode: 'perCategory', categories: {} };
   CAT_KEYS.forEach(k => {
