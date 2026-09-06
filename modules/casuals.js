@@ -264,6 +264,10 @@ function markDuplicates(cands) {
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 const STORE_PATH = process.env.CASUALS_PATH || path.join(DATA_DIR, 'casuals.json');
 const CAND_DIR = path.join(DATA_DIR, 'casuals-candidates');
+// Opening a batch must remain usable even when the Railway volume temporarily
+// refuses writes. This mirrors the normally persisted activeBatch for this
+// process and is reapplied on each read.
+let activeBatchOverride = null;
 try { fs.mkdirSync(CAND_DIR, { recursive: true }); } catch { /* exists */ }
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -280,6 +284,7 @@ function loadStore() {
     if (!s.settings) s.settings = {};
     if (!Array.isArray(s.candidates)) s.candidates = [];
     ensureBatches(s);
+    if (activeBatchOverride && s.batches.some(b => b.id === activeBatchOverride)) s.activeBatch = activeBatchOverride;
     return s;
   } catch { return ensureBatches({ settings: {}, candidates: [] }); }
 }
@@ -1822,8 +1827,14 @@ function activateBatch(req, res) {
   const id = String((req.params && req.params.id) || (req.body && req.body.id) || '');
   if (!s.batches.some(b => b.id === id)) return res.status(400).json({ success: false, error: 'Unknown batch' });
   s.activeBatch = id;
-  saveStore(s);
-  res.json({ success: true, activeBatch: s.activeBatch, batches: batchList(s) });
+  activeBatchOverride = id;
+  let persisted = true;
+  try { saveStore(s); }
+  catch (err) {
+    persisted = false;
+    console.error('[casuals] active batch is using runtime fallback:', err && (err.code || err.message));
+  }
+  res.json({ success: true, activeBatch: s.activeBatch, persisted, batches: batchList(s) });
 }
 router.post('/api/casuals/batches/active', activateBatch);
 router.put('/api/casuals/batches/:id/active', activateBatch);

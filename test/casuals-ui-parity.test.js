@@ -56,6 +56,9 @@ test('Casual batch rows use the explicit activation endpoint and expose failures
     .map(layer => ({ path: layer.route.path, methods: layer.route.methods }));
   assert.ok(routes.some(route => route.path === '/api/casuals/batches/:id/active' && route.methods.put));
   assert.ok(routes.some(route => route.path === '/api/casuals/batches/active' && route.methods.post));
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
+  assert.match(source, /activeBatchOverride = id/);
+  assert.match(source, /catch \(err\)[\s\S]*active batch is using runtime fallback/);
 });
 
 test('photo splitter sanitizes crop boxes and removes near duplicates', () => {
