@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes } = require('../modules/casuals');
+const { router, buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes } = require('../modules/casuals');
 
 test('Shirts and T-shirts support the same design-first target as Trousers', () => {
   const settings = settingsWithDefaults({ settings: {} });
@@ -42,6 +42,19 @@ test('legacy Casual UI presents shared upper and trouser workflow', () => {
   assert.match(html, /id="czSplitBatch"/);
   assert.match(html, /\/api\/casuals\/photo-split/);
   assert.doesNotMatch(html, /Plan this category by/);
+});
+
+test('Casual batch rows use the explicit activation endpoint and expose failures', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  assert.match(html, /fetch\('\/api\/casuals\/batches\/'\+encodeURIComponent\(id\)\+'\/active',\{method:'PUT'/);
+  assert.match(html, /czBatchError/);
+  assert.match(html, /setAttribute\('role', 'button'\)/);
+
+  const routes = router.stack
+    .filter(layer => layer.route)
+    .map(layer => ({ path: layer.route.path, methods: layer.route.methods }));
+  assert.ok(routes.some(route => route.path === '/api/casuals/batches/:id/active' && route.methods.put));
+  assert.ok(routes.some(route => route.path === '/api/casuals/batches/active' && route.methods.post));
 });
 
 test('photo splitter sanitizes crop boxes and removes near duplicates', () => {

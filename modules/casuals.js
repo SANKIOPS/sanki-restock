@@ -1814,15 +1814,19 @@ router.post('/api/casuals/batches', (req, res) => {
   res.json({ success: true, batch: b, batches: batchList(s), activeBatch: s.activeBatch });
 });
 
-// Switch the active batch (the plan/segregate/upload target).
-router.post('/api/casuals/batches/active', (req, res) => {
+// Switch the active batch (the plan/segregate/upload target). Keep the original
+// POST endpoint for older clients and expose an idempotent, batch-specific PUT
+// endpoint for the current UI.
+function activateBatch(req, res) {
   const s = loadStore();
-  const id = String((req.body && req.body.id) || '');
+  const id = String((req.params && req.params.id) || (req.body && req.body.id) || '');
   if (!s.batches.some(b => b.id === id)) return res.status(400).json({ success: false, error: 'Unknown batch' });
   s.activeBatch = id;
   saveStore(s);
   res.json({ success: true, activeBatch: s.activeBatch, batches: batchList(s) });
-});
+}
+router.post('/api/casuals/batches/active', activateBatch);
+router.put('/api/casuals/batches/:id/active', activateBatch);
 
 // Delete a batch and every photo in it; fall back to another active batch.
 router.delete('/api/casuals/batches/:id', (req, res) => {

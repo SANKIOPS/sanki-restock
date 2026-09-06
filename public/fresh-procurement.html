@@ -54,6 +54,7 @@
     .czbactions{ margin-top:12px; }
     .czbdel{ font-size:12px; font-weight:700; color:var(--err); background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:6px 11px; cursor:pointer; }
     .czbdel:hover{ background:#fde3e3; }
+    .czberr{ margin:8px 0; padding:10px 12px; border:1px solid #fecaca; border-radius:9px; background:#fef2f2; color:#991b1b; font-size:12px; font-weight:700; }
     .btn:disabled{ opacity:.5; cursor:default; }
     .panel{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
     .fld label{ display:block; font-size:11px; font-weight:700; color:#5f6d65; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
@@ -1656,7 +1657,7 @@
   // ── Batches: each upload session can be its own dated batch. The plan,
   // segregation and dedup all work on the ACTIVE batch only, so old photos
   // never mix into a fresh calculation. ──
-  var czBatches = [], czActiveBatch = null, czPhotosOpen = false, czExpanded = false;
+  var czBatches = [], czActiveBatch = null, czPhotosOpen = false, czExpanded = false, czBatchError = '';
   var czLastCands = [], czLastCats = [];
   function czActiveBatchObj(){ return czBatches.filter(function(b){ return b.id === czActiveBatch; })[0] || null; }
   // The category SET a batch spans: prefer the multi-category list, fall back to the
@@ -1669,7 +1670,16 @@
   // The uploader + the whole budget/plan workflow only exist while a batch is
   // opened. In the collapsed list view nothing but the batch rows is shown.
   function czSetWorkflow(show){ var w = el('czWorkflow'); if(w) w.style.display = show ? '' : 'none'; var u = el('czUploader'); if(u) u.style.display = show ? '' : 'none'; }
-  function czOpenBatch(id){ czExpanded = true; czOpenCards = {}; czDesigns = []; czSetMode(false); if(id === czActiveBatch){ czRenderBatches(); czRenderCats(); czRenderCandidates(czLastCands, czLastCats); return Promise.resolve(); } return czSetActiveBatch(id).then(function(){ czRenderCats(); }); }
+  function czOpenBatch(id){
+    czBatchError = '';
+    czExpanded = true; czOpenCards = {}; czDesigns = []; czSetMode(false);
+    if(id === czActiveBatch){ czRenderBatches(); czRenderCats(); czRenderCandidates(czLastCands, czLastCats); return Promise.resolve(); }
+    return czSetActiveBatch(id).then(function(){ czRenderCats(); }).catch(function(err){
+      czExpanded = false;
+      czBatchError = (err && err.message) || 'Could not open this batch. Please try again.';
+      czRenderBatches();
+    });
+  }
 
   // Total actual spend across the current plan (only meaningful after prices
   // are entered + Re-analyse). Used for the batch-row "actual ₹" chip.
@@ -1711,6 +1721,11 @@
       return;
     }
     host.innerHTML = '';
+    if(czBatchError){
+      var problem = document.createElement('div'); problem.className = 'czberr';
+      problem.textContent = czBatchError;
+      host.appendChild(problem);
+    }
 
     // ── Collapsed list view: just the batch rows, nothing expanded ──
     if(!czExpanded){
@@ -1723,7 +1738,11 @@
           '<div class="czbmain"><div class="czbname">'+escapeHtml(b.name)+'</div>'+
             '<div class="czbchips">'+czBatchChips(b, false)+'</div></div>'+
           '<div class="czbcaret">▸</div>';
-        hd.addEventListener('click', function(){ czPhotosOpen = false; czOpenBatch(b.id); });
+        hd.setAttribute('role', 'button'); hd.setAttribute('tabindex', '0');
+        hd.setAttribute('aria-label', 'Open '+b.name);
+        function openBatchRow(){ czPhotosOpen = false; czOpenBatch(b.id); }
+        hd.addEventListener('click', openBatchRow);
+        hd.addEventListener('keydown', function(e){ if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openBatchRow(); } });
         row.appendChild(hd);
         host.appendChild(row);
       });
@@ -1769,8 +1788,15 @@
     czRenderCandidates(czLastCands, czLastCats);
   }
   function czSetActiveBatch(id){
-    return fetch('/api/casuals/batches/active',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:id})})
-      .then(function(r){ return r.json(); }).then(function(){ return czLoadCandidates().then(czLoadPlan); });
+    return fetch('/api/casuals/batches/'+encodeURIComponent(id)+'/active',{method:'PUT',headers:{'accept':'application/json'}})
+      .then(function(r){
+        var type = String(r.headers.get('content-type') || '');
+        if(type.indexOf('application/json') < 0) throw new Error('The server could not open this batch. Refresh after the latest deployment finishes.');
+        return r.json().then(function(d){
+          if(!r.ok || !d.success) throw new Error(d.error || 'Could not open this batch.');
+          return d;
+        });
+      }).then(function(){ return czLoadCandidates().then(czLoadPlan); });
   }
   // ＋ New batch no longer creates a batch straight away — it asks WHICH categories
   // first (a batch spans one or more), then czCreateBatchFor makes the batch.
