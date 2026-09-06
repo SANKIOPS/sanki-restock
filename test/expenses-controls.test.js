@@ -9,7 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage } = require('../modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, indiaDisplayTimestamp } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -204,6 +204,12 @@ test('vendor ledgers can sort current outstanding amounts in both directions',()
   assert.match(html,/sort==='amount_desc'/);
   assert.match(html,/Number\(a\.outstanding\|\|0\)-Number\(b\.outstanding\|\|0\)/);
   assert.match(html,/Number\(b\.outstanding\|\|0\)-Number\(a\.outstanding\|\|0\)/);
+});
+
+test('reconciliation timestamps display in India time while storage stays UTC', () => {
+  assert.equal(indiaDisplayTimestamp('2026-09-06T16:35:00.000Z'), '2026-09-06 22:05');
+  assert.equal(indiaDisplayTimestamp(''), '');
+  assert.equal(indiaDisplayTimestamp('not-a-date'), 'not-a-date');
 });
 
 test('balanced date-amount policy upgrades drafts without removing manual work',()=>{

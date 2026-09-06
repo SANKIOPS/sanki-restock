@@ -1110,6 +1110,11 @@ function notifyExpenseUser(e, event, amount) {
   } catch { /* Telegram is optional */ }
 }
 
+function indiaDisplayTimestamp(value){if(!value)return'';const date=new Date(value);if(Number.isNaN(date.getTime()))return String(value);return date.toLocaleString('sv-SE',{timeZone:'Asia/Kolkata',hour12:false}).slice(0,16);}
+// Reconciliation APIs expose India-local display timestamps without changing
+// the immutable UTC timestamps stored for auditing.
+router.use((req,res,next)=>{if(req.method!=='GET'||!['/api/expenses/bank-statements','/api/expenses/account-ledger'].includes(req.path))return next();const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success){(payload.imports||[]).forEach(record=>{record.finalizedAt=indiaDisplayTimestamp(record.finalizedAt);(record.reconciliationRows||[]).forEach(row=>{row.resolvedAt=indiaDisplayTimestamp(row.resolvedAt);});});if(payload.lastReconciliation)payload.lastReconciliation.at=indiaDisplayTimestamp(payload.lastReconciliation.at);if(payload.draft&&payload.draft.finalizationApproval)payload.draft.finalizationApproval.requestedAt=indiaDisplayTimestamp(payload.draft.finalizationApproval.requestedAt);(payload.entries||[]).forEach(row=>{if(row.reconciliation)row.reconciliation.finalizedAt=indiaDisplayTimestamp(row.reconciliation.finalizedAt);});}return original(payload);};next();});
+
 // A non-owner reconciler may prepare every decision, but final posting is a
 // separate Owner action. Intercept before any finalization side-effect wrapper.
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
@@ -3121,3 +3126,4 @@ module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
 module.exports.applyFinalizedBankTruth = applyFinalizedBankTruth;
 module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliationDrafts;
 module.exports.extendPendingDraftThroughFinalizedCoverage = extendPendingDraftThroughFinalizedCoverage;
+module.exports.indiaDisplayTimestamp = indiaDisplayTimestamp;
