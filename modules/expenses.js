@@ -193,6 +193,7 @@ function blankStore() {
     openingBalances: {},                 // { [account]: opening ₹ }
     openingBalanceDates: {},             // effective dates for reset openings
     openingBalancesByNature: { SAMAST: {}, PERSONAL: {} }, // non-SANKI books stay separate
+    openingBalanceDatesByNature: { SAMAST: {}, PERSONAL: {} },
     adjustments: [],                     // [{ id, account, amount(+/-), note, date }] top-ups/corrections
     transfers: [],                       // [{ id, nature, fromAccount, toAccount, amount, date, proof, note }]
     receipts: [],                        // money received other than sales/receivables
@@ -2255,7 +2256,8 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&normalizedNature(x.nature)===nature&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
   if(expenseNature&&!approvalNatures(req).includes(expenseNature))return res.status(403).json({success:false,error:'You cannot view expenses for this entity.'});
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  entries.push({ id: 'OPENING', date: account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:'', kind: 'opening', description: creditCard?'Opening credit-card outstanding':(account===DEFAULT_COUNTER_CASH?'Opening balance effective 22 Aug 2026':'Opening balance'), credit: creditCard?num(creditCard.openingOutstanding):num(openingMap[account]), debit: 0 });
+  const openingDate=nature==='SANKI'?String((s.openingBalanceDates||{})[account]||''):String((((s.openingBalanceDatesByNature||{})[nature]||{})[account])||'');
+  entries.push({ id: 'OPENING', date: openingDate||(account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:''), kind: 'opening', description: creditCard?'Opening credit-card outstanding':('Opening balance'+(openingDate?' effective '+openingDate:(account===DEFAULT_COUNTER_CASH?' effective 22 Aug 2026':''))), credit: creditCard?num(creditCard.openingOutstanding):num(openingMap[account]), debit: 0 });
   (s.adjustments || []).filter(x => !x.accountingExcluded&&normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',by:x.createdBy||'' }));
   (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>{const gross=num(x.grossPaymentAmount);entries.push({id:x.paymentReference||x.id,date:x.date,kind:gross?'expense':'vendor_advance',description:(gross?'Vendor payment · ':'Vendor advance · ')+x.vendor+' · '+x.note,credit:0,debit:gross||num(x.amount),proof:x.proof||'',reference:x.bankReference||x.paymentReference||x.id,by:x.createdBy||'',vendorAdvanceAmount:gross?num(x.amount):0});});
   (s.receipts || []).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='product_sale'?'Product sale':x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,by:x.createdBy,manualSaleId:x.manualSaleId||''}));
@@ -2689,14 +2691,21 @@ router.post('/api/expenses/balances', (req, res) => {
   const nature = normalizedNature(b.nature);
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
   if (b.setOpening && b.setOpening.account) {
+    if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can set an opening balance.' });
     const openingAccount = allowedCompanyAccount(s, nature, b.setOpening.account);
     if (!openingAccount) return res.status(400).json({ success:false, error:'Select an account assigned to this entity.' });
+    const rawAmount=String(b.setOpening.amount==null?'':b.setOpening.amount).trim(),amount=Number(rawAmount),effectiveDate=String(b.setOpening.effectiveDate||'').slice(0,10),reason=String(b.setOpening.reason||'').trim();
+    if(rawAmount===''||!Number.isFinite(amount))return res.status(400).json({success:false,error:'Enter a valid opening balance. Zero and negative balances are allowed.'});
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)||Number.isNaN(new Date(effectiveDate+'T00:00:00Z').getTime()))return res.status(400).json({success:false,error:'Choose a valid effective date.'});
+    if(!reason)return res.status(400).json({success:false,error:'Reason is required for the opening-balance audit trail.'});
+    const openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{}),dateMap=nature==='SANKI'?(s.openingBalanceDates||{}):(((s.openingBalanceDatesByNature||{})[nature])||{}),before={amount:Object.prototype.hasOwnProperty.call(openingMap,openingAccount)?num(openingMap[openingAccount]):null,effectiveDate:dateMap[openingAccount]||''};
     if (nature !== 'SANKI') {
       s.openingBalancesByNature = s.openingBalancesByNature || {};
       s.openingBalancesByNature[nature] = s.openingBalancesByNature[nature] || {};
-      s.openingBalancesByNature[nature][openingAccount] = num(b.setOpening.amount);
-    } else s.openingBalances[openingAccount] = num(b.setOpening.amount);
-    audit(s,req,'OPENING_BALANCE_CHANGED','account',openingAccount,{nature,account:openingAccount,after:num(b.setOpening.amount)});
+      s.openingBalanceDatesByNature=s.openingBalanceDatesByNature||{};s.openingBalanceDatesByNature[nature]=s.openingBalanceDatesByNature[nature]||{};
+      s.openingBalancesByNature[nature][openingAccount] = amount;s.openingBalanceDatesByNature[nature][openingAccount]=effectiveDate;
+    } else {s.openingBalances=s.openingBalances||{};s.openingBalanceDates=s.openingBalanceDates||{};s.openingBalances[openingAccount]=amount;s.openingBalanceDates[openingAccount]=effectiveDate;}
+    audit(s,req,'OPENING_BALANCE_CHANGED','account',openingAccount,{nature,account:openingAccount,before,after:{amount,effectiveDate},note:reason});
   }
   if (b.adjust && b.adjust.account && b.adjust.amount != null) {
     const adjustmentAccount = allowedCompanyAccount(s, nature, b.adjust.account);

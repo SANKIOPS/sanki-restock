@@ -1986,6 +1986,23 @@ test('IndusInd 8181 is a complete SANKI bank account from 5 September 2026',()=>
   const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));assert.equal(stored.openingBalances['IndusInd Bank 8181'],0);assert.equal(stored.openingBalanceDates['IndusInd Bank 8181'],'2026-09-05');assert.ok(stored.oneTimeMigrations['register-indusind-8181-sanki-opening-2026-09-05']);
 });
 
+test('only the Owner can set a dated custom opening balance with an audit reason',()=>{
+  const denied=invoke('POST','/api/expenses/balances',{role:'admin',body:{nature:'SANKI',setOpening:{account:'Prashant Axis 3645',amount:-123.45,effectiveDate:'2026-09-06',reason:'Owner correction'}}});
+  assert.equal(denied.status,403);
+  const missingReason=invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',setOpening:{account:'Prashant Axis 3645',amount:0,effectiveDate:'2026-09-06'}}});
+  assert.equal(missingReason.status,400);
+  const saved=invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',setOpening:{account:'Prashant Axis 3645',amount:-123.45,effectiveDate:'2026-09-06',reason:'Verified from opening statement'}}});
+  assert.equal(saved.status,200);
+  const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));
+  assert.equal(stored.openingBalances['Prashant Axis 3645'],-123.45);
+  assert.equal(stored.openingBalanceDates['Prashant Axis 3645'],'2026-09-06');
+  const event=stored.auditLog.filter(x=>x.action==='OPENING_BALANCE_CHANGED'&&x.subjectId==='Prashant Axis 3645').at(-1);
+  assert.equal(event.note,'Verified from opening statement');
+  assert.deepEqual(event.after,{amount:-123.45,effectiveDate:'2026-09-06'});
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/cfg\.isOwner\?'<button class="btn mini ghost" onclick="openOpeningBalance/);
+});
+
 test('a store repair failure cannot hide the persisted financial records', () => {
   const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
   assert.match(source,/Could not read expenses\.json:[\s\S]*return blankStore\(\)/);
