@@ -2725,7 +2725,7 @@ function telegramEmployeeSettlements(expenses,asOf){
     const due=roundMoney(Math.max(0,personallyPaid-reimbursed));
     if(due<.01)return;
     const raw=String(e.claimant||e.createdBy||'Employee').trim()||'Employee',employee=raw.replace(/\b\w/g,c=>c.toUpperCase());
-    totals[employee]=totals[employee]||{employee,amount:0,count:0};totals[employee].amount=roundMoney(totals[employee].amount+due);totals[employee].count++;
+    totals[employee]=totals[employee]||{employee,amount:0,count:0,items:[]};totals[employee].amount=roundMoney(totals[employee].amount+due);totals[employee].count++;totals[employee].items.push({id:e.id,vendor:e.vendor||e.particulars||e.id,personallyPaid:roundMoney(personallyPaid),reimbursed:roundMoney(reimbursed),due});
   });
   return Object.values(totals).sort((a,b)=>b.amount-a.amount||a.employee.localeCompare(b.employee));
 }
