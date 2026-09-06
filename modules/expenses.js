@@ -2170,7 +2170,7 @@ router.get('/api/expenses/balances', (req, res) => {
     if(nature==='SANKI') salesLedgerEntries().filter(includeAutomaticSale).filter(x=>posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
     (s.transfers || []).filter(x => inRange(x.date)).forEach(x => {
       if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + num(x.amount);
-      if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
+      if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)&&transferCreditsCompanyFunds(x,nature,x.toAccount)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + num(x.amount);
     });
     (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{
       bankTruthIn[x.account]=(bankTruthIn[x.account]||0)+num(x.credit);
@@ -2265,7 +2265,8 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   (s.transfers || []).filter(x=>!x.accountingExcluded).forEach(x => {
     const isOut=normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account,isIn=normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account;if(!isOut&&!isIn)return;
     const other=(isOut?(x.toNature||x.nature)+' · '+x.toAccount:(x.fromNature||x.nature)+' · '+x.fromAccount);
-    entries.push({id:x.id,date:x.date,kind:'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' '),credit:creditCard?(isOut?num(x.amount):0):(isIn?num(x.amount):0),debit:creditCard?(isIn?num(x.amount):0):(isOut?num(x.amount):0),proof:x.proof,note:x.note,by:x.createdBy});
+    const companyFundsCredit=isIn&&transferCreditsCompanyFunds(x,nature,account),salaryAdvanceInfo=isIn&&!companyFundsCredit;
+    entries.push({id:x.id,date:x.date,kind:salaryAdvanceInfo?'salary_advance_funding':'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' ')+(salaryAdvanceInfo?' · salary advance; excluded from usable company funds':''),credit:creditCard?(isOut?num(x.amount):0):(companyFundsCredit?num(x.amount):0),debit:creditCard?(isIn?num(x.amount):0):(isOut?num(x.amount):0),actualCredit:salaryAdvanceInfo?num(x.amount):0,proof:x.proof,note:x.note,by:x.createdBy});
   });
   // A bank ledger follows the account that moved, even when that account paid
   // an expense belonging to another entity (for example SANKI 3645 paying a
@@ -2407,6 +2408,7 @@ function cumulativeCompanyExcludedBankNet(s,draft){
   if(!usesCompanyAdjustedBankTruth(draft.nature,draft.account))return 0;const through=String(draft.summary&&draft.summary.to||''),seen=new Set();let total=0;
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===normalizedNature(draft.nature)&&x.account===draft.account&&(!through||String(x.date||'')<=through)).forEach(x=>{const key='saved|'+String(x.bankTransactionId||x.reference||x.id);if(seen.has(key))return;seen.add(key);total+=num(x.credit)-num(x.debit);});
   Object.values(s.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)===normalizedNature(draft.nature)&&x.account===draft.account).forEach(x=>{const occurrences={};(x.transactions||[]).forEach((bank,index)=>{if(through&&String(bank.date||'')>through)return;const resolution=(x.resolutions||{})['bank-'+index];if(!resolution||resolution.action!=='exclude')return;const base=[bank.date,num(bank.debit).toFixed(2),num(bank.credit).toFixed(2),bank.reference||bank.description||'',bank.balance==null?'':num(bank.balance).toFixed(2)].join('|'),occurrence=occurrences[base]=(occurrences[base]||0)+1,key='draft|'+base+'|'+occurrence;if(seen.has(key))return;seen.add(key);total+=num(bank.credit)-num(bank.debit);});});
+  total+=companyFundsExcludedAdvanceNet(s,draft);
   return roundMoney(total);
 }
 function draftReconciliation(s,draft){
@@ -2740,11 +2742,14 @@ router.post('/api/expenses/balances', (req, res) => {
 });
 
 function usesCompanyAdjustedBankTruth(nature,account){return normalizedNature(nature)==='SANKI'&&String(account||'').trim().toLowerCase()==='prashant axis 3645';}
+function isSalaryAdvanceFundingTransfer(transfer){return !!(transfer&&transfer.salaryAdvanceId&&['salary_advance','salary_advance_funding'].includes(String(transfer.classification||'')));}
+function transferCreditsCompanyFunds(transfer,nature,account){return !(usesCompanyAdjustedBankTruth(nature,account)&&isSalaryAdvanceFundingTransfer(transfer)&&normalizedNature(transfer.toNature||transfer.nature)===normalizedNature(nature)&&transfer.toAccount===account);}
+function companyFundsExcludedAdvanceNet(s,draft){if(!usesCompanyAdjustedBankTruth(draft.nature,draft.account))return 0;const through=String(draft.summary&&draft.summary.to||'');return roundMoney((s.transfers||[]).filter(x=>!x.accountingExcluded&&isSalaryAdvanceFundingTransfer(x)&&normalizedNature(x.toNature||x.nature)===normalizedNature(draft.nature)&&x.toAccount===draft.account&&(!through||String(x.date||'')<=through)).reduce((n,x)=>n+num(x.amount),0));}
 function recordedAccountBalance(s,nature,account,asOf){
   const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d),openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{});let total=num(openingMap[account]);
   (s.adjustments||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
-  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
+  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account&&transferCreditsCompanyFunds(x,nature,account))total+=num(x.amount);});
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)&&!usesCompanyAdjustedBankTruth(nature,account)).forEach(x=>total+=num(x.credit)-num(x.debit));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
@@ -2763,7 +2768,7 @@ function telegramCompanyFundsBalance(s,nature,account,asOf,includePersonal=true)
   const on=d=>(!asOf||!d||String(d).slice(0,10)<=asOf)&&cashEntryIsVisible(account,d),openingMap=nature==='SANKI'?(s.openingBalances||{}):(((s.openingBalancesByNature||{})[nature])||{});let total=num(openingMap[account]);
   (s.adjustments||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
   (s.receipts||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));
-  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)&&(includePersonal||(normalizedNature(x.fromNature||x.nature)!=='PERSONAL'&&normalizedNature(x.toNature||x.nature)!=='PERSONAL'))).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account)total+=num(x.amount);});
+  (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)&&(includePersonal||(normalizedNature(x.fromNature||x.nature)!=='PERSONAL'&&normalizedNature(x.toNature||x.nature)!=='PERSONAL'))).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=num(x.amount);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account&&transferCreditsCompanyFunds(x,nature,account))total+=num(x.amount);});
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   // Most accounts show their raw bank truth. Prashant Axis 3645 is explicitly
   // treated as company funds with an employee, so excluded personal movements
