@@ -9,7 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts } = require('../modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -2022,6 +2022,13 @@ test('consecutive statement uploads merge into one workspace without duplicate o
   }};
   const merged=mergeActiveBankReconciliationDrafts(store,account,'SANKI');assert.equal(merged.id,'BRD-EARLY');assert.equal(Object.keys(store.bankReconciliationDrafts).length,1);assert.equal(merged.summary.from,'2026-08-22');assert.equal(merged.summary.to,'2026-09-06');assert.equal(merged.transactions.length,3,'overlapping bank row is stored once');assert.equal(merged.resolutions['bank-0'].reason,'Personal');assert.equal(merged.resolutions['bank-1'].appId,'EX-3');assert.equal(merged.resolutions['bank-2'].reason,'Recorded next day');assert.equal(merged.sourceStatements.length,2);assert.equal(store.bankReconciliationApprovals.OLD,undefined);
 });
+
+test('an older pending workspace absorbs an already-finalized later period as locked coverage',()=>{
+  const account='Prashant Axis 3645',draft={id:'BRD-OLD',nature:'SANKI',account,transactions:[{date:'2026-09-03',description:'Overlap',reference:'REF-3',debit:100,credit:0,balance:900}],resolutions:{'bank-0':{action:'accept_match',appId:'EX-3'}},summary:{from:'2026-08-22',to:'2026-09-03',openingBalance:1000,closingBalance:900,totalDebits:100,totalCredits:0,validated:true}},later={id:'BTX-LATER',date:'2026-09-04',description:'Later finalized row',reference:'REF-4',debit:25,credit:0,balance:875,firstSeenImport:'BST-LATER'},store={bankReconciliationDrafts:{'BRD-OLD':draft},bankStatements:{[account]:{reconciledThrough:'2026-09-06',transactions:{later},imports:[{id:'BST-LATER',from:'2026-09-04',to:'2026-09-06',closingBalance:875,finalizedAt:'2026-09-06T10:00:00Z'}]}}};
+  assert.equal(extendPendingDraftThroughFinalizedCoverage(store,draft),true);assert.equal(draft.summary.from,'2026-08-22');assert.equal(draft.summary.to,'2026-09-06');assert.equal(draft.summary.closingBalance,875);assert.equal(draft.transactions.length,2);assert.equal(draft.resolutions['bank-0'].appId,'EX-3');assert.deepEqual(draft.reconstructedFromFinalized.importIds,['BST-LATER']);
+});
+
+test('account ledger UI displays account and row reconciliation status',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/Reconciled through:/);assert.match(html,/ledgerReconciliationLabel/);assert.match(source,/ledgerReconciliationStatus/);assert.match(source,/✓ Reconciled/);});
 
 test('Prashant requests Owner approval before final bank reconciliation is posted',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='IndusInd Bank 8181',id='BRD-OWNER-APPROVAL';stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationApprovals={};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[],summary:{from:'2099-01-01',to:'2099-01-01',openingBalance:0,closingBalance:0,totalDebits:0,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString(),createdBy:'prashant'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
