@@ -95,6 +95,24 @@
     .porow{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; cursor:pointer; }
     .porow:hover{ border-color:var(--emerald-l); background:#f9fdfb; }
     .porow.active{ border-color:var(--emerald-d); background:#eefdf6; box-shadow:0 0 0 2px var(--emerald-l) inset; }
+    .ow-toolbar{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .ow-switch{ display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; background:#fff; }
+    .ow-switch button{ border:0; border-radius:0; background:#fff; color:var(--muted); }
+    .ow-switch button.active{ background:var(--ink); color:#fff; }
+    .ow-stats{ display:grid; grid-template-columns:repeat(5,minmax(110px,1fr)); gap:8px; margin:12px 0; }
+    .ow-stat{ padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--ivory2); }
+    .ow-stat b{ display:block; font-size:19px; margin-top:2px; }
+    .ow-card{ border:1px solid var(--line); border-radius:11px; background:#fff; margin-top:8px; overflow:hidden; }
+    .ow-card-head,.ow-sub-head{ width:100%; border:0; background:#fff; color:var(--ink); text-align:left; cursor:pointer; display:flex; align-items:center; gap:10px; padding:12px 14px; font:inherit; }
+    .ow-card-head:hover,.ow-sub-head:hover{ background:#f7fbf9; }
+    .ow-card-head .ow-title{ flex:1; font-size:14px; font-weight:800; }
+    .ow-sub{ margin:0 12px 12px; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+    .ow-sub-head{ padding:9px 11px; border-bottom:1px solid var(--line); }
+    .ow-sub:last-child .ow-sub-head{ border-bottom:0; }
+    .ow-detail{ padding:10px; background:#fbfcfb; border-top:1px solid var(--line); overflow-x:auto; }
+    .ow-chip{ display:inline-block; border-radius:999px; padding:2px 7px; margin:2px 3px 2px 0; background:#f1f5f9; color:#475569; font-size:10px; font-weight:700; white-space:nowrap; }
+    .ow-po-link{ border:0; background:none; color:var(--emerald-d); text-decoration:underline; cursor:pointer; padding:0; font:inherit; font-weight:700; }
+    @media(max-width:760px){ .ow-stats{ grid-template-columns:repeat(2,minmax(110px,1fr)); } .ow-card-head{ align-items:flex-start; flex-wrap:wrap; } }
     .hidden{ display:none !important; }
   </style>
 </head>
@@ -197,6 +215,34 @@
 
     <!-- ══════════ VIEW 2: RECEIVE & POST ══════════ -->
     <div id="viewReceive" class="hidden">
+      <div class="panel" id="onWayPanel">
+        <div class="ow-toolbar">
+          <div>
+            <h2 style="margin:0">What is on the way?</h2>
+            <p class="sub">Only ordered purchases still awaiting arrival. Open a category or vendor to see the other side, then the exact products and POs.</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+            <div class="fld"><label>Audience</label><select id="owAudience"><option value="">Everyone</option></select></div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#5f6d65;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">View by</label>
+              <div class="ow-switch"><button class="btn sm active" data-owview="category">Category</button><button class="btn sm" data-owview="vendor">Vendor</button></div>
+            </div>
+            <button class="btn ghost sm" id="owFilterToggle">Filters</button>
+          </div>
+        </div>
+        <div id="owMoreFilters" class="settingsgrid hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+          <div class="fld"><label>Category</label><select id="owCategory"><option value="">All categories</option></select></div>
+          <div class="fld"><label>Fit</label><select id="owFit"><option value="">All fits</option></select></div>
+          <div class="fld"><label>Vendor</label><select id="owVendor"><option value="">All vendors</option></select></div>
+          <div class="fld"><label>Colour</label><select id="owColour"><option value="">All colours</option></select></div>
+          <div class="fld"><label>Size</label><select id="owSize"><option value="">All sizes</option></select></div>
+          <div class="fld"><label>Arriving by</label><input id="owEta" type="date"></div>
+          <div class="fld"><label>Search <span class="muted" style="font-weight:400;text-transform:none">PO / bill / design / SKU</span></label><input id="owSearch" type="search" placeholder="Type to filter…"></div>
+          <div class="fld"><label>&nbsp;</label><button class="btn ghost" id="owClear">Clear filters</button></div>
+        </div>
+        <div id="owTotals"><p class="sub" style="margin-top:12px">Loading on-the-way purchases…</p></div>
+        <div id="owGroups"></div>
+      </div>
       <div class="panel">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <h2 style="margin:0">Saved purchases</h2>
@@ -1036,6 +1082,122 @@
 
     // ══════════ RECEIVE & POST ══════════
     el('refreshPos').onclick=loadPos;
+    // ── "What is on the way?" ──────────────────────────────────────
+    // This is a deterministic view over real ADVANCE POs only. It deliberately
+    // excludes received/posted POs and every Fresh Procurement planning queue.
+    var owView='category', owOpenPrimary='', owOpenSecondary='';
+    var OW_FILTER_IDS=['owAudience','owCategory','owFit','owVendor','owColour','owSize','owEta','owSearch'];
+    function owText(v){ v=String(v==null?'':v).trim(); return v||'Not specified'; }
+    function owLineCost(po,l){
+      var qty=(po.lines||[]).reduce(function(n,x){return n+(Number(x.qty)||0);},0);
+      var transport=(po.origin==='india'&&qty)?(Number(po.transportTotal)||0)/qty:0;
+      var per=po.origin==='india' ? (Number(l.perPcsYuan)||0)+transport
+        : (Number(l.perPcsYuan)||0)*Number(po.exRate!=null?po.exRate:settings.exRate||0)+(Number(l.weightGrams)||0)*Number(po.freightPerGram!=null?po.freightPerGram:settings.freightPerGram||0);
+      return {perPc:Math.round(per),cost:Math.round(per*(Number(l.qty)||0))};
+    }
+    function allOnWayItems(){
+      var out=[];
+      allPos.forEach(function(po){
+        if(po.status!=='advance') return;
+        (po.lines||[]).forEach(function(l,i){
+          var qty=Number(l.qty)||0; if(qty<=0) return;
+          var lc=owLineCost(po,l);
+          var category=owText(l.productType), vendor=owText(l.vendor||po.vendor);
+          var name=owText(l.designName||l.designCode), code=String(l.designCode||'').trim();
+          out.push({poId:po.id,billNo:po.billNo||'',vendor:vendor,category:category,audience:owText(l.audience),fit:owText(l.fit),
+            colour:owText(l.colour),size:owText(l.sizeLabel),chinaSize:String(l.chinaSize||''),name:name,code:code,sku:String(l.sku||''),
+            photoUrl:String(l.photoUrl||''),qty:qty,perPc:lc.perPc,cost:lc.cost,eta:po.expectedReceiveDate||'',ordered:po.datePurchase||'',lineIndex:i,
+            designKey:[vendor,code||name,category,owText(l.colour)].join('|').toLowerCase()});
+        });
+      });
+      return out;
+    }
+    function owFill(id,values,label){
+      var s=el(id); if(!s) return; var cur=s.value;
+      values=values.filter(function(v,i,a){return v&&a.indexOf(v)===i;}).sort(function(a,b){return a.localeCompare(b,undefined,{numeric:true});});
+      s.innerHTML='<option value="">'+label+'</option>'+values.map(function(v){return '<option value="'+esc(v)+'">'+esc(v)+'</option>';}).join('');
+      if(values.indexOf(cur)>=0) s.value=cur;
+    }
+    function refreshOnWayOptions(){
+      var a=allOnWayItems();
+      owFill('owAudience',a.map(function(x){return x.audience;}),'Everyone');
+      owFill('owCategory',a.map(function(x){return x.category;}),'All categories');
+      owFill('owFit',a.map(function(x){return x.fit;}),'All fits');
+      owFill('owVendor',a.map(function(x){return x.vendor;}),'All vendors');
+      owFill('owColour',a.map(function(x){return x.colour;}),'All colours');
+      owFill('owSize',a.map(function(x){return x.size;}),'All sizes');
+    }
+    function filteredOnWayItems(){
+      var vals={audience:el('owAudience').value,category:el('owCategory').value,fit:el('owFit').value,vendor:el('owVendor').value,colour:el('owColour').value,size:el('owSize').value};
+      var eta=el('owEta').value, q=el('owSearch').value.trim().toLowerCase();
+      return allOnWayItems().filter(function(x){
+        for(var k in vals){if(vals[k]&&x[k]!==vals[k])return false;}
+        if(eta&&(!x.eta||x.eta>eta))return false;
+        if(q&&[x.poId,x.billNo,x.vendor,x.category,x.audience,x.fit,x.colour,x.size,x.name,x.code,x.sku].join(' ').toLowerCase().indexOf(q)<0)return false;
+        return true;
+      });
+    }
+    function owDistinct(items,key){var o={};items.forEach(function(x){o[x[key]]=1;});return Object.keys(o).length;}
+    function owDesigns(items){var o={};items.forEach(function(x){o[x.designKey]=1;});return Object.keys(o).length;}
+    function owBreakdown(items,key,limit){
+      var g={};items.forEach(function(x){g[x[key]]=(g[x[key]]||0)+x.qty;});
+      return Object.keys(g).sort(function(a,b){return g[b]-g[a];}).slice(0,limit||99).map(function(k){return '<span class="ow-chip">'+esc(k)+' '+g[k].toLocaleString('en-IN')+'</span>';}).join('');
+    }
+    function owStatsHtml(items){
+      var pos=owDistinct(items,'poId'),pieces=items.reduce(function(n,x){return n+x.qty;},0),designs=owDesigns(items),cost=items.reduce(function(n,x){return n+x.cost;},0);
+      var etas=items.map(function(x){return x.eta;}).filter(Boolean).sort(),next=etas[0]||'';
+      return '<div class="ow-stats">'+
+        '<div class="ow-stat"><span class="muted">POs</span><b>'+pos+'</b></div>'+
+        '<div class="ow-stat"><span class="muted">Pieces</span><b>'+pieces.toLocaleString('en-IN')+'</b></div>'+
+        '<div class="ow-stat"><span class="muted">Designs</span><b>'+designs+'</b></div>'+
+        '<div class="ow-stat"><span class="muted">Est. value</span><b>'+money(cost)+'</b></div>'+
+        '<div class="ow-stat"><span class="muted">Next arrival</span><b style="font-size:15px">'+(next?esc(fmtDate(next)):'Not set')+'</b></div></div>';
+    }
+    function owGroup(items,key){
+      var m={};items.forEach(function(x){(m[x[key]]||(m[x[key]]=[])).push(x);});
+      return Object.keys(m).map(function(k){return {name:k,items:m[k]};}).sort(function(a,b){return b.items.reduce(function(n,x){return n+x.qty;},0)-a.items.reduce(function(n,x){return n+x.qty;},0);});
+    }
+    function owDetailTable(items){
+      var rows=items.slice().sort(function(a,b){return a.poId.localeCompare(b.poId)||a.name.localeCompare(b.name);}).map(function(x){
+        var photo=x.photoUrl?'<img class="thumb" src="'+esc(x.photoUrl)+'" alt="'+esc(x.name)+'" title="Click to enlarge">':'<span class="muted">none</span>';
+        return '<tr><td>'+photo+'</td><td><b>'+esc(x.name)+'</b>'+(x.code?'<div class="muted mono">'+esc(x.code)+'</div>':'')+'</td>'+
+          '<td>'+esc(x.category)+'<div class="muted">'+esc(x.audience)+' · '+esc(x.fit)+'</div></td>'+
+          '<td>'+esc(x.colour)+' · '+esc(x.size)+(x.chinaSize?' <span class="muted">(CN '+esc(x.chinaSize)+')</span>':'')+'</td>'+
+          '<td><button class="ow-po-link" data-owpo="'+esc(x.poId)+'">'+esc(x.poId)+'</button><div class="muted">'+(x.eta?('ETA '+esc(fmtDate(x.eta))):'ETA not set')+'</div></td>'+
+          '<td class="money"><b>'+x.qty+'</b></td><td class="money">'+money(x.perPc)+'</td><td class="money">'+money(x.cost)+'</td></tr>';
+      }).join('');
+      return '<div class="ow-detail"><table><thead><tr><th>Photo</th><th>Design</th><th>Category / audience / fit</th><th>Colour / size</th><th>PO / arrival</th><th>Qty</th><th>Est. ₹/pc</th><th>Est. total</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    }
+    function renderOnWay(){
+      if(!el('owTotals'))return;
+      var items=filteredOnWayItems(); el('owTotals').innerHTML=owStatsHtml(items);
+      if(!items.length){el('owGroups').innerHTML='<p class="sub">No on-the-way products match these filters.</p>';return;}
+      var pk=owView==='category'?'category':'vendor', sk=owView==='category'?'vendor':'category';
+      var groups=owGroup(items,pk);
+      el('owGroups').innerHTML=groups.map(function(g,pi){
+        var pKey=pk+'|'+g.name,open=owOpenPrimary===pKey,pcs=g.items.reduce(function(n,x){return n+x.qty;},0);
+        var sub=owGroup(g.items,sk);
+        var body=open?'<div style="padding:0 12px 10px">'+sub.map(function(s,si){
+          var sKey=pKey+'|'+sk+'|'+s.name,so=owOpenSecondary===sKey,sp=s.items.reduce(function(n,x){return n+x.qty;},0);
+          return '<div class="ow-sub"><button class="ow-sub-head" data-ows="'+pi+'" data-owsi="'+si+'"><span>'+(so?'▾':'▸')+'</span><b style="flex:1">'+esc(s.name)+'</b><span class="muted">'+owDesigns(s.items)+' designs · '+owDistinct(s.items,'poId')+' POs</span><b>'+sp.toLocaleString('en-IN')+' pcs</b></button>'+(so?owDetailTable(s.items):'')+'</div>';
+        }).join('')+'</div>':'';
+        return '<div class="ow-card"><button class="ow-card-head" data-owp="'+pi+'"><span>'+(open?'▾':'▸')+'</span><span class="ow-title">'+esc(g.name)+'</span><span>'+owBreakdown(g.items,'fit',3)+'</span><span class="muted">'+sub.length+' '+(sk==='vendor'?'vendors':'categories')+' · '+owDesigns(g.items)+' designs · '+owDistinct(g.items,'poId')+' POs</span><b>'+pcs.toLocaleString('en-IN')+' pcs</b></button>'+body+'</div>';
+      }).join('');
+      el('owGroups').onclick=function(e){
+        var po=e.target.closest&&e.target.closest('[data-owpo]'); if(po){openPo(po.getAttribute('data-owpo'));return;}
+        var sb=e.target.closest&&e.target.closest('[data-ows]');
+        if(sb){var pg=groups[+sb.getAttribute('data-ows')],sg=owGroup(pg.items,sk)[+sb.getAttribute('data-owsi')],key=pk+'|'+pg.name+'|'+sk+'|'+sg.name;owOpenSecondary=owOpenSecondary===key?'':key;renderOnWay();return;}
+        var pb=e.target.closest&&e.target.closest('[data-owp]');
+        if(pb){var x=groups[+pb.getAttribute('data-owp')],k=pk+'|'+x.name;owOpenPrimary=owOpenPrimary===k?'':k;owOpenSecondary='';renderOnWay();}
+      };
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('[data-owview]'),function(b){b.onclick=function(){
+      owView=b.getAttribute('data-owview');owOpenPrimary='';owOpenSecondary='';
+      Array.prototype.forEach.call(document.querySelectorAll('[data-owview]'),function(x){x.classList.toggle('active',x===b);});renderOnWay();
+    };});
+    OW_FILTER_IDS.forEach(function(id){var x=el(id);if(x){x.oninput=x.onchange=function(){owOpenPrimary='';owOpenSecondary='';renderOnWay();};}});
+    el('owFilterToggle').onclick=function(){var p=el('owMoreFilters'),show=p.classList.contains('hidden');p.classList.toggle('hidden');el('owFilterToggle').textContent=show?'Hide filters':'Filters';};
+    el('owClear').onclick=function(){OW_FILTER_IDS.forEach(function(id){if(el(id))el(id).value='';});owOpenPrimary='';owOpenSecondary='';renderOnWay();};
     // Search + filters re-render the already-loaded list (no re-fetch needed).
     ['poSearch','poVendorFilter','poStatusFilter','poOriginFilter'].forEach(function(id){
       var e=el(id); if(!e) return;
@@ -1050,6 +1212,7 @@
       fetch('/api/procurement/pos').then(r=>r.json()).then(function(d){
         if(!d.success){ el('poListHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
         poIndex={}; allPos=(d.pos||[]); allPos.forEach(function(p){ poIndex[p.id]=p; });
+        refreshOnWayOptions(); renderOnWay();
         // Refresh the vendor dropdown from the vendors actually present on POs.
         var vf=el('poVendorFilter'); if(vf){
           var cur=vf.value;
@@ -1193,7 +1356,7 @@
       var t=isDiff(l,f)?(' title="'+esc(diffTitle(l,f))+'"'):'';
       return '<select class="'+cls+'"'+t+' data-f="'+f+'" data-i="'+i+'"'+(o.style?(' style="'+o.style+'"'):'')+'>'+optionsHtml+'</select>'; }
     // Count of lines with any discrepancy vs what was ordered.
-    function poDiffCount(po){ return (po.lines||[]).filter(function(l){ return l&&l.ordered && ['qty','colour','productType','sizeLabel','chinaSize','designName','designCode','sku','fit'].some(function(f){return isDiff(l,f);}); }).length; }
+    function poDiffCount(po){ return (po.lines||[]).filter(function(l){ return l&&l.ordered && ['qty','colour','productType','sizeLabel','chinaSize','designName','designCode','sku','fit','audience'].some(function(f){return isDiff(l,f);}); }).length; }
     function renderPoDetail(po){
       lastReceive=null; currentPo=po;
       var posted = po.status==='posted';
@@ -1248,12 +1411,15 @@
           : edInput(l,'designName',i,{ph:'design name'})+edInput(l,'designCode',i,{mono:true,ph:'vendor code',style:'margin-top:3px'});
         var skuCell = posted ? esc(l.sku||l.skuError||'—')
           : edInput(l,'sku',i,{mono:true,ph:'SKU'});
-        var pcsCell = posted ? (esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell)
+        var pcsCell = posted ? (esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'<div class="muted" style="margin-top:3px">'+esc(l.audience||'Not specified')+' · '+esc(l.fit||'Not specified')+'</div>')
           : edSelect(l,'productType',i,objOpts(lookups.products,l.productType))+
             edSelect(l,'colour',i,objOpts(lookups.colours,l.colour),{style:'margin-top:3px'})+
             '<div style="display:flex;gap:4px;margin-top:3px">'+
               edSelect(l,'sizeLabel',i,optList(sizesFor(l.productType),l.sizeLabel),{style:'flex:1'})+
               edSelect(l,'chinaSize',i,'<option value="">CN</option>'+optList(CHINA_SIZES,l.chinaSize),{style:'flex:1'})+
+            '</div><div style="display:flex;gap:4px;margin-top:3px">'+
+              edSelect(l,'audience',i,'<option value="">Audience</option>'+optList(['Men','Women','Unisex'],l.audience),{style:'flex:1'})+
+              edSelect(l,'fit',i,'<option value="">Fit</option>'+optList(fitsFor(l.productType),l.fit),{style:'flex:1'})+
             '</div>';
         var qtyDiff = (!posted && isDiff(l,'qty'));
         h+='<tr>'+
@@ -1276,7 +1442,7 @@
           ? '<button class="btn ghost" id="markRecvBtn">📦 Mark goods received</button>'
           : '<span class="pill rec">✓ Received'+(po.dateReceive?(' · '+esc(fmtDate(po.dateReceive))):'')+'</span> <button class="btn ghost sm" id="undoRecvBtn" title="Undo — set back to Advance">↩ Undo received</button>';
         h+='<div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
-          '<button class="btn" id="saveCorrBtn" title="Save colour / SKU / category / size / design / qty corrections — differences from what was ordered stay highlighted for future audits">💾 Save corrections</button>'+
+          '<button class="btn" id="saveCorrBtn" title="Save colour / SKU / category / size / audience / fit / design / qty corrections — differences from what was ordered stay highlighted for future audits">💾 Save corrections</button>'+
           '<button class="btn ghost" id="computeBtn">Save weights &amp; preview landed cost</button>'+
           recvCtl+
           '<span class="muted" style="align-self:center;font-size:12px">Preview only — this no longer marks the PO received. Use “Mark goods received” when stock physically arrives.</span>'+

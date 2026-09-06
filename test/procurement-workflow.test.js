@@ -44,3 +44,28 @@ test('Purchases Summary renders every PO as a compact expandable history row', (
   assert.match(html, /Recovered from Shopify/);
   assert.match(html, /original PO unavailable/);
 });
+
+test('Audit Purchases has a strict on-the-way category and vendor explorer', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.match(html, /What is on the way\?/);
+  assert.match(html, /data-owview="category"/);
+  assert.match(html, /data-owview="vendor"/);
+  assert.match(html, /if\(po\.status!==['"]advance['"]\) return/);
+  assert.match(html, /All categories/);
+  assert.match(html, /All fits/);
+  assert.match(html, /All vendors/);
+  assert.match(html, /All colours/);
+  assert.match(html, /All sizes/);
+  assert.match(html, /Arriving by/);
+  assert.match(html, /data-owpo/);
+  assert.match(html, /title="Click to enlarge"/);
+});
+
+test('audience and fit can be corrected during purchase audit', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(html, /edSelect\(l,'audience'/);
+  assert.match(html, /edSelect\(l,'fit'/);
+  assert.match(js, /ORDERED_FIELDS = \[[^\]]*'audience'/);
+  assert.match(js, /LINE_EDIT_FIELDS = \[[^\]]*'audience'/);
+});

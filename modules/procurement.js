@@ -464,7 +464,7 @@ function normLine(v) {
 // edit that makes a tracked field differ from `l.ordered` is a discrepancy
 // the UI highlights — so a bill audited months later still shows what was
 // corrected. The baseline is written ONCE and never overwritten.
-const ORDERED_FIELDS = ['qty', 'colour', 'productType', 'sizeLabel', 'chinaSize', 'designName', 'designCode', 'sku', 'fit'];
+const ORDERED_FIELDS = ['qty', 'colour', 'productType', 'sizeLabel', 'chinaSize', 'designName', 'designCode', 'sku', 'fit', 'audience'];
 function orderedSnapshot(l) {
   const o = {};
   ORDERED_FIELDS.forEach(k => { o[k] = l[k] == null ? '' : l[k]; });
@@ -1267,7 +1267,7 @@ router.post('/api/procurement/pos/:id/line-photo', (req, res) => {
 // field that ends up differing from `ordered` is a highlighted discrepancy.
 // SKU is a free-text override (these POs aren't on Shopify yet); we do NOT
 // auto-regenerate it from colour/category/size, per the chosen behaviour.
-const LINE_EDIT_FIELDS = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'chinaSize', 'fit', 'sku'];
+const LINE_EDIT_FIELDS = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'chinaSize', 'fit', 'audience', 'sku'];
 router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
