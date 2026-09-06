@@ -1987,6 +1987,7 @@ test('IndusInd 8181 is a complete SANKI bank account from 5 September 2026',()=>
 });
 
 test('only the Owner can set a dated custom opening balance with an audit reason',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),before=JSON.parse(fs.readFileSync(expenseFile,'utf8'));before.bankReconciliationDrafts=before.bankReconciliationDrafts||{};before.bankReconciliationDrafts['OPENING-LIVE']={id:'OPENING-LIVE',nature:'SANKI',account:'Prashant Axis 3645',transactions:[],summary:{from:'2026-09-06',to:'2026-09-06',closingBalance:0},resolutions:{},openingResolution:{amount:999,reason:'stale'}};fs.writeFileSync(expenseFile,JSON.stringify(before));
   const denied=invoke('POST','/api/expenses/balances',{role:'admin',body:{nature:'SANKI',setOpening:{account:'Prashant Axis 3645',amount:-123.45,effectiveDate:'2026-09-06',reason:'Owner correction'}}});
   assert.equal(denied.status,403);
   const missingReason=invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',setOpening:{account:'Prashant Axis 3645',amount:0,effectiveDate:'2026-09-06'}}});
@@ -1996,11 +1997,22 @@ test('only the Owner can set a dated custom opening balance with an audit reason
   const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));
   assert.equal(stored.openingBalances['Prashant Axis 3645'],-123.45);
   assert.equal(stored.openingBalanceDates['Prashant Axis 3645'],'2026-09-06');
+  assert.equal(stored.bankReconciliationDrafts['OPENING-LIVE'].openingResolution,undefined,'active reconciliation immediately follows the Owner opening');
   const event=stored.auditLog.filter(x=>x.action==='OPENING_BALANCE_CHANGED'&&x.subjectId==='Prashant Axis 3645').at(-1);
   assert.equal(event.note,'Verified from opening statement');
   assert.deepEqual(event.after,{amount:-123.45,effectiveDate:'2026-09-06'});
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/cfg\.isOwner\?'<button class="btn mini ghost" onclick="openOpeningBalance/);
+});
+
+test('later reconciliation periods use the finalized cutoff and do not re-reconcile overlap',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='Axis Bank 3448',id='BRD-CONTINUOUS';
+  stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-09-03',transactions:{old:{id:'BTX-OLD',date:'2026-09-03',debit:100,credit:0,reference:'OLD'}},imports:[]};
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[{date:'2026-09-03',description:'Overlap',reference:'DIFFERENT-EXPORT-TEXT',debit:100,credit:0,balance:900},{date:'2026-09-04',description:'New row',reference:'NEW',debit:50,credit:0,balance:850}],summary:{from:'2026-09-03',to:'2026-09-04',openingBalance:1000,closingBalance:850,totalDebits:150,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString()};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:id,account}}).body;
+  assert.equal(view.continuityCutoff,'2026-09-03');assert.equal(view.effectiveFrom,'2026-09-04');
+  assert.equal(view.rows.find(x=>x.id==='bank-0').status,'already_reconciled');
+  assert.equal(view.rows.find(x=>x.id==='bank-1').status,'missing_in_app');
 });
 
 test('a store repair failure cannot hide the persisted financial records', () => {
