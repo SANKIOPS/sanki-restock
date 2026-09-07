@@ -455,14 +455,15 @@ function casualsOverview(store, requestedLine) {
   const openLines = [];
   Object.values(purchases.pos || {}).forEach(po => {
     if (!po || po.status !== 'advance' || po.line !== lineName) return;
-    (po.lines || []).forEach(line => {
+    (po.lines || []).forEach((line, lineIndex) => {
       const qty = Math.max(0, Number(line.qty) || 0);
       if (!qty) return;
+      const designKey = String(line.designCode || line.designName || line.sku || (po.id + '#' + lineIndex)).trim();
       openLines.push({
         poId: po.id, batchId: String(po.sourceBatchId || ''),
         category: batchCategory[String(po.sourceBatchId || '')] || canonicalCasualCategory(line.productType), audience: String(line.audience || ''),
         type: String(line.fit || ''), vendor: String(line.vendor || po.vendor || ''),
-        colour: String(line.colour || ''), qty,
+        colour: String(line.colour || ''), designKey, qty,
         cost: procurementLineCost(po, line, purchaseSettings)
       });
     });
@@ -479,18 +480,23 @@ function casualsOverview(store, requestedLine) {
     const cats = plan.categories.filter(c => allowed.includes(c.category));
     const linked = openLines.filter(x => x.batchId === b.id);
     const vendors = [...new Set(candidates.map(c => String(c.vendor || '').trim()).concat(linked.map(x => x.vendor)).filter(Boolean))];
-    const colours = [...new Set(candidates.map(c => String(c.colour || '').trim()).concat(linked.map(x => x.colour)).filter(Boolean))];
+    const activeColours = new Set();
+    allowed.forEach(k => Object.entries((settings.categories[k] && settings.categories[k].colours) || {})
+      .forEach(([name, pct]) => { if (Number(pct) > 0) activeColours.add(String(name)); }));
     const budget = cats.reduce((sum, c) => sum + (Number(c.budget) || 0), 0);
     const onWayCost = linked.reduce((sum, x) => sum + x.cost, 0);
     const onWayPieces = linked.reduce((sum, x) => sum + x.qty, 0);
+    const onWayDesigns = new Set(linked.map(x => x.designKey).filter(Boolean)).size;
     const targetDesigns = cats.reduce((sum, c) => sum + (Number(c.designsTarget) || 0), 0);
     const targetPieces = cats.reduce((sum, c) => sum + (Number(c.estUnits) || 0), 0);
     const displayCategory = b.categoryName || allowed.map(k => (CAT_BY_KEY[k] || { label: k }).label).join(', ') || 'Unspecified';
     rows.push({
       id: b.id, name: b.name, audience: b.audience || '',
       category: displayCategory, categoryKeys: [displayCategory], type: b.type || '', vendors, vendor: vendors.join(', '),
-      designs: targetDesigns, pieces: targetPieces, colours: colours.length, colourways: candidates.filter(c => !c.dupeOf).length,
-      budget, onWayCost, onWayPieces, remaining: Math.max(0, budget - onWayCost),
+      designs: targetDesigns, pieces: targetPieces, colours: activeColours.size, activeColours: [...activeColours], colourways: candidates.filter(c => !c.dupeOf).length,
+      budget, onWayCost, onWayPieces, onWayDesigns, remaining: Math.max(0, budget - onWayCost),
+      remainingDesigns: Math.max(0, targetDesigns - onWayDesigns),
+      remainingPieces: Math.max(0, targetPieces - onWayPieces),
       status: onWayCost >= budget && budget > 0 ? 'Fully ordered' : (onWayCost > 0 ? 'Part ordered' : (candidates.length ? 'Sourcing' : 'Draft')),
       createdAt: b.createdAt || ''
     });
@@ -502,31 +508,37 @@ function casualsOverview(store, requestedLine) {
   const onWayCost = openLines.reduce((sum, x) => sum + x.cost, 0);
   const onWayPieces = openLines.reduce((sum, x) => sum + x.qty, 0);
   const distinctColours = new Set();
-  rows.forEach(r => {
-    const batch = (s.batches || []).find(b => b.id === r.id);
-    (s.candidates || []).filter(c => c.batch === (batch && batch.id)).forEach(c => { if (c.colour) distinctColours.add(String(c.colour)); });
-  });
+  rows.forEach(r => (r.activeColours || []).forEach(colour => distinctColours.add(colour)));
   openLines.forEach(x => { if (x.colour) distinctColours.add(x.colour); });
   const categories = {};
   rows.forEach(r => r.categoryKeys.forEach(key => {
-    const c = categories[key] || (categories[key] = { key, label: (CAT_BY_KEY[key] || { label: key }).label, budget: 0, onWayCost: 0, onWayPieces: 0, batches: 0 });
-    c.budget += r.categoryKeys.length ? Math.round(r.budget / r.categoryKeys.length) : 0; c.batches++;
+    const c = categories[key] || (categories[key] = { key, label: (CAT_BY_KEY[key] || { label: key }).label, budget: 0, designs: 0, pieces: 0, onWayCost: 0, onWayPieces: 0, onWayDesignKeys: new Set(), batches: 0 });
+    const share = r.categoryKeys.length || 1;
+    c.budget += Math.round(r.budget / share); c.designs += Math.round(r.designs / share); c.pieces += Math.round(r.pieces / share); c.batches++;
   }));
   openLines.forEach(x => {
     const key = x.category;
-    const c = categories[key] || (categories[key] = { key, label: (CAT_BY_KEY[key] || { label: key }).label, budget: 0, onWayCost: 0, onWayPieces: 0, batches: 0 });
-    c.onWayCost += x.cost; c.onWayPieces += x.qty;
+    const c = categories[key] || (categories[key] = { key, label: (CAT_BY_KEY[key] || { label: key }).label, budget: 0, designs: 0, pieces: 0, onWayCost: 0, onWayPieces: 0, onWayDesignKeys: new Set(), batches: 0 });
+    c.onWayCost += x.cost; c.onWayPieces += x.qty; if (x.designKey) c.onWayDesignKeys.add(x.designKey);
   });
-  Object.values(categories).forEach(c => { c.remaining = Math.max(0, c.budget - c.onWayCost); });
+  Object.values(categories).forEach(c => {
+    c.onWayDesigns = c.onWayDesignKeys.size; delete c.onWayDesignKeys;
+    c.remaining = Math.max(0, c.budget - c.onWayCost);
+    c.remainingDesigns = Math.max(0, c.designs - c.onWayDesigns);
+    c.remainingPieces = Math.max(0, c.pieces - c.onWayPieces);
+  });
   const remainingByCategory = Object.values(categories).reduce((sum, c) => sum + c.remaining, 0);
   return {
-    line: lineName, rows, categories: Object.values(categories),
+    line: lineName, rows, categories: Object.values(categories), unlinkedOnWay: unlinked,
     totals: {
       batches: rows.length, budget: totalBudget, onWayCost, onWayPieces,
       // Never let over-buying in one category consume another category's budget.
       remaining: remainingByCategory,
       designs: rows.reduce((sum, r) => sum + r.designs, 0),
       pieces: rows.reduce((sum, r) => sum + r.pieces, 0),
+      onWayDesigns: new Set(openLines.map(x => x.category + '|' + x.designKey)).size,
+      remainingDesigns: Object.values(categories).reduce((sum, c) => sum + c.remainingDesigns, 0),
+      remainingPieces: Object.values(categories).reduce((sum, c) => sum + c.remainingPieces, 0),
       colours: distinctColours.size, unlinkedOnWayCost: unlinked.reduce((sum, x) => sum + x.cost, 0),
       unlinkedOnWayPieces: unlinked.reduce((sum, x) => sum + x.qty, 0)
     }
@@ -588,12 +600,21 @@ function settingsWithDefaults(s) {
       if (savedMap) Object.keys(savedMap).forEach(k => { if (!(k in out)) out[k] = cleanPct(savedMap[k], 0); });
       return out;
     };
+    // Colours are an exact, user-managed list. Once a founder removes a default
+    // colour, a later read must not silently merge that colour back in.
+    const exactPct = (defMap, savedMap) => {
+      const source = savedMap && typeof savedMap === 'object' && Object.keys(savedMap).length ? savedMap : defMap;
+      const out = {};
+      Object.keys(source).forEach(k => { out[k] = cleanPct(source[k], 0); });
+      return out;
+    };
     const legacySizes = LEGACY_PERCENT_SIZE_MAPS[spec.key];
     const savedSizes = legacySizes && sc.sizes && Object.keys(legacySizes).every(k => Number(sc.sizes[k]) === legacySizes[k])
       && Object.keys(sc.sizes).every(k => Object.prototype.hasOwnProperty.call(legacySizes, k)) ? null : sc.sizes;
     categories[spec.key] = {
       enabled: sc.enabled != null ? !!sc.enabled : true,
       budget: sc.budget != null ? Math.max(0, parseInt(sc.budget) || 0) : 0,
+      budgetOverride: sc.budgetOverride != null ? Math.max(0, parseInt(sc.budgetOverride) || 0) : null,
       avgCost: sc.avgCost != null ? Math.max(1, parseInt(sc.avgCost) || spec.avgCost) : spec.avgCost,
       // SIZING MODE — how the category's total piece target is set:
       //   'cost'    → pieces = budget ÷ avgCost (money-anchored estimate).
@@ -612,7 +633,7 @@ function settingsWithDefaults(s) {
       sizeSystem: (sc.sizeSystem === 'numeric' || sc.sizeSystem === 'alpha') ? sc.sizeSystem : (spec.key === 'Trouser' ? 'alpha' : 'alpha'),
       fits:    mergePct(fitDef, sc.fits),
       sizes:   mergePct(sizeDef, savedSizes),
-      colours: mergePct(colDef, sc.colours),
+      colours: exactPct(colDef, sc.colours),
       // Print-type % split — only populated for categories that support it
       // (Shirts, T-shirts); an empty {} for Trousers.
       printTypes: mergePct(printDef, sc.printTypes),
@@ -1215,7 +1236,9 @@ function buildPlan(cands, settings) {
       : (cfg.sizeMode === 'designs' ? Math.max(0, cfg.designs || 0) * SET
         : cfg.sizeMode === 'units' ? Math.max(0, cfg.targetUnits || 0)
         : Math.round(budget / expPrice));
-    if (enabled && (cfg.sizeMode === 'units' || cfg.sizeMode === 'designs')) budget = catUnits * expPrice;
+    if (enabled && (cfg.sizeMode === 'units' || cfg.sizeMode === 'designs')) {
+      budget = cfg.budgetOverride != null ? Math.max(0, Number(cfg.budgetOverride) || 0) : catUnits * expPrice;
+    }
     const estUnits = catUnits;
     // Total DESIGNS = the number that cascades down print → fit → colour, so colour
     // % lands on the count of designs (impactful), not a piece count that collapses
@@ -1968,9 +1991,16 @@ router.post('/api/casuals/settings', (req, res) => {
       keys.forEach(kk => { out[kk] = cleanPct(incMap && incMap[kk] != null ? incMap[kk] : curMap[kk], curMap[kk] || 0); });
       return out;
     };
+    const pickExactPct = (incMap, curMap) => {
+      const source = incMap && typeof incMap === 'object' && Object.keys(incMap).length ? incMap : curMap;
+      const out = {};
+      Object.keys(source || {}).forEach(kk => { out[kk] = cleanPct(source[kk], 0); });
+      return out;
+    };
     next.categories[k] = {
       enabled: inc.enabled != null ? !!inc.enabled : c.enabled,
       budget: inc.budget != null ? Math.max(0, parseInt(String(inc.budget).replace(/[^\d]/g, '')) || 0) : c.budget,
+      budgetOverride: inc.budgetOverride != null ? Math.max(0, parseInt(String(inc.budgetOverride).replace(/[^\d]/g, '')) || 0) : c.budgetOverride,
       avgCost: inc.avgCost != null ? Math.max(1, parseInt(inc.avgCost) || c.avgCost) : c.avgCost,
       sizeMode: inc.sizeMode != null ? ((inc.sizeMode === 'units' || inc.sizeMode === 'designs') ? inc.sizeMode : 'cost') : c.sizeMode,
       targetUnits: inc.targetUnits != null ? Math.max(0, parseInt(String(inc.targetUnits).replace(/[^\d]/g, '')) || 0) : c.targetUnits,
@@ -1978,7 +2008,7 @@ router.post('/api/casuals/settings', (req, res) => {
       sizeSystem: inc.sizeSystem != null ? (inc.sizeSystem === 'numeric' ? 'numeric' : 'alpha') : c.sizeSystem,
       fits: pickPct(inc.fits, c.fits),
       sizes: pickPct(inc.sizes, c.sizes),
-      colours: pickPct(inc.colours, c.colours),
+      colours: pickExactPct(inc.colours, c.colours),
       printTypes: pickPct(inc.printTypes, c.printTypes),
       onOrder: cleanIntMap(inc.onOrder != null ? inc.onOrder : c.onOrder),
       onOrderCost: cleanMoneyMap(inc.onOrderCost != null ? inc.onOrderCost : c.onOrderCost),
@@ -2067,6 +2097,20 @@ router.patch('/api/casuals/batches/:id', (req, res) => {
     const cats = [...new Set(raw.filter(k => CAT_BY_KEY[k]))];
     if (!cats.length) return res.status(400).json({ success: false, error: 'Choose a valid category' });
     b.categories = cats; b.category = cats.length === 1 ? cats[0] : null;
+  }
+  if (body.budget != null) {
+    const amount = Math.max(0, parseInt(String(body.budget).replace(/[^\d]/g, ''), 10) || 0);
+    const cats = batchCats(b);
+    if (!cats.length) return res.status(400).json({ success: false, error: 'This batch needs a category before its budget can be edited' });
+    const snapshot = settingsWithDefaults({ settings: b.planSettings || s.settings });
+    let left = amount;
+    cats.forEach((key, index) => {
+      const share = index === cats.length - 1 ? left : Math.round(amount / cats.length);
+      left -= share;
+      snapshot.categories[key].budget = share;
+      snapshot.categories[key].budgetOverride = share;
+    });
+    b.planSettings = JSON.parse(JSON.stringify(snapshot));
   }
   saveStore(s);
   res.json({ success: true, batch: batchList(s).find(x => x.id === b.id), batches: batchList(s) });

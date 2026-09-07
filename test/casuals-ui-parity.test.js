@@ -43,6 +43,19 @@ test('new and legacy shirt batches receive the six-piece default size run', () =
   assert.deepEqual(edited.categories.Shirt.sizes, { XS:1, S:1, M:1, L:1, XL:1, XXL:1 });
 });
 
+test('a removed default colour stays removed from a saved batch', () => {
+  const settings = settingsWithDefaults({ settings: { categories: {
+    Trouser: { colours:{ Black:60, Beige:40 } }
+  } } });
+  assert.deepEqual(settings.categories.Trouser.colours, { Black:60, Beige:40 });
+  assert.equal(Object.keys(settings.categories.Trouser.colours).length, 2);
+
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  assert.match(html, /kind==='colours' \? mapKeys\.length>1/);
+  assert.match(html, /delete map\[key\]/);
+  assert.match(html, /Keep at least one colour in the batch/);
+});
+
 test('detailed Casual UI presents the design-first workflow', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
   assert.match(html, /Same workflow for Trousers, Shirts and T-shirts/);

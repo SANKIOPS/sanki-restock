@@ -16,12 +16,17 @@ test('Casuals overview nets only advance Purchases linked to the named batch', (
   settings.categories.Trouser.sizeMode = 'designs';
   settings.categories.Trouser.designs = 10;
   settings.categories.Trouser.avgCost = 800;
+  settings.categories.Trouser.budgetOverride = 90000;
   settings.categories.Trouser.sizeSystem = 'numeric';
   settings.categories.Trouser.sizes = { 26:1, 28:1, 30:1, 32:1, 34:1, 36:1 };
+  settings.categories.Trouser.colours = { Black:40, White:20, Brown:15, Beige:15, Olive:10 };
 
   fs.writeFileSync(process.env.PROCUREMENT_PATH, JSON.stringify({ settings: { exRate: 15, freightPerGram: 0.42 }, pos: {
     'PO-0001': { id:'PO-0001', status:'advance', line:'casuals', sourceBatchId:'b-wide', origin:'china', exRate:15,
-      vendor:'VENDOR A', lines:[{ productType:'Trouser', audience:'Women', fit:'Wide Leg', colour:'Black', qty:20, perPcsYuan:50 }] },
+      vendor:'VENDOR A', lines:[
+        { designName:'6910', productType:'Trouser', audience:'Women', fit:'Wide Leg', colour:'Black', sizeLabel:'M', qty:12, perPcsYuan:50 },
+        { designName:'6910', productType:'Trouser', audience:'Women', fit:'Wide Leg', colour:'White', sizeLabel:'L', qty:8, perPcsYuan:50 }
+      ] },
     'PO-0002': { id:'PO-0002', status:'received', line:'casuals', sourceBatchId:'b-wide', origin:'china', exRate:15,
       vendor:'VENDOR A', lines:[{ productType:'Trouser', audience:'Women', fit:'Wide Leg', colour:'Black', qty:100, perPcsYuan:50 }] },
     'PO-0003': { id:'PO-0003', status:'advance', line:'funky', origin:'china', exRate:15,
@@ -36,10 +41,19 @@ test('Casuals overview nets only advance Purchases linked to the named batch', (
   assert.equal(overview.rows[0].name, 'Women Wide-Leg Trousers');
   assert.equal(overview.rows[0].designs, 10);
   assert.equal(overview.rows[0].pieces, 60);
-  assert.equal(overview.rows[0].budget, 48000);
+  assert.equal(overview.rows[0].budget, 90000);
   assert.equal(overview.rows[0].onWayCost, 15000);
-  assert.equal(overview.rows[0].remaining, 33000);
+  assert.equal(overview.rows[0].onWayDesigns, 1);
+  assert.equal(overview.rows[0].remainingDesigns, 9);
+  assert.equal(overview.rows[0].remainingPieces, 40);
+  assert.equal(overview.rows[0].colours, 5);
+  assert.equal(overview.rows[0].remaining, 75000);
   assert.equal(overview.totals.onWayPieces, 20);
+  assert.equal(overview.categories[0].designs, 10);
+  assert.equal(overview.categories[0].pieces, 60);
+  assert.equal(overview.categories[0].onWayDesigns, 1);
+  assert.equal(overview.categories[0].remainingDesigns, 9);
+  assert.equal(overview.categories[0].remainingPieces, 40);
 });
 
 test('Funky uses the same named-batch overview while remaining data-separated', () => {
@@ -66,6 +80,7 @@ test('Fresh Procurement UI has the summary, named batch fields and exact PO brid
   const fresh = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
   const purchases = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   const procurement = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  const casuals = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
   assert.match(fresh, /id="procOverview"/);
   assert.match(fresh, /id="czBatchName"/);
   assert.match(fresh, /id="czBatchAudience"/);
@@ -78,6 +93,10 @@ test('Fresh Procurement UI has the summary, named batch fields and exact PO brid
   assert.match(fresh, /\/api\/casuals\/overview\?line=/);
   assert.match(fresh, /categoryName:categoryName/);
   assert.match(fresh, /line:czLine/);
+  assert.match(fresh, /data-ov-budget/);
+  assert.match(fresh, /remainingDesigns/);
+  assert.match(fresh, /ovFilteredUnlinked/);
+  assert.match(casuals, /budgetOverride = share/);
   const routes = router.stack.filter(layer => layer.route).map(layer => ({ path:layer.route.path, methods:layer.route.methods }));
   assert.ok(routes.some(r => r.path === '/api/casuals/overview' && r.methods.get));
   assert.ok(routes.some(r => r.path === '/api/casuals/batches/:id' && r.methods.patch));

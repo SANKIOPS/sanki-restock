@@ -58,6 +58,8 @@
     .ovtable th{ text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.35px;background:#f7faf7; }
     .ovtable th,.ovtable td{ padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap; }
     .ovtable tr:last-child td{ border-bottom:0; }.ovbatch{ cursor:pointer; }.ovbatch:hover td{ background:#f2faf6; }
+    .ovbudgetinput{ width:92px;padding:5px 7px;border:1px solid #9ccfba;border-radius:7px;background:#fbfffd;font:inherit;font-weight:800;color:#065f46;text-align:right; }
+    .ovbudgetinput:focus{ outline:2px solid #a7f3d0;outline-offset:1px; }
     .ovstatus{ display:inline-block;border-radius:999px;padding:2px 7px;background:#eef4ff;color:#1d4ed8;font-weight:700;font-size:10px; }
     .ovwarn{ margin-top:9px;padding:8px 10px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:12px; }
     .cznewgrid{ display:grid;grid-template-columns:2fr 1fr 1fr 1.5fr;gap:10px;align-items:end; }
@@ -1279,7 +1281,7 @@
   el('drop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) uploadFiles(e.dataTransfer.files); });
 
   // ── Procurement portfolio: plan + real advance/on-the-way Purchases ──
-  var ovData=null, ovLine='funky';
+  var ovData=null, ovLine='funky', ovBudgetTimer=null;
   function ovMoney(n){return '₹'+fmtINR(Math.round(Number(n)||0));}
   function ovOptions(id,values,placeholder){
     var s=el(id),cur=s.value; values=values.filter(function(v,i,a){return v&&a.indexOf(v)===i;}).sort();
@@ -1290,25 +1292,39 @@
     if(!ovData)return[];var a=el('ovAudience').value,c=el('ovCategory').value,t=el('ovType').value,v=el('ovVendor').value,s=el('ovStatus').value;
     return (ovData.rows||[]).filter(function(r){return(!a||r.audience===a)&&(!c||r.category===c||(r.categoryKeys||[]).indexOf(c)>=0)&&(!t||r.type===t)&&(!v||(r.vendors||[]).indexOf(v)>=0)&&(!s||r.status===s);});
   }
+  function ovFilteredUnlinked(){
+    if(!ovData||el('ovStatus').value)return[];
+    var a=el('ovAudience').value,c=el('ovCategory').value,t=el('ovType').value,v=el('ovVendor').value;
+    return (ovData.unlinkedOnWay||[]).filter(function(r){return(!a||r.audience===a)&&(!c||r.category===c)&&(!t||r.type===t)&&(!v||r.vendor===v);});
+  }
+  function ovRollup(rows,unlinked){
+    var cats={};
+    function take(key){return cats[key]||(cats[key]={key:key,label:key,batches:0,budget:0,designs:0,pieces:0,onWayDesigns:0,onWayPieces:0,onWayCost:0,_unlinkedDesigns:{}});}
+    rows.forEach(function(r){var c=take(r.category||'Unspecified');c.batches++;c.budget+=Number(r.budget)||0;c.designs+=Number(r.designs)||0;c.pieces+=Number(r.pieces)||0;c.onWayDesigns+=Number(r.onWayDesigns)||0;c.onWayPieces+=Number(r.onWayPieces)||0;c.onWayCost+=Number(r.onWayCost)||0;});
+    unlinked.forEach(function(r){var c=take(r.category||'Uncategorised');c.onWayPieces+=Number(r.qty)||0;c.onWayCost+=Number(r.cost)||0;if(r.designKey)c._unlinkedDesigns[r.designKey]=1;});
+    var list=Object.keys(cats).sort().map(function(key){var c=cats[key];c.onWayDesigns+=Object.keys(c._unlinkedDesigns).length;delete c._unlinkedDesigns;c.remaining=Math.max(0,c.budget-c.onWayCost);c.remainingDesigns=Math.max(0,c.designs-c.onWayDesigns);c.remainingPieces=Math.max(0,c.pieces-c.onWayPieces);return c;});
+    return{categories:list,totals:{batches:rows.length,budget:list.reduce(function(s,c){return s+c.budget;},0),designs:list.reduce(function(s,c){return s+c.designs;},0),pieces:list.reduce(function(s,c){return s+c.pieces;},0),onWayDesigns:list.reduce(function(s,c){return s+c.onWayDesigns;},0),onWayPieces:list.reduce(function(s,c){return s+c.onWayPieces;},0),onWayCost:list.reduce(function(s,c){return s+c.onWayCost;},0),remaining:list.reduce(function(s,c){return s+c.remaining;},0),remainingDesigns:list.reduce(function(s,c){return s+c.remainingDesigns;},0),remainingPieces:list.reduce(function(s,c){return s+c.remainingPieces;},0)}};
+  }
   function ovRenderRows(){
-    var rows=ovFilteredRows(),host=el('ovRows');
+    var rows=ovFilteredRows(),unlinked=ovFilteredUnlinked(),roll=ovRollup(rows,unlinked),t=roll.totals,host=el('ovRows');
+    el('ovKpis').innerHTML='<div class="ovkpi money"><span>Planned budget</span><b>'+ovMoney(t.budget)+'</b></div><div class="ovkpi used"><span>Already on the way</span><b>'+ovMoney(t.onWayCost)+'</b></div><div class="ovkpi rem"><span>Remaining budget</span><b>'+ovMoney(t.remaining)+'</b></div><div class="ovkpi"><span>Planned designs</span><b>'+fmtINR(t.designs||0)+'</b></div><div class="ovkpi"><span>Planned pieces</span><b>'+fmtINR(t.pieces||0)+'</b></div><div class="ovkpi"><span>Remaining designs</span><b>'+fmtINR(t.remainingDesigns||0)+'</b></div><div class="ovkpi"><span>Remaining pieces</span><b>'+fmtINR(t.remainingPieces||0)+'</b></div><div class="ovkpi"><span>Batches / groups</span><b>'+fmtINR(t.batches||0)+'</b></div>';
+    var cats=roll.categories;el('ovCategories').innerHTML=cats.length?'<div class="ovtable"><table><thead><tr><th>Category</th><th>Batches</th><th>Budget</th><th>Planned designs</th><th>Planned pieces</th><th>On-way designs</th><th>On-way pieces</th><th>On-way value</th><th>Remaining designs</th><th>Remaining pieces</th><th>Remaining budget</th></tr></thead><tbody>'+cats.map(function(c){return'<tr><td><b>'+escapeHtml(c.label||c.key)+'</b></td><td>'+fmtINR(c.batches||0)+'</td><td>'+ovMoney(c.budget)+'</td><td>'+fmtINR(c.designs||0)+'</td><td>'+fmtINR(c.pieces||0)+'</td><td>'+fmtINR(c.onWayDesigns||0)+'</td><td>'+fmtINR(c.onWayPieces||0)+'</td><td>'+ovMoney(c.onWayCost)+'</td><td>'+fmtINR(c.remainingDesigns||0)+'</td><td>'+fmtINR(c.remainingPieces||0)+'</td><td><b>'+ovMoney(c.remaining)+'</b></td></tr>';}).join('')+'</tbody></table></div>':'';
+    var unlinkedCost=unlinked.reduce(function(s,r){return s+(Number(r.cost)||0);},0),unlinkedPieces=unlinked.reduce(function(s,r){return s+(Number(r.qty)||0);},0);
+    el('ovWarning').innerHTML=unlinkedCost?'<div class="ovwarn"><b>'+ovMoney(unlinkedCost)+'</b> ('+fmtINR(unlinkedPieces)+' pcs) is on the way but not linked to a named batch. It is included in the filtered totals above.</div>':'';
     if(!rows.length){host.innerHTML='<p class="sub" style="margin-top:12px">No sourcing batches match these filters.</p>';return;}
-    host.innerHTML='<div class="ovtable"><table><thead><tr><th>Named batch</th><th>Audience</th><th>Category</th><th>Type / fit</th><th>Vendor</th><th>Designs</th><th>Pieces</th><th>Colours</th><th>Budget</th><th>On way</th><th>Remaining</th><th>Status</th></tr></thead><tbody>'+rows.map(function(r){
-      return '<tr class="ovbatch" data-overview-batch="'+escapeHtml(r.id)+'"><td><b>'+escapeHtml(r.name)+'</b></td><td>'+escapeHtml(r.audience||'—')+'</td><td>'+escapeHtml(r.category||'—')+'</td><td>'+escapeHtml(r.type||'—')+'</td><td>'+escapeHtml(r.vendor||'—')+'</td><td>'+fmtINR(r.designs||0)+'</td><td>'+(r.pieces?fmtINR(r.pieces):'—')+'</td><td>'+fmtINR(r.colours||0)+'</td><td>'+ovMoney(r.budget)+'</td><td>'+ovMoney(r.onWayCost)+'</td><td><b>'+ovMoney(r.remaining)+'</b></td><td><span class="ovstatus">'+escapeHtml(r.status||'—')+'</span></td></tr>';
+    host.innerHTML='<div class="ovtable"><table><thead><tr><th>Named batch</th><th>Audience</th><th>Category</th><th>Type / fit</th><th>Vendor</th><th>Planned designs</th><th>Planned pieces</th><th>Active colours</th><th>Budget ₹</th><th>On-way designs</th><th>On-way pieces</th><th>On-way value</th><th>Remaining designs</th><th>Remaining pieces</th><th>Remaining budget</th><th>Status</th></tr></thead><tbody>'+rows.map(function(r){
+      return '<tr class="ovbatch" data-overview-batch="'+escapeHtml(r.id)+'"><td><b>'+escapeHtml(r.name)+'</b></td><td>'+escapeHtml(r.audience||'—')+'</td><td>'+escapeHtml(r.category||'—')+'</td><td>'+escapeHtml(r.type||'—')+'</td><td>'+escapeHtml(r.vendor||'—')+'</td><td>'+fmtINR(r.designs||0)+'</td><td>'+fmtINR(r.pieces||0)+'</td><td>'+fmtINR(r.colours||0)+'</td><td><input class="ovbudgetinput" data-ov-budget="'+escapeHtml(r.id)+'" inputmode="numeric" value="'+Math.round(Number(r.budget)||0)+'" aria-label="Budget for '+escapeHtml(r.name)+'"></td><td>'+fmtINR(r.onWayDesigns||0)+'</td><td>'+fmtINR(r.onWayPieces||0)+'</td><td>'+ovMoney(r.onWayCost)+'</td><td>'+fmtINR(r.remainingDesigns||0)+'</td><td>'+fmtINR(r.remainingPieces||0)+'</td><td><b>'+ovMoney(r.remaining)+'</b></td><td><span class="ovstatus">'+escapeHtml(r.status||'—')+'</span></td></tr>';
     }).join('')+'</tbody></table></div>';
   }
   function ovRender(d){
-    ovData=d;var t=d.totals||{};el('ovTitle').textContent=(ovLine==='casual'?'SANKI Casuals':'SANKI Funky')+' — procurement summary';
+    ovData=d;el('ovTitle').textContent=(ovLine==='casual'?'SANKI Casuals':'SANKI Funky')+' — procurement summary';
     el('ovSub').textContent='Planned sourcing and Purchases still on the way. Received and posted purchases are excluded.';
-    el('ovKpis').innerHTML='<div class="ovkpi money"><span>Planned budget</span><b>'+ovMoney(t.budget)+'</b></div><div class="ovkpi used"><span>Already on the way</span><b>'+ovMoney(t.onWayCost)+'</b></div><div class="ovkpi rem"><span>Remaining to source</span><b>'+ovMoney(t.remaining)+'</b></div><div class="ovkpi"><span>Target designs</span><b>'+fmtINR(t.designs||0)+'</b></div><div class="ovkpi"><span>Target pieces</span><b>'+(t.pieces?fmtINR(t.pieces):'—')+'</b></div><div class="ovkpi"><span>Batches / groups</span><b>'+fmtINR(t.batches||0)+'</b></div>';
     el('ovFilters').style.display='grid';var rows=d.rows||[];
     ovOptions('ovAudience',rows.map(function(r){return r.audience;}),'Everyone');
     ovOptions('ovCategory',[].concat.apply([],rows.map(function(r){return(r.categoryKeys&&r.categoryKeys.length)?r.categoryKeys:[r.category];})),'All categories');
     ovOptions('ovType',rows.map(function(r){return r.type;}),'All types');
     ovOptions('ovVendor',[].concat.apply([],rows.map(function(r){return r.vendors||[];})),'All vendors');
     ovOptions('ovStatus',rows.map(function(r){return r.status;}),'All statuses');
-    var cats=d.categories||[];el('ovCategories').innerHTML=cats.length?'<div class="ovtable"><table><thead><tr><th>Category</th><th>Batches</th><th>Planned budget</th><th>On-way pieces</th><th>On-way value</th><th>Remaining</th></tr></thead><tbody>'+cats.map(function(c){return'<tr><td><b>'+escapeHtml(c.label||c.key)+'</b></td><td>'+fmtINR(c.batches||0)+'</td><td>'+ovMoney(c.budget)+'</td><td>'+fmtINR(c.onWayPieces||0)+'</td><td>'+ovMoney(c.onWayCost)+'</td><td><b>'+ovMoney(c.remaining)+'</b></td></tr>';}).join('')+'</tbody></table></div>':'';
-    el('ovWarning').innerHTML=t.unlinkedOnWayCost?'<div class="ovwarn"><b>'+ovMoney(t.unlinkedOnWayCost)+'</b> ('+fmtINR(t.unlinkedOnWayPieces||0)+' pcs) is on the way but not linked to a named batch. It is included in category and overall totals.</div>':'';
     ovRenderRows();
   }
   function loadProcOverview(line){
@@ -1318,7 +1334,11 @@
   }
   ['ovAudience','ovCategory','ovType','ovVendor','ovStatus'].forEach(function(id){el(id).onchange=ovRenderRows;});
   el('ovRefresh').onclick=function(){loadProcOverview(ovLine);};
-  el('ovRows').onclick=function(e){var tr=e.target.closest&&e.target.closest('[data-overview-batch]');if(tr&&typeof czOpenBatch==='function'){czOpenBatch(tr.getAttribute('data-overview-batch')).then(function(){var x=el('czBatchBar');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});});}};
+  el('ovRows').onclick=function(e){if(e.target&&e.target.hasAttribute('data-ov-budget'))return;var tr=e.target.closest&&e.target.closest('[data-overview-batch]');if(tr&&typeof czOpenBatch==='function'){czOpenBatch(tr.getAttribute('data-overview-batch')).then(function(){var x=el('czBatchBar');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});});}};
+  function ovSaveBudget(inp){if(!inp||inp.disabled)return;clearTimeout(ovBudgetTimer);var id=inp.getAttribute('data-ov-budget'),amount=Math.max(0,parseInt(String(inp.value||'').replace(/[^\d]/g,''),10)||0);inp.disabled=true;fetch('/api/casuals/batches/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({budget:amount})}).then(function(r){return r.json();}).then(function(d){if(!d.success)throw new Error(d.error||'Could not save batch budget');flashSaved();var active=typeof czActiveBatchObj==='function'&&czActiveBatchObj();return Promise.all([loadProcOverview(ovLine),active&&active.id===id?czLoadSettings().then(czLoadPlan):Promise.resolve()]);}).catch(function(err){inp.disabled=false;alert(err.message);});}
+  el('ovRows').oninput=function(e){var inp=e.target&&e.target.closest&&e.target.closest('[data-ov-budget]');if(!inp)return;clearTimeout(ovBudgetTimer);ovBudgetTimer=setTimeout(function(){ovSaveBudget(inp);},650);};
+  el('ovRows').onchange=function(e){var inp=e.target&&e.target.closest&&e.target.closest('[data-ov-budget]');if(inp)ovSaveBudget(inp);};
+  el('ovRows').onkeydown=function(e){var inp=e.target&&e.target.closest&&e.target.closest('[data-ov-budget]');if(inp&&e.key==='Enter'){e.preventDefault();ovSaveBudget(inp);}};
 
   // ── Line tabs: SANKI FUNKY (existing) vs SANKI CASUALS (new system) ──
   function switchLine(line){
@@ -1429,7 +1449,16 @@
     var inp = d.querySelector('input');
     inp.addEventListener('input', function(){ czSettings.categories[catKey][kind][key] = Math.max(0, parseInt(inp.value)||0); czRecalcCard(catKey); czSaveSettings(); });
     var rm = d.querySelector('.rm');
-    if(rm) rm.addEventListener('click', function(){ delete czSettings.categories[catKey][kind][key]; czRenderCats(); czSaveSettings(true); });
+    if(rm) rm.addEventListener('click', function(){
+      var map=czSettings.categories[catKey][kind]||{};
+      if(kind==='colours'&&Object.keys(map).length<=1){alert('Keep at least one colour in the batch.');return;}
+      delete map[key];
+      if(kind==='colours'&&Array.isArray(czSettings.categories[catKey].extraColours)){
+        czSettings.categories[catKey].extraColours=czSettings.categories[catKey].extraColours.filter(function(x){return x&&x.key!==key;});
+      }
+      czRenderCats();
+      czSaveSettings(true).then(function(){if(kind==='colours')return czLoadPlan();});
+    });
     return d;
   }
 
@@ -1444,6 +1473,7 @@
   // Resolve a category's (notional) budget for BOTH sizing modes: cost mode uses
   // the entered budget; units mode back-solves budget = target units × est ₹/pc.
   function czBudgetOf(c){ if(!c) return 0; var ep = Math.max(1, c.avgCost||0);
+    if(c.budgetOverride != null) return Math.max(0, Math.round(Number(c.budgetOverride)||0));
     if(c.sizeMode === 'units'){ return Math.round((c.targetUnits||0) * ep); }
     if(c.sizeMode === 'designs'){ return Math.round((c.designs||0) * czSetOf(c) * ep); }
     return c.budget||0; }
@@ -1612,7 +1642,8 @@
           var label = (kind === 'fits') ? czFitLabel(catKey, key) : key;
           var spec = (kind === 'fits') ? !!(FIT_LABELS[catKey] && FIT_LABELS[catKey][key]) : true; // spec size/colour keys are their own labels
           var isCustom = (kind === 'fits') ? !spec : false; // only fits track custom vs spec cleanly
-          var r = czDistRow(catKey, kind, key, label, map[key], isCustom || (kind !== 'fits' && czIsCustom(catKey, kind, key)));
+          var canRemove = kind==='colours' ? mapKeys.length>1 : (isCustom || (kind !== 'fits' && czIsCustom(catKey, kind, key)));
+          var r = czDistRow(catKey, kind, key, label, map[key], canRemove);
           r.setAttribute('data-key', key); wrap.appendChild(r);
         });
         body.appendChild(wrap);
