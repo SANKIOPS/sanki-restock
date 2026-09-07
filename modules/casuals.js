@@ -442,7 +442,8 @@ function procurementLineCost(po, line, settings) {
   return Math.round((unit * exRate + weight * freight) * qty);
 }
 function canonicalCasualCategory(raw) {
-  return normCasualCategory(raw) || String(raw || 'Uncategorised').trim() || 'Uncategorised';
+  const key = normCasualCategory(raw);
+  return key && CAT_BY_KEY[key] ? CAT_BY_KEY[key].label : (String(raw || 'Uncategorised').trim() || 'Uncategorised');
 }
 function casualsOverview(store, requestedLine) {
   const s = store || loadStore();

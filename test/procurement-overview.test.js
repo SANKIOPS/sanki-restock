@@ -76,6 +76,22 @@ test('Funky uses the same named-batch overview while remaining data-separated', 
   assert.equal(overview.rows[0].category, 'Tops');
 });
 
+test('unlinked purchase category names still net against their matching batch category', () => {
+  const settings = settingsWithDefaults({ settings: {} });
+  settings.categories.Shirt.sizeMode = 'designs';
+  settings.categories.Shirt.designs = 10;
+  settings.categories.Shirt.budgetOverride = 60000;
+  fs.writeFileSync(process.env.PROCUREMENT_PATH, JSON.stringify({ settings:{ exRate:15 }, pos:{
+    'PO-U1':{ id:'PO-U1', status:'advance', line:'casuals', origin:'china', exRate:15, vendor:'V', lines:[{ designName:'S1', productType:'Shirt', qty:10, perPcsYuan:100 }] }
+  } }));
+  const overview = casualsOverview({ settings, activeBatch:'s1', batches:[{ id:'s1', name:'Shirts September', line:'casuals', category:'Shirt', categories:['Shirt'], categoryName:'Shirts', planSettings:settings }], candidates:[] });
+  const shirts = overview.categories.find(c => c.label === 'Shirts');
+  assert.ok(shirts);
+  assert.equal(overview.categories.filter(c => /shirt/i.test(c.label)).length, 1);
+  assert.equal(shirts.onWayCost, 15000);
+  assert.equal(shirts.remaining, 45000);
+});
+
 test('Fresh Procurement UI has the summary, named batch fields and exact PO bridge', () => {
   const fresh = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
   const purchases = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
