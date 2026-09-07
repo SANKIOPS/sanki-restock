@@ -68,14 +68,15 @@ const CASUALS_SPEC = [
   },
   {
     key: 'Shirt', label: 'Shirts',
-    designNote: 'Solid ≈ 50%, rest prints / textures',
+    designNote: 'Colour-only buying plan',
+    colourOnly: true,
     fits: [
       { key: 'oversized',      label: 'Oversized / Drop Shoulder', pct: 40, kw: ['oversize', 'oversized', 'drop shoulder', 'drop-shoulder', 'boxy', 'box fit', 'box'] },
       { key: 'relaxedregular', label: 'Relaxed Regular',           pct: 60, kw: ['relaxed regular', 'relaxed', 'regular', 'classic', 'cuban', 'resort', 'camp collar', 'revere', 'bowling'] }
     ],
     sizes: [
-      { key: 'XS', pct: 6 }, { key: 'S', pct: 28 }, { key: 'M', pct: 28 },
-      { key: 'L', pct: 18 }, { key: 'XL', pct: 14 }, { key: 'XXL', pct: 6 }
+      { key: 'XS', pct: 0 }, { key: 'S', pct: 2 }, { key: 'M', pct: 2 },
+      { key: 'L', pct: 1 }, { key: 'XL', pct: 1 }, { key: 'XXL', pct: 0 }
     ],
     colours: [
       { key: 'Black', pct: 20 }, { key: 'Off White', pct: 20 }, { key: 'White', pct: 5 },
@@ -92,14 +93,15 @@ const CASUALS_SPEC = [
   },
   {
     key: 'T-shirt', label: 'T-Shirts & Polos',
-    designNote: 'Solid 60–70%, texture / stripes / checks 25–30%',
+    designNote: 'Colour-only buying plan',
+    colourOnly: true,
     fits: [
       { key: 'oversizedround', label: 'Oversized Round Neck', pct: 50, kw: ['oversize', 'oversized', 'drop shoulder', 'oversized round', 'boxy', 'box fit', 'box'] },
       { key: 'relaxedround',   label: 'Relaxed Round Neck',   pct: 50, kw: ['relaxed round', 'relaxed', 'regular round', 'classic', 'regular tee', 'regular', 'polo', 'slim'] }
     ],
     sizes: [
-      { key: 'XS', pct: 10 }, { key: 'S', pct: 20 }, { key: 'M', pct: 20 },
-      { key: 'L', pct: 20 }, { key: 'XL', pct: 20 }, { key: 'XXL', pct: 10 }
+      { key: 'XS', pct: 0 }, { key: 'S', pct: 1 }, { key: 'M', pct: 2 },
+      { key: 'L', pct: 2 }, { key: 'XL', pct: 1 }, { key: 'XXL', pct: 0 }
     ],
     colours: [
       { key: 'Black', pct: 25 }, { key: 'Off White', pct: 20 }, { key: 'White', pct: 15 },
@@ -115,10 +117,24 @@ const CASUALS_SPEC = [
 ];
 const CAT_KEYS  = CASUALS_SPEC.map(c => c.key);
 const CAT_BY_KEY = CASUALS_SPEC.reduce((m, c) => (m[c.key] = c, m), {});
-// Pieces in ONE default size-set per category (mirrors the frontend
-// CZ_SETRATIO curve: 1+2+2+2+2+1 = 10). Used only for the soft "pieces coming"
-// hint on a batch row — the real count is decided in the buy sheet.
-const SET_PIECES = { Trouser: 10, Shirt: 10, 'T-shirt': 10 };
+// Pieces in ONE default size-set per category. Used only for the soft
+// "pieces coming" hint on a batch row — the real count is decided in the buy
+// sheet and remains fully editable.
+const SET_PIECES = { Trouser: 10, Shirt: 6, 'T-shirt': 6 };
+const DEFAULT_CATEGORY_REGISTRY = [
+  { name: 'Trousers', engineKey: 'Trouser' },
+  { name: 'Shirts', engineKey: 'Shirt' },
+  { name: 'T-shirts', engineKey: 'T-shirt' },
+  { name: 'Denims', engineKey: 'Trouser' },
+  { name: 'Tops', engineKey: 'Shirt' },
+  { name: 'Sweaters', engineKey: 'Shirt' },
+  { name: 'Hoodies', engineKey: 'T-shirt' }
+];
+const DEFAULT_AUDIENCE_REGISTRY = ['Women', 'Men', 'Unisex'];
+const LEGACY_PERCENT_SIZE_MAPS = {
+  Shirt: { XS:6, S:28, M:28, L:18, XL:14, XXL:6 },
+  'T-shirt': { XS:10, S:20, M:20, L:20, XL:20, XXL:10 }
+};
 
 // Map a free-text garment word onto a Casuals category. This is also used for
 // descriptive legacy batch names; it does not inspect the photograph.
@@ -334,11 +350,11 @@ function batchCats(b) {
 }
 function cleanBatchMeta(raw) {
   const b = raw || {};
-  const audience = ['Men', 'Women', 'Unisex'].includes(String(b.audience || '').trim())
-    ? String(b.audience).trim() : '';
+  const audience = String(b.audience || '').trim().slice(0, 60);
   return {
     audience,
-    type: String(b.type || b.fitType || '').trim().slice(0, 80)
+    type: String(b.type || b.fitType || '').trim().slice(0, 80),
+    line: String(b.line || '').trim() === 'funky' ? 'funky' : 'casuals'
   };
 }
 function newBatch(s, name, category, meta) {
@@ -350,9 +366,11 @@ function newBatch(s, name, category, meta) {
   const cats = [];
   rawCats.forEach(k => { if (CAT_BY_KEY[k] && cats.indexOf(k) < 0) cats.push(k); });
   const cleaned = cleanBatchMeta(meta);
+  const categoryName = String((meta && meta.categoryName) || '').trim().slice(0, 80)
+    || (cats.length === 1 && CAT_BY_KEY[cats[0]] ? CAT_BY_KEY[cats[0]].label : '');
   const b = { id: crypto.randomBytes(6).toString('hex'), num, name: (name && String(name).trim().slice(0, 120)) || batchDateName(num, createdAt), createdAt,
     categories: cats, category: cats.length === 1 ? cats[0] : null,
-    audience: cleaned.audience, type: cleaned.type,
+    categoryName, audience: cleaned.audience, type: cleaned.type, line: cleaned.line,
     // Each batch owns a snapshot so editing a new colour mix cannot rewrite an
     // older batch's plan. The store-level copy remains the starting template.
     planSettings: JSON.parse(JSON.stringify(settingsWithDefaults(s))) };
@@ -363,6 +381,16 @@ function newBatch(s, name, category, meta) {
 // the earliest photo's upload time — so the existing 84 photos become one batch.
 function ensureBatches(s) {
   if (!Array.isArray(s.batches)) s.batches = [];
+  if (!Array.isArray(s.categoryRegistry)) s.categoryRegistry = DEFAULT_CATEGORY_REGISTRY.map(x => ({ ...x }));
+  DEFAULT_CATEGORY_REGISTRY.forEach(def => {
+    if (!s.categoryRegistry.some(x => String(x && x.name || '').toLowerCase() === def.name.toLowerCase())) s.categoryRegistry.push({ ...def });
+  });
+  s.categoryRegistry = s.categoryRegistry.filter(x => x && String(x.name || '').trim()).map(x => ({
+    name: String(x.name).trim().slice(0, 80), engineKey: CAT_BY_KEY[x.engineKey] ? x.engineKey : 'Trouser'
+  }));
+  if (!Array.isArray(s.audienceRegistry)) s.audienceRegistry = DEFAULT_AUDIENCE_REGISTRY.slice();
+  DEFAULT_AUDIENCE_REGISTRY.forEach(name => { if (!s.audienceRegistry.some(x => String(x).toLowerCase() === name.toLowerCase())) s.audienceRegistry.push(name); });
+  s.audienceRegistry = s.audienceRegistry.map(x => String(x || '').trim().slice(0, 60)).filter(Boolean);
   const orphans = s.candidates.filter(c => !c.batch);
   if (orphans.length || (s.candidates.length && !s.batches.length)) {
     let first = s.batches.find(b => b.num === 1);
@@ -388,7 +416,8 @@ function batchList(s) {
     // Soft pieces-coming estimate = one default set per categorised photo.
     const pieces = Object.keys(by).reduce((sum, k) => sum + by[k] * (SET_PIECES[k] || 10), 0);
     return { id: b.id, num: b.num, name: b.name, createdAt: b.createdAt, category: b.category || null,
-      audience: b.audience || '', type: b.type || '',
+      categoryName: b.categoryName || (b.category && CAT_BY_KEY[b.category] ? CAT_BY_KEY[b.category].label : ''),
+      audience: b.audience || '', type: b.type || '', line: b.line === 'funky' ? 'funky' : 'casuals',
       batchCategories: batchCats(b),   // the category SET this batch spans (multi-category); [] = legacy/unconstrained
       count: cs.length, analysed, categories, pieces };
   });
@@ -415,19 +444,23 @@ function procurementLineCost(po, line, settings) {
 function canonicalCasualCategory(raw) {
   return normCasualCategory(raw) || String(raw || 'Uncategorised').trim() || 'Uncategorised';
 }
-function casualsOverview(store) {
+function casualsOverview(store, requestedLine) {
   const s = store || loadStore();
+  const lineName = requestedLine === 'funky' ? 'funky' : 'casuals';
   const purchases = readProcurementStore();
   const purchaseSettings = purchases.settings || {};
+  const lineBatches = (s.batches || []).filter(b => (b.line === 'funky' ? 'funky' : 'casuals') === lineName);
+  const batchCategory = {};
+  lineBatches.forEach(b => { batchCategory[b.id] = b.categoryName || (b.category && CAT_BY_KEY[b.category] ? CAT_BY_KEY[b.category].label : 'Uncategorised'); });
   const openLines = [];
   Object.values(purchases.pos || {}).forEach(po => {
-    if (!po || po.status !== 'advance' || po.line !== 'casuals') return;
+    if (!po || po.status !== 'advance' || po.line !== lineName) return;
     (po.lines || []).forEach(line => {
       const qty = Math.max(0, Number(line.qty) || 0);
       if (!qty) return;
       openLines.push({
         poId: po.id, batchId: String(po.sourceBatchId || ''),
-        category: canonicalCasualCategory(line.productType), audience: String(line.audience || ''),
+        category: batchCategory[String(po.sourceBatchId || '')] || canonicalCasualCategory(line.productType), audience: String(line.audience || ''),
         type: String(line.fit || ''), vendor: String(line.vendor || po.vendor || ''),
         colour: String(line.colour || ''), qty,
         cost: procurementLineCost(po, line, purchaseSettings)
@@ -436,7 +469,7 @@ function casualsOverview(store) {
   });
 
   const rows = [];
-  (s.batches || []).forEach(b => {
+  lineBatches.forEach(b => {
     const candidates = (s.candidates || []).filter(c => c.batch === b.id);
     markDuplicates(candidates);
     const settings = b.planSettings ? settingsWithDefaults({ settings: b.planSettings }) : settingsWithDefaults(s);
@@ -452,10 +485,10 @@ function casualsOverview(store) {
     const onWayPieces = linked.reduce((sum, x) => sum + x.qty, 0);
     const targetDesigns = cats.reduce((sum, c) => sum + (Number(c.designsTarget) || 0), 0);
     const targetPieces = cats.reduce((sum, c) => sum + (Number(c.estUnits) || 0), 0);
+    const displayCategory = b.categoryName || allowed.map(k => (CAT_BY_KEY[k] || { label: k }).label).join(', ') || 'Unspecified';
     rows.push({
       id: b.id, name: b.name, audience: b.audience || '',
-      category: allowed.map(k => (CAT_BY_KEY[k] || { label: k }).label).join(', ') || 'Unspecified',
-      categoryKeys: allowed, type: b.type || '', vendors, vendor: vendors.join(', '),
+      category: displayCategory, categoryKeys: [displayCategory], type: b.type || '', vendors, vendor: vendors.join(', '),
       designs: targetDesigns, pieces: targetPieces, colours: colours.length, colourways: candidates.filter(c => !c.dupeOf).length,
       budget, onWayCost, onWayPieces, remaining: Math.max(0, budget - onWayCost),
       status: onWayCost >= budget && budget > 0 ? 'Fully ordered' : (onWayCost > 0 ? 'Part ordered' : (candidates.length ? 'Sourcing' : 'Draft')),
@@ -463,7 +496,7 @@ function casualsOverview(store) {
     });
   });
 
-  const linkedIds = new Set((s.batches || []).map(b => b.id));
+  const linkedIds = new Set(lineBatches.map(b => b.id));
   const unlinked = openLines.filter(x => !x.batchId || !linkedIds.has(x.batchId));
   const totalBudget = rows.reduce((sum, r) => sum + r.budget, 0);
   const onWayCost = openLines.reduce((sum, x) => sum + x.cost, 0);
@@ -487,7 +520,7 @@ function casualsOverview(store) {
   Object.values(categories).forEach(c => { c.remaining = Math.max(0, c.budget - c.onWayCost); });
   const remainingByCategory = Object.values(categories).reduce((sum, c) => sum + c.remaining, 0);
   return {
-    line: 'casuals', rows, categories: Object.values(categories),
+    line: lineName, rows, categories: Object.values(categories),
     totals: {
       batches: rows.length, budget: totalBudget, onWayCost, onWayPieces,
       // Never let over-buying in one category consume another category's budget.
@@ -548,10 +581,16 @@ function settingsWithDefaults(s) {
     // Merge %s: start from defaults, apply any saved edits, keep unknown custom keys the founder added.
     const mergePct = (defMap, savedMap) => {
       const out = {};
-      Object.keys(defMap).forEach(k => { out[k] = cleanPct(savedMap && savedMap[k], defMap[k]); });
+      Object.keys(defMap).forEach(k => {
+        const hasSaved = !!savedMap && Object.prototype.hasOwnProperty.call(savedMap, k);
+        out[k] = cleanPct(hasSaved ? savedMap[k] : undefined, defMap[k]);
+      });
       if (savedMap) Object.keys(savedMap).forEach(k => { if (!(k in out)) out[k] = cleanPct(savedMap[k], 0); });
       return out;
     };
+    const legacySizes = LEGACY_PERCENT_SIZE_MAPS[spec.key];
+    const savedSizes = legacySizes && sc.sizes && Object.keys(legacySizes).every(k => Number(sc.sizes[k]) === legacySizes[k])
+      && Object.keys(sc.sizes).every(k => Object.prototype.hasOwnProperty.call(legacySizes, k)) ? null : sc.sizes;
     categories[spec.key] = {
       enabled: sc.enabled != null ? !!sc.enabled : true,
       budget: sc.budget != null ? Math.max(0, parseInt(sc.budget) || 0) : 0,
@@ -572,7 +611,7 @@ function settingsWithDefaults(s) {
       // are in `sizes`. Defaults to alpha for Trousers, else keeps prior behaviour.
       sizeSystem: (sc.sizeSystem === 'numeric' || sc.sizeSystem === 'alpha') ? sc.sizeSystem : (spec.key === 'Trouser' ? 'alpha' : 'alpha'),
       fits:    mergePct(fitDef, sc.fits),
-      sizes:   mergePct(sizeDef, sc.sizes),
+      sizes:   mergePct(sizeDef, savedSizes),
       colours: mergePct(colDef, sc.colours),
       // Print-type % split — only populated for categories that support it
       // (Shirts, T-shirts); an empty {} for Trousers.
@@ -1183,7 +1222,9 @@ function buildPlan(cands, settings) {
     // to 1. In 'designs' mode it's exactly what the founder typed.
     const catDesigns = (cfg.sizeMode === 'designs') ? Math.max(0, cfg.designs || 0) : Math.round(catUnits / SET);
 
-    const colourOnly = catKey === 'Trouser';
+    // Every category now follows the same colour-only buying rule. Fit, print,
+    // pattern and rating remain stored for history but never affect selection.
+    const colourOnly = true;
     const fitLabel = k => (spec.fits.find(f => f.key === k) || (cfg.extraFits.find(f => f.key === k)) || { label: k }).label;
     const fitRows = pctRows(cfg.fits, fitLabel);
     // HIERARCHY step 1 — category BUDGET flows to the fits by fit %.
@@ -1202,7 +1243,7 @@ function buildPlan(cands, settings) {
     // Uppers (Shirts/T-shirts) carry a PRINT-TYPE level ABOVE fit: the category
     // budget first splits by print-type %, then each print-type's slice splits by
     // fit %. Trousers keep the flat category→fit split.
-    const hasPrint = catHasPrintTypes(catKey);
+    const hasPrint = !colourOnly && catHasPrintTypes(catKey);
     // Trousers run a colour×fit HARD grid: fit is a hard cap too (not the soft
     // category-wide guide the tops use). Flag comes from the spec.
     const fitHard = !colourOnly && !!spec.fitHard;
@@ -1805,7 +1846,7 @@ function buildPlan(cands, settings) {
     let fits = [], printGroups = null;
     if (colourOnly) {
       includedIds = selectIncluded();
-      fits = [buildFit({ key: '_all', label: 'Trousers', pct: 100, share: 1 }, budget, pool, '_all')];
+      fits = [buildFit({ key: '_all', label: spec.label, pct: 100, share: 1 }, budget, pool, '_all')];
     } else if (hasPrint) {
       // Step 1 — category budget → print-type %.
       const printRows = pctRows(cfg.printTypes, k => (PRINT_BY_KEY[k] || { label: k }).label);
@@ -1969,11 +2010,30 @@ router.get('/api/casuals/batches', (req, res) => {
   res.json({ success: true, batches: batchList(s), activeBatch: s.activeBatch });
 });
 
+// Reusable dropdown values. Category is deliberately a human choice; custom
+// categories reuse the same colour-only engine and never require new code.
+router.get('/api/casuals/registry', (req, res) => {
+  const s = loadStore();
+  res.json({ success: true, categories: s.categoryRegistry, audiences: s.audienceRegistry });
+});
+router.post('/api/casuals/registry', (req, res) => {
+  const s = loadStore(), body = req.body || {}, kind = String(body.kind || ''), name = String(body.name || '').trim().slice(0, 80);
+  if (!name) return res.status(400).json({ success: false, error: 'Enter a name' });
+  if (kind === 'category') {
+    const found = s.categoryRegistry.find(x => x.name.toLowerCase() === name.toLowerCase());
+    if (!found) s.categoryRegistry.push({ name, engineKey: 'Trouser' });
+  } else if (kind === 'audience') {
+    if (!s.audienceRegistry.some(x => x.toLowerCase() === name.toLowerCase())) s.audienceRegistry.push(name);
+  } else return res.status(400).json({ success: false, error: 'Invalid registry type' });
+  saveStore(s);
+  res.json({ success: true, categories: s.categoryRegistry, audiences: s.audienceRegistry });
+});
+
 // Portfolio view: every named sourcing batch plus only real Purchases that are
 // still awaiting arrival. Received/posted records never consume open-to-buy.
 router.get('/api/casuals/overview', (req, res) => {
   const s = loadStore();
-  res.json({ success: true, ...casualsOverview(s) });
+  res.json({ success: true, ...casualsOverview(s, req.query && req.query.line) });
 });
 
 // Create a new (empty) batch and make it active.
@@ -2000,6 +2060,8 @@ router.patch('/api/casuals/batches/:id', (req, res) => {
   }
   if (body.audience != null) b.audience = meta.audience;
   if (body.type != null || body.fitType != null) b.type = meta.type;
+  if (body.line != null) b.line = meta.line;
+  if (body.categoryName != null) b.categoryName = String(body.categoryName || '').trim().slice(0, 80);
   if (body.category != null || Array.isArray(body.categories)) {
     const raw = Array.isArray(body.categories) ? body.categories : [body.category];
     const cats = [...new Set(raw.filter(k => CAT_BY_KEY[k]))];
@@ -2152,8 +2214,8 @@ router.post('/api/casuals/candidate/:id/include', (req, res) => {
   const settings = settingsForActiveBatch(s);
   const active = activeCands(s);
   if (v === true) {
-    if (c.category === 'Trouser' && c.colour) {
-      const before = buildPlan(active, settings).categories.find(x => x.category === 'Trouser');
+    if (CAT_BY_KEY[c.category] && c.colour) {
+      const before = buildPlan(active, settings).categories.find(x => x.category === c.category);
       const selected = before && before.fits && before.fits[0]
         ? before.fits[0].designs.filter(x => x.id !== c.id && x.included && x.colour === c.colour)
         : [];
@@ -2476,12 +2538,12 @@ router.post('/api/casuals/invoice/apply', async (req, res) => {
   lines.forEach(it => {
     const cat = CAT_KEYS.includes(it && it.category) ? it.category : null;
     const cfg = cat ? merged.categories[cat] : null;
-    const fit = (cfg && it.fit && (it.fit in cfg.fits)) ? it.fit : null;
-    const hasP = cat ? catHasPrintTypes(cat) : false;
-    const pt = (hasP && cfg && it.printType && (it.printType in cfg.printTypes)) ? it.printType : null;
+    const fit = null;
+    const hasP = false;
+    const pt = null;
     let qty = parseInt(it && it.qty, 10); if (!isFinite(qty) || qty <= 0) qty = 0;
     let price = Number(it && it.unitPrice); if (!isFinite(price) || price < 0) price = 0;
-    if (!cat || !fit || !qty || (hasP && !pt)) { skipped++; return; }
+    if (!cat || !qty || !(it && String(it.colour || '').trim())) { skipped++; return; }
     // Size run: prefer an explicit per-size object; else fold the whole qty under the
     // line's single size token (best-effort — bills often list one size per row).
     const orderedSizes = {};

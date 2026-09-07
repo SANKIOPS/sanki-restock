@@ -631,10 +631,12 @@
     var sourceBatches=[];
     function fillSourceBatches(list){
       sourceBatches=list||[]; var s=el('b_sourceBatch'),cur=s.value;
-      s.innerHTML='<option value="">Not linked</option>'+sourceBatches.map(function(b){return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>';}).join('');
-      if(sourceBatches.some(function(b){return b.id===cur;}))s.value=cur;
+      var line=el('b_line').value;
+      var eligible=sourceBatches.filter(function(b){return (b.line==='funky'?'funky':'casuals')===line;});
+      s.innerHTML='<option value="">Not linked</option>'+eligible.map(function(b){return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>';}).join('');
+      if(eligible.some(function(b){return b.id===cur;}))s.value=cur;
     }
-    function syncSourceBatch(){el('sourceBatchWrap').style.display=el('b_line').value==='casuals'?'':'none';if(el('b_line').value!=='casuals')el('b_sourceBatch').value='';}
+    function syncSourceBatch(){var line=el('b_line').value;el('sourceBatchWrap').style.display=line?'':'none';if(!line)el('b_sourceBatch').value='';fillSourceBatches(sourceBatches);}
     el('b_line').onchange=syncSourceBatch;
     function sourceBatchName(){var b=sourceBatches.filter(function(x){return x.id===el('b_sourceBatch').value;})[0];return b?b.name:'';}
 

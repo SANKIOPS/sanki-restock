@@ -6,7 +6,7 @@ const path = require('node:path');
 const Jimp = require('jimp');
 const { router, buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes, detectLocalColour } = require('../modules/casuals');
 
-test('all Casual categories support a design-first target while only uppers use fit', () => {
+test('all procurement categories use the same design-first colour-only plan', () => {
   const settings = settingsWithDefaults({ settings: {} });
   for (const key of ['Trouser', 'Shirt', 'T-shirt']) {
     settings.categories[key].sizeMode = 'designs';
@@ -20,23 +20,37 @@ test('all Casual categories support a design-first target while only uppers use 
     assert.equal(category.estUnits, 10 * category.set);
     assert.ok(category.calc, `${key} exposes transparent target calculations`);
     assert.ok(category.calc.colours.length, `${key} exposes colour coverage`);
-    if (key === 'Trouser') assert.equal(category.calc.fits.length, 0, 'Trouser has no fit allocation');
-    else assert.ok(category.calc.fits.length, `${key} exposes fit coverage`);
+    assert.equal(category.colourOnly, true, `${key} is colour-only`);
+    assert.equal(category.calc.fits.length, 0, `${key} has no fit allocation`);
+    assert.equal(category.calc.prints.length, 0, `${key} has no print allocation`);
+    assert.equal(category.hasPrint, false);
   }
-  for (const key of ['Shirt', 'T-shirt']) {
-    const category = plan.categories.find(c => c.category === key);
-    assert.equal(category.hasPrint, true);
-    assert.ok(category.calc.prints.length, `${key} retains its print dimension`);
-  }
+});
+
+test('new and legacy shirt batches receive the six-piece default size run', () => {
+  const fresh = settingsWithDefaults({ settings: {} });
+  assert.deepEqual(fresh.categories.Shirt.sizes, { XS:0, S:2, M:2, L:1, XL:1, XXL:0 });
+  assert.deepEqual(fresh.categories['T-shirt'].sizes, { XS:0, S:1, M:2, L:2, XL:1, XXL:0 });
+
+  const legacy = settingsWithDefaults({ settings: { categories: {
+    Shirt: { sizes:{ XS:6, S:28, M:28, L:18, XL:14, XXL:6 } },
+    'T-shirt': { sizes:{ XS:10, S:20, M:20, L:20, XL:20, XXL:10 } }
+  } } });
+  assert.equal(Object.values(legacy.categories.Shirt.sizes).reduce((a,b) => a+b, 0), 6);
+  assert.equal(Object.values(legacy.categories['T-shirt'].sizes).reduce((a,b) => a+b, 0), 6);
+
+  const edited = settingsWithDefaults({ settings: { categories: { Shirt: { sizes:{ XS:1, S:1, M:1, L:1, XL:1, XXL:1 } } } } });
+  assert.deepEqual(edited.categories.Shirt.sizes, { XS:1, S:1, M:1, L:1, XL:1, XXL:1 });
 });
 
 test('detailed Casual UI presents the design-first workflow', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
-  assert.match(html, /Available for Trousers, Shirts and T-shirts/);
+  assert.match(html, /Same workflow for Trousers, Shirts and T-shirts/);
   assert.match(html, /upload <b>all of its colour photos together<\/b>/);
-  assert.match(html, /SHIRT \/ T-SHIRT OPERATIONAL PARITY/);
-  assert.match(html, /<b>Coverage table<\/b>/);
-  assert.match(html, /<b>Design order sheet<\/b>/);
+  assert.match(html, /Every category is allocated only by your colour percentages/);
+  assert.match(html, /Add new category/);
+  assert.match(html, /Add new gender \/ audience/);
+  assert.match(html, /czSwitchWorkspace/);
   assert.match(html, /id="czDesignFolder"[^>]*webkitdirectory/);
   assert.match(html, /function czDImportFolder\(fileList\)/);
   assert.match(html, /Each subfolder becomes a design automatically/);
@@ -109,12 +123,31 @@ test('Trouser planning selects named colourways by colour only', () => {
   assert.ok(trouser.fits[0].designs.every(d => d.fit == null));
 });
 
-test('Trouser UI omits fit from setup, review and exported rows', () => {
+test('Shirts and T-shirts select by colour without fit or pattern', () => {
+  for (const key of ['Shirt', 'T-shirt']) {
+    const settings = settingsWithDefaults({ settings: {} });
+    for (const category of ['Trouser', 'Shirt', 'T-shirt']) settings.categories[category].enabled = category === key;
+    settings.categories[key].sizeMode = 'designs';
+    settings.categories[key].designs = 2;
+    settings.categories[key].colours = { Black:50, White:50 };
+    const candidates = [
+      { id:key+'-a', category:key, colour:'Black', designName:'A', fit:null, pattern:null, dupeOf:null },
+      { id:key+'-b', category:key, colour:'White', designName:'B', fit:null, pattern:'printed', dupeOf:null },
+      { id:key+'-c', category:key, colour:'Black', designName:'C', fit:'legacy-fit', pattern:'checks', dupeOf:null }
+    ];
+    const category = buildPlan(candidates, settings).categories.find(c => c.category === key);
+    assert.equal(category.colourOnly, true);
+    assert.equal(category.hasPrint, false);
+    assert.deepEqual(category.fits[0].designs.filter(d => d.included).map(d => d.designName), ['A', 'B']);
+  }
+});
+
+test('universal procurement UI omits fit and print from selection', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
-  assert.match(html, /isTrouser \? \['sizes','colours'\]/);
-  assert.match(html, /cat\.colourOnly \? '' : '<label class="czsegl">Fit/);
+  assert.match(html, /var kinds = \['sizes','colours'\]/);
+  assert.match(html, /fit: null, printType: null/);
   assert.match(html, /fit:cat\.colourOnly\?'':f\.label/);
-  assert.match(html, /Trouser plan uses <b>colour only<\/b>/);
+  assert.match(html, /Every category is allocated only by your colour percentages/);
 });
 
 test('Trouser colourways are auto-picked locally and remain editable', async () => {

@@ -637,8 +637,8 @@
       <!-- ① Upload everything together -->
       <div class="panel">
         <div class="czhead">
-          <h2>① The Casual Feed — upload everything together</h2>
-          <p class="sub">Create one named batch for each category and type/fit. For Trousers, selection uses only each photo's <b>colour</b>; type/fit remains a label for organising and filtering the batch.</p>
+          <h2 id="czFeedTitle">① SANKI Casuals sourcing — upload everything together</h2>
+          <p class="sub" id="czFeedSub">Create one named batch for each category and type/fit. Every garment uses only each photo's <b>colour</b>; type/fit remains a label for organising and filtering the batch.</p>
         </div>
         <div class="czbatchbar" id="czBatchBar">
           <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to open it; drop photos &amp; plan inside the open batch</span></div>
@@ -652,8 +652,8 @@
           <div class="muted" style="font-size:12px;margin:0 0 10px">Create one batch for one category and type/fit. The detailed colour and size plan stays inside it.</div>
           <div class="cznewgrid">
             <div class="fld"><label>Batch name <span style="color:var(--err)">*</span></label><input id="czBatchName" placeholder="e.g. Women Wide-Leg Trousers — September"></div>
-            <div class="fld"><label>Audience</label><select id="czBatchAudience"><option value="Women">Women</option><option value="Men">Men</option><option value="Unisex">Unisex</option></select></div>
-            <div class="fld"><label>Category</label><select id="czBatchCategory"><option value="Trouser">Trouser</option><option value="Shirt">Shirt</option><option value="T-shirt">T-shirt</option></select></div>
+            <div class="fld"><label>Gender / audience</label><select id="czBatchAudience"><option value="">Loading…</option></select></div>
+            <div class="fld"><label>Category</label><select id="czBatchCategory"><option value="">Loading…</option></select></div>
             <div class="fld"><label>Type / Fit</label><input id="czBatchType" placeholder="e.g. Wide Leg"></div>
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
@@ -680,13 +680,13 @@
           <div id="czPileMode">
             <div class="drop" style="margin-top:4px" id="czDrop">
               <div style="font-size:32px">⬆</div>
-              <div><b>Drop casual-wear photos here</b> or click to browse</div>
-              <div style="font-size:12px; margin-top:4px">One mixed pile — the batch category is applied automatically. For Trousers, only colour is required.</div>
+              <div><b>Drop sourcing photos here</b> or click to browse</div>
+              <div style="font-size:12px; margin-top:4px">One mixed pile — the batch category is applied automatically and only colour is required.</div>
               <input type="file" id="czInput" accept="image/*" multiple style="display:none" />
             </div>
           </div>
           <div id="czDesignMode" style="display:none">
-            <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> For Trousers, name the design and upload <b>all of its colour photos together</b>. The colour is picked automatically without paid AI; use the dropdown under any photo to correct it. Every colourway keeps its own photograph and no fit is used.</div>
+            <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Same workflow for Trousers, Shirts and T-shirts.</b> Name the design and upload <b>all of its colour photos together</b>. Colour is picked automatically without paid AI; use the dropdown under any photo to correct it. Every colourway keeps its own photograph and no fit is used.</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;padding:10px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:9px">
               <label class="btn ghost sm" style="cursor:pointer">📁 Upload segregated design folder
                 <input id="czDesignFolder" type="file" accept="image/*" webkitdirectory directory multiple style="display:none" />
@@ -718,7 +718,7 @@
       <!-- ② Design-first plan — one consistent workflow per category -->
       <div class="panel">
         <h2 style="margin:0 0 3px">② Plan setup — per category</h2>
-        <p class="sub">Trousers use a simple design, size-run and colour plan only. Shirts and T-shirts retain their existing print and fit setup.</p>
+        <p class="sub">Every category uses the same simple design, size-run and colour plan. Fit, print and pattern do not affect the order.</p>
       </div>
 
       <!-- ③ Categories — enable + budget + editable % (fit / size / colour) -->
@@ -726,7 +726,7 @@
 
       <div style="text-align:center; margin:22px 0">
         <button class="btn lg" id="czAnalyzeBtn">▶ Organise photos</button>
-        <div class="sub" style="margin-top:6px">Uses the category already chosen for this batch. Trousers need only colour confirmation; shirts and tees retain fit and colour — no paid AI.</div>
+        <div class="sub" style="margin-top:6px">Uses the category already chosen for this batch. Every category needs only colour confirmation — no paid AI.</div>
         <div id="czAnalyzeStatus" class="sub" style="margin-top:8px"></div>
       </div>
 
@@ -743,7 +743,7 @@
 
       <!-- Plan -->
       <div id="czPlanPanel" style="display:none">
-        <h2 style="margin:0 0 4px">Casual buy plan</h2>
+        <h2 style="margin:0 0 4px">Fresh procurement buy plan</h2>
         <p class="sub" id="czPlanSummary"></p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px">
           <button class="btn" id="czExportBtn" type="button" style="display:none">⤓ Export PO</button>
@@ -1294,7 +1294,7 @@
     var rows=ovFilteredRows(),host=el('ovRows');
     if(!rows.length){host.innerHTML='<p class="sub" style="margin-top:12px">No sourcing batches match these filters.</p>';return;}
     host.innerHTML='<div class="ovtable"><table><thead><tr><th>Named batch</th><th>Audience</th><th>Category</th><th>Type / fit</th><th>Vendor</th><th>Designs</th><th>Pieces</th><th>Colours</th><th>Budget</th><th>On way</th><th>Remaining</th><th>Status</th></tr></thead><tbody>'+rows.map(function(r){
-      return '<tr class="'+(ovLine==='casual'?'ovbatch':'')+'"'+(ovLine==='casual'?' data-overview-batch="'+escapeHtml(r.id)+'"':'')+'><td><b>'+escapeHtml(r.name)+'</b></td><td>'+escapeHtml(r.audience||'—')+'</td><td>'+escapeHtml(r.category||'—')+'</td><td>'+escapeHtml(r.type||'—')+'</td><td>'+escapeHtml(r.vendor||'—')+'</td><td>'+fmtINR(r.designs||0)+'</td><td>'+(r.pieces?fmtINR(r.pieces):'—')+'</td><td>'+fmtINR(r.colours||0)+'</td><td>'+ovMoney(r.budget)+'</td><td>'+ovMoney(r.onWayCost)+'</td><td><b>'+ovMoney(r.remaining)+'</b></td><td><span class="ovstatus">'+escapeHtml(r.status||'—')+'</span></td></tr>';
+      return '<tr class="ovbatch" data-overview-batch="'+escapeHtml(r.id)+'"><td><b>'+escapeHtml(r.name)+'</b></td><td>'+escapeHtml(r.audience||'—')+'</td><td>'+escapeHtml(r.category||'—')+'</td><td>'+escapeHtml(r.type||'—')+'</td><td>'+escapeHtml(r.vendor||'—')+'</td><td>'+fmtINR(r.designs||0)+'</td><td>'+(r.pieces?fmtINR(r.pieces):'—')+'</td><td>'+fmtINR(r.colours||0)+'</td><td>'+ovMoney(r.budget)+'</td><td>'+ovMoney(r.onWayCost)+'</td><td><b>'+ovMoney(r.remaining)+'</b></td><td><span class="ovstatus">'+escapeHtml(r.status||'—')+'</span></td></tr>';
     }).join('')+'</tbody></table></div>';
   }
   function ovRender(d){
@@ -1313,26 +1313,30 @@
   }
   function loadProcOverview(line){
     ovLine=line==='casual'?'casual':'funky';el('ovSub').textContent='Loading the complete sourcing and on-the-way position…';
-    var url=ovLine==='casual'?'/api/casuals/overview':'/api/fresh/overview';
+    var url='/api/casuals/overview?line='+(ovLine==='casual'?'casuals':'funky');
     return fetch(url).then(function(r){return r.json();}).then(function(d){if(!d.success)throw new Error(d.error||'Could not load summary');ovRender(d);}).catch(function(e){el('ovSub').textContent=e.message;el('ovKpis').innerHTML='';el('ovRows').innerHTML='';});
   }
   ['ovAudience','ovCategory','ovType','ovVendor','ovStatus'].forEach(function(id){el(id).onchange=ovRenderRows;});
   el('ovRefresh').onclick=function(){loadProcOverview(ovLine);};
-  el('ovRows').onclick=function(e){var tr=e.target.closest&&e.target.closest('[data-overview-batch]');if(tr&&typeof czOpenBatch==='function'){switchLine('casual');czOpenBatch(tr.getAttribute('data-overview-batch')).then(function(){var x=el('czBatchBar');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});});}};
+  el('ovRows').onclick=function(e){var tr=e.target.closest&&e.target.closest('[data-overview-batch]');if(tr&&typeof czOpenBatch==='function'){czOpenBatch(tr.getAttribute('data-overview-batch')).then(function(){var x=el('czBatchBar');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});});}};
 
   // ── Line tabs: SANKI FUNKY (existing) vs SANKI CASUALS (new system) ──
   function switchLine(line){
     var funky = line !== 'casual';
-    el('lineFunky').style.display = funky ? '' : 'none';
-    el('lineCasual').style.display = funky ? 'none' : '';
+    czLine = funky ? 'funky' : 'casuals';
+    el('lineFunky').style.display = 'none';
+    el('lineCasual').style.display = '';
     el('tabFunky').classList.toggle('active', funky);
     el('tabCasual').classList.toggle('active', !funky);
-    el('funkyTopControls').style.display = funky ? 'flex' : 'none';
+    el('funkyTopControls').style.display = 'none';
     el('pageSub').textContent = funky
-      ? 'Decide what NEW fashion to source this cycle — driven by funkiness tiers & live market trends, lightly tuned by buyer taste. This is not restocking.'
+      ? 'Plan new Funky sourcing in named category and type/fit batches, with colour-led selection and live Purchases already on the way.'
       : 'Plan new Casuals sourcing in named category and type/fit batches, with colour-led selection and live Purchases already on the way.';
+    el('czFeedTitle').textContent = '① SANKI '+(funky?'Funky':'Casuals')+' sourcing — upload everything together';
+    el('czFeedSub').innerHTML = 'Create one named batch for each category and type/fit. Every garment uses only each photo\'s <b>colour</b>; type/fit remains a label for organising and filtering the batch.';
     try { localStorage.setItem('sanki_fresh_line', line); } catch(e){}
     loadProcOverview(funky?'funky':'casual');
+    if(czBooted && typeof czSwitchWorkspace === 'function') czSwitchWorkspace();
   }
   el('tabFunky').addEventListener('click', function(){ switchLine('funky'); });
   el('tabCasual').addEventListener('click', function(){ switchLine('casual'); });
@@ -1357,6 +1361,9 @@
   //  SANKI CASUALS — separate line, own pool, hierarchy-wise budget
   // ════════════════════════════════════════════════════════════════
   var czSettings = null, czSaveTimer = null, czBooted = false;
+  var czLine = czLine || 'casuals';
+  var czLineActive = {};
+  var czRegistry = { categories:[], audiences:[] };
   function czSlug(s){ return String(s||'').trim().replace(/\s+/g,' '); }
 
   function czSaveSettings(now){
@@ -1364,7 +1371,7 @@
     clearTimeout(czSaveTimer);
     var doSave = function(){
       return fetch('/api/casuals/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(czSettings) })
-        .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czSettings = d.settings; flashSaved(); loadProcOverview('casual'); } });
+        .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czSettings = d.settings; flashSaved(); loadProcOverview(czLine==='funky'?'funky':'casual'); } });
     };
     // Return a promise so callers (e.g. the Trouser Apply button) can wait for the
     // save to land before reloading the plan — otherwise the grid is computed from
@@ -1377,6 +1384,30 @@
     return fetch('/api/casuals/settings').then(function(r){ return r.json(); }).then(function(d){
       czSettings = d.settings; czRenderBudget(); czRenderCats();
     });
+  }
+
+  function czFillRegistrySelects(selectedCategory, selectedAudience){
+    var cs=el('czBatchCategory'),as=el('czBatchAudience');
+    cs.innerHTML=(czRegistry.categories||[]).map(function(x){return '<option value="'+escapeHtml(x.name)+'">'+escapeHtml(x.name)+'</option>';}).join('')+'<option value="__add__">＋ Add new category…</option>';
+    as.innerHTML=(czRegistry.audiences||[]).map(function(x){return '<option value="'+escapeHtml(x)+'">'+escapeHtml(x)+'</option>';}).join('')+'<option value="__add__">＋ Add new gender / audience…</option>';
+    if(selectedCategory&&(czRegistry.categories||[]).some(function(x){return x.name===selectedCategory;}))cs.value=selectedCategory;
+    if(selectedAudience&&(czRegistry.audiences||[]).indexOf(selectedAudience)>=0)as.value=selectedAudience;
+  }
+  function czLoadRegistry(){
+    return fetch('/api/casuals/registry').then(function(r){return r.json();}).then(function(d){
+      if(!d.success)throw new Error(d.error||'Could not load categories');
+      czRegistry={categories:d.categories||[],audiences:d.audiences||[]};czFillRegistrySelects();
+    });
+  }
+  function czAddRegistry(kind, select){
+    if(select.value!=='__add__')return;
+    var previous=select.options.length>1?select.options[0].value:'';
+    var label=kind==='category'?'category':'gender / audience';
+    var name=prompt('New '+label+' name:','');
+    if(name===null||!name.trim()){select.value=previous;return;}
+    fetch('/api/casuals/registry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:kind,name:name.trim()})})
+      .then(function(r){return r.json();}).then(function(d){if(!d.success)throw new Error(d.error||'Could not add '+label);czRegistry={categories:d.categories||[],audiences:d.audiences||[]};czFillRegistrySelects(kind==='category'?name.trim():null,kind==='audience'?name.trim():null);})
+      .catch(function(e){alert(e.message);select.value=previous;});
   }
 
   function czRenderBudget(){
@@ -1453,6 +1484,10 @@
 
   var CAT_KEYS = ['Trouser','Shirt','T-shirt'];
   var CAT_LABEL = { 'Trouser':'Trousers', 'Shirt':'Shirts', 'T-shirt':'T-Shirts & Polos' };
+  function czCategoryLabel(catKey){
+    var b=czActiveBatchObj(),cats=czBatchCats(b);
+    return b&&b.categoryName&&cats.length===1&&cats[0]===catKey?b.categoryName:(CAT_LABEL[catKey]||catKey);
+  }
   // Human labels for the spec fit keys (so the editor reads nicely).
   var FIT_LABELS = {
     'Trouser':{ baggy:'Baggy', normal:'Normal' },
@@ -1500,7 +1535,7 @@
       var hd = document.createElement('div'); hd.className = 'czcardhd';
       hd.innerHTML =
         '<label class="czsw" title="Buy this category this cycle"><input type="checkbox" '+(c.enabled?'checked':'')+' /><span class="tk"></span></label>'+
-        '<div class="grow"><h3>'+escapeHtml(CAT_LABEL[catKey])+'</h3><div class="note" data-note></div></div>'+
+        '<div class="grow"><h3>'+escapeHtml(czCategoryLabel(catKey))+'</h3><div class="note" data-note></div></div>'+
         pills+
         '<span class="caret">'+(open?'▾':'▸')+'</span>';
       card.appendChild(hd);
@@ -1528,9 +1563,9 @@
         + '<div class="czpill">Estimated value<b data-budgetpill>₹0</b></div>';
       body.appendChild(pills);
 
-      // Print-type mix % — an extra manual split (Shirts & T-shirts only) that
-      // sits ABOVE fit in the hierarchy, so it is edited FIRST. Fixed 3 buckets.
-      if(CZ_PRINT_CATS.indexOf(catKey) >= 0 && c.printTypes){
+      // Kept for historical settings only. The uniform colour-only workflow
+      // never renders or applies print-type controls.
+      if(false && CZ_PRINT_CATS.indexOf(catKey) >= 0 && c.printTypes){
         var psub = document.createElement('div'); psub.className = 'czsub'; psub.textContent = '② Print type mix % — editable';
         body.appendChild(psub);
         var pwrap = document.createElement('div'); pwrap.className = 'czdist'; pwrap.setAttribute('data-kind', 'printTypes');
@@ -1546,21 +1581,13 @@
         body.appendChild(pnote);
       }
 
-      // Trousers use only size + colour. Uppers retain their existing print,
-      // size, colour and fit workflow until they are redesigned separately.
-      var isUpper = CZ_PRINT_CATS.indexOf(catKey) >= 0;
-      // Use the same operational order for every category. Uppers insert print as
-      // step ②, so their size/colour/fit steps are numbered one place later.
-      var kinds = isTrouser ? ['sizes','colours'] : ['sizes','colours','fits'];
+      // Every category uses the Trouser sequence: sizes, then colour. Saved fit
+      // and print settings remain in old data but are not part of the plan.
+      var kinds = ['sizes','colours'];
       kinds.forEach(function(kind){
-        var stepBase = isTrouser ? 2 : 3;
-        var title = isTrouser
-          ? (kind === 'sizes' ? '② Size run — quantity per size (SUM = one design’s set)'
-            : kind === 'colours' ? '③ Colour mix %'
-            : '④ Fit — Baggy vs Normal %')
-          : (kind === 'sizes' ? (stepBase+' Size run — quantity per size (SUM = one design’s set)')
-            : kind === 'colours' ? ((stepBase+1)+' Colour mix %')
-            : ((stepBase+2)+' Fit mix % — within each print type'));
+        var title = kind === 'sizes'
+          ? '② Size run — quantity per size (SUM = one design’s set)'
+          : '③ Colour mix %';
         var sub = document.createElement('div'); sub.className = 'czsub'; sub.textContent = title + ' — editable';
         body.appendChild(sub);
         // Trouser: the size-system dropdown (alpha 26–40 / S–XXXXL) leads the Sizes step.
@@ -1612,9 +1639,7 @@
 
       var colNote = document.createElement('div'); colNote.className = 'czsub';
       colNote.style.textTransform = 'none'; colNote.style.letterSpacing = '0';
-      colNote.innerHTML = isTrouser
-        ? '<span style="color:var(--muted)">The Trouser plan uses <b>colour only</b>. The entered colour weights are normalised to 100% and become exact design targets. Surplus colourways are held and shortages remain visible. Fit, pattern and rating do not affect the order.</span>'
-        : '<span style="color:var(--muted)">The plan below uses the same design-first workflow as trousers. <b>Print</b> and <b>colour</b> remain HARD caps for uppers, while fit guides the best combination. Use <b>By design</b> above to upload every colourway together; exact shortages and an order sheet appear in the summary.</span>';
+      colNote.innerHTML = '<span style="color:var(--muted)">This plan uses <b>colour only</b>. Entered colour weights are normalised to 100% and become exact design targets. Surplus colourways are held and shortages remain visible. Fit, print, pattern and rating do not affect the order.</span>';
       body.appendChild(colNote);
 
       // The category's products (bill) live INSIDE this card, under its mix %s.
@@ -1681,7 +1706,7 @@
     'Shirt':{ sizes:['XS','S','M','L','XL','XXL'], colours:['Black','Off White','White','Charcoal Grey','Olive Green','Beige','Sky Blue'] },
     'T-shirt':{ sizes:['XS','S','M','L','XL','XXL'], colours:['Black','Off White','White','Charcoal Grey','Olive Green','Beige','Navy Blue'] }
   };
-  var CZ_NOTE = { 'Trouser':'Mostly solids; texture / checks as accents', 'Shirt':'Solid ≈ 50%, rest prints / textures', 'T-shirt':'Solid 60–70%, texture / stripes / checks 25–30%' };
+  var CZ_NOTE = { 'Trouser':'Colour-only buying plan', 'Shirt':'Colour-only buying plan', 'T-shirt':'Colour-only buying plan' };
   function czIsCustom(catKey, kind, key){
     var def = CZ_DEFAULT[catKey] && CZ_DEFAULT[catKey][kind]; return def ? def.indexOf(key) < 0 : true;
   }
@@ -1707,9 +1732,9 @@
         || (b.rating||0)-(a.rating||0);
     });
     grid.innerHTML = sorted.map(function(c){
-      var cap = [c.vendor||'—']; if(c.category) cap.push(CAT_LABEL[c.category]||c.category); if(c.fit) cap.push(czFitLabel(c.category, c.fit)); if(c.colour) cap.push(c.colour);
+      var cap = [c.vendor||'—']; if(c.category) cap.push(czCategoryLabel(c.category)); if(c.fit) cap.push(czFitLabel(c.category, c.fit)); if(c.colour) cap.push(c.colour);
       var dupe = c.dupeOf ? '<span class="dupeflag" title="Near-duplicate — left out of the buy">dupe</span>' : '';
-      var cat = c.category ? '<span class="catbadge" title="Auto-detected">'+escapeHtml(CAT_LABEL[c.category]||c.category)+'</span>' : '';
+      var cat = c.category ? '<span class="catbadge" title="Batch category">'+escapeHtml(czCategoryLabel(c.category))+'</span>' : '';
       var excl = (c.included === false);
       // Rating pill (top-left) shows the AI's 1–10 score once analysed.
       var rate = '';
@@ -1729,7 +1754,28 @@
     });
   }
   function czLoadCandidates(){
-    return fetch('/api/casuals/candidates').then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czBatches = d.batches||[]; czActiveBatch = d.activeBatch||null; czLastCands = d.candidates||[]; czLastCats = d.categories||[]; czRenderBatches(); czRenderCandidates(czLastCands, czLastCats); } });
+    return fetch('/api/casuals/candidates').then(function(r){ return r.json(); }).then(function(d){ if(d.success){
+      var all=d.batches||[];
+      czBatches=all.filter(function(b){return (b.line==='funky'?'funky':'casuals')===czLine;});
+      var activeHere=czBatches.some(function(b){return b.id===d.activeBatch;});
+      czActiveBatch=activeHere?d.activeBatch:null;
+      czLastCands=activeHere?(d.candidates||[]):[];czLastCats=activeHere?(d.categories||[]):[];
+      if(czActiveBatch)czLineActive[czLine]=czActiveBatch;
+      czRenderBatches();czRenderCandidates(czLastCands,czLastCats);
+    } });
+  }
+
+  function czSwitchWorkspace(){
+    return fetch('/api/casuals/batches').then(function(r){return r.json();}).then(function(d){
+      if(!d.success)throw new Error(d.error||'Could not load batches');
+      var lineBatches=(d.batches||[]).filter(function(b){return (b.line==='funky'?'funky':'casuals')===czLine;});
+      var wanted=czLineActive[czLine];
+      if(!lineBatches.some(function(b){return b.id===wanted;}))wanted=lineBatches.length?lineBatches[lineBatches.length-1].id:null;
+      if(!wanted){czBatches=[];czActiveBatch=null;czLastCands=[];czLastCats=[];czExpanded=false;czRenderBatches();return;}
+      czLineActive[czLine]=wanted;
+      if(d.activeBatch===wanted)return czLoadCandidates().then(czLoadPlan);
+      return czSetActiveBatch(wanted);
+    }).catch(function(e){czBatchError=e.message;czRenderBatches();});
   }
 
   // ── Batches: each upload session can be its own dated batch. The plan,
@@ -1751,6 +1797,7 @@
   function czOpenBatch(id){
     czBatchError = '';
     czExpanded = true; czOpenCards = {}; czDesigns = []; czSetMode(false);
+    czLineActive[czLine]=id;
     if(id === czActiveBatch){ czRenderBatches(); czRenderCats(); czRenderCandidates(czLastCands, czLastCats); return Promise.resolve(); }
     return czSetActiveBatch(id).then(function(){ czRenderCats(); }).catch(function(err){
       czExpanded = false;
@@ -1777,7 +1824,8 @@
     var spans = czBatchCats(b);
     // The categories this batch spans — shown even before any photo is segregated,
     // so an empty new batch still displays what it's for.
-    if(spans.length){ spans.forEach(function(k){ out.push('<span class="czbchip cat">'+escapeHtml(CAT_LABEL[k]||k)+'</span>'); }); }
+    if(b.categoryName)out.push('<span class="czbchip cat">'+escapeHtml(b.categoryName)+'</span>');
+    else if(spans.length){ spans.forEach(function(k){ out.push('<span class="czbchip cat">'+escapeHtml(CAT_LABEL[k]||k)+'</span>'); }); }
     if(b.categories && b.categories.length){
       b.categories.forEach(function(c){ out.push('<span class="czbchip">'+escapeHtml(c.label)+' '+c.count+'</span>'); });
       if(b.pieces) out.push('<span class="czbchip pcs">~'+fmtINR(b.pieces)+' pc</span>');
@@ -1900,7 +1948,10 @@
   // New batches are explicitly named and tied to one category and type/fit.
   function czShowCatPick(show){
     var p = el('czCatPick'); if(!p) return;
-    if(show){ el('czBatchName').value='';el('czBatchAudience').value='Women';el('czBatchCategory').value='Trouser';el('czBatchType').value=''; }
+    if(show){
+      el('czBatchName').value='';el('czBatchType').value='';
+      czFillRegistrySelects('Trousers','Women');
+    }
     p.style.display = show ? '' : 'none';
     if(show)setTimeout(function(){el('czBatchName').focus();},0);
   }
@@ -1912,8 +1963,10 @@
     if(!cats.length){ alert('Pick at least one category for this batch.'); return Promise.resolve(); }
     czShowCatPick(false);
     meta=meta||{};
-    return fetch('/api/casuals/batches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({categories:cats,name:meta.name||'',audience:meta.audience||'',type:meta.type||''})})
-      .then(function(r){ return r.json(); }).then(function(){
+    return fetch('/api/casuals/batches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({categories:cats,name:meta.name||'',categoryName:meta.categoryName||'',audience:meta.audience||'',type:meta.type||'',line:czLine})})
+      .then(function(r){ return r.json(); }).then(function(d){
+        if(!d.success)throw new Error(d.error||'Could not create batch');
+        if(d.batch&&d.batch.id)czLineActive[czLine]=d.batch.id;
         czExpanded = true; czPhotosOpen = false; czOpenCards = {};
         var changed = false;
         cats.forEach(function(cat){
@@ -1922,21 +1975,22 @@
         if(changed) czSaveSettings();
         // Re-render the cards NOW so the batch's category filter applies — czLoadPlan
         // only re-renders cards once photos are analysed, which an empty batch has none of.
-        return czLoadCandidates().then(function(){ czRenderCats(); loadProcOverview('casual'); return czLoadPlan(); }); });
+        return czLoadCandidates().then(function(){ czRenderCats(); loadProcOverview(czLine==='funky'?'funky':'casual'); return czLoadPlan(); });
+      }).catch(function(e){alert(e.message);});
   }
   function czDeleteBatch(){
     var act = czActiveBatchObj(); if(!act) return;
     if(!confirm('Delete “'+act.name+'” and its '+act.count+' photo'+(act.count===1?'':'s')+'? This cannot be undone.')) return;
-    fetch('/api/casuals/batches/'+act.id,{method:'DELETE'}).then(function(r){ return r.json(); }).then(function(){ czExpanded = false; czPhotosOpen = false; czLoadCandidates().then(czLoadPlan); });
+    fetch('/api/casuals/batches/'+act.id,{method:'DELETE'}).then(function(r){ return r.json(); }).then(function(){ czExpanded = false; czPhotosOpen = false;delete czLineActive[czLine];czSwitchWorkspace(); });
   }
   function czEditBatch(){
     var act=czActiveBatchObj();if(!act)return;
     var name=prompt('Batch name:',act.name||'');if(name===null)return;name=name.trim();if(!name){alert('Batch name is required.');return;}
-    var audience=prompt('Audience — Men, Women or Unisex:',act.audience||'Women');if(audience===null)return;
-    audience=audience.trim();if(['Men','Women','Unisex'].indexOf(audience)<0){alert('Use Men, Women or Unisex.');return;}
+    var audience=prompt('Gender / audience:',act.audience||'Women');if(audience===null)return;
+    audience=audience.trim();if(!audience){alert('Gender / audience is required.');return;}
     var type=prompt('Type / fit (for example Wide Leg):',act.type||'');if(type===null)return;
     fetch('/api/casuals/batches/'+encodeURIComponent(act.id),{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({name:name,audience:audience,type:type.trim()})})
-      .then(function(r){return r.json();}).then(function(d){if(!d.success)throw new Error(d.error||'Could not update batch');return czLoadCandidates().then(function(){loadProcOverview('casual');});})
+      .then(function(r){return r.json();}).then(function(d){if(!d.success)throw new Error(d.error||'Could not update batch');return czLoadCandidates().then(function(){loadProcOverview(czLine==='funky'?'funky':'casual');});})
       .catch(function(e){alert(e.message);});
   }
 
@@ -1944,15 +1998,11 @@
     if(!files || !files.length) return;
     var vendor = (el('czVendor').value||'').trim();
     if(!vendor){ el('czUploadStatus').innerHTML = '<span style="color:var(--err)">Enter a vendor name first, then add photos.</span>'; el('czVendor').focus(); return; }
-    // Decide which batch these photos land in. If the active batch already has
-    // photos, ask whether to add to it or start a fresh dated batch.
+    // Photos always land in the named batch that is open. A different sourcing
+    // intention starts through “New batch”, where category and audience are known.
     var act = czActiveBatchObj();
-    var batchTarget;
-    if(act && act.count > 0){
-      batchTarget = confirm('Add these photos to “'+act.name+'”?\n\nOK = add to this batch    Cancel = create a NEW batch') ? act.id : 'new';
-    } else {
-      batchTarget = act ? act.id : 'new';
-    }
+    if(!act){el('czUploadStatus').innerHTML='<span style="color:var(--err)">Open or create a named batch first.</span>';return;}
+    var batchTarget=act.id;
     var all = Array.prototype.slice.call(files);
     var chunks = [], cur = [], curBytes = 0;
     all.forEach(function(f){ var sz=f.size||0; if(cur.length && (curBytes+sz > BATCH_BYTES || cur.length >= BATCH_MAX)){ chunks.push(cur); cur=[]; curBytes=0; } cur.push(f); curBytes+=sz; });
@@ -2020,7 +2070,7 @@
   function czSplitRenderBatches(){
     var sel=el('czSplitBatch'); if(!sel) return;
     sel.innerHTML=(czBatches||[]).map(function(b){
-      var cats=czBatchCats(b).map(function(k){ return CAT_LABEL[k]||k; }).join(', ');
+      var cats=b.categoryName||czBatchCats(b).map(function(k){ return CAT_LABEL[k]||k; }).join(', ');
       return '<option value="'+escapeHtml(b.id)+'"'+(b.id===czActiveBatch?' selected':'')+'>'+escapeHtml(b.name||'Batch')+(cats?' — '+escapeHtml(cats):'')+'</option>';
     }).join('');
     if(!sel.innerHTML) sel.innerHTML='<option value="">Create a batch first</option>';
@@ -2082,10 +2132,9 @@
   }
   function czDAddDesign(){
     var cat = czDCat();
-    var fits = czDFits(cat);
     // Collapse existing designs so the list stays compact; open only the new one.
     czDesigns.forEach(function(x){ x.collapsed = true; });
-    czDesigns.push({ id: ++czDSeq, name: '', cat: cat, fit: cat==='Trouser' ? '' : (fits[0] || ''), cols: [], collapsed: false });
+    czDesigns.push({ id: ++czDSeq, name: '', cat: cat, fit: '', cols: [], collapsed: false });
     czDRender();
   }
   // Import a computer folder that is already segregated by design:
@@ -2129,10 +2178,10 @@
     order.forEach(function(key){
       var g=groups[key], fits=czDFits(g.cat);
       czDesigns.forEach(function(x){ x.collapsed=true; });
-      var d={id:++czDSeq,name:g.name,cat:g.cat,fit:g.cat==='Trouser'?'':(fits[0]||''),cols:[],collapsed:false};
+      var d={id:++czDSeq,name:g.name,cat:g.cat,fit:'',cols:[],collapsed:false};
       czDesigns.push(d); czDAddPhotos(d.id,g.files);
     });
-    st.innerHTML='<span style="color:var(--emerald-d)">✓ Read '+files.length+' photo'+(files.length===1?'':'s')+' from '+order.length+' design folder'+(order.length===1?'':'s')+'. Trouser colours are being picked automatically; correct any dropdown if needed, then upload.</span>';
+    st.innerHTML='<span style="color:var(--emerald-d)">✓ Read '+files.length+' photo'+(files.length===1?'':'s')+' from '+order.length+' design folder'+(order.length===1?'':'s')+'. Colours are being picked automatically; correct any dropdown if needed, then upload.</span>';
     czDRender();
   }
   // Match an AI-detected colour string to one of THIS category's plan colours
@@ -2160,9 +2209,8 @@
       czDRender();
     }).catch(function(){ fresh.forEach(function(cl){ cl.detecting=false; }); czDRender(); });
   }
-  // A design's photos are uploaded in ONE shot; each becomes a colour slot.
-  // Trousers use the local detector above. Uppers retain their existing vision
-  // classifier until their workflow is redesigned separately.
+  // A design's photos are uploaded in one shot; each becomes a colour slot.
+  // Every garment uses the same free local colour detector.
   function czDAddPhotos(did, files){
     var d = czDesigns.filter(function(x){ return x.id === did; })[0]; if(!d || !files || !files.length) return;
     var cat = czDCatOf(d);
@@ -2174,27 +2222,7 @@
     });
     if(!fresh.length) return;
     czDRender();
-    // Trouser colour detection is local and returns only this batch's configured
-    // colour labels. The selected dropdown stays editable for corrections.
-    if(cat === 'Trouser'){
-      czDDetectLocalColours(cat,fresh);
-      return;
-    }
-    var fd = new FormData();
-    fresh.forEach(function(cl){ fd.append('images', cl.file); fd.append('ids', 'c'+cl.id); });
-    fetch('/api/casuals/invoice/classify', { method:'POST', body: fd }).then(function(r){ return r.json(); }).then(function(res){
-      var map = (res && res.results) || {};
-      fresh.forEach(function(cl){ var o = map['c'+cl.id]; cl.detecting = false;
-        if(o && o.colour){
-          // Prefer an on-plan colour; if the AI's read isn't one of this category's
-          // plan colours, keep it anyway as an OFF-PLAN custom colour (the grid nets
-          // off-list colours) instead of leaving the slot blank — a blank slot is
-          // silently skipped on upload, which surprises the founder.
-          cl.colour = czDMatchColour(cat, o.colour) || czColourEN(o.colour) || String(o.colour).trim() || '';
-          cl._aiColour = o.colour;
-        } });
-      czDRender();
-    }).catch(function(){ fresh.forEach(function(cl){ cl.detecting = false; }); czDRender(); });
+    czDDetectLocalColours(cat,fresh);
   }
   function czDRender(){
     var host = el('czDesignList'); if(!host) return;
@@ -2217,7 +2245,6 @@
       var nPhotos = d.cols.filter(function(cl){ return cl.file; }).length;
       var sumBits = [];
       if(multiCat) sumBits.push(escapeHtml(CAT_LABEL[cat]||cat));
-      if(d.fit) sumBits.push(escapeHtml(czFitLabel(cat, d.fit)));
       sumBits.push(nPhotos ? (nPhotos+' colour'+(nPhotos===1?'':'s')) : 'no photos yet');
       card.innerHTML =
         '<div class="dsum" data-dtoggle>'+
@@ -2229,8 +2256,7 @@
         '<div class="dbody"'+(open?'':' style="display:none"')+'>'+
           '<div class="dh">'+
             catFld+
-            (cat==='Trouser' ? '' : '<div class="fld" style="min-width:120px"><label>Fit</label><select data-fit>'+fitOpts+'</select></div>')+
-            '<div class="fld" style="flex:1;min-width:150px"><label>Design name'+(cat==='Trouser'?'':' (optional)')+'</label><input data-name placeholder="e.g. Cargo Pocket" value="'+escapeHtml(d.name||'')+'" /></div>'+
+            '<div class="fld" style="flex:1;min-width:150px"><label>Design name</label><input data-name placeholder="e.g. Cargo Pocket" value="'+escapeHtml(d.name||'')+'" /></div>'+
           '</div>'+
           '<label class="czdaddphotos" data-addlabel><span data-addtxt>⬆ Upload all photos for this design</span>'+
             '<input type="file" accept="image/*" multiple data-photos style="display:none" /></label>'+
@@ -2275,7 +2301,7 @@
         d.cat = this.value;
         // Category changed → its fit list & plan colours differ, so reset the design's
         // fit to the new category's first fit and clear each colour slot's mapping.
-        var nf = czDFits(d.cat); d.fit = d.cat==='Trouser' ? '' : (nf[0] || '');
+        d.fit = '';
         d.cols.forEach(function(cl){ cl.colour = ''; cl._aiColour = null; });
         czDRender();
       });
@@ -2294,8 +2320,8 @@
     var st = el('czUploadStatus');
     var vendor = (el('czVendor').value||'').trim();
     if(!vendor){ st.innerHTML = '<span style="color:var(--err)">Enter a vendor name first.</span>'; el('czVendor').focus(); return; }
-    var unnamedTrouser = czDesigns.some(function(d){ return czDCatOf(d)==='Trouser' && d.cols.some(function(cl){ return !!cl.file; }) && !(d.name||'').trim(); });
-    if(unnamedTrouser){ st.innerHTML = '<span style="color:var(--err)">Enter a name for every Trouser design before uploading. Its colour photos must stay grouped under that name.</span>'; return; }
+    var unnamedDesign = czDesigns.some(function(d){ return d.cols.some(function(cl){ return !!cl.file; }) && !(d.name||'').trim(); });
+    if(unnamedDesign){ st.innerHTML = '<span style="color:var(--err)">Enter a name for every design before uploading. Its colour photos must stay grouped under that name.</span>'; return; }
     // If the AI is still naming colours, don't skip those slots — ask to wait.
     var stillDetecting = 0;
     czDesigns.forEach(function(d){ d.cols.forEach(function(cl){ if(cl.file && cl.detecting) stillDetecting++; }); });
@@ -2345,8 +2371,8 @@
         btn.disabled = false;
         if(!d.success){ el('czAnalyzeStatus').innerHTML = '<span style="color:var(--err)">'+escapeHtml(d.error||'Failed')+'</span>'; return; }
         var msg = '✓ Photos organised without paid AI';
-        if(d.category) msg += ' as '+d.category;
-        msg += ' — confirm fit and colour below, then continue';
+        if(d.category) msg += ' as '+czCategoryLabel(d.category);
+        msg += ' — confirm colour below, then continue';
         if(d.unsorted&&d.unsorted.length) msg += ' · '+d.unsorted.length+' photo'+(d.unsorted.length===1?' needs':'s need')+' a category';
         if(d.dupes) msg += ' · '+d.dupes+' exact duplicate'+(d.dupes===1?'':'s')+' set aside';
         el('czAnalyzeStatus').innerHTML = '<span style="color:var(--emerald-d)">'+msg+'</span>';
@@ -3564,10 +3590,14 @@
 
   function czRenderPlan(d){
     if(!d || !d.categories){ return; }
+    var active=czActiveBatchObj(),activeCats=czBatchCats(active);
+    if(active&&active.categoryName&&activeCats.length===1){
+      (d.categories||[]).forEach(function(cat){if(cat.category===activeCats[0])cat.label=active.categoryName;});
+    }
     czLastPlan = d;
     if(d.settings) czSettings = d.settings;
     el('czPlanPanel').style.display = '';
-    var summary = 'Each selected colourway buys one predefined <b>size set</b>, editable per size. Trousers are allocated only by your colour percentages; Shirts and T-shirts retain their existing workflow.';
+    var summary = 'Each selected colourway buys one predefined <b>size set</b>, editable per size. Every category is allocated only by your colour percentages; fit, pattern and print do not affect selection.';
     if(czPriced){
       var grandCost = 0;
       (d.categories||[]).forEach(function(cat){ if(!cat.enabled) return; (cat.fits||[]).forEach(function(f){ (f.designs||[]).forEach(function(c){ if(c.included === false) return; grandCost += czRowCost(c, cat); }); }); });
@@ -3638,6 +3668,10 @@
   }
   function czRenderSegregation(d){
     if(!d || !d.categories){ return; }
+    var active=czActiveBatchObj(),activeCats=czBatchCats(active);
+    if(active&&active.categoryName&&activeCats.length===1){
+      (d.categories||[]).forEach(function(cat){if(cat.category===activeCats[0])cat.label=active.categoryName;});
+    }
     czLastPlan = d;
     if(d.settings) czSettings = d.settings;
     el('czSegPanel').style.display = '';
@@ -3868,16 +3902,16 @@
   // batch's colour mix), with an explicit
   // "Other — off-plan" escape that lands the line as an already-bought extra row.
   function czInvHasColours(cat){ return !!(cat && czSettings && czSettings.categories && czSettings.categories[cat] && czSettings.categories[cat].colours && Object.keys(czSettings.categories[cat].colours).length); }
-  function czInvColourPicker(cat){ return czInvHasColours(cat) && !czInvIsUpper(cat); }
+  function czInvColourPicker(cat){ return czInvHasColours(cat); }
   function czInvPrintOptions(cat, sel){ return '<option value="">— type —</option>' + ((czInv.prints[cat])||[]).map(function(p){ return '<option value="'+p.key+'"'+(p.key===sel?' selected':'')+'>'+escapeHtml(p.label)+'</option>'; }).join(''); }
-  // A line is ready when included, has a category, fit, qty, and — for uppers — a print type.
-  function czInvReady(){ return (czInv.items||[]).filter(function(it){ return it.include && it.category && it.fit && it.qty>0 && (!czInvIsUpper(it.category) || it.printType); }); }
+  // The universal workflow needs only category, colour and quantity.
+  function czInvReady(){ return (czInv.items||[]).filter(function(it){ return it.include && it.category && it.colour && it.qty>0; }); }
   function czInvRender(){
     var items = czInv.items||[];
     if(!items.length){ el('czInvBody').innerHTML = '<div class="sub" style="padding:24px 4px">No garment line items found. Try a clearer photo/PDF, or an Excel with one row per item.</div>'; el('czInvSub').textContent=''; el('czInvApply').disabled=true; el('czInvFoot').textContent=''; return; }
     var isINR = (czInv.currency==='INR');
     var curSym = isINR ? '₹' : '¥';
-    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Add a <b>product photo</b> per line then <b>Analyze photos</b> to auto-fill, or pick category / print / fit yourself. '+(isINR?'Prices are read in <b>₹</b>.':'Set the <b>¥→₹ rate</b> so prices land in rupees.');
+    el('czInvSub').innerHTML = 'Found <b>'+items.length+'</b> line item'+(items.length===1?'':'s')+'. Confirm only the category and colour for each selected line. '+(isINR?'Prices are read in <b>₹</b>.':'Set the <b>¥→₹ rate</b> so prices land in rupees.');
     var vendBar = '<div class="czfxbar"><b>Vendor</b> <input id="czInvVendor" type="text" value="'+escapeHtml(czInv.vendor||'')+'" placeholder="e.g. CHAOUFI" style="min-width:180px"> <span class="sub" style="margin-left:auto">Which supplier this bill is from — shown as the name on every ordered card.</span></div>';
     var fxBar = '<div class="czfxbar"><b>Bill currency</b> '+
       '<span class="czcurtog"><button type="button" class="czcurbtn'+(!isINR?' on':'')+'" data-cur="CNY">¥ Yuan</button>'+
@@ -3887,9 +3921,6 @@
         : ' &nbsp;·&nbsp; <b>1&nbsp;¥ =</b> <input id="czInvFx" type="number" min="0" step="0.01" value="'+czFx+'"> <b>₹</b> <span class="sub" style="margin-left:auto">¥ prices are converted to ₹ using this rate.</span>')+
       '</div>';
     var rows = items.map(function(it){
-      var upper = czInvIsUpper(it.category);
-      var needFit = it.include && it.category && !it.fit;
-      var needPrint = it.include && upper && !it.printType;
       var rupee = czToINR(it.unitPrice);
       var thumb = it._imgUrl ? ('<img src="'+it._imgUrl+'" alt="">') : '📷';
       var colTd;
@@ -3912,8 +3943,6 @@
         '<td><label class="czimgbtn" title="Add product photo">'+thumb+'<input type="file" class="cz-imgin" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label></td>'+
         '<td><div class="czidesc">'+escapeHtml(it.description||'—')+'</div></td>'+
         '<td><select class="cz-cat">'+czInvCatOptions(it.category)+'</select></td>'+
-        '<td>'+(upper ? ('<select class="cz-print'+(needPrint?' needfit':'')+'">'+czInvPrintOptions(it.category, it.printType)+'</select>') : '<span class="czidash">—</span>')+'</td>'+
-        '<td><select class="cz-fit'+(needFit?' needfit':'')+'"'+(it.category?'':' disabled')+'>'+czInvFitOptions(it.category, it.fit)+'</select></td>'+
         '<td>'+colTd+'</td>'+
         '<td><input class="cz-size" value="'+escapeHtml(it.size||'')+'" style="width:56px"></td>'+
         '<td><input class="cz-qty qty" type="number" min="0" step="1" value="'+(it.qty||0)+'"></td>'+
@@ -3921,7 +3950,7 @@
         '<td><button class="czirm" title="Remove line">🗑</button></td>'+
       '</tr>';
     }).join('');
-    el('czInvBody').innerHTML = vendBar + fxBar + '<table class="czitab"><thead><tr><th>Buy</th><th>Photo</th><th>Item</th><th>Category</th><th>Print</th><th>Fit</th><th>Colour</th><th>Size</th><th>Qty</th><th>Unit '+curSym+'</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    el('czInvBody').innerHTML = vendBar + fxBar + '<table class="czitab"><thead><tr><th>Buy</th><th>Photo</th><th>Item</th><th>Category</th><th>Colour</th><th>Size</th><th>Qty</th><th>Unit '+curSym+'</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
     el('czInvVendor').addEventListener('input', function(){ czInv.vendor = this.value; czInvSyncFoot(); });
     Array.prototype.forEach.call(el('czInvBody').querySelectorAll('.czcurbtn'), function(b){
       b.addEventListener('click', function(){ czInv.currency = (this.getAttribute('data-cur')==='INR') ? 'INR' : 'CNY'; czInvRender(); });
@@ -3932,10 +3961,10 @@
       var id = tr.getAttribute('data-id'), it = czInvGet(id); if(!it) return;
       tr.querySelector('.cz-inc').addEventListener('change', function(){ it.include = this.checked; czInvRender(); });
       tr.querySelector('.cz-imgin').addEventListener('change', function(){ var f=this.files&&this.files[0]; if(!f) return; if(it._imgUrl){ try{ URL.revokeObjectURL(it._imgUrl); }catch(e){} } it._img=f; it._imgUrl=URL.createObjectURL(f); czInvRender(); });
-      tr.querySelector('.cz-cat').addEventListener('change', function(){ it.category = this.value||null; it.fit = null; if(!czInvIsUpper(it.category)) it.printType = null; czInvFill(it, ['category','fit','printType']); czInvRender(); });
+      tr.querySelector('.cz-cat').addEventListener('change', function(){ it.category = this.value||null; it.fit = null; it.printType = null; czInvFill(it, ['category','fit','printType']); czInvRender(); });
       var pr = tr.querySelector('.cz-print');
       if(pr) pr.addEventListener('change', function(){ it.printType = this.value||null; czInvFill(it, ['printType']); czInvRender(); });
-      tr.querySelector('.cz-fit').addEventListener('change', function(){ it.fit = this.value||null; czInvFill(it, ['fit']); czInvRender(); });
+      var ft = tr.querySelector('.cz-fit'); if(ft) ft.addEventListener('change', function(){ it.fit = this.value||null; czInvFill(it, ['fit']); czInvRender(); });
       var colSel = tr.querySelector('.cz-colsel');
       if(colSel){
         var coff = tr.querySelector('.cz-coloff');
@@ -3978,13 +4007,11 @@
     var ready = czInvReady();
     var units = ready.reduce(function(s,it){ return s + it.qty; }, 0);
     var spend = ready.reduce(function(s,it){ return s + it.qty*czToINR(it.unitPrice); }, 0);
-    var needFit = (czInv.items||[]).filter(function(it){ return it.include && it.category && (!it.fit || (czInvIsUpper(it.category) && !it.printType)); }).length;
-    var withImg = (czInv.items||[]).filter(function(it){ return it._img; }).length;
+    var incomplete = (czInv.items||[]).filter(function(it){ return it.include && it.qty>0 && (!it.category || !it.colour); }).length;
     var totals = ready.length
-      ? ('<b>'+ready.length+'</b> line'+(ready.length===1?'':'s')+' · total <b>'+fmtINR(units)+'</b> pc · <b>₹'+fmtINR(spend)+'</b>'+(needFit?(' · <b style="color:#b45309">'+needFit+' still need print/fit</b>'):''))
-      : (needFit?('<b style="color:#b45309">'+needFit+' line'+(needFit===1?'':'s')+' need print type / fit selected</b>'):'Nothing selected yet.');
-    el('czInvFoot').innerHTML = '<button class="czianalyze" id="czInvAnalyzeBtn"'+(withImg?'':' disabled')+'>✨ Analyze photos'+(withImg?(' ('+withImg+')'):'')+'</button> <span style="margin-left:10px">'+totals+'</span>';
-    var ab = el('czInvAnalyzeBtn'); if(ab) ab.addEventListener('click', czInvAnalyze);
+      ? ('<b>'+ready.length+'</b> line'+(ready.length===1?'':'s')+' · total <b>'+fmtINR(units)+'</b> pc · <b>₹'+fmtINR(spend)+'</b>'+(incomplete?(' · <b style="color:#b45309">'+incomplete+' still need category/colour</b>'):''))
+      : (incomplete?('<b style="color:#b45309">'+incomplete+' line'+(incomplete===1?'':'s')+' need category / colour</b>'):'Nothing selected yet.');
+    el('czInvFoot').innerHTML = totals;
     var noVendor = !((czInv.vendor||'').trim());
     if(ready.length && noVendor){ el('czInvFoot').innerHTML += ' <b style="color:#b45309">· enter a vendor name above</b>'; }
     // Keep the button CLICKABLE even when not ready — a disabled button that does
@@ -3993,16 +4020,16 @@
     el('czInvApply').disabled = false;
   }
   function czInvApply(){
-    // Explain WHY nothing imports rather than sitting inert. Blockers: no vendor,
-    // no ready lines, or lines still missing category / fit / (upper) print type.
+    // Explain WHY nothing imports rather than sitting inert. Only category,
+    // colour, quantity and vendor are required; fit / print never participate.
     var ready = czInvReady();
     var noVendor = !((czInv.vendor||'').trim());
     if(!ready.length || noVendor){
-      var incomplete = (czInv.items||[]).filter(function(it){ return it.include && it.qty>0 && (!it.category || !it.fit || (czInvIsUpper(it.category) && !it.printType)); }).length;
+      var incomplete = (czInv.items||[]).filter(function(it){ return it.include && it.qty>0 && (!it.category || !it.colour); }).length;
       var msg = [];
       if(noVendor) msg.push('enter a <b>vendor name</b> at the top');
       if(!ready.length){
-        if(incomplete) msg.push('<b>'+incomplete+'</b> line'+(incomplete===1?'':'s')+' still need category / fit'+((czInv.items||[]).some(function(it){return czInvIsUpper(it.category);})?' / print type':''));
+        if(incomplete) msg.push('<b>'+incomplete+'</b> line'+(incomplete===1?'':'s')+' still need category / colour');
         else msg.push('tick <b>Buy</b> and set a <b>qty</b> on at least one line');
       }
       el('czInvFoot').innerHTML = '<b style="color:#b45309">Can\u2019t import yet — '+msg.join(', and ')+'.</b>';
@@ -4015,7 +4042,7 @@
     var fd = new FormData();
     if(czInv.sourcePo) fd.append('sourcePo', czInv.sourcePo);
     fd.append('meta', JSON.stringify(ready.map(function(it){
-      return { _id: it._id, vendor: (czInv.vendor||'').trim(), category: it.category, fit: it.fit, printType: it.printType||null,
+      return { _id: it._id, vendor: (czInv.vendor||'').trim(), category: it.category, fit: null, printType: null,
         colour: it.colour||'', size: it.size||'', qty: it.qty, unitPrice: czToINR(it.unitPrice),
         photoRef: it.photoRef||null };   // reuse the PO's supplier photo when no local file is added
     })));
@@ -4045,7 +4072,7 @@
     if(d.success && d.settings) czSettings = d.settings;
     if(d.success && (d.analysed || hasSpecGrid)) czRenderPlan(d);
     else if(d.success){ czLastPlan = d; czRenderCats(); }
-    if(d.success)loadProcOverview('casual');
+    if(d.success)loadProcOverview(czLine==='funky'?'funky':'casual');
   }).catch(function(){}); }
 
   // Wiring (casuals)
@@ -4070,10 +4097,14 @@
   el('czPlanFromSegBtn').addEventListener('click', function(){ el('czSegPanel').style.display = 'none'; czLoadPlan(); });
   el('czExportBtn').addEventListener('click', czExportPO);
   el('czNewBatch').addEventListener('click', czCreateBatch);
+  el('czBatchCategory').addEventListener('change',function(){czAddRegistry('category',this);});
+  el('czBatchAudience').addEventListener('change',function(){czAddRegistry('audience',this);});
   el('czCatPickCreate').addEventListener('click', function(){
     var name=(el('czBatchName').value||'').trim();if(!name){alert('Enter a clear batch name first.');el('czBatchName').focus();return;}
-    var cat=el('czBatchCategory').value;
-    czCreateBatchFor([cat],{name:name,audience:el('czBatchAudience').value,type:(el('czBatchType').value||'').trim()});
+    var categoryName=el('czBatchCategory').value,audience=el('czBatchAudience').value;
+    var def=(czRegistry.categories||[]).filter(function(x){return x.name===categoryName;})[0];
+    if(!def||audience==='__add__'||!audience){alert('Choose a category and gender / audience.');return;}
+    czCreateBatchFor([def.engineKey],{name:name,categoryName:categoryName,audience:audience,type:(el('czBatchType').value||'').trim()});
   });
   el('czCatPickCancel').addEventListener('click', function(){ czShowCatPick(false); });
   el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });
@@ -4088,11 +4119,9 @@
   el('czInvApply').addEventListener('click', czInvApply);
   el('czInvModal').addEventListener('click', function(e){ if(e.target === el('czInvModal')) czInvClose(); });
 
-  // Lazy boot the Casuals line the first time it's opened.
-  function czBoot(){ if(czBooted) return; czBooted = true; czLoadSettings().then(czLoadCandidates).then(czLoadPlan); }
-  var _switchLine = switchLine;
-  switchLine = function(line){ _switchLine(line); if(line === 'casual') czBoot(); };
-  (function(){ var saved='funky'; try { saved = localStorage.getItem('sanki_fresh_line')||'funky'; } catch(e){} if(saved === 'casual') czBoot(); })();
+  // Both lines share this one simple named-batch engine; only their data differs.
+  function czBoot(){ if(czBooted) return; czBooted = true; Promise.all([czLoadSettings(),czLoadRegistry()]).then(czSwitchWorkspace); }
+  czBoot();
   </script>
   <script src="/sidebar.js"></script>
 </body>

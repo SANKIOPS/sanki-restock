@@ -42,6 +42,26 @@ test('Casuals overview nets only advance Purchases linked to the named batch', (
   assert.equal(overview.totals.onWayPieces, 20);
 });
 
+test('Funky uses the same named-batch overview while remaining data-separated', () => {
+  const settings = settingsWithDefaults({ settings: {} });
+  settings.categories.Shirt.enabled = true;
+  settings.categories.Shirt.sizeMode = 'designs';
+  settings.categories.Shirt.designs = 5;
+  const common = { settings, planSettings:settings, categories:['Shirt'], category:'Shirt', audience:'Women', type:'Oversized' };
+  const overview = casualsOverview({
+    settings, activeBatch:'f1',
+    batches:[
+      { ...common, id:'f1', num:1, name:'Funky Oversized', categoryName:'Tops', line:'funky' },
+      { ...common, id:'c1', num:2, name:'Casual Oversized', categoryName:'Shirts', line:'casuals' }
+    ],
+    candidates:[{ id:'x', batch:'f1', category:'Shirt', colour:'Black', designName:'F1' }]
+  }, 'funky');
+  assert.equal(overview.line, 'funky');
+  assert.equal(overview.rows.length, 1);
+  assert.equal(overview.rows[0].name, 'Funky Oversized');
+  assert.equal(overview.rows[0].category, 'Tops');
+});
+
 test('Fresh Procurement UI has the summary, named batch fields and exact PO bridge', () => {
   const fresh = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
   const purchases = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
@@ -54,9 +74,11 @@ test('Fresh Procurement UI has the summary, named batch fields and exact PO brid
   assert.match(fresh, /Received and posted purchases are excluded/);
   assert.match(purchases, /id="b_sourceBatch"/);
   assert.match(purchases, /sourceBatchId:el\('b_sourceBatch'\)\.value/);
-  assert.match(procurement, /sourceBatchId: normLine\(b\.line\) === 'casuals'/);
+  assert.match(procurement, /sourceBatchId: normLine\(b\.line\) \?/);
+  assert.match(fresh, /\/api\/casuals\/overview\?line=/);
+  assert.match(fresh, /categoryName:categoryName/);
+  assert.match(fresh, /line:czLine/);
   const routes = router.stack.filter(layer => layer.route).map(layer => ({ path:layer.route.path, methods:layer.route.methods }));
   assert.ok(routes.some(r => r.path === '/api/casuals/overview' && r.methods.get));
   assert.ok(routes.some(r => r.path === '/api/casuals/batches/:id' && r.methods.patch));
 });
-
