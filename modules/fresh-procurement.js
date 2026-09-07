@@ -127,6 +127,7 @@ function mediaTypeForFile(fn) {
 
 // ── JSON store (atomic write, same pattern as every module) ──────
 const STORE_PATH = process.env.FRESH_PROC_PATH || path.join(DATA_DIR, 'fresh-procurement.json');
+const PROCUREMENT_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
 
 // The orders ledger lives beside us on the volume — Signal ③ reads it.
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
@@ -685,6 +686,50 @@ router.get('/api/fresh/plan', (req, res) => {
   const scored = cands.some(c => typeof c.funk === 'number');
   if (scored) { markDuplicates(cands); assignTiersBySplit(cands, settings); saveStore(s); }
   res.json({ success: true, scored, settings, candidates: cands.map(publicCandidate), vendors: vendorCounts(cands), ...buildPlan(cands, settings) });
+});
+
+// SANKI Funky portfolio summary. Funky currently plans one sourcing cycle rather
+// than persisted sub-batches, so each garment category is a summary row. Real
+// advance POs are folded in; received/posted purchases are intentionally absent.
+router.get('/api/fresh/overview', (req, res) => {
+  const s = loadStore(), settings = settingsWithDefaults(s), cands = s.candidates || [];
+  const scored = cands.some(c => typeof c.funk === 'number');
+  if (scored) { markDuplicates(cands); assignTiersBySplit(cands, settings); }
+  const plan = buildPlan(cands, settings);
+  let purchases = { settings: {}, pos: {} };
+  try { purchases = JSON.parse(fs.readFileSync(PROCUREMENT_PATH, 'utf8')); } catch {}
+  const open = [];
+  Object.values(purchases.pos || {}).forEach(po => {
+    if (!po || po.status !== 'advance' || po.line !== 'funky') return;
+    const totalQty = (po.lines || []).reduce((sum, line) => sum + Math.max(0, Number(line.qty) || 0), 0);
+    (po.lines || []).forEach(line => {
+      const qty = Math.max(0, Number(line.qty) || 0); if (!qty) return;
+      const unit = Math.max(0, Number(line.perPcsYuan) || 0);
+      const cost = po.origin === 'india'
+        ? Math.round((unit + (totalQty ? (Number(po.transportTotal) || 0) / totalQty : 0)) * qty)
+        : Math.round((unit * (Number(po.exRate != null ? po.exRate : purchases.settings && purchases.settings.exRate) || 0)
+          + Math.max(0, Number(line.weightGrams) || 0) * (Number(po.freightPerGram != null ? po.freightPerGram : purchases.settings && purchases.settings.freightPerGram) || 0)) * qty);
+      open.push({ category: normCategory(line.productType), audience: String(line.audience || ''), type: String(line.fit || ''),
+        vendor: String(line.vendor || po.vendor || ''), colour: String(line.colour || ''), qty, cost });
+    });
+  });
+  const rows = plan.categories.map((cat, index) => {
+    const pool = cands.filter(c => (c.category || 'Other') === cat.category && !c.dupeOf);
+    const incoming = open.filter(x => x.category === cat.category);
+    const vendors = [...new Set(pool.map(c => c.vendor).concat(incoming.map(x => x.vendor)).filter(Boolean))];
+    const colours = new Set(pool.map(c => c.aiColour || c.colour).concat(incoming.map(x => x.colour)).filter(Boolean));
+    const onWayCost = incoming.reduce((sum, x) => sum + x.cost, 0);
+    return { id: 'funky-' + index, name: 'Current ' + cat.category + ' plan', audience: '', category: cat.category,
+      categoryKeys: [cat.category], type: 'Impression mix', vendor: vendors.join(', '), vendors,
+      designs: cat.selectedCount, pieces: 0, colours: colours.size, colourways: pool.length,
+      budget: cat.subtotal, onWayCost, onWayPieces: incoming.reduce((sum, x) => sum + x.qty, 0),
+      remaining: Math.max(0, cat.subtotal - onWayCost), status: onWayCost ? 'Part ordered' : (pool.length ? 'Sourcing' : 'Draft') };
+  });
+  const onWayCost = open.reduce((sum, x) => sum + x.cost, 0), onWayPieces = open.reduce((sum, x) => sum + x.qty, 0);
+  const allColours = new Set(cands.map(c => c.aiColour || c.colour).concat(open.map(x => x.colour)).filter(Boolean));
+  res.json({ success: true, line: 'funky', rows, categories: rows.map(r => ({ key:r.category, label:r.category, budget:r.budget, onWayCost:r.onWayCost, onWayPieces:r.onWayPieces, remaining:r.remaining, batches:1 })),
+    totals: { batches: rows.length, budget: plan.budget, onWayCost, onWayPieces, remaining: Math.max(0, plan.budget - onWayCost),
+      designs: plan.totalSelected, pieces: 0, colours: allColours.size, unlinkedOnWayCost: 0, unlinkedOnWayPieces: 0 } });
 });
 
 // Manual override: pin one candidate to a tier (locks it so re-analyze/re-cut

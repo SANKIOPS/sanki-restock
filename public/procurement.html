@@ -168,6 +168,7 @@
         <div class="settingsgrid">
           <div class="fld"><label>Vendor <span style="color:var(--err)">*</span></label><select id="b_vendor"><option value="">Select vendor…</option><option value="__new__">+ Add new vendor…</option></select></div>
           <div class="fld"><label>Line <span style="color:var(--err)">*</span></label><select id="b_line"><option value="">Which line?…</option><option value="funky">SANKI Funky</option><option value="casuals">SANKI Casuals</option></select></div>
+          <div class="fld" id="sourceBatchWrap" style="display:none"><label>Fresh Procurement batch</label><select id="b_sourceBatch"><option value="">Not linked</option></select></div>
           <div class="fld"><label>Bill number <span style="color:var(--err)">*</span></label><input id="b_billNo" placeholder="vendor invoice no." /></div>
           <div class="fld"><label>Date of purchase <span style="color:var(--err)">*</span></label><input id="b_datePurchase" type="date" /></div>
           <div class="fld"><label>Lead time (days) <span class="muted" style="font-weight:400;text-transform:none">China→India</span></label><input id="b_leadTime" type="number" min="0" step="1" placeholder="e.g. 10" /></div>
@@ -607,7 +608,7 @@
         '<div style="font-size:12px"><span class="muted">Ordered</span> '+esc(ordered)+'<br><span class="muted">Received</span> '+esc(received)+'</div>'+
         '<div>'+historyStatus(po)+'</div><div class="money"><b>'+t.qty+' pcs</b></div><div class="money"><b>'+money(t.total)+'</b></div></div>';
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
-        '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span><span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span>'+(po.sourceBatchName?'<span><b>Fresh batch:</b> '+esc(po.sourceBatchName)+'</span>':'')+'<span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
         '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / colour / size</th><th class="money">Qty</th><th class="money">Landed/pc</th><th class="money">Total</th><th>Weight g/pc</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
         (po.status==='posted'?'<div class="banner ok" style="margin-top:9px">Posted to Shopify'+(po.postedAt?' on '+esc(String(po.postedAt).replace('T',' ').slice(0,19)):'')+'.</div>':'')+'</div>';
       return head+detail;
@@ -627,13 +628,24 @@
       return head+detail;
     }
 
+    var sourceBatches=[];
+    function fillSourceBatches(list){
+      sourceBatches=list||[]; var s=el('b_sourceBatch'),cur=s.value;
+      s.innerHTML='<option value="">Not linked</option>'+sourceBatches.map(function(b){return '<option value="'+esc(b.id)+'">'+esc(b.name)+'</option>';}).join('');
+      if(sourceBatches.some(function(b){return b.id===cur;}))s.value=cur;
+    }
+    function syncSourceBatch(){el('sourceBatchWrap').style.display=el('b_line').value==='casuals'?'':'none';if(el('b_line').value!=='casuals')el('b_sourceBatch').value='';}
+    el('b_line').onchange=syncSourceBatch;
+    function sourceBatchName(){var b=sourceBatches.filter(function(x){return x.id===el('b_sourceBatch').value;})[0];return b?b.name:'';}
+
     // ── boot ──
     Promise.all([
       fetch('/api/auth/me').then(r=>r.json()).catch(()=>({})),
       fetch('/api/procurement/settings').then(r=>r.json()),
       fetch('/api/procurement/lookups').then(r=>r.json()),
       fetch('/api/showroom/locations').then(r=>r.json()).catch(()=>({locations:[]})),
-      fetch('/api/procurement/vendors').then(r=>r.json()).catch(()=>({vendors:[]}))
+      fetch('/api/procurement/vendors').then(r=>r.json()).catch(()=>({vendors:[]})),
+      fetch('/api/casuals/batches').then(r=>r.json()).catch(()=>({batches:[]}))
     ]).then(function(res){
       var userRoles=Array.isArray(res[0].roles)?res[0].roles:[];
       me = { isAdmin:!!res[0].isAdmin, role:res[0].role||'', roles:userRoles, username:res[0].username||'' };
@@ -653,6 +665,7 @@
       locs.forEach(function(l){ var o=document.createElement('option'); o.value=l.id; o.textContent=l.name; if(String(l.id)===String(settings.warehouseLocationId)) o.selected=true; wh.appendChild(o); });
       if(!settings.warehouseLocationId) el('settingsNote').textContent='Pick the warehouse location that receives incoming stock, then Save.';
       fillVendors((res[4]&&res[4].vendors)||[]);
+      fillSourceBatches((res[5]&&res[5].batches)||[]); syncSourceBatch();
     });
 
     // ── live expected-arrival note (from lead time + purchase date) ──
@@ -903,7 +916,9 @@
       fetch('/api/procurement/advance',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ lines:lines, exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
           leadTimeDays:el('b_leadTime').value, origin:advOrigin(), transportTotal:el('b_transportTotal').value,
-          vendor:el('b_vendor').value.trim().toUpperCase(), line:el('b_line').value, billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
+          vendor:el('b_vendor').value.trim().toUpperCase(), line:el('b_line').value,
+          sourceBatchId:el('b_sourceBatch').value, sourceBatchName:sourceBatchName(),
+          billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save advance purchase →';
         if(!d.success){ el('advanceResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
@@ -931,6 +946,7 @@
       syncOrigin();
       ensureVendorOption(po.vendor||'');
       el('b_line').value=po.line||'';
+      syncSourceBatch(); el('b_sourceBatch').value=po.sourceBatchId||'';
       el('b_billNo').value=po.billNo||'';
       el('b_datePurchase').value=po.datePurchase||'';
       el('b_leadTime').value=(po.leadTimeDays!=null?po.leadTimeDays:'');
@@ -955,6 +971,7 @@
     function exitEditMode(){
       editingPoId=null; lines=[]; renderLines();
       el('b_origin').value='china'; el('b_transportTotal').value=''; syncOrigin();
+      el('b_line').value=''; el('b_sourceBatch').value=''; syncSourceBatch();
       el('editingBanner').classList.add('hidden');
       el('saveAdvanceBtn').classList.remove('hidden');
       el('updatePoBtn').classList.add('hidden');
@@ -965,7 +982,8 @@
       if(!lines.length){ alert('A PO needs at least one line. Cancel edit to delete the PO instead.'); return; }
       var id=editingPoId, btn=el('updatePoBtn'); btn.disabled=true; btn.textContent='Updating…';
       fetch('/api/procurement/pos/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ vendor:el('b_vendor').value.trim().toUpperCase(), line:el('b_line').value, billNo:el('b_billNo').value.trim(),
+        body:JSON.stringify({ vendor:el('b_vendor').value.trim().toUpperCase(), line:el('b_line').value,
+          sourceBatchId:el('b_sourceBatch').value, sourceBatchName:sourceBatchName(), billNo:el('b_billNo').value.trim(),
           datePurchase:el('b_datePurchase').value, leadTimeDays:el('b_leadTime').value,
           exRate:el('exRate').value, freightPerGram:el('freightPerGram').value,
           origin:advOrigin(), transportTotal:el('b_transportTotal').value, lines:lines })
@@ -1374,7 +1392,7 @@
         '<span class="pill '+stMeta[0]+'">'+esc(stMeta[1])+'</span></div>';
       h+='<div class="panel"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
         '<div><h2 style="margin:0">'+esc(po.id)+'</h2>'+
-          '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
+          '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+(po.sourceBatchName?(' <span class="muted">· Fresh batch '+esc(po.sourceBatchName)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
       // rates + date-of-receive carried from the advance purchase — editable here before final calc
       if(!posted){

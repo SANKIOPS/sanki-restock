@@ -262,6 +262,7 @@ function markDuplicates(cands) {
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 const STORE_PATH = process.env.CASUALS_PATH || path.join(DATA_DIR, 'casuals.json');
 const CAND_DIR = path.join(DATA_DIR, 'casuals-candidates');
+const PROCUREMENT_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
 // Opening a batch must remain usable even when the Railway volume temporarily
 // refuses writes. This mirrors the normally persisted activeBatch for this
 // process and is reapplied on each read.
@@ -331,7 +332,16 @@ function batchCats(b) {
   raw.forEach(k => { if (CAT_BY_KEY[k] && out.indexOf(k) < 0) out.push(k); });
   return out;
 }
-function newBatch(s, name, category) {
+function cleanBatchMeta(raw) {
+  const b = raw || {};
+  const audience = ['Men', 'Women', 'Unisex'].includes(String(b.audience || '').trim())
+    ? String(b.audience).trim() : '';
+  return {
+    audience,
+    type: String(b.type || b.fitType || '').trim().slice(0, 80)
+  };
+}
+function newBatch(s, name, category, meta) {
   const num = (s.batches.reduce((m, b) => Math.max(m, b.num || 0), 0)) + 1;
   const createdAt = new Date().toISOString();
   // A batch spans one OR MORE categories, chosen up-front on New batch. `category`
@@ -339,8 +349,10 @@ function newBatch(s, name, category) {
   const rawCats = Array.isArray(category) ? category : (category ? [category] : []);
   const cats = [];
   rawCats.forEach(k => { if (CAT_BY_KEY[k] && cats.indexOf(k) < 0) cats.push(k); });
-  const b = { id: crypto.randomBytes(6).toString('hex'), num, name: (name && String(name).trim()) || batchDateName(num, createdAt), createdAt,
+  const cleaned = cleanBatchMeta(meta);
+  const b = { id: crypto.randomBytes(6).toString('hex'), num, name: (name && String(name).trim().slice(0, 120)) || batchDateName(num, createdAt), createdAt,
     categories: cats, category: cats.length === 1 ? cats[0] : null,
+    audience: cleaned.audience, type: cleaned.type,
     // Each batch owns a snapshot so editing a new colour mix cannot rewrite an
     // older batch's plan. The store-level copy remains the starting template.
     planSettings: JSON.parse(JSON.stringify(settingsWithDefaults(s))) };
@@ -376,9 +388,116 @@ function batchList(s) {
     // Soft pieces-coming estimate = one default set per categorised photo.
     const pieces = Object.keys(by).reduce((sum, k) => sum + by[k] * (SET_PIECES[k] || 10), 0);
     return { id: b.id, num: b.num, name: b.name, createdAt: b.createdAt, category: b.category || null,
+      audience: b.audience || '', type: b.type || '',
       batchCategories: batchCats(b),   // the category SET this batch spans (multi-category); [] = legacy/unconstrained
       count: cs.length, analysed, categories, pieces };
   });
+}
+
+function readProcurementStore() {
+  try { return JSON.parse(fs.readFileSync(PROCUREMENT_PATH, 'utf8')); }
+  catch { return { settings: {}, pos: {} }; }
+}
+function procurementLineCost(po, line, settings) {
+  const qty = Math.max(0, Number(line && line.qty) || 0);
+  if (!qty) return 0;
+  const totalQty = (po.lines || []).reduce((sum, row) => sum + Math.max(0, Number(row.qty) || 0), 0);
+  const unit = Math.max(0, Number(line.perPcsYuan) || 0);
+  if (po.origin === 'india') {
+    const transport = totalQty ? Math.max(0, Number(po.transportTotal) || 0) / totalQty : 0;
+    return Math.round((unit + transport) * qty);
+  }
+  const exRate = Number(po.exRate != null ? po.exRate : settings.exRate) || 0;
+  const freight = Number(po.freightPerGram != null ? po.freightPerGram : settings.freightPerGram) || 0;
+  const weight = Math.max(0, Number(line.weightGrams) || 0);
+  return Math.round((unit * exRate + weight * freight) * qty);
+}
+function canonicalCasualCategory(raw) {
+  return normCasualCategory(raw) || String(raw || 'Uncategorised').trim() || 'Uncategorised';
+}
+function casualsOverview(store) {
+  const s = store || loadStore();
+  const purchases = readProcurementStore();
+  const purchaseSettings = purchases.settings || {};
+  const openLines = [];
+  Object.values(purchases.pos || {}).forEach(po => {
+    if (!po || po.status !== 'advance' || po.line !== 'casuals') return;
+    (po.lines || []).forEach(line => {
+      const qty = Math.max(0, Number(line.qty) || 0);
+      if (!qty) return;
+      openLines.push({
+        poId: po.id, batchId: String(po.sourceBatchId || ''),
+        category: canonicalCasualCategory(line.productType), audience: String(line.audience || ''),
+        type: String(line.fit || ''), vendor: String(line.vendor || po.vendor || ''),
+        colour: String(line.colour || ''), qty,
+        cost: procurementLineCost(po, line, purchaseSettings)
+      });
+    });
+  });
+
+  const rows = [];
+  (s.batches || []).forEach(b => {
+    const candidates = (s.candidates || []).filter(c => c.batch === b.id);
+    markDuplicates(candidates);
+    const settings = b.planSettings ? settingsWithDefaults({ settings: b.planSettings }) : settingsWithDefaults(s);
+    const plan = buildPlan(candidates, settings);
+    let allowed = batchCats(b);
+    if (!allowed.length) allowed = plan.categories.filter(c => c.enabled && (c.poolCount || c.budget)).map(c => c.category);
+    const cats = plan.categories.filter(c => allowed.includes(c.category));
+    const linked = openLines.filter(x => x.batchId === b.id);
+    const vendors = [...new Set(candidates.map(c => String(c.vendor || '').trim()).concat(linked.map(x => x.vendor)).filter(Boolean))];
+    const colours = [...new Set(candidates.map(c => String(c.colour || '').trim()).concat(linked.map(x => x.colour)).filter(Boolean))];
+    const budget = cats.reduce((sum, c) => sum + (Number(c.budget) || 0), 0);
+    const onWayCost = linked.reduce((sum, x) => sum + x.cost, 0);
+    const onWayPieces = linked.reduce((sum, x) => sum + x.qty, 0);
+    const targetDesigns = cats.reduce((sum, c) => sum + (Number(c.designsTarget) || 0), 0);
+    const targetPieces = cats.reduce((sum, c) => sum + (Number(c.estUnits) || 0), 0);
+    rows.push({
+      id: b.id, name: b.name, audience: b.audience || '',
+      category: allowed.map(k => (CAT_BY_KEY[k] || { label: k }).label).join(', ') || 'Unspecified',
+      categoryKeys: allowed, type: b.type || '', vendors, vendor: vendors.join(', '),
+      designs: targetDesigns, pieces: targetPieces, colours: colours.length, colourways: candidates.filter(c => !c.dupeOf).length,
+      budget, onWayCost, onWayPieces, remaining: Math.max(0, budget - onWayCost),
+      status: onWayCost >= budget && budget > 0 ? 'Fully ordered' : (onWayCost > 0 ? 'Part ordered' : (candidates.length ? 'Sourcing' : 'Draft')),
+      createdAt: b.createdAt || ''
+    });
+  });
+
+  const linkedIds = new Set((s.batches || []).map(b => b.id));
+  const unlinked = openLines.filter(x => !x.batchId || !linkedIds.has(x.batchId));
+  const totalBudget = rows.reduce((sum, r) => sum + r.budget, 0);
+  const onWayCost = openLines.reduce((sum, x) => sum + x.cost, 0);
+  const onWayPieces = openLines.reduce((sum, x) => sum + x.qty, 0);
+  const distinctColours = new Set();
+  rows.forEach(r => {
+    const batch = (s.batches || []).find(b => b.id === r.id);
+    (s.candidates || []).filter(c => c.batch === (batch && batch.id)).forEach(c => { if (c.colour) distinctColours.add(String(c.colour)); });
+  });
+  openLines.forEach(x => { if (x.colour) distinctColours.add(x.colour); });
+  const categories = {};
+  rows.forEach(r => r.categoryKeys.forEach(key => {
+    const c = categories[key] || (categories[key] = { key, label: (CAT_BY_KEY[key] || { label: key }).label, budget: 0, onWayCost: 0, onWayPieces: 0, batches: 0 });
+    c.budget += r.categoryKeys.length ? Math.round(r.budget / r.categoryKeys.length) : 0; c.batches++;
+  }));
+  openLines.forEach(x => {
+    const key = x.category;
+    const c = categories[key] || (categories[key] = { key, label: (CAT_BY_KEY[key] || { label: key }).label, budget: 0, onWayCost: 0, onWayPieces: 0, batches: 0 });
+    c.onWayCost += x.cost; c.onWayPieces += x.qty;
+  });
+  Object.values(categories).forEach(c => { c.remaining = Math.max(0, c.budget - c.onWayCost); });
+  const remainingByCategory = Object.values(categories).reduce((sum, c) => sum + c.remaining, 0);
+  return {
+    line: 'casuals', rows, categories: Object.values(categories),
+    totals: {
+      batches: rows.length, budget: totalBudget, onWayCost, onWayPieces,
+      // Never let over-buying in one category consume another category's budget.
+      remaining: remainingByCategory,
+      designs: rows.reduce((sum, r) => sum + r.designs, 0),
+      pieces: rows.reduce((sum, r) => sum + r.pieces, 0),
+      colours: distinctColours.size, unlinkedOnWayCost: unlinked.reduce((sum, x) => sum + x.cost, 0),
+      unlinkedOnWayPieces: unlinked.reduce((sum, x) => sum + x.qty, 0)
+    }
+  };
 }
 
 function mediaTypeForFile(fn) {
@@ -1850,15 +1969,45 @@ router.get('/api/casuals/batches', (req, res) => {
   res.json({ success: true, batches: batchList(s), activeBatch: s.activeBatch });
 });
 
+// Portfolio view: every named sourcing batch plus only real Purchases that are
+// still awaiting arrival. Received/posted records never consume open-to-buy.
+router.get('/api/casuals/overview', (req, res) => {
+  const s = loadStore();
+  res.json({ success: true, ...casualsOverview(s) });
+});
+
 // Create a new (empty) batch and make it active.
 router.post('/api/casuals/batches', (req, res) => {
   const s = loadStore();
   // Accept either `categories:[...]` (multi-select) or a single `category` (legacy).
   const cat = (req.body && Array.isArray(req.body.categories)) ? req.body.categories : (req.body && req.body.category);
-  const b = newBatch(s, req.body && req.body.name, cat);
+  const b = newBatch(s, req.body && req.body.name, cat, req.body);
   s.activeBatch = b.id;
   saveStore(s);
   res.json({ success: true, batch: b, batches: batchList(s), activeBatch: s.activeBatch });
+});
+
+// Rename/reclassify a batch without touching its photos or frozen plan.
+router.patch('/api/casuals/batches/:id', (req, res) => {
+  const s = loadStore();
+  const b = s.batches.find(x => x.id === req.params.id);
+  if (!b) return res.status(404).json({ success: false, error: 'Batch not found' });
+  const body = req.body || {}, meta = cleanBatchMeta(body);
+  if (body.name != null) {
+    const name = String(body.name).trim().slice(0, 120);
+    if (!name) return res.status(400).json({ success: false, error: 'Batch name is required' });
+    b.name = name;
+  }
+  if (body.audience != null) b.audience = meta.audience;
+  if (body.type != null || body.fitType != null) b.type = meta.type;
+  if (body.category != null || Array.isArray(body.categories)) {
+    const raw = Array.isArray(body.categories) ? body.categories : [body.category];
+    const cats = [...new Set(raw.filter(k => CAT_BY_KEY[k]))];
+    if (!cats.length) return res.status(400).json({ success: false, error: 'Choose a valid category' });
+    b.categories = cats; b.category = cats.length === 1 ? cats[0] : null;
+  }
+  saveStore(s);
+  res.json({ success: true, batch: batchList(s).find(x => x.id === b.id), batches: batchList(s) });
 });
 
 // Switch the active batch (the plan/segregate/upload target). Keep the original
@@ -2437,4 +2586,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes, detectLocalColour };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes, detectLocalColour, casualsOverview };

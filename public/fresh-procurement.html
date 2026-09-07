@@ -46,6 +46,23 @@
     .czbchip.warn{ background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
     .czbchip.muted{ background:#f6f7f6; color:var(--muted); }
     .czbchip.cat{ background:#f5f0ff; border-color:#ddd0f5; color:#6d28d9; }
+    .ovhead{ display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap; }
+    .ovkpis{ display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:8px;margin-top:12px; }
+    .ovkpi{ border:1px solid var(--line);border-radius:10px;background:#fbfdfb;padding:10px 11px;display:flex;flex-direction:column;gap:3px; }
+    .ovkpi span{ color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.4px; }
+    .ovkpi b{ font-size:18px;line-height:1.2; }
+    .ovkpi.money b{ color:#065f46; }.ovkpi.used b{ color:#92400e; }.ovkpi.rem b{ color:#1d4ed8; }
+    .ovfilters{ display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:8px;margin-top:13px;padding-top:12px;border-top:1px solid var(--line); }
+    .ovtable{ overflow:auto;margin-top:12px;border:1px solid var(--line);border-radius:10px; }
+    .ovtable table{ width:100%;border-collapse:collapse;font-size:12px;background:#fff; }
+    .ovtable th{ text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.35px;background:#f7faf7; }
+    .ovtable th,.ovtable td{ padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap; }
+    .ovtable tr:last-child td{ border-bottom:0; }.ovbatch{ cursor:pointer; }.ovbatch:hover td{ background:#f2faf6; }
+    .ovstatus{ display:inline-block;border-radius:999px;padding:2px 7px;background:#eef4ff;color:#1d4ed8;font-weight:700;font-size:10px; }
+    .ovwarn{ margin-top:9px;padding:8px 10px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:12px; }
+    .cznewgrid{ display:grid;grid-template-columns:2fr 1fr 1fr 1.5fr;gap:10px;align-items:end; }
+    @media(max-width:850px){.ovkpis{grid-template-columns:repeat(2,1fr)}.ovfilters{grid-template-columns:repeat(2,1fr)}.cznewgrid{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:520px){.ovfilters,.cznewgrid{grid-template-columns:1fr}}
     .czbcaret{ flex:0 0 auto; font-size:12px; color:var(--muted); width:14px; text-align:center; }
     .czbbody{ border-top:1px solid var(--line); padding:12px 14px; background:#fbfdfb; }
     .czphotos-tog{ display:inline-flex; align-items:center; gap:7px; cursor:pointer; user-select:none; font-size:13px; font-weight:700; color:#374151;
@@ -470,9 +487,9 @@
     <div class="top">
       <div>
         <h1>Fresh Procurement <span class="mono" style="font-size:12px;font-weight:600;color:var(--muted)">· the buying brain</span></h1>
-        <p class="sub">Decide what NEW fashion to source this cycle — driven by funkiness tiers &amp; live market trends, lightly tuned by buyer taste. This is not restocking.</p>
+        <p class="sub" id="pageSub">Decide what NEW fashion to source this cycle — driven by funkiness tiers &amp; live market trends, lightly tuned by buyer taste. This is not restocking.</p>
       </div>
-      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">
+      <div id="funkyTopControls" style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap">
         <div class="fld"><label>Cycle</label>
           <select id="cycle">
             <option value="15">Every 15 days</option>
@@ -489,6 +506,19 @@
     <div class="linetabs" id="lineTabs">
       <button class="linetab funky active" id="tabFunky" data-line="funky"><span class="em">SANKI</span> FUNKY</button>
       <button class="linetab casual" id="tabCasual" data-line="casual"><span class="em">SANKI</span> CASUALS</button>
+    </div>
+
+    <div class="panel" id="procOverview">
+      <div class="ovhead"><div><h2 id="ovTitle">Procurement summary</h2><p class="sub" id="ovSub">Loading the complete sourcing and on-the-way position…</p></div><button class="btn ghost sm" id="ovRefresh" type="button">↻ Refresh</button></div>
+      <div class="ovkpis" id="ovKpis"></div>
+      <div class="ovfilters" id="ovFilters" style="display:none">
+        <div class="fld"><label>Audience</label><select id="ovAudience"><option value="">Everyone</option></select></div>
+        <div class="fld"><label>Category</label><select id="ovCategory"><option value="">All categories</option></select></div>
+        <div class="fld"><label>Type / Fit</label><select id="ovType"><option value="">All types</option></select></div>
+        <div class="fld"><label>Vendor</label><select id="ovVendor"><option value="">All vendors</option></select></div>
+        <div class="fld"><label>Status</label><select id="ovStatus"><option value="">All statuses</option></select></div>
+      </div>
+      <div id="ovCategories"></div><div id="ovRows"></div><div id="ovWarning"></div>
     </div>
 
     <!-- ══════════ SANKI FUNKY (existing system) ══════════ -->
@@ -608,23 +638,25 @@
       <div class="panel">
         <div class="czhead">
           <h2>① The Casual Feed — upload everything together</h2>
-          <p class="sub">Trousers, shirts and tees can go into one batch. On <b>Organise</b>, the app uses the batch category you selected. For Trousers, confirm only each photo's <b>colour</b>; shirts and tees retain fit and colour.</p>
+          <p class="sub">Create one named batch for each category and type/fit. For Trousers, selection uses only each photo's <b>colour</b>; type/fit remains a label for organising and filtering the batch.</p>
         </div>
         <div class="czbatchbar" id="czBatchBar">
           <div class="grow"><b>Batches</b> <span class="muted" style="font-weight:500">— tap a batch to open it; drop photos &amp; plan inside the open batch</span></div>
           <button class="btn ghost sm" id="czModeSplitter" type="button">✂ Photos Splitter</button>
           <button class="btn ghost sm" id="czNewBatch" type="button">＋ New batch</button>
         </div>
-        <!-- Category picker — a batch spans ONE OR MORE categories. Shown when ＋ New
-             batch is clicked; tick every category this vendor's photos include, then
-             Create opens each chosen category's spec card (specs first, photos after). -->
+        <!-- New sourcing batches are named and classified manually. Type/fit is
+             batch metadata only; Trouser photo selection remains colour-only. -->
         <div id="czCatPick" style="display:none;margin:12px 0 4px">
-          <div style="font-weight:700;font-size:14px;margin:0 0 4px">Start a new batch — which categories?</div>
-          <div class="muted" style="font-size:12px;margin:0 0 10px">Pick every category this batch includes (one, any two, or all three). Each is planned independently.</div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-            <label class="czcatopt"><input type="checkbox" data-catpick="Trouser"> 👖 Trouser</label>
-            <label class="czcatopt"><input type="checkbox" data-catpick="Shirt"> 👔 Shirt</label>
-            <label class="czcatopt"><input type="checkbox" data-catpick="T-shirt"> 👕 T-shirt</label>
+          <div style="font-weight:700;font-size:14px;margin:0 0 4px">Start a named sourcing batch</div>
+          <div class="muted" style="font-size:12px;margin:0 0 10px">Create one batch for one category and type/fit. The detailed colour and size plan stays inside it.</div>
+          <div class="cznewgrid">
+            <div class="fld"><label>Batch name <span style="color:var(--err)">*</span></label><input id="czBatchName" placeholder="e.g. Women Wide-Leg Trousers — September"></div>
+            <div class="fld"><label>Audience</label><select id="czBatchAudience"><option value="Women">Women</option><option value="Men">Men</option><option value="Unisex">Unisex</option></select></div>
+            <div class="fld"><label>Category</label><select id="czBatchCategory"><option value="Trouser">Trouser</option><option value="Shirt">Shirt</option><option value="T-shirt">T-shirt</option></select></div>
+            <div class="fld"><label>Type / Fit</label><input id="czBatchType" placeholder="e.g. Wide Leg"></div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
             <button class="btn" type="button" id="czCatPickCreate">Create batch</button>
             <button class="btn ghost sm" type="button" id="czCatPickCancel">Cancel</button>
           </div>
@@ -836,7 +868,7 @@
     settings.budget = parseInt((el('budget').value||'').replace(/[^\d]/g,''))||0;
     settings.tiers = { statement: parseInt(el('tStatement').value)||0, medium: parseInt(el('tMedium').value)||0, basic: parseInt(el('tBasic').value)||0 };
     fetch('/api/fresh/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(settings) })
-      .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ flashSaved(); } });
+      .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ flashSaved(); loadProcOverview('funky'); } });
   }
 
   function loadSettings(){
@@ -1246,6 +1278,48 @@
   ['dragleave','drop'].forEach(function(ev){ el('drop').addEventListener(ev, function(e){ e.preventDefault(); el('drop').classList.remove('drag'); }); });
   el('drop').addEventListener('drop', function(e){ if(e.dataTransfer && e.dataTransfer.files) uploadFiles(e.dataTransfer.files); });
 
+  // ── Procurement portfolio: plan + real advance/on-the-way Purchases ──
+  var ovData=null, ovLine='funky';
+  function ovMoney(n){return '₹'+fmtINR(Math.round(Number(n)||0));}
+  function ovOptions(id,values,placeholder){
+    var s=el(id),cur=s.value; values=values.filter(function(v,i,a){return v&&a.indexOf(v)===i;}).sort();
+    s.innerHTML='<option value="">'+placeholder+'</option>'+values.map(function(v){return '<option value="'+escapeHtml(v)+'">'+escapeHtml(v)+'</option>';}).join('');
+    if(values.indexOf(cur)>=0)s.value=cur;
+  }
+  function ovFilteredRows(){
+    if(!ovData)return[];var a=el('ovAudience').value,c=el('ovCategory').value,t=el('ovType').value,v=el('ovVendor').value,s=el('ovStatus').value;
+    return (ovData.rows||[]).filter(function(r){return(!a||r.audience===a)&&(!c||r.category===c||(r.categoryKeys||[]).indexOf(c)>=0)&&(!t||r.type===t)&&(!v||(r.vendors||[]).indexOf(v)>=0)&&(!s||r.status===s);});
+  }
+  function ovRenderRows(){
+    var rows=ovFilteredRows(),host=el('ovRows');
+    if(!rows.length){host.innerHTML='<p class="sub" style="margin-top:12px">No sourcing batches match these filters.</p>';return;}
+    host.innerHTML='<div class="ovtable"><table><thead><tr><th>Named batch</th><th>Audience</th><th>Category</th><th>Type / fit</th><th>Vendor</th><th>Designs</th><th>Pieces</th><th>Colours</th><th>Budget</th><th>On way</th><th>Remaining</th><th>Status</th></tr></thead><tbody>'+rows.map(function(r){
+      return '<tr class="'+(ovLine==='casual'?'ovbatch':'')+'"'+(ovLine==='casual'?' data-overview-batch="'+escapeHtml(r.id)+'"':'')+'><td><b>'+escapeHtml(r.name)+'</b></td><td>'+escapeHtml(r.audience||'—')+'</td><td>'+escapeHtml(r.category||'—')+'</td><td>'+escapeHtml(r.type||'—')+'</td><td>'+escapeHtml(r.vendor||'—')+'</td><td>'+fmtINR(r.designs||0)+'</td><td>'+(r.pieces?fmtINR(r.pieces):'—')+'</td><td>'+fmtINR(r.colours||0)+'</td><td>'+ovMoney(r.budget)+'</td><td>'+ovMoney(r.onWayCost)+'</td><td><b>'+ovMoney(r.remaining)+'</b></td><td><span class="ovstatus">'+escapeHtml(r.status||'—')+'</span></td></tr>';
+    }).join('')+'</tbody></table></div>';
+  }
+  function ovRender(d){
+    ovData=d;var t=d.totals||{};el('ovTitle').textContent=(ovLine==='casual'?'SANKI Casuals':'SANKI Funky')+' — procurement summary';
+    el('ovSub').textContent='Planned sourcing and Purchases still on the way. Received and posted purchases are excluded.';
+    el('ovKpis').innerHTML='<div class="ovkpi money"><span>Planned budget</span><b>'+ovMoney(t.budget)+'</b></div><div class="ovkpi used"><span>Already on the way</span><b>'+ovMoney(t.onWayCost)+'</b></div><div class="ovkpi rem"><span>Remaining to source</span><b>'+ovMoney(t.remaining)+'</b></div><div class="ovkpi"><span>Target designs</span><b>'+fmtINR(t.designs||0)+'</b></div><div class="ovkpi"><span>Target pieces</span><b>'+(t.pieces?fmtINR(t.pieces):'—')+'</b></div><div class="ovkpi"><span>Batches / groups</span><b>'+fmtINR(t.batches||0)+'</b></div>';
+    el('ovFilters').style.display='grid';var rows=d.rows||[];
+    ovOptions('ovAudience',rows.map(function(r){return r.audience;}),'Everyone');
+    ovOptions('ovCategory',[].concat.apply([],rows.map(function(r){return(r.categoryKeys&&r.categoryKeys.length)?r.categoryKeys:[r.category];})),'All categories');
+    ovOptions('ovType',rows.map(function(r){return r.type;}),'All types');
+    ovOptions('ovVendor',[].concat.apply([],rows.map(function(r){return r.vendors||[];})),'All vendors');
+    ovOptions('ovStatus',rows.map(function(r){return r.status;}),'All statuses');
+    var cats=d.categories||[];el('ovCategories').innerHTML=cats.length?'<div class="ovtable"><table><thead><tr><th>Category</th><th>Batches</th><th>Planned budget</th><th>On-way pieces</th><th>On-way value</th><th>Remaining</th></tr></thead><tbody>'+cats.map(function(c){return'<tr><td><b>'+escapeHtml(c.label||c.key)+'</b></td><td>'+fmtINR(c.batches||0)+'</td><td>'+ovMoney(c.budget)+'</td><td>'+fmtINR(c.onWayPieces||0)+'</td><td>'+ovMoney(c.onWayCost)+'</td><td><b>'+ovMoney(c.remaining)+'</b></td></tr>';}).join('')+'</tbody></table></div>':'';
+    el('ovWarning').innerHTML=t.unlinkedOnWayCost?'<div class="ovwarn"><b>'+ovMoney(t.unlinkedOnWayCost)+'</b> ('+fmtINR(t.unlinkedOnWayPieces||0)+' pcs) is on the way but not linked to a named batch. It is included in category and overall totals.</div>':'';
+    ovRenderRows();
+  }
+  function loadProcOverview(line){
+    ovLine=line==='casual'?'casual':'funky';el('ovSub').textContent='Loading the complete sourcing and on-the-way position…';
+    var url=ovLine==='casual'?'/api/casuals/overview':'/api/fresh/overview';
+    return fetch(url).then(function(r){return r.json();}).then(function(d){if(!d.success)throw new Error(d.error||'Could not load summary');ovRender(d);}).catch(function(e){el('ovSub').textContent=e.message;el('ovKpis').innerHTML='';el('ovRows').innerHTML='';});
+  }
+  ['ovAudience','ovCategory','ovType','ovVendor','ovStatus'].forEach(function(id){el(id).onchange=ovRenderRows;});
+  el('ovRefresh').onclick=function(){loadProcOverview(ovLine);};
+  el('ovRows').onclick=function(e){var tr=e.target.closest&&e.target.closest('[data-overview-batch]');if(tr&&typeof czOpenBatch==='function'){switchLine('casual');czOpenBatch(tr.getAttribute('data-overview-batch')).then(function(){var x=el('czBatchBar');if(x)x.scrollIntoView({behavior:'smooth',block:'start'});});}};
+
   // ── Line tabs: SANKI FUNKY (existing) vs SANKI CASUALS (new system) ──
   function switchLine(line){
     var funky = line !== 'casual';
@@ -1253,7 +1327,12 @@
     el('lineCasual').style.display = funky ? 'none' : '';
     el('tabFunky').classList.toggle('active', funky);
     el('tabCasual').classList.toggle('active', !funky);
+    el('funkyTopControls').style.display = funky ? 'flex' : 'none';
+    el('pageSub').textContent = funky
+      ? 'Decide what NEW fashion to source this cycle — driven by funkiness tiers & live market trends, lightly tuned by buyer taste. This is not restocking.'
+      : 'Plan new Casuals sourcing in named category and type/fit batches, with colour-led selection and live Purchases already on the way.';
     try { localStorage.setItem('sanki_fresh_line', line); } catch(e){}
+    loadProcOverview(funky?'funky':'casual');
   }
   el('tabFunky').addEventListener('click', function(){ switchLine('funky'); });
   el('tabCasual').addEventListener('click', function(){ switchLine('casual'); });
@@ -1285,7 +1364,7 @@
     clearTimeout(czSaveTimer);
     var doSave = function(){
       return fetch('/api/casuals/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(czSettings) })
-        .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czSettings = d.settings; flashSaved(); } });
+        .then(function(r){ return r.json(); }).then(function(d){ if(d.success){ czSettings = d.settings; flashSaved(); loadProcOverview('casual'); } });
     };
     // Return a promise so callers (e.g. the Trouser Apply button) can wait for the
     // save to land before reloading the plan — otherwise the grid is computed from
@@ -1693,6 +1772,8 @@
   // the real spend.
   function czBatchChips(b, isActive){
     var out = ['<span class="czbchip">'+b.count+' photo'+(b.count===1?'':'s')+'</span>'];
+    if(b.audience)out.push('<span class="czbchip">'+escapeHtml(b.audience)+'</span>');
+    if(b.type)out.push('<span class="czbchip">'+escapeHtml(b.type)+'</span>');
     var spans = czBatchCats(b);
     // The categories this batch spans — shown even before any photo is segregated,
     // so an empty new batch still displays what it's for.
@@ -1777,6 +1858,9 @@
       body.appendChild(pc);
     }
     var act = document.createElement('div'); act.className = 'czbactions';
+    var edit = document.createElement('button'); edit.className = 'btn ghost sm'; edit.type = 'button'; edit.textContent = '✎ Edit batch details';
+    edit.addEventListener('click', function(e){ e.stopPropagation(); czEditBatch(); });
+    act.appendChild(edit);
     var del = document.createElement('button'); del.className = 'czbdel'; del.type = 'button'; del.textContent = '🗑 Delete this batch';
     del.addEventListener('click', function(e){ e.stopPropagation(); czDeleteBatch(); });
     act.appendChild(del); body.appendChild(act);
@@ -1813,22 +1897,22 @@
       })
       .then(function(){ return czLoadCandidates().then(czLoadPlan); });
   }
-  // ＋ New batch no longer creates a batch straight away — it asks WHICH categories
-  // first (a batch spans one or more), then czCreateBatchFor makes the batch.
+  // New batches are explicitly named and tied to one category and type/fit.
   function czShowCatPick(show){
     var p = el('czCatPick'); if(!p) return;
-    if(show){ [].slice.call(p.querySelectorAll('[data-catpick]')).forEach(function(cb){ cb.checked = false; }); }
+    if(show){ el('czBatchName').value='';el('czBatchAudience').value='Women';el('czBatchCategory').value='Trouser';el('czBatchType').value=''; }
     p.style.display = show ? '' : 'none';
+    if(show)setTimeout(function(){el('czBatchName').focus();},0);
   }
   function czCreateBatch(){ czShowCatPick(true); return Promise.resolve(); }
-  // Create a batch spanning `cats` (array of category keys). Enables & opens every
-  // chosen category so all their spec cards (incl. "number of designs") show together.
-  function czCreateBatchFor(cats){
+  // Create the named single-category sourcing batch and open its plan.
+  function czCreateBatchFor(cats, meta){
     if(typeof cats === 'string') cats = [cats];
     cats = (cats||[]).filter(function(k){ return CAT_KEYS.indexOf(k) >= 0; });
     if(!cats.length){ alert('Pick at least one category for this batch.'); return Promise.resolve(); }
     czShowCatPick(false);
-    return fetch('/api/casuals/batches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({categories:cats})})
+    meta=meta||{};
+    return fetch('/api/casuals/batches',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({categories:cats,name:meta.name||'',audience:meta.audience||'',type:meta.type||''})})
       .then(function(r){ return r.json(); }).then(function(){
         czExpanded = true; czPhotosOpen = false; czOpenCards = {};
         var changed = false;
@@ -1838,12 +1922,22 @@
         if(changed) czSaveSettings();
         // Re-render the cards NOW so the batch's category filter applies — czLoadPlan
         // only re-renders cards once photos are analysed, which an empty batch has none of.
-        return czLoadCandidates().then(function(){ czRenderCats(); return czLoadPlan(); }); });
+        return czLoadCandidates().then(function(){ czRenderCats(); loadProcOverview('casual'); return czLoadPlan(); }); });
   }
   function czDeleteBatch(){
     var act = czActiveBatchObj(); if(!act) return;
     if(!confirm('Delete “'+act.name+'” and its '+act.count+' photo'+(act.count===1?'':'s')+'? This cannot be undone.')) return;
     fetch('/api/casuals/batches/'+act.id,{method:'DELETE'}).then(function(r){ return r.json(); }).then(function(){ czExpanded = false; czPhotosOpen = false; czLoadCandidates().then(czLoadPlan); });
+  }
+  function czEditBatch(){
+    var act=czActiveBatchObj();if(!act)return;
+    var name=prompt('Batch name:',act.name||'');if(name===null)return;name=name.trim();if(!name){alert('Batch name is required.');return;}
+    var audience=prompt('Audience — Men, Women or Unisex:',act.audience||'Women');if(audience===null)return;
+    audience=audience.trim();if(['Men','Women','Unisex'].indexOf(audience)<0){alert('Use Men, Women or Unisex.');return;}
+    var type=prompt('Type / fit (for example Wide Leg):',act.type||'');if(type===null)return;
+    fetch('/api/casuals/batches/'+encodeURIComponent(act.id),{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({name:name,audience:audience,type:type.trim()})})
+      .then(function(r){return r.json();}).then(function(d){if(!d.success)throw new Error(d.error||'Could not update batch');return czLoadCandidates().then(function(){loadProcOverview('casual');});})
+      .catch(function(e){alert(e.message);});
   }
 
   function czUpload(files){
@@ -3951,6 +4045,7 @@
     if(d.success && d.settings) czSettings = d.settings;
     if(d.success && (d.analysed || hasSpecGrid)) czRenderPlan(d);
     else if(d.success){ czLastPlan = d; czRenderCats(); }
+    if(d.success)loadProcOverview('casual');
   }).catch(function(){}); }
 
   // Wiring (casuals)
@@ -3976,8 +4071,9 @@
   el('czExportBtn').addEventListener('click', czExportPO);
   el('czNewBatch').addEventListener('click', czCreateBatch);
   el('czCatPickCreate').addEventListener('click', function(){
-    var cats = [].slice.call(document.querySelectorAll('#czCatPick [data-catpick]:checked')).map(function(cb){ return cb.getAttribute('data-catpick'); });
-    czCreateBatchFor(cats);
+    var name=(el('czBatchName').value||'').trim();if(!name){alert('Enter a clear batch name first.');el('czBatchName').focus();return;}
+    var cat=el('czBatchCategory').value;
+    czCreateBatchFor([cat],{name:name,audience:el('czBatchAudience').value,type:(el('czBatchType').value||'').trim()});
   });
   el('czCatPickCancel').addEventListener('click', function(){ czShowCatPick(false); });
   el('czRepriceBtn').addEventListener('click', function(){ czPriced = true; czRenderPlan(czLastPlan); });

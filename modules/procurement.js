@@ -1139,6 +1139,10 @@ router.post('/api/procurement/advance', async (req, res) => {
       createdBy: (req.user && req.user.username) || 'system',
       vendor: String(b.vendor || '').toUpperCase().trim(),
       line: normLine(b.line),          // 'funky' | 'casuals' | '' (unclassified)
+      // Exact bridge back to Fresh Procurement. This avoids fuzzy matching on
+      // batch names, fit words or product titles when calculating open-to-buy.
+      sourceBatchId: normLine(b.line) === 'casuals' ? String(b.sourceBatchId || '').trim().slice(0, 80) : '',
+      sourceBatchName: normLine(b.line) === 'casuals' ? String(b.sourceBatchName || '').trim().slice(0, 120) : '',
       billNo: b.billNo || '',
       datePurchase: b.datePurchase || '',
       dateReceive: '',
@@ -1316,6 +1320,9 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     const b = req.body || {};
     if (b.vendor != null)       po.vendor = String(b.vendor).toUpperCase().trim();
     if (b.line != null)         po.line = normLine(b.line);
+    if (b.sourceBatchId != null) po.sourceBatchId = po.line === 'casuals' ? String(b.sourceBatchId).trim().slice(0, 80) : '';
+    if (b.sourceBatchName != null) po.sourceBatchName = po.line === 'casuals' ? String(b.sourceBatchName).trim().slice(0, 120) : '';
+    if (po.line !== 'casuals') { po.sourceBatchId = ''; po.sourceBatchName = ''; }
     if (b.billNo != null)       po.billNo = String(b.billNo).trim();
     if (b.datePurchase != null) po.datePurchase = String(b.datePurchase);
     if (b.leadTimeDays != null && b.leadTimeDays !== '') po.leadTimeDays = Math.max(0, Math.round(num(b.leadTimeDays)));
@@ -1375,6 +1382,7 @@ router.post('/api/procurement/pos/:id/line', (req, res) => {
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
   po.line = normLine((req.body || {}).line);
+  if (po.line !== 'casuals') { po.sourceBatchId = ''; po.sourceBatchName = ''; }
   saveStore(s);
   res.json({ success: true, poId: po.id, line: po.line });
 });

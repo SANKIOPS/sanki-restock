@@ -1,0 +1,62 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-proc-overview-'));
+process.env.PROCUREMENT_PATH = path.join(dir, 'procurement.json');
+process.env.CASUALS_PATH = path.join(dir, 'casuals.json');
+process.env.DATA_PATH = path.join(dir, 'orders.json');
+
+const { casualsOverview, settingsWithDefaults, router } = require('../modules/casuals');
+
+test('Casuals overview nets only advance Purchases linked to the named batch', () => {
+  const settings = settingsWithDefaults({ settings: {} });
+  settings.categories.Trouser.sizeMode = 'designs';
+  settings.categories.Trouser.designs = 10;
+  settings.categories.Trouser.avgCost = 800;
+  settings.categories.Trouser.sizeSystem = 'numeric';
+  settings.categories.Trouser.sizes = { 26:1, 28:1, 30:1, 32:1, 34:1, 36:1 };
+
+  fs.writeFileSync(process.env.PROCUREMENT_PATH, JSON.stringify({ settings: { exRate: 15, freightPerGram: 0.42 }, pos: {
+    'PO-0001': { id:'PO-0001', status:'advance', line:'casuals', sourceBatchId:'b-wide', origin:'china', exRate:15,
+      vendor:'VENDOR A', lines:[{ productType:'Trouser', audience:'Women', fit:'Wide Leg', colour:'Black', qty:20, perPcsYuan:50 }] },
+    'PO-0002': { id:'PO-0002', status:'received', line:'casuals', sourceBatchId:'b-wide', origin:'china', exRate:15,
+      vendor:'VENDOR A', lines:[{ productType:'Trouser', audience:'Women', fit:'Wide Leg', colour:'Black', qty:100, perPcsYuan:50 }] },
+    'PO-0003': { id:'PO-0003', status:'advance', line:'funky', origin:'china', exRate:15,
+      vendor:'VENDOR B', lines:[{ productType:'Trouser', qty:100, perPcsYuan:50 }] }
+  }}));
+
+  const overview = casualsOverview({
+    settings, activeBatch:'b-wide',
+    batches:[{ id:'b-wide', num:1, name:'Women Wide-Leg Trousers', audience:'Women', type:'Wide Leg', categories:['Trouser'], category:'Trouser', planSettings:settings }],
+    candidates:[{ id:'c1', batch:'b-wide', category:'Trouser', colour:'Black', vendor:'VENDOR A', designName:'6910' }]
+  });
+  assert.equal(overview.rows[0].name, 'Women Wide-Leg Trousers');
+  assert.equal(overview.rows[0].designs, 10);
+  assert.equal(overview.rows[0].pieces, 60);
+  assert.equal(overview.rows[0].budget, 48000);
+  assert.equal(overview.rows[0].onWayCost, 15000);
+  assert.equal(overview.rows[0].remaining, 33000);
+  assert.equal(overview.totals.onWayPieces, 20);
+});
+
+test('Fresh Procurement UI has the summary, named batch fields and exact PO bridge', () => {
+  const fresh = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  const purchases = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const procurement = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(fresh, /id="procOverview"/);
+  assert.match(fresh, /id="czBatchName"/);
+  assert.match(fresh, /id="czBatchAudience"/);
+  assert.match(fresh, /id="czBatchType"/);
+  assert.match(fresh, /\/api\/casuals\/overview/);
+  assert.match(fresh, /Received and posted purchases are excluded/);
+  assert.match(purchases, /id="b_sourceBatch"/);
+  assert.match(purchases, /sourceBatchId:el\('b_sourceBatch'\)\.value/);
+  assert.match(procurement, /sourceBatchId: normLine\(b\.line\) === 'casuals'/);
+  const routes = router.stack.filter(layer => layer.route).map(layer => ({ path:layer.route.path, methods:layer.route.methods }));
+  assert.ok(routes.some(r => r.path === '/api/casuals/overview' && r.methods.get));
+  assert.ok(routes.some(r => r.path === '/api/casuals/batches/:id' && r.methods.patch));
+});
+
