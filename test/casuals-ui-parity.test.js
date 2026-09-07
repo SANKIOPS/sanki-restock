@@ -27,6 +27,38 @@ test('all procurement categories use the same design-first colour-only plan', ()
   }
 });
 
+test('estimated value recalculates from designs, set size and price per piece', () => {
+  const settings = settingsWithDefaults({ settings: {} });
+  for (const key of ['Trouser', 'Shirt', 'T-shirt']) settings.categories[key].enabled = key === 'T-shirt';
+  const tshirts = settings.categories['T-shirt'];
+  tshirts.sizeMode = 'designs';
+  tshirts.designs = 10;
+  tshirts.sizes = { XS:0, S:1, M:2, L:2, XL:2, XXL:1 };
+  tshirts.avgCost = 800;
+  tshirts.budgetOverride = null;
+
+  let category = buildPlan([], settings).categories.find(c => c.category === 'T-shirt');
+  assert.equal(category.set, 8);
+  assert.equal(category.estUnits, 80);
+  assert.equal(category.budget, 64000);
+
+  // Summary edits can still override the estimate, but changing a planning
+  // input clears that override and restores the automatic formula.
+  tshirts.budgetOverride = 32000;
+  category = buildPlan([], settings).categories.find(c => c.category === 'T-shirt');
+  assert.equal(category.budget, 32000);
+  tshirts.budgetOverride = null;
+  category = buildPlan([], settings).categories.find(c => c.category === 'T-shirt');
+  assert.equal(category.budget, 64000);
+
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
+  assert.match(html, /dsg\.addEventListener\('input',[\s\S]*?c\.budgetOverride = null/);
+  assert.match(html, /avc\.addEventListener\('input',[\s\S]*?c\.budgetOverride = null/);
+  assert.match(html, /kind === 'sizes'\) category\.budgetOverride = null/);
+  assert.match(source, /hasBudgetOverride[\s\S]*?inc\.budgetOverride == null \? null/);
+});
+
 test('new and legacy shirt batches receive the six-piece default size run', () => {
   const fresh = settingsWithDefaults({ settings: {} });
   assert.deepEqual(fresh.categories.Shirt.sizes, { XS:0, S:2, M:2, L:1, XL:1, XXL:0 });

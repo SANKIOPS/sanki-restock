@@ -1447,7 +1447,14 @@
       '<span class="u" data-u></span>'+
       (removable ? '<span class="rm" title="Remove">✕</span>' : '');
     var inp = d.querySelector('input');
-    inp.addEventListener('input', function(){ czSettings.categories[catKey][kind][key] = Math.max(0, parseInt(inp.value)||0); czRecalcCard(catKey); czSaveSettings(); });
+    inp.addEventListener('input', function(){
+      var category = czSettings.categories[catKey];
+      category[kind][key] = Math.max(0, parseInt(inp.value)||0);
+      // A size-run edit changes the number of pieces in every design, so any
+      // budget previously typed in the overview is no longer authoritative.
+      if(kind === 'sizes') category.budgetOverride = null;
+      czRecalcCard(catKey); czSaveSettings();
+    });
     var rm = d.querySelector('.rm');
     if(rm) rm.addEventListener('click', function(){
       var map=czSettings.categories[catKey][kind]||{};
@@ -1590,7 +1597,7 @@
 
       var pills = document.createElement('div'); pills.className = 'czpills';
       pills.innerHTML = '<div class="czpill">Target pieces<b data-unitspill>0</b></div><div class="czpill">Set size<b data-setpill>0 pc</b></div><div class="czpill">→ Designs<b data-designpill>0</b></div>'
-        + '<div class="czpill">Estimated value<b data-budgetpill>₹0</b></div>';
+        + '<div class="czpill">Estimated value (auto)<b data-budgetpill>₹0</b></div>';
       body.appendChild(pills);
 
       // Kept for historical settings only. The uniform colour-only workflow
@@ -1693,13 +1700,22 @@
       if(bud) bud.addEventListener('change', function(){ c.budget = parseInt((bud.value||'').replace(/[^\d]/g,''))||0; bud.value = fmtINR(c.budget); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
 
       var uni = body.querySelector('[data-units]');
-      if(uni) uni.addEventListener('change', function(){ c.targetUnits = parseInt((uni.value||'').replace(/[^\d]/g,''))||0; uni.value = fmtINR(c.targetUnits); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+      if(uni){
+        uni.addEventListener('input', function(){ c.targetUnits = parseInt((uni.value||'').replace(/[^\d]/g,''))||0; c.budgetOverride = null; CAT_KEYS.forEach(czRecalcCard); });
+        uni.addEventListener('change', function(){ uni.value = fmtINR(c.targetUnits); czSaveSettings(); });
+      }
 
       var dsg = body.querySelector('[data-designs]');
-      if(dsg) dsg.addEventListener('change', function(){ c.designs = parseInt((dsg.value||'').replace(/[^\d]/g,''))||0; dsg.value = fmtINR(c.designs); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+      if(dsg){
+        dsg.addEventListener('input', function(){ c.designs = parseInt((dsg.value||'').replace(/[^\d]/g,''))||0; c.budgetOverride = null; CAT_KEYS.forEach(czRecalcCard); });
+        dsg.addEventListener('change', function(){ dsg.value = fmtINR(c.designs); czSaveSettings(); });
+      }
 
       var avc = body.querySelector('[data-avgcost]');
-      if(avc) avc.addEventListener('change', function(){ c.avgCost = Math.max(0, parseInt((avc.value||'').replace(/[^\d]/g,''))||0); avc.value = fmtINR(c.avgCost); CAT_KEYS.forEach(czRecalcCard); czSaveSettings(); });
+      if(avc){
+        avc.addEventListener('input', function(){ c.avgCost = Math.max(0, parseInt((avc.value||'').replace(/[^\d]/g,''))||0); c.budgetOverride = null; CAT_KEYS.forEach(czRecalcCard); });
+        avc.addEventListener('change', function(){ avc.value = fmtINR(c.avgCost); czSaveSettings(); });
+      }
 
       // Size-system toggle (Trousers): swap the size run between alpha and numeric.
       var sys = body.querySelector('[data-sizesystem]');
@@ -1708,7 +1724,7 @@
         var keys = CZ_TROUSER_SIZES[c.sizeSystem] || [];
         var oldMap = c.sizes || {}; var oldVals = Object.keys(oldMap).map(function(k){ return oldMap[k]; });
         var next = {}; keys.forEach(function(k, i){ next[k] = (oldVals[i] != null ? oldVals[i] : (oldMap[k] != null ? oldMap[k] : 0)); });
-        c.sizes = next; czRenderCats(); czSaveSettings(true);
+        c.sizes = next; c.budgetOverride = null; czRenderCats(); czSaveSettings(true);
       });
 
       var smode = body.querySelector('[data-sizemode]');

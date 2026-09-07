@@ -1986,6 +1986,7 @@ router.post('/api/casuals/settings', (req, res) => {
   CAT_KEYS.forEach(k => {
     const inc = (b.categories && b.categories[k]) || {};
     const c = cur.categories[k];
+    const hasBudgetOverride = Object.prototype.hasOwnProperty.call(inc, 'budgetOverride');
     const pickPct = (incMap, curMap) => {
       const out = {};
       const keys = new Set([...Object.keys(curMap), ...(incMap ? Object.keys(incMap) : [])]);
@@ -2001,7 +2002,11 @@ router.post('/api/casuals/settings', (req, res) => {
     next.categories[k] = {
       enabled: inc.enabled != null ? !!inc.enabled : c.enabled,
       budget: inc.budget != null ? Math.max(0, parseInt(String(inc.budget).replace(/[^\d]/g, '')) || 0) : c.budget,
-      budgetOverride: inc.budgetOverride != null ? Math.max(0, parseInt(String(inc.budgetOverride).replace(/[^\d]/g, '')) || 0) : c.budgetOverride,
+      // An explicit null means an upstream planning input changed and the
+      // estimated value must return to designs × set size × estimated ₹/piece.
+      budgetOverride: hasBudgetOverride
+        ? (inc.budgetOverride == null ? null : Math.max(0, parseInt(String(inc.budgetOverride).replace(/[^\d]/g, '')) || 0))
+        : c.budgetOverride,
       avgCost: inc.avgCost != null ? Math.max(1, parseInt(inc.avgCost) || c.avgCost) : c.avgCost,
       sizeMode: inc.sizeMode != null ? ((inc.sizeMode === 'units' || inc.sizeMode === 'designs') ? inc.sizeMode : 'cost') : c.sizeMode,
       targetUnits: inc.targetUnits != null ? Math.max(0, parseInt(String(inc.targetUnits).replace(/[^\d]/g, '')) || 0) : c.targetUnits,
