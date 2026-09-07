@@ -59,6 +59,10 @@ test('Audit Purchases has a strict on-the-way category and vendor explorer', () 
   assert.match(html, /Arriving by/);
   assert.match(html, /data-owpo/);
   assert.match(html, /title="Click to enlarge"/);
+  // Colourways and size rows are not separate designs. The identity stays
+  // vendor + design code/name + category, while colour remains filterable.
+  assert.match(html, /designKey:\[vendor,code\|\|name,category\]/);
+  assert.doesNotMatch(html, /designKey:\[vendor,code\|\|name,category,owText\(l\.colour\)\]/);
 });
 
 test('audience and fit can be corrected during purchase audit', () => {

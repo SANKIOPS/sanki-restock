@@ -1127,7 +1127,10 @@
           out.push({poId:po.id,billNo:po.billNo||'',vendor:vendor,category:category,audience:owText(l.audience),fit:owText(l.fit),
             colour:owText(l.colour),size:owText(l.sizeLabel),chinaSize:String(l.chinaSize||''),name:name,code:code,sku:String(l.sku||''),
             photoUrl:String(l.photoUrl||''),qty:qty,perPc:lc.perPc,cost:lc.cost,eta:po.expectedReceiveDate||'',ordered:po.datePurchase||'',lineIndex:i,
-            designKey:[vendor,code||name,category,owText(l.colour)].join('|').toLowerCase()});
+            // One design may have several colourways and size rows. Purchases
+            // must count the underlying design once, exactly as Fresh
+            // Procurement does; colour remains available as a separate filter.
+            designKey:[vendor,code||name,category].join('|').toLowerCase()});
         });
       });
       return out;
