@@ -1048,14 +1048,14 @@ test('approved self-paid expenses appear once in spending, vendor and personal a
   assert.equal(vendors.vendors[0].outstanding,0);
 });
 
-test('posted advanced purchases become mediator payables without changing procurement', () => {
+test('posted advanced purchases stay out of expense Payables without changing procurement', () => {
   const procurementFile = path.join(tempDir, 'procurement.json');
   const original = { pos: { 'PO-9001': { id:'PO-9001', status:'posted', postedAt:'2026-08-21T08:00:00.000Z', dateReceive:'2026-08-21', vendor:'CHINA SUPPLIER', billNo:'CN-77',
     newProducts:[{variants:[{qty:2,landed:500}]}], existingAdds:[{qty:1,landed:250}] } } };
   fs.writeFileSync(procurementFile, JSON.stringify(original));
   const pending = invoke('GET', '/api/expenses/pending-payments', { query:{nature:'SANKI'}, role:'owner' });
-  assert.equal(pending.body.purchases[0].amount, 1250);
-  assert.equal(pending.body.purchases[0].supplier, 'CHINA SUPPLIER');
+  assert.deepEqual(pending.body.purchases, []);
+  assert.equal(pending.body.totalOutstanding, pending.body.expenses.reduce((n,e)=>n+e.balanceDue,0));
   const partial = invoke('POST', '/api/expenses/procurement-payables/:id/pay', { params:{id:'PO-9001'}, role:'owner', body:{amount:500,account:'Counter Cash',date:'2026-08-22',paymentProof:'/api/expenses/photo/proc-pay.jpg'} });
   assert.equal(partial.body.payable.balanceDue, 750);
   const ledger = invoke('GET', '/api/expenses/account-ledger', { query:{nature:'SANKI',account:'Counter Cash'}, role:'owner' }).body;

@@ -1898,15 +1898,9 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     contractBalance: round0(num(e.amount) - num(e.paidAmount)),
     daysPending: Math.max(0, Math.floor((Date.parse(today) - Date.parse(String(e.approvedAt || e.date).slice(0, 10))) / 86400000))
   })).sort((a, b) => b.daysPending - a.daysPending || String(a.approvedAt || '').localeCompare(String(b.approvedAt || '')));
-  const purchases = (!nature || nature === 'SANKI') ? procurementPayables(s, false).filter(p => {
-    if (vendor && !String(p.vendor).toLowerCase().includes(vendor) && !String(p.supplier).toLowerCase().includes(vendor)) return false;
-    if (from && String(p.date || '') < from) return false;
-    if (to && String(p.date || '') > to) return false;
-    if (bucket === 'partial' && !(p.paidAmount > 0)) return false;
-    if (bucket === 'credit') return false;
-    if (bucket === 'approved' && p.paidAmount > 0) return false;
-    return true;
-  }) : [];
+  // Advanced-purchase mediator balances belong to the Purchases workflow.
+  // Keep this screen limited to approved expense/vendor payables for now.
+  const purchases = [];
   res.json({ success: true, expenses, purchases, mediator: procurementAccounting(s).mediator, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0) + purchases.reduce((n, p) => n + p.balanceDue, 0)) });
 });
 
