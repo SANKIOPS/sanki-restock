@@ -60,8 +60,13 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Salary &amp; Attendance</h1>
+    <h1 id="salaryTitle">SANKI Salary &amp; Attendance</h1>
     <p class="sub">Pay = <b>salary ÷ 30 × paid days</b> − advance. Attendance auto-fills paid days (editable). Earned salary posts to the P&amp;L Fixed Cost, channel-tagged. Admin/accounting only.</p>
+
+    <div class="tabs" id="salaryEntities" style="margin-bottom:12px">
+      <button data-entity="SANKI" class="on">SANKI Salary</button>
+      <button data-entity="SAMAST">Samast Salary</button>
+    </div>
 
     <div class="bar">
       <div class="tabs" id="tabs">
@@ -88,13 +93,13 @@
     // WO is assigned automatically by the server when A falls on the
     // employee's configured weekly-off day. It is not a manual choice.
     var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'', 'WO':'' };
-    var state = { view:'payroll', ym:'', data:null, employees:null, accounts:[], attendanceInfo:'', advanceFilters:{employee:'',month:'',status:'',account:''} };
+    var state = { entity:'SANKI', view:'payroll', ym:'', data:null, employees:null, accounts:[], attendanceInfo:'', advanceFilters:{employee:'',month:'',status:'',account:''} };
 
     function pad(n){ return String(n).padStart(2,'0'); }
     function ymLabel(ym){ var p=ym.split('-'); var mn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return mn[+p[1]-1]+' '+p[0]; }
     function shiftMonth(ym, d){ var p=ym.split('-').map(Number); var dt=new Date(p[0], p[1]-1+d, 1); return dt.getFullYear()+'-'+pad(dt.getMonth()+1); }
 
-    function api(url, opts){ return fetch(url, opts).then(function(r){ return r.json(); }); }
+    function api(url, opts){ if(url.indexOf('/api/salary/')===0)url+=(url.indexOf('?')>=0?'&':'?')+'entity='+encodeURIComponent(state.entity);return fetch(url, opts).then(function(r){ return r.json(); }); }
     function flash(txt, ok){ el('msg').className='msg '+(ok?'ok':'err'); el('msg').textContent=txt; }
 
     function load(){
@@ -107,6 +112,8 @@
         if(state.view==='attendance') renderAttendance(d); else if(!state.accounts.length)api('/api/salary/employees').then(function(c){state.accounts=c.salaryPayingAccounts||['Gagan Sir Cash','Counter Cash'];renderPayroll(d);});else renderPayroll(d);
       });
     }
+
+    Array.prototype.forEach.call(el('salaryEntities').querySelectorAll('[data-entity]'),function(button){button.onclick=function(){state.entity=this.dataset.entity;state.data=null;state.employees=null;state.accounts=[];Array.prototype.forEach.call(el('salaryEntities').querySelectorAll('[data-entity]'),function(x){x.classList.toggle('on',x===button);});el('salaryTitle').textContent=(state.entity==='SAMAST'?'Samast':'SANKI')+' Salary & Attendance';load();};});
 
     // ── PAYROLL ──
     function renderPayroll(d){

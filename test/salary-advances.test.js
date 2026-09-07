@@ -67,6 +67,12 @@ test('advance UI merges employee history and exposes approval and proof-backed p
   assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);
 });
 
+test('salary UI and storage keep SANKI and Samast payrolls independent',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');
+  assert.match(html,/SANKI Salary/);assert.match(html,/Samast Salary/);assert.match(html,/state\.entity/);assert.match(html,/entity='\+encodeURIComponent\(state\.entity\)/);
+  assert.match(source,/salary-samast\.json/);assert.match(source,/AsyncLocalStorage/);assert.match(source,/entity==='SANKI'&&applyJuly2026AttendanceAndPayroll/);
+});
+
 test('payroll always follows attendance instead of a stale paid-days override',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Attendance Source',salary:30000,monthlyPaidLeaveAllowance:0}}).body.employee;
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,paidDays:24}}).status,200);

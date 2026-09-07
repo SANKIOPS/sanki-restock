@@ -12,10 +12,16 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks');
 const router = express.Router();
 
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 const SAL_PATH = path.join(DATA_DIR, 'salary.json');
+const SAMAST_SAL_PATH = path.join(DATA_DIR, 'salary-samast.json');
+const salaryContext = new AsyncLocalStorage();
+function salaryEntity(value){return String(value||'SANKI').toUpperCase()==='SAMAST'?'SAMAST':'SANKI';}
+function activeSalaryEntity(){const context=salaryContext.getStore();return salaryEntity(context&&context.entity);}
+function activeSalaryPath(){return activeSalaryEntity()==='SAMAST'?SAMAST_SAL_PATH:SAL_PATH;}
 
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
@@ -32,17 +38,17 @@ const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], advanceRequests:{}, advanceRequestSeq:0, advanceRequestAudit:[], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, oneTimeMigrations:{} }; }
 function load() {
   try {
-    const s=Object.assign(blank(), JSON.parse(fs.readFileSync(SAL_PATH, 'utf8')));
-    const julyImported=applyJuly2026AttendanceAndPayroll(s);
-    const employeeRepair=applySunnyGuardAndSurajRepair(s);
-    const correctedJuly=applyCorrectedJulyAttendanceV7(s);
-    const normalizedLeaveMarks=applyStoredLeaveAllowancesV11(s);
-    const finalJulyPayroll=applyFinalJuly2026PayrollV13(s);
+    const entity=activeSalaryEntity(),s=Object.assign(blank(), JSON.parse(fs.readFileSync(activeSalaryPath(), 'utf8')));
+    const julyImported=entity==='SANKI'&&applyJuly2026AttendanceAndPayroll(s);
+    const employeeRepair=entity==='SANKI'&&applySunnyGuardAndSurajRepair(s);
+    const correctedJuly=entity==='SANKI'&&applyCorrectedJulyAttendanceV7(s);
+    const normalizedLeaveMarks=entity==='SANKI'&&applyStoredLeaveAllowancesV11(s);
+    const finalJulyPayroll=entity==='SANKI'&&applyFinalJuly2026PayrollV13(s);
     if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll) save(s);
     return s;
   } catch { return blank(); }
 }
-function save(s) { const tmp = SAL_PATH + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, SAL_PATH); }
+function save(s) { const target=activeSalaryPath(),tmp = target + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, target); }
 
 // Owner-confirmed historical import. It is deliberately idempotent and only
 // changes July 2026. Historical advances have no proof/account, so they remain
@@ -422,10 +428,14 @@ function summaryForPL(from, to) {
   return { POS: round0(buckets.POS), Website: round0(buckets.Website), Shared: round0(buckets.Shared) };
 }
 
+// Every salary API runs inside an entity-local storage context. Existing salary.json
+// remains SANKI; SAMAST starts independently in salary-samast.json.
+router.use('/api/salary',(req,res,next)=>salaryContext.run({entity:salaryEntity(req.query&&req.query.entity)},next));
+
 // ── Employee master ──
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
-  res.json({ success: true, employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS });
+  res.json({ success: true, entity:activeSalaryEntity(), employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};

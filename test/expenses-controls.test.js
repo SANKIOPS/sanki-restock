@@ -1144,6 +1144,8 @@ test('confirming a displayed possible match needs no second bank selection and f
   const draftSnapshot=JSON.parse(JSON.stringify(JSON.parse(fs.readFileSync(expenseFile,'utf8')).bankReconciliationDrafts[id])),finalized=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:id}});assert.equal(finalized.status,200,JSON.stringify(finalized.body));applyFinalizedConfirmedMatches(draftSnapshot,'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankDateOverrides[appId].originalDate,'2098-01-01');assert.equal(after.bankDateOverrides[appId].bankDate,'2098-01-02');assert.match(after.bankDateOverrides[appId].remark,/Confirmed displayed match/);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
+test('Payables groups same-name vendor bills without merging their records',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/vendorPayableGroups\(d\.expenses\)/);assert.match(html,/approved bills grouped under this vendor/);assert.match(html,/\.map\(expenseCard\)\.join/);});
+
 test('unmatching a suggested pair separates both entries and remembers the required reason',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='Axis Bank 3448',id='BRD-UNMATCH-SUGGESTION',appId='EX-UNMATCH/PAY-001';
   stored.expenses['EX-UNMATCH']={id:'EX-UNMATCH',date:'2098-03-02',nature:'SANKI',status:'paid',approvedAt:'2098-03-02T10:00:00Z',vendor:'Zepto',particulars:'Zepto',ledger:'FOOD EXPENSE',amount:107,paidAmount:107,payments:[{id:'PAY-001',date:'2098-03-02',amount:107,account}]};
