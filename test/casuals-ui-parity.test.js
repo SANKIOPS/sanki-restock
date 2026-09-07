@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { router, buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes } = require('../modules/casuals');
+const Jimp = require('jimp');
+const { router, buildPlan, settingsWithDefaults, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes, detectLocalColour } = require('../modules/casuals');
 
 test('all Casual categories support a design-first target while only uppers use fit', () => {
   const settings = settingsWithDefaults({ settings: {} });
@@ -114,6 +115,28 @@ test('Trouser UI omits fit from setup, review and exported rows', () => {
   assert.match(html, /cat\.colourOnly \? '' : '<label class="czsegl">Fit/);
   assert.match(html, /fit:cat\.colourOnly\?'':f\.label/);
   assert.match(html, /Trouser plan uses <b>colour only<\/b>/);
+});
+
+test('Trouser colourways are auto-picked locally and remain editable', async () => {
+  const labels = ['Black','Beige','Charcoal Grey','Olive','Brown','Navy Blue','Off White'];
+  async function catalogueImage(rgb, topRgb) {
+    const image = new Jimp(120, 160, Jimp.rgbaToInt(247, 247, 243, 255));
+    if (topRgb) image.scan(38, 18, 44, 42, function(x,y,idx){ this.bitmap.data[idx]=topRgb[0]; this.bitmap.data[idx+1]=topRgb[1]; this.bitmap.data[idx+2]=topRgb[2]; this.bitmap.data[idx+3]=255; });
+    image.scan(28, 55, 64, 96, function(x,y,idx){ this.bitmap.data[idx]=rgb[0]; this.bitmap.data[idx+1]=rgb[1]; this.bitmap.data[idx+2]=rgb[2]; this.bitmap.data[idx+3]=255; });
+    return image.getBufferAsync(Jimp.MIME_JPEG);
+  }
+  assert.equal((await detectLocalColour(await catalogueImage([25,25,27]), labels)).colour, 'Black');
+  assert.equal((await detectLocalColour(await catalogueImage([187,165,126]), labels)).colour, 'Beige');
+  assert.equal((await detectLocalColour(await catalogueImage([91,96,52]), labels)).colour, 'Olive');
+  assert.equal((await detectLocalColour(await catalogueImage([29,39,67], [198,140,112]), labels)).colour, 'Navy Blue');
+  assert.equal((await detectLocalColour(await catalogueImage([226,221,202]), labels)).colour, 'Off White');
+
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'fresh-procurement.html'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'casuals.js'), 'utf8');
+  assert.match(html, /\/api\/casuals\/colour-detect/);
+  assert.match(html, /data-colour/);
+  assert.match(source, /mode:'local'/);
+  assert.doesNotMatch(source.match(/router\.post\('\/api\/casuals\/colour-detect'[\s\S]*?\n\}\);/)[0], /ANTHROPIC_API_KEY/);
 });
 
 test('Casual planning settings are snapshotted per batch', () => {

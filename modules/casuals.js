@@ -737,6 +737,91 @@ async function shrinkForVision(buffer, mediaType) {
     return { data: out.toString('base64'), mediaType: 'image/jpeg' };
   } catch { return { data: buffer.toString('base64'), mediaType }; }
 }
+
+// Local, deterministic colour picker for Trouser colourways. It intentionally
+// uses no external model: the garment-heavy centre/lower portion of the photo is
+// compared with practical retail colour swatches after downscaling. Edge pixels
+// estimate the background so a plain catalogue backdrop receives little weight.
+const LOCAL_COLOUR_SWATCHES = {
+  black:[8,9,10], charcoal:[72,75,78], charcoalgrey:[72,75,78], charcoalgray:[72,75,78],
+  darkgrey:[82,84,86], darkgray:[82,84,86], grey:[132,134,135], gray:[132,134,135],
+  lightgrey:[190,191,190], lightgray:[190,191,190], white:[244,244,240],
+  offwhite:[226,221,202], cream:[226,216,184], ivory:[232,224,199],
+  beige:[187,165,126], taupe:[139,120,102], khaki:[151,137,91], camel:[168,123,74],
+  tan:[171,126,82], brown:[96,74,55], chocolate:[51,36,30], coffee:[62,47,39],
+  olive:[91,96,52], olivegreen:[82,94,50], green:[54,111,67], mint:[142,190,158],
+  navy:[18,31,45], navyblue:[18,31,45], blue:[54,94,160], skyblue:[135,187,216],
+  teal:[42,112,113], red:[163,47,45], maroon:[101,31,39], burgundy:[108,35,46],
+  wine:[112,36,49], pink:[211,125,151], peach:[226,151,119], orange:[210,108,44],
+  yellow:[214,180,54], mustard:[174,135,38], purple:[103,65,134], lavender:[170,145,191]
+};
+function localColourSwatch(label) {
+  const key = String(label || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+  if (!key) return null;
+  if (LOCAL_COLOUR_SWATCHES[key]) return LOCAL_COLOUR_SWATCHES[key];
+  const aliases = Object.keys(LOCAL_COLOUR_SWATCHES).sort((a, b) => b.length - a.length);
+  const hit = aliases.find(k => key.includes(k) || k.includes(key));
+  return hit ? LOCAL_COLOUR_SWATCHES[hit] : null;
+}
+function rgbToLab(rgb) {
+  let [r,g,b] = rgb.map(v => v / 255);
+  [r,g,b] = [r,g,b].map(v => v > .04045 ? Math.pow((v + .055) / 1.055, 2.4) : v / 12.92);
+  let x=(r*.4124+g*.3576+b*.1805)/.95047, y=(r*.2126+g*.7152+b*.0722), z=(r*.0193+g*.1192+b*.9505)/1.08883;
+  [x,y,z] = [x,y,z].map(v => v > .008856 ? Math.cbrt(v) : (7.787*v)+(16/116));
+  return [(116*y)-16, 500*(x-y), 200*(y-z)];
+}
+function labDistance(a, b) {
+  const dl=a[0]-b[0], da=a[1]-b[1], db=a[2]-b[2];
+  return Math.sqrt(dl*dl + da*da + db*db);
+}
+function median(values) {
+  if (!values.length) return 0;
+  values.sort((a,b) => a-b);
+  return values[Math.floor(values.length/2)];
+}
+async function detectLocalColour(buffer, allowedLabels) {
+  if (!Jimp) throw new Error('Local image colour detection is unavailable');
+  const choices = (allowedLabels || []).map(label => ({ label:String(label), rgb:localColourSwatch(label) })).filter(x => x.label && x.rgb);
+  if (!choices.length) return { colour:'', confidence:0 };
+  const img = await Jimp.read(buffer);
+  img.scaleToFit(96, 96);
+  const w=img.bitmap.width, h=img.bitmap.height, edge=[];
+  for (let y=0; y<h; y+=2) for (let x=0; x<w; x+=2) {
+    if (x>w*.09 && x<w*.91 && y>h*.09 && y<h*.91) continue;
+    const p=Jimp.intToRGBA(img.getPixelColor(x,y)); if (p.a>=128) edge.push(p);
+  }
+  const bg=[median(edge.map(p=>p.r)),median(edge.map(p=>p.g)),median(edge.map(p=>p.b))];
+  const labs=choices.map(c => rgbToLab(c.rgb)), votes=choices.map(() => 0);
+  let usable=0;
+  const votePixels = useBackgroundMask => {
+    votes.fill(0); usable=0;
+    for (let y=Math.floor(h*.18); y<Math.ceil(h*.95); y++) for (let x=Math.floor(w*.24); x<Math.ceil(w*.76); x++) {
+      const p=Jimp.intToRGBA(img.getPixelColor(x,y)); if (p.a<128) continue;
+      const nx=x/Math.max(1,w-1), ny=y/Math.max(1,h-1);
+      const bgd=Math.hypot(p.r-bg[0],p.g-bg[1],p.b-bg[2]);
+      if (useBackgroundMask && bgd<10) continue;
+      // Catalogue trousers normally occupy the centre and lower half. Weighting
+      // that area suppresses faces, tops, captions and surrounding décor.
+      let weight=.7 + Math.pow(Math.max(0,1-Math.abs(nx-.5)*2),2)*2.2 + Math.max(0,ny-.35)*1.4;
+      if (useBackgroundMask && bgd<24) weight*=.3;
+      const mx=Math.max(p.r,p.g,p.b), mn=Math.min(p.r,p.g,p.b), sat=mx ? (mx-mn)/mx : 0;
+      // Skin in the upper half should not turn beige/brown trousers into a false
+      // warm result; retain a little weight because some product-only photos are brown.
+      if (ny<.58 && p.r>p.g*1.07 && p.g>p.b*1.08 && sat>.12) weight*=.12;
+      const pl=rgbToLab([p.r,p.g,p.b]);
+      let best=0, bestD=Infinity;
+      labs.forEach((lab,i) => { const d=labDistance(pl,lab); if(d<bestD){ bestD=d; best=i; } });
+      votes[best]+=weight; usable+=weight;
+    }
+  };
+  votePixels(true);
+  if (usable<40) votePixels(false);
+  let best=0, second=0;
+  votes.forEach((v,i) => { if(v>votes[best]) best=i; });
+  votes.forEach((v,i) => { if(i!==best && v>second) second=v; });
+  const confidence = votes[best] > 0 ? Math.max(0, Math.min(1, (votes[best]-second)/votes[best])) : 0;
+  return { colour:choices[best].label, confidence:Math.round(confidence*100)/100 };
+}
 async function scoreBatch(items) {
   // items: [{id, buffer, mediaType}] → map id→{category, fit, colour, pattern}
   const content = [];
@@ -2133,6 +2218,33 @@ function runInvoiceClassifyUpload(req, res) {
     });
   });
 }
+
+// Auto-pick Trouser colours without a paid API. The browser sends the exact
+// colour labels configured for the open batch, and the response uses only those
+// labels so the existing dropdown remains the final human override.
+router.post('/api/casuals/colour-detect', async (req, res) => {
+  try {
+    const upload = await runInvoiceClassifyUpload(req, res);
+    if (res.headersSent) return;
+    if (!upload.ok) return res.status(400).json({ success:false, error:upload.error });
+    const files=(req.files||[]).filter(f => /^image\//.test(f.mimetype) || /\.(png|jpe?g|webp|gif)$/i.test(f.originalname||''));
+    if (!files.length) return res.status(400).json({ success:false, error:'No product images received' });
+    let labels=[];
+    try { labels=JSON.parse((req.body&&req.body.colours)||'[]'); } catch {}
+    labels=Array.isArray(labels) ? labels.map(x=>String(x||'').trim()).filter(Boolean).slice(0,40) : [];
+    if (!labels.length) return res.status(400).json({ success:false, error:'No batch colours are configured' });
+    let ids=req.body&&req.body.ids; if(typeof ids==='string') ids=[ids]; ids=Array.isArray(ids)?ids:[];
+    const results={};
+    for(let i=0;i<files.length;i++) {
+      const id=ids[i]||('img'+i);
+      results[id]=await detectLocalColour(files[i].buffer,labels);
+    }
+    res.json({ success:true, mode:'local', results });
+  } catch (err) {
+    res.status(422).json({ success:false, error:'Could not detect the colour locally: '+(err.message||'unknown') });
+  }
+});
+
 router.post('/api/casuals/invoice/classify', async (req, res) => {
   try {
     if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI reading is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
@@ -2325,4 +2437,4 @@ router.post('/api/casuals/design-tags', (req, res) => {
   res.json({ success: true, designTags: batchObj.designTags });
 });
 
-module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes };
+module.exports = { router, CASUALS_SPEC, buildPlan, settingsWithDefaults, splitInts, validSplitBoxes, splitDetectionNeedsDetail, separateHorizontalSplitBoxes, detectLocalColour };

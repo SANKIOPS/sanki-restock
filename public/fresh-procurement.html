@@ -654,7 +654,7 @@
             </div>
           </div>
           <div id="czDesignMode" style="display:none">
-            <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> For Trousers, name the design, upload <b>all of its colour photos together</b>, then choose the colour under each photo. Every colourway keeps its own photograph; no fit or paid AI is used.</div>
+            <div class="muted" style="font-size:12px;margin:0 0 8px"><b>Available for Trousers, Shirts and T-shirts.</b> For Trousers, name the design and upload <b>all of its colour photos together</b>. The colour is picked automatically without paid AI; use the dropdown under any photo to correct it. Every colourway keeps its own photograph and no fit is used.</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px;padding:10px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:9px">
               <label class="btn ghost sm" style="cursor:pointer">📁 Upload segregated design folder
                 <input id="czDesignFolder" type="file" accept="image/*" webkitdirectory directory multiple style="display:none" />
@@ -2038,7 +2038,7 @@
       var d={id:++czDSeq,name:g.name,cat:g.cat,fit:g.cat==='Trouser'?'':(fits[0]||''),cols:[],collapsed:false};
       czDesigns.push(d); czDAddPhotos(d.id,g.files);
     });
-    st.innerHTML='<span style="color:var(--emerald-d)">✓ Read '+files.length+' photo'+(files.length===1?'':'s')+' from '+order.length+' design folder'+(order.length===1?'':'s')+'. For Trousers, choose the colour under every photo, then click Upload these designs.</span>';
+    st.innerHTML='<span style="color:var(--emerald-d)">✓ Read '+files.length+' photo'+(files.length===1?'':'s')+' from '+order.length+' design folder'+(order.length===1?'':'s')+'. Trouser colours are being picked automatically; correct any dropdown if needed, then upload.</span>';
     czDRender();
   }
   // Match an AI-detected colour string to one of THIS category's plan colours
@@ -2053,9 +2053,22 @@
     var part = cols.filter(function(k){ var kl=k.toLowerCase(); return lo.indexOf(kl)>=0 || kl.indexOf(lo)>=0; })[0];
     return part || '';
   }
-  // A design's photos are uploaded in ONE shot; each becomes a colour slot and the
-  // AI names the colour. Sends the whole batch to /invoice/classify (same vision
-  // brain the pile + invoice flows use), then maps each result to a plan colour.
+  function czDDetectLocalColours(cat, fresh){
+    var fd=new FormData();
+    fresh.forEach(function(cl){ fd.append('images',cl.file); fd.append('ids','c'+cl.id); });
+    fd.append('colours',JSON.stringify(czDColours(cat)));
+    fetch('/api/casuals/colour-detect',{method:'POST',body:fd}).then(function(r){ return r.json(); }).then(function(res){
+      var map=(res&&res.results)||{};
+      fresh.forEach(function(cl){
+        var o=map['c'+cl.id]; cl.detecting=false;
+        if(o&&o.colour){ cl.colour=czDMatchColour(cat,o.colour)||String(o.colour).trim(); cl._autoColour=o.colour; }
+      });
+      czDRender();
+    }).catch(function(){ fresh.forEach(function(cl){ cl.detecting=false; }); czDRender(); });
+  }
+  // A design's photos are uploaded in ONE shot; each becomes a colour slot.
+  // Trousers use the local detector above. Uppers retain their existing vision
+  // classifier until their workflow is redesigned separately.
   function czDAddPhotos(did, files){
     var d = czDesigns.filter(function(x){ return x.id === did; })[0]; if(!d || !files || !files.length) return;
     var cat = czDCatOf(d);
@@ -2067,11 +2080,10 @@
     });
     if(!fresh.length) return;
     czDRender();
-    // Trouser colours are confirmed by the buyer. Do not call a paid or
-    // unreliable image model; reveal the colour picker immediately.
+    // Trouser colour detection is local and returns only this batch's configured
+    // colour labels. The selected dropdown stays editable for corrections.
     if(cat === 'Trouser'){
-      fresh.forEach(function(cl){ cl.detecting = false; });
-      czDRender();
+      czDDetectLocalColours(cat,fresh);
       return;
     }
     var fd = new FormData();
@@ -2151,7 +2163,7 @@
         csel.addEventListener('change', function(){
           if(this.value==='__custom__'){ ccust.style.display=''; cl.colour = ccust.value.trim(); ccust.focus(); }
           else { ccust.style.display='none'; cl.colour = this.value; }
-          cl._aiColour = null;
+          cl._aiColour = null; cl._autoColour = null;
         });
         ccust.addEventListener('input', function(){ cl.colour = this.value.trim(); });
         cell.querySelector('[data-crm]').addEventListener('click', function(){ if(cl.url) try{ URL.revokeObjectURL(cl.url); }catch(e){} d.cols = d.cols.filter(function(x){ return x.id !== cl.id; }); czDRender(); });
