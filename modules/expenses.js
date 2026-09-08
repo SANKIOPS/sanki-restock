@@ -367,6 +367,11 @@ function applyKaluFlowersFruitsVendorMerge(s){
   const result=mergeVendorRecords(s,'SANKI',['Vijay','Vijay Kumar','Kalu flower'],'Kalu Flowers & Fruits',{user:'prashant',device:'System migration',note:'Admin-authorized consolidation of the three SANKI vendor aliases; SAMAST Vijay Kumar remains separate'});
   s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),preservedOtherEntities:true,preservedTransactionDetails:true,result};return true;
 }
+function applyArunJiiVendorMerge(s){
+  const key='merge-sanki-arun-jiii-into-arun-jii-v1';s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
+  const result=mergeVendorRecords(s,'SANKI',['Arun jiii'],'Arun jii',{user:'gaganlambasanki',device:'Owner-directed deployment',note:'Owner-authorized merge of the duplicate Arun jiii vendor into Arun jii; every linked transaction and proof is preserved'});
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),preservedTransactionDetails:true,result};return true;
+}
 function applyEx00120ExactBankAmountCorrection(s){
   const key='correct-ex-00120-to-651-90-remove-adj-0003-v1',expenseId='EX-00120',paymentId='PAY-001',adjustmentId='ADJ-0003',appId=expenseId+'/'+paymentId,amount=651.90,now=new Date().toISOString();
   s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
@@ -610,6 +615,7 @@ function loadStore() {
     if(applyOwnerConfirmedEx00032GrossPayment(s))saveStore(s);
     if(applyVendorOverpaymentDisplayMetadata(s))saveStore(s);
     if(applyKaluFlowersFruitsVendorMerge(s))saveStore(s);
+    if(applyArunJiiVendorMerge(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
     // the official bank row remains the sole Axis balance movement.
@@ -3149,7 +3155,7 @@ router.use((error,req,res,next)=>{
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 
-module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
+module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
 module.exports.applyFinalizedBankTruth = applyFinalizedBankTruth;
 module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliationDrafts;

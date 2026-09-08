@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, indiaDisplayTimestamp } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
@@ -204,6 +204,11 @@ test('vendor ledgers can sort current outstanding amounts in both directions',()
   assert.match(html,/sort==='amount_desc'/);
   assert.match(html,/Number\(a\.outstanding\|\|0\)-Number\(b\.outstanding\|\|0\)/);
   assert.match(html,/Number\(b\.outstanding\|\|0\)-Number\(a\.outstanding\|\|0\)/);
+});
+
+test('Arun jiii duplicate merges into Arun jii without changing either expense',()=>{
+  const store={expenses:{'EX-00132':{id:'EX-00132',nature:'SANKI',vendor:'Arun jii',amount:100,billPhoto:'/proof-a.jpg'},'EX-00123':{id:'EX-00123',nature:'SANKI',vendor:'Arun jiii',amount:200,billPhoto:'/proof-b.jpg'}},vendors:{'arun jii':{name:'Arun jii'},'arun jiii':{name:'Arun jiii'}},vendorsByNature:{SAMAST:{},PERSONAL:{}},vendorOpeningPayables:[],vendorAdvances:[],bankReconciliationDrafts:{},oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyArunJiiVendorMerge(store),true);assert.equal(store.expenses['EX-00132'].vendor,'Arun jii');assert.equal(store.expenses['EX-00123'].vendor,'Arun jii');assert.equal(store.expenses['EX-00132'].amount,100);assert.equal(store.expenses['EX-00123'].amount,200);assert.equal(store.vendors['arun jiii'],undefined);assert.equal(store.vendors['arun jii'].name,'Arun jii');assert.equal(applyArunJiiVendorMerge(store),false);
 });
 
 test('reconciliation timestamps display in India time while storage stays UTC', () => {
