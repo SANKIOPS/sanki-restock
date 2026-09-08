@@ -2058,6 +2058,15 @@ test('a store repair failure cannot hide the persisted financial records', () =>
   assert.match(source,/Store repair failed; serving the original financial records:[\s\S]*return s/);
 });
 
+test('cash refund against a bank sale preserves the original receipt account and debits Counter Cash',()=>{
+  const created=invoke('POST','/api/expenses/sales-refunds',{role:'owner',body:{nature:'SANKI',saleReference:'#SALE-CASH-REFUND',originalReceiptAccount:'Axis Bank 3448',refundAccount:'Counter Cash',amount:500,date:'2099-04-10',reason:'Customer returned item; counter cash handed back',proof:'/api/expenses/photo/refund.jpg'}});
+  assert.equal(created.status,200,JSON.stringify(created.body));assert.equal(created.body.refund.originalReceiptAccount,'Axis Bank 3448');assert.equal(created.body.refund.refundAccount,'Counter Cash');
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash',from:'2099-04-10',to:'2099-04-10'}}).body;
+  const row=ledger.entries.find(x=>x.id===created.body.refund.id);assert.ok(row);assert.equal(row.debit,500);assert.equal(row.credit,0);assert.match(row.description,/#SALE-CASH-REFUND/);
+  const bankLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2099-04-10',to:'2099-04-10'}}).body;
+  assert.equal(bankLedger.entries.some(x=>x.id===created.body.refund.id),false,'cash payout must not reduce the original bank receipt');
+});
+
 test('expense and transfer proof uploads preserve real upload errors instead of submitting empty proof',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
   assert.match(html,/if\(!d\.success\|\|!d\.url\)throw new Error\(d\.error/);

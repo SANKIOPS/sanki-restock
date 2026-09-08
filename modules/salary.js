@@ -345,7 +345,12 @@ function attPaidDays(att,e,ym) {
   if (!att) return null;
   let worked=0,any=false;
   Object.keys(att).forEach(d=>{const mark=att[d];if(MARKS[mark]!=null){any=true;if(mark==='P')worked++;else if(mark==='H')worked+=.5;}});
-  return any?Math.max(0,round2(worked+paidLeaveAllowanceForMonth(e,ym)-(daysInMonth(ym)===31?1:0))):null;
+  if(!any)return null;
+  const grossPaidDays=round2(worked+paidLeaveAllowanceForMonth(e,ym));
+  // The 31-day normalization is a full/majority-month payroll rule. Applying
+  // it to a new joiner with only one eligible day incorrectly erases that day.
+  const calendarAdjustment=daysInMonth(ym)===31&&grossPaidDays>=15?1:0;
+  return Math.max(0,round2(grossPaidDays-calendarAdjustment));
 }
 function employmentAttendance(att, e, ym) {
   if (!att) return att;
@@ -543,8 +548,9 @@ router.post('/api/salary/advance-requests/:id/post',guard,(req,res)=>{
   if(!canRequestOrPostAdvance(req))return res.status(403).json({success:false,error:'Only Admin or Prashant can upload proof and post an approved advance.'});
   const s=load(),r=(s.advanceRequests||{})[req.params.id],b=req.body||{},proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
   if(!r)return res.status(404).json({success:false,error:'Advance request not found.'});if(r.status!=='Approved – proof required')return res.status(400).json({success:false,error:'The Owner must approve this request before it can be posted.'});if(!proofs.length)return res.status(400).json({success:false,error:'Payment proof is required before posting.'});
-  s.advanceSeq=(s.advanceSeq||0)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0'),now=new Date().toISOString();s.advances[id]={id,requestId:r.id,empId:r.empId,employeeName:r.employeeName,amount:r.amount,date:r.date,account:r.account,proof:proofs[0],proofs,note:r.note,reference:r.reference,recoveryStartMonth:r.recoveryStartMonth,recoveries:[],active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now,approvedBy:r.approvedBy,approvedAt:r.approvedAt};
-  r.status='Posted';r.advanceId=id;r.proof=proofs[0];r.proofs=proofs;r.postedBy=req.user&&req.user.username||'admin';r.postedAt=now;auditAdvanceRequest(s,req,'POSTED',r.id,{advanceId:id,proofCount:proofs.length});auditAdvance(s,req,'CREATED',id,{amount:r.amount,account:r.account,requestId:r.id});save(s);res.json({success:true,request:r,advance:advanceView(s.advances[id])});
+  const payoutDate=String(b.payoutDate||'').trim();if(!/^\d{4}-\d{2}-\d{2}$/.test(payoutDate)||isNaN(Date.parse(payoutDate+'T00:00:00Z')))return res.status(400).json({success:false,error:'Actual payout date is required before posting.'});
+  s.advanceSeq=(s.advanceSeq||0)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0'),now=new Date().toISOString();s.advances[id]={id,requestId:r.id,empId:r.empId,employeeName:r.employeeName,amount:r.amount,date:payoutDate,payoutDate,proposedDate:r.date,account:r.account,proof:proofs[0],proofs,note:r.note,reference:r.reference,recoveryStartMonth:payoutDate.slice(0,7),recoveries:[],active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now,approvedBy:r.approvedBy,approvedAt:r.approvedAt};
+  r.status='Posted';r.advanceId=id;r.payoutDate=payoutDate;r.proof=proofs[0];r.proofs=proofs;r.postedBy=req.user&&req.user.username||'admin';r.postedAt=now;auditAdvanceRequest(s,req,'POSTED',r.id,{advanceId:id,payoutDate,proofCount:proofs.length});auditAdvance(s,req,'CREATED',id,{amount:r.amount,account:r.account,requestId:r.id,payoutDate});save(s);res.json({success:true,request:r,advance:advanceView(s.advances[id])});
 });
 
 router.post('/api/salary/recoveries/:ym', guard, (req, res) => {

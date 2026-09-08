@@ -22,7 +22,7 @@ function invoke(method, routePath, { body={}, params={}, query={}, role='admin',
 function postAdvance(emp,body={}){
   const request=invoke('POST','/api/salary/advances',{body:Object.assign({empId:emp.id,amount:1000,date:'2026-08-22',account:'Axis Bank 3448',recoveryStartMonth:'2026-08'},body),role:'admin'}).body.request;
   assert.ok(request&&request.id);assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'owner'}).status,200);
-  return invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{proofs:[body.proof||'/proof.jpg']},role:'admin'}).body.advance;
+  return invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{payoutDate:body.payoutDate||body.date||'2026-08-22',proofs:[body.proof||'/proof.jpg']},role:'admin'}).body.advance;
 }
 
 test('salary advances require owner approval and proof-backed posting, then recover oldest first', () => {
@@ -33,7 +33,7 @@ test('salary advances require owner approval and proof-backed posting, then reco
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'accounting'}).status,403);
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'owner'}).status,200);
   const missing=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{}});assert.equal(missing.status,400);assert.match(missing.body.error,/proof/i);
-  assert.equal(invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{proof:'/proof-first.jpg'}}).status,200);
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{payoutDate:'2026-08-22',proof:'/proof-first.jpg'}}).status,200);
   [2000,2000].forEach((amount,i)=>{
     const made=postAdvance(emp,{amount,date:'2026-08-'+String(23+i).padStart(2,'0'),account:'Axis Bank 3448',proof:'/proof-'+i+'.jpg',recoveryStartMonth:'2026-08'});
     assert.ok(made.id);
@@ -49,15 +49,14 @@ test('salary advances require owner approval and proof-backed posting, then reco
   const tooMuch=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:6000}}); assert.equal(tooMuch.status,400);
 });
 
-test('historical advances assigned to an earlier payroll month remain editable',()=>{
+test('advance recovery starts from its actual payout month, not a proposed recovery month',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Historical Recovery',salary:30000}}).body.employee;
   const made=postAdvance(emp,{amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'});
-  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000}}).status,200);
-  let row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-11'}}).body.rows.find(x=>x.id===emp.id);
-  assert.equal(row.loggedAdvanceRecovery,3000);
-  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:1000}}).status,200);
-  row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-11'}}).body.rows.find(x=>x.id===emp.id);
-  assert.equal(row.loggedAdvanceRecovery,1000);assert.equal(row.netPayable,-1000);
+  assert.equal(made.date,'2026-12-07');assert.equal(made.recoveryStartMonth,'2026-12');
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000}}).status,400);
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-12'},body:{empId:emp.id,amount:1000}}).status,200);
+  const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-12'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.loggedAdvanceRecovery,1000);
   const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,2000);
 });
 
@@ -152,11 +151,18 @@ test('joining and leaving dates limit calendar-month weekly offs and paid days',
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'23',mark:'A'}}).body.mark,'WO');
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'30',mark:'A'}}).body.mark,'WO');
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body, row=month.rows.find(x=>x.id===emp.id);
-  assert.equal(row.computedPaidDays,1,'two eligible Sundays are followed by the 31-day payroll adjustment');
+  assert.equal(row.computedPaidDays,2,'partial-month employees keep both eligible paid weekly offs');
   const invalid=invoke('POST','/api/salary/employees',{body:{name:'Invalid Dates',joiningDate:'2026-08-20',lastWorkingDate:'2026-08-19'}});
   assert.equal(invalid.status,400);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/Joining date/); assert.match(html,/Last working date/); assert.match(html,/not-employed/);
+});
+
+test('a joiner working on the 31st receives that one paid day',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Last Day Joiner',salary:30000,joiningDate:'2026-08-31'}}).body.employee;
+  assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'31',mark:'P'}}).status,200);
+  const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.computedPaidDays,1);assert.equal(row.salaryAmt,1000);
 });
 
 test('zero paid-leave allowance converts legacy PL to absence and deducts salary',()=>{
