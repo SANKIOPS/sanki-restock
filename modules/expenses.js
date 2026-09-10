@@ -896,10 +896,10 @@ function salesLedgerEntries() {
       if(orderNo==='2720')return; // owner-confirmed test order: not genuine revenue
       if(orderNo==='2717')return; // owner-confirmed fully store-credit-funded order
       if(storeCredit&&!paytm&&!cash)return; // no fresh money entered a bank/gateway
-      const freshPaytm=num(x.paytmAmount||x.paytmPaidAmount||x.freshPaymentAmount)||(paytm?gross:0);
+      const date=String(x.processedAt||x.createdAt||'').slice(0,10);
+      const freshPaytm=num(x.paytmAmount||x.paytmPaidAmount||x.freshPaymentAmount)||(paytm||date>=SHOPIFY_DIRECT_TO_AXIS_FROM?gross:0);
       const amount=cash?roundCashSale(gross):freshPaytm;
       if(!(amount>0))return;
-      const date=String(x.processedAt||x.createdAt||'').slice(0,10);
       rows.push({ id:'SHOPIFY/'+x.id, orderId:String(x.id), orderNumber:orderNo||String(x.name||x.id), date, account:cash?DEFAULT_COUNTER_CASH:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT), amount, gross, storeCreditUsed:Math.max(0,gross-amount), paymentGateways:x.paymentGateways||[], description:'Shopify sale · '+(x.name||x.id)+' · '+(x.channel||'') });
     });
   } catch { /* orders have not synced yet */ }

@@ -1873,6 +1873,7 @@ test('Shopify Paytm sales use clearing before 10 September and post directly to 
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{
     paytm:{id:'paytm',name:'#2718',orderNumber:2718,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:50000,refundAmount:0},
     direct:{id:'direct',name:'#2800',orderNumber:2800,createdAt:'2026-09-10T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:12500,refundAmount:0},
+    unlabeled:{id:'unlabeled',name:'#2801',orderNumber:2801,createdAt:'2026-09-10T11:00:00Z',financialStatus:'paid',paymentGateways:['manual'],total:7000,refundAmount:0},
     credit:{id:'credit',name:'#2717',orderNumber:2717,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['store credit'],total:20000,refundAmount:0},
     test:{id:'test',name:'#2720',orderNumber:2720,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:100,refundAmount:0}
   }}));
@@ -1880,6 +1881,7 @@ test('Shopify Paytm sales use clearing before 10 September and post directly to 
   const clearing=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Paytm Settlement Clearing'},role:'owner'}).body.entries;
   assert.equal(axis.some(x=>x.id==='SHOPIFY/paytm'),false);
   assert.equal(axis.find(x=>x.id==='SHOPIFY/direct').credit,12500);
+  assert.equal(axis.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000);
   const receipt=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-08-23');assert.equal(receipt.credit,50000);assert.deepEqual(receipt.connectedSales.map(x=>x.id),['SHOPIFY/paytm']);
   assert.equal(clearing.some(x=>x.id==='SHOPIFY/direct'||(x.connectedSales||[]).some(y=>y.id==='SHOPIFY/direct')),false);
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
