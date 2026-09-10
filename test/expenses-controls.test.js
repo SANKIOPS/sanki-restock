@@ -739,7 +739,7 @@ test('one app user can retain multiple Telegram notification accounts', () => {
 });
 
 test('Owner Telegram narration and screenshot OCR create one categorized paid PERSONAL expense', () => {
-  const {parsePersonalCaption,parsePersonalIntent,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory,applyCaptureEdit,capturePreview}=require('../modules/telegram');
+  const {parsePersonalCaption,parsePersonalIntent,isHotel0992Caption,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory,applyCaptureEdit,capturePreview}=require('../modules/telegram');
   const parsed=parsePersonalCaption('Personal | Nanny salary August | ICICI 0993 | ₹27,500');
   assert.deepEqual(parsed,{ok:true,amount:27500,account:'ICICI 0993',particulars:'Nanny salary August',date:''});
   assert.deepEqual(parsePersonalCaption('Personal Food tip 0993 200'),{ok:true,amount:200,account:'0993',particulars:'Food tip',date:''});
@@ -749,6 +749,9 @@ test('Owner Telegram narration and screenshot OCR create one categorized paid PE
   assert.deepEqual(parsePersonalIntent('personal cash Nanny payment 27500'),{ok:true,particulars:'Nanny payment',received:false,cash:true,upi:false,amount:27500});
   assert.deepEqual(parsePersonalIntent('Personal upi Received Refund from Mukesh'),{ok:true,particulars:'Refund from Mukesh',received:true,cash:false,upi:true,amount:0});
   assert.equal(parsePersonalIntent('SAMAST electrician payment').ok,false);
+  assert.equal(isHotel0992Caption('0992'),true);
+  assert.equal(isHotel0992Caption('09-9-2'),true);
+  assert.equal(isHotel0992Caption('0993'),false);
   const ocr=parsePaymentOcr('Transaction Successful\n23 August 2026 at 4:14 PM\nPaid to\nMr MUKESH KUMAR ₹200\nDebited from\nXXXXXXXXXXX93 ₹200\nUTR: 412656746520');
   assert.equal(ocr.amount,200);assert.equal(ocr.amountConfidence,true);assert.equal(ocr.account,'93');assert.equal(ocr.recipient,'Mr MUKESH KUMAR');assert.equal(ocr.date,'2026-08-23');
   const safeOcr=parsePaymentOcr('Transaction Successful\nPaid to\nFOOD RESTAURANT 35190\nAmount ₹5,000.50\nDebited from XXXXX0993\n₹5,000.50\nUTR 351901234567');
