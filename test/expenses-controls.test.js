@@ -989,6 +989,15 @@ test('Prashant can record only the approved Axis 3448 to Axis 3645 transfer rout
   const other=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Counter Cash',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/other.jpg'}});assert.equal(other.status,403);
 });
 
+test('money exchange posts equal bank and cash movements without recording income or expense',()=>{
+  const made=invoke('POST','/api/expenses/exchanges',{role:'owner',body:{nature:'SANKI',direction:'transfer_to_cash',bankAccount:'Axis Bank 3448',cashAccount:'Counter Cash',source:'SB Enterprises',amount:2500,date:'2099-05-01',proof:'/api/expenses/photo/exchange.jpg',note:'Cash exchange'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.classification,'money_exchange');assert.equal(made.body.transfer.fromAccount,'Axis Bank 3448');assert.equal(made.body.transfer.toAccount,'Counter Cash');assert.equal(made.body.transfer.exchangeSource,'SB Enterprises');
+  const reverse=invoke('POST','/api/expenses/exchanges',{role:'owner',body:{nature:'SANKI',direction:'cash_to_transfer',bankAccount:'Axis Bank 3448',cashAccount:'Counter Cash',source:'SB Enterprises',amount:900,date:'2099-05-02',proof:'/api/expenses/photo/exchange-2.jpg'}});assert.equal(reverse.status,200);assert.equal(reverse.body.transfer.fromAccount,'Counter Cash');assert.equal(reverse.body.transfer.toAccount,'Axis Bank 3448');
+  const invalid=invoke('POST','/api/expenses/exchanges',{role:'owner',body:{nature:'SANKI',direction:'cash_to_transfer',bankAccount:'Axis Bank 3448',cashAccount:'Prashant Axis 3645',source:'SB Enterprises',amount:900,date:'2099-05-02',proof:'/proof.jpg'}});assert.equal(invalid.status,400);
+  const denied=invoke('POST','/api/expenses/exchanges',{role:'admin',body:{nature:'SANKI',direction:'transfer_to_cash',bankAccount:'Axis Bank 3448',cashAccount:'Counter Cash',source:'SB Enterprises',amount:100,date:'2099-05-02',proof:'/proof.jpg'}});assert.equal(denied.status,403);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/<option value="exchange">Exchange<\/option>/);assert.match(html,/SB Enterprises/);assert.match(html,/Transfer given → cash received/);assert.match(html,/Cash given → transfer received/);
+});
+
 test('vendor overpayment is one ledger payment and the excess remains as vendor advance', () => {
   function approved(amount,date,particulars) {
     const made=invoke('POST','/api/expenses',{body:{date,vendor:'Running Balance Vendor',particulars,amount,billPhoto:'/api/expenses/photo/running-bill.jpg',qrPhoto:'/api/expenses/photo/running-qr.jpg',paymentType:'UPI'}});

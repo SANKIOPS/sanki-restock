@@ -1360,7 +1360,7 @@ router.post('/api/expenses', (req, res) => {
 // ── Edit ─────────────────────────────────────────────────────────
 // Single-segment POST paths that have their OWN handlers registered after this
 // param route — the ':id' pattern would otherwise swallow them. Fall through.
-const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'transfers', 'receipts', 'sales-refunds', 'receivables', 'vendors', 'custom-ledgers', 'upload', 'batch-pay']);
+const RESERVED_POST = new Set(['requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'receivables', 'vendors', 'custom-ledgers', 'upload', 'batch-pay']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
   const s = loadStore();
@@ -2246,6 +2246,20 @@ router.get('/api/expenses/balances', (req, res) => {
 });
 
 // A transfer is one atomic event that produces a debit and matching credit.
+router.post('/api/expenses/exchanges',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can record a money exchange.'});
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),direction=String(b.direction||''),source=String(b.source||'').trim(),amount=roundMoney(b.amount),date=String(b.date||'').slice(0,10),proof=String(b.proof||'').trim(),note=String(b.note||'').trim();
+  if(!approvalNatures(req).includes(nature))return res.status(403).json({success:false,error:'You cannot record an exchange for this entity.'});
+  const bankAccount=allowedTransferAccount(nature,b.bankAccount),cashAccount=allowedTransferAccount(nature,b.cashAccount);
+  if(!['transfer_to_cash','cash_to_transfer'].includes(direction))return res.status(400).json({success:false,error:'Choose whether transfer was given or cash was given.'});
+  if(!source)return res.status(400).json({success:false,error:'Exchange company/source is required.'});
+  if(!bankAccount||!cashAccount||/cash/i.test(bankAccount)||!/cash/i.test(cashAccount))return res.status(400).json({success:false,error:'Choose one non-cash transfer account and one cash account.'});
+  if(!(amount>0)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!proof)return res.status(400).json({success:false,error:'Amount, date and exchange proof are required.'});
+  const fromAccount=direction==='transfer_to_cash'?bankAccount:cashAccount,toAccount=direction==='transfer_to_cash'?cashAccount:bankAccount;
+  s.transferSeq=num(s.transferSeq)+1;const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature,fromNature:nature,toNature:nature,classification:'money_exchange',exchangeDirection:direction,exchangeSource:source,fromAccount,toAccount,amount,date,proof,note:[source,note].filter(Boolean).join(' · '),createdBy:req.user&&req.user.username||'owner',createdAt:new Date().toISOString()};
+  s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,req,'MONEY_EXCHANGE_RECORDED','transfer',transfer.id,{nature,account:fromAccount,after:transfer,note:'Equal exchange; no income or expense'});saveStore(s);res.json({success:true,transfer});
+});
+
 router.post('/api/expenses/transfers', (req, res) => {
   const s = loadStore(); const b = req.body || {};
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
