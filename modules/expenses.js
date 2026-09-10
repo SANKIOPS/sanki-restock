@@ -530,6 +530,26 @@ function applyOwnerConfirmedEx00032GrossPayment(s){
   s.oneTimeMigrations[key]={appliedAt:createdAt,result:'corrected',expenseId:expense.id,paymentId:payment.id,vendorAdvanceId:advanceId,grossPaymentAmount:418,expenseAllocationAmount:200,vendorAdvanceAmount:218};
   return true;
 }
+function applyOwnerConfirmedEx00132GrossPayment(s){
+  const key='correct-ex-00132-gross-payment-300-v1';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];
+  const expense=(s.expenses||{})['EX-00132'],payment=expense&&(expense.payments||[]).find(x=>x.id==='PAY-001'),reference='EX-00132/PAY-001';
+  const valid=expense&&payment&&String(expense.date||'')==='2026-08-29'&&String(payment.date||'')==='2026-09-08'&&Math.abs(num(expense.amount)-100)<.01&&Math.abs(num(payment.amount)-100)<.01&&/arun/i.test(String(expense.vendor||''))&&String(payment.account||expense.account||'')==='Prashant Axis 3645';
+  if(!valid){s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),result:'identity_mismatch'};return true;}
+  const existing=s.vendorAdvances.find(x=>x.paymentReference===reference&&Math.abs(num(x.grossPaymentAmount)-300)<.01);
+  if(existing){s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),result:'already_correct',vendorAdvanceId:existing.id};return applyVendorOverpaymentDisplayMetadata(s)||true;}
+  let sequence=s.vendorAdvances.length+1,advanceId='';
+  do{advanceId='VADV-'+String(sequence++).padStart(5,'0');}while(s.vendorAdvances.some(x=>x.id===advanceId));
+  const batchPaymentId=payment.batchPaymentId||'BPAY-EX00132-GROSS-300',createdAt=new Date().toISOString(),proofs=proofList(payment.proofs,payment.proof||expense.paymentProof),proof=proofs[0]||'';
+  Object.assign(payment,{batchPaymentId,batchTotal:300,grossPaymentAmount:300,expenseAllocationAmount:100,vendorAdvanceAmount:200,vendorAdvanceId:advanceId});
+  const advance={id:advanceId,nature:normalizedNature(expense.nature),vendor:expense.vendor,date:payment.date,amount:200,remainingAmount:200,account:payment.account||expense.account,paymentType:payment.paymentType||expense.paymentType||'UPI',paymentReference:reference,proof,proofs,note:payment.note||'Excess amount from ₹300 vendor payment',applications:[],batchPaymentId,grossPaymentAmount:300,allocatedExpenseAmount:100,createdBy:payment.paidBy||'prashant',createdAt};
+  s.vendorAdvances.push(advance);
+  audit(s,null,'VENDOR_PAYMENT_GROSS_AMOUNT_CORRECTED','expense',expense.id,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:expense.nature,account:advance.account,paymentId:payment.id,before:{expenseAllocationAmount:100,grossPaymentAmount:100,vendorAdvanceAmount:0},after:{expenseAllocationAmount:100,grossPaymentAmount:300,vendorAdvanceAmount:200,vendorAdvanceId:advanceId},note:'Owner confirmed the payment proof is ₹300: ₹100 settled EX-00132 and ₹200 remains as vendor advance.'});
+  s.oneTimeMigrations[key]={appliedAt:createdAt,result:'corrected',expenseId:expense.id,paymentId:payment.id,vendorAdvanceId:advanceId,grossPaymentAmount:300,expenseAllocationAmount:100,vendorAdvanceAmount:200};
+  return true;
+}
 function applyVendorOverpaymentDisplayMetadata(s){
   let changed=false;
   (s.vendorAdvances||[]).filter(x=>x.batchPaymentId&&num(x.grossPaymentAmount)>0).forEach(advance=>{
@@ -613,6 +633,7 @@ function loadStore() {
     s.vendorAdvances.forEach(x=>{x.account=rename(x.account);});
     (s.paytmSettlements||[]).forEach(x=>{x.bankAccount=rename(x.bankAccount);});
     if(applyOwnerConfirmedEx00032GrossPayment(s))saveStore(s);
+    if(applyOwnerConfirmedEx00132GrossPayment(s))saveStore(s);
     if(applyVendorOverpaymentDisplayMetadata(s))saveStore(s);
     if(applyKaluFlowersFruitsVendorMerge(s))saveStore(s);
     if(applyArunJiiVendorMerge(s))saveStore(s);
@@ -3155,7 +3176,7 @@ router.use((error,req,res,next)=>{
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 
-module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
+module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyOwnerConfirmedEx00132GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
 module.exports.applyFinalizedBankTruth = applyFinalizedBankTruth;
 module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliationDrafts;
