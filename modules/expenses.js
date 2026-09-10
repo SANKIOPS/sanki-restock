@@ -1248,7 +1248,7 @@ router.get('/api/expenses/config', (req, res) => {
     accounts: Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n])))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : [])])),
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? ledgerAccountsForNature(s,n).filter(name => !/cash/i.test(name)) : []])),
-    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) ? Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name)))).sort((a,b)=>a.localeCompare(b)) : []])),
+    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name)))).sort((a,b)=>a.localeCompare(b)) : []])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645']:[]) : (approvalNatures(req).includes(n) ? transferAccountsForNature(n) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
@@ -2266,7 +2266,9 @@ router.post('/api/expenses/transfers', (req, res) => {
   if (!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
   const fromAccount = allowedTransferAccount(fromNature, b.fromAccount), toAccount = allowedTransferAccount(toNature, b.toAccount);
   const amount = num(b.amount), proof = String(b.proof || '').trim();
-  const classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
+  let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
+  const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
+  if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
   const prashantAllowed=isPrashant(req)&&fromNature==='SANKI'&&toNature==='SANKI'&&fromAccount==='Axis Bank 3448'&&toAccount==='Prashant Axis 3645'&&classification==='internal_transfer';
   if(!isOwner(req)&&!prashantAllowed)return res.status(403).json({success:false,error:'Prashant can record transfers only from Axis Bank 3448 to Prashant Axis 3645.'});
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });

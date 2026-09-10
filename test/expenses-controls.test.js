@@ -1486,8 +1486,23 @@ test('personal bank reconciliation is Owner-only and stored separately from busi
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.deepEqual(adminConfig.accountsByNature.PERSONAL,[]);
   assert.deepEqual(adminConfig.bankAccountsByNature.PERSONAL,[]);
+  assert.deepEqual(adminConfig.ledgerAccountsByNature.PERSONAL,[]);
   const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   assert.deepEqual(ownerConfig.bankAccountsByNature.PERSONAL,['ICICI Bank 0992','ICICI Bank 0993','IndusInd Bank 7883','Namita 5464']);
+  assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita 5464'));
+  assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita Cash'));
+});
+
+test('Owner transfers from business or Personal accounts into private Namita ledgers',()=>{
+  const business=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'SANKI',fromAccount:'Tiana 0425',toNature:'PERSONAL',toAccount:'Namita 5464',classification:'inter_entity_loan',amount:1200,date:'2026-09-10',proof:'/api/expenses/photo/namita-0425.jpg',note:'Namita funds'}});
+  assert.equal(business.status,200,JSON.stringify(business.body));assert.equal(business.body.transfer.classification,'owner_withdrawal');
+  const personal=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'PERSONAL',fromAccount:'ICICI Bank 0992',toNature:'PERSONAL',toAccount:'Namita Cash',classification:'owner_withdrawal',amount:300,date:'2026-09-10',proof:'/api/expenses/photo/namita-cash.jpg',note:'Cash funds'}});
+  assert.equal(personal.status,200,JSON.stringify(personal.body));assert.equal(personal.body.transfer.classification,'internal_transfer');
+  const sourceLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Tiana 0425'}}).body;
+  const namitaLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'PERSONAL',account:'Namita 5464'}}).body;
+  assert.ok(sourceLedger.entries.some(x=>x.id===business.body.transfer.id&&x.debit===1200));
+  assert.ok(namitaLedger.entries.some(x=>x.id===business.body.transfer.id&&x.credit===1200));
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'PERSONAL',account:'Namita 5464'}}).status,403);
 });
 
 test('finalizing one reconciliation period preserves other unfinished periods',()=>{
