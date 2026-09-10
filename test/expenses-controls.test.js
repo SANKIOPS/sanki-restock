@@ -980,6 +980,15 @@ test('consolidated vendor payment consumes available advance before creating the
   assert.ok(saved.auditLog.some(x=>x.action==='VENDOR_ADVANCE_APPLIED'&&x.paymentId==='VADV-CREDIT-TEST'));
 });
 
+test('Prashant can record only the approved Axis 3448 to Axis 3645 transfer route',()=>{
+  const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+  assert.deepEqual(config.transferAccountsByNature.SANKI,['Axis Bank 3448','Prashant Axis 3645']);assert.deepEqual(config.transferAccountsByNature.SAMAST,[]);
+  const allowed=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Prashant Axis 3645',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/prashant-transfer.jpg'}});
+  assert.equal(allowed.status,200,JSON.stringify(allowed.body));assert.equal(allowed.body.transfer.createdBy,'prashant');
+  const reverse=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Prashant Axis 3645',toAccount:'Axis Bank 3448',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/reverse.jpg'}});assert.equal(reverse.status,403);
+  const other=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Counter Cash',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/other.jpg'}});assert.equal(other.status,403);
+});
+
 test('vendor overpayment is one ledger payment and the excess remains as vendor advance', () => {
   function approved(amount,date,particulars) {
     const made=invoke('POST','/api/expenses',{body:{date,vendor:'Running Balance Vendor',particulars,amount,billPhoto:'/api/expenses/photo/running-bill.jpg',qrPhoto:'/api/expenses/photo/running-qr.jpg',paymentType:'UPI'}});
