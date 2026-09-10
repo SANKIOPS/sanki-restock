@@ -45,6 +45,7 @@ const statementUpload=multer({storage:multer.diskStorage({destination:(req,file,
 const DEFAULT_SALES_BANK = 'Axis Bank 3448';
 const DEFAULT_COUNTER_CASH = 'Counter Cash';
 const PAYTM_CLEARING_ACCOUNT = 'Paytm Settlement Clearing';
+const SHOPIFY_DIRECT_TO_AXIS_FROM = '2026-09-10';
 const SALES_LEDGER_FROM = '2026-08-21';
 const COUNTER_CASH_RESET_DATE = '2026-08-22';
 const ACCOUNTING_BUILD = '2026-08-26-bank-charge-ledgers-v2';const BANK_RECONCILIATION_RESET_KEY = 'owner-reset-all-bank-reconciliation-2026-09-04-v2';
@@ -898,7 +899,8 @@ function salesLedgerEntries() {
       const freshPaytm=num(x.paytmAmount||x.paytmPaidAmount||x.freshPaymentAmount)||(paytm?gross:0);
       const amount=cash?roundCashSale(gross):freshPaytm;
       if(!(amount>0))return;
-      rows.push({ id:'SHOPIFY/'+x.id, orderId:String(x.id), orderNumber:orderNo||String(x.name||x.id), date:String(x.processedAt||x.createdAt||'').slice(0,10), account:cash?DEFAULT_COUNTER_CASH:PAYTM_CLEARING_ACCOUNT, amount, gross, storeCreditUsed:Math.max(0,gross-amount), paymentGateways:x.paymentGateways||[], description:'Shopify sale · '+(x.name||x.id)+' · '+(x.channel||'') });
+      const date=String(x.processedAt||x.createdAt||'').slice(0,10);
+      rows.push({ id:'SHOPIFY/'+x.id, orderId:String(x.id), orderNumber:orderNo||String(x.name||x.id), date, account:cash?DEFAULT_COUNTER_CASH:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT), amount, gross, storeCreditUsed:Math.max(0,gross-amount), paymentGateways:x.paymentGateways||[], description:'Shopify sale · '+(x.name||x.id)+' · '+(x.channel||'') });
     });
   } catch { /* orders have not synced yet */ }
   const seen = new Set();
