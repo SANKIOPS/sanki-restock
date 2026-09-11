@@ -1006,6 +1006,22 @@ test('money exchange posts equal bank and cash movements without recording incom
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/<option value="exchange">Exchange<\/option>/);assert.match(html,/SB Enterprises/);assert.match(html,/Transfer given → cash received/);assert.match(html,/Cash given → transfer received/);assert.match(html,/View exchange details/);assert.match(html,/Open full proof/);
 });
 
+test('money exchange records unequal received cash as an explicit historical-ledger adjustment and supports audited owner edits',()=>{
+  const missingLedger=invoke('POST','/api/expenses/exchanges',{role:'owner',body:{nature:'SANKI',direction:'transfer_to_cash',bankAccount:'Axis Bank 3448',cashAccount:'Gagan Sir Cash',source:'SB Enterprises',amount:320000,receivedAmount:300000,date:'2099-06-01',proof:'/api/expenses/photo/exchange-split.jpg'}});
+  assert.equal(missingLedger.status,400);assert.match(missingLedger.body.error,/previous-balance ledger/i);
+  const made=invoke('POST','/api/expenses/exchanges',{role:'owner',body:{nature:'SANKI',direction:'transfer_to_cash',bankAccount:'Axis Bank 3448',cashAccount:'Gagan Sir Cash',source:'SB Enterprises',amount:320000,receivedAmount:300000,adjustmentLedger:'SB Enterprises old balance',adjustmentNote:'Adjusted against pending historical hisaab',date:'2099-06-01',proof:'/api/expenses/photo/exchange-split.jpg'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.adjustmentAmount,20000);
+  const source=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2099-06-01',to:'2099-06-01'}}).body.entries.find(x=>x.id===made.body.transfer.id);
+  const destination=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Gagan Sir Cash',from:'2099-06-01',to:'2099-06-01'}}).body.entries.find(x=>x.id===made.body.transfer.id);
+  assert.equal(source.debit,320000);assert.equal(source.credit,0);assert.equal(destination.credit,300000);assert.equal(destination.debit,0);assert.equal(destination.adjustmentAmount,20000);assert.equal(destination.adjustmentLedger,'SB Enterprises old balance');
+  const denied=invoke('PATCH','/api/expenses/exchanges/:id',{role:'admin',params:{id:made.body.transfer.id},body:{reason:'Admin edit'}});assert.equal(denied.status,403);
+  const edited=invoke('PATCH','/api/expenses/exchanges/:id',{role:'owner',params:{id:made.body.transfer.id},body:{amount:320000,receivedAmount:305000,source:'SB Enterprises',adjustmentLedger:'SB Enterprises old balance',adjustmentNote:'Corrected historical hisaab',date:'2099-06-01',reason:'Correct cash received'}});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.transfer.adjustmentAmount,15000);assert.equal(edited.body.transfer.editedBy,'owner-user');
+  const saved=JSON.parse(fs.readFileSync(path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),'utf8'));const auditRow=saved.auditLog.findLast(x=>x.action==='MONEY_EXCHANGE_EDITED'&&x.subjectId===made.body.transfer.id);
+  assert.ok(auditRow);assert.equal(auditRow.before.receivedAmount,300000);assert.equal(auditRow.after.receivedAmount,305000);assert.equal(auditRow.note,'Correct cash received');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Amount actually received/);assert.match(html,/Previous-balance ledger/);assert.match(html,/Edit exchange/);
+});
+
 test('vendor overpayment is one ledger payment and the excess remains as vendor advance', () => {
   function approved(amount,date,particulars) {
     const made=invoke('POST','/api/expenses',{body:{date,vendor:'Running Balance Vendor',particulars,amount,billPhoto:'/api/expenses/photo/running-bill.jpg',qrPhoto:'/api/expenses/photo/running-qr.jpg',paymentType:'UPI'}});
