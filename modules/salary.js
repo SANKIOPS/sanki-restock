@@ -46,9 +46,29 @@ function load() {
     const finalJulyPayroll=entity==='SANKI'&&applyFinalJuly2026PayrollV13(s);
     const correctedAshpreetAdvance=entity==='SANKI'&&repairAshpreetOutstandingAdvanceV14(s);
     const allocatedAshpreetSalary=entity==='SANKI'&&allocateAshpreetSalaryRecoveryV15(s);
-    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary) save(s);
+    const removedHistoricalAdvances=removeHistoricalAdvancesV16(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary||removedHistoricalAdvances) save(s);
     return s;
   } catch { return blank(); }
+}
+
+// Owner-authorized cleanup: advances imported from spreadsheets/history are not
+// part of the app advance ledger. Keep every app-created request and posted
+// advance (including older proof-backed advances that predate request IDs).
+function removeHistoricalAdvancesV16(s){
+  const key='remove_historical_import_advances_v16';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const now=new Date().toISOString(),removed=[];
+  Object.entries(s.advances||{}).forEach(([id,a])=>{
+    if(a.historicalImport!==true)return;
+    removed.push({id,employeeName:a.employeeName||'',date:a.date||'',amount:round2(a.amount),recovered:advanceRecovered(a),outstanding:advanceOutstanding(a),reference:a.reference||''});
+    delete s.advances[id];
+  });
+  const totals={amount:round2(removed.reduce((n,a)=>n+a.amount,0)),recovered:round2(removed.reduce((n,a)=>n+a.recovered,0)),outstanding:round2(removed.reduce((n,a)=>n+a.outstanding,0))};
+  s.advanceAudit=s.advanceAudit||[];
+  s.advanceAudit.push({at:now,by:'Owner-authorized cleanup',action:'HISTORICAL_IMPORTS_DELETED',advanceId:'',details:{count:removed.length,totals,advanceIds:removed.map(a=>a.id)}});
+  s.oneTimeMigrations[key]={appliedAt:now,count:removed.length,totals,advanceIds:removed.map(a=>a.id),rule:'Only advances explicitly marked historicalImport were deleted; app-created requests and advances were preserved.'};
+  return true;
 }
 function save(s) { const target=activeSalaryPath(),tmp = target + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, target); }
 
@@ -759,4 +779,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16 };

@@ -7,7 +7,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16 } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -224,6 +224,20 @@ test('only owner can edit posted advances and every correction remains audited',
   const saved=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'));assert.ok(saved.advanceAudit.some(x=>x.action==='EDITED'&&x.advanceId===advance.id&&x.details.reason==='Proof showed corrected amount'));
 });
 
+test('historical-import cleanup deletes only imported advances and retains an audit',()=>{
+  const store={advances:{
+    historical:{id:'ADV-HIST',employeeName:'Imported',amount:50000,date:'2026-08-01',reference:'HIST-1',historicalImport:true,recoveries:[{amount:23000}]},
+    appRequest:{id:'ADV-APP',employeeName:'App request',amount:1000,requestId:'ADVR-1',proof:'/proof.jpg',recoveries:[]},
+    olderApp:{id:'ADV-OLD',employeeName:'Older app entry',amount:2500,proof:'/proof-old.jpg',recoveries:[]}
+  },advanceAudit:[],oneTimeMigrations:{}};
+  assert.equal(_removeHistoricalAdvancesV16(store),true);
+  assert.deepEqual(Object.keys(store.advances).sort(),['appRequest','olderApp']);
+  assert.equal(store.advanceAudit.at(-1).action,'HISTORICAL_IMPORTS_DELETED');
+  assert.equal(store.advanceAudit.at(-1).details.count,1);
+  assert.equal(store.advanceAudit.at(-1).details.totals.outstanding,27000);
+  assert.equal(_removeHistoricalAdvancesV16(store),false,'cleanup is idempotent');
+});
+
 test('positive and negative balances carry forward once and payroll respects employment months',()=>{
   const carryEmp=invoke('POST','/api/salary/employees',{body:{name:'Carry Forward Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-05'},body:{empId:carryEmp.id,paidDays:0,advance:5000}});
@@ -266,24 +280,23 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   const finalRows=new Map(_finalJuly2026Payroll.map(x=>[String(x[0]).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(x[1]).toLowerCase(),{paidDays:x[3],paid:x[4]}]));
   imported.forEach(r=>{const key=String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase(),x=finalRows.get(key);assert.ok(x,r.name+' has a final July row');assert.equal(r.paidDays,x.paidDays,r.name);assert.equal(r.paid,x.paid,r.name+' historical payment');});
   assert.equal(_providedAdvanceImport.reduce((n,x)=>n+x[3],0),125067);
-  assert.equal(month.totals.advance,98067,'₹25,000 of Ashpreet salary is allocated oldest-first: ₹2,000 plus ₹23,000');
+  assert.equal(month.totals.advance,0,'historical spreadsheet advances no longer affect payroll');
   const allHistorical=invoke('GET','/api/salary/advances').body.advances.filter(x=>x.historicalImport),history=allHistorical.filter(x=>String(x.sourceKey).startsWith('provided-advance-sheet-')),augustHistory=allHistorical.filter(x=>String(x.sourceKey).startsWith('final-august-advance-sheet-'));
-  assert.equal(history.length,22);assert.equal(history.reduce((n,x)=>n+x.amount,0),125067);const ashpreet50000=history.find(x=>x.amount===50000&&/^Arshpreet/i.test(x.employeeName));assert.equal(ashpreet50000.status,'Partially recovered');assert.equal(ashpreet50000.recovered,23000);assert.equal(ashpreet50000.outstanding,27000);assert.ok(history.filter(x=>x!==ashpreet50000).every(x=>x.status==='Recovered'&&!x.account&&!x.proof));
-  assert.equal(augustHistory.length,7);assert.equal(augustHistory.reduce((n,x)=>n+x.amount,0),12000);assert.ok(augustHistory.every(x=>x.status==='Recovered'&&x.recoveryStartMonth==='2026-08'));
+  assert.equal(history.length,0);assert.equal(augustHistory.length,0);
   assert.equal(_finalAugust2026Advances.reduce((n,x)=>n+x[3],0),12000);
-  assert.equal(month.totals.paid,291000);assert.equal(Math.round(imported.reduce((n,r)=>n+r.balance,0)*100)/100,-9658.65);
+  assert.equal(month.totals.paid,291000);assert.equal(Math.round(imported.reduce((n,r)=>n+r.balance,0)*100)/100,85408.35,'salary balances are recalculated without deleted historical advance deductions');
   assert.equal(month.rows.find(r=>r.name==='Pooja').paidDays,10);
   assert.equal(month.rows.find(r=>r.name==='Ravi').paidDays,9);
   const sunny=month.rows.find(r=>r.name==='SUNNY SHARMA'),guard=month.rows.find(r=>r.name==='Guard'),suraj=month.rows.find(r=>/^Suraj/i.test(r.name));
-  assert.equal(sunny.salary,24000);assert.equal(sunny.paidDays,22);assert.equal(sunny.advance,20000);assert.equal(sunny.netPayable,-2400);
-  assert.equal(guard.advance,3000);assert.equal(guard.netPayable,12000);
-  assert.equal(suraj.paidDays,25);assert.equal(suraj.advance,1500);assert.equal(suraj.netPayable,13500);
+  assert.equal(sunny.salary,24000);assert.equal(sunny.paidDays,22);assert.equal(sunny.advance,0);
+  assert.equal(guard.advance,0);
+  assert.equal(suraj.paidDays,25);assert.equal(suraj.advance,0);
   const employeeMaster=invoke('GET','/api/salary/employees').body.employees;assert.equal(employeeMaster.find(e=>e.id===suraj.id).monthlyPaidLeaveAllowance,1);assert.equal(employeeMaster.find(e=>e.id===sunny.id).monthlyPaidLeaveAllowance,4);
   const arshpreet=month.rows.find(r=>/^Arshpreet/i.test(r.name)),ravi=month.rows.find(r=>r.name==='Ravi');
   const august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows,finalNames=new Set(_finalJuly2026Payroll.map(x=>String(x[0]).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(x[1]).toLowerCase())),finalAugust=august.filter(r=>finalNames.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
-  assert.equal(august.find(r=>r.id===arshpreet.id).advance,2500);assert.equal(august.find(r=>r.id===arshpreet.id).outstandingAdvance,27000);assert.equal(august.find(r=>r.id===ravi.id).advance,10200);assert.equal(august.find(r=>r.id===suraj.id).advance,1500);
+  assert.equal(august.find(r=>r.id===arshpreet.id).advance,0);assert.equal(august.find(r=>r.id===arshpreet.id).outstandingAdvance,0);assert.equal(august.find(r=>r.id===ravi.id).advance,0);assert.equal(august.find(r=>r.id===suraj.id).advance,0);
   assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);
-  assert.equal(Math.round(finalAugust.reduce((n,r)=>n+r.netPayable,0)*100)/100,-21658.65,'only ₹23,000 of the ₹50,000 advance is recovered through the withheld salary');
+  assert.ok(finalAugust.every(r=>r.outstandingAdvance===0),'no spreadsheet-imported advance survives the cleanup');
   const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
   assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');
   assert.equal(sundayOff.attendance['01'],'A','ordinary absence remains visibly marked A');
