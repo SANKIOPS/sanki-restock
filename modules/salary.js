@@ -44,7 +44,8 @@ function load() {
     const correctedJuly=entity==='SANKI'&&applyCorrectedJulyAttendanceV7(s);
     const normalizedLeaveMarks=entity==='SANKI'&&applyStoredLeaveAllowancesV11(s);
     const finalJulyPayroll=entity==='SANKI'&&applyFinalJuly2026PayrollV13(s);
-    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll) save(s);
+    const correctedAshpreetAdvance=entity==='SANKI'&&repairAshpreetOutstandingAdvanceV14(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -256,6 +257,24 @@ function applyFinalJuly2026PayrollV13(s){
   const existingPosting=s.payrollPostings['2026-07']||{};
   s.payrollPostings['2026-07']=Object.assign({},existingPosting,{ym:'2026-07',rows:postingRows,postedAt:existingPosting.postedAt||now,postedBy:existingPosting.postedBy||'System migration',historicalImport:true,correctedAt:now});
   s.oneTimeMigrations[key]={appliedAt:now,month:'2026-07',updatedEmployees,julyRecoveryTotal:round2(julyRecoveryTotal),julyPaidTotal:round2(FINAL_JULY_2026_PAYROLL.reduce((n,x)=>n+num(x[4]),0)),augustAdvanceIds,createdAugustAdvanceIds,augustRecoveryTotal:round2(FINAL_AUGUST_2026_ADVANCES.reduce((n,x)=>n+num(x[3]),0)),rules:{signedPayrollCarry:true,noBankOrCashPosting:true,existingAugustAdvancesMatchedNotDuplicated:true,pendingRequestsUntouched:true}};
+  return true;
+}
+
+// The ₹50,000 paid to Ashpreet on 1 August was imported with the July payroll
+// sheet, but it was not recovered from salary. Earlier import code incorrectly
+// created a same-value System migration recovery. Remove only that generated
+// recovery; do not touch the separate ₹2,000 or ₹2,500 recovered advances.
+function repairAshpreetOutstandingAdvanceV14(s){
+  const key='ashpreet_50000_advance_outstanding_v14';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const advance=Object.values(s.advances||{}).find(a=>a.active!==false&&a.historicalImport&&num(a.amount)===50000&&String(a.date)==='2026-08-01'&&/^arshpreet/i.test(String(a.employeeName||'')));
+  const now=new Date().toISOString();
+  if(!advance){s.oneTimeMigrations[key]={appliedAt:now,result:'matching advance not found'};return true;}
+  const before=(advance.recoveries||[]).map(x=>Object.assign({},x));
+  advance.recoveries=before.filter(r=>!(String(r.by)==='System migration'&&String(r.ym)==='2026-07'&&num(r.amount)===50000));
+  const removed=round2(before.reduce((n,r)=>n+num(r.amount),0)-advance.recoveries.reduce((n,r)=>n+num(r.amount),0));
+  if(removed){s.advanceAudit=s.advanceAudit||[];s.advanceAudit.push({at:now,by:'System correction',action:'REMOVED_INCORRECT_RECOVERY',advanceId:advance.id,details:{amount:removed,reason:'Owner confirmed the ₹50,000 Ashpreet advance remains fully unrecovered.'}});}
+  s.oneTimeMigrations[key]={appliedAt:now,advanceId:advance.id,removedRecovery:removed,outstandingAfter:advanceOutstanding(advance)};
   return true;
 }
 
