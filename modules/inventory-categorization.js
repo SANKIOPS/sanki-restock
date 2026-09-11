@@ -10,6 +10,7 @@ const STORE = process.env.SHOPIFY_STORE || '';
 const API = '2024-07';
 const CONTROLLED_TAGS = ['SANKI Category:', 'SANKI Fit:', 'SANKI Gender:', 'SANKI Collection:'];
 let job = { status: 'idle', total: DATA.length, completed: 0, updated: 0, skipped: 0, failed: 0, errors: [], startedAt: null, finishedAt: null };
+let catalogCache = { at: 0, products: null };
 
 async function jsonRequest(url, options) {
   const response = await shopifyClient.request(url, options);
@@ -19,7 +20,7 @@ async function jsonRequest(url, options) {
 }
 
 async function fetchProducts() {
-  let url = `https://${STORE}/admin/api/${API}/products.json?limit=250&fields=id,handle,title,product_type,tags`;
+  let url = `https://${STORE}/admin/api/${API}/products.json?limit=250&fields=id,handle,title,product_type,tags,image,images`;
   const output = [];
   while (url) {
     const response = await shopifyClient.request(url);
@@ -107,6 +108,25 @@ async function runApply() {
 }
 
 router.get('/api/inventory-categorization/status', (req, res) => res.json({ success: true, job }));
+
+router.get('/api/inventory-categorization/catalog', async (req, res) => {
+  try {
+    if (!catalogCache.products || Date.now() - catalogCache.at > 30 * 60 * 1000) {
+      const shopify = await fetchProducts();
+      const byHandle = new Map(shopify.map(p => [p.handle, p]));
+      catalogCache = {
+        at: Date.now(),
+        products: DATA.map(product => {
+          const match = byHandle.get(product.handle);
+          const images = match ? (match.images || []).map(image => image.src).filter(Boolean) : [];
+          if (match && match.image && match.image.src && !images.includes(match.image.src)) images.unshift(match.image.src);
+          return { ...product, images, image: images[0] || null };
+        })
+      };
+    }
+    res.json({ success: true, products: catalogCache.products });
+  } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
+});
 
 router.get('/api/inventory-categorization/preview', async (req, res) => {
   try {
