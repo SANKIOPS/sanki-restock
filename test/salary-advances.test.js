@@ -40,21 +40,21 @@ test('salary advances require owner approval and proof-backed posting, then reco
   });
   let list=invoke('GET','/api/salary/advances',{query:{summaryMonth:'2026-08'}}).body;
   const summary=list.summary.find(x=>x.empId===emp.id); assert.equal(summary.total,5000); assert.equal(summary.thisMonth,5000); assert.equal(summary.outstanding,5000);
-  const recovered=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:2500}});
+  const recovered=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:2500},role:'owner'});
   assert.equal(recovered.status,200);
   list=invoke('GET','/api/salary/advances').body; const own=list.advances.filter(x=>x.empId===emp.id).sort((a,b)=>a.date.localeCompare(b.date));
   assert.equal(own[0].status,'Recovered'); assert.equal(own[1].recovered,1500); assert.equal(own[1].status,'Partially recovered'); assert.equal(list.summary.find(x=>x.empId===emp.id).outstanding,2500);
   const payroll=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.find(x=>x.id===emp.id);
   assert.equal(payroll.loggedAdvanceRecovery,2500); assert.equal(payroll.outstandingAdvance,2500);
-  const tooMuch=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:6000}}); assert.equal(tooMuch.status,400);
+  const tooMuch=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:6000},role:'owner'}); assert.equal(tooMuch.status,400);
 });
 
 test('advance recovery starts from its actual payout month, not a proposed recovery month',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Historical Recovery',salary:30000}}).body.employee;
   const made=postAdvance(emp,{amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'});
   assert.equal(made.date,'2026-12-07');assert.equal(made.recoveryStartMonth,'2026-12');
-  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000}}).status,400);
-  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-12'},body:{empId:emp.id,amount:1000}}).status,200);
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000},role:'owner'}).status,400);
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-12'},body:{empId:emp.id,amount:1000},role:'owner'}).status,200);
   const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-12'}}).body.rows.find(x=>x.id===emp.id);
   assert.equal(row.loggedAdvanceRecovery,1000);
   const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,2000);
@@ -62,7 +62,7 @@ test('advance recovery starts from its actual payout month, not a proposed recov
 
 test('advance UI merges employee history and exposes approval and proof-backed posting', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
-  assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance summary · closing/); assert.match(html,/Advance approval queue/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);
+  assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance register · closing/); assert.match(html,/Advance approval queue/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);assert.match(html,/Company owes/);assert.match(html,/editAdvance/);
   assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);
 });
 
@@ -177,7 +177,7 @@ test('payroll posting creates employee salary ledgers once and advances remain b
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Ledger Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,paidDays:30,paid:25000}});
   postAdvance(emp,{amount:5000,date:'2026-09-10',account:'Axis Bank 3448',proof:'/axis-advance.jpg',reference:'UTR5000',recoveryStartMonth:'2026-09'});
-  invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,amount:5000}});
+  invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,amount:5000},role:'owner'});
   assert.equal(invoke('POST','/api/salary/post/:ym',{params:{ym:'2026-09'}}).status,200);
   assert.equal(invoke('POST','/api/salary/post/:ym',{params:{ym:'2026-09'}}).status,409);
   const ledger=invoke('GET','/api/salary/ledgers').body.ledgers.find(x=>x.empId===emp.id);
@@ -201,17 +201,36 @@ test('one salary batch posts multiple employees atomically from the payroll tabl
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Select all payable/);assert.match(html,/Clear selection/);assert.match(html,/Only checked employees will be paid/);assert.match(html,/Partially paid/);
 });
 
+test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Partial Pay Employee',salary:30000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-10'},body:{empId:emp.id,paidDays:30}});
+  const refused=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-10',date:'2098-10-31',account:'Gagan Sir Cash',proof:'/partial.jpg',items:[{empId:emp.id,amount:5500}]}});assert.equal(refused.status,400);assert.match(refused.body.error,/why/i);
+  const paid=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-10',date:'2098-10-31',account:'Gagan Sir Cash',proof:'/partial.jpg',items:[{empId:emp.id,amount:5500,modificationReason:'First partial salary payment'}]}});assert.equal(paid.status,200);
+  const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2098-10'}}).body.rows.find(x=>x.id===emp.id);assert.equal(row.paid,5500);assert.equal(row.balance,24500);
+  const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8')).salaryPayments.find(x=>x.empId===emp.id&&x.ym==='2098-10');assert.equal(stored.modificationReason,'First partial salary payment');assert.equal(stored.remainingBeforePayment,30000);assert.equal(stored.balanceAfterPayment,24500);assert.equal(stored.proof,'/partial.jpg');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Deductions \/ adjustments/);assert.match(html,/Balance to pay/);assert.match(html,/Reason when amount differs/);assert.match(html,/submitSingleSalaryPayment/);
+});
+
+test('only owner can edit posted advances and every correction remains audited',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Editable Advance Employee',salary:20000}}).body.employee,advance=postAdvance(emp,{amount:2000,date:'2098-11-01',account:'Axis Bank 3448',proof:'/advance-edit.jpg'});
+  assert.equal(invoke('PATCH','/api/salary/advances/:id',{params:{id:advance.id},body:{amount:2200,date:'2098-11-02',account:'Axis Bank 3448',reason:'Correction'}}).status,403);
+  const edited=invoke('PATCH','/api/salary/advances/:id',{params:{id:advance.id},role:'owner',body:{amount:2200,date:'2098-11-02',account:'Axis Bank 3448',note:'Corrected advance',reason:'Proof showed corrected amount'}});assert.equal(edited.status,200);assert.equal(edited.body.advance.amount,2200);assert.equal(edited.body.advance.date,'2098-11-02');
+  const saved=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'));assert.ok(saved.advanceAudit.some(x=>x.action==='EDITED'&&x.advanceId===advance.id&&x.details.reason==='Proof showed corrected amount'));
+});
+
 test('positive and negative balances carry forward once and payroll respects employment months',()=>{
   const carryEmp=invoke('POST','/api/salary/employees',{body:{name:'Carry Forward Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-05'},body:{empId:carryEmp.id,paidDays:0,advance:5000}});
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-06'},body:{empId:carryEmp.id,paidDays:30}});
   let june=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-06'}}).body.rows.find(x=>x.id===carryEmp.id);
   assert.equal(june.openingBalanceCarry,-5000);assert.equal(june.openingAdvanceCarry,5000);assert.equal(june.openingPayableCarry,0);assert.equal(june.netPayable,25000);assert.equal(june.carryForwardAdvance,0);
+  assert.equal(june.deductionAdjustment,-5000);assert.ok(june.adjustmentDetails.some(x=>x.kind==='previous_overpayment'&&x.amount===-5000));
   const payableEmp=invoke('POST','/api/salary/employees',{body:{name:'Positive Carry Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-05'},body:{empId:payableEmp.id,paidDays:30,paid:29000}});
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-06'},body:{empId:payableEmp.id,paidDays:30}});
   june=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-06'}}).body.rows.find(x=>x.id===payableEmp.id);
   assert.equal(june.openingBalanceCarry,1000);assert.equal(june.openingAdvanceCarry,0);assert.equal(june.openingPayableCarry,1000);assert.equal(june.netPayable,31000);
+  assert.equal(june.deductionAdjustment,1000);assert.ok(june.adjustmentDetails.some(x=>x.kind==='previous_payable'&&x.amount===1000));
   const joiner=invoke('POST','/api/salary/employees',{body:{name:'August Joiner',salary:18000,joiningDate:'2026-08-15'}}).body.employee;
   const leaver=invoke('POST','/api/salary/employees',{body:{name:'July Leaver',salary:18000,lastWorkingDate:'2026-07-20'}}).body.employee;
   const leaverWithBalance=invoke('POST','/api/salary/employees',{body:{name:'January Leaver With Balance',salary:18000,lastWorkingDate:'2027-01-20'}}).body.employee;
@@ -224,7 +243,7 @@ test('positive and negative balances carry forward once and payroll respects emp
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
   const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
   assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/Gagan Sir Cash|Counter Cash/);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying cash/);assert.match(html,/last month deduction/);assert.match(html,/last month payable/);assert.match(html,/positive balances remain payable/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');assert.match(html,/Salary paying cash/);assert.match(source,/Extra salary paid earlier/);assert.match(source,/Salary left unpaid earlier/);assert.match(html,/positive balances remain payable/);
 });
 
 test('July 2026 historical attendance prepares payroll with paid-off and 31-day rules',()=>{
