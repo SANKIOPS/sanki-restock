@@ -46,6 +46,11 @@ test('expense form can post an approved purchase directly to a selected credit c
   const after=invoke('GET','/api/expenses/credit-cards').body.cards.find(x=>x.id===card.id);assert.equal(after.outstanding,before+321);
   const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.ok(ledger.entries.some(x=>x.id===made.body.expense.id+'/PAY-001'&&x.debit===321));
 });
+test('an unpaid credit expense retains the selected card for its later payment',()=>{
+  const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
+  const made=invokeExpense('POST','/api/expenses',{body:{date:'2026-09-11',amount:789,particulars:'Equipment awaiting payment',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:false,creditCardId:card.id,billPhoto:'/bill-pending.jpg'}});
+  assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.paidAmount,0);assert.deepEqual(made.body.expense.payments,[]);assert.equal(made.body.expense.status,'pending');
+});
 test('linked duplicate statement payment never creates a second bank transfer or liability reduction',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding,expBefore=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfersBefore=expBefore.transfers.length;
   const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-08-30',narration:'Card payment Axis Bank 3448',amount:400,classification:'card_payment'}}).body.statement,row=st.rows[0];
@@ -67,4 +72,4 @@ test('merchant and transaction inference recognizes refunds, fees and EMI',()=>{
   assert.equal(inferClassification({description:'EMI interest',debit:100}),'emi_interest');
   assert.equal(inferClassification({description:'Merchant refund',credit:100}),'refund');
 });
-test('expenses UI exposes credit cards, statement logs, review and merchant learning',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/data-t="creditcards"/);assert.match(html,/Select credit card used/);assert.match(html,/Add or manage credit cards/);assert.match(html,/cfg\.creditCards/);assert.match(html,/Statement Logs/);assert.match(html,/Merchant rules/);assert.match(html,/Finalize and post to ledgers/);assert.match(html,/Possible duplicate/);assert.match(html,/Full payment/);assert.match(html,/Reopen with reason/);assert.match(html,/Optional bill\/proof URL/);});
+test('expenses UI exposes credit cards, statement logs, review and merchant learning',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/data-t="creditcards"/);assert.match(html,/Select credit card used/);assert.match(html,/Credit card to use/);assert.match(html,/Add or manage credit cards/);assert.match(html,/populatePaymentSource/);assert.match(html,/cfg\.creditCards/);assert.match(html,/Statement Logs/);assert.match(html,/Merchant rules/);assert.match(html,/Finalize and post to ledgers/);assert.match(html,/Possible duplicate/);assert.match(html,/Full payment/);assert.match(html,/Reopen with reason/);assert.match(html,/Optional bill\/proof URL/);});

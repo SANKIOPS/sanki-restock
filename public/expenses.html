@@ -602,7 +602,7 @@
     function unlinkTelegram(chatId){var username=el('telegramUser').value;if(!username){setMsg('Select a user first.',false);return;}if(!confirm(chatId?'Disconnect only this Telegram account?':'Disconnect every Telegram account linked to '+username+'?'))return;api('/api/telegram/unlink',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username,chatId:chatId||''})}).then(function(d){setMsg(d.success?d.removed+' Telegram account'+(d.removed===1?'':'s')+' disconnected; '+d.remaining+' remaining.':(d.error||'Disconnect failed.'),!!d.success);if(d.success)loadTelegramUsers();});}
     function togglePaymentFlow(){
       var paid=el('f_paidalready').value==='true';
-      el('personalProofWrap').style.display=paid?'':'none';el('personalAccountWrap').style.display=paid?'':'none';
+      el('personalProofWrap').style.display=paid?'':'none';
       toggleQrPhoto();
     }
     function toggleInstallment(){
@@ -613,12 +613,12 @@
     function toggleQrPhoto(){
       var paid=el('f_paidalready').value==='true',type=el('f_paymenttype').value,show=!paid&&(type==='UPI'||type==='Credit');
       el('qrPhotoWrap').style.display=show?'':'none';el('qrLabel').textContent=type==='Credit'?'Vendor QR-code photo (optional for Credit)':'Vendor QR-code photo (required for UPI)';
-      if(el('personalAccountWrap'))el('personalAccountWrap').style.display=paid&&type!=='Cash'?'':'none';
+      if(el('personalAccountWrap'))el('personalAccountWrap').style.display=(type==='Credit'||(paid&&type!=='Cash'))?'':'none';
       if(el('f_personalaccount')){
         var current=el('f_personalaccount').value,cards=(cfg.creditCards||[]),options=type==='Credit'?cards.map(function(c){return '<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>';}).join(''):opts(cfg.personalAccounts||[]);
         el('f_personalaccount').innerHTML=(type==='Credit'?'<option value="">Select credit card used</option>':'')+options;
         if(Array.prototype.some.call(el('f_personalaccount').options,function(o){return o.value===current;}))el('f_personalaccount').value=current;
-        el('personalAccountLabel').textContent=type==='Credit'?'Credit card used':'Account used';
+        el('personalAccountLabel').textContent=type==='Credit'?(paid?'Credit card used':'Credit card to use'):'Account used';
         el('personalAccountHint').textContent=type==='Credit'?(cards.length?'The expense will post to this card’s outstanding liability.':'No credit card exists yet. Use Add or manage credit cards.'):'Only accounts assigned to you are available. Cash is recorded automatically as '+cfg.me+' Cash.';
         if(el('addCardFromExpense'))el('addCardFromExpense').style.display=type==='Credit'?'':'none';
       }
@@ -661,6 +661,7 @@
       if(!billFiles.length){ setMsg('Attach at least one printed or handwritten bill photo before submitting.', false); return; }
       var paidAlready=el('f_paidalready').value==='true', paymentType=el('f_paymenttype').value;
       if(paidAlready&&!personalFiles.length){ setMsg('Attach at least one proof of the payment you made.', false); return; }
+      if(paymentType==='Credit'&&!el('f_personalaccount').value){ setMsg('Select the credit card to use, or add the card first.', false); return; }
       if(paidAlready&&paymentType!=='Cash'&&!el('f_personalaccount').value){ setMsg('No personal payment account is assigned to this user.', false); return; }
       if(!paidAlready&&paymentType==='UPI'&&!qrInput.files[0]){ setMsg('Attach the vendor QR-code photo for UPI payment.', false); return; }
       var installment=el('f_installment').value==='true';
@@ -795,6 +796,17 @@
         var purchases=(d.purchases||[]).map(procurementPayableCard).join('');
         el('ptable').innerHTML=all.length?'<div class="claim-list">'+purchases+vendorPayableGroups(d.expenses)+'</div>':'<span class="muted">No vendor payments pending.</span>';
       });
+    }
+    function populatePaymentSource(nature,refreshIfEmpty){
+      if(el('payType').value==='Credit'){
+        var cards=cfg.creditCards||[];
+        el('payAcctLabel').textContent='Credit card used';
+        el('payAcct').innerHTML='<option value="">Select credit card used</option>'+cards.map(function(c){return '<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>';}).join('');
+        el('payMsg').textContent=cards.length?'':'No credit card exists yet. Add one from the Credit cards section.';
+        return Promise.resolve(cards);
+      }
+      el('payAcctLabel').textContent='Pay from account';
+      return populateVendorPayAccounts(nature,refreshIfEmpty);
     }
     function vendorPayableGroups(expenses){var groups={};(expenses||[]).forEach(function(e){var key=String(e.vendor||'Unspecified vendor').trim().toLocaleLowerCase('en-IN'),g=groups[key]||(groups[key]={vendor:e.vendor||'Unspecified vendor',items:[],due:0});g.items.push(e);g.due+=Number(e.balanceDue||0);});return Object.values(groups).sort(function(a,b){return a.vendor.localeCompare(b.vendor,'en',{sensitivity:'base',numeric:true});}).map(function(g){if(g.items.length===1)return expenseCard(g.items[0]);return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(g.vendor)+'<div class="claim-vendor">'+g.items.length+' approved bills grouped under this vendor</div></div><div class="claim-amount">'+fmt(g.due)+' due</div></div></summary><div class="claim-detail"><div class="claim-list">'+g.items.sort(function(a,b){return String(a.date+a.id).localeCompare(String(b.date+b.id));}).map(expenseCard).join('')+'</div></div></details>';}).join('');}
     function procurementPayableCard(e){
@@ -942,7 +954,8 @@
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
-      populateVendorPayAccounts(e.nature||'SANKI',true);
+      el('payType').value=e.paymentType||'UPI';
+      populatePaymentSource(e.nature||'SANKI',true);
       var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').removeAttribute('max');el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
       el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent='';el('payOverrideWrap').style.display='none';el('payOverrideReason').value='';
       el('payBatchWrap').style.display='none';el('payBatchWrap').setAttribute('data-apply-vendor-credit','false');el('payBatchList').innerHTML='';el('payAmount').oninput=null;
@@ -980,6 +993,10 @@
       el('payDate').value=today();el('payType').value='UPI';el('payNote').value='';el('payFile').value='';el('payPrev').style.display='none';el('payGo').disabled=true;el('payMsg').textContent='';el('payDlg').showModal();
     };
     el('payCancel').addEventListener('click', function(){ el('payDlg').close(); });
+    el('payType').addEventListener('change',function(){
+      if(payMode!=='vendor'&&payMode!=='procurement')return;
+      populatePaymentSource((expensesById[payId]||{}).nature||'SANKI',true);
+    });
     el('payAddAcct').addEventListener('click', function(){
       if(!cfg.isAdmin){ requestAccount(); return; }
       var name=prompt('New paying account name (for example, HDFC Bank 1234):');

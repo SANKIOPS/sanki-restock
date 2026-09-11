@@ -1303,9 +1303,9 @@ router.post('/api/expenses', (req, res) => {
     return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
   const claimant = (req.user && req.user.username) || 'system';
-  const creditCard=paidAlready&&paymentType==='Credit'?resolveCreditCard(req,b.creditCardId||b.personalAccount):null;
+  const creditCard=paymentType==='Credit'?resolveCreditCard(req,b.creditCardId||b.personalAccount):null;
   const personalAccount = creditCard?creditCardName(creditCard):(paymentType === 'Cash' ? claimant + ' Cash' : String(b.personalAccount || '').trim());
-  if(paidAlready&&paymentType==='Credit'&&!creditCard){
+  if(paymentType==='Credit'&&(b.creditCardId||b.personalAccount)&&!creditCard){
     return res.status(400).json({success:false,error:'Select an accessible credit card or add the card first.'});
   }
   if (paidAlready && paymentType !== 'Cash' && !personalAccount) {

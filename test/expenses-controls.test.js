@@ -1822,7 +1822,7 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html,/Select actual paying account/);
   assert.match(html,/String\(nature\|\|'SANKI'\)\.trim\(\)\.toUpperCase\(\)/);
   assert.match(html,/function populateVendorPayAccounts\(nature,refreshIfEmpty\)/);
-  assert.match(html,/populateVendorPayAccounts\(e\.nature\|\|'SANKI',true\)/);
+  assert.match(html,/populatePaymentSource\(e\.nature\|\|'SANKI',true\)/);
   assert.match(html,/Refreshing paying accounts/);
   assert.match(html,/<label>Expense entity<\/label><select id="lg_expense_nature"><option value="">All<\/option>/);
   assert.match(html,/expenseNature='\+encodeURIComponent\(el\('lg_expense_nature'\)\.value\)/);
