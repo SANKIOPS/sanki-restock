@@ -295,7 +295,8 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   const arshpreet=month.rows.find(r=>/^Arshpreet/i.test(r.name)),ravi=month.rows.find(r=>r.name==='Ravi');
   const august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows,finalNames=new Set(_finalJuly2026Payroll.map(x=>String(x[0]).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(x[1]).toLowerCase())),finalAugust=august.filter(r=>finalNames.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
   assert.equal(august.find(r=>r.id===arshpreet.id).advance,0);assert.equal(august.find(r=>r.id===arshpreet.id).outstandingAdvance,0);assert.equal(august.find(r=>r.id===ravi.id).advance,0);assert.equal(august.find(r=>r.id===suraj.id).advance,0);
-  assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);
+  assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);assert.ok(finalAugust.every(r=>r.balance===0),'historical payroll is closed through August');
+  const september=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows;assert.ok(finalAugust.every(r=>september.find(x=>x.id===r.id).openingBalanceCarry===0),'September starts without a historical salary carry-forward');
   assert.ok(finalAugust.every(r=>r.outstandingAdvance===0),'no spreadsheet-imported advance survives the cleanup');
   const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
   assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');
