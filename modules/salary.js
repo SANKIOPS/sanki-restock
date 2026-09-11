@@ -409,7 +409,16 @@ function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: fal
 function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }
 function advanceOutstanding(a) { return round2(Math.max(0, num(a.amount) - advanceRecovered(a))); }
 function advanceStatus(a) { const r = advanceRecovered(a); return r <= 0 ? 'Outstanding' : (r + .001 >= num(a.amount) ? 'Recovered' : 'Partially recovered'); }
-function advanceView(a) { return Object.assign({}, a, { recovered: advanceRecovered(a), outstanding: advanceOutstanding(a), status: a.active === false ? 'Cancelled' : advanceStatus(a) }); }
+function advanceView(a) {
+  let remaining=round2(num(a.amount));
+  const recoveries=(a.recoveries||[]).map((r,index)=>Object.assign({ _index:index },r)).sort((x,y)=>String((x.ym||'')+(x.at||'')+x._index).localeCompare(String((y.ym||'')+(y.at||'')+y._index))).map(r=>{
+    remaining=round2(Math.max(0,remaining-num(r.amount)));
+    const recordedOn=String(r.recordedOn||r.at||'').slice(0,10);
+    const view=Object.assign({},r,{payrollMonth:r.payrollMonth||r.ym||'',recordedOn,reference:r.reference||('SALARY-RECOVERY-'+String(r.ym||'UNKNOWN')),remainingAfter:remaining});
+    delete view._index;return view;
+  });
+  return Object.assign({}, a, { recoveries, recovered: advanceRecovered(a), outstanding: advanceOutstanding(a), status: a.active === false ? 'Cancelled' : advanceStatus(a) });
+}
 function monthRecovery(s, empId, ym) { return round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === empId).reduce((n, a) => n + (a.recoveries || []).filter(r => r.ym === ym).reduce((m, r) => m + num(r.amount), 0), 0)); }
 function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.advanceAudit || []; s.advanceAudit.push({ at: new Date().toISOString(), by: req.user && req.user.username || 'admin', action, advanceId, details: details || {} }); }
 function auditAdvanceRequest(s, req, action, requestId, details) { s.advanceRequestAudit = s.advanceRequestAudit || []; s.advanceRequestAudit.push({ at:new Date().toISOString(), by:req.user&&req.user.username||'system', action, requestId, details:details||{} }); }
@@ -610,7 +619,7 @@ router.post('/api/salary/recoveries/:ym', guard, (req, res) => {
   const eligible = employeeAdvances.filter(a => a.recoveryStartMonth <= ym).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
   const available = eligible.reduce((n, a) => n + advanceOutstanding(a), 0);
   if (amount > available + .001) return res.status(400).json({ success: false, error: 'Recovery cannot exceed the eligible outstanding advance of ₹' + round2(available) + '.' });
-  let left = amount; eligible.forEach(a => { if (left <= 0) return; const take = Math.min(left, advanceOutstanding(a)); if (take > 0) { a.recoveries.push({ ym, amount: round2(take), by: req.user && req.user.username || 'admin', at: new Date().toISOString() }); left = round2(left - take); } });
+  let left = amount; eligible.forEach(a => { if (left <= 0) return; const take = Math.min(left, advanceOutstanding(a)); if (take > 0) { const at=new Date().toISOString();a.recoveries.push({ ym, payrollMonth:ym, amount: round2(take), by: req.user && req.user.username || 'admin', at, recordedOn:at.slice(0,10), reference:'SALARY-RECOVERY-'+ym }); left = round2(left - take); } });
   auditAdvance(s, req, 'RECOVERY_SET', '', { empId: b.empId, ym, amount }); save(s); res.json({ success: true, amount: round2(amount) });
 });
 
