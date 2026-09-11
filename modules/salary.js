@@ -409,12 +409,13 @@ function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: fal
 function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }
 function advanceOutstanding(a) { return round2(Math.max(0, num(a.amount) - advanceRecovered(a))); }
 function advanceStatus(a) { const r = advanceRecovered(a); return r <= 0 ? 'Outstanding' : (r + .001 >= num(a.amount) ? 'Recovered' : 'Partially recovered'); }
-function advanceView(a) {
+function advanceView(a,s) {
   let remaining=round2(num(a.amount));
   const recoveries=(a.recoveries||[]).map((r,index)=>Object.assign({ _index:index },r)).sort((x,y)=>String((x.ym||'')+(x.at||'')+x._index).localeCompare(String((y.ym||'')+(y.at||'')+y._index))).map(r=>{
     remaining=round2(Math.max(0,remaining-num(r.amount)));
     const recordedOn=String(r.recordedOn||r.at||'').slice(0,10);
-    const view=Object.assign({},r,{payrollMonth:r.payrollMonth||r.ym||'',recordedOn,reference:r.reference||('SALARY-RECOVERY-'+String(r.ym||'UNKNOWN')),remainingAfter:remaining});
+    const payrollMonth=r.payrollMonth||r.ym||'',salaryPayment=s&&(s.salaryPayments||[]).filter(p=>p.active!==false&&p.empId===a.empId&&p.ym===payrollMonth&&p.date).sort((x,y)=>String(x.date).localeCompare(String(y.date)))[0];
+    const view=Object.assign({},r,{payrollMonth,recordedOn,deductionDate:r.deductionDate||(salaryPayment&&salaryPayment.date)||'',deductedFrom:payrollMonth?payrollMonth+' salary':'Salary deduction',salaryPaymentReference:salaryPayment&&(salaryPayment.reference||salaryPayment.batchId||salaryPayment.id)||'',reference:r.reference||('SALARY-RECOVERY-'+String(r.ym||'UNKNOWN')),remainingAfter:remaining});
     delete view._index;return view;
   });
   return Object.assign({}, a, { recoveries, recovered: advanceRecovered(a), outstanding: advanceOutstanding(a), status: a.active === false ? 'Cancelled' : advanceStatus(a) });
@@ -550,7 +551,7 @@ router.get('/api/salary/ledgers',guard,(req,res)=>{
 // Salary advances are recoverable employee balances, not salary/P&L expenses.
 router.get('/api/salary/advances', guard, (req, res) => {
   const s = load(), q = req.query || {};
-  let rows = Object.values(s.advances || {}).map(advanceView);
+  let rows = Object.values(s.advances || {}).map(a=>advanceView(a,s));
   if (q.employee) rows = rows.filter(a => a.empId === q.employee);
   if (q.month) rows = rows.filter(a => String(a.date || '').slice(0, 7) === q.month);
   if (q.status) rows = rows.filter(a => a.status === q.status);
@@ -559,7 +560,7 @@ router.get('/api/salary/advances', guard, (req, res) => {
   const requests=Object.values(s.advanceRequests||{}).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))),payrollRows=new Map(computeMonth(s,q.summaryMonth||new Date().toISOString().slice(0,7)).map(x=>[x.id,x])),summary = Object.values(s.employees).sort(byEmployeeName).map(e => {
     const all = Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id);
     const total = all.reduce((n, a) => n + num(a.amount), 0), recovered = all.reduce((n, a) => n + advanceRecovered(a), 0);
-    const payroll=payrollRows.get(e.id),transactions=all.map(advanceView).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),employeeRequests=requests.filter(r=>r.empId===e.id&&r.status!=='Posted'),activityDates=transactions.map(x=>x.date).concat(employeeRequests.map(x=>x.payoutDate||x.date)).filter(Boolean).sort().reverse();return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:activityDates[0]||'',transactions,requests:employeeRequests };
+    const payroll=payrollRows.get(e.id),transactions=all.map(a=>advanceView(a,s)).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),employeeRequests=requests.filter(r=>r.empId===e.id&&r.status!=='Posted'),activityDates=transactions.map(x=>x.date).concat(employeeRequests.map(x=>x.payoutDate||x.date)).filter(Boolean).sort().reverse();return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:activityDates[0]||'',transactions,requests:employeeRequests };
   }).filter(x => x.total || x.recovered || x.companyOwes || x.requests.length);
   const totals = summary.reduce((t, x) => ({ total: t.total + x.total, recovered: t.recovered + x.recovered, outstanding: t.outstanding + x.outstanding }), { total: 0, recovered: 0, outstanding: 0 });
   res.json({ success: true, advances: rows, summary, totals, requests, permissions:{canRequest:canRequestOrPostAdvance(req),canApprove:canApproveAdvance(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canApproveAdvance(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
@@ -567,7 +568,7 @@ router.get('/api/salary/advances', guard, (req, res) => {
 
 router.patch('/api/salary/advances/:id',guard,(req,res)=>{
   if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only the Owner can edit an advance.'});const s=load(),a=(s.advances||{})[req.params.id],b=req.body||{},reason=String(b.reason||'').trim(),amount=round2(num(b.amount)),date=String(b.date||'').slice(0,10),account=String(b.account||'').trim();
-  if(!a)return res.status(404).json({success:false,error:'Advance not found.'});if(!reason||!(amount>0)||amount+0.001<advanceRecovered(a)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!account)return res.status(400).json({success:false,error:'Reason, valid amount/date/account are required, and amount cannot be below recovered value.'});const before=JSON.parse(JSON.stringify(a));Object.assign(a,{amount,date,payoutDate:date,account,note:String(b.note||'').trim(),editedBy:req.user.username,editedAt:new Date().toISOString()});auditAdvance(s,req,'EDITED',a.id,{before,after:a,reason});save(s);res.json({success:true,advance:advanceView(a)});
+  if(!a)return res.status(404).json({success:false,error:'Advance not found.'});if(!reason||!(amount>0)||amount+0.001<advanceRecovered(a)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!account)return res.status(400).json({success:false,error:'Reason, valid amount/date/account are required, and amount cannot be below recovered value.'});const before=JSON.parse(JSON.stringify(a));Object.assign(a,{amount,date,payoutDate:date,account,note:String(b.note||'').trim(),editedBy:req.user.username,editedAt:new Date().toISOString()});auditAdvance(s,req,'EDITED',a.id,{before,after:a,reason});save(s);res.json({success:true,advance:advanceView(a,s)});
 });
 
 router.post('/api/salary/advances', guard, (req, res) => {
@@ -605,7 +606,7 @@ router.post('/api/salary/advance-requests/:id/post',guard,(req,res)=>{
   if(!r)return res.status(404).json({success:false,error:'Advance request not found.'});if(r.status!=='Approved – proof required')return res.status(400).json({success:false,error:'The Owner must approve this request before it can be posted.'});if(!proofs.length)return res.status(400).json({success:false,error:'Payment proof is required before posting.'});
   const payoutDate=String(b.payoutDate||'').trim();if(!/^\d{4}-\d{2}-\d{2}$/.test(payoutDate)||isNaN(Date.parse(payoutDate+'T00:00:00Z')))return res.status(400).json({success:false,error:'Actual payout date is required before posting.'});
   s.advanceSeq=(s.advanceSeq||0)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0'),now=new Date().toISOString();s.advances[id]={id,requestId:r.id,empId:r.empId,employeeName:r.employeeName,amount:r.amount,date:payoutDate,payoutDate,proposedDate:r.date,account:r.account,proof:proofs[0],proofs,note:r.note,reference:r.reference,recoveryStartMonth:payoutDate.slice(0,7),recoveries:[],active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now,approvedBy:r.approvedBy,approvedAt:r.approvedAt};
-  r.status='Posted';r.advanceId=id;r.payoutDate=payoutDate;r.proof=proofs[0];r.proofs=proofs;r.postedBy=req.user&&req.user.username||'admin';r.postedAt=now;auditAdvanceRequest(s,req,'POSTED',r.id,{advanceId:id,payoutDate,proofCount:proofs.length});auditAdvance(s,req,'CREATED',id,{amount:r.amount,account:r.account,requestId:r.id,payoutDate});save(s);res.json({success:true,request:r,advance:advanceView(s.advances[id])});
+  r.status='Posted';r.advanceId=id;r.payoutDate=payoutDate;r.proof=proofs[0];r.proofs=proofs;r.postedBy=req.user&&req.user.username||'admin';r.postedAt=now;auditAdvanceRequest(s,req,'POSTED',r.id,{advanceId:id,payoutDate,proofCount:proofs.length});auditAdvance(s,req,'CREATED',id,{amount:r.amount,account:r.account,requestId:r.id,payoutDate});save(s);res.json({success:true,request:r,advance:advanceView(s.advances[id],s)});
 });
 
 router.post('/api/salary/recoveries/:ym', guard, (req, res) => {

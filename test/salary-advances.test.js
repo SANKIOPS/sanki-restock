@@ -49,7 +49,7 @@ test('salary advances require owner approval and proof-backed posting, then reco
   assert.equal(recovered.status,200);
   list=invoke('GET','/api/salary/advances').body; const own=list.advances.filter(x=>x.empId===emp.id).sort((a,b)=>a.date.localeCompare(b.date));
   assert.equal(own[0].status,'Recovered'); assert.equal(own[1].recovered,1500); assert.equal(own[1].status,'Partially recovered'); assert.equal(list.summary.find(x=>x.empId===emp.id).outstanding,2500);
-  assert.equal(own[0].recoveries[0].payrollMonth,'2026-08');assert.equal(own[0].recoveries[0].reference,'SALARY-RECOVERY-2026-08');assert.equal(own[0].recoveries[0].remainingAfter,0);assert.match(own[0].recoveries[0].recordedOn,/^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(own[0].recoveries[0].payrollMonth,'2026-08');assert.equal(own[0].recoveries[0].deductedFrom,'2026-08 salary');assert.equal(own[0].recoveries[0].deductionDate,'');assert.equal(own[0].recoveries[0].reference,'SALARY-RECOVERY-2026-08');assert.equal(own[0].recoveries[0].remainingAfter,0);assert.match(own[0].recoveries[0].recordedOn,/^\d{4}-\d{2}-\d{2}$/);
   const payroll=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.find(x=>x.id===emp.id);
   assert.equal(payroll.loggedAdvanceRecovery,2500); assert.equal(payroll.outstandingAdvance,2500);
   const tooMuch=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:6000},role:'owner'}); assert.equal(tooMuch.status,400);
@@ -69,7 +69,7 @@ test('advance recovery starts from its actual payout month, not a proposed recov
 test('advance UI merges employee history and exposes approval and proof-backed posting', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance register · closing/); assert.doesNotMatch(html,/Advance approval queue/);assert.match(html,/Requests, approvals, posted advances/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);assert.match(html,/Company owes/);assert.match(html,/editAdvance/);
-  assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);assert.match(html,/Connected advance history/);assert.match(html,/Advance given/);assert.match(html,/Deducted from salary/);assert.match(html,/Amount deducted/);assert.match(html,/Fully deducted/);assert.match(html,/remainingAfter/);
+  assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);assert.match(html,/Connected advance history/);assert.match(html,/Advance given/);assert.match(html,/Amount deducted/);assert.match(html,/Date not recorded/);assert.match(html,/deductionDate/);assert.match(html,/salaryPaymentReference/);assert.match(html,/Fully deducted/);assert.match(html,/remainingAfter/);
 });
 
 test('salary UI and storage keep SANKI and Samast payrolls independent',()=>{
