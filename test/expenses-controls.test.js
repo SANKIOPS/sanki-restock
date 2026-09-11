@@ -1022,6 +1022,18 @@ test('money exchange records unequal received cash as an explicit historical-led
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Amount actually received/);assert.match(html,/Previous-balance ledger/);assert.match(html,/Edit exchange/);
 });
 
+test('owner can edit manual money-trail entries while reconciled and generated rows stay protected',()=>{
+  const receipt=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SANKI',account:'Counter Cash',receiptType:'other_income',source:'Original source',amount:700,date:'2099-07-01',note:'Original note',proof:'/api/expenses/photo/receipt-edit.jpg'}});
+  assert.equal(receipt.status,200,JSON.stringify(receipt.body));const id=receipt.body.receipt.id;
+  const denied=invoke('PATCH','/api/expenses/ledger-entry',{role:'admin',body:{id,kind:'receipt',amount:750,date:'2099-07-02',source:'Correct source',note:'Correct note',reason:'Correction'}});assert.equal(denied.status,403);
+  const edited=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id,kind:'receipt',nature:'SANKI',account:'Counter Cash',amount:750,date:'2099-07-02',source:'Correct source',note:'Correct note',reason:'Corrected receipt'}});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.entry.amount,750);assert.equal(edited.body.entry.source,'Correct source');assert.equal(edited.body.entry.date,'2099-07-02');
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash',from:'2099-07-02',to:'2099-07-02'}}).body.entries.find(x=>x.id===id);assert.equal(ledger.credit,750);assert.equal(ledger.editable,true);assert.equal(ledger.source,'Correct source');
+  const expenseStorePath=path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),saved=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));saved.bankDateOverrides=saved.bankDateOverrides||{};saved.bankDateOverrides[id]={bankDate:'2099-07-02'};fs.writeFileSync(expenseStorePath,JSON.stringify(saved));
+  const blocked=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id,kind:'receipt',amount:800,date:'2099-07-02',source:'Correct source',reason:'Should block'}});assert.equal(blocked.status,409);assert.match(blocked.body.error,/reconciled/i);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/function entryEditButton/);assert.match(html,/Reason for editing — required/);assert.match(html,/\/api\/expenses\/ledger-entry/);
+});
+
 test('vendor overpayment is one ledger payment and the excess remains as vendor advance', () => {
   function approved(amount,date,particulars) {
     const made=invoke('POST','/api/expenses',{body:{date,vendor:'Running Balance Vendor',particulars,amount,billPhoto:'/api/expenses/photo/running-bill.jpg',qrPhoto:'/api/expenses/photo/running-qr.jpg',paymentType:'UPI'}});
