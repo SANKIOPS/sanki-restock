@@ -181,6 +181,7 @@ test('only owner can rename, merge and safely delete vendor ledgers', () => {
 test('vendor ledger UI offers Delete only when its entry count is zero', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
+  assert.match(html,/id="vendorManageRow"/);assert.match(html,/vendorManageRow'\)\)el\('vendorManageRow'\)\.style\.display=this\.dataset\.vsource==='expense'/);
 });
 
 test('owner vendor maintenance uses an in-page dialog and safely supports exact bulk cleanup', () => {
@@ -1109,8 +1110,11 @@ test('approved self-paid expenses appear once in spending, vendor and personal a
 
 test('posted advanced purchases stay out of expense Payables without changing procurement', () => {
   const procurementFile = path.join(tempDir, 'procurement.json');
-  const original = { pos: { 'PO-9001': { id:'PO-9001', status:'posted', postedAt:'2026-08-21T08:00:00.000Z', dateReceive:'2026-08-21', vendor:'CHINA SUPPLIER', billNo:'CN-77',
-    newProducts:[{variants:[{qty:2,landed:500}]}], existingAdds:[{qty:1,landed:250}] } } };
+  const original = { pos: {
+    'PO-0001': { id:'PO-0001', status:'posted', postedAt:'2026-08-24T08:00:00.000Z', dateReceive:'2026-08-24', vendor:'LEGACY SUPPLIER', billNo:'OLD-1', newProducts:[{variants:[{qty:1,landed:2320}]}], existingAdds:[] },
+    'PO-9001': { id:'PO-9001', status:'posted', postedAt:'2026-08-21T08:00:00.000Z', dateReceive:'2026-08-21', vendor:'CHINA SUPPLIER', billNo:'CN-77',
+      newProducts:[{variants:[{qty:2,landed:500}]}], existingAdds:[{qty:1,landed:250}] }
+  } };
   fs.writeFileSync(procurementFile, JSON.stringify(original));
   const pending = invoke('GET', '/api/expenses/pending-payments', { query:{nature:'SANKI'}, role:'owner' });
   assert.deepEqual(pending.body.purchases, []);
@@ -1119,6 +1123,9 @@ test('posted advanced purchases stay out of expense Payables without changing pr
   assert.equal(partial.body.payable.balanceDue, 750);
   const ledger = invoke('GET', '/api/expenses/account-ledger', { query:{nature:'SANKI',account:'Counter Cash'}, role:'owner' }).body;
   assert.ok(ledger.entries.some(x => x.kind === 'purchase' && x.debit === 500));
+  const sourcing=invoke('GET','/api/expenses/vendors',{query:{nature:'SANKI',source:'sourcing',from:'2026-08-01',to:'2026-08-31'},role:'owner'}).body;
+  assert.ok(sourcing.vendors.every(v=>v.notes==='Advanced Purchases mediator'&&v.ledgerRows.every(x=>String(x.reference).startsWith('PO-'))),'ordinary expense vendors never enter the sourcing view');
+  assert.equal(sourcing.vendors.some(v=>v.ledgerRows.some(x=>x.reference==='PO-0001')),true,'every posted in-app PO remains payable until its payment is recorded');
   assert.deepEqual(JSON.parse(fs.readFileSync(procurementFile, 'utf8')), original);
 });
 
