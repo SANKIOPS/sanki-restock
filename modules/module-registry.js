@@ -35,7 +35,7 @@ try {
 }
 
 // Section order controls how groups stack in the sidebar / dashboard.
-const SECTION_ORDER = ['Main', 'Sales', 'Store Ops', 'Purchases', 'Accounts', 'Marketing', 'Admin'];
+const SECTION_ORDER = ['Main', 'Sales', 'Inventory', 'Store Ops', 'Purchases', 'Accounts', 'Marketing', 'Admin'];
 
 // ── The registry ────────────────────────────────────────────────
 // Everything starts 'hidden' (blank launcher). We turn modules 'live'
@@ -46,6 +46,8 @@ const MODULES = [
   { key: 'analytics',    title: 'Analytics',             desc: 'Sales & performance dashboards',                     icon: '📊', href: '/analytics.html',                 section: 'Main',      status: 'hidden', roles: ['admin', 'sales'] },
   { key: 'inv-stats',    title: 'Inventory Statistics',  desc: 'Stock levels & valuation',                           icon: '📈', href: '/inventory-stats.html',           section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
   { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'hidden', roles: ['admin', 'stocksearch', 'warehouse'] },
+
+  { key: 'inventory-dashboard', title: 'Dashboard', desc: 'Search, filter and locate every resolved product', icon: '▦', href: '/inventory.html', section: 'Inventory', status: 'live', roles: ['admin', 'inventory', 'warehouse', 'sales', 'stocksearch'] },
 
   { key: 'orders',       title: 'Orders',                desc: 'Every Shopify sale (POS + Website) + dispatch tracking', icon: '🧾', href: '/orders.html',                section: 'Sales',     status: 'live',   roles: ['admin', 'sales', 'revenue', 'warehouse'] },
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.

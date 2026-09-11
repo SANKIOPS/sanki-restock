@@ -106,6 +106,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/racks',                 roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
   { prefix: '/api/stock-search',          roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
   { prefix: '/api/showroom/',             roles: ['admin', 'inventory', 'warehouse'] },
+  { prefix: '/api/inventory-categorization/', roles: ['admin'] },
   { prefix: '/api/velocity/',             roles: ['admin', 'sales'] },
   { prefix: '/api/orders-ledger',         roles: ['admin', 'sales', 'revenue', 'warehouse'] },
   { prefix: '/api/orders',                roles: ['admin', 'sales', 'revenue', 'warehouse'] },
