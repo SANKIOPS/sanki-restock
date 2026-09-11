@@ -2599,8 +2599,10 @@ app.use(require('./modules/procurement').router);
 app.use(require('./modules/fresh-procurement').router);
 app.use(require('./modules/casuals').router);
 app.use(require('./modules/size-tracker').router);
-app.use(require('./modules/expenses').router);
 app.use(require('./modules/credit-cards').router);
+// Credit-card routes must stay before expenses: POST /api/expenses/:id would
+// otherwise interpret "credit-cards" as an expense id and return Not found.
+app.use(require('./modules/expenses').router);
 app.use(require('./modules/telegram').router);
 app.use(require('./modules/salary').router);
 app.use(require('./modules/pl').router);
