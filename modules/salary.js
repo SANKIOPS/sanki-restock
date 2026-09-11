@@ -511,13 +511,12 @@ router.get('/api/salary/advances', guard, (req, res) => {
   if (q.status) rows = rows.filter(a => a.status === q.status);
   if (q.account) rows = rows.filter(a => a.account === q.account);
   rows.sort((a, b) => String(b.date + b.id).localeCompare(String(a.date + a.id)));
-  const payrollRows=new Map(computeMonth(s,q.summaryMonth||new Date().toISOString().slice(0,7)).map(x=>[x.id,x])),summary = Object.values(s.employees).sort(byEmployeeName).map(e => {
+  const requests=Object.values(s.advanceRequests||{}).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))),payrollRows=new Map(computeMonth(s,q.summaryMonth||new Date().toISOString().slice(0,7)).map(x=>[x.id,x])),summary = Object.values(s.employees).sort(byEmployeeName).map(e => {
     const all = Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id);
     const total = all.reduce((n, a) => n + num(a.amount), 0), recovered = all.reduce((n, a) => n + advanceRecovered(a), 0);
-    const payroll=payrollRows.get(e.id),transactions=all.map(advanceView).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:transactions[0]&&transactions[0].date||'',transactions };
-  }).filter(x => x.total || x.recovered);
+    const payroll=payrollRows.get(e.id),transactions=all.map(advanceView).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),employeeRequests=requests.filter(r=>r.empId===e.id&&r.status!=='Posted'),activityDates=transactions.map(x=>x.date).concat(employeeRequests.map(x=>x.payoutDate||x.date)).filter(Boolean).sort().reverse();return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:activityDates[0]||'',transactions,requests:employeeRequests };
+  }).filter(x => x.total || x.recovered || x.companyOwes || x.requests.length);
   const totals = summary.reduce((t, x) => ({ total: t.total + x.total, recovered: t.recovered + x.recovered, outstanding: t.outstanding + x.outstanding }), { total: 0, recovered: 0, outstanding: 0 });
-  const requests=Object.values(s.advanceRequests||{}).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
   res.json({ success: true, advances: rows, summary, totals, requests, permissions:{canRequest:canRequestOrPostAdvance(req),canApprove:canApproveAdvance(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canApproveAdvance(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
 });
 

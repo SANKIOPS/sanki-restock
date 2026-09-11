@@ -28,12 +28,17 @@ function postAdvance(emp,body={}){
 test('salary advances require owner approval and proof-backed posting, then recover oldest first', () => {
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Employee A',salary:30000,channel:'Shared'}}).body.employee;
   const request=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:1000,date:'2026-08-22',account:'Axis Bank 3448'}}).body.request;
-  assert.equal(invoke('GET','/api/salary/advances').body.advances.filter(x=>x.empId===emp.id).length,0);
+  let beforePosting=invoke('GET','/api/salary/advances').body;
+  assert.equal(beforePosting.advances.filter(x=>x.empId===emp.id).length,0);
+  assert.deepEqual(beforePosting.summary.find(x=>x.empId===emp.id).requests.map(x=>x.id),[request.id]);
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{proof:'/early.jpg'}}).status,400);
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'accounting'}).status,403);
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'owner'}).status,200);
   const missing=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{}});assert.equal(missing.status,400);assert.match(missing.body.error,/proof/i);
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{payoutDate:'2026-08-22',proof:'/proof-first.jpg'}}).status,200);
+  const afterPosting=invoke('GET','/api/salary/advances').body.summary.find(x=>x.empId===emp.id);
+  assert.equal(afterPosting.requests.some(x=>x.id===request.id),false);
+  assert.equal(afterPosting.transactions.some(x=>x.requestId===request.id),true);
   [2000,2000].forEach((amount,i)=>{
     const made=postAdvance(emp,{amount,date:'2026-08-'+String(23+i).padStart(2,'0'),account:'Axis Bank 3448',proof:'/proof-'+i+'.jpg',recoveryStartMonth:'2026-08'});
     assert.ok(made.id);
@@ -62,7 +67,7 @@ test('advance recovery starts from its actual payout month, not a proposed recov
 
 test('advance UI merges employee history and exposes approval and proof-backed posting', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
-  assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance register · closing/); assert.match(html,/Advance approval queue/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);assert.match(html,/Company owes/);assert.match(html,/editAdvance/);
+  assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance register · closing/); assert.doesNotMatch(html,/Advance approval queue/);assert.match(html,/Requests, approvals, posted advances/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);assert.match(html,/Company owes/);assert.match(html,/editAdvance/);
   assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);
 });
 
