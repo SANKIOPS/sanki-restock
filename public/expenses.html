@@ -549,7 +549,7 @@
         '<div class="fld" id="requestedWrap" style="display:none"><label>Payment being logged now ₹</label><input type="number" id="f_requestedamount" min="1" step="1" placeholder="e.g. 1000"><div class="hint">Cannot exceed the total agreed amount.</div></div>'+
         '<div class="fld full" id="paymentNoteWrap" style="display:none"><label>Installment note (optional)</label><input id="f_paymentnote" placeholder="e.g. advance, second installment, final payment"></div>'+
         '<div class="fld" id="paymentTypeWrap"><label>How will this be paid?</label><select id="f_paymenttype">'+opts(cfg.paymentTypes,'UPI')+'</select></div>'+
-        '<div class="fld" id="personalAccountWrap" style="display:none"><label>Account used</label><select id="f_personalaccount">'+opts(cfg.personalAccounts||[])+'</select><div class="hint">Only accounts assigned to you are available. Cash is recorded automatically as '+esc(cfg.me)+' Cash.</div></div>'+
+        '<div class="fld" id="personalAccountWrap" style="display:none"><label id="personalAccountLabel">Account used</label><select id="f_personalaccount"></select><div class="hint" id="personalAccountHint"></div>'+(cfg.isOwner?'<button type="button" class="btn mini ghost" id="addCardFromExpense" style="display:none;margin-top:7px">+ Add or manage credit cards</button>':'')+'</div>'+
         '<div class="fld" id="qrPhotoWrap"><label id="qrLabel">Vendor QR-code photo (required for UPI)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_qrcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_qrphoto" accept="image/*" hidden></label></div></div>'+
         '<div class="fld" id="personalProofWrap" style="display:none"><label>Your payment proof(s) (at least one required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_personalcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_personalproof" accept="image/*" multiple hidden></label></div></div>'+
         (cfg.isAdmin?'<div class="fld"><label>Channel</label><select id="f_channel">'+opts(cfg.channels,'Shared')+'</select></div>':'')+
@@ -570,6 +570,7 @@
       document.removeEventListener('click',closeVendorSuggestions,true);
       document.addEventListener('click',closeVendorSuggestions,true);
       el('saveExp').addEventListener('click', saveExpense);
+      if(el('addCardFromExpense'))el('addCardFromExpense').addEventListener('click',function(){tab='creditcards';Array.prototype.forEach.call(el('tabs').children,function(b){b.classList.toggle('on',b.dataset.t===tab);});render();});
       if(el('linkTelegram')){el('linkTelegram').addEventListener('click',linkTelegram);loadTelegramUsers();}
       if(el('setupTelegram'))el('setupTelegram').addEventListener('click',setupTelegram);
       if(el('testTelegram'))el('testTelegram').addEventListener('click',testTelegram);
@@ -613,6 +614,14 @@
       var paid=el('f_paidalready').value==='true',type=el('f_paymenttype').value,show=!paid&&(type==='UPI'||type==='Credit');
       el('qrPhotoWrap').style.display=show?'':'none';el('qrLabel').textContent=type==='Credit'?'Vendor QR-code photo (optional for Credit)':'Vendor QR-code photo (required for UPI)';
       if(el('personalAccountWrap'))el('personalAccountWrap').style.display=paid&&type!=='Cash'?'':'none';
+      if(el('f_personalaccount')){
+        var current=el('f_personalaccount').value,cards=(cfg.creditCards||[]),options=type==='Credit'?cards.map(function(c){return '<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>';}).join(''):opts(cfg.personalAccounts||[]);
+        el('f_personalaccount').innerHTML=(type==='Credit'?'<option value="">Select credit card used</option>':'')+options;
+        if(Array.prototype.some.call(el('f_personalaccount').options,function(o){return o.value===current;}))el('f_personalaccount').value=current;
+        el('personalAccountLabel').textContent=type==='Credit'?'Credit card used':'Account used';
+        el('personalAccountHint').textContent=type==='Credit'?(cards.length?'The expense will post to this card’s outstanding liability.':'No credit card exists yet. Use Add or manage credit cards.'):'Only accounts assigned to you are available. Cash is recorded automatically as '+cfg.me+' Cash.';
+        if(el('addCardFromExpense'))el('addCardFromExpense').style.display=type==='Credit'?'':'none';
+      }
     }
     function findLedger(name){ return cfg.ledgers.find(function(l){ return l.name.toLowerCase()===String(name||'').toLowerCase(); }); }
     function onLedgerInput(){
@@ -666,7 +675,7 @@
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
           isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
-          paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:(urls[2]||[])[0]||'',personalPaymentProofs:urls[2]||[],personalAccount:paymentType==='Cash'?(cfg.me+' Cash'):el('f_personalaccount').value,
+          paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:(urls[2]||[])[0]||'',personalPaymentProofs:urls[2]||[],personalAccount:paymentType==='Cash'?(cfg.me+' Cash'):el('f_personalaccount').value,creditCardId:paymentType==='Credit'?el('f_personalaccount').value:'',
           channel:cfg.isAdmin&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
           billPhoto:(urls[0]||[])[0]||'',billPhotos:urls[0]||[], qrPhoto:urls[1]
         };

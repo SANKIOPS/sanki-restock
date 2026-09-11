@@ -1303,7 +1303,11 @@ router.post('/api/expenses', (req, res) => {
     return res.status(400).json({ success: false, error: 'Vendor QR-code photo is required for UPI payment.' });
   }
   const claimant = (req.user && req.user.username) || 'system';
-  const personalAccount = paymentType === 'Cash' ? claimant + ' Cash' : String(b.personalAccount || '').trim();
+  const creditCard=paidAlready&&paymentType==='Credit'?resolveCreditCard(req,b.creditCardId||b.personalAccount):null;
+  const personalAccount = creditCard?creditCardName(creditCard):(paymentType === 'Cash' ? claimant + ' Cash' : String(b.personalAccount || '').trim());
+  if(paidAlready&&paymentType==='Credit'&&!creditCard){
+    return res.status(400).json({success:false,error:'Select an accessible credit card or add the card first.'});
+  }
   if (paidAlready && paymentType !== 'Cash' && !personalAccount) {
     return res.status(400).json({ success: false, error: 'Enter the account used for your personal payment.' });
   }
@@ -1329,16 +1333,16 @@ router.post('/api/expenses', (req, res) => {
     amount,
     isInstallment,
     requestedAmount,
-    nature, type, ledger, vendor,
+    nature, type, ledger, vendor, creditCardId:creditCard&&creditCard.id||'',
     claimant,                                     // who did the errand (was "runner")
     account: '',                                  // selected by approver when payment is made
-    channel, bill, fundedBy: paidAlready ? 'claimant' : 'company', paymentType,
+    channel, bill, fundedBy: paidAlready&&!creditCard ? 'claimant' : 'company', paymentType,
     qrPhoto: !paidAlready && (paymentType === 'UPI' || paymentType === 'Credit') ? qrPhoto : '',
     billPhoto, billPhotos,                         // one payment may cover several vendor bills
     purchasePaymentProof: paidAlready ? personalPaymentProof : '', purchasePaymentProofs:paidAlready?personalPaymentProofs:[], exceptionEvidence: '', exceptionReason: '', billNote: '',
     paidAlready,
     personalPaidAmount: paidAlready ? requestedAmount : 0,
-    reimbursementStatus: paidAlready ? 'awaiting_approval' : 'not_applicable',
+    reimbursementStatus: paidAlready&&!creditCard ? 'awaiting_approval' : 'not_applicable',
     reimbursementAmount: 0,
     reimbursementPayments: [],
     paymentProof: '', paymentProofs:[],           // company payment/reimbursement proof(s)
@@ -1346,9 +1350,9 @@ router.post('/api/expenses', (req, res) => {
     paidAmount: paidAlready ? requestedAmount : 0,
     payments: paidAlready ? [{
       id: 'PAY-001', amount: requestedAmount, date: String(b.date || now.slice(0, 10)).slice(0, 10),
-      account: personalAccount, paymentType, proof: personalPaymentProof, proofs:personalPaymentProofs,
+      account: personalAccount, paymentType, creditCardId:creditCard&&creditCard.id||'', proof: personalPaymentProof, proofs:personalPaymentProofs,
       note: String(b.paymentNote || 'Paid personally by submitter').trim(),
-      paidBy: claimant, paidAt: now, personalFunds: true
+      paidBy: claimant, paidAt: now, personalFunds: !creditCard
     }] : [],
     createdAt: now,
     createdBy: (req.user && req.user.username) || 'system',

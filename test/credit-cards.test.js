@@ -7,8 +7,10 @@ const path=require('node:path');
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'sanki-credit-cards-'));
 process.env.DATA_PATH=path.join(temp,'data.json');
 const {router,merchantKey,inferClassification}=require('../modules/credit-cards');
+const expenseRouter=require('../modules/expenses').router;
 test.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
 function invoke(method,routePath,{body={},params={},query={},role='owner'}={}){const layer=router.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username:'tester',role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
+function invokeExpense(method,routePath,{body={},params={},query={},role='owner'}={}){const layer=expenseRouter.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'expense route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username:'tester',role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
 test('credit cards are entity-neutral liabilities with permanent statement review logs',()=>{
   const made=invoke('POST','/api/expenses/credit-cards',{body:{name:'HDFC Regalia',last4:'1234',cardholder:'Owner',issuingBank:'HDFC',cycleDay:5,dueDay:25,creditLimit:200000,openingOutstanding:1000}});
   assert.equal(made.status,200);assert.equal(made.body.card.displayName,'HDFC Regalia 1234');assert.equal(made.body.card.outstanding,1000);assert.equal(made.body.card.nature,undefined);
@@ -36,6 +38,14 @@ test('card payment reduces liability and debits only the linked bank ledger',()=
   assert.equal(transfer.fromAccount,'Axis Bank 3448');assert.equal(transfer.toAccount,'HDFC Regalia 1234');assert.equal(transfer.classification,'credit_card_payment');
   const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.equal(ledger.outstanding,paid.body.outstanding);assert.ok(ledger.entries.some(x=>x.id===paid.body.payment.id));
 });
+test('expense form can post an approved purchase directly to a selected credit card',()=>{
+  const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding;
+  const made=invokeExpense('POST','/api/expenses',{body:{date:'2026-09-11',amount:321,particulars:'Shoot accessory',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:true,personalAccount:card.id,personalPaymentProof:'/card-proof.jpg',billPhoto:'/bill.jpg'}});
+  assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.payments[0].creditCardId,card.id);assert.equal(made.body.expense.payments[0].account,card.displayName);assert.equal(made.body.expense.payments[0].personalFunds,false);
+  const stored=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));stored.expenses[made.body.expense.id].status='approved';stored.expenses[made.body.expense.id].approvedAt='2026-09-11T00:00:00.000Z';fs.writeFileSync(path.join(temp,'expenses.json'),JSON.stringify(stored));
+  const after=invoke('GET','/api/expenses/credit-cards').body.cards.find(x=>x.id===card.id);assert.equal(after.outstanding,before+321);
+  const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.ok(ledger.entries.some(x=>x.id===made.body.expense.id+'/PAY-001'&&x.debit===321));
+});
 test('linked duplicate statement payment never creates a second bank transfer or liability reduction',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding,expBefore=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfersBefore=expBefore.transfers.length;
   const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-08-30',narration:'Card payment Axis Bank 3448',amount:400,classification:'card_payment'}}).body.statement,row=st.rows[0];
@@ -57,4 +67,4 @@ test('merchant and transaction inference recognizes refunds, fees and EMI',()=>{
   assert.equal(inferClassification({description:'EMI interest',debit:100}),'emi_interest');
   assert.equal(inferClassification({description:'Merchant refund',credit:100}),'refund');
 });
-test('expenses UI exposes credit cards, statement logs, review and merchant learning',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/data-t="creditcards"/);assert.match(html,/Statement Logs/);assert.match(html,/Merchant rules/);assert.match(html,/Finalize and post to ledgers/);assert.match(html,/Possible duplicate/);assert.match(html,/Full payment/);assert.match(html,/Reopen with reason/);assert.match(html,/Optional bill\/proof URL/);});
+test('expenses UI exposes credit cards, statement logs, review and merchant learning',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/data-t="creditcards"/);assert.match(html,/Select credit card used/);assert.match(html,/Add or manage credit cards/);assert.match(html,/cfg\.creditCards/);assert.match(html,/Statement Logs/);assert.match(html,/Merchant rules/);assert.match(html,/Finalize and post to ledgers/);assert.match(html,/Possible duplicate/);assert.match(html,/Full payment/);assert.match(html,/Reopen with reason/);assert.match(html,/Optional bill\/proof URL/);});
