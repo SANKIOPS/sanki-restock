@@ -45,7 +45,8 @@ function load() {
     const normalizedLeaveMarks=entity==='SANKI'&&applyStoredLeaveAllowancesV11(s);
     const finalJulyPayroll=entity==='SANKI'&&applyFinalJuly2026PayrollV13(s);
     const correctedAshpreetAdvance=entity==='SANKI'&&repairAshpreetOutstandingAdvanceV14(s);
-    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance) save(s);
+    const allocatedAshpreetSalary=entity==='SANKI'&&allocateAshpreetSalaryRecoveryV15(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -275,6 +276,22 @@ function repairAshpreetOutstandingAdvanceV14(s){
   const removed=round2(before.reduce((n,r)=>n+num(r.amount),0)-advance.recoveries.reduce((n,r)=>n+num(r.amount),0));
   if(removed){s.advanceAudit=s.advanceAudit||[];s.advanceAudit.push({at:now,by:'System correction',action:'REMOVED_INCORRECT_RECOVERY',advanceId:advance.id,details:{amount:removed,reason:'Owner confirmed the ₹50,000 Ashpreet advance remains fully unrecovered.'}});}
   s.oneTimeMigrations[key]={appliedAt:now,advanceId:advance.id,removedRecovery:removed,outstandingAfter:advanceOutstanding(advance)};
+  return true;
+}
+
+// Ashpreet earned ₹30,000 and was paid ₹5,000. The withheld ₹25,000 clears
+// the older ₹2,000 advance first and then recovers ₹23,000 from this ₹50,000
+// advance, leaving the owner-confirmed outstanding balance of ₹27,000.
+function allocateAshpreetSalaryRecoveryV15(s){
+  const key='ashpreet_50000_salary_recovery_23000_v15';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const advance=Object.values(s.advances||{}).find(a=>a.active!==false&&a.historicalImport&&num(a.amount)===50000&&String(a.date)==='2026-08-01'&&/^arshpreet/i.test(String(a.employeeName||'')));
+  const now=new Date().toISOString();
+  if(!advance){s.oneTimeMigrations[key]={appliedAt:now,result:'matching advance not found'};return true;}
+  const before=(advance.recoveries||[]).map(x=>Object.assign({},x));
+  advance.recoveries=before.filter(r=>String(r.by)!=='System salary allocation').concat([{ym:'2026-07',amount:23000,by:'System salary allocation',at:now,note:'₹25,000 salary withheld: ₹2,000 older advance + ₹23,000 of this advance'}]);
+  s.advanceAudit=s.advanceAudit||[];s.advanceAudit.push({at:now,by:'System correction',action:'ALLOCATED_WITHHELD_SALARY',advanceId:advance.id,details:{salaryEarned:30000,salaryPaid:5000,totalWithheld:25000,olderAdvanceRecovery:2000,thisAdvanceRecovery:23000,outstandingAfter:advanceOutstanding(advance),reason:'Owner confirmed the remaining advance balance is ₹27,000.'}});
+  s.oneTimeMigrations[key]={appliedAt:now,advanceId:advance.id,recoveryAllocated:23000,outstandingAfter:advanceOutstanding(advance)};
   return true;
 }
 
