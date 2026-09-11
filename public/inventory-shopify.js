@@ -36,7 +36,6 @@
     }).catch(function (error) { text.textContent = error.message; }).finally(function () { check.disabled = false; });
   };
   apply.onclick = function () {
-    if (!confirm('Apply the approved categorization to matched Shopify products? Quantities and product records will not be removed.')) return;
     apply.disabled = true; text.textContent = 'Starting Shopify update…';
     request('/api/inventory-categorization/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: 'APPLY APPROVED CATEGORIZATION' }) })
       .then(function (data) { renderJob(data.job); })
