@@ -43,6 +43,14 @@ test('Purchases Summary renders every PO as a compact expandable history row', (
   assert.match(html, /Posted to Shopify/);
   assert.match(html, /Recovered from Shopify/);
   assert.match(html, /original PO unavailable/);
+  assert.match(html, /Selected bills — category summary/);
+  assert.match(html, /data-history-select/);
+  assert.match(html, /historySelectAll/);
+  assert.match(html, /historyClearSelection/);
+  assert.match(html, /historySelectedCategoryRows/);
+  assert.match(html, /Unique designs/);
+  assert.match(html, /historyDesignKey\(po,line,category\)/);
+  assert.doesNotMatch(html.match(/function historyDesignKey[\s\S]*?\n    \}/)[0], /colour/);
 });
 
 test('Audit Purchases has a strict on-the-way category and vendor explorer', () => {

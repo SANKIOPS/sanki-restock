@@ -271,6 +271,19 @@
         </div>
         <p class="sub">Every purchase created through this software, newest first. Each compact row shows its order and receipt status; click it to see the complete bill, products, quantities, costs, photos and Shopify details.</p>
         <div id="sumTotals" style="margin-top:10px"></div>
+        <div id="historySelectionTools" style="margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#f8fafc">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div>
+              <h3 style="margin:0">Selected bills — category summary</h3>
+              <p class="sub" style="margin:3px 0 0">Tick the bills below to see their combined categories, unique designs, pieces and value.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn ghost sm" id="historySelectAll" type="button">Select all complete POs</button>
+              <button class="btn ghost sm" id="historyClearSelection" type="button">Clear selection</button>
+            </div>
+          </div>
+          <div id="historySelectionSummary" style="margin-top:10px"></div>
+        </div>
         <div id="sumHost" style="margin-top:14px"></div>
       </div>
     </div>
@@ -373,6 +386,13 @@
 
     // ── purchases summary ──
     el('refreshSummary').onclick=loadPurchaseHistory;
+    el('historySelectAll').onclick=function(){
+      purchaseHistory.forEach(function(po){ if(!po.historical) historySelected[po.id]=true; });
+      syncHistorySelectionChecks(); renderHistorySelectionSummary();
+    };
+    el('historyClearSelection').onclick=function(){
+      historySelected={}; syncHistorySelectionChecks(); renderHistorySelectionSummary();
+    };
     var sumData=null;               // last /summary response (re-rendered on filter/group change)
     var sumFilter='all';            // 'all' | 'done' | 'pending' — driven by clicking a stat card
     var sumGroup='category';        // 'category' | 'vendor'
@@ -550,11 +570,15 @@
     // the actual PO records (not category/vendor aggregation), so every purchase
     // made through this software appears exactly once.
     var purchaseHistory=[];
+    var historySelected={};
     function loadPurchaseHistory(){
       el('sumTotals').innerHTML='<p class="sub">Loading purchase history…</p>'; el('sumHost').innerHTML='';
       fetch('/api/procurement/history').then(readJson).then(function(d){
         if(!d.success){ el('sumTotals').innerHTML='<div class="banner err">'+esc(d.error||'Failed to load')+'</div>'; return; }
-        purchaseHistory=d.history||[]; renderPurchaseHistory(d);
+        purchaseHistory=d.history||[];
+        var available={}; purchaseHistory.forEach(function(po){if(!po.historical)available[po.id]=1;});
+        Object.keys(historySelected).forEach(function(id){if(!available[id])delete historySelected[id];});
+        renderPurchaseHistory(d);
       }).catch(function(e){ el('sumTotals').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     }
     function historyTotals(po){
@@ -574,6 +598,59 @@
       var c=colours[s]||['#f1f5f9','#334155'];
       return '<span style="background:'+c[0]+';color:'+c[1]+';border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700;white-space:nowrap">'+esc(labels[s]||s)+'</span>';
     }
+    function historyDesignKey(po,line,category){
+      var vendor=String(line.vendor||po.vendor||'').trim().toLowerCase();
+      var design=String(line.designCode||line.designName||'(unnamed)').trim().toLowerCase();
+      return [vendor,design,String(category||'').trim().toLowerCase()].join('|');
+    }
+    function historySelectedCategoryRows(){
+      var categories={};
+      purchaseHistory.forEach(function(po){
+        if(po.historical||!historySelected[po.id])return;
+        var poQty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0);
+        var transport=po.origin==='india'&&poQty?Number(po.transportTotal||0)/poQty:0;
+        (po.lines||[]).forEach(function(line){
+          var qty=Number(line.qty)||0;if(qty<=0)return;
+          var category=String(line.productType||'Uncategorised').trim()||'Uncategorised';
+          var row=categories[category]||(categories[category]={category:category,pos:{},designs:{},pieces:0,value:0});
+          var per=po.origin==='india' ? Number(line.perPcsYuan||0)+transport
+            : Number(line.perPcsYuan||0)*Number(po.exRate||settings.exRate||0)+Number(line.weightGrams||0)*Number(po.freightPerGram||settings.freightPerGram||0);
+          row.pos[po.id]=1; row.designs[historyDesignKey(po,line,category)]=1;
+          row.pieces+=qty; row.value+=Math.round(per*qty);
+        });
+      });
+      return Object.keys(categories).map(function(key){
+        var row=categories[key];
+        row.poCount=Object.keys(row.pos).length; row.designCount=Object.keys(row.designs).length;
+        return row;
+      }).sort(function(a,b){return b.pieces-a.pieces||a.category.localeCompare(b.category);});
+    }
+    function selectedHistoryPos(){return purchaseHistory.filter(function(po){return !po.historical&&historySelected[po.id];});}
+    function syncHistorySelectionChecks(){
+      Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-history-select]'),function(box){
+        box.checked=!!historySelected[box.getAttribute('data-history-select')];
+      });
+    }
+    function renderHistorySelectionSummary(){
+      var chosen=selectedHistoryPos(),host=el('historySelectionSummary');
+      el('historyClearSelection').disabled=!chosen.length;
+      if(!chosen.length){
+        host.innerHTML='<div style="border:1px dashed #cbd5e1;border-radius:9px;padding:11px 12px;background:#fff;color:var(--muted);font-size:13px">Select one or more complete PO / bill checkboxes below. The category totals will appear here immediately.</div>';
+        return;
+      }
+      var rows=historySelectedCategoryRows();
+      var totalPieces=rows.reduce(function(n,r){return n+r.pieces;},0);
+      var totalValue=rows.reduce(function(n,r){return n+r.value;},0);
+      var totalDesigns=rows.reduce(function(n,r){return n+r.designCount;},0);
+      var billChips=chosen.map(function(po){return '<span class="pill">'+esc(po.id)+' · Bill '+esc(po.billNo||'—')+'</span>';}).join('');
+      host.innerHTML='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
+        '<b>'+chosen.length+' bill'+(chosen.length===1?'':'s')+' selected</b>'+billChips+'</div>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+          '<span class="pill">'+rows.length+' '+(rows.length===1?'category':'categories')+'</span><span class="pill">'+totalDesigns+' unique designs</span><span class="pill">'+totalPieces.toLocaleString('en-IN')+' pieces</span><span class="pill">'+money(totalValue)+'</span></div>'+
+        '<div style="overflow-x:auto"><table style="font-size:12px;background:#fff"><thead><tr><th>Category</th><th class="money">Selected POs</th><th class="money">Unique designs</th><th class="money">Pieces</th><th class="money">Value</th></tr></thead><tbody>'+
+        rows.map(function(row){return '<tr><td><b>'+esc(row.category)+'</b></td><td class="money">'+row.poCount+'</td><td class="money">'+row.designCount+'</td><td class="money"><b>'+row.pieces.toLocaleString('en-IN')+'</b></td><td class="money"><b>'+money(row.value)+'</b></td></tr>';}).join('')+
+        '</tbody></table></div>';
+    }
     function renderPurchaseHistory(meta){
       var totalQty=0,totalValue=0,received=0,posted=0;
       purchaseHistory.forEach(function(po){if(po.historical)return;var t=historyTotals(po);totalQty+=t.qty;totalValue+=t.total;if(po.status==='received'||po.status==='awaiting_approval'||po.status==='posted')received++;if(po.status==='posted')posted++;});
@@ -581,15 +658,24 @@
         '<span class="pill">'+purchaseHistory.length+' purchase batches</span><span class="pill">'+totalQty+' known pieces</span><span class="pill">'+money(totalValue)+' known total</span><span class="pill">'+received+' received</span><span class="pill">'+posted+' posted</span>'+
         ((meta&&meta.recoveredProducts)?'<span class="pill">'+meta.recoveredProducts+' historical products recovered</span>':'')+'</div>'+
         ((meta&&meta.historyWarning)?'<div class="banner err" style="margin-top:8px">Complete POs are shown, but Shopify history could not be refreshed: '+esc(meta.historyWarning)+'</div>':'');
-      if(!purchaseHistory.length){el('sumHost').innerHTML='<p class="sub">No purchases have been created through this software yet.</p>';return;}
+      if(!purchaseHistory.length){el('sumHost').innerHTML='<p class="sub">No purchases have been created through this software yet.</p>';renderHistorySelectionSummary();return;}
       el('sumHost').innerHTML=purchaseHistory.map(historyPoRow).join('');
+      Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-history-select]'),function(box){
+        box.onclick=function(e){e.stopPropagation();};
+        box.onchange=function(){
+          var id=box.getAttribute('data-history-select');
+          if(box.checked)historySelected[id]=true;else delete historySelected[id];
+          renderHistorySelectionSummary();
+        };
+      });
       Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-history-po]'),function(row){
         row.onclick=function(e){
-          if(e.target&&e.target.closest&&e.target.closest('img'))return;
+          if(e.target&&e.target.closest&&(e.target.closest('img')||e.target.closest('[data-history-select]')))return;
           var id=row.getAttribute('data-history-po'),body=el('historyBody'+id),car=row.querySelector('.sumcaret');
           if(body){body.classList.toggle('hidden');if(car)car.textContent=body.classList.contains('hidden')?'▸':'▾';}
         };
       });
+      renderHistorySelectionSummary();
     }
     function historyPoRow(po,idx){
       if(po.historical) return historicalPurchaseRow(po,idx);
@@ -603,7 +689,9 @@
         return '<tr><td>'+photo+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+(l.chinaSize?' (CN '+esc(l.chinaSize)+')':'')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(l.weightGrams||'—')+'</td></tr>';
       }).join('');
       var lineLabel=po.line==='funky'?'SANKI Funky':(po.line==='casuals'?'SANKI Casuals':'Unclassified');
-      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(120px,1.2fr) minmax(110px,1fr) minmax(150px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
+      var checked=historySelected[po.id]?' checked':'';
+      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:28px 24px minmax(120px,1.2fr) minmax(110px,1fr) minmax(150px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
+        '<input type="checkbox" data-history-select="'+esc(po.id)+'"'+checked+' aria-label="Include '+esc(po.id)+' Bill '+esc(po.billNo||'—')+' in category summary" title="Include this bill in the category summary" style="width:18px;height:18px;cursor:pointer">'+
         '<span class="sumcaret muted">▸</span><div><b>'+(idx+1)+'. '+esc(po.id)+'</b><div class="muted" style="font-size:11px">'+esc(po.vendor||'—')+' · Bill '+esc(po.billNo||'—')+'</div></div>'+
         '<div style="font-size:12px"><span class="muted">Ordered</span> '+esc(ordered)+'<br><span class="muted">Received</span> '+esc(received)+'</div>'+
         '<div>'+historyStatus(po)+'</div><div class="money"><b>'+t.qty+' pcs</b></div><div class="money"><b>'+money(t.total)+'</b></div></div>';
@@ -618,8 +706,8 @@
       var rows=products.map(function(p){
         return '<tr><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td>'+esc(p.status||'—')+'</td></tr>';
       }).join('');
-      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(160px,1.4fr) minmax(120px,1fr) minmax(160px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
-        '<span class="sumcaret muted">▸</span><div><b>'+(idx+1)+'. Historical purchase</b><div class="muted" style="font-size:11px">Recovered from Shopify · original PO unavailable</div></div>'+
+      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:28px 24px minmax(160px,1.4fr) minmax(120px,1fr) minmax(160px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
+        '<span class="muted" title="Original bill quantities are unavailable, so this recovered entry cannot be selected">—</span><span class="sumcaret muted">▸</span><div><b>'+(idx+1)+'. Historical purchase</b><div class="muted" style="font-size:11px">Recovered from Shopify · original PO unavailable</div></div>'+
         '<div style="font-size:12px"><span class="muted">Posted</span> '+esc(po.datePurchase||'—')+'</div>'+historyStatus(po)+
         '<div class="money"><b>'+Number(po.productCount||0)+' products</b></div><div class="money"><b>'+Number(po.skuCount||0)+' SKUs</b></div></div>';
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
