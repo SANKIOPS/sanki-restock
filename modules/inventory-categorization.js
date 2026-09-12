@@ -14,6 +14,8 @@ let catalogCache = { at: 0, products: null };
 let catalogInflight = null;
 const catalogClient = new ShopifyClient({ minIntervalMs: 250 });
 const galleryCache = new Map();
+let costCache = { at: 0, products: null };
+let costInflight = null;
 
 async function jsonRequest(url, options) {
   const response = await shopifyClient.request(url, options);
@@ -49,6 +51,58 @@ async function fetchCatalogImages() {
     url = next ? next[1] : null;
   }
   return output;
+}
+
+async function fetchCostAttention() {
+  let url = `https://${STORE}/admin/api/${API}/products.json?limit=250&fields=handle,title,image,variants`;
+  const shopifyProducts = [];
+  while (url) {
+    const response = await catalogClient.request(url);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+    shopifyProducts.push(...(body.products || []));
+    const next = (response.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/);
+    url = next ? next[1] : null;
+  }
+  const sourceByHandle = new Map(DATA.map(product => [product.handle, product]));
+  const relevant = shopifyProducts.filter(product => sourceByHandle.has(product.handle));
+  const itemIds = [];
+  for (const product of relevant) for (const variant of (product.variants || [])) if (variant.inventory_item_id) itemIds.push(String(variant.inventory_item_id));
+  const costs = new Map();
+  for (let index = 0; index < itemIds.length; index += 100) {
+    const ids = itemIds.slice(index, index + 100);
+    const response = await catalogClient.request(`https://${STORE}/admin/api/${API}/inventory_items.json?ids=${ids.join(',')}&limit=100`);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+    for (const item of (body.inventory_items || [])) costs.set(String(item.id), Number(item.cost) || 0);
+  }
+  return relevant.map(product => {
+    const source = sourceByHandle.get(product.handle);
+    const physicalBySku = new Map((source.variants || []).map(variant => [String(variant.sku || '').trim(), variant]));
+    const missing = (product.variants || []).map(variant => {
+      const sku = String(variant.sku || '').trim();
+      const physical = physicalBySku.get(sku);
+      return { sku, inventoryItemId: String(variant.inventory_item_id || ''), cost: costs.get(String(variant.inventory_item_id)) || 0, physical };
+    }).filter(item => item.physical && Number(item.physical.totalQty) > 0 && !item.cost && item.inventoryItemId);
+    if (!missing.length) return null;
+    return {
+      handle: product.handle,
+      title: source.title || product.title,
+      image: product.image && product.image.src || null,
+      collection: source.collection,
+      category: source.category,
+      missingSkus: missing.map(item => ({
+        sku: item.sku,
+        inventoryItemId: item.inventoryItemId,
+        variant: item.physical.variant,
+        size: item.physical.size,
+        colour: item.physical.colour,
+        displayQty: Number(item.physical.displayQty) || 0,
+        warehouseQty: Number(item.physical.warehouseQty) || 0,
+        totalQty: Number(item.physical.totalQty) || 0
+      }))
+    };
+  }).filter(Boolean);
 }
 
 function desiredTags(product, existing) {
@@ -125,6 +179,39 @@ async function runApply() {
 }
 
 router.get('/api/inventory-categorization/status', (req, res) => res.json({ success: true, job }));
+
+router.get('/api/inventory-costs/attention', async (req, res) => {
+  try {
+    if (!costCache.products || Date.now() - costCache.at > 15 * 60 * 1000) {
+      if (!costInflight) costInflight = fetchCostAttention().then(products => { costCache = { at: Date.now(), products }; }).finally(() => { costInflight = null; });
+      await costInflight;
+    }
+    const missingSkus = costCache.products.reduce((total, product) => total + product.missingSkus.length, 0);
+    const missingPieces = costCache.products.reduce((total, product) => total + product.missingSkus.reduce((qty, sku) => qty + sku.totalQty, 0), 0);
+    res.json({ success: true, products: costCache.products, productCount: costCache.products.length, missingSkus, missingPieces });
+  } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
+});
+
+router.post('/api/inventory-costs/set', async (req, res) => {
+  try {
+    const cost = Number(req.body && req.body.cost);
+    const itemIds = Array.from(new Set((req.body && req.body.inventoryItemIds || []).map(String).filter(id => /^\d+$/.test(id))));
+    if (!Number.isFinite(cost) || cost <= 0 || cost > 100000) return res.status(400).json({ success: false, error: 'Enter a valid landed cost between ₹0.01 and ₹1,00,000.' });
+    if (!itemIds.length || itemIds.length > 100) return res.status(400).json({ success: false, error: 'No valid SKUs were selected.' });
+    if (!costCache.products) return res.status(409).json({ success: false, error: 'Refresh Needs Attention before saving.' });
+    const allowedIds = new Set(costCache.products.flatMap(product => product.missingSkus.map(sku => sku.inventoryItemId)));
+    if (itemIds.some(id => !allowedIds.has(id))) return res.status(400).json({ success: false, error: 'One or more SKUs are not in the current missing-cost audit.' });
+    for (const id of itemIds) {
+      const response = await shopifyClient.request(`https://${STORE}/admin/api/${API}/inventory_items/${id}.json`, {
+        method: 'PUT', body: JSON.stringify({ inventory_item: { id: Number(id), cost: cost.toFixed(2) } })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+    }
+    costCache = { at: 0, products: null };
+    res.json({ success: true, updated: itemIds.length, cost });
+  } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
+});
 
 router.get('/api/inventory-categorization/catalog', async (req, res) => {
   try {
