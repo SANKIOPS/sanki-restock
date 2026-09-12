@@ -32,7 +32,7 @@ test('Nida-style Inventory users can call the complete Purchases workflow', () =
   assert.equal(canManagePurchases({ user: { role: 'sales', roles: ['sales'] } }), false);
 });
 
-test('Purchases Summary renders every PO as a compact expandable history row', () => {
+test('Purchases Summary has a category-first PO explorer plus the complete history', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   assert.match(html, /Purchase history/);
   assert.match(html, /fetch\('\/api\/procurement\/history'\)/);
@@ -43,12 +43,20 @@ test('Purchases Summary renders every PO as a compact expandable history row', (
   assert.match(html, /Posted to Shopify/);
   assert.match(html, /Recovered from Shopify/);
   assert.match(html, /original PO unavailable/);
-  assert.match(html, /Selected bills — category summary/);
-  assert.match(html, /data-history-select/);
-  assert.match(html, /historySelectAll/);
-  assert.match(html, /historyClearSelection/);
-  assert.match(html, /historySelectedCategoryRows/);
-  assert.match(html, /Unique designs/);
+  assert.match(html, /Explore purchases by category/);
+  assert.match(html, /id="historyCategory"/);
+  assert.match(html, /data-history-scope="all"/);
+  assert.match(html, /data-history-scope="choose"/);
+  assert.match(html, /data-history-pick/);
+  assert.match(html, /All matching POs/);
+  assert.match(html, /historyCategoryRows/);
+  assert.match(html, /Matching purchase details/);
+  assert.match(html, /data-hx-po/);
+  assert.match(html, /data-hx-design/);
+  assert.match(html, /Click to enlarge/);
+  assert.match(html, /Category<\/th><th>Colour<\/th><th>Size/);
+  assert.match(html, /historyStatus\(po\)/);
+  assert.doesNotMatch(html, /data-history-select/);
   assert.match(html, /historyDesignKey\(po,line,category\)/);
   assert.doesNotMatch(html.match(/function historyDesignKey[\s\S]*?\n    \}/)[0], /colour/);
 });
