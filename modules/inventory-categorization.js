@@ -2,7 +2,7 @@
 
 const express = require('express');
 const path = require('path');
-const { shopifyClient } = require('./shopify-client');
+const { ShopifyClient, shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
 const DATA = require(path.join(__dirname, '..', 'public', 'inventory-data.json'));
@@ -11,6 +11,8 @@ const API = '2024-07';
 const CONTROLLED_TAGS = ['SANKI Category:', 'SANKI Fit:', 'SANKI Gender:', 'SANKI Collection:'];
 let job = { status: 'idle', total: DATA.length, completed: 0, updated: 0, skipped: 0, failed: 0, errors: [], startedAt: null, finishedAt: null };
 let catalogCache = { at: 0, products: null };
+let catalogInflight = null;
+const catalogClient = new ShopifyClient({ minIntervalMs: 250 });
 
 async function jsonRequest(url, options) {
   const response = await shopifyClient.request(url, options);
@@ -19,11 +21,11 @@ async function jsonRequest(url, options) {
   return body;
 }
 
-async function fetchProducts() {
+async function fetchProducts(client = shopifyClient) {
   let url = `https://${STORE}/admin/api/${API}/products.json?limit=250&fields=id,handle,title,product_type,tags,image,images`;
   const output = [];
   while (url) {
-    const response = await shopifyClient.request(url);
+    const response = await client.request(url);
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
     output.push(...(body.products || []));
@@ -112,17 +114,22 @@ router.get('/api/inventory-categorization/status', (req, res) => res.json({ succ
 router.get('/api/inventory-categorization/catalog', async (req, res) => {
   try {
     if (!catalogCache.products || Date.now() - catalogCache.at > 30 * 60 * 1000) {
-      const shopify = await fetchProducts();
-      const byHandle = new Map(shopify.map(p => [p.handle, p]));
-      catalogCache = {
-        at: Date.now(),
-        products: DATA.map(product => {
-          const match = byHandle.get(product.handle);
-          const images = match ? (match.images || []).map(image => image.src).filter(Boolean) : [];
-          if (match && match.image && match.image.src && !images.includes(match.image.src)) images.unshift(match.image.src);
-          return { ...product, images, image: images[0] || null };
-        })
-      };
+      if (!catalogInflight) catalogInflight = (async () => {
+        try {
+          const shopify = await fetchProducts(catalogClient);
+          const byHandle = new Map(shopify.map(p => [p.handle, p]));
+          catalogCache = {
+            at: Date.now(),
+            products: DATA.map(product => {
+              const match = byHandle.get(product.handle);
+              const images = match ? (match.images || []).map(image => image.src).filter(Boolean) : [];
+              if (match && match.image && match.image.src && !images.includes(match.image.src)) images.unshift(match.image.src);
+              return { ...product, images, image: images[0] || null };
+            })
+          };
+        } finally { catalogInflight = null; }
+      })();
+      await catalogInflight;
     }
     res.json({ success: true, products: catalogCache.products });
   } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
