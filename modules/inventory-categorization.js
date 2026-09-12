@@ -36,6 +36,20 @@ async function fetchProducts(client = shopifyClient) {
   return output;
 }
 
+async function fetchCatalogImages() {
+  let url = `https://${STORE}/admin/api/${API}/products.json?limit=250&fields=handle,image`;
+  const output = [];
+  while (url) {
+    const response = await catalogClient.request(url);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+    output.push(...(body.products || []));
+    const next = (response.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/);
+    url = next ? next[1] : null;
+  }
+  return output;
+}
+
 function desiredTags(product, existing) {
   const keep = String(existing || '').split(',').map(x => x.trim()).filter(Boolean)
     .filter(tag => !CONTROLLED_TAGS.some(prefix => tag.toLowerCase().startsWith(prefix.toLowerCase())));
@@ -116,14 +130,13 @@ router.get('/api/inventory-categorization/catalog', async (req, res) => {
     if (!catalogCache.products || Date.now() - catalogCache.at > 30 * 60 * 1000) {
       if (!catalogInflight) catalogInflight = (async () => {
         try {
-          const shopify = await fetchProducts(catalogClient);
+          const shopify = await fetchCatalogImages();
           const byHandle = new Map(shopify.map(p => [p.handle, p]));
           catalogCache = {
             at: Date.now(),
             products: DATA.map(product => {
               const match = byHandle.get(product.handle);
-              const images = match ? (match.images || []).map(image => image.src).filter(Boolean) : [];
-              if (match && match.image && match.image.src && !images.includes(match.image.src)) images.unshift(match.image.src);
+              const images = match && match.image && match.image.src ? [match.image.src] : [];
               return { ...product, images, image: images[0] || null };
             })
           };
