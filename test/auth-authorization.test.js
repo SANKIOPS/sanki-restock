@@ -64,6 +64,14 @@ test('claimants can log expenses but cannot access accounting or unrelated APIs'
   assert.equal(apiAllowedForUser(claimant, '/api/orders-ledger'), false);
 });
 
+test('personal claimants can create and view their own expense records', () => {
+  const claimant = user('personal_claimant');
+  assert.equal(apiAllowedForUser(claimant, '/api/expenses'), true);
+  assert.equal(apiAllowedForUser(claimant, '/api/expenses/list'), true);
+  assert.equal(apiAllowedForUser(claimant, '/api/expenses/upload'), true);
+  assert.equal(apiAllowedForUser(claimant, '/api/pl/summary'), false);
+});
+
 test('warehouse and stock-search roles receive only operational stock access', () => {
   assert.equal(apiAllowedForUser(user('warehouse'), '/api/showroom/queue/move'), true);
   assert.equal(apiAllowedForUser(user('warehouse'), '/api/orders-ledger'), true);

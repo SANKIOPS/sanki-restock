@@ -384,7 +384,7 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   assert.ok(sankiList.body.expenses.every(e => (e.nature || 'SANKI') !== 'SAMAST'));
 });
 
-test('PERSONAL stays outside business P&L and its data is visible only to Owner', () => {
+test('PERSONAL stays outside business P&L and each claimant sees only their own records', () => {
   const sankiPlBefore = summaryForPL();
   const personalConfig = invoke('GET', '/api/expenses/config', { role: 'personal_claimant' });
   assert.deepEqual(personalConfig.body.natures, ['PERSONAL']);
@@ -400,6 +400,14 @@ test('PERSONAL stays outside business P&L and its data is visible only to Owner'
   } });
   assert.equal(created.status, 200);
   assert.equal(created.body.expense.nature, 'PERSONAL');
+
+  const creatorList = invoke('GET', '/api/expenses/list', { query: { nature: 'PERSONAL' }, role: 'personal_claimant' });
+  assert.equal(creatorList.status, 200);
+  assert.deepEqual(creatorList.body.expenses.map(e => e.id), [created.body.expense.id]);
+
+  const otherClaimantList = invoke('GET', '/api/expenses/list', { query: { nature: 'PERSONAL' }, role: 'claimant' });
+  assert.equal(otherClaimantList.status, 200);
+  assert.ok(!otherClaimantList.body.expenses.some(e => e.id === created.body.expense.id), 'another claimant must not see the PERSONAL record');
 
   const adminList = invoke('GET', '/api/expenses/list', { query: { nature: 'PERSONAL' }, role: 'admin' });
   assert.equal(adminList.status, 403);

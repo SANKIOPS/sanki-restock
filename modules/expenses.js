@@ -1089,10 +1089,17 @@ function submissionNatures(req) {
   return Array.from(new Set(out));
 }
 function canApproveExpenseNature(req, e) { return approvalNatures(req).includes(normalizedNature(e && e.nature)); }
+function expenseBelongsToUser(req, e) {
+  const username = String(req && req.user && req.user.username || '').trim().toLowerCase();
+  const creator = String(e && (e.createdBy || e.claimant) || '').trim().toLowerCase();
+  return !!username && creator === username;
+}
 function canViewExpense(req, e) {
-  if (normalizedNature(e && e.nature) === 'PERSONAL') return isOwner(req);
+  // PERSONAL remains private: the Owner can see the complete book, while a
+  // submitter can see only the PERSONAL expenses that they created.
+  if (normalizedNature(e && e.nature) === 'PERSONAL') return isOwner(req) || expenseBelongsToUser(req, e);
   if (canApproveExpenseNature(req, e)) return true;
-  return e && e.createdBy === (req.user && req.user.username);
+  return expenseBelongsToUser(req, e);
 }
 // Some legacy paid records have no approvedAt timestamp even though their
 // finalized status and payment history prove that they were posted.
@@ -1374,7 +1381,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
   const s = loadStore();
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
-  if (!canViewExpense(req, e)) return res.status(403).json({ success: false, error: normalizedNature(e.nature)==='PERSONAL'?'Only the Owner can view or edit PERSONAL accounting data.':'You do not have access to this accounting entity.' });
+  if (!canViewExpense(req, e)) return res.status(403).json({ success: false, error: normalizedNature(e.nature)==='PERSONAL'?'Only the Owner or the expense creator can view this PERSONAL record.':'You do not have access to this accounting entity.' });
   if (!canApprove(req) && (e.createdBy !== (req.user && req.user.username) || e.status !== 'pending')) {
     return res.status(403).json({ success: false, error: 'You can only edit your own pending expenses.' });
   }
