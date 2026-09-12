@@ -91,6 +91,8 @@ async function fetchCostAttention() {
       image: product.image && product.image.src || null,
       collection: source.collection,
       category: source.category,
+      productType: source.productType,
+      gender: source.gender,
       missingSkus: missing.map(item => ({
         sku: item.sku,
         inventoryItemId: item.inventoryItemId,
@@ -197,7 +199,7 @@ router.post('/api/inventory-costs/set', async (req, res) => {
     const cost = Number(req.body && req.body.cost);
     const itemIds = Array.from(new Set((req.body && req.body.inventoryItemIds || []).map(String).filter(id => /^\d+$/.test(id))));
     if (!Number.isFinite(cost) || cost <= 0 || cost > 100000) return res.status(400).json({ success: false, error: 'Enter a valid landed cost between ₹0.01 and ₹1,00,000.' });
-    if (!itemIds.length || itemIds.length > 100) return res.status(400).json({ success: false, error: 'No valid SKUs were selected.' });
+    if (!itemIds.length || itemIds.length > 500) return res.status(400).json({ success: false, error: 'No valid SKUs were selected.' });
     if (!costCache.products) return res.status(409).json({ success: false, error: 'Refresh Needs Attention before saving.' });
     const allowedIds = new Set(costCache.products.flatMap(product => product.missingSkus.map(sku => sku.inventoryItemId)));
     if (itemIds.some(id => !allowedIds.has(id))) return res.status(400).json({ success: false, error: 'One or more SKUs are not in the current missing-cost audit.' });
@@ -208,7 +210,12 @@ router.post('/api/inventory-costs/set', async (req, res) => {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
     }
-    costCache = { at: 0, products: null };
+    const savedIds = new Set(itemIds);
+    costCache.products = costCache.products.map(product => ({
+      ...product,
+      missingSkus: product.missingSkus.filter(sku => !savedIds.has(sku.inventoryItemId))
+    })).filter(product => product.missingSkus.length);
+    costCache.at = Date.now();
     res.json({ success: true, updated: itemIds.length, cost });
   } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
 });
