@@ -13,6 +13,7 @@ let job = { status: 'idle', total: DATA.length, completed: 0, updated: 0, skippe
 let catalogCache = { at: 0, products: null };
 let catalogInflight = null;
 const catalogClient = new ShopifyClient({ minIntervalMs: 250 });
+const galleryCache = new Map();
 
 async function jsonRequest(url, options) {
   const response = await shopifyClient.request(url, options);
@@ -145,6 +146,30 @@ router.get('/api/inventory-categorization/catalog', async (req, res) => {
       await catalogInflight;
     }
     res.json({ success: true, products: catalogCache.products });
+  } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
+});
+
+router.get('/api/inventory-categorization/catalog/:handle', async (req, res) => {
+  try {
+    const handle = String(req.params.handle || '');
+    const cached = galleryCache.get(handle);
+    if (cached && Date.now() - cached.at < 30 * 60 * 1000) return res.json({ success: true, ...cached.data });
+    const url = `https://${STORE}/admin/api/${API}/products.json?limit=1&handle=${encodeURIComponent(handle)}&fields=handle,images,image,variants`;
+    const response = await catalogClient.request(url);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+    const product = (body.products || []).find(item => item.handle === handle);
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found in Shopify' });
+    const images = (product.images || []).map(image => ({ src: image.src, variantIds: (image.variant_ids || []).map(String) })).filter(image => image.src);
+    if (!images.length && product.image && product.image.src) images.push({ src: product.image.src, variantIds: [] });
+    const variantImages = {};
+    for (const variant of (product.variants || [])) {
+      const matched = images.filter(image => image.variantIds.includes(String(variant.id))).map(image => image.src);
+      variantImages[String(variant.sku || '').trim()] = matched.length ? matched : (images[0] ? [images[0].src] : []);
+    }
+    const data = { handle, images: images.map(image => image.src), variantImages };
+    galleryCache.set(handle, { at: Date.now(), data });
+    res.json({ success: true, ...data });
   } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
 });
 
