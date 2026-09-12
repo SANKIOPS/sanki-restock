@@ -83,7 +83,7 @@ async function fetchCostAttention() {
       const sku = String(variant.sku || '').trim();
       const physical = physicalBySku.get(sku);
       return { sku, inventoryItemId: String(variant.inventory_item_id || ''), cost: costs.get(String(variant.inventory_item_id)) || 0, physical };
-    }).filter(item => item.physical && Number(item.physical.totalQty) > 0 && !item.cost && item.inventoryItemId);
+    }).filter(item => item.physical && (Number(item.physical.displayQty) + Number(item.physical.warehouseQty)) > 0 && !item.cost && item.inventoryItemId);
     if (!missing.length) return null;
     return {
       handle: product.handle,
@@ -99,7 +99,7 @@ async function fetchCostAttention() {
         colour: item.physical.colour,
         displayQty: Number(item.physical.displayQty) || 0,
         warehouseQty: Number(item.physical.warehouseQty) || 0,
-        totalQty: Number(item.physical.totalQty) || 0
+        totalQty: (Number(item.physical.displayQty) || 0) + (Number(item.physical.warehouseQty) || 0)
       }))
     };
   }).filter(Boolean);
