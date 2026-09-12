@@ -211,18 +211,18 @@ function ensureHistoricalGuard(s,mo){
   return guard;
 }
 function julyImportedMarks(emp,encoded){
-  const attendance={},raw=String(encoded||''); let worked=0;
+  const attendance={},raw=String(encoded||''); let worked=0,presentDays=0;
   for(let i=0;i<31;i++){
     const source=raw[i]||'',day=String(i+1).padStart(2,'0');
     if(source==='-'||!source)continue;
-    if(source==='P'){attendance[day]='P';worked++;continue;}
+    if(source==='P'){attendance[day]='P';worked++;presentDays++;continue;}
     if(source==='H'){attendance[day]='H';worked+=.5;continue;}
     if(source==='A'){
       const date='2026-07-'+day,weekday=WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()],isWeekOff=!!emp.weekOffDay&&emp.weekOffDay===weekday;
       attendance[day]=isWeekOff?'WO':'A';
     }
   }
-  return {attendance,paidDays:Math.max(0,round2(worked+paidLeaveAllowanceForMonth(emp,'2026-07')-1))};
+  return {attendance,paidDays:Math.max(0,round2(worked+paidLeaveAllowanceForMonth(emp,'2026-07',presentDays)-1))};
 }
 function applyCorrectedJulyAttendanceV7(s){
   const key='corrected_july_attendance_fixed_leave_allowance_v10';s.oneTimeMigrations=s.oneTimeMigrations||{};
@@ -418,10 +418,10 @@ function guard(req, res, next) {
 function daysInMonth(ym) { const p = String(ym).split('-').map(Number); return new Date(p[0], p[1], 0).getDate(); }
 function attPaidDays(att,e,ym) {
   if (!att) return null;
-  let worked=0,any=false;
-  Object.keys(att).forEach(d=>{const mark=att[d];if(MARKS[mark]!=null){any=true;if(mark==='P')worked++;else if(mark==='H')worked+=.5;}});
+  let worked=0,presentDays=0,any=false;
+  Object.keys(att).forEach(d=>{const mark=att[d];if(MARKS[mark]!=null){any=true;if(mark==='P'){worked++;presentDays++;}else if(mark==='H')worked+=.5;}});
   if(!any)return null;
-  const grossPaidDays=round2(worked+paidLeaveAllowanceForMonth(e,ym));
+  const grossPaidDays=round2(worked+paidLeaveAllowanceForMonth(e,ym,presentDays));
   // The 31-day normalization is a full/majority-month payroll rule. Applying
   // it to a new joiner with only one eligible day incorrectly erases that day.
   const calendarAdjustment=daysInMonth(ym)===31&&grossPaidDays>=15?1:0;
@@ -435,14 +435,15 @@ function employeeInPayrollMonth(e,ym){
   const joinMonth=String(e.joiningDate||'').slice(0,7),leaveMonth=String(e.lastWorkingDate||'').slice(0,7);
   return !(joinMonth&&ym<joinMonth)&&!(leaveMonth&&ym>leaveMonth);
 }
-function paidLeaveAllowanceForMonth(e,ym){
-  const base=e.monthlyPaidLeaveAllowance==null?4:Math.max(0,num(e.monthlyPaidLeaveAllowance)),dim=daysInMonth(ym);
+function paidLeaveAllowanceForMonth(e,ym,presentDays){
+  const base=e.monthlyPaidLeaveAllowance==null?4:Math.max(0,num(e.monthlyPaidLeaveAllowance)),present=Math.max(0,num(presentDays));
   if(!base||!employeeInPayrollMonth(e,ym))return 0;
-  const monthStart=ym+'-01',monthEnd=ym+'-'+String(dim).padStart(2,'0'),start=e.joiningDate&&e.joiningDate>monthStart?e.joiningDate:monthStart,end=e.lastWorkingDate&&e.lastWorkingDate<monthEnd?e.lastWorkingDate:monthEnd;
-  if(start===monthStart&&end===monthEnd)return base;
-  if(start>end)return 0;
-  if(e.weekOffDay){let count=0;for(let day=1;day<=dim;day++){const date=ym+'-'+String(day).padStart(2,'0');if(date<start||date>end)continue;if(WEEK_DAYS[new Date(date+'T00:00:00Z').getUTCDay()]===e.weekOffDay)count++;}return Math.min(base,count);}
-  const employedDays=Math.floor((Date.parse(end)-Date.parse(start))/86400000)+1;return Math.min(base,Math.floor(base*employedDays/dim));
+  // Final payroll-sheet rule: paid leave is earned from full present days.
+  // 0–5: 0, 6–8: 1, 9–11: 1.5, 12–14: 2, 15–17: 2.5,
+  // 18–20: 3, 21–23: 3.5, and 24+: 4. An employee-specific
+  // allowance remains a cap (for example, Suraj is capped at one day).
+  const earned=present<=5?0:present<=8?1:present<=11?1.5:present<=14?2:present<=17?2.5:present<=20?3:present<=23?3.5:4;
+  return Math.min(base,earned);
 }
 function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: false, rows: {}, attendance: {} }; return s.months[ym]; }
 function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }

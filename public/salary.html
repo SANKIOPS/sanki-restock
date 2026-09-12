@@ -219,7 +219,7 @@
         '<div class="legend">Click a cell to cycle: '+
           '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b>·</b> clear. Week-off is assigned automatically from the employee’s configured weekly-off day.'+
         '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+ 
-        '<div class="conf">Attendance stores P, H, A or WO only. Payroll adds the employee’s configured monthly paid-leave allowance separately; when it is 0, every A or WO deducts salary.</div>'+ 
+        '<div class="conf">Attendance stores P, H, A or WO only. Paid leave is earned from full present days: 6–8 gives 1 day, then +0.5 for each three-day band, up to 4 days at 24+. The employee setting is the monthly cap; when it is 0, every A or WO deducts salary.</div>'+
         '<details class="card"><summary>Bulk attendance import</summary><label>Validated JSON rows</label><textarea id="bulkAttendance" rows="8" style="width:100%" placeholder=\'[{"employeeName":"Employee name","marks":["P","A","HD"]}]\'></textarea><label><input id="confirmBulkAttendance" type="checkbox"> I confirm that supplied dates may replace existing attendance</label><button class="btn" id="saveBulkAttendance">Import this month atomically</button><div class="conf">All rows are validated before anything is saved. Blank marks clear those dates; HD is stored as Half Day.</div></details>';
       el('saveBulkAttendance').onclick=function(){var items;try{items=JSON.parse(el('bulkAttendance').value);}catch(e){flash('Enter valid JSON rows.',false);return;}if(!Array.isArray(items)||!items.length){flash('Add at least one employee row.',false);return;}if(!el('confirmBulkAttendance').checked){flash('Confirm that supplied dates may replace existing attendance.',false);return;}this.disabled=true;api('/api/salary/attendance/'+state.ym+'/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})}).then(function(x){if(!x.success)throw new Error(x.error||'Import failed');flash('Imported '+x.cells+' attendance cells for '+x.employees+' employees.',true);load();}).catch(function(e){flash(e.message,false);el('saveBulkAttendance').disabled=false;});};
       Array.prototype.forEach.call(document.querySelectorAll('.daycell'), function(c){
@@ -255,14 +255,14 @@
           '</tr>';
         }).join('');
         el('host').innerHTML =
-          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th class="l">Weekly off day</th><th>Paid leaves/month</th><th>Joining date</th><th>Last working date</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th class="l">Weekly off day</th><th>Maximum paid leaves/month</th><th>Joining date</th><th>Last working date</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
           '<div class="card" style="margin-top:14px"><div class="empform">'+
             '<div class="fld"><label>Name</label><input id="ne_name" placeholder="full name"></div>'+
             '<div class="fld"><label>Post</label><input id="ne_post" placeholder="e.g. Sales Executive"></div>'+
             '<div class="fld"><label>Monthly salary ₹</label><input id="ne_salary" type="number" placeholder="0"></div>'+
             '<div class="fld"><label>Channel</label><select id="ne_channel">'+chOpts('Shared')+'</select></div>'+
             '<div class="fld"><label>Weekly off day</label><select id="ne_weekoff">'+weekOpts('')+'</select></div>'+
-            '<div class="fld"><label>Paid leaves/month</label><input id="ne_paidleaves" type="number" min="0" value="4"></div>'+
+            '<div class="fld"><label>Maximum paid leaves/month</label><input id="ne_paidleaves" type="number" min="0" value="4"></div>'+
             '<div class="fld"><label>Joining date</label><input id="ne_joining" type="date"></div>'+
             '<div class="fld"><label>Last working date (optional)</label><input id="ne_lastworking" type="date"></div>'+
             '<div class="fld" style="justify-content:flex-end"><button class="btn" id="addEmp">＋ Add employee</button></div>'+

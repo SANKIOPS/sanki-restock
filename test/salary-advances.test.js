@@ -151,17 +151,33 @@ test('bulk attendance skips supplied marks outside employment dates',()=>{
   assert.equal(month.attendance[emp.id]['23'],undefined);assert.equal(month.attendance[emp.id]['24'],'A');
 });
 
-test('joining and leaving dates limit calendar-month weekly offs and paid days', () => {
+test('joining and leaving dates limit attendance and earned paid-leave days', () => {
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Mid Month Joiner',salary:12000,weekOffDay:'Sunday',joiningDate:'2026-08-20'}}).body.employee;
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'16',mark:'A'}}).status,400);
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'23',mark:'A'}}).body.mark,'WO');
   assert.equal(invoke('POST','/api/salary/attendance/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,day:'30',mark:'A'}}).body.mark,'WO');
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body, row=month.rows.find(x=>x.id===emp.id);
-  assert.equal(row.computedPaidDays,2,'partial-month employees keep both eligible paid weekly offs');
+  assert.equal(row.computedPaidDays,0,'paid leave is not earned before six full present days');
   const invalid=invoke('POST','/api/salary/employees',{body:{name:'Invalid Dates',joiningDate:'2026-08-20',lastWorkingDate:'2026-08-19'}});
   assert.equal(invalid.status,400);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/Joining date/); assert.match(html,/Last working date/); assert.match(html,/not-employed/);
+});
+
+test('paid-leave allowance follows the final salary-sheet attendance bands',()=>{
+  const expected=new Map([[5,5],[6,7],[8,9],[9,10.5],[11,12.5],[12,14],[14,15],[15,16.5],[17,18.5],[18,20],[20,22],[21,23.5],[23,25.5],[24,27],[30,33]]);
+  expected.forEach((paidDays,presentDays)=>{
+    const emp=invoke('POST','/api/salary/employees',{body:{name:'Band '+presentDays,salary:30000,monthlyPaidLeaveAllowance:4}}).body.employee;
+    const marks=Array(31).fill('A');for(let i=0;i<presentDays;i++)marks[i]='P';
+    assert.equal(invoke('POST','/api/salary/attendance/:ym/batch',{params:{ym:'2026-08'},body:{items:[{empId:emp.id,marks}]}}).status,200);
+    const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.find(x=>x.id===emp.id);
+    assert.equal(row.computedPaidDays,paidDays,'present days '+presentDays);
+  });
+  const capped=invoke('POST','/api/salary/employees',{body:{name:'One Day Cap',salary:30000,monthlyPaidLeaveAllowance:1}}).body.employee;
+  const marks=Array(31).fill('A');for(let i=0;i<24;i++)marks[i]='P';
+  invoke('POST','/api/salary/attendance/:ym/batch',{params:{ym:'2026-08'},body:{items:[{empId:capped.id,marks}]}});
+  const cappedRow=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows.find(x=>x.id===capped.id);
+  assert.equal(cappedRow.computedPaidDays,24,'employee-specific maximum remains authoritative');
 });
 
 test('a joiner working on the 31st receives that one paid day',()=>{
