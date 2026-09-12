@@ -182,7 +182,8 @@
         fetch('/api/data/load').then(r => r.json()).catch(() => ({}))
       ]);
       _products = Array.isArray(pj.products) ? pj.products : (Array.isArray(pj) ? pj : []);
-      const serverPOs = (srv && srv.data && srv.data.pos) || [];
+      const storedPOs = (srv && srv.data && srv.data.pos) || [];
+      const serverPOs = Array.isArray(storedPOs) ? storedPOs : Object.values(storedPOs || {});
       const localPOs = JSON.parse(localStorage.getItem('sanki_pos') || '[]');
       const map = {};
       for (const p of serverPOs) if (p.id) map[p.id] = p;
