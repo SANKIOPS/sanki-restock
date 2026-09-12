@@ -76,14 +76,26 @@ async function fetchCostAttention() {
     if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
     for (const item of (body.inventory_items || [])) costs.set(String(item.id), Number(item.cost) || 0);
   }
-  return relevant.map(product => {
+  const averages = new Map();
+  const missingProducts = relevant.map(product => {
     const source = sourceByHandle.get(product.handle);
     const physicalBySku = new Map((source.variants || []).map(variant => [String(variant.sku || '').trim(), variant]));
-    const missing = (product.variants || []).map(variant => {
+    const variants = (product.variants || []).map(variant => {
       const sku = String(variant.sku || '').trim();
       const physical = physicalBySku.get(sku);
       return { sku, inventoryItemId: String(variant.inventory_item_id || ''), cost: costs.get(String(variant.inventory_item_id)) || 0, physical };
-    }).filter(item => item.physical && (Number(item.physical.displayQty) + Number(item.physical.warehouseQty)) > 0 && !item.cost && item.inventoryItemId);
+    });
+    for (const item of variants) {
+      const qty = item.physical ? (Number(item.physical.displayQty) || 0) + (Number(item.physical.warehouseQty) || 0) : 0;
+      if (qty > 0 && item.cost > 0) {
+        const stat = averages.get(source.category) || { category: source.category, costedPieces: 0, costedSkus: 0, weightedTotal: 0 };
+        stat.costedPieces += qty;
+        stat.costedSkus++;
+        stat.weightedTotal += qty * item.cost;
+        averages.set(source.category, stat);
+      }
+    }
+    const missing = variants.filter(item => item.physical && (Number(item.physical.displayQty) + Number(item.physical.warehouseQty)) > 0 && !item.cost && item.inventoryItemId);
     if (!missing.length) return null;
     return {
       handle: product.handle,
@@ -105,6 +117,13 @@ async function fetchCostAttention() {
       }))
     };
   }).filter(Boolean);
+  const categoryAverages = Array.from(averages.values()).map(stat => ({
+    category: stat.category,
+    averageCost: Math.round((stat.weightedTotal / stat.costedPieces) * 100) / 100,
+    costedPieces: stat.costedPieces,
+    costedSkus: stat.costedSkus
+  })).sort((a, b) => a.category.localeCompare(b.category));
+  return { products: missingProducts, categoryAverages };
 }
 
 function desiredTags(product, existing) {
@@ -185,12 +204,12 @@ router.get('/api/inventory-categorization/status', (req, res) => res.json({ succ
 router.get('/api/inventory-costs/attention', async (req, res) => {
   try {
     if (!costCache.products || Date.now() - costCache.at > 15 * 60 * 1000) {
-      if (!costInflight) costInflight = fetchCostAttention().then(products => { costCache = { at: Date.now(), products }; }).finally(() => { costInflight = null; });
+      if (!costInflight) costInflight = fetchCostAttention().then(result => { costCache = { at: Date.now(), ...result }; }).finally(() => { costInflight = null; });
       await costInflight;
     }
     const missingSkus = costCache.products.reduce((total, product) => total + product.missingSkus.length, 0);
     const missingPieces = costCache.products.reduce((total, product) => total + product.missingSkus.reduce((qty, sku) => qty + sku.totalQty, 0), 0);
-    res.json({ success: true, products: costCache.products, productCount: costCache.products.length, missingSkus, missingPieces });
+    res.json({ success: true, products: costCache.products, categoryAverages: costCache.categoryAverages || [], productCount: costCache.products.length, missingSkus, missingPieces });
   } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
 });
 
