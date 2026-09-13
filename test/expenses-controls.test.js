@@ -1021,6 +1021,8 @@ test('secondary money flows preserve multiple proofs without duplicating the tra
   assert.equal(made.status,200);assert.equal(made.body.transfer.amount,10000);assert.deepEqual(made.body.transfer.proofs,proofs);assert.equal(made.body.transfer.proof,proofs[0]);
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   ['receiveProof','rc_proof','srf_proof','tr_proof'].forEach(id=>assert.match(html,new RegExp('id="'+id+'"[^>]*multiple')));
+  assert.match(html,/<details class="card"><summary><h3[^>]*>Record Customer Against the Sale<\/h3><\/summary>/);
+  assert.doesNotMatch(html,/Record customer refund against a sale/);
 });
 
 test('Prashant can record only the approved Axis 3448 to Axis 3645 transfer route',()=>{
