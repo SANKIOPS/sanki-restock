@@ -93,6 +93,7 @@ const API_ROLE_RULES = [
   { path: '/api/modules',                 roles: '*' },
   { prefix: '/api/admin',                 roles: ['admin', 'owner'] },
   { prefix: '/api/owner/',                roles: ['owner'] },
+  { prefix: '/api/model-calendar', roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
   { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'samast_accounting', 'claimant', 'personal_claimant', 'owner'] },

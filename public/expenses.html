@@ -530,6 +530,23 @@
     window.reopenCreditCardStatement=function(id){var reason=prompt('Reason for reopening this finalized statement:')||'';if(!reason.trim())return;api('/api/expenses/credit-cards/statements/'+id+'/reopen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason.trim()})}).then(function(d){if(!d.success){setMsg(d.error,false);return;}ccReviewId=id;setMsg('Statement reopened. Its prior card-category postings were reversed and the source file remains in Statement Logs.',true);renderCreditCards();});};
     window.loadCreditCardLedger=function(id){api('/api/expenses/credit-cards/'+id+'/ledger').then(function(d){var host=el('ccledger_'+id);if(!d.success){host.textContent=d.error;return;}host.innerHTML='<div class="claim-meta"><b>Outstanding '+fmt(d.outstanding)+'</b></div><table><thead><tr><th>Date</th><th>Description</th><th>Debit</th><th>Credit/payment</th><th>Balance</th></tr></thead><tbody>'+d.entries.map(function(x){return '<tr><td>'+esc(x.date||'Opening')+'</td><td>'+esc(x.description)+'</td><td>'+fmt(x.debit)+'</td><td>'+fmt(x.credit)+'</td><td>'+fmt(x.balance)+'</td></tr>';}).join('')+'</tbody></table>';});};
     function recordCreditCardPayment(){api('/api/expenses/credit-cards/payments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cardId:el('cc_pay_card').value,nature:el('cc_pay_nature').value,account:el('cc_pay_account').value,paymentKind:el('cc_pay_kind').value,amount:el('cc_pay_amount').value,date:el('cc_pay_date').value,reference:el('cc_pay_ref').value})}).then(function(d){if(!d.success){setMsg(d.error,false);return;}setMsg('Card payment linked to the paying bank ledger. Outstanding '+fmt(d.outstanding)+'.',true);renderCreditCards();});}
+    var modelCalendarContractId = new URLSearchParams(location.search).get('modelContractId') || '';
+    function prefillModelExpense(){
+      if(!modelCalendarContractId)return;
+      var save=el('saveExp');save.disabled=true;
+      api('/api/model-calendar/contracts/'+encodeURIComponent(modelCalendarContractId)).then(function(d){
+        if(!d.success){setMsg(d.error||'Model package could not load.',false);return;}
+        var c=d.contract;if(c.expenseId){setMsg('This package is already linked to '+c.expenseId+'. Open it from Model Calendar.',false);return;}
+        if(!el('f_amount'))return;
+        el('f_amount').value=c.amount;el('f_amount').readOnly=true;el('f_totalamount').value=c.amount;el('f_totalamount').readOnly=true;
+        el('f_vendor').value=c.name;el('f_nature').value='SANKI';el('f_nature').disabled=true;
+        el('f_part').value='Model shoot: '+c.name+' · '+c.month+' · '+c.includedShoots+' shoot(s)'+(c.details?' · '+c.details:'');
+        if(el('f_ledger')){el('f_ledger').value='Models Payment';onLedgerInput();}
+        if(el('f_type'))el('f_type').value='marketing';
+        var banner=document.createElement('div');banner.className='msg ok';banner.textContent='Linked to Model Calendar: '+c.name+'. Submit the bill here, then use the normal approval and payment steps.';el('panel').prepend(banner);
+        save.disabled=false;
+      }).catch(function(){setMsg('Could not load the model package. Reload before submitting.',false);});
+    }
     function renderLog(){
       el('panel').innerHTML =
       '<div class="card"><div class="grid">'+
@@ -576,6 +593,7 @@
       if(el('testTelegram'))el('testTelegram').addEventListener('click',testTelegram);
       if(el('unlinkTelegram'))el('unlinkTelegram').addEventListener('click',function(){unlinkTelegram('');});
       togglePaymentFlow(); toggleInstallment();
+      prefillModelExpense();
     }
     function renderVendorSuggestions(){
       var input=el('f_vendor'), menu=el('vendorSuggestions'), q=input.value.trim().toLowerCase();
@@ -672,6 +690,7 @@
       var btn = el('saveExp'); btn.disabled=true; el('upState').textContent='uploading…';
       Promise.all([uploadFiles(billFiles),(!paidAlready&&(paymentType==='UPI'||paymentType==='Credit')&&qrInput.files[0])?uploadFile(qrInput):Promise.resolve(''),paidAlready?uploadFiles(personalFiles):Promise.resolve([])]).then(function(urls){
         var body = {
+          modelCalendarContractId: modelCalendarContractId || undefined,
           date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value, nature:el('f_nature').value,
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
           vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
@@ -1397,6 +1416,7 @@
       // Optional deep links can open a particular expense or the approvals queue.
       var qs = new URLSearchParams(location.search);
       var f = qs.get('focus'), tp = qs.get('tab');
+      if(modelCalendarContractId)tp='log';
       if(f){ tab = 'list'; focusId = f; focusedExpenseId = f; }
       else if(tp && el('tabs').querySelector('[data-t="'+tp+'"]')){ tab = tp; }
       Array.prototype.forEach.call(el('tabs').children, function(b){ b.classList.toggle('on', b.dataset.t===tab); });

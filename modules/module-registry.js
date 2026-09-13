@@ -61,6 +61,7 @@ const MODULES = [
   { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'hidden', roles: ['admin', 'accounting', 'revenue', 'owner'] },
   { key: 'balance-sheet',title: 'Balance Sheet',          desc: 'Assets, liabilities and recorded net position as of a selected date', icon: '⚖️', href: '/balance-sheet.html', section: 'Accounts', status: 'hidden', roles: ['admin','owner'] },
   { key: 'expenses',     title: 'Ledgers',               desc: 'Expenses, payments, account movements and reconciliations', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'samast_accounting', 'personal_claimant', 'claimant', 'owner'] },
+  { key: 'model-calendar', title: 'Model Calendar', desc: 'Schedule models, track packages and linked expense payments', icon: '📅', href: '/model-calendar.html', section: 'Marketing', status: 'live', roles: ['admin', 'accounting', 'owner'] },
   { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the P&L', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },

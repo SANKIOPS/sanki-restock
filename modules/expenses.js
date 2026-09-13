@@ -27,6 +27,7 @@ const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
 
 const router = express.Router();
+const modelCalendar = require('./model-calendar');
 
 const DATA_DIR = process.env.DATA_PATH
   ? path.dirname(process.env.DATA_PATH)
@@ -1286,6 +1287,9 @@ router.get('/api/expenses/config', (req, res) => {
 router.post('/api/expenses', (req, res) => {
   const b = req.body || {};
   const s = loadStore();
+  let modelContract;
+  try { modelContract = modelCalendar.prepareExpenseLink(s, req, b); }
+  catch (error) { return res.status(error.status || 400).json({ success:false, error:error.message }); }
   // Only Admin/Owner classify expenses. Every other submitter gets the simple
   // claimant form and Admin/Owner assigns the category during review.
   const ledger = isAdmin(req) ? String(b.ledger || '').trim() : '';
@@ -1374,6 +1378,7 @@ router.post('/api/expenses', (req, res) => {
     approvedAt: null, approvedBy: null,
     paidAt: null, paidBy: null
   };
+  if (modelContract) modelCalendar.attachExpense(s, modelContract, s.expenses[id]);
   audit(s,req,'CREATED','expense',id,{nature,after:s.expenses[id]});
   saveStore(s);
   notifyApproversNewExpense(s.expenses[id]);
@@ -3299,6 +3304,8 @@ function summaryForPL(from, to) {
 // Run idempotent store repairs/corrections when the service starts, rather
 // than waiting for the first user to open an Expenses screen.
 const startupExpenseStore=loadStore(),startupDraftAccounts=new Set(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).map(x=>normalizedNature(x.nature)+'|'+x.account));let startupReconciliationRepaired=false;startupDraftAccounts.forEach(key=>{const separator=key.indexOf('|'),nature=key.slice(0,separator),account=key.slice(separator+1),count=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).length;if(count>1){mergeActiveBankReconciliationDrafts(startupExpenseStore,account,nature);startupReconciliationRepaired=true;}const draft=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).find(x=>normalizedNature(x.nature)===nature&&x.account===account);if(draft&&extendPendingDraftThroughFinalizedCoverage(startupExpenseStore,draft))startupReconciliationRepaired=true;});if(startupReconciliationRepaired)saveStore(startupExpenseStore);
+
+router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 
 // Keep API failures machine-readable so the page can display the real failure
 // instead of silently trying to parse Express's HTML error page.
