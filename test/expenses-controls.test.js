@@ -2087,6 +2087,24 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
   assert.equal(paid.body.expense.payments.at(-1).reconciliationOverrideReason, 'Urgent approved vendor payment');
 });
 
+test('split Shopify sales credit only the cash portion and Admin corrections require Owner approval',()=>{
+  fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{
+    split:{id:'split',name:'#SPLIT',orderNumber:9901,createdAt:'2099-09-12T10:00:00Z',financialStatus:'paid',paymentGateways:['Cash','Paytm'],total:50000,refundAmount:0}
+  }}));
+  let cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash',from:'2099-09-12',to:'2099-09-12'},role:'owner'}).body.entries;
+  assert.equal(cash.find(x=>x.id==='SHOPIFY/split').credit,50000,'ambiguous source data remains visible until reviewed');
+  const requested=invoke('POST','/api/expenses/sale-allocation',{role:'admin',body:{saleId:'SHOPIFY/split',cashAmount:25000,reason:'Customer paid half cash and half UPI'}});
+  assert.equal(requested.status,200);assert.equal(requested.body.approved,false);
+  cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash',from:'2099-09-12',to:'2099-09-12'},role:'owner'}).body.entries;
+  assert.equal(cash.find(x=>x.id==='SHOPIFY/split').credit,50000,'Admin request cannot change the ledger before Owner approval');
+  const adminBlocked=invoke('POST','/api/expenses/requests/:id/decide',{role:'admin',params:{id:requested.body.request.id},body:{approve:true}});assert.equal(adminBlocked.status,403);
+  const approved=invoke('POST','/api/expenses/requests/:id/decide',{role:'owner',params:{id:requested.body.request.id},body:{approve:true}});assert.equal(approved.status,200);
+  cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash',from:'2099-09-12',to:'2099-09-12'},role:'owner'}).body.entries;
+  const axis=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448',from:'2099-09-12',to:'2099-09-12'},role:'owner'}).body.entries;
+  assert.equal(cash.find(x=>x.id==='SHOPIFY/split').credit,25000);assert.equal(axis.find(x=>x.id==='SHOPIFY/split/NONCASH').credit,25000);
+  const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'));assert.equal(stored.saleAllocationOverrides['SHOPIFY/split'].gross,50000);assert.equal(stored.auditLog.at(-2).action,'SALE_ALLOCATION_CORRECTED');assert.equal(stored.auditLog.at(-2).after.requestedBy,'prashant');
+});
+
 test('IndusInd 8181 is a complete SANKI bank account from 5 September 2026',()=>{
   const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.ok(config.accountsByNature.SANKI.includes('IndusInd Bank 8181'));
