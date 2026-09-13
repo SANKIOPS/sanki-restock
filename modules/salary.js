@@ -27,6 +27,12 @@ function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 function round0(n) { return Math.round(n); }
 function round2(n) { return Math.round(n * 100) / 100; }
 function byEmployeeName(a, b) { return String(a.name || a.employeeName || '').localeCompare(String(b.name || b.employeeName || ''), 'en', { sensitivity:'base', numeric:true }); }
+function salaryHistoryOf(e) { return Array.isArray(e.salaryHistory) ? e.salaryHistory.slice().sort((a,b)=>String(a.effectiveMonth||'').localeCompare(String(b.effectiveMonth||''))||String(a.recordedAt||'').localeCompare(String(b.recordedAt||''))) : []; }
+function salaryForMonth(e, ym) {
+  let salary=num(e.baseSalary != null ? e.baseSalary : e.salary);
+  salaryHistoryOf(e).forEach(x=>{ if(String(x.effectiveMonth||'')<=ym)salary=num(x.updatedSalary); });
+  return round2(salary);
+}
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const SALARY_PAYING_ACCOUNTS = ['Gagan Sir Cash', 'Counter Cash'];
@@ -469,9 +475,9 @@ function employeeMonthBase(s,e,ym){
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
   const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),historicalPaidDays=row.historicalPaidDays!=null?num(row.historicalPaidDays):null,paidDays=historicalPaidDays!=null?historicalPaidDays:(computed!=null?computed:(row.paidDays!=null?num(row.paidDays):null));
-  const salaryAmt=paidDays!=null?(num(e.salary)/div*paidDays):0,legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery),historicalCloseAdjustment=num(row.historicalCloseAdjustment);
+  const monthlySalary=salaryForMonth(e,ym),salaryAmt=paidDays!=null?(monthlySalary/div*paidDays):0,legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery),historicalCloseAdjustment=num(row.historicalCloseAdjustment);
   const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
-  return {row,computed,historicalPaidDays,paidDays,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,historicalCloseAdjustment,legacyPaid,transactionPaid,paid};
+  return {row,computed,historicalPaidDays,paidDays,monthlySalary,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,historicalCloseAdjustment,legacyPaid,transactionPaid,paid};
 }
 function payrollBalanceCarryIn(s,e,ym){
   let carry=0;
@@ -487,7 +493,7 @@ function computeMonth(s, ym) {
     const x=employeeMonthBase(s,e,ym),openingBalanceCarry=payrollBalanceCarryIn(s,e,ym),openingAdvanceCarry=round2(Math.max(0,-openingBalanceCarry)),openingPayableCarry=round2(Math.max(0,openingBalanceCarry)),advance=round2(x.currentAdvance+openingAdvanceCarry),netPayable=x.salaryAmt-x.currentAdvance+openingBalanceCarry+x.historicalCloseAdjustment;
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
-      salary: num(e.salary), paidDays:x.paidDays, computedPaidDays:x.computed, historicalPaidDays:x.historicalPaidDays,
+      salary: x.monthlySalary, paidDays:x.paidDays, computedPaidDays:x.computed, historicalPaidDays:x.historicalPaidDays,
       salaryAmt: round2(x.salaryAmt), advance, currentAdvance:x.currentAdvance, openingBalanceCarry, openingAdvanceCarry, openingPayableCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, netPayable: round2(netPayable),
       deductionAdjustment:round2(openingBalanceCarry-x.currentAdvance+x.historicalCloseAdjustment), adjustmentDetails:[
         ...(x.loggedAdvanceRecovery?[{kind:'advance_recovery',amount:-x.loggedAdvanceRecovery,description:'Salary advance recovered in '+ym}]:[]),
@@ -533,7 +539,8 @@ router.use('/api/salary',(req,res,next)=>salaryContext.run({entity:salaryEntity(
 // ── Employee master ──
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
-  res.json({ success: true, entity:activeSalaryEntity(), employees: Object.values(s.employees).sort(byEmployeeName), divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS });
+  const currentMonth=new Date().toISOString().slice(0,7),employees=Object.values(s.employees).sort(byEmployeeName).map(e=>Object.assign({},e,{salaryHistory:salaryHistoryOf(e),effectiveSalary:salaryForMonth(e,currentMonth)}));
+  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -543,6 +550,7 @@ router.post('/api/salary/employees', guard, (req, res) => {
   if(duplicate)return res.status(409).json({success:false,duplicate:true,existingEmployee:{id:duplicate.id,name:duplicate.name,post:duplicate.post},error:duplicate.name+' already exists. Edit or reactivate the existing employee instead.'});
   if (!id) id=nextEmployeeId(s);
   const cur = s.employees[id] || {};
+  if(cur.id&&b.salary!==undefined&&round2(num(b.salary))!==round2(num(cur.salary)))return res.status(400).json({success:false,error:'Use Salary increments to change an existing employee salary so previous payroll months remain unchanged.'});
   const joiningDate=b.joiningDate!==undefined?String(b.joiningDate||'').slice(0,10):(cur.joiningDate||''),lastWorkingDate=b.lastWorkingDate!==undefined?String(b.lastWorkingDate||'').slice(0,10):(cur.lastWorkingDate||'');
   if((joiningDate&&!/^\d{4}-\d{2}-\d{2}$/.test(joiningDate))||(lastWorkingDate&&!/^\d{4}-\d{2}-\d{2}$/.test(lastWorkingDate)))return res.status(400).json({success:false,error:'Use valid joining and last-working dates.'});
   if(joiningDate&&lastWorkingDate&&lastWorkingDate<joiningDate)return res.status(400).json({success:false,error:'Last working date cannot be before the joining date.'});
@@ -551,6 +559,8 @@ router.post('/api/salary/employees', guard, (req, res) => {
     name: String(b.name != null ? b.name : cur.name || '').trim(),
     post: String(b.post != null ? b.post : cur.post || '').trim(),
     salary: b.salary != null ? num(b.salary) : num(cur.salary),
+    baseSalary: cur.baseSalary != null ? num(cur.baseSalary) : (b.salary != null ? num(b.salary) : num(cur.salary)),
+    salaryHistory: salaryHistoryOf(cur),
     channel: CHANNELS.includes(b.channel) ? b.channel : (cur.channel || 'Shared'),
     weekOffDay: b.weekOffDay !== undefined ? (WEEK_DAYS.includes(b.weekOffDay) ? b.weekOffDay : '') : (cur.weekOffDay || ''),
     monthlyPaidLeaveAllowance: b.monthlyPaidLeaveAllowance !== undefined ? Math.max(0,num(b.monthlyPaidLeaveAllowance)) : (cur.monthlyPaidLeaveAllowance == null ? 4 : Math.max(0,num(cur.monthlyPaidLeaveAllowance))),
@@ -561,6 +571,21 @@ router.post('/api/salary/employees', guard, (req, res) => {
   };
   save(s);
   res.json({ success: true, employee: s.employees[id] });
+});
+router.post('/api/salary/increments', guard, (req,res)=>{
+  const s=load(),b=req.body||{},emp=s.employees[b.empId],effectiveMonth=String(b.effectiveMonth||''),updatedSalary=round2(num(b.updatedSalary));
+  if(!emp)return res.status(400).json({success:false,error:'Select an employee.'});
+  if(!/^\d{4}-\d{2}$/.test(effectiveMonth)||Number(effectiveMonth.slice(5,7))<1||Number(effectiveMonth.slice(5,7))>12)return res.status(400).json({success:false,error:'Select a valid effective salary month.'});
+  if(!(updatedSalary>0))return res.status(400).json({success:false,error:'Enter a valid updated monthly salary.'});
+  const history=salaryHistoryOf(emp);
+  if(history.some(x=>x.effectiveMonth===effectiveMonth))return res.status(409).json({success:false,error:'A salary change already exists for this employee in '+effectiveMonth+'.'});
+  const previousSalary=salaryForMonth(emp,effectiveMonth);
+  if(updatedSalary<=previousSalary)return res.status(400).json({success:false,error:'The incremented salary must be greater than the ₹'+previousSalary+' salary effective for that month.'});
+  if(emp.baseSalary==null)emp.baseSalary=num(emp.salary);
+  const at=new Date().toISOString(),entry={id:'INC-'+String(Date.now())+'-'+emp.id,effectiveMonth,previousSalary,updatedSalary,increase:round2(updatedSalary-previousSalary),recordedAt:at,recordedBy:req.user&&req.user.username||'admin'};
+  emp.salaryHistory=history.concat(entry).sort((a,b)=>String(a.effectiveMonth).localeCompare(String(b.effectiveMonth))||String(a.recordedAt).localeCompare(String(b.recordedAt)));
+  emp.salary=emp.salaryHistory.reduce((latest,x)=>num(x.updatedSalary),num(emp.baseSalary));
+  save(s);res.json({success:true,employee:Object.assign({},emp,{effectiveSalary:salaryForMonth(emp,new Date().toISOString().slice(0,7))}),increment:entry});
 });
 router.delete('/api/salary/employees/:id', guard, (req, res) => {
   const s = load();

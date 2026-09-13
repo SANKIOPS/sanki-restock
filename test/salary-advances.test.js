@@ -106,6 +106,20 @@ test('every salary employee list is returned alphabetically A to Z', () => {
   assert.deepEqual(summary,summary.slice().sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base',numeric:true})));
 });
 
+test('salary increments are effective-dated and preserve earlier payroll salary',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Increment History Employee',salary:30000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,paidDays:30}});
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-10'},body:{empId:emp.id,paidDays:30}});
+  const added=invoke('POST','/api/salary/increments',{body:{empId:emp.id,updatedSalary:36000,effectiveMonth:'2026-10'}});
+  assert.equal(added.status,200);assert.equal(added.body.increment.previousSalary,30000);assert.equal(added.body.increment.increase,6000);
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows.find(x=>x.id===emp.id).salary,30000);
+  const october=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body.rows.find(x=>x.id===emp.id);assert.equal(october.salary,36000);assert.equal(october.salaryAmt,36000);
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-11'}}).body.rows.find(x=>x.id===emp.id).salary,36000);
+  const listed=invoke('GET','/api/salary/employees').body.employees.find(x=>x.id===emp.id);assert.equal(listed.salaryHistory.length,1);assert.equal(listed.salaryHistory[0].effectiveMonth,'2026-10');
+  assert.equal(invoke('POST','/api/salary/increments',{body:{empId:emp.id,updatedSalary:37000,effectiveMonth:'2026-10'}}).status,409);
+  assert.equal(invoke('POST','/api/salary/employees',{body:{id:emp.id,salary:40000}}).status,400);
+});
+
 test('adding employees never reuses a stale ID or overwrites an existing employee',()=>{
   const before=invoke('GET','/api/salary/employees').body.employees,protectedEmployee=before[0];
   const salaryPath=path.join(tempDir,'salary.json'),stored=JSON.parse(fs.readFileSync(salaryPath,'utf8'));stored.seq=0;fs.writeFileSync(salaryPath,JSON.stringify(stored));
