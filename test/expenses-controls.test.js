@@ -2239,3 +2239,20 @@ test('full-volume recovery compresses only oversized historical JPEG proofs in p
   assert.match(source,/replacement\.length>=before\*\.95/);
   assert.match(source,/fs\.writeFileSync\(fp,replacement\)/);
 });
+
+test('Owner can replace a deleted expense link in finalized reconciliation with the correct transfer',()=>{
+  invoke('POST','/api/expenses',{body:{ledger:'FOOD EXPENSE',vendor:'Fixture',particulars:'Fixture',amount:1,billPhoto:'/fixture.jpg',paymentType:'Cash'}});
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8');
+  try{
+    const s=JSON.parse(baseline),account='ICICI Bank 0993',recordId='BST-FINAL-CORRECTION',rowId='bank-30k';
+    s.transfers=s.transfers||[];s.transfers.push({id:'TR-FINAL-30000',nature:'PERSONAL',fromNature:'PERSONAL',toNature:'PERSONAL',fromAccount:account,toAccount:'Namita 5464',amount:30000,date:'2026-09-04',classification:'internal_transfer',createdBy:'owner-user',createdAt:'2026-09-13T12:00:00Z'});
+    s.bankStatements=s.bankStatements||{};s.bankStatements['PERSONAL|'+account]={transactions:{},imports:[{id:recordId,from:'2026-09-01',to:'2026-09-05',finalizedAt:'2026-09-06T10:00:00Z',finalizedBy:'owner-user',reconciliationRows:[{id:rowId,bank:{date:'2026-09-04',description:'Transfer to Namita',reference:'BANK-30000',debit:30000,credit:0,transactionId:'BTX-30000'},ledger:{id:'EX-DELETED/PAY-001',date:'2026-09-04',debit:30000,credit:0},linkedRecordIds:['EX-DELETED/PAY-001'],decision:'Matched with ledger entry',reason:'Original classification'}]}],reconciledThrough:'2026-09-05'};
+    fs.writeFileSync(expenseFile,JSON.stringify(s));
+    const denied=invoke('POST','/api/expenses/bank-statements/correct-finalized-link',{role:'admin',body:{nature:'PERSONAL',account,recordId,rowId,appId:'TR-FINAL-30000',reason:'Correct classification'}});assert.equal(denied.status,403);
+    const corrected=invoke('POST','/api/expenses/bank-statements/correct-finalized-link',{role:'owner',body:{nature:'PERSONAL',account,recordId,rowId,appId:'TR-FINAL-30000',reason:'Expense deleted; this was an internal transfer to Namita'}});
+    assert.equal(corrected.status,200,JSON.stringify(corrected.body));assert.deepEqual(corrected.body.row.linkedRecordIds,['TR-FINAL-30000']);assert.equal(corrected.body.row.corrected,true);assert.equal(corrected.body.row.correctionHistory[0].before.linkedRecordIds[0],'EX-DELETED/PAY-001');
+    const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(saved.bankDateOverrides['TR-FINAL-30000'].bankDate,'2026-09-04');assert.ok(saved.auditLog.some(x=>x.action==='FINALIZED_BANK_RECONCILIATION_LINK_CORRECTED'&&x.subjectId===recordId));
+    const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'PERSONAL',account,from:'2026-09-04',to:'2026-09-04'}}).body.entries.find(x=>x.id==='TR-FINAL-30000');assert.equal(ledger.reconciliation.status,'reconciled');
+    const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Correct link/);assert.match(html,/correct-finalized-link/);
+  }finally{fs.writeFileSync(expenseFile,baseline);}
+});
