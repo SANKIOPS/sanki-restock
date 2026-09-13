@@ -113,7 +113,7 @@ const SEED = {
   sizes: { // size label → suffix code (letter sizes for uppers, waist for bottoms)
     'Free Size': 'FS', 'Medium': 'M', 'Large': 'L', 'Extra Large': 'XL',
     'Double Extra Large': 'XXL', 'Triple Extra Large': '3XL', 'Four Extra Large': '4XL',
-    'Waist 28': '28', 'Waist 30': '30', 'Waist 32': '32', 'Waist 34': '34',
+    'Waist 24': '24', 'Waist 26': '26', 'Waist 28': '28', 'Waist 30': '30', 'Waist 32': '32', 'Waist 34': '34',
     'Waist 36': '36', 'Waist 38': '38', 'Waist 40': '40', 'Waist 42': '42', 'Waist 44': '44'
   },
   vendors: [ // known China vendors (from the sheet); ALWAYS stored UPPERCASE
@@ -131,7 +131,7 @@ const SEED = {
 };
 
 // Known size suffix tokens — used to parse the serial out of an existing SKU.
-const SIZE_TOKENS = ['FS','XS','S','M','L','XL','XXL','3XL','4XL','5XL','28','30','32','34','36','38','40','42','44'];
+const SIZE_TOKENS = ['FS','XS','S','M','L','XL','XXL','3XL','4XL','5XL','24','26','28','30','32','34','36','38','40','42','44'];
 // Trailing size embedded in the serial regex (longest-first) so the greedy
 // number group backtracks to a VALID size token — critical for numeric waist
 // sizes (…33 could otherwise split as num=…3, size='3').
@@ -154,6 +154,7 @@ function loadStore() {
   if (!s.products) s.products = { ...SEED.products };
   if (!s.colours)  s.colours = { ...SEED.colours };
   if (!s.sizes)    s.sizes = { ...SEED.sizes };
+  else s.sizes = { ...SEED.sizes, ...s.sizes };
   if (!Array.isArray(s.vendors)) s.vendors = [ ...SEED.vendors ];
   else { // normalize any older mixed-case entries to UPPERCASE + dedupe
     const seen = {}; s.vendors = s.vendors.map(v => String(v).toUpperCase().trim())
@@ -206,6 +207,14 @@ function parseSerial(sku) {
   const m = String(sku || '').toUpperCase().match(SERIAL_RE);
   if (!m) return null;
   return { alpha: m[1], num: parseInt(m[2], 10) };
+}
+// Keep the article's running serial, but rebuild all classification-derived
+// parts whenever product type, colour or size changes.
+function rebuildLineSku(store, line, previousSku) {
+  const serial = line.serialUsed || parseSerial(previousSku || line.sku);
+  if (!serial) return { sku: String(line.sku || '').toUpperCase().trim(), serialUsed: null, error: 'Could not retain the SKU serial.' };
+  const built = buildSku(store, line.productType, line.colour, line.sizeLabel, serial);
+  return { sku: built.sku || '', serialUsed: { ...serial }, error: built.error || null };
 }
 // Compare two serials: alpha first (A<B…), then number.
 function serialGt(a, b) {
@@ -553,7 +562,7 @@ async function computePreview(store, body) {
     // We generate the candidate SKU using the NEXT serial, but if the user
     // supplied an explicit existing SKU we honour it for the EXISTING path.
     let sku = (raw.sku || '').toUpperCase().trim();
-    let serialUsed = null, skuError = null;
+    let serialUsed = raw.serialUsed || null, skuError = raw.skuError || null;
     const existingByGiven = sku && cat.skuMap[sku];
     if (!sku) {
       cursor = nextSerial(cursor);
@@ -1003,7 +1012,7 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
     const s = loadStore();
     const products = Object.keys(s.products);
     const colours = Object.keys(s.colours);
-    const sizes = ['FS', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '28', '30', '32', '34', '36', '38', '40', '42', '44'];
+    const sizes = ['FS', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44'];
     const fits = ['Oversized', 'Drop Shoulder', 'Boxy Fit', 'Relaxed Fit', 'Regular Fit', 'Slim Fit', 'Muscle Fit',
                   'Baggy Fit', 'Straight Fit', 'Tapered Fit', 'Skinny Fit', 'Narrow Fit', 'Wide Leg', 'Bootcut', 'Cargo Fit'];
     const b64 = req.file.buffer.toString('base64');
@@ -1269,8 +1278,8 @@ router.post('/api/procurement/pos/:id/line-photo', (req, res) => {
 // advance form. Each touched line freezes its ORDERED baseline the first
 // time it's edited (so pre-existing POs start tracking from now), then any
 // field that ends up differing from `ordered` is a highlighted discrepancy.
-// SKU is a free-text override (these POs aren't on Shopify yet); we do NOT
-// auto-regenerate it from colour/category/size, per the chosen behaviour.
+// A direct SKU correction remains possible, but changing product type, colour
+// or size automatically rebuilds the SKU while retaining its article serial.
 const LINE_EDIT_FIELDS = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'chinaSize', 'fit', 'audience', 'sku'];
 router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
   const s = loadStore();
@@ -1291,6 +1300,8 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
     // that introduces a difference is captured against the prior values.
     if (!l.ordered || typeof l.ordered !== 'object') l.ordered = orderedSnapshot(l);
     let changed = false;
+    const priorSku = l.sku;
+    const priorIdentity = [l.productType, l.colour, l.sizeLabel].map(v => String(v == null ? '' : v));
     if (e) LINE_EDIT_FIELDS.forEach(k => {
       if (e[k] == null) return;
       let v = String(e[k]).trim();
@@ -1300,6 +1311,13 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
     if (hasQty) {
       const q = Math.max(0, Math.round(num(qtys[i])));
       if (q !== (num(l.qty) || 0)) { l.qty = q; changed = true; }
+    }
+    const nextIdentity = [l.productType, l.colour, l.sizeLabel].map(v => String(v == null ? '' : v));
+    if (priorIdentity.some((v, idx) => v !== nextIdentity[idx])) {
+      const rebuilt = rebuildLineSku(s, l, priorSku);
+      l.sku = rebuilt.sku;
+      l.serialUsed = rebuilt.serialUsed;
+      l.skuError = rebuilt.error;
     }
     if (changed) { l.editedAt = now; l.editedBy = who; touched++; }
   });
@@ -1337,16 +1355,27 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
       const base = po.datePurchase ? new Date(po.datePurchase) : new Date();
       if (!isNaN(base.getTime())) { base.setDate(base.getDate() + po.leadTimeDays); po.expectedReceiveDate = base.toISOString().slice(0, 10); }
     }
-    // FULL line edit: caller sends the complete edited line set. Lines that keep
-    // their existing SKU keep it (frozen); brand-new lines (no sku) get the next
-    // serial. computePreview honours an explicit sku, so pre-filling each line's
-    // sku preserves it. Weight is carried through if the line already had one.
+    // FULL line edit: retain the serial, but rebuild the SKU when its product,
+    // colour or size components changed. Brand-new lines receive a new serial.
     if (Array.isArray(b.lines)) {
       // Carry each line's frozen "ordered" baseline across a full-form edit. The
       // preview rebuild drops unknown fields, so we re-attach by (stable) SKU.
       const prevOrdered = {};
       (po.lines || []).forEach(l => { if (l.sku && l.ordered) prevOrdered[l.sku] = l.ordered; });
-      const preview = await computePreview(s, { lines: b.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
+      const preparedLines = b.lines.map((raw, idx) => {
+        const incoming = { ...raw };
+        const old = (po.lines || [])[idx];
+        if (!old) return incoming;
+        const identityChanged = ['productType', 'colour', 'sizeLabel'].some(k => String(incoming[k] == null ? '' : incoming[k]) !== String(old[k] == null ? '' : old[k]));
+        if (identityChanged) {
+          const rebuilt = rebuildLineSku(s, incoming, old.sku);
+          incoming.sku = rebuilt.sku;
+          incoming.serialUsed = rebuilt.serialUsed;
+          incoming.skuError = rebuilt.error;
+        }
+        return incoming;
+      });
+      const preview = await computePreview(s, { lines: preparedLines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
       po.lines = preview.lines.map(l => ({
         designName: l.designName, productType: l.productType, colour: l.colour,
         sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
@@ -1850,4 +1879,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, landedCost, parseSerial, nextSerial, canManagePurchases };
+module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases };

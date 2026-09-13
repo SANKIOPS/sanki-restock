@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, canManagePurchases } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases } = require('../modules/procurement');
 
 test('purchase SKU serials roll from Z999 to AA1 without punctuation', () => {
   assert.deepEqual(nextSerial({ alpha: 'Z', num: 999 }), { alpha: 'AA', num: 1 });
@@ -13,6 +13,23 @@ test('purchase SKU serials roll from Z999 to AA1 without punctuation', () => {
     buildSku({ brand: 'SA', products: { Trouser: 11 }, colours: { Black: 1 }, sizes: {} }, 'Trouser', 'Black', '34', { alpha: 'AA', num: 1 }).sku,
     'SA111AA134'
   );
+});
+
+test('trouser waist sizes 24 and 26 produce valid SKUs and preserve serials on edits', () => {
+  const store = { brand: 'SA', products: { Trouser: 11 }, colours: { Black: 1, Blue: 2 }, sizes: {} };
+  assert.equal(buildSku(store, 'Trouser', 'Black', '24', { alpha: 'AA', num: 1 }).sku, 'SA111AA124');
+  assert.deepEqual(parseSerial('SA111AA124'), { alpha: 'AA', num: 1 });
+  assert.equal(rebuildLineSku(store, { productType: 'Trouser', colour: 'Blue', sizeLabel: '26' }, 'SA111AA124').sku, 'SA112AA126');
+});
+
+test('invoice OCR can fill bill headers before vendor, bill number and date are entered', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.match(html, /if\(d\.vendor\)/);
+  assert.match(html, /vendorSel\.value=vendorName/);
+  assert.doesNotMatch(html, /Select the vendor first \(required\)/);
+  assert.doesNotMatch(html, /Enter the bill number first \(required\)/);
+  assert.match(html, /var TROUSER_WAIST_SIZES=\['24','26'/);
+  assert.match(html, /function sizesFor\(p\)\{ return isTrouser\(p\)\?TROUSER_WAIST_SIZES/);
 });
 
 test('owner and procurement roles receive the full Purchases workflow in the UI', () => {

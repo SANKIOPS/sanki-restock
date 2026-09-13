@@ -139,7 +139,7 @@
     <!-- ══════════ VIEW 1: ADVANCE ══════════ -->
     <div id="viewAdvance">
       <div id="editingBanner" class="banner info hidden" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-        <span>Editing <b id="editingPoLabel"></b> — change any detail below, then <b>Update PO</b>. SKUs already assigned stay the same.</span>
+        <span>Editing <b id="editingPoLabel"></b> — change any detail below, then <b>Update PO</b>. Size, colour and product changes update the SKU automatically.</span>
         <button class="btn ghost sm" id="cancelEditPo">Cancel edit</button>
       </div>
       <div class="panel">
@@ -149,7 +149,7 @@
           <button class="btn" id="parseInvoiceBtn">Read invoice &amp; fill lines</button>
           <span class="muted" id="invoiceNote" style="font-size:12px"></span>
         </div>
-        <p class="sub">First set <b>Vendor</b>, <b>Bill number</b> &amp; <b>Date of purchase</b> in the “Vendor bill” panel below (all required) — then read the invoice. Extracted lines drop into the form below to review; add each product photo, then Save.</p>
+        <p class="sub">Upload the bill first. AI will read the vendor, bill number, date and line items for you to review; fill only anything it could not read.</p>
       </div>
 
       <div class="panel">
@@ -356,17 +356,20 @@
     var LOWER_FITS=['Baggy Fit','Straight Fit','Relaxed Fit','Tapered Fit','Slim Fit','Skinny Fit','Narrow Fit','Wide Leg','Bootcut','Cargo Fit'];
     var UPPER_SIZES=['FS','S','M','L','XL','XXL','3XL','4XL'];
     var LOWER_SIZES_INDIA=['FS','28','30','32','34','36','38','40','42','44'];
+    var TROUSER_WAIST_SIZES=['24','26','28','30','32','34','36','38','40','42','44'];
     var CHINA_SIZES=['FS','S','M','L','XL','XXL','3XL','4XL'];
     function categoryOf(p){ p=String(p||'').toLowerCase();
       if(/jean|trouser|lower|short|jogger|jort|pant|cargo|denim|bottom/.test(p)) return 'lower';
       if(/shirt|tee|t-shirt|sweat|hoodie|hood|sando|top|jacket|tank|coord|set/.test(p)) return 'upper';
       return 'other';
     }
+    function isTrouser(p){ return /trouser/i.test(String(p||'')); }
+    function sizesFor(p){ return isTrouser(p)?TROUSER_WAIST_SIZES:(categoryOf(p)==='lower'?LOWER_SIZES_INDIA:UPPER_SIZES); }
     function syncCategory(){
       var isLower = categoryOf(el('f_productType').value)==='lower';
       var keepFit=el('f_fit').value, keepCn=el('f_chinaSize').value;
       optsArr(el('f_fit'), isLower?LOWER_FITS:UPPER_FITS);
-      optsArr(el('f_sizeLabel'), isLower?LOWER_SIZES_INDIA:UPPER_SIZES);
+      optsArr(el('f_sizeLabel'), sizesFor(el('f_productType').value));
       el('sizeLabelTxt').textContent = isLower ? 'Indian size (waist)' : 'Size';
       // China size applies to BOTH uppers and lowers now (FS included).
       el('chinaWrap').style.display = '';
@@ -923,7 +926,6 @@
     function optList(arr,sel){ return (arr||[]).map(function(v){ return '<option'+(String(v)===String(sel)?' selected':'')+'>'+esc(v)+'</option>'; }).join(''); }
     function objOpts(obj,sel){ return '<option value="">—</option>'+Object.keys(obj||{}).map(function(v){ return '<option'+(v===sel?' selected':'')+'>'+esc(v)+'</option>'; }).join(''); }
     function fitsFor(p){ return categoryOf(p)==='lower'?LOWER_FITS:UPPER_FITS; }
-    function sizesFor(p){ return categoryOf(p)==='lower'?LOWER_SIZES_INDIA:UPPER_SIZES; }
 
     var editingLineIdx=-1;     // which saved line is being edited inline (-1 = none)
     var editorPhotoUrl='';     // working photo url for the inline editor
@@ -1168,11 +1170,6 @@
     el('parseInvoiceBtn').onclick=function(){
       var f=el('invoiceFile').files&&el('invoiceFile').files[0];
       if(!f){ el('invoiceNote').textContent='Choose an invoice image or PDF first.'; return; }
-      // Vendor, bill number & date of purchase are mandatory BEFORE reading the bill.
-      var vsel=el('b_vendor'), vend=(vsel&&vsel.value||'').trim();
-      if(!vend||vend==='__new__'){ el('invoiceNote').textContent='Select the vendor first (required).'; if(vsel) vsel.focus(); return; }
-      if(!el('b_billNo').value.trim()){ el('invoiceNote').textContent='Enter the bill number first (required).'; el('b_billNo').focus(); return; }
-      if(!el('b_datePurchase').value){ el('invoiceNote').textContent='Enter the date of purchase first (required).'; el('b_datePurchase').focus(); return; }
       var btn=el('parseInvoiceBtn'); btn.disabled=true; btn.textContent='Reading…';
       el('invoiceNote').textContent='Reading the invoice — this can take a few seconds…';
       downscaleImage(f, 2200).then(function(up){
@@ -1181,7 +1178,15 @@
       }).then(function(d){
         btn.disabled=false; btn.textContent='Read invoice & fill lines';
         if(!d.success){ el('invoiceNote').textContent=d.error||'Could not read the invoice.'; return; }
-        // vendor/bill/date were entered manually before reading — don't clobber them.
+        // Populate bill headers from OCR. Preserve a value the user already entered.
+        if(d.vendor){
+          var vendorName=String(d.vendor).toUpperCase().trim(), vendorSel=el('b_vendor');
+          var found=false;
+          Array.prototype.forEach.call(vendorSel.options,function(o){ if(String(o.value).toUpperCase()===vendorName){ found=true; } });
+          if(!found){ var vo=document.createElement('option'); vo.value=vendorName; vo.textContent=vendorName; vendorSel.insertBefore(vo,vendorSel.lastElementChild); }
+          if(!vendorSel.value || vendorSel.value==='__new__') vendorSel.value=vendorName;
+          updateLinesVendor();
+        }
         if(d.billNo && !el('b_billNo').value.trim()){ el('b_billNo').value=d.billNo; }
         if(d.datePurchase && !el('b_datePurchase').value){ el('b_datePurchase').value=d.datePurchase; }
         updateEta();
