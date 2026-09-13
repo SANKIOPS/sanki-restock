@@ -413,7 +413,7 @@ function applyJuly2026AttendanceAndPayroll(s){
 // ── Access: salary is sensitive → admin or accounting only ──
 function rolesOf(req) { return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || []; }
 function advanceUsername(req) { return String(req.user && req.user.username || '').trim().toLowerCase(); }
-function canRequestOrPostAdvance(req) { return rolesOf(req).includes('admin') || advanceUsername(req) === 'prashant'; }
+function canRequestOrPostAdvance(req) { return rolesOf(req).includes('admin') || rolesOf(req).includes('owner') || advanceUsername(req) === 'prashant'; }
 function canApproveAdvance(req) { return rolesOf(req).includes('owner'); }
 function guard(req, res, next) {
   const r = rolesOf(req);
@@ -629,7 +629,7 @@ router.get('/api/salary/advances', guard, (req, res) => {
     const payroll=payrollRows.get(e.id),transactions=all.map(a=>advanceView(a,s)).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),employeeRequests=requests.filter(r=>r.empId===e.id&&r.status!=='Posted'),activityDates=transactions.map(x=>x.date).concat(employeeRequests.map(x=>x.payoutDate||x.date)).filter(Boolean).sort().reverse();return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:activityDates[0]||'',transactions,requests:employeeRequests };
   }).filter(x => x.total || x.recovered || x.companyOwes || x.requests.length);
   const totals = summary.reduce((t, x) => ({ total: t.total + x.total, recovered: t.recovered + x.recovered, outstanding: t.outstanding + x.outstanding }), { total: 0, recovered: 0, outstanding: 0 });
-  res.json({ success: true, advances: rows, summary, totals, requests, permissions:{canRequest:canRequestOrPostAdvance(req),canApprove:canApproveAdvance(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canApproveAdvance(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
+  res.json({ success: true, advances: rows, summary, totals, requests, permissions:{canRequest:canRequestOrPostAdvance(req),canDirectPost:canApproveAdvance(req),canApprove:canApproveAdvance(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canApproveAdvance(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
 });
 
 router.patch('/api/salary/advances/:id',guard,(req,res)=>{
@@ -639,13 +639,21 @@ router.patch('/api/salary/advances/:id',guard,(req,res)=>{
 
 router.post('/api/salary/advances', guard, (req, res) => {
   const s = load(), b = req.body || {}, emp = s.employees[b.empId], amount = num(b.amount);
-  if (!canRequestOrPostAdvance(req)) return res.status(403).json({success:false,error:'Only Admin or Prashant can submit an advance request.'});
+  if (!canRequestOrPostAdvance(req)) return res.status(403).json({success:false,error:'Only the Owner, Admin, or Prashant can record an advance.'});
   if (!emp) return res.status(400).json({ success: false, error: 'Select an employee.' });
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Enter a valid advance amount.' });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date || ''))) return res.status(400).json({ success: false, error: 'Select the payment date.' });
   if (!String(b.account || '').trim()) return res.status(400).json({ success: false, error: 'Select the paying account.' });
   const recoveryStartMonth = String(b.recoveryStartMonth || b.date.slice(0, 7));
   if (!/^\d{4}-\d{2}$/.test(recoveryStartMonth)) return res.status(400).json({ success: false, error: 'Select a recovery start month.' });
+  if (canApproveAdvance(req)) {
+    const proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
+    if(!proofs.length)return res.status(400).json({success:false,error:'Payment proof is required to post the advance.'});
+    s.advanceSeq=(s.advanceSeq||0)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0'),now=new Date().toISOString(),payoutDate=String(b.date);
+    s.advances[id]={id,empId:emp.id,employeeName:emp.name,amount:round2(amount),date:payoutDate,payoutDate,account:String(b.account).trim(),proof:proofs[0],proofs,note:String(b.note||'').trim(),reference:String(b.reference||'').trim(),recoveryStartMonth,recoveries:[],active:true,createdBy:req.user&&req.user.username||'owner',createdAt:now,approvedBy:req.user&&req.user.username||'owner',approvedAt:now,directOwnerPost:true};
+    auditAdvance(s,req,'OWNER_DIRECT_POST',id,{amount:round2(amount),account:String(b.account).trim(),payoutDate,proofCount:proofs.length});save(s);
+    return res.json({success:true,directPost:true,advance:advanceView(s.advances[id],s)});
+  }
   s.advanceRequests=s.advanceRequests||{};s.advanceRequestSeq=(s.advanceRequestSeq||0)+1;const id='ADVR-'+String(s.advanceRequestSeq).padStart(5,'0'),now=new Date().toISOString();
   s.advanceRequests[id]={id,empId:emp.id,employeeName:emp.name,amount:round2(amount),date:String(b.date),account:String(b.account).trim(),note:String(b.note||'').trim(),reference:String(b.reference||'').trim(),recoveryStartMonth,status:'Pending approval',createdBy:req.user&&req.user.username||'admin',createdAt:now};
   auditAdvanceRequest(s,req,'SUBMITTED',id,{amount:round2(amount),account:String(b.account).trim()});save(s);

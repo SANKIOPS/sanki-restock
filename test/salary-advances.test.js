@@ -66,6 +66,16 @@ test('advance recovery starts from its actual payout month, not a proposed recov
   const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,2000);
 });
 
+test('owner can post a proof-backed employee advance immediately without approval',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Owner Direct Advance',salary:24000}}).body.employee;
+  const missingProof=invoke('POST','/api/salary/advances',{role:'owner',username:'owner',body:{empId:emp.id,amount:2500,date:'2026-09-13',account:'Axis Bank 3448',recoveryStartMonth:'2026-09'}});
+  assert.equal(missingProof.status,400);assert.match(missingProof.body.error,/proof/i);
+  const posted=invoke('POST','/api/salary/advances',{role:'owner',username:'owner',body:{empId:emp.id,amount:2500,date:'2026-09-13',account:'Axis Bank 3448',recoveryStartMonth:'2026-09',note:'Emergency advance',proofs:['/owner-proof.jpg']}});
+  assert.equal(posted.status,200);assert.equal(posted.body.directPost,true);assert.equal(posted.body.request,undefined);assert.equal(posted.body.advance.outstanding,2500);assert.equal(posted.body.advance.directOwnerPost,true);
+  const list=invoke('GET','/api/salary/advances',{role:'owner'}).body;
+  assert.equal(list.permissions.canDirectPost,true);assert.equal(list.summary.find(x=>x.empId===emp.id).outstanding,2500);
+});
+
 test('advance UI merges employee history and exposes approval and proof-backed posting', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance register · closing/); assert.doesNotMatch(html,/Advance approval queue/);assert.match(html,/Requests, approvals, posted advances/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);assert.match(html,/Company owes/);assert.match(html,/editAdvance/);
