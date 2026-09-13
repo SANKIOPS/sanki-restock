@@ -2131,6 +2131,24 @@ test('screenshot reconciliation rejects OCR-created years and account-sized amou
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Review note:/);assert.match(html,/msg bad multiline/);
 });
 
+test('IndusInd statement screenshots ignore reference digits and infer blank debit/credit columns',()=>{
+  const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
+  const rows=parseBankStatementText(`2026-08-25  R/KKBKR52026082500 p 200000  281650.4
+750786/KKBK0000958
+/NVIKK BEAUTY
+2026-08-25 UPI/612835748021/DR - 3000 81650.4
+/GAGA/ICIC/tforsamast1@ybl
+2026-09-10 UPI/314330460489/DR - 2000 1631.5
+2026-09-09 UPI/314278065346/DR - 860 36315
+2026-09-08 UPI/215174457477/DR - 1300 4491.5`);
+  assert.deepEqual(rows.slice(0,2).map(x=>({date:x.date,debit:x.debit,credit:x.credit,balance:x.balance})),[
+    {date:'2026-08-25',debit:0,credit:200000,balance:281650.4},
+    {date:'2026-08-25',debit:3000,credit:0,balance:81650.4}
+  ]);
+  assert.equal(rows[3].balance,3631.5,'repairs a decimal point dropped by OCR from the running balance');
+  assert.equal(rows.every(statementScreenshotRowIsPlausible),true);
+});
+
 test('split Shopify sales credit only the cash portion and Admin corrections require Owner approval',()=>{
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{
     split:{id:'split',name:'#SPLIT',orderNumber:9901,createdAt:'2099-09-12T10:00:00Z',financialStatus:'paid',paymentGateways:['Cash','Paytm'],total:50000,refundAmount:0}

@@ -2509,6 +2509,7 @@ function parseBankStatementFile(filePath){
 }
 function parseBankStatementText(raw){
   const text=String(raw||'').replace(/\r/g,'');
+  const indusIndRows=parseIndusIndScreenshotText(text);if(indusIndRows.length)return indusIndRows;
   if(/Detailed\s*Statement/i.test(text)&&/ICICI\s*BANK/i.test(text)&&/Withdra\s*wal\s*\(Dr\)/i.test(text)){
     const section=(text.split(/Balance\s*\n/i)[1]||'').split(/Page Total/i)[0]||'',opening=statementNum((text.match(/Opening\s*Bal:\s*(-?[0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),closing=statementNum((text.match(/Closing\s*Bal:\s*(-?[0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),withdrawals=statementNum((text.match(/Withdraw(?:al|l)s:\s*([0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),deposits=statementNum((text.match(/Deposits:\s*([0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),chunks=section.split(/(?=\n\d+[A-Z][A-Z0-9]*\s*\n)/).filter(x=>/^\s*\d+[A-Z]/.test(x)),out=[];
     let running=opening;
@@ -2550,6 +2551,24 @@ function parseBankStatementText(raw){
     else{const token=amountTokens[0][0],amount=Math.abs(amounts[0]),context=(rest+' '+token).toLowerCase();if(/\bcr\b|credit|deposit|received/.test(context))credit=amount;else debit=amount;}
     if(!debit&&!credit)return;const firstAmount=amountTokens[0],description=rest.slice(0,firstAmount.index).trim().replace(/[|:-]+$/,'').trim(),reference=((description.match(/\b(?:utr|ref|txn|chq)[\s:#-]*([a-z0-9-]+)/i)||[])[1]||'');out.push({date,description,reference,debit,credit,balance:Math.abs(balance),row:index+1});
   });return out;
+}
+function parseIndusIndScreenshotText(raw){
+  const lines=String(raw||'').replace(/\r/g,'').split('\n'),rows=[];
+  for(let index=0;index<lines.length;index++){
+    const line=lines[index].replace(/\s+/g,' ').trim(),dm=line.match(/^(20\d{2}-\d{2}-\d{2})\s+(.+)$/);if(!dm)continue;
+    const tail=dm[2].match(/^(.*?)(?:\s+[\-p|])?\s+([0-9][0-9,]*(?:\.\d{1,2})?)\s+([0-9][0-9,]*(?:\.\d{1,2})?)\s*$/i);if(!tail)continue;
+    let description=tail[1].trim(),continuation=index+1;
+    while(continuation<lines.length&&!/^20\d{2}-\d{2}-\d{2}\s/.test(lines[continuation].trim())&&!/^Date\s+Particulars/i.test(lines[continuation].trim())){const extra=lines[continuation].trim();if(extra&&!/^[_=\-\s]+$/.test(extra))description+=' '+extra;continuation++;}
+    const amount=Math.abs(statementNum(tail[2])),balance=Math.abs(statementNum(tail[3]));if(!amount||!Number.isFinite(balance))continue;
+    const explicitDebit=/\/DR\b|\bACH\s+DR\b/i.test(description),explicitCredit=/\/CR\b|\bcredit[- ]transfer\s+from\b/i.test(description),reference=((description.match(/\b(?:UPI|IMPS|NEFT|RTGS|KKBK)[\/\s:#-]*([A-Z0-9-]{5,})/i)||[])[1]||'');
+    rows.push({date:dm[1],description,reference,debit:explicitDebit?amount:0,credit:explicitCredit?amount:0,balance,row:index+1,_amount:amount,_sideKnown:explicitDebit||explicitCredit});
+  }
+  if(!rows.length)return rows;
+  // IndusInd screenshots are newest first. Use the running balance to classify
+  // rows whose blank debit/credit column OCRs as "p", and repair a dropped
+  // decimal point (for example 3631.5 being read as 36315).
+  for(let index=rows.length-2;index>=0;index--){const row=rows[index],older=rows[index+1],amount=row._amount,candidates=[row.balance,row.balance/10,row.balance/100],choices=[];for(const balance of candidates){if(row._sideKnown){const expected=older.balance+row.credit-row.debit;choices.push({balance,debit:row.debit,credit:row.credit,error:Math.abs(balance-expected)});}else{choices.push({balance,debit:amount,credit:0,error:Math.abs(balance-(older.balance-amount))},{balance,debit:0,credit:amount,error:Math.abs(balance-(older.balance+amount))});}}const best=choices.sort((a,b)=>a.error-b.error)[0];if(best&&best.error<=Math.max(.02,amount*.001)){row.balance=Math.round(best.balance*100)/100;row.debit=best.debit;row.credit=best.credit;}}
+  rows.forEach(row=>{if(!row.debit&&!row.credit){if(/^R\/|^N\/|\bcredit[- ]transfer\s+from\b/i.test(row.description))row.credit=row._amount;else row.debit=row._amount;}delete row._amount;delete row._sideKnown;});return rows;
 }
 async function readPdfText(filePath,password){
   const supplied=String(password||''),bytes=new Uint8Array(fs.readFileSync(filePath));pdfjs.disableWorker=true;let doc;
