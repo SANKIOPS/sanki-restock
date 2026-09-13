@@ -2253,6 +2253,6 @@ test('Owner can replace a deleted expense link in finalized reconciliation with 
     assert.equal(corrected.status,200,JSON.stringify(corrected.body));assert.deepEqual(corrected.body.row.linkedRecordIds,['TR-FINAL-30000']);assert.equal(corrected.body.row.corrected,true);assert.equal(corrected.body.row.correctionHistory[0].before.linkedRecordIds[0],'EX-DELETED/PAY-001');
     const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(saved.bankDateOverrides['TR-FINAL-30000'].bankDate,'2026-09-04');assert.ok(saved.auditLog.some(x=>x.action==='FINALIZED_BANK_RECONCILIATION_LINK_CORRECTED'&&x.subjectId===recordId));
     const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'PERSONAL',account,from:'2026-09-04',to:'2026-09-04'}}).body.entries.find(x=>x.id==='TR-FINAL-30000');assert.equal(ledger.reconciliation.status,'reconciled');
-    const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Correct link/);assert.match(html,/correct-finalized-link/);
+    const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Correct link/);assert.match(html,/correct-finalized-link/);assert.match(html,/View correction history/);assert.match(html,/Previous link:/);assert.match(html,/Corrected link:/);assert.match(html,/Changed by/);
   }finally{fs.writeFileSync(expenseFile,baseline);}
 });
