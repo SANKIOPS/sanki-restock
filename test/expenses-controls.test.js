@@ -2123,6 +2123,14 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
   assert.equal(paid.body.expense.payments.at(-1).reconciliationOverrideReason, 'Urgent approved vendor payment');
 });
 
+test('screenshot reconciliation rejects OCR-created years and account-sized amounts row by row',()=>{
+  const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
+  assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:1500,credit:0,balance:75010.5}),true);
+  assert.equal(statementScreenshotRowIsPlausible({date:'2001-09-26',debit:2000,credit:0,balance:75010.5}),false);
+  assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:214607353136,credit:0,balance:75010.5}),false);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Review note:/);assert.match(html,/msg bad multiline/);
+});
+
 test('split Shopify sales credit only the cash portion and Admin corrections require Owner approval',()=>{
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{
     split:{id:'split',name:'#SPLIT',orderNumber:9901,createdAt:'2099-09-12T10:00:00Z',financialStatus:'paid',paymentGateways:['Cash','Paytm'],total:50000,refundAmount:0}
