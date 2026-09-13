@@ -2596,9 +2596,14 @@ function repairOrphanedReconciliationExpenses(s,draft){
   if(!draft)return 0;
   draft.resolutions=draft.resolutions||{};
   let repaired=0;
+  Object.keys(draft.resolutions).forEach(rowId=>{
+    if(draft.resolutions[rowId]&&draft.resolutions[rowId].repairedAt){delete draft.resolutions[rowId];repaired+=1;}
+  });
+  const baselineRows=new Map(draftReconciliation(s,draft).rows.map(row=>[row.id,row]));
   Object.values(s.expenses||{}).forEach(expense=>{
     const source=expense&&expense.reconciliationSource;
-    if(!source||source.draftId!==draft.id||!source.rowId||draft.resolutions[source.rowId])return;
+    const baseline=source&&baselineRows.get(source.rowId);
+    if(!source||source.draftId!==draft.id||!source.rowId||draft.resolutions[source.rowId]||!baseline||baseline.status!=='missing_in_app')return;
     const payment=(expense.payments||[]).find(x=>x.bankReconciliationDraft===draft.id&&x.bankReconciliationRow===source.rowId)||(expense.payments||[])[0];
     if(!payment)return;
     draft.resolutions[source.rowId]={action:'create_expense',reason:String(source.remark||'Expense created directly from bank reconciliation'),remark:String(source.remark||''),category:String(expense.ledger||''),appId:expense.id+'/'+payment.id,expenseId:expense.id,by:String(expense.createdBy||'system'),at:String(expense.createdAt||new Date().toISOString()),repairedAt:new Date().toISOString()};
