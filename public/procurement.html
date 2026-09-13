@@ -393,7 +393,7 @@
 
     // ── purchases summary ──
     el('refreshSummary').onclick=loadPurchaseHistory;
-    el('historyCategory').onchange=function(){ historyCategory=this.value||'all'; renderHistoryExplorer(); };
+    el('historyCategory').onchange=function(){ historyCategory=this.value||'all'; historyDrillCategory=''; renderHistoryExplorer(); };
     Array.prototype.forEach.call(document.querySelectorAll('[data-history-scope]'),function(btn){
       btn.onclick=function(){ historyScope=btn.getAttribute('data-history-scope'); renderHistoryExplorer(); };
     });
@@ -575,6 +575,7 @@
     // made through this software appears exactly once.
     var purchaseHistory=[];
     var historyCategory='all';
+    var historyDrillCategory='';
     var historyScope='all';
     var historySelected={};
     var historyOpenPos={};
@@ -599,14 +600,24 @@
       },0);
       return {qty:qty,total:Math.round(total)};
     }
+    function historyStatusCode(po){
+      var raw=po.status||'advance';
+      if(raw==='posted')return 'posted';
+      if(raw==='received'||raw==='awaiting_approval'||po.dateReceive)return 'received';
+      return 'advance';
+    }
     function historyStatus(po){
-      var s=po.status==='awaiting_approval'?'received':(po.status||'advance');
+      var s=historyStatusCode(po);
       var labels={advance:'Ordered · awaiting goods',received:'Goods received',posted:'Posted to Shopify'};
       var colours={advance:['#fef3c7','#92400e'],received:['#dbeafe','#1e40af'],posted:['#dcfce7','#065f46']};
       var c=colours[s]||['#f1f5f9','#334155'];
       return '<span style="background:'+c[0]+';color:'+c[1]+';border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700;white-space:nowrap">'+esc(labels[s]||s)+'</span>';
     }
     function historyCategoryName(line){return String(line.productType||'Uncategorised').trim()||'Uncategorised';}
+    function historyCategoryLabel(category){
+      var labels={'T-Shirt':'T-Shirts','Trouser':'Trousers','Shirt':'Shirts'};
+      return labels[category]||category;
+    }
     function historyLineCost(po,line){
       var poQty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0);
       var transport=po.origin==='india'&&poQty?Number(po.transportTotal||0)/poQty:0;
@@ -623,9 +634,10 @@
       purchaseHistory.forEach(function(po){if(po.historical)return;(po.lines||[]).forEach(function(line){if((Number(line.qty)||0)>0)seen[historyCategoryName(line)]=1;});});
       return Object.keys(seen).sort(function(a,b){return a.localeCompare(b);});
     }
-    function historyMatchingLines(po){
+    function historyMatchingLines(po,category){
+      category=category==null?historyCategory:category;
       return (po.lines||[]).filter(function(line){
-        return (Number(line.qty)||0)>0&&(historyCategory==='all'||historyCategoryName(line)===historyCategory);
+        return (Number(line.qty)||0)>0&&(category==='all'||historyCategoryName(line)===category);
       });
     }
     function historyCandidatePos(){
@@ -652,9 +664,9 @@
         return row;
       }).sort(function(a,b){return b.pieces-a.pieces||a.category.localeCompare(b.category);});
     }
-    function historyDesignGroups(po){
+    function historyDesignGroups(po,category){
       var groups={};
-      historyMatchingLines(po).forEach(function(line){
+      historyMatchingLines(po,category).forEach(function(line){
         var category=historyCategoryName(line),key=historyDesignKey(po,line,category);
         var group=groups[key]||(groups[key]={key:key,name:line.designName||line.designCode||'Unnamed design',code:line.designCode||'',category:category,colours:{},sizes:{},pieces:0,value:0,lines:[],photo:''});
         var qty=Number(line.qty)||0;
@@ -667,7 +679,7 @@
     function renderHistoryExplorer(){
       var select=el('historyCategory'),categories=historyCategories();
       if(historyCategory!=='all'&&categories.indexOf(historyCategory)<0)historyCategory='all';
-      select.innerHTML='<option value="all">All categories</option>'+categories.map(function(category){return '<option value="'+esc(category)+'">'+esc(category)+'</option>';}).join('');
+      select.innerHTML='<option value="all">All categories</option>'+categories.map(function(category){return '<option value="'+esc(category)+'">'+esc(historyCategoryLabel(category))+'</option>';}).join('');
       select.value=historyCategory;
       Array.prototype.forEach.call(document.querySelectorAll('[data-history-scope]'),function(btn){
         var active=btn.getAttribute('data-history-scope')===historyScope;btn.classList.toggle('ghost',!active);
@@ -686,23 +698,29 @@
       var totalValue=rows.reduce(function(n,r){return n+r.value;},0);
       var totalDesigns=rows.reduce(function(n,r){return n+r.designCount;},0);
       host.innerHTML='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
-        '<b>'+(historyCategory==='all'?'All categories':esc(historyCategory))+'</b><span class="muted">·</span><span>'+(historyScope==='all'?'All matching POs':chosen.length+' selected PO'+(chosen.length===1?'':'s'))+'</span></div>'+
+        '<b>'+(historyCategory==='all'?'All categories':esc(historyCategoryLabel(historyCategory)))+'</b><span class="muted">·</span><span>'+(historyScope==='all'?'All matching POs':chosen.length+' selected PO'+(chosen.length===1?'':'s'))+'</span></div>'+
         '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
           '<span class="pill">'+chosen.length+' PO'+(chosen.length===1?'':'s')+'</span><span class="pill">'+totalDesigns+' unique designs</span><span class="pill">'+totalPieces.toLocaleString('en-IN')+' pieces</span><span class="pill">'+money(totalValue)+'</span></div>'+
         (rows.length?'<div style="overflow-x:auto"><table style="font-size:12px;background:#fff"><thead><tr><th>Category</th><th class="money">POs</th><th class="money">Unique designs</th><th class="money">Pieces</th><th class="money">Value</th></tr></thead><tbody>'+
-        rows.map(function(row){return '<tr><td><b>'+esc(row.category)+'</b></td><td class="money">'+row.poCount+'</td><td class="money">'+row.designCount+'</td><td class="money"><b>'+row.pieces.toLocaleString('en-IN')+'</b></td><td class="money"><b>'+money(row.value)+'</b></td></tr>';}).join('')+
-        '</tbody></table></div>':'<div style="border:1px dashed #cbd5e1;border-radius:9px;padding:11px 12px;background:#fff;color:var(--muted);font-size:13px">'+(historyScope==='choose'?'Choose one or more POs above to see their products.':'No matching purchases found.')+'</div>');
+        rows.map(function(row){var expandable=historyCategory==='all',active=historyDrillCategory===row.category;return '<tr'+(expandable?' data-history-category-row="'+esc(row.category)+'" tabindex="0" role="button" aria-expanded="'+(active?'true':'false')+'" title="Click to '+(active?'close':'open')+' '+esc(historyCategoryLabel(row.category))+' details" style="cursor:pointer;background:'+(active?'#ecfdf5':'#fff')+'"':'')+'><td><b>'+(expandable?'<span class="sumcaret" style="display:inline-block;width:18px;color:#047857">'+(active?'▾':'▸')+'</span>':'')+esc(historyCategoryLabel(row.category))+'</b></td><td class="money">'+row.poCount+'</td><td class="money">'+row.designCount+'</td><td class="money"><b>'+row.pieces.toLocaleString('en-IN')+'</b></td><td class="money"><b>'+money(row.value)+'</b></td></tr>';}).join('')+
+        '</tbody></table></div>'+(historyCategory==='all'&&historyDrillCategory?'<div class="banner ok" style="margin-top:8px">Showing <b>'+esc(historyCategoryLabel(historyDrillCategory))+'</b> purchase details below. Click the category again to close.</div>':''):'<div style="border:1px dashed #cbd5e1;border-radius:9px;padding:11px 12px;background:#fff;color:var(--muted);font-size:13px">'+(historyScope==='choose'?'Choose one or more POs above to see their products.':'No matching purchases found.')+'</div>');
+      Array.prototype.forEach.call(host.querySelectorAll('[data-history-category-row]'),function(row){
+        function toggle(){var category=row.getAttribute('data-history-category-row');historyDrillCategory=historyDrillCategory===category?'':category;renderHistoryExplorer();}
+        row.onclick=toggle;row.onkeydown=function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();toggle();}};
+      });
       renderHistoryExplorerResults(chosen);
     }
     function renderHistoryExplorerResults(pos){
       var host=el('historyExplorerResults');
+      var category=historyCategory==='all'?(historyDrillCategory||'all'):historyCategory;
+      pos=pos.filter(function(po){return historyMatchingLines(po,category).length;});
       if(!pos.length){host.innerHTML='';return;}
-      host.innerHTML='<h4 style="margin:0 0 7px">Matching purchase details</h4>'+pos.map(historyExplorerPoRow).join('');
+      host.innerHTML='<h4 style="margin:0 0 7px">'+(category==='all'?'Matching purchase details':esc(historyCategoryLabel(category))+' — purchase details')+'</h4>'+pos.map(function(po,idx){return historyExplorerPoRow(po,idx,category);}).join('');
       Array.prototype.forEach.call(host.querySelectorAll('[data-hx-po]'),function(row){row.onclick=function(e){if(e.target&&e.target.closest&&e.target.closest('img'))return;var key=row.getAttribute('data-hx-po'),body=el(row.getAttribute('data-body')),car=row.querySelector('.sumcaret');historyOpenPos[key]=!historyOpenPos[key];body.classList.toggle('hidden',!historyOpenPos[key]);if(car)car.textContent=historyOpenPos[key]?'▾':'▸';};});
       Array.prototype.forEach.call(host.querySelectorAll('[data-hx-design]'),function(row){row.onclick=function(e){if(e.target&&e.target.closest&&e.target.closest('img'))return;var key=row.getAttribute('data-hx-design'),body=el(row.getAttribute('data-body')),car=row.querySelector('.sumcaret');historyOpenDesigns[key]=!historyOpenDesigns[key];body.classList.toggle('hidden',!historyOpenDesigns[key]);if(car)car.textContent=historyOpenDesigns[key]?'▾':'▸';};});
     }
-    function historyExplorerPoRow(po,idx){
-      var groups=historyDesignGroups(po),lines=historyMatchingLines(po),pieces=lines.reduce(function(n,l){return n+(Number(l.qty)||0);},0),value=lines.reduce(function(n,l){return n+Math.round(historyLineCost(po,l)*(Number(l.qty)||0));},0);
+    function historyExplorerPoRow(po,idx,category){
+      var groups=historyDesignGroups(po,category),lines=historyMatchingLines(po,category),pieces=lines.reduce(function(n,l){return n+(Number(l.qty)||0);},0),value=lines.reduce(function(n,l){return n+Math.round(historyLineCost(po,l)*(Number(l.qty)||0));},0);
       var open=!!historyOpenPos[po.id],bodyId='historyExplorerPoBody'+idx;
       var head='<div data-hx-po="'+esc(po.id)+'" data-body="'+bodyId+'" style="display:grid;grid-template-columns:24px minmax(180px,1.5fr) minmax(150px,1fr) auto auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-top:7px"><span class="sumcaret muted">'+(open?'▾':'▸')+'</span><div><b>'+esc(po.id)+'</b><div class="muted" style="font-size:11px">'+esc(po.vendor||'—')+' · Bill '+esc(po.billNo||'—')+'</div></div><div>'+historyStatus(po)+'<div class="muted" style="font-size:11px;margin-top:4px">Ordered '+esc(po.datePurchase||'—')+' · Received '+esc(po.dateReceive||'not yet')+'</div></div><div class="money"><b>'+groups.length+' design'+(groups.length===1?'':'s')+'</b></div><div class="money"><b>'+pieces+' pcs</b></div><div class="money"><b>'+money(value)+'</b></div></div>';
       var body='<div id="'+bodyId+'" class="'+(open?'':'hidden')+'" style="margin:-2px 5px 10px;padding:10px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+groups.map(function(group,gidx){return historyExplorerDesignRow(po,group,idx,gidx);}).join('')+'</div>';
@@ -712,14 +730,14 @@
       var stateKey=po.id+'|'+group.key,open=!!historyOpenDesigns[stateKey],bodyId='historyExplorerDesignBody'+pidx+'_'+gidx;
       var photo=group.photo?'<img class="thumb" data-zoom src="'+esc(group.photo)+'" title="Click to enlarge" style="width:48px;height:56px;object-fit:cover;border-radius:6px;cursor:zoom-in">':'<span class="muted">No photo</span>';
       var colours=Object.keys(group.colours),sizes=Object.keys(group.sizes);
-      var head='<div data-hx-design="'+esc(stateKey)+'" data-body="'+bodyId+'" style="display:grid;grid-template-columns:24px 58px minmax(170px,1.5fr) minmax(145px,1fr) auto auto;gap:9px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px"><span class="sumcaret muted">'+(open?'▾':'▸')+'</span><div>'+photo+'</div><div><b>'+esc(group.name)+'</b><div class="muted" style="font-size:11px">'+esc(group.code||'No vendor code')+'</div></div><div><span class="pill">'+esc(group.category)+'</span><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money"><b>'+group.pieces+' pcs</b><div class="muted" style="font-size:11px">'+colours.length+' colour'+(colours.length===1?'':'s')+' · '+sizes.length+' size'+(sizes.length===1?'':'s')+'</div></div><div class="money"><b>'+money(group.value)+'</b></div></div>';
-      var rows=group.lines.map(function(line){var qty=Number(line.qty)||0,per=historyLineCost(po,line),pic=line.photoUrl?'<img class="thumb" data-zoom src="'+esc(line.photoUrl)+'" title="Click to enlarge" style="width:42px;height:50px;object-fit:cover;border-radius:5px;cursor:zoom-in">':'—';return '<tr><td>'+pic+'</td><td><b>'+esc(historyCategoryName(line))+'</b></td><td>'+esc(line.colour||'—')+'</td><td>'+esc(line.sizeLabel||'—')+(line.chinaSize?' <span class="muted">(CN '+esc(line.chinaSize)+')</span>':'')+'</td><td class="mono">'+esc(line.sku||'—')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(line.weightGrams||'—')+'</td></tr>';}).join('');
+      var head='<div data-hx-design="'+esc(stateKey)+'" data-body="'+bodyId+'" style="display:grid;grid-template-columns:24px 58px minmax(170px,1.5fr) minmax(145px,1fr) auto auto;gap:9px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px"><span class="sumcaret muted">'+(open?'▾':'▸')+'</span><div>'+photo+'</div><div><b>'+esc(group.name)+'</b><div class="muted" style="font-size:11px">'+esc(group.code||'No vendor code')+'</div></div><div><span class="pill">'+esc(historyCategoryLabel(group.category))+'</span><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money"><b>'+group.pieces+' pcs</b><div class="muted" style="font-size:11px">'+colours.length+' colour'+(colours.length===1?'':'s')+' · '+sizes.length+' size'+(sizes.length===1?'':'s')+'</div></div><div class="money"><b>'+money(group.value)+'</b></div></div>';
+      var rows=group.lines.map(function(line){var qty=Number(line.qty)||0,per=historyLineCost(po,line),pic=line.photoUrl?'<img class="thumb" data-zoom src="'+esc(line.photoUrl)+'" title="Click to enlarge" style="width:42px;height:50px;object-fit:cover;border-radius:5px;cursor:zoom-in">':'—';return '<tr><td>'+pic+'</td><td><b>'+esc(historyCategoryLabel(historyCategoryName(line)))+'</b></td><td>'+esc(line.colour||'—')+'</td><td>'+esc(line.sizeLabel||'—')+(line.chinaSize?' <span class="muted">(CN '+esc(line.chinaSize)+')</span>':'')+'</td><td class="mono">'+esc(line.sku||'—')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(line.weightGrams||'—')+'</td></tr>';}).join('');
       var detail='<div id="'+bodyId+'" class="'+(open?'':'hidden')+'" style="margin:-1px 4px 8px;padding:8px;background:#fff;border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Category</th><th>Colour</th><th>Size</th><th>SKU</th><th class="money">Qty</th><th class="money">Landed/pc</th><th class="money">Total</th><th>Weight g/pc</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
       return head+detail;
     }
     function renderPurchaseHistory(meta){
       var totalQty=0,totalValue=0,received=0,posted=0;
-      purchaseHistory.forEach(function(po){if(po.historical)return;var t=historyTotals(po);totalQty+=t.qty;totalValue+=t.total;if(po.status==='received'||po.status==='awaiting_approval'||po.status==='posted')received++;if(po.status==='posted')posted++;});
+      purchaseHistory.forEach(function(po){if(po.historical)return;var t=historyTotals(po),status=historyStatusCode(po);totalQty+=t.qty;totalValue+=t.total;if(status==='received'||status==='posted')received++;if(status==='posted')posted++;});
       el('sumTotals').innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap">'+
         '<span class="pill">'+purchaseHistory.length+' purchase batches</span><span class="pill">'+totalQty+' known pieces</span><span class="pill">'+money(totalValue)+' known total</span><span class="pill">'+received+' received</span><span class="pill">'+posted+' posted</span>'+
         ((meta&&meta.recoveredProducts)?'<span class="pill">'+meta.recoveredProducts+' historical products recovered</span>':'')+'</div>'+
