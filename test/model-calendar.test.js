@@ -53,3 +53,27 @@ test('excluded and rejected expenses cannot make models appear paid',()=>{
 });
 
 test('central auth gate protects the model API',()=>{for(const role of ['owner','admin','accounting'])assert.equal(apiAllowedForUser({roles:[role]},'/api/model-calendar'),true);for(const role of ['claimant','sales','samast_accounting'])assert.equal(apiAllowedForUser({roles:[role]},'/api/model-calendar/bookings'),false);});
+
+test('Model Calendar role manages bookings and views payments without expense authority',async()=>{
+ const role='model_calendar',user={roles:[role]},authUsers=require('../modules/auth-users');
+ assert.equal(authUsers.landingFor(role),'/model-calendar.html');
+ assert.equal(authUsers.roleCanAccessPath(role,'/model-calendar.html'),true);
+ assert.equal(authUsers.roleCanAccessPath(role,'/expenses.html'),false);
+ assert.equal(apiAllowedForUser(user,'/api/model-calendar/bookings'),true);
+ for(const endpoint of ['/api/expenses','/api/expenses/EX-1/pay','/api/expenses/EX-1/approve','/api/admin/users'])assert.equal(apiAllowedForUser(user,endpoint),false);
+ let s=await call('GET','/api/model-calendar',undefined,role);assert.equal(s.status,200);assert.equal(s.permissions.canManageExpenses,false);
+ const contract={name:'Coordinator Model',kind:'monthly',month:'2026-09',amount:12000,includedShoots:3};
+ s=await call('POST','/api/model-calendar/bookings',{revision:s.revision,date:'2026-09-18',contract},role);assert.equal(s.status,200);
+ const c=s.contracts.at(-1),shoot=s.shoots.at(-1);
+ s=await call('POST','/api/model-calendar/contracts/'+c.id,{...contract,amount:15000,revision:s.revision},role);assert.equal(s.status,200);assert.equal(s.contracts.at(-1).amount,15000);
+ s=await call('POST','/api/model-calendar/shoots/'+shoot.id,{revision:s.revision,date:'2026-09-19',status:'completed',notes:'Shoot done'},role);assert.equal(s.status,200);
+ for(const action of ['link-expense','unlink-expense'])assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id+'/'+action,{revision:s.revision,expenseId:'EX-00001'},role)).status,403);
+ assert.equal((await call('POST','/api/expenses',expenseBody({...c,amount:15000}),role)).status,403);
+ assert.equal((await get()).permissions.canManageExpenses,true);
+ const created=await call('POST','/api/expenses',expenseBody({...c,amount:15000}));assert.equal(created.status,200);
+ const id=created.expense.id;
+ assert.equal((await call('POST','/api/expenses/'+id+'/approve',{})).status,200);
+ assert.equal((await call('POST','/api/expenses/'+id+'/pay',{amount:5000,account:'Counter Cash',paymentType:'Cash',paymentProof:'/test-pay.jpg',date:'2026-09-19'})).status,200);
+ s=await call('GET','/api/model-calendar',undefined,role);const linked=s.contracts.find(x=>x.id===c.id);assert.equal(linked.finance.paid,5000);assert.equal(linked.finance.due,10000);
+ assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id,{...contract,amount:16000,revision:s.revision},role)).status,400);
+});
