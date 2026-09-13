@@ -80,6 +80,7 @@ test('advance UI merges employee history and exposes approval and proof-backed p
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance register · closing/); assert.doesNotMatch(html,/Advance approval queue/);assert.match(html,/Requests, approvals, posted advances/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);assert.match(html,/Company owes/);assert.match(html,/editAdvance/);
   assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);assert.match(html,/Connected advance history/);assert.match(html,/Advance given/);assert.match(html,/Amount deducted/);assert.match(html,/Date not recorded/);assert.match(html,/deductionDate/);assert.match(html,/salaryPaymentReference/);assert.match(html,/Fully deducted/);assert.match(html,/remainingAfter/);
+  assert.match(html,/0992\|0993\|7883/);assert.match(html,/personalOwnerAccounts/);
 });
 
 test('salary UI and storage keep SANKI and Samast payrolls independent',()=>{
