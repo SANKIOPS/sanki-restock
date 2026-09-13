@@ -1025,6 +1025,13 @@ test('secondary money flows preserve multiple proofs without duplicating the tra
   assert.doesNotMatch(html,/Record customer refund against a sale/);
 });
 
+test('Owner can record a transfer through an intermediary without creating an intermediary balance',()=>{
+  const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'PERSONAL',toNature:'PERSONAL',fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',amount:15000,date:'2026-09-12',routedThroughIntermediary:true,intermediary:'Jatin',note:'Jatin forwarded the payment to Namita',proof:'/api/expenses/photo/jatin-namita.jpg'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.intermediary,'Jatin');assert.equal(made.body.transfer.routedThroughIntermediary,true);assert.equal(made.body.transfer.fromAccount,'IndusInd Bank 7883');assert.equal(made.body.transfer.toAccount,'Namita 5464');
+  const missing=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'PERSONAL',toNature:'PERSONAL',fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',amount:1,date:'2026-09-12',routedThroughIntermediary:true,proof:'/api/expenses/photo/missing-name.jpg'}});assert.equal(missing.status,400);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Paid through an intermediary/);assert.match(html,/View intermediary details/);assert.match(html,/Final recipient account/);
+});
+
 test('Prashant can record only the approved Axis 3448 to Axis 3645 transfer route',()=>{
   const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.deepEqual(config.transferAccountsByNature.SANKI,['Axis Bank 3448','Prashant Axis 3645']);assert.deepEqual(config.transferAccountsByNature.SAMAST,[]);

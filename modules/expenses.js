@@ -670,6 +670,13 @@ function loadStore() {
     });
     s.reconciliationExpenses.filter(e=>e.settlementId&&e.category!=='PAYTM CHARGES').forEach(e=>{e.previousCategory=e.category;e.category='PAYTM CHARGES';e.reclassifiedAt=e.reclassifiedAt||new Date().toISOString();e.reclassificationReason='Paytm processing charges separated from ordinary bank charges';bankChargeRepairAdded=true;});
     (s.transfers || []).forEach(x => { x.fromAccount = rename(x.fromAccount); x.toAccount = rename(x.toAccount); });
+    const namitaJatinTransferKey='convert-ex-00316-to-namita-5464-transfer-v1';
+    if(!s.oneTimeMigrations[namitaJatinTransferKey]){
+      const expense=s.expenses&&s.expenses['EX-00316'],payment=expense&&(expense.payments||[]).find(x=>x.id==='PAY-001'),valid=expense&&payment&&normalizedNature(expense.nature)==='PERSONAL'&&String(payment.account||expense.account)==='IndusInd Bank 7883'&&String(payment.date||expense.date).slice(0,10)==='2026-09-12'&&Math.abs(num(payment.amount)-15000)<.01,now=new Date().toISOString();
+      let result='identity_mismatch',transferId='';
+      if(valid){const before=JSON.parse(JSON.stringify(expense));s.transferSeq=num(s.transferSeq)+1;const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:'PERSONAL',fromNature:'PERSONAL',toNature:'PERSONAL',classification:'internal_transfer',fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',amount:15000,date:'2026-09-12',proof:payment.proof||expense.paymentProof||'',proofs:proofList(payment.proofs,payment.proof||expense.paymentProof),note:'Paid to Jatin, who transferred the amount to Namita',intermediary:'Jatin',routedThroughIntermediary:true,convertedFromExpense:'EX-00316/PAY-001',createdBy:'gaganlambasanki',createdAt:now};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);delete s.expenses['EX-00316'];transferId=transfer.id;result='converted';audit(s,null,'EXPENSE_CONVERTED_TO_INTERMEDIARY_TRANSFER','expense','EX-00316',{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'PERSONAL',account:'IndusInd Bank 7883',before,after:transfer,note:'Owner confirmed ₹15,000 was paid through Jatin to Namita 5464, not an expense'});}
+      s.oneTimeMigrations[namitaJatinTransferKey]={appliedAt:now,result,expensePaymentId:'EX-00316/PAY-001',transferId,fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',intermediary:'Jatin',amount:15000,date:'2026-09-12'};saveStore(s);
+    }
     const removeTr9Key='owner-delete-tr-00009-both-ledger-sides';
     s.oneTimeMigrations=s.oneTimeMigrations||{};
     if(applyEx00122CashPaymentCorrection(s))saveStore(s);
@@ -2364,7 +2371,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
   if (!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
   const fromAccount = allowedTransferAccount(fromNature, b.fromAccount), toAccount = allowedTransferAccount(toNature, b.toAccount);
-  const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'';
+  const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',routedThroughIntermediary=b.routedThroughIntermediary===true||b.routedThroughIntermediary==='true',intermediary=String(b.intermediary||'').trim();
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
@@ -2374,10 +2381,11 @@ router.post('/api/expenses/transfers', (req, res) => {
   if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
   if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Transfer amount must be greater than 0.' });
+  if(routedThroughIntermediary&&!intermediary)return res.status(400).json({success:false,error:'Enter the intermediary who forwarded the transfer.'});
   if (!proof) return res.status(400).json({ success: false, error: 'Transfer proof is required.' });
   s.transferSeq = (s.transferSeq || 0) + 1;
   const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature:fromNature, fromNature, toNature, classification, fromAccount, toAccount, amount,
-    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, proofs, note: String(b.note || '').trim(),
+    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, proofs, note: String(b.note || '').trim(), intermediary:routedThroughIntermediary?intermediary:'',routedThroughIntermediary,
     createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString() };
   s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer);audit(s,req,'TRANSFER_RECORDED','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer});saveStore(s);
   res.json({ success: true, transfer });
@@ -2448,7 +2456,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     const isOut=normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account,isIn=normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account;if(!isOut&&!isIn)return;
     const other=(isOut?(x.toNature||x.nature)+' · '+x.toAccount:(x.fromNature||x.nature)+' · '+x.fromAccount);
     const companyFundsCredit=isIn&&transferCreditsCompanyFunds(x,nature,account),salaryAdvanceInfo=isIn&&!companyFundsCredit;
-    entries.push({id:x.id,date:x.date,createdAt:x.createdAt||'',kind:salaryAdvanceInfo?'salary_advance_funding':'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+' · '+String(x.classification||'internal transfer').replaceAll('_',' ')+(salaryAdvanceInfo?' · salary advance; excluded from usable company funds':''),credit:creditCard?(isOut?transferDebitAmount(x):0):(companyFundsCredit?transferCreditAmount(x):0),debit:creditCard?(isIn?transferCreditAmount(x):0):(isOut?transferDebitAmount(x):0),actualCredit:salaryAdvanceInfo?transferCreditAmount(x):0,proof:x.proof,note:x.note,by:x.createdBy,classification:x.classification||'internal_transfer',fromNature:x.fromNature||x.nature,toNature:x.toNature||x.nature,fromAccount:x.fromAccount,toAccount:x.toAccount,exchangeSource:x.exchangeSource||'',exchangeDirection:x.exchangeDirection||'',transferAmount:transferDebitAmount(x),receivedAmount:transferCreditAmount(x),adjustmentAmount:num(x.adjustmentAmount),adjustmentLedger:x.adjustmentLedger||'',adjustmentNote:x.adjustmentNote||'',editable:!salaryAdvanceInfo});
+    entries.push({id:x.id,date:x.date,createdAt:x.createdAt||'',kind:salaryAdvanceInfo?'salary_advance_funding':'transfer',description:(isOut?'Transfer to ':'Transfer from ')+other+(x.intermediary?' via '+x.intermediary:'')+' · '+String(x.classification||'internal transfer').replaceAll('_',' ')+(salaryAdvanceInfo?' · salary advance; excluded from usable company funds':''),credit:creditCard?(isOut?transferDebitAmount(x):0):(companyFundsCredit?transferCreditAmount(x):0),debit:creditCard?(isIn?transferCreditAmount(x):0):(isOut?transferDebitAmount(x):0),actualCredit:salaryAdvanceInfo?transferCreditAmount(x):0,proof:x.proof,note:x.note,by:x.createdBy,classification:x.classification||'internal_transfer',fromNature:x.fromNature||x.nature,toNature:x.toNature||x.nature,fromAccount:x.fromAccount,toAccount:x.toAccount,intermediary:x.intermediary||'',routedThroughIntermediary:!!x.routedThroughIntermediary,convertedFromExpense:x.convertedFromExpense||'',exchangeSource:x.exchangeSource||'',exchangeDirection:x.exchangeDirection||'',transferAmount:transferDebitAmount(x),receivedAmount:transferCreditAmount(x),adjustmentAmount:num(x.adjustmentAmount),adjustmentLedger:x.adjustmentLedger||'',adjustmentNote:x.adjustmentNote||'',editable:!salaryAdvanceInfo});
   });
   // A bank ledger follows the account that moved, even when that account paid
   // an expense belonging to another entity (for example SANKI 3645 paying a
