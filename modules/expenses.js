@@ -177,6 +177,24 @@ function canonicalAccountName(value) {
   const match=Object.entries(ACCOUNT_RENAMES).find(([oldName])=>oldName.toLowerCase()===raw.toLowerCase());
   return match?match[1]:raw;
 }
+function searchRank(fields, query) {
+  const q=String(query||'').trim().toLowerCase().replace(/\s+/g,' ');if(!q)return 0;
+  const values=fields.map(x=>String(x||'').trim().toLowerCase()).filter(Boolean),words=q.split(' ');
+  if(values.some(v=>v===q))return 0;
+  if(values.some(v=>v.startsWith(q)))return 1;
+  if(values.some(v=>v.includes(q)))return 2;
+  if(words.every(word=>values.some(v=>v.includes(word)||fuzzyIncludes(v,word))))return 3;
+  if(values.some(v=>fuzzyIncludes(v,q)))return 4;
+  return 99;
+}
+function expenseSearchFields(expense) {
+  return [
+    expense.vendor, expense.particulars, expense.ledger, expense.id,
+    expense.billNo, expense.billNumber, expense.createdBy, expense.claimant,
+    expense.paymentType, expense.account,
+    ...(expense.payments || []).flatMap(payment => [payment.account, payment.reference, payment.bankReference, payment.note])
+  ];
+}
 
 // Accounts the founder actually pays from are added in-app (with approval) —
 // start minimal instead of the old guessed list.
@@ -1883,12 +1901,14 @@ router.get('/api/expenses/list', (req, res) => {
   const paymentType = (req.query.paymentType || '').toString().toLowerCase();
   const payingAccount = (req.query.payingAccount || '').toString().trim().toLowerCase();
   const reference = (req.query.reference || '').toString().trim().toLowerCase();
+  const search = (req.query.search || '').toString().trim().toLowerCase();
   const missingBill = String(req.query.missingBill || '') === 'true';
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   if (nature && isAdmin(req) && !approvalNatures(req).includes(nature)) return res.status(403).json({ success:false, error:'You cannot view this accounting entity.' });
   let list = Object.values(s.expenses).filter(e => {
     if (!canViewExpense(req, e)) return false;
     if (id && e.id !== id) return false;
+    if(search&&searchRank(expenseSearchFields(e),search)===99)return false;
     if (reference) {
       const needle=reference.replace(/[^a-z0-9]/g,''),digits=reference.replace(/\D/g,''),hay=[e.id,e.billNo,e.billNumber].filter(Boolean).map(v=>String(v).toLowerCase().replace(/[^a-z0-9]/g,''));
       if(!hay.some(v=>(needle&&v.includes(needle))||(digits&&v.replace(/\D/g,'').includes(digits))))return false;
@@ -1912,7 +1932,7 @@ router.get('/api/expenses/list', (req, res) => {
     }
     if (missingBill && e.billPhoto) return false;
     return true;
-  }).sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+  }).sort((a,b)=>search?(searchRank(expenseSearchFields(a),search)-searchRank(expenseSearchFields(b),search)||(b.date+b.id).localeCompare(a.date+a.id)):(b.date+b.id).localeCompare(a.date+a.id));
 
   const totals = { all: 0, pending: 0, approved: 0, paid: 0, noBill: 0, byType: {} };
   TYPES.forEach(t => { totals.byType[t] = 0; });
@@ -1993,7 +2013,7 @@ router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
 router.get('/api/expenses/spending-dashboard', (req, res) => {
   if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore(), from = String(req.query.from || ''), to = String(req.query.to || '');
-  const nature = req.query.nature ? normalizedNature(req.query.nature) : '', accountFilter = String(req.query.account || '').trim().toLowerCase(), categoryFilter=String(req.query.category||'').trim().toLowerCase();
+  const nature = req.query.nature ? normalizedNature(req.query.nature) : '', accountFilter = String(req.query.account || '').trim().toLowerCase(), categoryFilter=String(req.query.category||'').trim().toLowerCase(),search=String(req.query.search||'').trim().toLowerCase();
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const allowed = approvalNatures(req), inRange = d => (!from || d >= from) && (!to || d <= to);
   const payments = [];
@@ -2007,8 +2027,10 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
     });
   });
   (s.reconciliationExpenses||[]).filter(e=>allowed.includes(normalizedNature(e.nature))&&(!nature||normalizedNature(e.nature)===nature)&&inRange(String(e.date||''))&&(!accountFilter||String(e.account||'').toLowerCase()===accountFilter)&&(!categoryFilter||String(e.category||'').toLowerCase()===categoryFilter)).forEach(e=>payments.push({id:e.id,paymentId:e.bankTransactionId||e.adjustmentId||'',date:e.date,entity:normalizedNature(e.nature),kind:'Bank-reconciled expense',vendor:e.vendor||'Bank',claimant:'',particulars:e.particulars||e.category,category:e.category,type:e.type||defaultType(e.category||''),expenseAmount:round0(e.amount),amount:round0(e.amount),account:e.account,paymentType:'Bank statement',proof:'',billPhoto:'',qrPhoto:'',approvedAt:e.createdAt||'',approvedBy:e.createdBy||'',paidBy:e.createdBy||''}));
-  payments.sort((a,b)=>String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId)));
-  res.json({ success:true, range:{from,to}, totalPaid:round0(payments.reduce((n,p)=>n+num(p.amount),0)), count:payments.length, payments, accounts:storedAccountNames(s) });
+  const searchable=p=>[p.vendor,p.particulars,p.category,p.id,p.paymentId,p.reference,p.claimant,p.account,p.paymentType,p.kind,p.entity];
+  const visiblePayments=search?payments.filter(p=>searchRank(searchable(p),search)<99):payments;
+  visiblePayments.sort((a,b)=>search?(searchRank(searchable(a),search)-searchRank(searchable(b),search)||String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId))):String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId)));
+  res.json({ success:true, range:{from,to}, totalPaid:round0(visiblePayments.reduce((n,p)=>n+num(p.amount),0)), count:visiblePayments.length, payments:visiblePayments, accounts:storedAccountNames(s) });
 });
 
 router.get('/api/expenses/reimbursements', (req, res) => {

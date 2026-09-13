@@ -436,6 +436,25 @@ test('audit log groups each expense into a readable complete lifecycle with user
   assert.equal(reconstructed.timeline[0].action,'CREATED');assert.match(reconstructed.timeline[0].note,/reconstructed/i);assert.equal(reconstructed.timeline[0].user,'arshpreet');
 });
 
+test('all expenses and spending dashboard support broad closest-match search', () => {
+  const exact=invoke('POST','/api/expenses',{body:{date:'2026-09-13',ledger:'FOOD EXPENSE',vendor:'Needle',particulars:'Tailoring supplies',amount:101,billPhoto:'/api/expenses/photo/needle.jpg',paymentType:'Cash'}}).body.expense;
+  const partial=invoke('POST','/api/expenses',{body:{date:'2026-09-13',ledger:'FOOD EXPENSE',vendor:'Tailor Shop',particulars:'Needle repair service',amount:102,billPhoto:'/api/expenses/photo/repair.jpg',paymentType:'Cash'}}).body.expense;
+  const list=invoke('GET','/api/expenses/list',{query:{search:'Needle'},role:'owner'}).body.expenses;
+  assert.equal(list[0].id,exact.id,'an exact vendor match ranks before a particulars match');
+  assert.ok(list.some(expense=>expense.id===partial.id));
+  assert.equal(invoke('GET','/api/expenses/list',{query:{search:'repair servce'},role:'owner'}).body.expenses[0].id,partial.id,'minor missing letters still find the closest entry');
+  assert.equal(invoke('POST','/api/expenses/:id',{params:{id:exact.id},role:'owner',body:{ledger:'FOOD EXPENSE',vendor:'Needle'}}).status,200);
+  assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id:exact.id},role:'owner'}).status,200);
+  assert.equal(invoke('POST','/api/expenses/:id/pay',{params:{id:exact.id},role:'owner',body:{amount:101,account:'Counter Cash',paymentType:'Cash',paymentProof:'/api/expenses/photo/needle-payment.jpg'}}).status,200);
+  const dashboard=invoke('GET','/api/expenses/spending-dashboard',{query:{search:'Needle'},role:'owner'}).body;
+  assert.ok(dashboard.payments.some(payment=>payment.id===exact.id));
+  assert.ok(dashboard.count>=1);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/id="lf_search"/);assert.match(html,/id="sd_search"/);
+  assert.match(html,/search='\+encodeURIComponent\(focused\?'':el\('lf_search'\)\.value\)/);
+  assert.match(html,/spending-dashboard\?from=.*&search=/);
+});
+
 test('All Expenses ignores stale responses after the date range changes', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/listRequestSeq=0/);
