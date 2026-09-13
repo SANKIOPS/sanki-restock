@@ -2051,7 +2051,7 @@ router.post('/api/expenses/receivables', (req, res) => {
   if(!reason) return res.status(400).json({success:false,error:'Reason is required.'});
   if(!(amount>0)) return res.status(400).json({success:false,error:'Receivable amount must be greater than 0.'});
   s.receivableSeq=(s.receivableSeq||0)+1; const now=new Date().toISOString(), id='RCV-'+String(s.receivableSeq).padStart(5,'0');
-  const item={id,nature,party,reason,amount,receivedAmount:0,status:'open',date:String(b.date||now.slice(0,10)).slice(0,10),dueDate:String(b.dueDate||'').slice(0,10),proof:String(b.proof||'').trim(),collections:[],createdBy:(req.user&&req.user.username)||'admin',createdAt:now};
+  const proofs=proofList(b.proofs,b.proof),item={id,nature,party,reason,amount,receivedAmount:0,status:'open',date:String(b.date||now.slice(0,10)).slice(0,10),dueDate:String(b.dueDate||'').slice(0,10),proof:proofs[0]||'',proofs,collections:[],createdBy:(req.user&&req.user.username)||'admin',createdAt:now};
   s.receivables=s.receivables||{};s.receivables[id]=item;audit(s,req,'CREATED','receivable',id,{nature,after:item});saveStore(s);res.json({success:true,receivable:item});
 });
 
@@ -2068,12 +2068,12 @@ router.post('/api/expenses/receivables/:id/receive', (req,res) => {
   const s=loadStore(), x=(s.receivables||{})[req.params.id], b=req.body||{};
   if(!x) return res.status(404).json({success:false,error:'Receivable not found.'});
   if(!approvalNatures(req).includes(normalizedNature(x.nature))) return res.status(403).json({success:false,error:'You cannot collect this receivable.'});
-  const due=Math.max(0,num(x.amount)-num(x.receivedAmount)), amount=num(b.amount), account=String(b.account||'').trim(), proof=String(b.proof||'').trim();
+  const due=Math.max(0,num(x.amount)-num(x.receivedAmount)), amount=num(b.amount), account=String(b.account||'').trim(), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'';
   if(!(amount>0)||amount>due) return res.status(400).json({success:false,error:'Collection must be greater than 0 and cannot exceed ₹'+round0(due)+'.'});
   const receivingAccount=allowedCompanyAccount(s,x.nature,account);
   if(!receivingAccount) return res.status(400).json({success:false,error:'Select a receiving account assigned to this accounting entity.'});
   if(!proof) return res.status(400).json({success:false,error:'Collection proof is required.'});
-  x.collections=Array.isArray(x.collections)?x.collections:[];x.collections.push({id:'COL-'+String(x.collections.length+1).padStart(3,'0'),amount,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),account:receivingAccount,proof,note:String(b.note||'').trim(),receivedBy:(req.user&&req.user.username)||'admin',receivedAt:new Date().toISOString()});
+  x.collections=Array.isArray(x.collections)?x.collections:[];x.collections.push({id:'COL-'+String(x.collections.length+1).padStart(3,'0'),amount,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),account:receivingAccount,proof,proofs,note:String(b.note||'').trim(),receivedBy:(req.user&&req.user.username)||'admin',receivedAt:new Date().toISOString()});
   x.receivedAmount=num(x.receivedAmount)+amount;x.status=x.receivedAmount>=x.amount?'received':'partially_received';audit(s,req,'COLLECTION_RECORDED','receivable',x.id,{nature:x.nature,account:receivingAccount,paymentId:x.collections.at(-1).id,after:x.collections.at(-1)});saveStore(s);res.json({success:true,receivable:x});
 });
 
@@ -2271,7 +2271,7 @@ router.get('/api/expenses/balances', (req, res) => {
 // A transfer is one atomic event that produces a debit and matching credit.
 router.post('/api/expenses/exchanges',(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can record a money exchange.'});
-  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),direction=String(b.direction||''),source=String(b.source||'').trim(),amount=roundMoney(b.amount),receivedAmount=b.receivedAmount==null?amount:roundMoney(b.receivedAmount),adjustmentAmount=roundMoney(amount-receivedAmount),adjustmentLedger=String(b.adjustmentLedger||'').trim(),adjustmentNote=String(b.adjustmentNote||'').trim(),date=String(b.date||'').slice(0,10),proof=String(b.proof||'').trim(),note=String(b.note||'').trim();
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),direction=String(b.direction||''),source=String(b.source||'').trim(),amount=roundMoney(b.amount),receivedAmount=b.receivedAmount==null?amount:roundMoney(b.receivedAmount),adjustmentAmount=roundMoney(amount-receivedAmount),adjustmentLedger=String(b.adjustmentLedger||'').trim(),adjustmentNote=String(b.adjustmentNote||'').trim(),date=String(b.date||'').slice(0,10),proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',note=String(b.note||'').trim();
   if(!approvalNatures(req).includes(nature))return res.status(403).json({success:false,error:'You cannot record an exchange for this entity.'});
   const bankAccount=allowedTransferAccount(nature,b.bankAccount),cashAccount=allowedTransferAccount(nature,b.cashAccount);
   if(!['transfer_to_cash','cash_to_transfer'].includes(direction))return res.status(400).json({success:false,error:'Choose whether transfer was given or cash was given.'});
@@ -2280,7 +2280,7 @@ router.post('/api/expenses/exchanges',(req,res)=>{
   if(!(amount>0)||!(receivedAmount>0)||receivedAmount>amount||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!proof)return res.status(400).json({success:false,error:'Amount given, amount received, date and exchange proof are required; received cannot exceed given.'});
   if(adjustmentAmount>0&&(!adjustmentLedger||!adjustmentNote))return res.status(400).json({success:false,error:'Name the previous-balance ledger and explain the adjustment.'});
   const fromAccount=direction==='transfer_to_cash'?bankAccount:cashAccount,toAccount=direction==='transfer_to_cash'?cashAccount:bankAccount;
-  s.transferSeq=num(s.transferSeq)+1;const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature,fromNature:nature,toNature:nature,classification:'money_exchange',exchangeDirection:direction,exchangeSource:source,fromAccount,toAccount,amount,receivedAmount,adjustmentAmount,adjustmentLedger,adjustmentNote,date,proof,note:[source,note].filter(Boolean).join(' · '),createdBy:req.user&&req.user.username||'owner',createdAt:new Date().toISOString()};
+  s.transferSeq=num(s.transferSeq)+1;const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature,fromNature:nature,toNature:nature,classification:'money_exchange',exchangeDirection:direction,exchangeSource:source,fromAccount,toAccount,amount,receivedAmount,adjustmentAmount,adjustmentLedger,adjustmentNote,date,proof,proofs,note:[source,note].filter(Boolean).join(' · '),createdBy:req.user&&req.user.username||'owner',createdAt:new Date().toISOString()};
   s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,req,'MONEY_EXCHANGE_RECORDED','transfer',transfer.id,{nature,account:fromAccount,after:transfer,note:'Exchange recorded with explicit cash/transfer receipt and previous-balance adjustment; no income or expense'});saveStore(s);res.json({success:true,transfer});
 });
 
@@ -2337,7 +2337,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
   if (!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
   const fromAccount = allowedTransferAccount(fromNature, b.fromAccount), toAccount = allowedTransferAccount(toNature, b.toAccount);
-  const amount = num(b.amount), proof = String(b.proof || '').trim();
+  const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'';
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
@@ -2350,7 +2350,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   if (!proof) return res.status(400).json({ success: false, error: 'Transfer proof is required.' });
   s.transferSeq = (s.transferSeq || 0) + 1;
   const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature:fromNature, fromNature, toNature, classification, fromAccount, toAccount, amount,
-    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, note: String(b.note || '').trim(),
+    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, proofs, note: String(b.note || '').trim(),
     createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString() };
   s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer);audit(s,req,'TRANSFER_RECORDED','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer});saveStore(s);
   res.json({ success: true, transfer });
@@ -2374,7 +2374,7 @@ router.post('/api/expenses/receipts', (req,res) => {
   if(!isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can record money received.'});
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature);
   if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot record money for this entity.'});
-  const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proof=String(b.proof||'').trim(),source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim(),note=String(b.note||'').trim(),ownerCashDeclaration=rolesOfReq(req).includes('owner')&&/cash/i.test(String(account||''))&&!proof;
+  const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim(),note=String(b.note||'').trim(),ownerCashDeclaration=rolesOfReq(req).includes('owner')&&/cash/i.test(String(account||''))&&!proof;
   if(!account) return res.status(400).json({success:false,error:'Select the account that received the money.'});
   if(!(amount>0)) return res.status(400).json({success:false,error:'Receipt amount must be greater than 0.'});
   if(!source) return res.status(400).json({success:false,error:'Source / party is required.'});
@@ -2382,19 +2382,19 @@ router.post('/api/expenses/receipts', (req,res) => {
   if(ownerCashDeclaration&&!note) return res.status(400).json({success:false,error:'Explain why no proof is available for this cash receipt.'});
   if(!['asset_sale','other_income','refund','owner_contribution'].includes(receiptType)) return res.status(400).json({success:false,error:'Choose a valid receipt type.'});
   s.receiptSeq=(s.receiptSeq||0)+1;s.receipts=Array.isArray(s.receipts)?s.receipts:[];
-  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note,proof,proofException:ownerCashDeclaration?'Owner cash declaration — no external proof available':'',createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString()};
+  const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature,account,amount,receiptType,source,date:String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),note,proof,proofs,proofException:ownerCashDeclaration?'Owner cash declaration — no external proof available':'',createdBy:(req.user&&req.user.username)||'admin',createdAt:new Date().toISOString()};
   s.receipts.push(receipt);audit(s,req,'RECEIPT_RECORDED','receipt',receipt.id,{nature,account,after:receipt});saveStore(s);res.json({success:true,receipt});
 });
 
 router.post('/api/expenses/sales-refunds',(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can record a customer sales refund.'});
-  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),amount=roundMoney(b.amount),saleReference=String(b.saleReference||'').trim(),reason=String(b.reason||'').trim(),proof=String(b.proof||'').trim(),date=String(b.date||'').slice(0,10),refundAccount=allowedCompanyAccount(s,nature,b.refundAccount),originalReceiptAccount=allowedCompanyAccount(s,nature,b.originalReceiptAccount);
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),amount=roundMoney(b.amount),saleReference=String(b.saleReference||'').trim(),reason=String(b.reason||'').trim(),proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',date=String(b.date||'').slice(0,10),refundAccount=allowedCompanyAccount(s,nature,b.refundAccount),originalReceiptAccount=allowedCompanyAccount(s,nature,b.originalReceiptAccount);
   if(nature!=='SANKI')return res.status(400).json({success:false,error:'Sales refunds are currently available for SANKI sales only.'});
   if(!saleReference)return res.status(400).json({success:false,error:'Original sale/order/receipt reference is required.'});
   if(!(amount>0))return res.status(400).json({success:false,error:'Refund amount must be greater than 0.'});
   if(!refundAccount||!originalReceiptAccount)return res.status(400).json({success:false,error:'Select both the original receipt account and the refund-paying account.'});
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!reason||!proof)return res.status(400).json({success:false,error:'Refund date, reason and payout proof are required.'});
-  s.salesRefundSeq=num(s.salesRefundSeq)+1;const refund={id:'SRF-'+String(s.salesRefundSeq).padStart(5,'0'),nature,amount,saleReference,originalReceiptAccount,refundAccount,date,reason,proof,createdBy:req.user&&req.user.username||'owner',createdAt:new Date().toISOString()};
+  s.salesRefundSeq=num(s.salesRefundSeq)+1;const refund={id:'SRF-'+String(s.salesRefundSeq).padStart(5,'0'),nature,amount,saleReference,originalReceiptAccount,refundAccount,date,reason,proof,proofs,createdBy:req.user&&req.user.username||'owner',createdAt:new Date().toISOString()};
   s.salesRefunds.push(refund);audit(s,req,'SALES_REFUND_RECORDED','sales_refund',refund.id,{nature,account:refundAccount,after:refund,note:'Original receipt remains in its source account; refund paid from '+refundAccount});saveStore(s);res.json({success:true,refund});
 });
 

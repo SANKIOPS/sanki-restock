@@ -996,6 +996,14 @@ test('consolidated vendor payment consumes available advance before creating the
   assert.ok(saved.auditLog.some(x=>x.action==='VENDOR_ADVANCE_APPLIED'&&x.paymentId==='VADV-CREDIT-TEST'));
 });
 
+test('secondary money flows preserve multiple proofs without duplicating the transaction',()=>{
+  const proofs=['/api/expenses/photo/part-2000.jpg','/api/expenses/photo/part-8000.jpg'];
+  const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:'Axis Bank 3448',amount:10000,date:'2026-08-27',proofs}});
+  assert.equal(made.status,200);assert.equal(made.body.transfer.amount,10000);assert.deepEqual(made.body.transfer.proofs,proofs);assert.equal(made.body.transfer.proof,proofs[0]);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  ['receiveProof','rc_proof','srf_proof','tr_proof'].forEach(id=>assert.match(html,new RegExp('id="'+id+'"[^>]*multiple')));
+});
+
 test('Prashant can record only the approved Axis 3448 to Axis 3645 transfer route',()=>{
   const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.deepEqual(config.transferAccountsByNature.SANKI,['Axis Bank 3448','Prashant Axis 3645']);assert.deepEqual(config.transferAccountsByNature.SAMAST,[]);

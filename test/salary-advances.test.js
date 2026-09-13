@@ -258,6 +258,18 @@ test('partial salary payment requires a reason and preserves the remaining balan
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Deductions \/ adjustments/);assert.match(html,/Balance to pay/);assert.match(html,/Reason when amount differs/);assert.match(html,/submitSingleSalaryPayment/);
 });
 
+test('salary payments upload and preserve multiple screenshots as one payment',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Multi Proof Salary',salary:12000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-12'},body:{empId:emp.id,paidDays:30}});
+  const proofs=['/salary-part-2000.jpg','/salary-part-8000.jpg'];
+  const paid=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-12',date:'2098-12-31',account:'Gagan Sir Cash',proofs,items:[{empId:emp.id,amount:10000,modificationReason:'Paid in two immediate transfers'}]}});
+  assert.equal(paid.status,200);assert.equal(paid.body.proofCount,2);
+  const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8')).salaryPayments.find(x=>x.empId===emp.id&&x.ym==='2098-12');
+  assert.deepEqual(stored.proofs,proofs);assert.equal(stored.proof,proofs[0]);assert.equal(stored.amount,10000);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/id="one_proof"[^>]*multiple/);assert.match(html,/id="sp_proof"[^>]*multiple/);assert.match(html,/proofs:proofs/);
+});
+
 test('only owner can edit posted advances and every correction remains audited',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Editable Advance Employee',salary:20000}}).body.employee,advance=postAdvance(emp,{amount:2000,date:'2098-11-01',account:'Axis Bank 3448',proof:'/advance-edit.jpg'});
   assert.equal(invoke('PATCH','/api/salary/advances/:id',{params:{id:advance.id},body:{amount:2200,date:'2098-11-02',account:'Axis Bank 3448',reason:'Correction'}}).status,403);
