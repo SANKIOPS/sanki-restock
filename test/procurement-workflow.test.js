@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, parseLocalInvoiceText } = require('../modules/procurement');
 
 test('purchase SKU serials roll from Z999 to AA1 without punctuation', () => {
   assert.deepEqual(nextSerial({ alpha: 'Z', num: 999 }), { alpha: 'AA', num: 1 });
@@ -30,6 +30,35 @@ test('invoice OCR can fill bill headers before vendor, bill number and date are 
   assert.doesNotMatch(html, /Enter the bill number first \(required\)/);
   assert.match(html, /var TROUSER_WAIST_SIZES=\['24','26'/);
   assert.match(html, /function sizesFor\(p\)\{ return isTrouser\(p\)\?TROUSER_WAIST_SIZES/);
+});
+
+test('China invoice reading uses local Chinese OCR and parses reviewable garment lines without paid AI credits', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  const route = source.match(/router\.post\('\/api\/procurement\/parse-invoice'[\s\S]*?\n\}\);/)[0];
+  assert.match(source, /@tesseract\.js-data\/chi_sim/);
+  assert.match(route, /localInvoiceOcr/);
+  assert.doesNotMatch(route, /api\.anthropic\.com/);
+  assert.doesNotMatch(route, /ANTHROPIC_API_KEY/);
+
+  const parsed = parseLocalInvoiceText([
+    '广州衣尚服饰有限公司',
+    '订单号: CN-7788',
+    '日期: 2026年09月14日',
+    '1 6921 阔腿裤 黑色 L 6 80 480',
+    '2 A611 衬衫 白色 XL 10 55 550',
+    '合计 1030'
+  ].join('\n'), {
+    products: { Trouser: 11, Shirt: 1, 'T-Shirt': 2 },
+    colours: { Black: 1, White: 12 },
+    vendors: []
+  });
+  assert.equal(parsed.vendor, '广州衣尚服饰有限公司');
+  assert.equal(parsed.billNo, 'CN-7788');
+  assert.equal(parsed.datePurchase, '2026-09-14');
+  assert.deepEqual(parsed.lines.map(line => ({ code: line.designCode, type: line.productType, colour: line.colour, size: line.sizeLabel, qty: line.qty, price: line.perPcsYuan })), [
+    { code: '6921', type: 'Trouser', colour: 'Black', size: 'L', qty: 6, price: 80 },
+    { code: 'A611', type: 'Shirt', colour: 'White', size: 'XL', qty: 10, price: 55 }
+  ]);
 });
 
 test('owner and procurement roles receive the full Purchases workflow in the UI', () => {

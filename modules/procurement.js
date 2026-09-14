@@ -38,6 +38,9 @@ const fs      = require('fs');
 const crypto  = require('crypto');
 const multer  = require('multer');
 const fetch   = require('node-fetch');
+const pdfParse = require('pdf-parse');
+const { createWorker } = require('tesseract.js');
+const tesseractChinese = require('@tesseract.js-data/chi_sim');
 const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
@@ -67,9 +70,11 @@ const photoUpload = multer({
 });
 
 // ── Invoice auto-fill (Chinese vendor invoice → structured lines) ──
-// The invoice is held in memory (base64 → AI vision), never persisted. Accepts
-// an image OR a PDF. Requires ANTHROPIC_API_KEY; model is overridable.
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+// The invoice is held in memory and never persisted. Reading uses local
+// Simplified-Chinese OCR, so this workflow does not depend on paid AI credits.
+// Images and text-based PDFs are supported; the buyer reviews every extracted
+// field before the purchase is saved.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY; // optional SEO generation only
 const AI_MODEL = process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
 const invoiceUpload = multer({
   storage: multer.memoryStorage(),
@@ -1005,86 +1010,175 @@ function extractJsonBlock(text) {
   if (start < 0 || end < 0 || end <= start) return null;
   try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
 }
+let invoiceOcrWorkerPromise;
+let invoiceOcrQueue = Promise.resolve();
+function localInvoiceOcr(buffer) {
+  // One warm local worker; serialize jobs because a Tesseract worker cannot
+  // safely run two recognitions at once. chi_sim also recognises Latin/digits.
+  const job = invoiceOcrQueue.then(async () => {
+    if (!invoiceOcrWorkerPromise) {
+      invoiceOcrWorkerPromise = createWorker(tesseractChinese.code, 1, {
+        langPath: tesseractChinese.langPath, gzip: tesseractChinese.gzip, cacheMethod: 'none'
+      });
+    }
+    const worker = await invoiceOcrWorkerPromise;
+    const result = await worker.recognize(buffer);
+    return String(result && result.data && result.data.text || '');
+  });
+  invoiceOcrQueue = job.catch(() => {});
+  return job;
+}
+function normalInvoiceText(value) {
+  return String(value || '').normalize('NFKC').replace(/\r/g, '').replace(/[，]/g, ',').replace(/[：]/g, ':');
+}
+function localInvoiceDate(text) {
+  const raw = normalInvoiceText(text);
+  const m = raw.match(/(?:20\d{2})[年\/.-]\s*\d{1,2}[月\/.-]\s*\d{1,2}日?/) ||
+            raw.match(/\d{1,2}[\/.-]\s*\d{1,2}[\/.-]\s*(?:20)?\d{2}/);
+  if (!m) return '';
+  const nums = m[0].match(/\d+/g).map(Number);
+  let y, month, day;
+  if (nums[0] > 1900) [y, month, day] = nums;
+  else { [day, month, y] = nums; if (y < 100) y += 2000; }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return '';
+  return String(y).padStart(4, '0') + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+}
+function localInvoiceBillNo(text) {
+  const m = normalInvoiceText(text).match(/(?:invoice|bill|order|单据|单号|订单|票据)\s*(?:no\.?|number|编号|号码|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9_\/-]{2,})/i);
+  return m ? m[1].replace(/[.,;:]+$/, '') : '';
+}
+function localInvoiceProduct(line, products) {
+  const rules = [
+    ['Denim Joggers', /denim\s*jogger|牛仔束脚/i], ['Coord Set', /coord|co-ord|套装/i],
+    ['T-Shirt', /t[\s-]?shirt|tee\b|polo|T恤|短袖/i], ['Shirt', /\bshirt\b|衬衫/i],
+    ['Jeans', /\bjeans?\b|牛仔裤/i], ['Trouser', /trouser|pants?|长裤|裤子|西裤|阔腿裤/i],
+    ['Jogger', /jogger|束脚裤/i], ['Shorts', /shorts?|短裤/i], ['Jorts', /jorts?/i],
+    ['Sando', /sando|背心/i], ['Lower', /lower/i], ['Bag', /\bbag\b|包/i]
+  ];
+  const hit = rules.find(r => r[1].test(line) && products.includes(r[0]));
+  return hit ? hit[0] : '';
+}
+function localInvoiceColour(line, colours) {
+  const rules = [
+    ['Sky Blue', /sky\s*blue|天蓝/i], ['Blue', /navy|blue|蓝|藏青/i], ['Black', /black|黑/i],
+    ['White', /white|白/i], ['Brown', /brown|coffee|咖啡|棕|褐/i], ['Cream', /cream|off[ -]?white|米白|奶油/i],
+    ['Green', /green|绿/i], ['Grey', /gr[ae]y|灰/i], ['Maroon', /maroon|酒红/i], ['Orange', /orange|橙|桔/i],
+    ['Pink', /pink|粉/i], ['Purple', /purple|紫/i], ['Red', /red|红/i], ['Yellow', /yellow|黄/i],
+    ['Beige', /beige|杏|米色/i], ['Olive', /olive|军绿/i], ['Khaki', /khaki|卡其/i],
+    ['Golden', /gold(?:en)?|金色/i], ['Silver', /silver|银色/i]
+  ];
+  const hit = rules.find(r => r[1].test(line) && colours.includes(r[0]));
+  return hit ? hit[0] : '';
+}
+function localInvoiceFit(line, fits) {
+  const rules = [
+    ['Wide Leg', /wide\s*leg|阔腿/i], ['Oversized', /oversiz|超大/i], ['Relaxed Fit', /relaxed|宽松/i],
+    ['Slim Fit', /slim|修身/i], ['Skinny Fit', /skinny|紧身/i], ['Straight Fit', /straight|直筒/i],
+    ['Baggy Fit', /baggy/i], ['Tapered Fit', /tapered|锥形/i], ['Bootcut', /bootcut|喇叭/i],
+    ['Cargo Fit', /cargo|工装/i], ['Drop Shoulder', /drop\s*shoulder|落肩/i], ['Boxy Fit', /boxy/i],
+    ['Regular Fit', /regular/i], ['Muscle Fit', /muscle/i], ['Narrow Fit', /narrow/i]
+  ];
+  const hit = rules.find(r => r[1].test(line) && fits.includes(r[0]));
+  return hit ? hit[0] : '';
+}
+function localInvoiceSize(line, sizes) {
+  const matches = normalInvoiceText(line).toUpperCase().match(/(?:^|[^A-Z0-9])(FS|4XL|3XL|XXL|XL|L|M|S|(?:2[468]|3[02468]|4[024]))(?:[^A-Z0-9]|$)/g) || [];
+  for (const match of matches) {
+    const size = match.replace(/[^A-Z0-9]/g, '');
+    if (sizes.includes(size)) return size;
+  }
+  return '';
+}
+function localInvoiceNumbers(line, designCode) {
+  const clean = normalInvoiceText(line)
+    .replace(/(?:20\d{2})[年\/.-]\s*\d{1,2}[月\/.-]\s*\d{1,2}日?/g, ' ')
+    .replace(/\b\d{7,}\b/g, ' ');
+  const values = [];
+  for (const m of clean.matchAll(/(?:^|[^A-Z0-9])(?:¥|￥|RMB|CNY)?\s*(\d+(?:\.\d+)?)(?=$|[^A-Z0-9])/gi)) {
+    if (designCode && m[1] === designCode) continue;
+    values.push(Number(m[1]));
+  }
+  if (/^\s*\d{1,3}[.)、]\s/.test(clean) && values.length > 2) values.shift();
+  let qty = 0, price = 0;
+  for (let i = values.length - 3; i >= 0; i--) {
+    const q = values[i], p = values[i + 1], total = values[i + 2];
+    if (Number.isInteger(q) && q > 0 && q <= 10000 && p > 0 && Math.abs(q * p - total) <= Math.max(2, total * 0.03)) {
+      qty = q; price = p; break;
+    }
+  }
+  if (!qty && values.length >= 2) {
+    const q = values[values.length - 2], p = values[values.length - 1];
+    if (Number.isInteger(q) && q > 0 && q <= 10000 && p > 0) { qty = q; price = p; }
+  }
+  return { qty, price };
+}
+function parseLocalInvoiceText(rawText, store) {
+  const text = normalInvoiceText(rawText);
+  const products = Object.keys(store.products || {}), colours = Object.keys(store.colours || {});
+  const sizes = ['FS', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44'];
+  const fits = ['Oversized', 'Drop Shoulder', 'Boxy Fit', 'Relaxed Fit', 'Regular Fit', 'Slim Fit', 'Muscle Fit',
+                'Baggy Fit', 'Straight Fit', 'Tapered Fit', 'Skinny Fit', 'Narrow Fit', 'Wide Leg', 'Bootcut', 'Cargo Fit'];
+  const knownVendor = (store.vendors || []).find(v => text.toLowerCase().includes(String(v).toLowerCase()));
+  const textLines = text.split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const vendorLine = textLines.slice(0, 12).find(x => /公司|商行|服饰|服装|档口|供应商|supplier|vendor/i.test(x));
+  const lines = [];
+  textLines.forEach((line, index) => {
+    if (/合计|总计|小计|运费|税额|折扣|应付|实付|收款|电话|地址|日期|单号|订单号|subtotal|grand\s*total|freight|discount|tax/i.test(line)) return;
+    const tokens = line.match(/[A-Z]*\d[A-Z0-9_-]{2,}/gi) || [];
+    let designCode = tokens.find(x => /[A-Z]/i.test(x) && /\d/.test(x)) || '';
+    // OCR can glue the printed row number to an alphanumeric style code
+    // ("1 A611" → "1A611"). Separate that harmlessly.
+    if (/^\d{1,3}[A-Z]\d/i.test(designCode) && line.trim().startsWith(designCode)) {
+      designCode = designCode.replace(/^\d{1,3}(?=[A-Z]\d)/i, '');
+    }
+    if (!designCode) {
+      const numericCode = line.match(/(?:^|\s)(\d{4,8})(?=\s|$)/);
+      if (numericCode) designCode = numericCode[1];
+    }
+    const productType = localInvoiceProduct(line, products);
+    const colour = localInvoiceColour(line, colours);
+    const sizeLabel = localInvoiceSize(line, sizes);
+    const amounts = localInvoiceNumbers(line, designCode);
+    if (!amounts.qty || (!productType && !colour && !sizeLabel && !designCode)) return;
+    const fit = localInvoiceFit(line, fits);
+    const sourceName = line.replace(/[¥￥]/g, ' ').replace(/\b\d+(?:\.\d+)?\b/g, ' ').replace(/\s+/g, ' ').trim();
+    const baseName = [productType, colour].filter(Boolean).join(' ');
+    lines.push({
+      designName: (baseName || sourceName || ('Invoice item ' + (index + 1))).slice(0, 80),
+      designCode: String(designCode).slice(0, 40), productType, colour, fit,
+      sizeLabel, chinaSize: sizeLabel, audience: 'Men', qty: amounts.qty,
+      perPcsYuan: amounts.price, photoBox: null
+    });
+  });
+  const fallbackVendor = textLines.slice(0, 8).find(x =>
+    !/(?:invoice|bill|order|单据|单号|订单|票据|date|日期|电话|phone)/i.test(x) &&
+    /[A-Z\u3400-\u9fff]/i.test(x) && !/\d{4,}/.test(x)
+  );
+  return {
+    vendor: String(knownVendor || vendorLine || fallbackVendor || '').replace(/^(?:供应商|vendor|supplier)\s*[:：-]?\s*/i, '').toUpperCase().trim().slice(0, 100),
+    billNo: localInvoiceBillNo(text), datePurchase: localInvoiceDate(text), lines
+  };
+}
 router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), async (req, res) => {
   try {
-    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'Invoice auto-fill is not enabled. Set ANTHROPIC_API_KEY in Railway to turn it on.' });
     if (!req.file) return res.status(400).json({ success: false, error: 'No invoice received — attach a photo or PDF of the vendor invoice.' });
     const s = loadStore();
-    const products = Object.keys(s.products);
-    const colours = Object.keys(s.colours);
-    const sizes = ['FS', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44'];
-    const fits = ['Oversized', 'Drop Shoulder', 'Boxy Fit', 'Relaxed Fit', 'Regular Fit', 'Slim Fit', 'Muscle Fit',
-                  'Baggy Fit', 'Straight Fit', 'Tapered Fit', 'Skinny Fit', 'Narrow Fit', 'Wide Leg', 'Bootcut', 'Cargo Fit'];
-    const b64 = req.file.buffer.toString('base64');
     const isPdf = /pdf/.test(req.file.mimetype);
-    const media = isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
-      : { type: 'image', source: { type: 'base64', media_type: req.file.mimetype, data: b64 } };
-    const prompt =
-`You are reading a garment supplier INVOICE for an Indian streetwear brand. ` +
-`It may be PRINTED or HANDWRITTEN, and in Chinese, English, or a mix. ` +
-`Read handwriting carefully. OCR it, translate any Chinese to English, and extract EVERY line item. ` +
-`Do your best on messy or handwritten bills — infer product/colour/size/qty/price from whatever is legible rather than giving up.\n\n` +
-`Return STRICT JSON ONLY (no prose) in exactly this shape:\n` +
-`{"vendor":"","billNo":"","datePurchase":"YYYY-MM-DD","lines":[{"designName":"","designCode":"","productType":"","colour":"","fit":"","sizeLabel":"","chinaSize":"","qty":0,"perPcsYuan":0,"photoBox":null}]}\n\n` +
-`Rules:\n` +
-`- vendor = supplier/company name (romanise if Chinese). billNo = invoice/order number. datePurchase = the invoice date.\n` +
-`- designCode = the vendor's product/style code printed on the invoice (e.g. A611). designName = a short English working name for the garment.\n` +
-`- productType: map to the CLOSEST of [${products.join(', ')}] or "" if unclear.\n` +
-`- colour: map to the CLOSEST of [${colours.join(', ')}] or "" if unclear.\n` +
-`- fit: map to the CLOSEST of [${fits.join(', ')}] or "" if not stated.\n` +
-`- sizeLabel = the Indian/global size, one of [${sizes.join(', ')}] ("FS" = free size). chinaSize = the size as printed on the invoice (M/L/XL… or "FS").\n` +
-`- If a row lists several sizes, output ONE line PER size with its own qty.\n` +
-`- qty = pieces (integer). perPcsYuan = unit price in RMB/¥ (number only).\n` +
-`- photoBox = if this line has a PRODUCT PHOTO/THUMBNAIL on the invoice, its bounding box as [x0,y0,x1,y1] normalised 0..1 (left,top,right,bottom of the whole page). Use null if there is no product image for the line. Lines sharing one photo may repeat the same box.\n` +
-`- Never invent data — leave a field "" or 0 (or null for photoBox) if the invoice does not show it.`;
-    // Guard the vision call with a hard timeout so a slow/hung upstream returns
-    // a clean JSON error to the browser instead of the platform's plain-text
-    // "upstream error" (which the frontend can't JSON.parse).
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90000);
-    let r;
-    try {
-      r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }),
-        signal: ctrl.signal
-      });
-    } catch (err) {
-      clearTimeout(timer);
-      if (err.name === 'AbortError') return res.status(504).json({ success: false, error: 'The invoice reader timed out. Try a smaller/clearer photo, or enter the lines manually.' });
-      return res.status(502).json({ success: false, error: 'Could not reach the invoice reader: ' + err.message });
-    }
-    clearTimeout(timer);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) return res.status(502).json({ success: false, error: 'AI error: ' + ((j.error && j.error.message) || ('HTTP ' + r.status)) });
-    const text = (j.content || []).map(c => c.text || '').join('');
-    const parsed = extractJsonBlock(text);
-    if (!parsed) return res.status(502).json({ success: false, error: 'Could not read the invoice. Try a clearer photo, or enter the lines manually.' });
-    const lines = (parsed.lines || []).map(l => ({
-      designName: String(l.designName || '').trim(),
-      designCode: String(l.designCode || '').trim(),
-      productType: pickClosest(l.productType, products),
-      colour: pickClosest(l.colour, colours),
-      fit: pickClosest(l.fit, fits),
-      sizeLabel: pickClosest(l.sizeLabel, sizes) || String(l.sizeLabel || '').trim(),
-      chinaSize: String(l.chinaSize || '').trim(),
-      audience: 'Men',
-      qty: Math.max(0, Math.round(num(l.qty))),
-      perPcsYuan: num(l.perPcsYuan),
-      // Normalised [x0,y0,x1,y1] 0..1 of the product thumbnail on the invoice, if any.
-      photoBox: (Array.isArray(l.photoBox) && l.photoBox.length === 4 &&
-                 l.photoBox.every(n => typeof n === 'number' && n >= 0 && n <= 1)) ? l.photoBox : null
-    }));
+    const text = isPdf ? String((await pdfParse(req.file.buffer)).text || '') : await localInvoiceOcr(req.file.buffer);
+    if (!text.trim()) return res.status(422).json({ success: false, error: isPdf
+      ? 'This PDF has no readable text. Upload a clear JPG/PNG photo of each page instead.'
+      : 'No readable invoice text was found. Retake the photo straight-on in good light and try again.' });
+    const parsed = parseLocalInvoiceText(text, s);
+    if (!parsed.lines.length) return res.status(422).json({ success: false,
+      error: 'The invoice text was read, but no complete quantity-and-price rows were found. Use a clearer straight-on photo, or add the lines manually.' });
     res.json({
       success: true,
       vendor: String(parsed.vendor || '').toUpperCase().trim(),
       billNo: String(parsed.billNo || '').trim(),
       datePurchase: String(parsed.datePurchase || '').trim(),
-      // The frontend crops photoBoxes from THIS image (canvas), so tell it whether cropping is possible.
-      canCropPhotos: !isPdf,
-      lines
+      canCropPhotos: false,
+      reader: 'local-ocr',
+      lines: parsed.lines
     });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -1879,4 +1973,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases };
+module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, parseLocalInvoiceText };

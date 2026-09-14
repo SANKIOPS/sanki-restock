@@ -1196,6 +1196,7 @@
       }).then(function(d){
         btn.disabled=false; btn.textContent='Read invoice & fill lines';
         if(!d.success){ el('invoiceNote').textContent=d.error||'Could not read the invoice.'; return; }
+        var readerNote=d.reader==='local-ocr'?'Read locally — no AI credits used. ':'';
         // Populate bill headers from OCR. Preserve a value the user already entered.
         if(d.vendor){
           var vendorName=String(d.vendor).toUpperCase().trim(), vendorSel=el('b_vendor');
@@ -1217,18 +1218,18 @@
         });
         var startIdx=lines.length;
         lines=lines.concat(added); renderLines();
-        el('invoiceNote').textContent=added.length?('Filled '+added.length+' line(s). Cropping product photos…'):'No line items found on the invoice.';
+        el('invoiceNote').textContent=readerNote+(added.length?('Filled '+added.length+' line(s). Cropping product photos…'):'No line items found on the invoice.');
         window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
         // Crop each line's product photo out of THIS invoice image (canvas), upload it,
         // and attach it for approval. Only possible for image invoices, not PDFs.
         var boxed=added.filter(function(l){ return l._photoBox; }).length;
         if(d.canCropPhotos && boxed && /^image\//.test(f.type)){
           cropInvoicePhotos(f, added, startIdx).then(function(n){
-            el('invoiceNote').textContent='Filled '+added.length+' line(s); auto-cropped '+n+' photo(s). Review each line — Edit to fix any field, replace/approve the photo, then Save.';
+            el('invoiceNote').textContent=readerNote+'Filled '+added.length+' line(s); auto-cropped '+n+' photo(s). Review each line — Edit to fix any field, replace/approve the photo, then Save.';
             renderLines();
           });
         } else {
-          el('invoiceNote').textContent='Filled '+added.length+' line(s). '+(boxed&&!d.canCropPhotos?'(PDF — add each photo via Edit.) ':'')+'Review each line — Edit to add/approve its photo, then Save.';
+          el('invoiceNote').textContent=readerNote+'Filled '+added.length+' line(s). '+(boxed&&!d.canCropPhotos?'(PDF — add each photo via Edit.) ':'')+'Review each line — Edit to add/approve its photo, then Save.';
         }
       }).catch(function(e){ btn.disabled=false; btn.textContent='Read invoice & fill lines'; el('invoiceNote').textContent=e.message; });
     };
