@@ -1085,13 +1085,18 @@
       var n=Number(value||0);if(Math.abs(n)<0.005)return '<span class="muted"><b>'+fmt(0)+'</b> clear</span>';
       return n<0?'<span class="pos"><b>'+fmt(Math.abs(n))+'</b> advance</span>':'<span class="neg"><b>'+fmt(n)+'</b> due</span>';
     }
+    function procurementCostHtml(raw){
+      var c=raw&&raw.costBreakdown;if(!c)return'';
+      var rows=(c.lines||[]).map(function(l){return '<tr><td>'+esc(l.designName||l.sku||'—')+'</td><td class="ledger-money">'+l.qty+'</td><td class="ledger-money">'+fmt(l.goodsPerPc)+'</td><td class="ledger-money">'+fmt(l.freightPerPc)+'</td><td class="ledger-money">'+fmt(l.landedPerPc)+'</td><td class="ledger-money"><b>'+fmt(l.lineTotal)+'</b></td></tr>';}).join('');
+      return '<details style="margin-top:7px"><summary><b>View cost calculation</b></summary><div class="muted" style="margin:7px 0">'+esc(c.formula)+'</div><div class="vendor-ledger-scroll"><table class="vendor-ledger-table"><thead><tr><th>Design / SKU</th><th>Qty</th><th>Goods/pc</th><th>Freight/pc</th><th>Landed/pc</th><th>Total</th></tr></thead><tbody>'+rows+'</tbody></table></div><div style="margin-top:7px">Goods '+fmt(c.goodsTotal)+' + freight/transport '+fmt(c.freightTotal)+' = <b>'+fmt(c.landedTotal)+'</b></div><div class="muted">Edit the rates, prices, weights or quantities from Purchases → Purchases Summary → open '+esc(raw.id)+'.</div></details>';
+    }
     function vendorLedgerTable(v){
       var opening=Number(v.ledgerOpeningBalance||0),rows=v.ledgerRows||[];
       var body='<tr class="ledger-opening"><td>'+esc(el('vf_from').value||'—')+'</td><td>Opening balance</td><td>Opening</td><td>—</td><td class="ledger-money">—</td><td class="ledger-money">—</td><td class="ledger-money">'+vendorBalanceHtml(opening)+'</td></tr>';
       body+=rows.map(function(x){
         var raw=expensesById[x.entryId],due=raw?Math.max(0,Number(raw.amount||0)-Number(raw.paidAmount||0)):0;
         var action=raw&&x.kind==='expense'&&due>0&&!raw.paidAlready?(raw.source==='procurement'?'<div><button class="btn mini green" onclick="openPurchasePay(\''+raw.id+'\')">Record payment</button></div>':'<div><button class="btn mini green" onclick="openPay(\''+raw.id+'\')">Record payment</button></div>'):'';
-        return '<tr><td>'+esc(x.date||'—')+'</td><td>'+esc(x.particulars||'—')+action+'</td><td>'+esc(x.type||'—')+'</td><td>'+esc(x.reference||'—')+'</td><td class="ledger-money pos">'+(Number(x.in||0)>0?fmt(x.in):'—')+'</td><td class="ledger-money neg">'+(Number(x.out||0)>0?fmt(x.out):'—')+'</td><td class="ledger-money">'+vendorBalanceHtml(x.balance)+'</td></tr>';
+        return '<tr><td>'+esc(x.date||'—')+'</td><td>'+esc(x.particulars||'—')+procurementCostHtml(raw)+action+'</td><td>'+esc(x.type||'—')+'</td><td>'+esc(x.reference||'—')+'</td><td class="ledger-money pos">'+(Number(x.in||0)>0?fmt(x.in):'—')+'</td><td class="ledger-money neg">'+(Number(x.out||0)>0?fmt(x.out):'—')+'</td><td class="ledger-money">'+vendorBalanceHtml(x.balance)+'</td></tr>';
       }).join('');
       if(!rows.length)body+='<tr><td colspan="7" class="muted">No vendor transactions in this period.</td></tr>';
       return '<div class="vendor-ledger-scroll"><table class="vendor-ledger-table"><thead><tr><th>Date</th><th>Particulars</th><th>Type</th><th>Expense / transaction reference</th><th class="r">In</th><th class="r">Out</th><th class="r">Balance</th></tr></thead><tbody>'+body+'</tbody></table></div>';

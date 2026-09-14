@@ -1005,6 +1005,11 @@ function poLandedTotal(po) {
   (po.existingAdds || []).forEach(v => { total += num(v.landed) * num(v.qty); });
   return round0(total);
 }
+function poCostBreakdown(po, defaults) {
+  defaults=defaults||{};const india=po.origin==='india',exRate=num(po.exRate!=null?po.exRate:defaults.exRate),freightPerGram=num(po.freightPerGram!=null?po.freightPerGram:defaults.freightPerGram),totalQty=(po.lines||[]).reduce((n,l)=>n+num(l.qty),0),transportTotal=india?num(po.transportTotal):0,transportPerPc=india&&totalQty?transportTotal/totalQty:0;
+  const lines=(po.lines||[]).map(l=>{const qty=num(l.qty),unitPrice=num(l.perPcsYuan),weightGrams=num(l.weightGrams),goodsPerPc=india?unitPrice:unitPrice*exRate,freightPerPc=india?transportPerPc:weightGrams*freightPerGram,landedPerPc=goodsPerPc+freightPerPc;return{sku:l.sku||'',designName:l.designName||'',qty,unitPrice:roundMoney(unitPrice),weightGrams:roundMoney(weightGrams),goodsPerPc:roundMoney(goodsPerPc),freightPerPc:roundMoney(freightPerPc),landedPerPc:roundMoney(landedPerPc),lineTotal:roundMoney(landedPerPc*qty)};});
+  return{origin:india?'india':'china',exRate:roundMoney(exRate),freightPerGram:roundMoney(freightPerGram),transportTotal:roundMoney(transportTotal),totalQty,goodsTotal:roundMoney(lines.reduce((n,l)=>n+l.goodsPerPc*l.qty,0)),freightTotal:roundMoney(lines.reduce((n,l)=>n+l.freightPerPc*l.qty,0)),landedTotal:roundMoney(lines.reduce((n,l)=>n+l.lineTotal,0)),formula:india?'Landed/pc = INR price/pc + (total transport / total quantity)':'Landed/pc = (Yuan price/pc x exchange rate) + (weight g/pc x freight rate/g)',lines};
+}
 function procurementPayables(s, includePaid) {
   const cfg = procurementAccounting(s), proc = loadProcurementStore();
   return Object.values(proc.pos || {}).filter(po => po.status === 'posted' && String(po.postedAt || '') >= String(cfg.trackPostedFrom || ''))
@@ -1014,7 +1019,8 @@ function procurementPayables(s, includePaid) {
       return { id: po.id, source: 'procurement', nature: 'SANKI', vendor: state.mediator || cfg.mediator,
         supplier: po.vendor || '', billNo: po.billNo || '', date: po.dateReceive || po.datePurchase || String(po.postedAt || '').slice(0, 10),
         postedAt: po.postedAt || '', particulars: 'Advanced purchase · goods and China-to-store transport', amount, paidAmount,
-        balanceDue: Math.max(0, amount - paidAmount), status: paidAmount >= amount ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'approved'), payments };
+        balanceDue: Math.max(0, amount - paidAmount), status: paidAmount >= amount ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'approved'), payments,
+        costBreakdown: poCostBreakdown(po, proc.settings || {}), costCorrectionHistory: po.costCorrectionHistory || [] };
     }).filter(x => includePaid || x.balanceDue > 0).sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 function ledgerMeta(s, name) {

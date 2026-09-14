@@ -352,6 +352,31 @@ function landedCost(line, settings, opts) {
     suggestedMrp: mrp
   };
 }
+function poCostBreakdown(po, defaults) {
+  defaults = defaults || {};
+  const india = po.origin === 'india';
+  const exRate = num(po.exRate != null ? po.exRate : defaults.exRate);
+  const freightPerGram = num(po.freightPerGram != null ? po.freightPerGram : defaults.freightPerGram);
+  const totalQty = (po.lines || []).reduce((n, l) => n + num(l.qty), 0);
+  const transportTotal = india ? num(po.transportTotal) : 0;
+  const transportPerPc = india && totalQty ? transportTotal / totalQty : 0;
+  const lines = (po.lines || []).map((line, index) => {
+    const qty = num(line.qty), unitPrice = num(line.perPcsYuan), weightGrams = num(line.weightGrams);
+    const goodsPerPc = india ? unitPrice : unitPrice * exRate;
+    const freightPerPc = india ? transportPerPc : weightGrams * freightPerGram;
+    const landedPerPc = goodsPerPc + freightPerPc;
+    return { index, sku: line.sku || '', designName: line.designName || '', qty,
+      unitPrice: round2(unitPrice), weightGrams: round2(weightGrams), goodsPerPc: round2(goodsPerPc),
+      freightPerPc: round2(freightPerPc), landedPerPc: round2(landedPerPc), lineTotal: round2(landedPerPc * qty) };
+  });
+  return { origin: india ? 'india' : 'china', exRate: round2(exRate), freightPerGram: round2(freightPerGram),
+    transportTotal: round2(transportTotal), totalQty: round2(totalQty),
+    goodsTotal: round2(lines.reduce((n, l) => n + l.goodsPerPc * l.qty, 0)),
+    freightTotal: round2(lines.reduce((n, l) => n + l.freightPerPc * l.qty, 0)),
+    landedTotal: round2(lines.reduce((n, l) => n + l.lineTotal, 0)), lines,
+    formula: india ? 'Landed/pc = INR price/pc + (total transport / total quantity)'
+      : 'Landed/pc = (Yuan price/pc x exchange rate) + (weight g/pc x freight rate/g)' };
+}
 function round2(n) { return Math.round(n * 100) / 100; }
 function charmPrice(x) { const up = Math.ceil(x / 100) * 100; return Math.max(up - 1, 0); } // → …99
 
@@ -1825,6 +1850,33 @@ router.get('/api/procurement/pos', (req, res) => {
   if (req.query.status) { const want = String(req.query.status).split(','); list = list.filter(p => want.includes(p.status)); }
   list = list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   res.json({ success: true, pos: list.map(p => publicPo(p, req)) });
+});
+router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
+  const role = String(req.user && req.user.role || '').toLowerCase();
+  if (!isAdmin(req) && role !== 'owner') return res.status(403).json({ success: false, error: 'Only the Owner can edit a posted purchase calculation.' });
+  const s = loadStore(), po = s.pos[req.params.id], b = req.body || {};
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  if (po.status !== 'posted') return res.status(400).json({ success: false, error: 'Use the normal PO editor until this purchase is posted.' });
+  const reason = String(b.reason || '').trim();
+  if (!reason) return res.status(400).json({ success: false, error: 'A correction reason is required.' });
+  const before = poCostBreakdown(po, s.settings);
+  if (b.exRate != null && b.exRate !== '') po.exRate = Math.max(0, num(b.exRate));
+  if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = Math.max(0, num(b.freightPerGram));
+  if (b.transportTotal != null && b.transportTotal !== '') po.transportTotal = Math.max(0, num(b.transportTotal));
+  if (Array.isArray(b.lines)) b.lines.forEach((edit, i) => {
+    const line = (po.lines || [])[i]; if (!line) return;
+    if (edit.qty != null && edit.qty !== '') line.qty = Math.max(0, Math.round(num(edit.qty)));
+    if (edit.unitPrice != null && edit.unitPrice !== '') line.perPcsYuan = Math.max(0, num(edit.unitPrice));
+    if (edit.weightGrams != null && edit.weightGrams !== '') line.weightGrams = Math.max(0, num(edit.weightGrams));
+  });
+  const after = poCostBreakdown(po, s.settings), by = (req.user && req.user.username) || 'owner';
+  const bySku = new Map(after.lines.map(x => [String(x.sku), x]));
+  (po.newProducts || []).forEach(p => (p.variants || []).forEach(v => { const x = bySku.get(String(v.sku)); if (x) { v.qty = x.qty; v.landed = x.landedPerPc; } }));
+  (po.existingAdds || []).forEach(v => { const x = bySku.get(String(v.sku)); if (x) { v.qty = x.qty; v.landed = x.landedPerPc; } });
+  po.costCorrectionHistory = Array.isArray(po.costCorrectionHistory) ? po.costCorrectionHistory : [];
+  po.costCorrectionHistory.push({ correctedAt: new Date().toISOString(), correctedBy: by, reason, before, after });
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req), breakdown: after, warning: 'Accounting cost was corrected. Shopify inventory was not changed.' });
 });
 router.get('/api/procurement/history', async (req, res) => {
   const s = loadStore();
