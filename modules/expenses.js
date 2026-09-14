@@ -2534,8 +2534,11 @@ function parseBankStatementText(raw){
   }
   if(/Axis Bank Account No/i.test(text)&&/ParticularsAmount\(INR\)Debit\/CreditBalance\(INR\)/i.test(text)){
     const section=(text.split(/S\.NOTransaction/i)[1]||'').split(/TRANSACTION TOTAL DR\/CR/i)[0]||'',out=[];
-    const rowRe=/(?:^|\n)(\d{1,4})(\d{2}\/\d{2}\/\d{4})(\d{2}\/\d{2}\/\d{4})([\s\S]*?)([0-9][0-9,]*\.\d{2})(DR|CR)([0-9][0-9,]*\.\d{2})\s*(?:\([^\n]*\))?(?=\n\d{1,4}(?:\d{2}\/\d{2}\/\d{4}|$)|$)/gi;
-    let match;while((match=rowRe.exec(section))){const amount=statementNum(match[5]),side=match[6].toUpperCase(),description=match[4].replace(/\s+/g,' ').trim(),reference=((description.match(/\b(?:IFT|UPI|IMPS|NEFT|RTGS|UTR)[\/\s:#-]*([A-Z0-9-]{5,})/i)||[])[1]||'');out.push({date:statementDate(match[2]),valueDate:statementDate(match[3]),description,reference,debit:side==='DR'?amount:0,credit:side==='CR'?amount:0,balance:statementNum(match[7]),row:Number(match[1])});}
+    // Axis inserts spaces/newlines between the amount, DR/CR marker and balance
+    // on some pages. Parse each serial-numbered transaction as its own block so
+    // one differently-formatted row cannot make the following row disappear.
+    const anchors=Array.from(section.matchAll(/(?:^|\n)\s*(\d{1,4})\s*(\d{2}\/\d{2}\/\d{4})\s*(\d{2}\/\d{2}\/\d{4})/g));
+    anchors.forEach((anchor,index)=>{const block=section.slice(anchor.index+anchor[0].length,index+1<anchors.length?anchors[index+1].index:section.length).replace(/\s+/g,' ').trim(),moneySide=Array.from(block.matchAll(/([0-9][0-9,]*\.\d{2})\s*(DR|CR)\s*([0-9][0-9,]*\.\d{2})/gi)).at(-1);if(!moneySide)return;const amount=statementNum(moneySide[1]),side=moneySide[2].toUpperCase(),description=block.slice(0,moneySide.index).trim(),reference=((description.match(/\b(?:IFT|UPI|IMPS|NEFT|RTGS|UTR)[\/\s:#-]*([A-Z0-9-]{5,})/i)||[])[1]||'');out.push({date:statementDate(anchor[2]),valueDate:statementDate(anchor[3]),description,reference,debit:side==='DR'?amount:0,credit:side==='CR'?amount:0,balance:statementNum(moneySide[3]),row:Number(anchor[1])});});
     const opening=statementNum((text.match(/Opening Balance:\s*(?:INR|₹)?\s*([0-9,]+(?:\.\d{1,2})?)/i)||[])[1]);
     const closing=statementNum((text.match(/Closing Balance:\s*(?:INR|₹)?\s*([0-9,]+(?:\.\d{1,2})?)/i)||[])[1]);
     const period=text.match(/From\s*:\s*(\d{2}\/\d{2}\/\d{4})\s+To\s*:\s*(\d{2}\/\d{2}\/\d{4})/i),debits=out.reduce((n,x)=>n+x.debit,0),credits=out.reduce((n,x)=>n+x.credit,0),calculated=Math.round((opening+credits-debits)*100)/100;

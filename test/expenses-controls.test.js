@@ -1677,6 +1677,30 @@ test('Axis Bank PDF text ignores the statement-period header and validates the t
   assert.equal(rows.statementSummary.closingBalance,56717.22);
 });
 
+test('Axis Bank PDF keeps a credit when amount, CR and balance are separated', () => {
+  const text=`Account Statement Report
+Statement of Axis Bank Account No : XXXX3448 for the period ( From : 22/08/2026 To : 02/09/2026 )
+Opening Balance: INR 71,262.40
+S.NOTransaction
+Date
+(dd/mm/yyyy)
+Value Date
+(dd/mm/yyyy)
+ParticularsAmount(INR)Debit/CreditBalance(INR)Cheque
+Number
+Branch Name(SOL)
+101/09/202601/09/2026
+UPI/P2A/123456789012/CUSTOMER PAYMENT
+12,700.00 CR 83,962.40 (100)
+1TRANSACTION TOTAL DR/CR
+0.00/12,700.00
+Closing Balance: INR 83,962.40`;
+  const rows=parseBankStatementText(text);
+  assert.equal(rows.length,1);
+  assert.deepEqual(rows.map(x=>[x.date,x.debit,x.credit,x.balance]),[['2026-09-01',0,12700,83962.4]]);
+  assert.equal(rows.statementSummary.validated,true);
+});
+
 test('Axis salary-account PDF reads the declared period and every debit and credit column',()=>{
   const text=`Statement of Axis Account No: 925010025223645 for the period (From: 22-08-2026 To: 28-08-2026)
 Tran DateChq NoParticularsDebitCreditBalanceInit.
