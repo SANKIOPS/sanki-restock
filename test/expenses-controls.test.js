@@ -767,7 +767,10 @@ test('one app user can retain multiple Telegram notification accounts', () => {
 });
 
 test('Owner Telegram narration and screenshot OCR create one categorized paid PERSONAL expense', () => {
-  const {parsePersonalCaption,parsePersonalIntent,isHotel0992Caption,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory,applyCaptureEdit,applyBatchCaptureEdit,capturePreview,batchCapturePreview}=require('../modules/telegram');
+  const {parsePersonalCaption,parsePersonalIntent,isHotel0992Caption,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory,applyCaptureEdit,applyBatchCaptureEdit,capturePreview,batchCapturePreview,personalMenu,personalAccountButtons,personalTransferPreview}=require('../modules/telegram');
+  const menu=personalMenu();assert.deepEqual(menu.inline_keyboard.flat().map(x=>x.text),['🔁 Transfer','💳 Expense','💰 Money received','💵 Cash expense','🪙 Cash received']);
+  const accounts=personalAccountButtons(['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992'],'single');assert.equal(accounts.inline_keyboard.length,4);assert.match(accounts.inline_keyboard[0][0].callback_data,/pm:account:single:0/);
+  assert.match(personalTransferPreview({payload:{fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',amount:15000,date:'2026-09-14'}}),/IndusInd Bank 7883[\s\S]*Namita 5464[\s\S]*₹15,000/);
   const parsed=parsePersonalCaption('Personal | Nanny salary August | ICICI 0993 | ₹27,500');
   assert.deepEqual(parsed,{ok:true,amount:27500,account:'ICICI 0993',particulars:'Nanny salary August',date:''});
   assert.deepEqual(parsePersonalCaption('Personal Food tip 0993 200'),{ok:true,amount:200,account:'0993',particulars:'Food tip',date:''});
@@ -2079,6 +2082,10 @@ test('Namita Personal bot expenses use separate Namita account and cash ledgers'
   assert.equal(upi.success,true);assert.equal(upi.expense.account,'Namita 5464');assert.equal(upi.expense.createdBy,'namita');
   const cash=createTelegramPersonalExpense({username:'namita',amount:300,account:'cash',date:'2026-08-25',particulars:'Household cash',vendor:'Local Store',ledger:'Household Staff',proof:'/api/expenses/photo/namita-cash.jpg',sourceKey:'namita-cash-1'});
   assert.equal(cash.success,true);assert.equal(cash.expense.account,'Namita Cash');
+  const ownerCash=createTelegramPersonalExpense({username:'gaganlambasanki',amount:50,account:'Namita Cash',date:'2026-08-25',particulars:'Cash for Namita',vendor:'Namita',ledger:'Miscellaneous Personal',proof:'/api/expenses/photo/owner-namita-cash.jpg',sourceKey:'owner-namita-cash-1'});
+  assert.equal(ownerCash.success,true);assert.equal(ownerCash.expense.account,'Namita Cash','an exact chosen cash ledger must not fall back to Gagan Personal Cash');
+  const ownerReceipt=createTelegramPersonalReceipt({username:'gaganlambasanki',amount:75,account:'Namita Cash',date:'2026-08-25',source:'Cash returned',proof:'/api/expenses/photo/owner-namita-receipt.jpg',sourceKey:'owner-namita-receipt-1'});
+  assert.equal(ownerReceipt.success,true);assert.equal(ownerReceipt.receipt.account,'Namita Cash');
   const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');assert.match(source,/isNamita/);assert.match(source,/Only the Owner can approve or settle PERSONAL expenses/);
 });
 
