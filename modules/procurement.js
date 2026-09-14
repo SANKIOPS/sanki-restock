@@ -57,6 +57,8 @@ const STORE_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurem
 // AI photos + SEO. Stored on the persistent volume so they survive redeploys.
 const PHOTO_DIR = path.join(DATA_DIR, 'procurement-photos');
 try { fs.mkdirSync(PHOTO_DIR, { recursive: true }); } catch { /* exists */ }
+const INVOICE_DIR = path.join(DATA_DIR, 'procurement-invoices');
+try { fs.mkdirSync(INVOICE_DIR, { recursive: true }); } catch { /* exists */ }
 const photoUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, PHOTO_DIR),
@@ -81,6 +83,12 @@ const invoiceUpload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => cb(null, /^image\/|application\/pdf/.test(file.mimetype))
 });
+function persistInvoice(file) {
+  const ext=(path.extname(file.originalname||'')||(/pdf/.test(file.mimetype)?'.pdf':'.jpg')).toLowerCase().replace(/[^.a-z0-9]/g,'');
+  const name=Date.now()+'-'+crypto.randomBytes(6).toString('hex')+(ext||'.bin');
+  fs.writeFileSync(path.join(INVOICE_DIR,name),file.buffer);
+  return { file:name, url:'/api/procurement/invoice/'+name, originalName:path.basename(file.originalname||'Vendor bill'), mime:file.mimetype||'', uploadedAt:new Date().toISOString() };
+}
 
 // ── AI product images (Google Gemini image generation) ───────────
 // Feed the raw invoice/garment photo to Gemini and get back polished listing
@@ -809,6 +817,20 @@ router.get('/api/procurement/photo/:file', (req, res) => {
   if (!fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp)) return res.status(404).end();
   res.sendFile(fp);
 });
+router.get('/api/procurement/invoice/:file', (req, res) => {
+  const name=path.basename(String(req.params.file||'')),fp=path.join(INVOICE_DIR,name);
+  if(!fp.startsWith(INVOICE_DIR)||!fs.existsSync(fp))return res.status(404).end();
+  res.sendFile(fp);
+});
+router.post('/api/procurement/pos/:id/invoice', invoiceUpload.single('invoice'), (req,res) => {
+  const role=String(req.user&&req.user.role||'').toLowerCase();
+  if(!isAdmin(req)&&role!=='owner')return res.status(403).json({success:false,error:'Only the Owner can attach or replace a posted bill.'});
+  if(!req.file)return res.status(400).json({success:false,error:'Choose the original vendor bill.'});
+  const s=loadStore(),po=s.pos[req.params.id];if(!po)return res.status(404).json({success:false,error:'PO not found.'});
+  const invoice=persistInvoice(req.file);invoice.uploadedBy=(req.user&&req.user.username)||'owner';po.invoice=invoice;
+  po.invoiceHistory=Array.isArray(po.invoiceHistory)?po.invoiceHistory:[];po.invoiceHistory.push({...invoice,reason:'Original bill attached to PO'});saveStore(s);
+  res.json({success:true,invoice,po:publicPo(po,req)});
+});
 // Disk reclaim: every AI-image generation writes a NEW random-named file and
 // never deletes the version it replaced, so regenerated images pile up on the
 // /data volume as orphans no PO references. Collect every photo filename still
@@ -1187,7 +1209,7 @@ function parseLocalInvoiceText(rawText, store) {
 router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, error: 'No invoice received — attach a photo or PDF of the vendor invoice.' });
-    const s = loadStore();
+    const s = loadStore(), invoice = persistInvoice(req.file);
     const isPdf = /pdf/.test(req.file.mimetype);
     const text = isPdf ? String((await pdfParse(req.file.buffer)).text || '') : await localInvoiceOcr(req.file.buffer);
     if (!text.trim()) return res.status(422).json({ success: false, error: isPdf
@@ -1203,6 +1225,7 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
       datePurchase: String(parsed.datePurchase || '').trim(),
       canCropPhotos: false,
       reader: 'local-ocr',
+      invoice,
       lines: parsed.lines
     });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
@@ -1272,6 +1295,7 @@ router.post('/api/procurement/advance', async (req, res) => {
       sourceBatchId: normLine(b.line) ? String(b.sourceBatchId || '').trim().slice(0, 80) : '',
       sourceBatchName: normLine(b.line) ? String(b.sourceBatchName || '').trim().slice(0, 120) : '',
       billNo: b.billNo || '',
+      invoice: b.invoice && b.invoice.url ? b.invoice : null,
       datePurchase: b.datePurchase || '',
       dateReceive: '',
       leadTimeDays: b.leadTimeDays != null && b.leadTimeDays !== '' ? Math.max(0, Math.round(num(b.leadTimeDays))) : null,

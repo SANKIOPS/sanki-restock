@@ -327,6 +327,7 @@
     var settings = {};
     var me = { isAdmin:false, role:'', username:'' };
     var pendingPhotoUrl = '';       // uploaded photo for the line being added
+    var pendingInvoice = null;      // original vendor bill retained with the PO
     var lastReceive = null;         // last receive preview (for admin commit)
     var editingPoId = null;         // set when the advance form is editing an existing PO
 
@@ -628,8 +629,11 @@
       var india=po.origin==='india',qty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0),rate=Number(po.exRate!=null?po.exRate:settings.exRate||0),freight=Number(po.freightPerGram!=null?po.freightPerGram:settings.freightPerGram||0),transport=Number(po.transportTotal||0),share=india&&qty?transport/qty:0;
       var goods=0,delivery=0,total=0,rows=(po.lines||[]).map(function(l,i){var q=Number(l.qty)||0,price=Number(l.perPcsYuan)||0,w=Number(l.weightGrams)||0,g=india?price:price*rate,f=india?share:w*freight,landed=g+f;goods+=g*q;delivery+=f*q;total+=landed*q;return '<tr><td>'+esc(l.designName||l.sku||('Line '+(i+1)))+'</td><td class="money">'+q+'</td><td class="money">'+(india?money(price):yuan(price))+'</td>'+(india?'':'<td class="money">'+rate+'</td>')+'<td class="money">'+money(g)+'</td><td class="money">'+w+'</td><td class="money">'+(india?money(share):freight)+'</td><td class="money">'+money(f)+'</td><td class="money"><b>'+money(landed)+'</b></td><td class="money"><b>'+money(landed*q)+'</b></td></tr>';}).join('');
       var formula=india?'Landed/pc = INR price/pc + (total transport ÷ total quantity)':'Landed/pc = (Yuan price/pc × exchange rate) + (weight g/pc × freight rate/g)';
-      return '<div class="banner" style="margin:10px 0"><b>Visible cost formula:</b> '+formula+'<div style="margin-top:5px">Goods '+money(goods)+' + '+(india?'transport':'freight')+' '+money(delivery)+' = <b>PO landed total '+money(total)+'</b></div></div><div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Design / SKU</th><th class="money">Qty</th><th class="money">'+(india?'INR/pc':'Yuan/pc')+'</th>'+(india?'':'<th class="money">₹/Yuan</th>')+'<th class="money">Goods/pc</th><th class="money">Weight g</th><th class="money">'+(india?'Transport/pc':'Freight ₹/g')+'</th><th class="money">Freight/pc</th><th class="money">Landed/pc</th><th class="money">Line total</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+(po.status==='posted'?'<div style="margin-top:10px"><button class="btn sm" onclick="event.stopPropagation();editPostedCost(\''+esc(po.id)+'\')">Edit cost calculation</button> <span class="muted">Owner only · accounting correction; Shopify stock is unchanged</span></div>':'');
+      var bill=po.invoice&&po.invoice.url?'<a class="btn sm" href="'+esc(po.invoice.url)+'" target="_blank">Open original bill · '+esc(po.invoice.originalName||po.billNo||'invoice')+'</a>':'<span class="muted">The old system did not retain this bill file.</span> <input id="poInvoice'+esc(po.id)+'" type="file" accept="image/*,application/pdf" style="font-size:11px"> <button class="btn sm" onclick="event.stopPropagation();attachPoInvoice(\''+esc(po.id)+'\')">Attach original bill</button>';
+      var original=(po.lines||[]).map(function(l){return '<tr><td>'+(l.photoUrl?'<img class="thumb" data-zoom src="'+esc(l.photoUrl)+'" style="width:38px;height:46px;object-fit:cover">':'—')+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+'</td><td class="money">'+(Number(l.qty)||0)+'</td><td class="money">'+(india?money(l.perPcsYuan):yuan(l.perPcsYuan))+'</td><td class="money">'+(Number(l.weightGrams)||0)+'</td></tr>';}).join('');
+      return '<div class="banner" style="margin:10px 0"><b>Complete purchase record</b><div style="margin-top:6px">Vendor <b>'+esc(po.vendor||'—')+'</b> · Bill <b>'+esc(po.billNo||'—')+'</b> · Purchased '+esc(po.datePurchase||'—')+' · Received '+esc(po.dateReceive||'not yet')+' · Source '+(india?'India':'China')+'</div><div style="margin-top:8px">'+bill+'</div></div><div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product · colour · size</th><th>Qty</th><th>'+(india?'INR/pc':'Yuan/pc')+'</th><th>Weight g/pc</th></tr></thead><tbody>'+original+'</tbody></table></div><div class="banner" style="margin:10px 0"><b>Visible cost formula:</b> '+formula+'<div style="margin-top:5px">Goods '+money(goods)+' + '+(india?'transport':'freight')+' '+money(delivery)+' = <b>PO landed total '+money(total)+'</b></div></div><div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Design / SKU</th><th class="money">Qty</th><th class="money">'+(india?'INR/pc':'Yuan/pc')+'</th>'+(india?'':'<th class="money">₹/Yuan</th>')+'<th class="money">Goods/pc</th><th class="money">Weight g</th><th class="money">'+(india?'Transport/pc':'Freight ₹/g')+'</th><th class="money">Freight/pc</th><th class="money">Landed/pc</th><th class="money">Line total</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+(po.status==='posted'?'<div style="margin-top:10px"><button class="btn sm" onclick="event.stopPropagation();editPostedCost(\''+esc(po.id)+'\')">Edit cost calculation</button> <span class="muted">Owner only · accounting correction; Shopify stock is unchanged</span></div>':'');
     }
+    window.attachPoInvoice=function(id){var input=el('poInvoice'+id),file=input&&input.files&&input.files[0];if(!file){alert('Choose the original bill first.');return;}var fd=new FormData();fd.append('invoice',file);fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/invoice',{method:'POST',body:fd}).then(readJson).then(function(d){if(!d.success){alert(d.error||'Could not attach bill.');return;}alert('Original bill attached to '+id+'.');loadPurchaseHistory();loadPos();}).catch(function(e){alert(e.message);});};
     window.editPostedCost=function(id){
       var po=purchaseHistory.filter(function(x){return x.id===id;})[0]||(currentPo&&currentPo.id===id?currentPo:null);if(!po)return;
       var india=po.origin==='india',rate=po.exRate!=null?po.exRate:settings.exRate,freight=po.freightPerGram!=null?po.freightPerGram:settings.freightPerGram,transport=po.transportTotal||0;
@@ -1095,7 +1099,7 @@
           leadTimeDays:el('b_leadTime').value, origin:advOrigin(), transportTotal:el('b_transportTotal').value,
           vendor:el('b_vendor').value.trim().toUpperCase(), line:el('b_line').value,
           sourceBatchId:el('b_sourceBatch').value, sourceBatchName:sourceBatchName(),
-          billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value })
+          billNo:el('b_billNo').value.trim(), datePurchase:el('b_datePurchase').value, invoice:pendingInvoice })
       }).then(r=>r.json()).then(function(d){
         btn.disabled=false; btn.textContent='Save advance purchase →';
         if(!d.success){ el('advanceResult').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
@@ -1222,6 +1226,7 @@
         }
         if(d.billNo && !el('b_billNo').value.trim()){ el('b_billNo').value=d.billNo; }
         if(d.datePurchase && !el('b_datePurchase').value){ el('b_datePurchase').value=d.datePurchase; }
+        pendingInvoice=d.invoice||pendingInvoice;
         updateEta();
         // append parsed lines to the review table
         var added=(d.lines||[]).map(function(l){
