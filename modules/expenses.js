@@ -866,7 +866,7 @@ function createTelegramBusinessPaidExpense(input) {
   if(nature==='PERSONAL')return{success:false,error:'Use the private PERSONAL bot for PERSONAL expenses.'};
   if(!(amount>0))return{success:false,error:'Amount must be greater than 0.'};
   if(!proof)return{success:false,error:'Payment screenshot is required.'};
-  const account=(USER_PAYMENT_ACCOUNTS[String(actor).toLowerCase()]||[]).find(x=>x.toLowerCase()===String(b.account||'').toLowerCase());
+  const allowed=b.isOwner?companyAccountsForNature(nature):(USER_PAYMENT_ACCOUNTS[String(actor).toLowerCase()]||[]),account=allowed.find(x=>x.toLowerCase()===String(b.account||'').toLowerCase());
   if(!account)return{success:false,error:'Select one of your assigned paying accounts.'};
   const categories=telegramBusinessCategories(),ledger=categories.find(x=>x.toLowerCase()===String(b.ledger||'').trim().toLowerCase());
   if(!ledger)return{success:false,error:'Select a valid expense category.',needsCategory:true};
