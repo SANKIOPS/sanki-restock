@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, indiaDisplayTimestamp } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
@@ -182,6 +182,12 @@ test('vendor ledger UI offers Delete only when its entry count is zero', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
   assert.match(html,/id="vendorManageRow"/);assert.match(html,/vendorManageRow'\)\)el\('vendorManageRow'\)\.style\.display=this\.dataset\.vsource==='expense'/);
+});
+
+test('visually identical Shayam Mondal ledgers merge without changing transactions',()=>{
+  const hidden='Shayam\u200b Mondal',store={expenses:{A:{id:'A',nature:'SANKI',vendor:'Shayam Mondal'},B:{id:'B',nature:'SANKI',vendor:hidden}},vendors:{plain:{name:'Shayam Mondal',notes:'first'},hidden:{name:hidden,notes:'second'}},vendorOpeningPayables:[],vendorAdvances:[],oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyShayamMondalVendorMerge(store),true);assert.equal(applyShayamMondalVendorMerge(store),false);
+  assert.deepEqual(Object.keys(store.vendors),['shayam mondal']);assert.equal(store.expenses.A.vendor,'Shayam Mondal');assert.equal(store.expenses.B.vendor,'Shayam Mondal');assert.equal(store.vendors['shayam mondal'].notes,'first · second');assert.equal(store.auditLog.at(-1).action,'VENDOR_MERGED');
 });
 
 test('owner vendor maintenance uses an in-page dialog and safely supports exact bulk cleanup', () => {
