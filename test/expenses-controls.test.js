@@ -10,6 +10,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, indiaDisplayTimestamp } = require('../modules/expenses');
+const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -182,6 +183,25 @@ test('vendor ledger UI offers Delete only when its entry count is zero', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
   assert.match(html,/id="vendorManageRow"/);assert.match(html,/vendorManageRow'\)\)el\('vendorManageRow'\)\.style\.display=this\.dataset\.vsource==='expense'/);
+});
+
+test('EX-00300 and EX-00301 keep their 8 September expense dates but show the actual 11 September payment date',()=>{
+  const account='Prashant Axis 3645',store={expenses:{
+    'EX-00300':{id:'EX-00300',nature:'SANKI',date:'2026-09-08',amount:85,payments:[{id:'PAY-001',amount:85,date:'2026-09-10',account,proof:'/proof-85.jpg'}]},
+    'EX-00301':{id:'EX-00301',nature:'SANKI',date:'2026-09-08',amount:90,payments:[{id:'PAY-001',amount:90,date:'2026-09-10',account,proof:'/proof-90.jpg'}]},
+    'EX-OTHER':{id:'EX-OTHER',nature:'SANKI',date:'2026-09-08',payments:[{id:'PAY-001',amount:85,date:'2026-09-10',account}]}
+  },bankDateOverrides:{'EX-00300/PAY-001':{bankDate:'2026-09-10',reference:'REF-85'}},oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applySep11PrashantReimbursementDateCorrection(store),true);
+  assert.equal(store.expenses['EX-00300'].date,'2026-09-08');assert.equal(store.expenses['EX-00301'].date,'2026-09-08');
+  assert.equal(store.expenses['EX-00300'].payments[0].date,'2026-09-11');assert.equal(store.expenses['EX-00301'].payments[0].date,'2026-09-11');
+  assert.equal(store.expenses['EX-00300'].payments[0].proof,'/proof-85.jpg');assert.equal(store.expenses['EX-00301'].payments[0].amount,90);
+  assert.equal(store.bankDateOverrides['EX-00300/PAY-001'].bankDate,'2026-09-11');assert.equal(store.bankDateOverrides['EX-00300/PAY-001'].reference,'REF-85');
+  assert.equal(store.expenses['EX-OTHER'].payments[0].date,'2026-09-10');assert.equal(store.auditLog.filter(x=>x.action==='PAYMENT_DATE_CORRECTED').length,2);
+  assert.equal(applySep11PrashantReimbursementDateCorrection(store),false,'the correction is idempotent');
+});
+
+test('default transaction dates use the India calendar day instead of UTC',()=>{
+  assert.equal(indiaBusinessDate('2026-09-10T19:30:00.000Z'),'2026-09-11');
 });
 
 test('visually identical Shayam Mondal ledgers merge without changing transactions',()=>{

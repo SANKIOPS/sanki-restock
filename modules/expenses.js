@@ -618,6 +618,29 @@ function repairPrashantSalaryAdvanceReconciliationDraft(s){
   if(result==='normalized')audit(s,null,'BANK_RECONCILIATION_DUPLICATE_LINK_REPAIRED','account','Prashant Axis 3645',{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:'Prashant Axis 3645',after:s.oneTimeMigrations[key],note:'Keep one ₹10,000 bank-to-transfer match while ADV-00030 remains outstanding'});
   return true;
 }
+function indiaBusinessDate(value=new Date()){
+  const date=value instanceof Date?value:new Date(value);
+  if(Number.isNaN(date.getTime()))return'';
+  return date.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'});
+}
+function applySep11PrashantReimbursementDateCorrection(s){
+  const key='correct-ex-00300-ex-00301-payment-date-to-2026-09-11-v1',from='2026-09-10',to='2026-09-11',now=new Date().toISOString();
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const expected={'EX-00300':85,'EX-00301':90},corrected=[];
+  Object.entries(expected).forEach(([expenseId,amount])=>{
+    const expense=s.expenses&&s.expenses[expenseId],payment=expense&&(expense.payments||[]).find(x=>x.id==='PAY-001');
+    if(!expense||!payment||String(expense.date||'').slice(0,10)!=='2026-09-08'||String(payment.date||'').slice(0,10)!==from||Math.abs(num(payment.amount)-amount)>.01||canonicalAccountName(payment.account)!=='Prashant Axis 3645')return;
+    const appId=expenseId+'/'+payment.id,before={date:payment.date,bankDateOverride:s.bankDateOverrides&&s.bankDateOverrides[appId]||null};
+    payment.date=to;
+    if(s.bankDateOverrides&&s.bankDateOverrides[appId]&&s.bankDateOverrides[appId].bankDate===from)s.bankDateOverrides[appId]=Object.assign({},s.bankDateOverrides[appId],{bankDate:to,correctedAt:now,correctedBy:'gaganlambasanki'});
+    corrected.push(appId);
+    audit(s,null,'PAYMENT_DATE_CORRECTED','expense',expenseId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:expense.nature,account:payment.account,paymentId:payment.id,before,after:{date:to,bankDateOverride:s.bankDateOverrides&&s.bankDateOverrides[appId]||null},note:'Expense remained dated 8 September; actual reimbursement/payment occurred on 11 September 2026.'});
+  });
+  if(!corrected.length)return false;
+  s.oneTimeMigrations[key]={appliedAt:now,from,to,corrected,preservedExpenseDates:true,preservedProofsAmountsAndApprovals:true};
+  return true;
+}
 function loadStore() {
   let s;
   try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
@@ -668,6 +691,7 @@ function loadStore() {
     if(applyKaluFlowersFruitsVendorMerge(s))saveStore(s);
     if(applyArunJiiVendorMerge(s))saveStore(s);
     if(applyShayamMondalVendorMerge(s))saveStore(s);
+    if(applySep11PrashantReimbursementDateCorrection(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
     // the official bank row remains the sole Axis balance movement.
@@ -897,7 +921,7 @@ function telegramRecordTransfer(actor,body){const b=body||{},s=loadStore();let f
 function telegramRecordNamitaTransfer(actor,body){const b=body||{},s=loadStore(),q=String(b.fromAccount||''),digits=q.replace(/\D/g,''),personal=companyAccountsForNature('PERSONAL'),personalMatches=personal.filter(a=>digits&&a.replace(/\D/g,'').endsWith(digits)),fromPersonal=personal.find(a=>a.toLowerCase()===q.toLowerCase())||(personalMatches.length===1?personalMatches[0]:''),fallback=telegramResolveTransferAccount(q),from=fromPersonal?{nature:'PERSONAL',account:fromPersonal}:fallback,toAccount=/cash/i.test(String(b.toAccount||''))?'Namita Cash':'Namita 5464',amount=num(b.amount),proof=String(b.proof||'').trim();if(!from)return{success:false,error:'The source account was not recognized.'};if(!(amount>0))return{success:false,error:'Transfer amount must be greater than 0.'};if(!proof)return{success:false,error:'Transfer proof is required.'};s.transferSeq=(s.transferSeq||0)+1;const now=new Date().toISOString(),classification=from.nature==='PERSONAL'?'internal_transfer':'owner_withdrawal',transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:from.nature,fromNature:from.nature,toNature:'PERSONAL',classification,fromAccount:from.account,toAccount,amount,date:String(b.date||now.slice(0,10)).slice(0,10),proof,note:String(b.note||'Namita funds').trim(),createdBy:String(actor||'owner'),createdAt:now,device:'Telegram'};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,null,'TRANSFER_RECORDED','transfer',transfer.id,{user:transfer.createdBy,device:'Telegram',nature:from.nature,account:from.account,after:transfer});saveStore(s);return{success:true,transfer};}
 function telegramApproveExpense(id,actor,changes){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};const before=JSON.parse(JSON.stringify(e)),c=changes||{};['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}if(c.nature)e.nature=normalizedNature(c.nature);if(e.ledger&&!pickableLedgers(s).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase())){s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};}const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};const n=normalizedNature(e.nature);s.vendors=s.vendors||{};s.vendorsByNature=s.vendorsByNature||{};if(n==='SANKI'){s.vendors[e.vendor.toLowerCase()]=s.vendors[e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}else{s.vendorsByNature[n]=s.vendorsByNature[n]||{};s.vendorsByNature[n][e.vendor.toLowerCase()]=s.vendorsByNature[n][e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';if(e.paidAlready)e.reimbursementStatus='pending';e.approvedAt=new Date().toISOString();e.approvedBy=actor;audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};}
 function telegramRejectExpense(id,actor,reason){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'Only a pending expense can be rejected.'};e.status='rejected';e.rejectReason=String(reason||'Rejected from Telegram');e.rejectedAt=new Date().toISOString();e.rejectedBy=actor;audit(s,null,'REJECTED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,reason:e.rejectReason}});saveStore(s);notifyExpenseUser(e,'rejected');return{success:true,expense:e};}
-function telegramRecordPayment(id,actor,b){const s=loadStore(),e=s.expenses[id],body=b||{};if(!e)return{success:false,error:'Expense not found.'};if(!['approved','partially_paid'].includes(e.status)||e.paidAlready)return{success:false,error:'This expense is not awaiting a vendor payment.'};const proof=String(body.proof||'');if(!proof)return{success:false,error:'Payment screenshot is required.'};const account=telegramResolveAccount(e.nature,body.account);if(!account)return{success:false,error:'Paying account was not recognized.',needsAccount:true};const issues=reconciliationIssues(s,normalizedNature(e.nature),account);if(issues.length)return{success:false,error:'This account has a reconciliation warning. Complete this payment in the app.',appRequired:true};const outstanding=Math.max(0,num(e.amount)-num(e.paidAmount)),amount=body.amount!=null?num(body.amount):outstanding;if(!(amount>0)||amount>outstanding)return{success:false,error:'Payment must be between ₹0 and '+outstanding+'.'};e.account=account;e.paidAmount=num(e.paidAmount)+amount;e.paymentProof=proof;e.payments=Array.isArray(e.payments)?e.payments:[];e.payments.push({id:'PAY-'+String(e.payments.length+1).padStart(3,'0'),amount,date:String(body.date||new Date().toISOString().slice(0,10)).slice(0,10),account,paymentType:'UPI',proof,note:'Recorded through Telegram',paidBy:actor,paidAt:new Date().toISOString()});e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid';e.paidAt=new Date().toISOString();e.paidBy=actor;audit(s,null,'PAYMENT_RECORDED','expense',id,{user:actor,device:'Telegram',nature:e.nature,account,paymentId:e.payments.at(-1).id,after:e.payments.at(-1)});saveStore(s);notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',amount);return{success:true,expense:e,payment:e.payments.at(-1)};}
+function telegramRecordPayment(id,actor,b){const s=loadStore(),e=s.expenses[id],body=b||{};if(!e)return{success:false,error:'Expense not found.'};if(!['approved','partially_paid'].includes(e.status)||e.paidAlready)return{success:false,error:'This expense is not awaiting a vendor payment.'};const proof=String(body.proof||'');if(!proof)return{success:false,error:'Payment screenshot is required.'};const account=telegramResolveAccount(e.nature,body.account);if(!account)return{success:false,error:'Paying account was not recognized.',needsAccount:true};const issues=reconciliationIssues(s,normalizedNature(e.nature),account);if(issues.length)return{success:false,error:'This account has a reconciliation warning. Complete this payment in the app.',appRequired:true};const outstanding=Math.max(0,num(e.amount)-num(e.paidAmount)),amount=body.amount!=null?num(body.amount):outstanding;if(!(amount>0)||amount>outstanding)return{success:false,error:'Payment must be between ₹0 and '+outstanding+'.'};e.account=account;e.paidAmount=num(e.paidAmount)+amount;e.paymentProof=proof;e.payments=Array.isArray(e.payments)?e.payments:[];e.payments.push({id:'PAY-'+String(e.payments.length+1).padStart(3,'0'),amount,date:String(body.date||indiaBusinessDate()).slice(0,10),account,paymentType:'UPI',proof,note:'Recorded through Telegram',paidBy:actor,paidAt:new Date().toISOString()});e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid';e.paidAt=new Date().toISOString();e.paidBy=actor;audit(s,null,'PAYMENT_RECORDED','expense',id,{user:actor,device:'Telegram',nature:e.nature,account,paymentId:e.payments.at(-1).id,after:e.payments.at(-1)});saveStore(s);notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',amount);return{success:true,expense:e,payment:e.payments.at(-1)};}
 // Runs an existing synchronous accounting route for a linked Telegram user.
 // This keeps validation, permissions, ledger posting and audit behavior identical
 // between Telegram and the web app instead of maintaining two accounting engines.
@@ -1656,7 +1680,7 @@ function recordBatchVendorPayment(req, res) {
   if (requestedTotal>0&&!account) return res.status(400).json({ success:false, error:paymentType==='Credit'?'Select the credit card used.':'Select a paying account assigned to this accounting entity.' });
   const reconIssues = requestedTotal>0?(card?[]:reconciliationIssues(s, nature, account)):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
-  const date = String(b.date || new Date().toISOString().slice(0,10)).slice(0,10), paidBy = (req.user&&req.user.username)||'admin';
+  const date = String(b.date || indiaBusinessDate()).slice(0,10), paidBy = (req.user&&req.user.username)||'admin';
   const batchPaymentId = 'BPAY-' + Date.now().toString(36).toUpperCase();
   const orderedExpenses=expenses.slice().sort((a,b)=>String((a.date||'')+a.id).localeCompare(String((b.date||'')+b.id)));
   let creditRemaining=vendorCreditApplied;const vendorCreditAllocations=[];
@@ -1752,7 +1776,7 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   e.payments.push({
     id: 'PAY-' + String(e.payments.length + 1).padStart(3, '0'),
     amount: pay,
-    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
+    date: String(b.date || indiaBusinessDate()).slice(0, 10),
     account: e.account || '',
     paymentType, creditCardId:card&&card.id||'',
     proof,proofs,
@@ -1831,7 +1855,7 @@ router.post('/api/expenses/:id/reimburse', (req, res) => {
   e.reimbursementPayments = Array.isArray(e.reimbursementPayments) ? e.reimbursementPayments : [];
   e.reimbursementPayments.push({
     id: 'REIM-' + String(e.reimbursementPayments.length + 1).padStart(3, '0'), amount,
-    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10),
+    date: String(b.date || indiaBusinessDate()).slice(0, 10),
     account: reimbursementAccount, accountNatures:reimbursementAccountNatures, paymentType: PAYMENT_TYPES.includes(b.paymentType) ? b.paymentType : 'UPI',
     proof,proofs, note: String(b.note || '').trim(), paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString()
   });
@@ -1863,7 +1887,7 @@ router.post('/api/expenses/reimbursements/batch', (req, res) => {
     if(!(due>0)) return res.status(400).json({success:false,error:id+' has no reimbursement amount due.'});
     expenses.push({e,due});
   }
-  const date=String(b.date||new Date().toISOString().slice(0,10)).slice(0,10),paidAt=new Date().toISOString();
+  const date=String(b.date||indiaBusinessDate()).slice(0,10),paidAt=new Date().toISOString();
   const batchId='RB-'+paidAt.replace(/\D/g,'').slice(0,14)+'-'+Math.random().toString(36).slice(2,6).toUpperCase();
   const reimbursementAccountNatures=approvalNatures(req).filter(n=>companyAccountsForNature(n).some(a=>a.toLowerCase()===reimbursementAccount.toLowerCase()));
   expenses.forEach(({e,due})=>{
@@ -3415,3 +3439,5 @@ module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliati
 module.exports.extendPendingDraftThroughFinalizedCoverage = extendPendingDraftThroughFinalizedCoverage;
 module.exports.statementScreenshotRowIsPlausible = statementScreenshotRowIsPlausible;
 module.exports.indiaDisplayTimestamp = indiaDisplayTimestamp;
+module.exports.indiaBusinessDate = indiaBusinessDate;
+module.exports.applySep11PrashantReimbursementDateCorrection = applySep11PrashantReimbursementDateCorrection;
