@@ -248,6 +248,20 @@ test('one salary batch posts multiple employees atomically from the payroll tabl
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Select all payable/);assert.match(html,/Clear selection/);assert.match(html,/Only checked employees will be paid/);assert.match(html,/Partially paid/);
 });
 
+test('Prashant Axis 3645 is available for advances and full or partial salary payments',()=>{
+  const config=invoke('GET','/api/salary/employees').body;
+  assert.ok(config.salaryPayingAccounts.includes('Prashant Axis 3645'));
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Axis Salary Employee',salary:20000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-09'},body:{empId:emp.id,paidDays:30}});
+  const partial=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-09',date:'2098-09-30',account:'Prashant Axis 3645',proof:'/axis-partial.jpg',items:[{empId:emp.id,amount:5000,modificationReason:'Fraction salary payment'}]}});
+  assert.equal(partial.status,200);assert.equal(partial.body.total,5000);
+  const fullBalance=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-09',date:'2098-09-30',account:'Prashant Axis 3645',proof:'/axis-balance.jpg',items:[{empId:emp.id,amount:15000}]}});
+  assert.equal(fullBalance.status,200);assert.equal(fullBalance.body.total,15000);
+  const advance=invoke('POST','/api/salary/advances',{role:'owner',username:'owner',body:{empId:emp.id,amount:1000,date:'2098-10-01',account:'Prashant Axis 3645',recoveryStartMonth:'2098-10',proof:'/axis-advance.jpg'}});
+  assert.equal(advance.status,200);assert.equal(advance.body.advance.account,'Prashant Axis 3645');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(html,/ed\.salaryPayingAccounts/);
+});
+
 test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Partial Pay Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-10'},body:{empId:emp.id,paidDays:30}});
@@ -315,8 +329,8 @@ test('positive and negative balances carry forward once and payroll respects emp
   assert.equal(february.find(x=>x.id===leaverWithBalance.id).openingAdvanceCarry,2400,'a former employee remains visible until their balance is settled');
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
   const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
-  assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/Gagan Sir Cash|Counter Cash/);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');assert.match(html,/Salary paying cash/);assert.match(source,/Extra salary paid earlier/);assert.match(source,/Salary left unpaid earlier/);assert.match(html,/positive balances remain payable/);
+  assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/Prashant Axis 3645|cash account/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(source,/Extra salary paid earlier/);assert.match(source,/Salary left unpaid earlier/);assert.match(html,/positive balances remain payable/);
 });
 
 test('July 2026 historical attendance prepares payroll with paid-off and 31-day rules',()=>{

@@ -35,7 +35,7 @@ function salaryForMonth(e, ym) {
 }
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
-const SALARY_PAYING_ACCOUNTS = ['Gagan Sir Cash', 'Counter Cash'];
+const SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'Gagan Sir Cash', 'Counter Cash'];
 const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 // Paid-day value per attendance mark: Present 1, Half 0.5, Paid-leave 1,
 // Week-off 1 (paid), Absent 0.
@@ -601,7 +601,7 @@ router.post('/api/salary/post/:ym', guard, (req,res)=>{
 });
 router.post('/api/salary/payments/batch',guard,(req,res)=>{
   const s=load(),b=req.body||{},ym=String(b.ym||''),date=String(b.date||''),account=String(b.account||'').trim(),proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean))),proof=proofs[0]||'',items=Array.isArray(b.items)?b.items:[];
-  if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!SALARY_PAYING_ACCOUNTS.includes(account)||!proofs.length||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, Gagan Sir Cash or Counter Cash, and at least one payment proof.'});
+  if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!SALARY_PAYING_ACCOUNTS.includes(account)||!proofs.length||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, Prashant Axis 3645 or an available cash account, and at least one payment proof.'});
   const rows=computeMonth(s,ym),seen=new Set(),prepared=[];for(const x of items){const row=rows.find(r=>r.id===x.empId),amount=round2(num(x.amount)),remaining=round2(Math.max(0,row&&row.balance||0)),modificationReason=String(x.modificationReason||'').trim();if(!row||seen.has(x.empId)||!(amount>0)||amount>remaining+.001)return res.status(400).json({success:false,error:'A payment is invalid or exceeds the employee’s remaining payable balance.'});if(Math.abs(amount-remaining)>.001&&!modificationReason)return res.status(400).json({success:false,error:'Enter why '+row.name+' is being paid '+amount+' instead of the full balance '+remaining+'.'});seen.add(x.empId);prepared.push({row,amount,modificationReason,remainingBeforePayment:remaining});}
   s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,proofs:proofs.slice(),reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),modificationReason:x.modificationReason,remainingBeforePayment:x.remainingBeforePayment,balanceAfterPayment:round2(x.remainingBeforePayment-x.amount),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0)),proofCount:proofs.length});
 });
