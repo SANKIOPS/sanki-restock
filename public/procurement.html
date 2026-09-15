@@ -114,6 +114,12 @@
     .ow-po-link{ border:0; background:none; color:var(--emerald-d); text-decoration:underline; cursor:pointer; padding:0; font:inherit; font-weight:700; }
     @media(max-width:760px){ .ow-stats{ grid-template-columns:repeat(2,minmax(110px,1fr)); } .ow-card-head{ align-items:flex-start; flex-wrap:wrap; } }
     .hidden{ display:none !important; }
+    .purchase-table{min-width:900px;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
+    .purchase-table-row{display:grid;grid-template-columns:24px 140px 140px 140px minmax(200px,1fr) 100px 130px;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}
+    .purchase-table-row>div{min-width:0;overflow-wrap:anywhere}
+    .purchase-table-heading{background:#f3f6f5;font-size:11px;font-weight:700;text-transform:uppercase;color:#64736c}
+    .purchase-table-record{cursor:pointer;min-height:78px}
+    .purchase-table-record:hover{background:#f7faf9}
   </style>
 </head>
 <body>
@@ -286,7 +292,7 @@
           <div id="historyExplorerSummary" style="margin-top:12px"></div>
         </div>
         <h3 style="margin:18px 0 4px">All purchase records</h3>
-        <p class="sub" style="margin:0">Purchase date → receipt date → vendor → PO. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
+        <p class="sub" style="margin:0">Received date → purchase date → PO number → vendor → quantity → amount. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
         <div id="sumHost" style="margin-top:14px"></div>
       </div>
     </div>
@@ -733,7 +739,7 @@
       if(category==='all'&&historyScope==='all')pos=pos.concat(purchaseHistory.filter(function(po){return po.historical;}));
       pos.sort(function(a,b){return String(b.datePurchase||b.createdAt||'').localeCompare(String(a.datePurchase||a.createdAt||''))||String(b.id).localeCompare(String(a.id));});
       var host=el('sumHost');
-      host.innerHTML=pos.length?pos.map(historyPoRow).join(''):'<p class="sub">No purchases match these filters.</p>';
+      host.innerHTML=pos.length?purchaseHistoryTable(pos):'<p class="sub">No purchases match these filters.</p>';
       Array.prototype.forEach.call(host.querySelectorAll('[data-history-po]'),function(row){row.onclick=function(e){if(e.target&&e.target.closest&&e.target.closest('img'))return;var body=el('historyBody'+row.getAttribute('data-history-po')),car=row.querySelector('.sumcaret');if(body){body.classList.toggle('hidden');if(car)car.textContent=body.classList.contains('hidden')?'▸':'▾';}};});
     }
     function historyExplorerPoRow(po,idx,category){
@@ -760,7 +766,7 @@
         ((meta&&meta.recoveredProducts)?'<span class="pill">'+meta.recoveredProducts+' historical products recovered</span>':'')+'</div>'+
         ((meta&&meta.historyWarning)?'<div class="banner err" style="margin-top:8px">Complete POs are shown, but Shopify history could not be refreshed: '+esc(meta.historyWarning)+'</div>':'');
       if(!purchaseHistory.length){el('sumHost').innerHTML='<p class="sub">No purchases have been created through this software yet.</p>';renderHistoryExplorer();return;}
-      el('sumHost').innerHTML=purchaseHistory.map(historyPoRow).join('');
+      el('sumHost').innerHTML=purchaseHistoryTable(purchaseHistory);
       Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-history-po]'),function(row){
         row.onclick=function(e){
           if(e.target&&e.target.closest&&e.target.closest('img'))return;
@@ -769,6 +775,12 @@
         };
       });
       renderHistoryExplorer();
+    }
+    function purchaseHistoryTable(pos){
+      return '<div style="overflow-x:auto"><div class="purchase-table"><div class="purchase-table-row purchase-table-heading"><span></span><div>Received date</div><div>Purchase date</div><div>PO number</div><div>Vendor name</div><div class="money">Quantity</div><div class="money">Amount</div></div>'+pos.map(historyPoRow).join('')+'</div></div>';
+    }
+    function purchaseHistoryHead(po,received,purchased,poNumber,vendor,quantity,amount){
+      return '<div data-history-po="'+esc(po.id)+'" class="purchase-table-row purchase-table-record"><span class="sumcaret muted">▸</span><div>'+esc(received)+'</div><div>'+esc(purchased)+'</div><div><b>'+esc(poNumber)+'</b><div class="muted" style="font-size:11px">'+(po.historical?'Historical purchase':'Bill '+esc(po.billNo||'Not recorded'))+'</div></div><div><b>'+esc(vendor)+'</b><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money">'+esc(quantity)+'</div><div class="money"><b>'+esc(amount)+'</b></div></div>';
     }
     function historyPoRow(po,idx){
       if(po.historical) return historicalPurchaseRow(po,idx);
@@ -782,10 +794,7 @@
         return '<tr><td>'+photo+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+(l.chinaSize?' (CN '+esc(l.chinaSize)+')':'')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(l.weightGrams||'—')+'</td></tr>';
       }).join('');
       var lineLabel=po.line==='funky'?'SANKI Funky':(po.line==='casuals'?'SANKI Casuals':'Unclassified');
-      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(120px,1.2fr) minmax(110px,1fr) minmax(150px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
-        '<span class="sumcaret muted">▸</span><div style="font-size:12px"><span class="muted">Purchased</span><br><b>'+esc(ordered)+'</b></div>'+
-        '<div style="font-size:12px"><span class="muted">Received</span><br><b>'+esc(received)+'</b></div>'+
-        '<div><b>'+esc(po.vendor||'Vendor not recorded')+'</b><div class="muted" style="font-size:12px">'+esc(po.id)+' · Bill '+esc(po.billNo||'—')+'</div>'+historyStatus(po)+'</div><div class="money"><b>'+t.qty+' pcs</b></div><div class="money"><b>'+money(t.total)+'</b></div></div>';
+      var head=purchaseHistoryHead(po,received,ordered==='—'?'Not recorded':ordered,po.id,po.vendor||'Not recorded',t.qty+' pcs',money(t.total));
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
         '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span>'+(po.sourceBatchName?'<span><b>Fresh batch:</b> '+esc(po.sourceBatchName)+'</span>':'')+'<span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
         purchaseCostPanel(po)+
@@ -797,12 +806,9 @@
       var rows=products.map(function(p){
         return '<tr><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td>'+esc(p.status||'—')+'</td></tr>';
       }).join('');
-      var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(160px,1.4fr) minmax(120px,1fr) minmax(160px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
-        '<span class="sumcaret muted">▸</span><div style="font-size:12px"><span class="muted">Purchase date unknown</span><br>Posted '+esc(po.datePurchase||'—')+'</div>'+
-        '<div style="font-size:12px"><span class="muted">Receipt date</span><br>Not recorded</div><div><b>Vendor not recorded</b><div class="muted" style="font-size:11px">Historical purchase · original PO unavailable</div>'+historyStatus(po)+'</div>'+
-        '<div class="money"><b>'+Number(po.productCount||0)+' products</b></div><div class="money"><b>'+Number(po.skuCount||0)+' SKUs</b></div></div>';
+      var head=purchaseHistoryHead(po,'Not recorded','Not recorded','Not recorded','Not recorded','Not recorded','Not recorded');
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
-        '<div class="banner" style="margin-bottom:9px">Recovered from Shopify. Product names, SKUs and posting date are verified. The old bill, vendor, quantity and landed cost are not present in Railway, so they are intentionally not guessed.</div>'+
+        '<div class="banner" style="margin-bottom:9px">Recovered from Shopify. Posted '+esc(po.datePurchase||'Not recorded')+' · '+Number(po.productCount||0)+' products · '+Number(po.skuCount||0)+' SKUs. Product names, SKUs and posting date are verified. The old bill, vendor, quantity and landed cost are not present in Railway, so they are intentionally not guessed.</div>'+
         '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Product</th><th>Type</th><th>SKUs</th><th>Shopify status</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
       return head+detail;
     }

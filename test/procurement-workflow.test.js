@@ -88,7 +88,7 @@ test('Purchases Summary has a category-first PO explorer plus the complete histo
   assert.match(html, /Received<\/span>/);
   assert.match(html, /Posted to Shopify/);
   assert.match(html, /Recovered from Shopify/);
-  assert.match(html, /original PO unavailable/);
+  assert.match(html, /Historical purchase/);
   assert.match(html, /Explore purchases by category/);
   assert.match(html, /id="historyCategory"/);
   assert.match(html, /data-history-scope="all"/);
