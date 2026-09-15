@@ -22,6 +22,11 @@ function providerError(provider, status, body) {
   if (status === 400 || status === 413) return prefix + ': image request was rejected (HTTP ' + status + '). Try a smaller JPEG photo.';
   return prefix + ': service request failed (HTTP ' + status + '). Try again shortly.';
 }
+function safeProviderMessage(body, secrets = []) {
+  let message = String(body?.error?.message || '');
+  for (const secret of secrets.filter(Boolean)) message = message.split(secret).join('[redacted]');
+  return message.replace(/AIza[\w-]+|sk-[\w-]+|Bearer\s+\S+|https?:\/\/\S+/gi,'[redacted]').slice(0,500);
+}
 async function vision(parts, prompt, config = process.env, request = fetch) {
   const google = config.GEMINI_API_KEY || config.GOOGLE_API_KEY;
   const providers = [google && 'google', config.ANTHROPIC_API_KEY && 'anthropic'].filter(Boolean);
@@ -53,7 +58,10 @@ async function vision(parts, prompt, config = process.env, request = fetch) {
         body: JSON.stringify({ model: config.INVENTORY_ANTHROPIC_MODEL || (shared.startsWith('claude-') ? shared : 'claude-sonnet-4-6'), max_tokens: 4096, temperature: 0, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }].concat(parts.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }))) }] }) });
     }
     const body = await response.json().catch(()=>({}));
-    if (!response.ok) throw new Error(providerError(provider,response.status,body));
+    if (!response.ok) {
+      const detail = safeProviderMessage(body,[google,config.ANTHROPIC_API_KEY]);
+      throw new Error(providerError(provider,response.status,body)+(detail ? ' Provider detail: '+detail : ''));
+    }
     const text = useGoogle ? (body.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('') : (body.content || []).map(p => p.text || '').join('');
     const start = text.indexOf('{'), end = text.lastIndexOf('}');
     if (start < 0) throw new Error('Vision service returned no readable matches.');
@@ -142,6 +150,15 @@ async function search(job, buffer, getCatalog) {
   finally { busy = false; job.finishedAt = Date.now(); }
 }
 function register(router, getCatalog) {
+  router.get('/api/inventory-categorization/image-search/diagnostics', async (req,res) => {
+    const key=process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!key) return res.json({success:true,gemini:{configured:false},anthropic:{configured:!!process.env.ANTHROPIC_API_KEY}});
+    try {
+      const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models',{timeout:15000,headers:{'x-goog-api-key':key}});
+      const body=await response.json().catch(()=>({}));
+      res.json({success:true,gemini:{configured:true,status:response.status,error:response.ok?null:safeProviderMessage(body,[key]),model:process.env.INVENTORY_GEMINI_MODEL||process.env.INVENTORY_VISION_MODEL||'gemini-2.5-flash',availableModels:response.ok?(body.models||[]).filter(m=>m.supportedGenerationMethods?.includes('generateContent')).map(m=>m.name):[]},anthropic:{configured:!!process.env.ANTHROPIC_API_KEY}});
+    } catch { res.status(502).json({success:false,error:'Could not reach Gemini model diagnostics.'}); }
+  });
   router.post('/api/inventory-categorization/image-search', (req,res) => {
     if (!process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY && !process.env.ANTHROPIC_API_KEY) return res.status(503).json({ success:false, error:'Image recognition needs a configured Gemini or Anthropic vision key on Railway.' });
     if (busy) return res.status(409).json({ success:false, error:'Another image search is running. Please try again shortly.' });
@@ -159,4 +176,4 @@ function register(router, getCatalog) {
     const {owner:unused,...result}=job; res.json({success:true,...result});
   });
 }
-module.exports = { register, cleanMatches, vision, providerError };
+module.exports = { register, cleanMatches, vision, providerError, safeProviderMessage };
