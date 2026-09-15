@@ -4,6 +4,11 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');
+test('sale allocation POST is not swallowed by the earlier expense-id route',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../modules/expenses.js'),'utf8');
+ const reserved=source.match(/const RESERVED_POST = new Set\(\[([^\]]+)\]\)/)[1];
+ assert.match(reserved,/'sale-allocation'/);
+});
 const code=html.slice(html.indexOf('    window.correctSaleAllocation=async function'),html.indexOf('    window.correctSaleAllocation=async function')+html.slice(html.indexOf('    window.correctSaleAllocation=async function')).indexOf('\n    };')+7);
 function setup(answers,api){
  const alerts=[],calls=[];
