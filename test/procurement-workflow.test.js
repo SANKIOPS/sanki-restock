@@ -102,7 +102,9 @@ test('Purchases Summary has a category-first PO explorer plus the complete histo
   assert.match(html, /'T-Shirt':'T-Shirts'/);
   assert.match(html, /'Trouser':'Trousers'/);
   assert.match(html, /'Shirt':'Shirts'/);
-  assert.match(html, /Matching purchase details/);
+  assert.doesNotMatch(html, /Matching purchase details/);
+  assert.doesNotMatch(html, /id="historyExplorerResults"/);
+  assert.match(html, /Filters above apply to this one list/);
   assert.match(html, /data-hx-po/);
   assert.match(html, /data-hx-design/);
   assert.match(html, /Click to enlarge/);

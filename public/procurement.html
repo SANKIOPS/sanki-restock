@@ -284,10 +284,9 @@
           </div>
           <div id="historyPoPicker" class="hidden" style="margin-top:10px"></div>
           <div id="historyExplorerSummary" style="margin-top:12px"></div>
-          <div id="historyExplorerResults" style="margin-top:12px"></div>
         </div>
         <h3 style="margin:18px 0 4px">All purchase records</h3>
-        <p class="sub" style="margin:0">The complete chronological purchase history remains below.</p>
+        <p class="sub" style="margin:0">Purchase date → receipt date → vendor → PO. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
         <div id="sumHost" style="margin-top:14px"></div>
       </div>
     </div>
@@ -729,13 +728,13 @@
       renderHistoryExplorerResults(chosen);
     }
     function renderHistoryExplorerResults(pos){
-      var host=el('historyExplorerResults');
       var category=historyCategory==='all'?(historyDrillCategory||'all'):historyCategory;
       pos=pos.filter(function(po){return historyMatchingLines(po,category).length;});
-      if(!pos.length){host.innerHTML='';return;}
-      host.innerHTML='<h4 style="margin:0 0 7px">'+(category==='all'?'Matching purchase details':esc(historyCategoryLabel(category))+' — purchase details')+'</h4>'+pos.map(function(po,idx){return historyExplorerPoRow(po,idx,category);}).join('');
-      Array.prototype.forEach.call(host.querySelectorAll('[data-hx-po]'),function(row){row.onclick=function(e){if(e.target&&e.target.closest&&e.target.closest('img'))return;var key=row.getAttribute('data-hx-po'),body=el(row.getAttribute('data-body')),car=row.querySelector('.sumcaret');historyOpenPos[key]=!historyOpenPos[key];body.classList.toggle('hidden',!historyOpenPos[key]);if(car)car.textContent=historyOpenPos[key]?'▾':'▸';};});
-      Array.prototype.forEach.call(host.querySelectorAll('[data-hx-design]'),function(row){row.onclick=function(e){if(e.target&&e.target.closest&&e.target.closest('img'))return;var key=row.getAttribute('data-hx-design'),body=el(row.getAttribute('data-body')),car=row.querySelector('.sumcaret');historyOpenDesigns[key]=!historyOpenDesigns[key];body.classList.toggle('hidden',!historyOpenDesigns[key]);if(car)car.textContent=historyOpenDesigns[key]?'▾':'▸';};});
+      if(category==='all'&&historyScope==='all')pos=pos.concat(purchaseHistory.filter(function(po){return po.historical;}));
+      pos.sort(function(a,b){return String(b.datePurchase||b.createdAt||'').localeCompare(String(a.datePurchase||a.createdAt||''))||String(b.id).localeCompare(String(a.id));});
+      var host=el('sumHost');
+      host.innerHTML=pos.length?pos.map(historyPoRow).join(''):'<p class="sub">No purchases match these filters.</p>';
+      Array.prototype.forEach.call(host.querySelectorAll('[data-history-po]'),function(row){row.onclick=function(e){if(e.target&&e.target.closest&&e.target.closest('img'))return;var body=el('historyBody'+row.getAttribute('data-history-po')),car=row.querySelector('.sumcaret');if(body){body.classList.toggle('hidden');if(car)car.textContent=body.classList.contains('hidden')?'▸':'▾';}};});
     }
     function historyExplorerPoRow(po,idx,category){
       var groups=historyDesignGroups(po,category),lines=historyMatchingLines(po,category),pieces=lines.reduce(function(n,l){return n+(Number(l.qty)||0);},0),value=lines.reduce(function(n,l){return n+Math.round(historyLineCost(po,l)*(Number(l.qty)||0));},0);
@@ -784,9 +783,9 @@
       }).join('');
       var lineLabel=po.line==='funky'?'SANKI Funky':(po.line==='casuals'?'SANKI Casuals':'Unclassified');
       var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(120px,1.2fr) minmax(110px,1fr) minmax(150px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
-        '<span class="sumcaret muted">▸</span><div><b>'+(idx+1)+'. '+esc(po.id)+'</b><div class="muted" style="font-size:11px">'+esc(po.vendor||'—')+' · Bill '+esc(po.billNo||'—')+'</div></div>'+
-        '<div style="font-size:12px"><span class="muted">Ordered</span> '+esc(ordered)+'<br><span class="muted">Received</span> '+esc(received)+'</div>'+
-        '<div>'+historyStatus(po)+'</div><div class="money"><b>'+t.qty+' pcs</b></div><div class="money"><b>'+money(t.total)+'</b></div></div>';
+        '<span class="sumcaret muted">▸</span><div style="font-size:12px"><span class="muted">Purchased</span><br><b>'+esc(ordered)+'</b></div>'+
+        '<div style="font-size:12px"><span class="muted">Received</span><br><b>'+esc(received)+'</b></div>'+
+        '<div><b>'+esc(po.vendor||'Vendor not recorded')+'</b><div class="muted" style="font-size:12px">'+esc(po.id)+' · Bill '+esc(po.billNo||'—')+'</div>'+historyStatus(po)+'</div><div class="money"><b>'+t.qty+' pcs</b></div><div class="money"><b>'+money(t.total)+'</b></div></div>';
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
         '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span>'+(po.sourceBatchName?'<span><b>Fresh batch:</b> '+esc(po.sourceBatchName)+'</span>':'')+'<span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
         purchaseCostPanel(po)+
@@ -799,8 +798,8 @@
         return '<tr><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td>'+esc(p.status||'—')+'</td></tr>';
       }).join('');
       var head='<div data-history-po="'+esc(po.id)+'" style="display:grid;grid-template-columns:24px minmax(160px,1.4fr) minmax(120px,1fr) minmax(160px,1.3fr) auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-top:7px">'+
-        '<span class="sumcaret muted">▸</span><div><b>'+(idx+1)+'. Historical purchase</b><div class="muted" style="font-size:11px">Recovered from Shopify · original PO unavailable</div></div>'+
-        '<div style="font-size:12px"><span class="muted">Posted</span> '+esc(po.datePurchase||'—')+'</div>'+historyStatus(po)+
+        '<span class="sumcaret muted">▸</span><div style="font-size:12px"><span class="muted">Purchase date unknown</span><br>Posted '+esc(po.datePurchase||'—')+'</div>'+
+        '<div style="font-size:12px"><span class="muted">Receipt date</span><br>Not recorded</div><div><b>Vendor not recorded</b><div class="muted" style="font-size:11px">Historical purchase · original PO unavailable</div>'+historyStatus(po)+'</div>'+
         '<div class="money"><b>'+Number(po.productCount||0)+' products</b></div><div class="money"><b>'+Number(po.skuCount||0)+' SKUs</b></div></div>';
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
         '<div class="banner" style="margin-bottom:9px">Recovered from Shopify. Product names, SKUs and posting date are verified. The old bill, vendor, quantity and landed cost are not present in Railway, so they are intentionally not guessed.</div>'+
