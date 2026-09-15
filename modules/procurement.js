@@ -42,6 +42,7 @@ const pdfParse = require('pdf-parse');
 const { createWorker } = require('tesseract.js');
 const tesseractChinese = require('@tesseract.js-data/chi_sim');
 const { shopifyClient } = require('./shopify-client');
+const { purchasePaymentStatus } = require('./purchase-payment-status');
 
 const router = express.Router();
 
@@ -1331,6 +1332,27 @@ router.post('/api/procurement/advance', async (req, res) => {
 });
 
 // ── Stage 2a: receive an advance PO — attach weights, compute the preview ──
+router.patch('/api/procurement/pos/:id/weights', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Only authorised Purchases users can save weights.' });
+  const s = loadStore(), po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Use Edit cost calculation for a posted PO.' });
+  const weights = (req.body || {}).weights;
+  if (!weights || typeof weights !== 'object' || Array.isArray(weights) || !Object.keys(weights).length)
+    return res.status(400).json({ success: false, error: 'Enter at least one weight.' });
+  for (const [index, weight] of Object.entries(weights)) {
+    if (!/^(0|[1-9]\d*)$/.test(index) || !(po.lines || [])[index] ||
+        (typeof weight !== 'number' && typeof weight !== 'string') || String(weight).trim() === '' || !Number.isFinite(Number(weight)) || Number(weight) <= 0)
+      return res.status(400).json({ success: false, error: 'Each weight must be a positive number in grams per piece.' });
+  }
+  po.weightHistory = po.weightHistory || [];
+  po.weightHistory.push({ at: new Date().toISOString(), by: (req.user || {}).username || '',
+    changes: Object.entries(weights).map(([index, weight]) => ({ index: Number(index), before: num(po.lines[index].weightGrams), after: Number(weight) })) });
+  Object.entries(weights).forEach(([index, weight]) => { po.lines[index].weightGrams = Number(weight); });
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req) });
+});
+
 // Merges the per-line weights the user recorded on arrival, then generates
 // SKUs + landed cost + draft SEO for approval (still no Shopify write).
 router.post('/api/procurement/pos/:id/receive', async (req, res) => {
@@ -1933,37 +1955,17 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req), breakdown: after, warning: 'Accounting cost was corrected. Shopify inventory was not changed.' });
 });
-router.get('/api/procurement/history', async (req, res) => {
+router.get('/api/procurement/history', (req, res) => {
   const s = loadStore();
-  const pos = Object.values(s.pos).map(p => publicPo(p, req));
-  try {
-    const recovered = await loadShopifyPurchaseHistory(req.query.refresh === '1');
-    const linkedProducts = new Map();
-    Object.values(s.pos).forEach(po => {
-      const poDate = String(po.postedAt || po.datePurchase || po.createdAt || '').slice(0, 10);
-      ((po.results && po.results.created) || []).forEach(p => {
-        if (p && p.productId) linkedProducts.set(String(p.productId), poDate);
-      });
-    });
-    const historical = recovered.map(batch => {
-      // A product linked to a newer PO can be a restock/reference. Only treat
-      // it as the same purchase when both Shopify and PO dates agree.
-      const products = batch.products.filter(p => linkedProducts.get(String(p.productId)) !== batch.datePurchase);
-      return { ...batch, products, productCount: products.length,
-        skuCount: products.reduce((n, p) => n + p.skus.length, 0) };
-    }).filter(batch => batch.productCount > 0);
-    const history = pos.concat(historical).sort((a, b) =>
-      String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || ''))
-    );
-    res.json({ success: true, history, completePurchases: pos.length,
-      recoveredBatches: historical.length,
-      recoveredProducts: historical.reduce((n, b) => n + b.productCount, 0) });
-  } catch (e) {
-    res.json({ success: true,
-      history: pos.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
-      completePurchases: pos.length, recoveredBatches: 0, recoveredProducts: 0,
-      historyWarning: e.message });
-  }
+  let accounting = null;
+  try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); } catch { /* Unavailable history must not imply unpaid. */ }
+  // Owner removed the two old POs and every Shopify-recovered placeholder
+  // from this list. Preserve their stored records and Shopify inventory.
+  const history = Object.values(s.pos)
+    .filter(p => !p.historical && p.id !== 'PO-0001' && p.id !== 'PO-0002')
+    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canManagePurchases(req), s.settings) }))
+    .sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
+  res.json({ success: true, history, completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
 });
 router.get('/api/procurement/pos/:id', (req, res) => {
   const s = loadStore();

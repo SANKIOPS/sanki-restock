@@ -114,11 +114,13 @@
     .ow-po-link{ border:0; background:none; color:var(--emerald-d); text-decoration:underline; cursor:pointer; padding:0; font:inherit; font-weight:700; }
     @media(max-width:760px){ .ow-stats{ grid-template-columns:repeat(2,minmax(110px,1fr)); } .ow-card-head{ align-items:flex-start; flex-wrap:wrap; } }
     .hidden{ display:none !important; }
-    .purchase-table{min-width:900px;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
-    .purchase-table-row{display:grid;grid-template-columns:24px 140px 140px 140px minmax(200px,1fr) 100px 130px;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}
+    .purchase-table{min-width:1080px;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
+    .purchase-table-row{display:grid;grid-template-columns:20px 130px 130px 125px minmax(180px,1fr) 85px 125px 135px;gap:12px;align-items:start;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}
     .purchase-table-row>div{min-width:0;overflow-wrap:anywhere}
     .purchase-table-heading{background:#f3f6f5;font-size:11px;font-weight:700;text-transform:uppercase;color:#64736c}
     .purchase-table-record{cursor:pointer;min-height:78px}
+    .purchase-table-record .money{text-align:right}
+    .purchase-payment-button{font:inherit;border:0;border-radius:999px;padding:4px 9px;cursor:pointer;background:#f1f5f9;color:#334155;white-space:nowrap}
     .purchase-table-record:hover{background:#f7faf9}
   </style>
 </head>
@@ -292,7 +294,7 @@
           <div id="historyExplorerSummary" style="margin-top:12px"></div>
         </div>
         <h3 style="margin:18px 0 4px">All purchase records</h3>
-        <p class="sub" style="margin:0">Received date → purchase date → PO number → vendor → quantity → amount. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
+        <p class="sub" style="margin:0">Received date → purchase date → PO number → vendor → quantity → billing amount → payment status. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
         <div id="sumHost" style="margin-top:14px"></div>
       </div>
     </div>
@@ -588,7 +590,7 @@
     var historyOpenDesigns={};
     function loadPurchaseHistory(){
       el('sumTotals').innerHTML='<p class="sub">Loading purchase history…</p>'; el('sumHost').innerHTML='';
-      fetch('/api/procurement/history').then(readJson).then(function(d){
+      return fetch('/api/procurement/history').then(readJson).then(function(d){
         if(!d.success){ el('sumTotals').innerHTML='<div class="banner err">'+esc(d.error||'Failed to load')+'</div>'; return; }
         purchaseHistory=d.history||[];
         var available={}; purchaseHistory.forEach(function(po){if(!po.historical)available[po.id]=1;});
@@ -630,14 +632,38 @@
       return po.origin==='india' ? Number(line.perPcsYuan||0)+transport
         : Number(line.perPcsYuan||0)*Number(po.exRate||settings.exRate||0)+Number(line.weightGrams||0)*Number(po.freightPerGram||settings.freightPerGram||0);
     }
-    function purchaseCostPanel(po){
+    function purchaseCalculationPanel(po){
       var india=po.origin==='india',qty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0),rate=Number(po.exRate!=null?po.exRate:settings.exRate||0),freight=Number(po.freightPerGram!=null?po.freightPerGram:settings.freightPerGram||0),transport=Number(po.transportTotal||0),share=india&&qty?transport/qty:0;
       var goods=0,delivery=0,total=0,rows=(po.lines||[]).map(function(l,i){var q=Number(l.qty)||0,price=Number(l.perPcsYuan)||0,w=Number(l.weightGrams)||0,g=india?price:price*rate,f=india?share:w*freight,landed=g+f;goods+=g*q;delivery+=f*q;total+=landed*q;return '<tr><td>'+esc(l.designName||l.sku||('Line '+(i+1)))+'</td><td class="money">'+q+'</td><td class="money">'+(india?money(price):yuan(price))+'</td>'+(india?'':'<td class="money">'+rate+'</td>')+'<td class="money">'+money(g)+'</td><td class="money">'+w+'</td><td class="money">'+(india?money(share):freight)+'</td><td class="money">'+money(f)+'</td><td class="money"><b>'+money(landed)+'</b></td><td class="money"><b>'+money(landed*q)+'</b></td></tr>';}).join('');
       var formula=india?'Landed/pc = INR price/pc + (total transport ÷ total quantity)':'Landed/pc = (Yuan price/pc × exchange rate) + (weight g/pc × freight rate/g)';
-      var bill=po.invoice&&po.invoice.url?'<a class="btn sm" href="'+esc(po.invoice.url)+'" target="_blank">Open original bill · '+esc(po.invoice.originalName||po.billNo||'invoice')+'</a>':'<span class="muted">The old system did not retain this bill file.</span> <input id="poInvoice'+esc(po.id)+'" type="file" accept="image/*,application/pdf" style="font-size:11px"> <button class="btn sm" onclick="event.stopPropagation();attachPoInvoice(\''+esc(po.id)+'\')">Attach original bill</button>';
-      var original=(po.lines||[]).map(function(l){return '<tr><td>'+(l.photoUrl?'<img class="thumb" data-zoom src="'+esc(l.photoUrl)+'" style="width:38px;height:46px;object-fit:cover">':'—')+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+'</td><td class="money">'+(Number(l.qty)||0)+'</td><td class="money">'+(india?money(l.perPcsYuan):yuan(l.perPcsYuan))+'</td><td class="money">'+(Number(l.weightGrams)||0)+'</td></tr>';}).join('');
-      return '<div class="banner" style="margin:10px 0"><b>Complete purchase record</b><div style="margin-top:6px">Vendor <b>'+esc(po.vendor||'—')+'</b> · Bill <b>'+esc(po.billNo||'—')+'</b> · Purchased '+esc(po.datePurchase||'—')+' · Received '+esc(po.dateReceive||'not yet')+' · Source '+(india?'India':'China')+'</div><div style="margin-top:8px">'+bill+'</div></div><div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product · colour · size</th><th>Qty</th><th>'+(india?'INR/pc':'Yuan/pc')+'</th><th>Weight g/pc</th></tr></thead><tbody>'+original+'</tbody></table></div><div class="banner" style="margin:10px 0"><b>Visible cost formula:</b> '+formula+'<div style="margin-top:5px">Goods '+money(goods)+' + '+(india?'transport':'freight')+' '+money(delivery)+' = <b>PO landed total '+money(total)+'</b></div></div><div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Design / SKU</th><th class="money">Qty</th><th class="money">'+(india?'INR/pc':'Yuan/pc')+'</th>'+(india?'':'<th class="money">₹/Yuan</th>')+'<th class="money">Goods/pc</th><th class="money">Weight g</th><th class="money">'+(india?'Transport/pc':'Freight ₹/g')+'</th><th class="money">Freight/pc</th><th class="money">Landed/pc</th><th class="money">Line total</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+(po.status==='posted'?'<div style="margin-top:10px"><button class="btn sm" onclick="event.stopPropagation();editPostedCost(\''+esc(po.id)+'\')">Edit cost calculation</button> <span class="muted">Owner only · accounting correction; Shopify stock is unchanged</span></div>':'');
+      return '<div class="banner" style="margin:10px 0"><b>Cost calculation</b><div>'+formula+'</div><div>Goods '+money(goods)+' + '+(india?'transport':'freight')+' '+money(delivery)+' = <b>PO landed total '+money(total)+'</b></div>'+(india?'':'<div>Exchange rate ₹'+rate+'/Yuan · Freight ₹'+freight+'/gram</div>')+'</div><div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Design / SKU</th><th>Qty</th><th>Unit price</th>'+(india?'':'<th>₹/Yuan</th>')+'<th>Goods/pc</th><th>Weight g/pc</th><th>Freight rate / transport share</th><th>Freight/pc</th><th>Landed/pc</th><th>Line total</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+(me.canManage&&po.status!=='posted'?'<button class="btn sm" style="margin:10px 0" onclick="event.stopPropagation();editPurchaseCalculation(\''+esc(po.id)+'\')">Edit prices, exchange rate & freight</button>':'');
     }
+    window.editPurchaseCalculation=function(id){
+      fetch('/api/procurement/pos/'+encodeURIComponent(id)).then(readJson).then(function(d){if(!d.success)throw new Error(d.error);editPoFull(d.po);}).catch(function(e){alert(e.message);});
+    };
+    function purchaseCostPanel(po){
+      var india=po.origin==='india';
+      var bill=po.invoice&&po.invoice.url?'<a class="btn sm" href="'+esc(po.invoice.url)+'" target="_blank">Open original bill · '+esc(po.invoice.originalName||po.billNo||'invoice')+'</a>':'<span class="muted">The old system did not retain this bill file.</span> <input id="poInvoice'+esc(po.id)+'" type="file" accept="image/*,application/pdf" style="font-size:11px"> <button class="btn sm" onclick="event.stopPropagation();attachPoInvoice(\''+esc(po.id)+'\')">Attach original bill</button>';
+      var editableWeights=me.canManage&&po.status!=='posted';
+      var original=(po.lines||[]).map(function(l,i){return '<tr><td>'+(l.photoUrl?'<img class="thumb" data-zoom src="'+esc(l.photoUrl)+'" style="width:38px;height:46px;object-fit:cover">':'—')+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+'</td><td class="money">'+(Number(l.qty)||0)+'</td><td class="money">'+(india?money(l.perPcsYuan):yuan(l.perPcsYuan))+'</td><td class="money">'+(editableWeights?'<input type="number" min="0.01" step="any" data-summary-weight="'+i+'" aria-label="Weight grams per piece for '+esc(l.sku||l.designName||('Line '+(i+1)))+'" value="'+(Number(l.weightGrams)||'')+'" placeholder="g / piece" style="width:100px">':(Number(l.weightGrams)||0))+'</td></tr>';}).join('');
+      return purchaseCalculationPanel(po)+'<div class="banner" style="margin:10px 0"><b>Complete purchase record</b><div style="margin-top:6px">Vendor <b>'+esc(po.vendor||'—')+'</b> · Bill <b>'+esc(po.billNo||'—')+'</b> · Purchased '+esc(po.datePurchase||'—')+' · Received '+esc(po.dateReceive||'not yet')+' · Source '+(india?'India':'China')+'</div><div style="margin-top:8px">'+bill+'</div></div><div data-summary-weight-editor><div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product · colour · size</th><th>Qty</th><th>'+(india?'INR/pc':'Yuan/pc')+'</th><th>Weight g/pc</th></tr></thead><tbody>'+original+'</tbody></table></div>'+(editableWeights?'<div style="margin-top:10px"><button type="button" class="btn sm" onclick="saveSummaryWeights(\''+esc(po.id)+'\',this)">Save weights & recalculate</button> <span class="muted">Weight of one piece in grams. Leave unknown weights blank. Saving does not mark goods received.</span><div data-weight-message role="status" style="margin-top:6px"></div></div>':'')+'</div>'+(po.status==='posted'?'<div style="margin-top:10px"><button class="btn sm" onclick="event.stopPropagation();editPostedCost(\''+esc(po.id)+'\')">Edit cost calculation</button> <span class="muted">Owner only · accounting correction; Shopify stock is unchanged</span></div>':'');
+    }
+    window.saveSummaryWeights=function(id,button){
+      var host=button.closest('[data-summary-weight-editor]'),message=host.querySelector('[data-weight-message]'),weights={};
+      Array.prototype.forEach.call(host.querySelectorAll('[data-summary-weight]'),function(input){if(input.value.trim()!=='')weights[input.getAttribute('data-summary-weight')]=input.value;});
+      if(!Object.keys(weights).length){message.textContent='Enter at least one weight in grams per piece.';return;}
+      if(Object.keys(weights).some(function(index){return !isFinite(Number(weights[index]))||Number(weights[index])<=0;})){message.textContent='Weights must be positive numbers in grams per piece.';return;}
+      button.disabled=true;message.textContent='Saving weights…';
+      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/weights',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({weights:weights})}).then(readJson).then(function(d){
+        if(!d.success)throw new Error(d.error||'Could not save weights.');
+        return loadPurchaseHistory().then(function(){
+          var row=Array.prototype.find.call(el('sumHost').querySelectorAll('[data-history-po]'),function(row){return row.getAttribute('data-history-po')===id;});
+          if(row&&el('historyBody'+id).classList.contains('hidden'))row.click();
+          var body=el('historyBody'+id),saved=body&&body.querySelector('[data-weight-message]');if(saved)saved.textContent='Weights saved. Freight and landed cost recalculated.';
+          loadPos();
+        });
+      }).catch(function(error){button.disabled=false;message.textContent=error.message;});
+    };
     window.attachPoInvoice=function(id){var input=el('poInvoice'+id),file=input&&input.files&&input.files[0];if(!file){alert('Choose the original bill first.');return;}var fd=new FormData();fd.append('invoice',file);fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/invoice',{method:'POST',body:fd}).then(readJson).then(function(d){if(!d.success){alert(d.error||'Could not attach bill.');return;}alert('Original bill attached to '+id+'.');loadPurchaseHistory();loadPos();}).catch(function(e){alert(e.message);});};
     window.editPostedCost=function(id){
       var po=purchaseHistory.filter(function(x){return x.id===id;})[0]||(currentPo&&currentPo.id===id?currentPo:null);if(!po)return;
@@ -776,11 +802,26 @@
       });
       renderHistoryExplorer();
     }
+    function purchasePaymentBadge(po){
+      var payment=po.paymentSummary||{},status=payment.status||'not_recorded';
+      var labels={paid:'Paid',partially_paid:'Partially paid',unpaid:'Unpaid',not_recorded:'Not recorded'};
+      var colour=status==='paid'?'background:#dcfce7;color:#065f46':status==='partially_paid'?'background:#fef3c7;color:#92400e':'';
+      return '<button type="button" class="purchase-payment-button" style="'+colour+'" aria-label="Expand '+esc(po.id)+' payment details">'+esc(labels[status]||'Not recorded')+' ▸</button>';
+    }
+    function purchasePaymentPanel(po){
+      var payment=po.paymentSummary||{};
+      if(!payment.status||payment.status==='not_recorded')return '<div class="banner"><b>Payment details</b><div>Payment history is not recorded for this PO in accounting.</div></div>';
+      var rows=(payment.payments||[]).map(function(p){
+        var proofs=Array.isArray(p.proofs)&&p.proofs.length?p.proofs:(p.proof?[p.proof]:[]);
+        return '<tr><td>'+esc(p.date||'—')+'</td><td>'+esc(p.id||'—')+'</td><td class="money">'+money(p.amount)+'</td><td>'+esc(p.account||'—')+'</td><td>'+esc(p.paymentType||'—')+'</td><td>'+esc(p.paidBy||'—')+'</td><td>'+esc(p.note||'—')+'</td><td>'+proofs.map(function(url,i){return '<a href="'+esc(url)+'" target="_blank" rel="noopener">Proof '+(i+1)+'</a>';}).join(' · ')+'</td></tr>';
+      }).join('');
+      return '<div class="banner"><b>Payment details</b><div>Accounting billing amount: '+money(payment.amount)+' · Paid: '+money(payment.paidAmount)+' · Balance due: '+money(payment.balanceDue)+(payment.mediator?' · Payee: '+esc(payment.mediator):'')+'</div></div>'+(rows?'<div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Payment</th><th class="money">Amount</th><th>Account</th><th>Method</th><th>Paid by</th><th>Note</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p class="sub">No payments recorded.</p>');
+    }
     function purchaseHistoryTable(pos){
-      return '<div style="overflow-x:auto"><div class="purchase-table"><div class="purchase-table-row purchase-table-heading"><span></span><div>Received date</div><div>Purchase date</div><div>PO number</div><div>Vendor name</div><div class="money">Quantity</div><div class="money">Amount</div></div>'+pos.map(historyPoRow).join('')+'</div></div>';
+      return '<div style="overflow-x:auto"><div class="purchase-table"><div class="purchase-table-row purchase-table-heading"><span></span><div>Received date</div><div>Purchase date</div><div>PO number</div><div>Vendor name</div><div class="money">Quantity</div><div class="money">Billing amount</div><div>Payment status</div></div>'+pos.map(historyPoRow).join('')+'</div></div>';
     }
     function purchaseHistoryHead(po,received,purchased,poNumber,vendor,quantity,amount){
-      return '<div data-history-po="'+esc(po.id)+'" class="purchase-table-row purchase-table-record"><span class="sumcaret muted">▸</span><div>'+esc(received)+'</div><div>'+esc(purchased)+'</div><div><b>'+esc(poNumber)+'</b><div class="muted" style="font-size:11px">'+(po.historical?'Historical purchase':'Bill '+esc(po.billNo||'Not recorded'))+'</div></div><div><b>'+esc(vendor)+'</b><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money">'+esc(quantity)+'</div><div class="money"><b>'+esc(amount)+'</b></div></div>';
+      return '<div data-history-po="'+esc(po.id)+'" class="purchase-table-row purchase-table-record"><span class="sumcaret muted">▸</span><div>'+esc(received)+'</div><div>'+esc(purchased)+'</div><div><b>'+esc(poNumber)+'</b><div class="muted" style="font-size:11px">'+(po.historical?'Historical purchase':'Bill '+esc(po.billNo||'Not recorded'))+'</div></div><div><b>'+esc(vendor)+'</b><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money">'+esc(quantity)+'</div><div class="money"><b>'+esc(amount)+'</b></div><div>'+purchasePaymentBadge(po)+'</div></div>';
     }
     function historyPoRow(po,idx){
       if(po.historical) return historicalPurchaseRow(po,idx);
@@ -794,10 +835,10 @@
         return '<tr><td>'+photo+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+(l.chinaSize?' (CN '+esc(l.chinaSize)+')':'')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(l.weightGrams||'—')+'</td></tr>';
       }).join('');
       var lineLabel=po.line==='funky'?'SANKI Funky':(po.line==='casuals'?'SANKI Casuals':'Unclassified');
-      var head=purchaseHistoryHead(po,received,ordered==='—'?'Not recorded':ordered,po.id,po.vendor||'Not recorded',t.qty+' pcs',money(t.total));
+      var head=purchaseHistoryHead(po,received,ordered==='—'?'Not recorded':ordered,po.id,po.vendor||'Not recorded',t.qty+' pcs',money(po.paymentSummary&&po.paymentSummary.amount!=null?po.paymentSummary.amount:t.total));
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
         '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span>'+(po.sourceBatchName?'<span><b>Fresh batch:</b> '+esc(po.sourceBatchName)+'</span>':'')+'<span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
-        purchaseCostPanel(po)+
+        purchasePaymentPanel(po)+purchaseCostPanel(po)+
         (po.status==='posted'?'<div class="banner ok" style="margin-top:9px">Posted to Shopify'+(po.postedAt?' on '+esc(String(po.postedAt).replace('T',' ').slice(0,19)):'')+'.</div>':'')+'</div>';
       return head+detail;
     }
@@ -1588,6 +1629,7 @@
         '<div><h2 style="margin:0">'+esc(po.id)+'</h2>'+
           '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+(po.sourceBatchName?(' <span class="muted">· Fresh batch '+esc(po.sourceBatchName)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
+      if(!posted) h+=purchaseCalculationPanel(po);
       // rates + date-of-receive carried from the advance purchase — editable here before final calc
       if(!posted){
         h+='<div class="settingsgrid" style="margin-top:12px">'+

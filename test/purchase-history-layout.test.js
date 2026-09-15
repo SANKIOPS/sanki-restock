@@ -15,11 +15,11 @@ test('purchase history is one filtered chronological list including historical r
   assert.equal(host.innerHTML,'selected;');
   assert.doesNotMatch(html,/id="historyExplorerResults"|Matching purchase details/);
 });
-test('all purchase headers use the same six-column layout',()=>{
+test('all purchase headers use the same seven-column layout',()=>{
   const start=html.indexOf('function purchaseHistoryTable('),end=html.indexOf('function historyPoRow(',start);
-  const context={esc:String,historyStatus:()=>'',historyPoRow:()=>''};
+  const context={esc:String,historyStatus:()=>'',purchasePaymentBadge:()=> 'Paid',historyPoRow:()=>''};
   const table=vm.runInNewContext(html.slice(start,end)+'\npurchaseHistoryTable;',context)([]);
-  assert.match(table,/Received date.*Purchase date.*PO number.*Vendor name.*Quantity.*Amount/);
+  assert.match(table,/Received date.*Purchase date.*PO number.*Vendor name.*Quantity.*Billing amount.*Payment status/);
   const head=vm.runInNewContext(html.slice(start,end)+'\npurchaseHistoryHead;',context)({id:'PO-1'},'Not received','2026-09-02','PO-1','Vendor','48 pcs','₹100');
   assert.match(head,/purchase-table-row purchase-table-record/);
   assert.match(head,/Not received.*2026-09-02.*PO-1.*Vendor.*48 pcs.*₹100/);
