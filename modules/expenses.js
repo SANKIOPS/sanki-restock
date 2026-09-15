@@ -1511,7 +1511,7 @@ router.post('/api/expenses/:id', (req, res, next) => {
     if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only Admin or Owner can assign or change the category.' });
     const ledger = String(b.ledger).trim();
     if (!pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
-      if (!isAdmin(req)) return res.status(400).json({ success: false, error: 'Only Admin or Owner can add a missing category during approval.' });
+      if (!isOwner(req)) return res.status(403).json({ success: false, error: 'Only the Owner can create a new category. Choose an existing category.' });
       s.customLedgers = s.customLedgers || {};
       s.customLedgers[ledger] = { name: ledger, type: TYPES.includes(b.type) ? b.type : (e.type || 'variable') };
     }
@@ -3362,6 +3362,7 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
   const s = loadStore();
   const r = (s.requests || []).find(x => x.id === req.params.id);
   if (!r) return res.status(404).json({ success: false, error: 'Request not found.' });
+  if (r.kind === 'ledger' && !isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can manage categories.'});
   if (r.kind === 'sale_split' && !isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can approve a sale allocation correction.' });
   if (!(isAdmin(req) || (r.kind === 'vendor' && canApprove(req)))) {
     return res.status(403).json({ success: false, error: r.kind === 'vendor' ? 'Only an approver/admin can decide vendor requests.' : 'Admin approval only.' });
@@ -3416,7 +3417,7 @@ router.post('/api/expenses/accounts/remove', (req, res) => {
 });
 // Admin: list / remove admin-approved CUSTOM categories (built-in ones stay).
 router.post('/api/expenses/custom-ledgers', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success:false, error:'Owner or Admin only.' });
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Owner only.' });
   const s=loadStore(), b=req.body||{}, name=String(b.name||'').trim();
   if(!name || name.length>120) return res.status(400).json({success:false,error:'Enter a category name (up to 120 characters).'});
   if(!TYPES.includes(b.type)) return res.status(400).json({success:false,error:'Choose a valid category type.'});
@@ -3428,11 +3429,12 @@ router.post('/api/expenses/custom-ledgers', (req, res) => {
   res.json({success:true,ledger});
 });
 router.get('/api/expenses/custom-ledgers', (req, res) => {
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Owner only.' });
   const s = loadStore();
   res.json({ success: true, ledgers: Object.values(s.customLedgers || {}), isAdmin: isAdmin(req) });
 });
 router.post('/api/expenses/custom-ledgers/remove', (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Admin only.' });
+  if (!isOwner(req)) return res.status(403).json({ success: false, error: 'Owner only.' });
   const s = loadStore();
   const name = String((req.body || {}).name || '').trim();
   if (s.customLedgers && s.customLedgers[name]) delete s.customLedgers[name];

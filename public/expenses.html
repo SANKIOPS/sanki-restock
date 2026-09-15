@@ -463,7 +463,7 @@
       if(tab==='cash') return renderCash();
       if(tab==='reimbursements') return renderReimbursements();
       if(tab==='rentals'&&cfg.isOwner) return window.mountRentalRegister(el('panel'),api,esc,fmt);
-      if(tab==='categories') return renderCategories();
+      if(tab==='categories'&&cfg.isOwner) return renderCategories();
       if(tab==='audit') return renderAudit();
       if(tab==='approvals') return renderApprovals();
     }
@@ -1349,7 +1349,7 @@
 
     // ── APPROVALS — approvers handle vendors; admin also handles categories/accounts ──
     function renderCategories(){
-      if(!cfg.isAdmin)return;
+      if(!cfg.isOwner)return;
       el('panel').innerHTML='<div class="card"><h3 style="margin-top:0">Manage categories</h3><p class="sub">Add a category directly. Categories are shared across SANKI, SAMAST and PERSONAL and become available in expense entry and Review / Resolve.</p><div class="filters"><div class="fld"><label>Category name</label><input id="categoryName" placeholder="Enter new category name" maxlength="120"></div><div class="fld"><label>Type</label><select id="categoryType">'+opts(cfg.types,'variable')+'</select></div><button class="btn primary" id="categoryAdd">Add category</button></div><div id="categoryMsg" class="msg"></div><div id="categoryList"></div></div>';
       function list(){el('categoryList').innerHTML='<table><thead><tr><th>Category</th><th>Type</th></tr></thead><tbody>'+cfg.ledgers.map(function(l){return '<tr><td>'+esc(l.name)+'</td><td>'+esc(l.type||'variable')+'</td></tr>';}).join('')+'</tbody></table>';}
       list();el('categoryAdd').onclick=function(){var btn=this,name=el('categoryName').value.trim();if(!name){el('categoryMsg').textContent='Enter a category name.';return;}btn.disabled=true;api('/api/expenses/custom-ledgers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,type:el('categoryType').value})}).then(function(d){if(!d.success){el('categoryMsg').textContent=d.error||'Could not add category.';return;}return loadConfig().then(function(){list();el('categoryName').value='';el('categoryMsg').textContent=d.already?'This category already exists.':'Category added. It is now available in Review / Resolve.';});}).catch(function(){el('categoryMsg').textContent='Could not add category. Please retry.';}).finally(function(){btn.disabled=false;});};
@@ -1357,11 +1357,11 @@
     function renderApprovals(){
       el('panel').innerHTML = '<div class="card"><h3 style="margin:0 0 4px">Pending approvals</h3>'+
         '<p class="sub" style="margin:0 0 12px">Review vendor requests'+(cfg.isAdmin?', categories, paying accounts, and sale-allocation corrections':'')+'. Sale corrections always require Owner approval.</p>'+
-        '<div id="atable" class="muted">Loading…</div></div>'+(cfg.isAdmin?(
+        '<div id="atable" class="muted">Loading…</div></div>'+(cfg.isOwner?(
         '<div class="card"><h3 style="margin:0 0 4px">Approved custom categories</h3>'+
         '<p class="sub" style="margin:0 0 12px">Extra categories added beyond the built-in Tally list. Remove one if it was a mistake.</p>'+
         '<div id="ctable2" class="muted">Loading…</div></div>'):'');
-      loadApprovals(); if(cfg.isAdmin) loadCustomLedgers();
+      loadApprovals(); if(cfg.isOwner) loadCustomLedgers();
     };
     function loadCustomLedgers(){
       api('/api/expenses/custom-ledgers').then(function(d){
@@ -1429,10 +1429,10 @@
 
     // boot
     loadConfig().then(function(){
-      if(cfg.isOwner)el('rentalsTab').style.display='';
+      if(cfg.isOwner){el('rentalsTab').style.display='';el('categoriesTab').style.display='';}
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
       bankNature=selectedNature;
-      if(cfg.isAdmin){el('categoriesTab').style.display='';el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';}
+      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';}
       if(!cfg.isAdmin){ // every non-Owner/Admin user: log + view own list only
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();
