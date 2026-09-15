@@ -1605,6 +1605,37 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// Included-usage generation happens in a user-started Codex session, not Railway.
+const codexBatch = require('./procurement-codex-batch');
+router.post('/api/procurement/pos/:id/codex-batch', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+    const s=loadStore(), po=s.pos[req.params.id];
+    if (!po || po.status==='posted') return res.status(400).json({success:false,error:'Editable purchase required.'});
+    const g=(await newGroupsOf(s,po)).find(g=>g.key===(req.body||{}).groupKey);
+    if (!g || !readStoredPhoto(g.photoUrl)) return res.status(400).json({success:false,error:'Product group with source photo required.'});
+    const batch=codexBatch.prepare(po,g); batch.poId=req.params.id;
+    po.codexBatches=po.codexBatches||{}; po.codexBatches[batch.id]=batch; saveStore(s);
+    res.json({success:true,batch});
+  } catch(e) {res.status(400).json({success:false,error:e.message});}
+});
+router.post('/api/procurement/pos/:id/codex-batch/:batchId/results', async (req,res)=>{
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+    const s=loadStore(),po=s.pos[req.params.id],batch=po&&(po.codexBatches||{})[req.params.batchId];
+    if(!batch || po.status==='posted') throw new Error('Editable batch not found.');
+    if((req.body||{}).groupKey!==batch.groupKey) throw new Error('Batch belongs to a different product/colour.');
+    const g=(await newGroupsOf(s,po)).find(g=>g.key===batch.groupKey);
+    if(!g) throw new Error('Product group no longer exists.');
+    const images=codexBatch.accept(batch,g,(po.backRefs||{})[g.key],(req.body||{}).images,readStoredPhoto);
+    po.aiImages=po.aiImages||{}; const existing=po.aiImages[g.key]||[];
+    for(const img of images){const old=existing.find(x=>x.type===img.type);if(old && old.url!==img.url) throw new Error('View already exists; use the existing replacement controls.');}
+    for(const img of images) if(!existing.some(x=>x.type===img.type)) existing.push(img);
+    po.aiImages[g.key]=existing; batch.status='returned'; batch.returnedAt=new Date().toISOString();saveStore(s);
+    res.json({success:true,images:existing});
+  }catch(e){res.status(400).json({success:false,error:e.message});}
+});
+
 // Generate the AI shots for ONE product group (or specific `types`).
 router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
   try {
