@@ -1939,7 +1939,7 @@
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<button class="btn sm" data-genimg="'+i+'">'+(imgs.length?'Regenerate all':'Generate photos')+'</button></div>';
+        '<div><button class="btn sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?PAIR_UPPER:PAIR_LOWER, s=stylingOf(np);
       function sel(kind,label,opts,val){
         var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
@@ -1963,7 +1963,7 @@
         '<span class="muted" style="font-size:11px">only affects the 2 model shots · AI picks colours</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
       var hasBackRef=!!studio.backRefs[np.key];
-      IMG_TYPES.forEach(function(t){
+      IMG_TYPES.concat([['model-front','Codex model front'],['model-side','Codex model side'],['model-back','Codex model back'],['detail','Codex detail']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         // "change back photo" link (only for the back slot once a ref exists)
         var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
@@ -1976,6 +1976,7 @@
           empty='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>'+
             '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button>'+chg+'</div>';
         }
+        if(t[0].indexOf('model-')===0 || t[0]==='detail') empty='<div class="muted" style="padding:20px 0">Awaiting Codex batch result</div>';
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
@@ -2026,8 +2027,29 @@
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
-      var gi=host.querySelector('[data-genimg]'); if(gi) gi.onclick=function(){ genImagesSequential(np,i); };
-      Array.prototype.forEach.call(host.querySelectorAll('[data-regen]'),function(b){ b.onclick=function(){ genImages(np,i,[b.getAttribute('data-type')],b); }; });
+      var cr=host.querySelector('[data-codexreturn]'); if(cr) cr.onchange=function(){
+        var file=cr.files&&cr.files[0]; if(!file)return;
+        var batchId=prompt('Paste the Codex batch ID for this product:'),type=prompt('View: front, model-front, model-side, model-back, or detail');
+        if(!batchId || ['front','model-front','model-side','model-back','detail'].indexOf(type)<0){cr.value='';return;}
+        var fd=new FormData();fd.append('photo',file);
+        fetch('/api/procurement/photo',{method:'POST',body:fd}).then(readJson).then(function(u){
+          if(!u.success)throw new Error(u.error||'Upload failed.');
+          return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/codex-batch/'+encodeURIComponent(batchId)+'/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,images:[{type:type,url:u.url}]})});
+        }).then(readJson).then(function(r){if(!r.success)throw new Error(r.error);studio.images[np.key]=r.images;rerenderCard(i);})
+          .catch(function(e){alert(e.message);}).finally(function(){cr.value='';});
+      };
+      var cb=host.querySelector('[data-codexbatch]'); if(cb) cb.onclick=function(){
+        cb.disabled=true;
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/codex-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
+          .then(readJson).then(function(r){
+            if(!r.success) throw new Error(r.error||'Batch preparation failed.');
+            var blob=new Blob([JSON.stringify(r.batch,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+            a.href=url;a.download='codex-image-batch-'+r.batch.id+'.json';a.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);
+            alert('Batch '+r.batch.id+' prepared. Share this manifest in Codex to start generation. No paid generation was called. Results must be returned to this purchase before approval/posting.');
+          }).catch(function(e){alert(e.message);}).finally(function(){cb.disabled=false;});
+      };
+      var gi=host.querySelector('[data-genimg]'); if(gi) gi.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImagesSequential(np,i); };
+      Array.prototype.forEach.call(host.querySelectorAll('[data-regen]'),function(b){ if(b.getAttribute('data-type').indexOf('model-')===0 || b.getAttribute('data-type')==='detail'){b.remove();return;} b.title='Gemini generation: paid API usage'; b.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImages(np,i,[b.getAttribute('data-type')],b); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-approveimg]'),function(b){ b.onclick=function(){ toggleImg(np,i,b.getAttribute('data-type')); }; });
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
@@ -2045,7 +2067,7 @@
           .then(readJson).then(function(r){
             if(!r.success){ alert(r.error||'Could not attach back photo.'); return; }
             studio.backRefs[np.key]=u.url; rerenderCard(i);
-            genImages(np,i,['back']);   // create the back shot from the real photo now
+            // Keep reference upload free of automatic paid generation.
           });
       }).catch(function(e){ alert(e.message); });
     }
