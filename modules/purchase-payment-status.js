@@ -1,6 +1,6 @@
 function purchaseBillingAmount(po, defaults = {}) {
   const num = x => Number(x) || 0;
-  if ((po.newProducts || []).length || (po.existingAdds || []).length) {
+  if (po.status === 'posted' && ((po.newProducts || []).length || (po.existingAdds || []).length)) {
     let total = 0;
     (po.newProducts || []).forEach(p => (p.variants || []).forEach(v => { total += num(v.landed) * num(v.qty); }));
     (po.existingAdds || []).forEach(v => { total += num(v.landed) * num(v.qty); });

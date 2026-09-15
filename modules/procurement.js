@@ -1332,6 +1332,27 @@ router.post('/api/procurement/advance', async (req, res) => {
 });
 
 // ── Stage 2a: receive an advance PO — attach weights, compute the preview ──
+router.patch('/api/procurement/pos/:id/weights', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Only authorised Purchases users can save weights.' });
+  const s = loadStore(), po = s.pos[req.params.id];
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Use Edit cost calculation for a posted PO.' });
+  const weights = (req.body || {}).weights;
+  if (!weights || typeof weights !== 'object' || Array.isArray(weights) || !Object.keys(weights).length)
+    return res.status(400).json({ success: false, error: 'Enter at least one weight.' });
+  for (const [index, weight] of Object.entries(weights)) {
+    if (!/^(0|[1-9]\d*)$/.test(index) || !(po.lines || [])[index] ||
+        (typeof weight !== 'number' && typeof weight !== 'string') || String(weight).trim() === '' || !Number.isFinite(Number(weight)) || Number(weight) <= 0)
+      return res.status(400).json({ success: false, error: 'Each weight must be a positive number in grams per piece.' });
+  }
+  po.weightHistory = po.weightHistory || [];
+  po.weightHistory.push({ at: new Date().toISOString(), by: (req.user || {}).username || '',
+    changes: Object.entries(weights).map(([index, weight]) => ({ index: Number(index), before: num(po.lines[index].weightGrams), after: Number(weight) })) });
+  Object.entries(weights).forEach(([index, weight]) => { po.lines[index].weightGrams = Number(weight); });
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req) });
+});
+
 // Merges the per-line weights the user recorded on arrival, then generates
 // SKUs + landed cost + draft SEO for approval (still no Shopify write).
 router.post('/api/procurement/pos/:id/receive', async (req, res) => {
