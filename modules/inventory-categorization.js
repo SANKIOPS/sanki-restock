@@ -16,6 +16,20 @@ const catalogClient = new ShopifyClient({ minIntervalMs: 250 });
 const galleryCache = new Map();
 let costCache = { at: 0, products: null };
 let costInflight = null;
+let visualCatalog = { at: 0, products: null };
+require('./inventory-visual-search').register(router, async () => {
+  if (!visualCatalog.products || Date.now()-visualCatalog.at>30*60*1000) {
+    const live = await fetchProducts(catalogClient);
+    const byHandle = new Map(live.map(p => [p.handle,p]));
+    visualCatalog = { at:Date.now(), products:DATA.map(p => {
+      const match = byHandle.get(p.handle);
+      const images = (match?.images || []).map(im => im.src).filter(Boolean);
+      if (!images.length && match?.image?.src) images.push(match.image.src);
+      return {...p,images,image:images[0] || null};
+    }) };
+  }
+  return visualCatalog.products;
+});
 
 async function jsonRequest(url, options) {
   const response = await shopifyClient.request(url, options);
