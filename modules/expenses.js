@@ -3415,6 +3415,18 @@ router.post('/api/expenses/accounts/remove', (req, res) => {
   res.json({ success: true, accounts: s.accounts });
 });
 // Admin: list / remove admin-approved CUSTOM categories (built-in ones stay).
+router.post('/api/expenses/custom-ledgers', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ success:false, error:'Owner or Admin only.' });
+  const s=loadStore(), b=req.body||{}, name=String(b.name||'').trim();
+  if(!name || name.length>120) return res.status(400).json({success:false,error:'Enter a category name (up to 120 characters).'});
+  if(!TYPES.includes(b.type)) return res.status(400).json({success:false,error:'Choose a valid category type.'});
+  const existing=pickableLedgers(s).find(l=>l.name.toLowerCase()===name.toLowerCase());
+  if(existing) return res.json({success:true,already:true,ledger:existing});
+  const ledger={name,type:b.type};
+  s.customLedgers=s.customLedgers||{};s.customLedgers[name]=ledger;
+  audit(s,req,'CATEGORY_CREATED','category',name,{after:ledger});saveStore(s);
+  res.json({success:true,ledger});
+});
 router.get('/api/expenses/custom-ledgers', (req, res) => {
   const s = loadStore();
   res.json({ success: true, ledgers: Object.values(s.customLedgers || {}), isAdmin: isAdmin(req) });
