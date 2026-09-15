@@ -20,10 +20,10 @@ test('posted POs and unauthorized users cannot use summary weight saving',()=>{
  assert.equal(handler({pos:{}},false)({'0':10}).code,403);
 });
 test('summary offers per-SKU input and recalculation only for editable POs',()=>{
- const a=html.indexOf('function purchaseCostPanel('),b=html.indexOf('window.saveSummaryWeights',a);
- const c={me:{canManage:true},settings:{exRate:15,freightPerGram:0.45},esc:String,money:x=>'₹'+x,yuan:x=>'¥'+x};
+ const a=html.indexOf('function purchaseCalculationPanel('),b=html.indexOf('window.saveSummaryWeights',a);
+ const c={window:{},me:{canManage:true},settings:{exRate:15,freightPerGram:0.45},esc:String,money:x=>'₹'+x,yuan:x=>'¥'+x};
  const render=vm.runInNewContext(html.slice(a,b)+'\npurchaseCostPanel;',c),po={id:'PO-5',status:'advance',origin:'china',lines:[{sku:'A',qty:3,perPcsYuan:40,weightGrams:250}]};
- assert.match(render(po),/data-summary-weight-editor/);assert.match(render(po),/data-summary-weight="0"/);assert.match(render(po),/Save weights & recalculate/);assert.match(render(po),/Goods ₹1800.*freight.*₹337.5/);
+ assert.ok(render(po).indexOf("Cost calculation")<render(po).indexOf("data-summary-weight-editor"));assert.match(render(po),/Edit prices, exchange rate & freight/);assert.match(render(po),/data-summary-weight-editor/);assert.match(render(po),/data-summary-weight="0"/);assert.match(render(po),/Save weights & recalculate/);assert.match(render(po),/Goods ₹1800.*freight.*₹337.5/);
  assert.doesNotMatch(render({...po,status:'posted'}),/data-summary-weight="0"/);
  c.me.canManage=false;assert.doesNotMatch(render(po),/Save weights & recalculate/);
 });
