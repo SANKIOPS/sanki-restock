@@ -1,3 +1,4 @@
+const { purchaseBillingAmount } = require('./purchase-payment-status');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -1012,12 +1013,12 @@ function poCostBreakdown(po, defaults) {
 }
 function procurementPayables(s, includePaid) {
   const cfg = procurementAccounting(s), proc = loadProcurementStore();
-  return Object.values(proc.pos || {}).filter(po => po.status === 'posted' && String(po.postedAt || '') >= String(cfg.trackPostedFrom || ''))
+  return Object.values(proc.pos || {}).filter(po => !po.historical)
     .map(po => {
       const state = cfg.paymentsByPo[po.id] || {}, payments = Array.isArray(state.payments) ? state.payments : [];
-      const amount = poLandedTotal(po), paidAmount = round0(payments.reduce((n, p) => n + num(p.amount), 0));
+      const amount = purchaseBillingAmount(po, proc.settings || {}), paidAmount = round0(payments.reduce((n, p) => n + num(p.amount), 0));
       return { id: po.id, source: 'procurement', nature: 'SANKI', vendor: state.mediator || cfg.mediator,
-        supplier: po.vendor || '', billNo: po.billNo || '', date: po.dateReceive || po.datePurchase || String(po.postedAt || '').slice(0, 10),
+        supplier: po.vendor || '', billNo: po.billNo || '', date: po.datePurchase || String(po.createdAt || po.postedAt || '').slice(0, 10),
         postedAt: po.postedAt || '', particulars: 'Advanced purchase · goods and China-to-store transport', amount, paidAmount,
         balanceDue: Math.max(0, amount - paidAmount), status: paidAmount >= amount ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'approved'), payments,
         costBreakdown: poCostBreakdown(po, proc.settings || {}), costCorrectionHistory: po.costCorrectionHistory || [] };

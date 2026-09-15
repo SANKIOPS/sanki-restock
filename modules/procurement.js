@@ -1938,7 +1938,7 @@ router.get('/api/procurement/history', async (req, res) => {
   const s = loadStore();
   let accounting = null;
   try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); } catch { /* Unavailable history must not imply unpaid. */ }
-  const pos = Object.values(s.pos).map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canManagePurchases(req)) }));
+  const pos = Object.values(s.pos).map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canManagePurchases(req), s.settings) }));
   try {
     const recovered = await loadShopifyPurchaseHistory(req.query.refresh === '1');
     const linkedProducts = new Map();
