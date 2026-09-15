@@ -2540,7 +2540,18 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const finalBalance=preciseBalance?Math.round(running*100)/100:round0(running);res.json({ success:true, account, nature, expenseNature, entries:visible, balance:Math.abs(finalBalance)<.005?0:finalBalance, reconciled:issues.length===0, reconciliationIssues:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
 });
 
-function statementDate(v){if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;}const s=String(v||'').trim(),m=s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;}return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):'';}
+function statementDate(v){
+  const calendar=(year,month,day)=>{const date=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`,parsed=new Date(date+'T00:00:00Z');return !isNaN(parsed)&&parsed.toISOString().slice(0,10)===date?date:'';};
+  if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);
+  if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);return d?calendar(d.y,d.m,d.d):'';}
+  const s=String(v||'').trim();
+  // Match the entire date, ISO first: an unanchored DMY regex used to read
+  // the suffix of 2026-09-01 as 26-09-01 and silently produce 2001-09-26.
+  let m=s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:$|[T\s])/);
+  if(m)return calendar(m[1],Number(m[2]),Number(m[3]));
+  m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4}|\d{2})(?:$|[T\s])/);
+  return m?calendar(m[3].length===2?'20'+m[3]:m[3],Number(m[2]),Number(m[1])):'';
+}
 function statementNum(v){return num(String(v==null?'':v).replace(/[₹,\s]/g,'').replace(/^\((.*)\)$/,'-$1'));}
 function parseBankStatementFile(filePath){
   const wb=XLSX.readFile(filePath,{cellDates:true}),sheet=wb.Sheets[wb.SheetNames[0]],matrix=XLSX.utils.sheet_to_json(sheet,{header:1,defval:''}),headerRow=Math.max(0,matrix.findIndex(r=>{const h=r.map(x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,''));return h.some(x=>['date','transactiondate','valuedate','txndate','postingdate'].includes(x))&&h.some(x=>/debit|credit|withdrawal|deposit|amount/.test(x));})),rows=XLSX.utils.sheet_to_json(sheet,{defval:'',range:headerRow});
@@ -2604,9 +2615,13 @@ function parseIndusIndScreenshotText(raw){
     const tail=dm[2].match(/^(.*?)(?:\s+[\-p|])?\s+([0-9][0-9,]*(?:\.\d{1,2})?)\s+([0-9][0-9,]*(?:\.\d{1,2})?)\s*$/i);if(!tail)continue;
     let description=tail[1].trim(),continuation=index+1;
     while(continuation<lines.length&&!/^20\d{2}-\d{2}-\d{2}\s/.test(lines[continuation].trim())&&!/^Date\s+Particulars/i.test(lines[continuation].trim())){const extra=lines[continuation].trim();if(extra&&!/^[_=\-\s]+$/.test(extra))description+=' '+extra;continuation++;}
+    // Repair only unambiguous OCR labels and digit wraps, never account names
+    // or monetary values. References must not fall back to a beneficiary UPI ID.
+    description=description.replace(/\bUP[1Il]\//g,'UPI/').replace(/[|l]MPS\//g,'IMPS/').replace(/(\d{6,})\s+(\d+)(?=\/)/g,'$1$2');
     const amount=Math.abs(statementNum(tail[2])),balance=Math.abs(statementNum(tail[3]));if(!amount||!Number.isFinite(balance))continue;
     const explicitDebit=/\/DR\b|\bACH\s+DR\b/i.test(description),explicitCredit=/\/CR\b|\bcredit[- ]transfer\s+from\b/i.test(description),reference=((description.match(/\b(?:UPI|IMPS|NEFT|RTGS|KKBK)[\/\s:#-]*([A-Z0-9-]{5,})/i)||[])[1]||'');
-    rows.push({date:dm[1],description,reference,debit:explicitDebit?amount:0,credit:explicitCredit?amount:0,balance,row:index+1,_amount:amount,_sideKnown:explicitDebit||explicitCredit});
+    const transactionReference=(description.match(/\bUPI\/(\d{10,})\//i)||description.match(/\bIMPS\/P2[AM]\/(\d{10,})\//i)||[])[1]||reference;
+    rows.push({date:dm[1],description,reference:transactionReference,debit:explicitDebit?amount:0,credit:explicitCredit?amount:0,balance,row:index+1,_amount:amount,_sideKnown:explicitDebit||explicitCredit});
   }
   if(!rows.length)return rows;
   // IndusInd screenshots are newest first. Use the running balance to classify
@@ -2673,6 +2688,19 @@ function statementScreenshotRowIsPlausible(row){
   return validDate&&validAmount&&validBalance&&(num(row&&row.debit)>0||num(row&&row.credit)>0);
 }
 function statementScreenshotRowsArePlausible(rows){return Array.isArray(rows)&&rows.length>0&&rows.every(statementScreenshotRowIsPlausible);}
+function repairScreenshotDraftDates(draft){
+  if(!draft||!/Statement screenshots/i.test(draft.originalName||'')||!(draft.transactions||[]).some(row=>!statementScreenshotRowIsPlausible(row)))return false;
+  if(!draft.temporaryFile||!fs.existsSync(draft.temporaryFile)||path.extname(draft.temporaryFile).toLowerCase()!=='.xlsx')return false;
+  const parsed=parseBankStatementFile(draft.temporaryFile),old=draft.transactions||[];
+  // Re-read the retained source, not a guessed reversal of the corrupt date.
+  // Preserve row IDs and decisions only when every monetary row still agrees.
+  if(parsed.length!==old.length||!statementScreenshotRowsArePlausible(parsed)||parsed.some((row,index)=>Math.abs(row.debit-num(old[index].debit))>.01||Math.abs(row.credit-num(old[index].credit))>.01||Math.abs(row.balance-num(old[index].balance))>.01))return false;
+  const dates=parsed.map(row=>row.date).sort(),from=dates[0],to=dates.at(-1),latest=parsed.filter(row=>row.date===to),endpoints=latest.filter(row=>!latest.some(other=>other!==row&&Math.abs(row.balance-(other.balance+other.debit-other.credit))<.005));
+  if(endpoints.length!==1)return false;
+  draft.dateParserRepair={at:new Date().toISOString(),previousSummary:Object.assign({},draft.summary),source:'Retained screenshot workbook',version:2};
+  draft.transactions=parsed;draft.summary=Object.assign({},draft.summary,{from,to,closingBalance:endpoints[0].balance,totalDebits:roundMoney(parsed.reduce((sum,row)=>sum+row.debit,0)),totalCredits:roundMoney(parsed.reduce((sum,row)=>sum+row.credit,0)),validated:false});
+  return true;
+}
 function cumulativeCompanyExcludedBankNet(s,draft){
   if(!usesCompanyAdjustedBankTruth(draft.nature,draft.account))return 0;const through=String(draft.summary&&draft.summary.to||''),seen=new Set();let total=0;
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===normalizedNature(draft.nature)&&x.account===draft.account&&(!through||String(x.date||'')<=through)).forEach(x=>{const key='saved|'+String(x.bankTransactionId||x.reference||x.id);if(seen.has(key))return;seen.add(key);total+=num(x.credit)-num(x.debit);});
@@ -2681,6 +2709,7 @@ function cumulativeCompanyExcludedBankNet(s,draft){
   return roundMoney(total);
 }
 function draftReconciliation(s,draft){
+  if(repairScreenshotDraftDates(draft))saveStore(s);
   const bank=draft.transactions||[],book=(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{},continuityCutoff=String(book.reconciledThrough||''),effectiveFrom=continuityCutoff&&(!draft.summary.to||continuityCutoff<draft.summary.to)?continuityCutoff:'',app=appBankMovements(s,draft.account,draft.nature).filter(x=>(!effectiveFrom||x.date>effectiveFrom)&&(!draft.summary.from||x.date>=draft.summary.from)&&(!draft.summary.to||x.date<=draft.summary.to)),used=new Set(),rows=[];
   const multiActions=['link_multiple_existing','link_with_rounding','vendor_advance_split'],multiBankAction='link_multiple_bank_entries',singleLinkActions=['accept_match','link_existing','opening_vendor_payable_split'];
   const priorQueues=new Map(),priorByBankIndex=new Map(),priorLinkedIds=new Set();Object.values(book.transactions||{}).forEach(x=>{const key=reconciliationBankSignature(x),queue=priorQueues.get(key)||[];queue.push(x);priorQueues.set(key,queue);});(book.imports||[]).forEach(record=>(record.reconciliationRows||[]).forEach(x=>(x.linkedRecordIds||[]).forEach(id=>priorLinkedIds.add(id))));bank.forEach((b,i)=>{const queue=priorQueues.get(reconciliationBankSignature(b));if(queue&&queue.length)priorByBankIndex.set(i,queue.shift());else if(effectiveFrom&&String(b.date||'')<=effectiveFrom)priorByBankIndex.set(i,{id:'RECONCILED-THROUGH-'+effectiveFrom,date:b.date,continuityCutoff:true});});priorLinkedIds.forEach(id=>{const index=app.findIndex(x=>x.id===id);if(index>=0)used.add(index);});
