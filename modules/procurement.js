@@ -1948,7 +1948,9 @@ router.get('/api/procurement/history', async (req, res) => {
         if (p && p.productId) linkedProducts.set(String(p.productId), poDate);
       });
     });
-    const historical = recovered.map(batch => {
+    // Owner removed this recovered placeholder from Purchase History.
+    // Suppress only the history entry; its Shopify products remain intact.
+    const historical = recovered.filter(batch => batch.id !== 'HIST-20260912').map(batch => {
       // A product linked to a newer PO can be a restock/reference. Only treat
       // it as the same purchase when both Shopify and PO dates agree.
       const products = batch.products.filter(p => linkedProducts.get(String(p.productId)) !== batch.datePurchase);
