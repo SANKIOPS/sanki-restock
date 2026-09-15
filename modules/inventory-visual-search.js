@@ -12,28 +12,57 @@ function cleanMatches(value, allowed) {
   return (Array.isArray(value) ? value : []).filter(m => Number.isInteger(m.id) && allowed.has(m.id) && !seen.has(m.id) && seen.add(m.id))
     .map(m => ({ id: m.id, confidence: ['high','medium','low'].includes(m.confidence) ? m.confidence : 'low', reason: String(m.reason || '').slice(0, 300) }));
 }
-async function vision(parts, prompt) {
-  const google = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+function providerError(provider, status, body) {
+  const message = String(body?.error?.message || '').toLowerCase();
+  const prefix = provider === 'google' ? 'Gemini' : 'Anthropic';
+  if (status === 429 || /quota|credit balance|billing/.test(message)) return prefix + ': quota or billing limit reached. Check the AI account.';
+  if (status === 401 || /api.key.*(invalid|expired|not valid)|invalid.*api.key/.test(message)) return prefix + ': API key is invalid or expired. Update its Railway variable.';
+  if (status === 403) return prefix + ': API key lacks permission or has incompatible restrictions.';
+  if (status === 404) return prefix + ': the configured vision model is unavailable for this key.';
+  if (status === 400 || status === 413) return prefix + ': image request was rejected (HTTP ' + status + '). Try a smaller JPEG photo.';
+  return prefix + ': service request failed (HTTP ' + status + '). Try again shortly.';
+}
+async function vision(parts, prompt, config = process.env, request = fetch) {
+  const google = config.GEMINI_API_KEY || config.GOOGLE_API_KEY;
+  const providers = [google && 'google', config.ANTHROPIC_API_KEY && 'anthropic'].filter(Boolean);
+  const failures = [];
+  for (const provider of providers) {
+  const useGoogle = provider === 'google';
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 45000);
   try {
     let response;
-    if (google) {
-      response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + (process.env.INVENTORY_VISION_MODEL || 'gemini-2.5-flash') + ':generateContent', {
+    const shared = config.INVENTORY_VISION_MODEL || '';
+    if (useGoogle) {
+      let model = config.INVENTORY_GEMINI_MODEL || (shared.startsWith('gemini-') ? shared : 'gemini-2.5-flash');
+      const options = {
         method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json', 'x-goog-api-key': google },
         body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }].concat(parts.map(data => ({ inlineData: { mimeType: 'image/jpeg', data } }))) }], generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 4096 } })
-      });
+      };
+      response = await request('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', options);
+      // A key can be valid while the default model is unavailable. Discover an
+      // available text+vision Flash model rather than repeatedly using a dead ID.
+      if (response.status === 404 && !config.INVENTORY_GEMINI_MODEL && !shared.startsWith('gemini-')) {
+        const available = await request('https://generativelanguage.googleapis.com/v1beta/models', { signal:controller.signal, headers:{'x-goog-api-key':google} });
+        const list = await available.json().catch(()=>({}));
+        const replacement = (list.models || []).filter(m=>m.supportedGenerationMethods?.includes('generateContent') && /^models\/gemini-.*flash/.test(m.name) && !/image|live|audio|preview|lite|tts/.test(m.name)).sort((a,b)=>b.name.localeCompare(a.name,undefined,{numeric:true}))[0];
+        if (available.ok && replacement) response = await request('https://generativelanguage.googleapis.com/v1beta/' + replacement.name + ':generateContent', options);
+      }
     } else {
-      response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: controller.signal,
-        headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: process.env.INVENTORY_VISION_MODEL || 'claude-sonnet-4-6', max_tokens: 4096, temperature: 0, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }].concat(parts.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }))) }] }) });
+      response = await request('https://api.anthropic.com/v1/messages', { method: 'POST', signal: controller.signal,
+        headers: { 'content-type': 'application/json', 'x-api-key': config.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: config.INVENTORY_ANTHROPIC_MODEL || (shared.startsWith('claude-') ? shared : 'claude-sonnet-4-6'), max_tokens: 4096, temperature: 0, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }].concat(parts.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }))) }] }) });
     }
-    const body = await response.json();
-    if (!response.ok) throw new Error(response.status === 429 ? 'Vision service is busy or its quota is exhausted. Try again later.' : 'Vision service unavailable. Check the configured AI key/model.');
-    const text = google ? (body.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('') : (body.content || []).map(p => p.text || '').join('');
+    const body = await response.json().catch(()=>({}));
+    if (!response.ok) throw new Error(providerError(provider,response.status,body));
+    const text = useGoogle ? (body.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('') : (body.content || []).map(p => p.text || '').join('');
     const start = text.indexOf('{'), end = text.lastIndexOf('}');
     if (start < 0) throw new Error('Vision service returned no readable matches.');
     return JSON.parse(text.slice(start, end + 1));
+  } catch (error) {
+    failures.push(error.name === 'AbortError' ? (useGoogle?'Gemini':'Anthropic') + ': recognition timed out.' : error.message);
   } finally { clearTimeout(timer); }
+  }
+  throw new Error(failures.join(' ') || 'No AI vision key is configured on Railway.');
 }
 async function photo(src, large) {
   const url = new URL(src);
@@ -130,4 +159,4 @@ function register(router, getCatalog) {
     const {owner:unused,...result}=job; res.json({success:true,...result});
   });
 }
-module.exports = { register, cleanMatches };
+module.exports = { register, cleanMatches, vision, providerError };
