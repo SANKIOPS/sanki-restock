@@ -1955,41 +1955,17 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req), breakdown: after, warning: 'Accounting cost was corrected. Shopify inventory was not changed.' });
 });
-router.get('/api/procurement/history', async (req, res) => {
+router.get('/api/procurement/history', (req, res) => {
   const s = loadStore();
   let accounting = null;
   try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); } catch { /* Unavailable history must not imply unpaid. */ }
-  const pos = Object.values(s.pos).map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canManagePurchases(req), s.settings) }));
-  try {
-    const recovered = await loadShopifyPurchaseHistory(req.query.refresh === '1');
-    const linkedProducts = new Map();
-    Object.values(s.pos).forEach(po => {
-      const poDate = String(po.postedAt || po.datePurchase || po.createdAt || '').slice(0, 10);
-      ((po.results && po.results.created) || []).forEach(p => {
-        if (p && p.productId) linkedProducts.set(String(p.productId), poDate);
-      });
-    });
-    // Owner removed this recovered placeholder from Purchase History.
-    // Suppress only the history entry; its Shopify products remain intact.
-    const historical = recovered.filter(batch => batch.id !== 'HIST-20260912').map(batch => {
-      // A product linked to a newer PO can be a restock/reference. Only treat
-      // it as the same purchase when both Shopify and PO dates agree.
-      const products = batch.products.filter(p => linkedProducts.get(String(p.productId)) !== batch.datePurchase);
-      return { ...batch, products, productCount: products.length,
-        skuCount: products.reduce((n, p) => n + p.skus.length, 0) };
-    }).filter(batch => batch.productCount > 0);
-    const history = pos.concat(historical).sort((a, b) =>
-      String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || ''))
-    );
-    res.json({ success: true, history, completePurchases: pos.length,
-      recoveredBatches: historical.length,
-      recoveredProducts: historical.reduce((n, b) => n + b.productCount, 0) });
-  } catch (e) {
-    res.json({ success: true,
-      history: pos.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
-      completePurchases: pos.length, recoveredBatches: 0, recoveredProducts: 0,
-      historyWarning: e.message });
-  }
+  // Owner removed the two old POs and every Shopify-recovered placeholder
+  // from this list. Preserve their stored records and Shopify inventory.
+  const history = Object.values(s.pos)
+    .filter(p => !p.historical && p.id !== 'PO-0001' && p.id !== 'PO-0002')
+    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canManagePurchases(req), s.settings) }))
+    .sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
+  res.json({ success: true, history, completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
 });
 router.get('/api/procurement/pos/:id', (req, res) => {
   const s = loadStore();
