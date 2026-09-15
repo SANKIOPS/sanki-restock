@@ -3,6 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {cleanMatches} = require('../modules/inventory-visual-search');
 const {vision,providerError} = require('../modules/inventory-visual-search');
+test('provider diagnostics redact credentials and URLs',()=>{
+  const {safeProviderMessage}=require('../modules/inventory-visual-search');
+  assert.equal(safeProviderMessage({error:{message:'key secret-value failed at https://example.com?key=123'}},['secret-value']),'key [redacted] failed at [redacted]');
+});
 function response(status,body){return {status,ok:status>=200&&status<300,json:async()=>body};}
 test('invalid Gemini key falls back to configured Anthropic vision',async()=>{
   const calls=[];
