@@ -42,6 +42,7 @@ const pdfParse = require('pdf-parse');
 const { createWorker } = require('tesseract.js');
 const tesseractChinese = require('@tesseract.js-data/chi_sim');
 const { shopifyClient } = require('./shopify-client');
+const { purchasePaymentStatus } = require('./purchase-payment-status');
 
 const router = express.Router();
 
@@ -1935,7 +1936,9 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
 });
 router.get('/api/procurement/history', async (req, res) => {
   const s = loadStore();
-  const pos = Object.values(s.pos).map(p => publicPo(p, req));
+  let accounting = null;
+  try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); } catch { /* Unavailable history must not imply unpaid. */ }
+  const pos = Object.values(s.pos).map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canManagePurchases(req)) }));
   try {
     const recovered = await loadShopifyPurchaseHistory(req.query.refresh === '1');
     const linkedProducts = new Map();

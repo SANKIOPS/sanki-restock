@@ -1,0 +1,19 @@
+// Read-only projection of accounting's PO payment ledger.
+function purchasePaymentStatus(po, accounting, includeDetails) {
+  if (!accounting || po.historical) return { status: 'not_recorded' };
+  const cfg = accounting.procurementAccounting || {};
+  const state = (cfg.paymentsByPo || {})[po.id];
+  const tracked = po.status === 'posted' && String(po.postedAt || '') >= String(cfg.trackPostedFrom || '2026-08-21T00:00:00+05:30');
+  if (!state && !tracked) return { status: 'not_recorded' };
+  const payments = state && Array.isArray(state.payments) ? state.payments : [];
+  const num = x => Number(x) || 0;
+  let amount = 0;
+  (po.newProducts || []).forEach(p => (p.variants || []).forEach(v => { amount += num(v.landed) * num(v.qty); }));
+  (po.existingAdds || []).forEach(v => { amount += num(v.landed) * num(v.qty); });
+  amount = Math.round(amount);
+  const paidAmount = Math.round(payments.reduce((n, p) => n + num(p.amount), 0));
+  return { status: amount > 0 && paidAmount >= amount ? 'paid' : paidAmount > 0 ? 'partially_paid' : 'unpaid',
+    amount, paidAmount, balanceDue: Math.max(0, amount - paidAmount),
+    ...(includeDetails ? { mediator: state && state.mediator || cfg.mediator || 'Logistics Mediator', payments } : {}) };
+}
+module.exports = { purchasePaymentStatus };

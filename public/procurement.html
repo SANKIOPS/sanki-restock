@@ -114,11 +114,13 @@
     .ow-po-link{ border:0; background:none; color:var(--emerald-d); text-decoration:underline; cursor:pointer; padding:0; font:inherit; font-weight:700; }
     @media(max-width:760px){ .ow-stats{ grid-template-columns:repeat(2,minmax(110px,1fr)); } .ow-card-head{ align-items:flex-start; flex-wrap:wrap; } }
     .hidden{ display:none !important; }
-    .purchase-table{min-width:900px;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
-    .purchase-table-row{display:grid;grid-template-columns:24px 140px 140px 140px minmax(200px,1fr) 100px 130px;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}
+    .purchase-table{min-width:1080px;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
+    .purchase-table-row{display:grid;grid-template-columns:20px 130px 130px 125px minmax(180px,1fr) 85px 125px 135px;gap:12px;align-items:start;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}
     .purchase-table-row>div{min-width:0;overflow-wrap:anywhere}
     .purchase-table-heading{background:#f3f6f5;font-size:11px;font-weight:700;text-transform:uppercase;color:#64736c}
     .purchase-table-record{cursor:pointer;min-height:78px}
+    .purchase-table-record .money{text-align:right}
+    .purchase-payment-button{font:inherit;border:0;border-radius:999px;padding:4px 9px;cursor:pointer;background:#f1f5f9;color:#334155;white-space:nowrap}
     .purchase-table-record:hover{background:#f7faf9}
   </style>
 </head>
@@ -292,7 +294,7 @@
           <div id="historyExplorerSummary" style="margin-top:12px"></div>
         </div>
         <h3 style="margin:18px 0 4px">All purchase records</h3>
-        <p class="sub" style="margin:0">Received date → purchase date → PO number → vendor → quantity → amount. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
+        <p class="sub" style="margin:0">Received date → purchase date → PO number → vendor → quantity → billing amount → payment status. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
         <div id="sumHost" style="margin-top:14px"></div>
       </div>
     </div>
@@ -776,11 +778,26 @@
       });
       renderHistoryExplorer();
     }
+    function purchasePaymentBadge(po){
+      var payment=po.paymentSummary||{},status=payment.status||'not_recorded';
+      var labels={paid:'Paid',partially_paid:'Partially paid',unpaid:'Unpaid',not_recorded:'Not recorded'};
+      var colour=status==='paid'?'background:#dcfce7;color:#065f46':status==='partially_paid'?'background:#fef3c7;color:#92400e':'';
+      return '<button type="button" class="purchase-payment-button" style="'+colour+'" aria-label="Expand '+esc(po.id)+' payment details">'+esc(labels[status]||'Not recorded')+' ▸</button>';
+    }
+    function purchasePaymentPanel(po){
+      var payment=po.paymentSummary||{};
+      if(!payment.status||payment.status==='not_recorded')return '<div class="banner"><b>Payment details</b><div>Payment history is not recorded for this PO in accounting.</div></div>';
+      var rows=(payment.payments||[]).map(function(p){
+        var proofs=Array.isArray(p.proofs)&&p.proofs.length?p.proofs:(p.proof?[p.proof]:[]);
+        return '<tr><td>'+esc(p.date||'—')+'</td><td>'+esc(p.id||'—')+'</td><td class="money">'+money(p.amount)+'</td><td>'+esc(p.account||'—')+'</td><td>'+esc(p.paymentType||'—')+'</td><td>'+esc(p.paidBy||'—')+'</td><td>'+esc(p.note||'—')+'</td><td>'+proofs.map(function(url,i){return '<a href="'+esc(url)+'" target="_blank" rel="noopener">Proof '+(i+1)+'</a>';}).join(' · ')+'</td></tr>';
+      }).join('');
+      return '<div class="banner"><b>Payment details</b><div>Accounting billing amount: '+money(payment.amount)+' · Paid: '+money(payment.paidAmount)+' · Balance due: '+money(payment.balanceDue)+(payment.mediator?' · Payee: '+esc(payment.mediator):'')+'</div></div>'+(rows?'<div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Payment</th><th class="money">Amount</th><th>Account</th><th>Method</th><th>Paid by</th><th>Note</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p class="sub">No payments recorded.</p>');
+    }
     function purchaseHistoryTable(pos){
-      return '<div style="overflow-x:auto"><div class="purchase-table"><div class="purchase-table-row purchase-table-heading"><span></span><div>Received date</div><div>Purchase date</div><div>PO number</div><div>Vendor name</div><div class="money">Quantity</div><div class="money">Amount</div></div>'+pos.map(historyPoRow).join('')+'</div></div>';
+      return '<div style="overflow-x:auto"><div class="purchase-table"><div class="purchase-table-row purchase-table-heading"><span></span><div>Received date</div><div>Purchase date</div><div>PO number</div><div>Vendor name</div><div class="money">Quantity</div><div class="money">Billing amount</div><div>Payment status</div></div>'+pos.map(historyPoRow).join('')+'</div></div>';
     }
     function purchaseHistoryHead(po,received,purchased,poNumber,vendor,quantity,amount){
-      return '<div data-history-po="'+esc(po.id)+'" class="purchase-table-row purchase-table-record"><span class="sumcaret muted">▸</span><div>'+esc(received)+'</div><div>'+esc(purchased)+'</div><div><b>'+esc(poNumber)+'</b><div class="muted" style="font-size:11px">'+(po.historical?'Historical purchase':'Bill '+esc(po.billNo||'Not recorded'))+'</div></div><div><b>'+esc(vendor)+'</b><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money">'+esc(quantity)+'</div><div class="money"><b>'+esc(amount)+'</b></div></div>';
+      return '<div data-history-po="'+esc(po.id)+'" class="purchase-table-row purchase-table-record"><span class="sumcaret muted">▸</span><div>'+esc(received)+'</div><div>'+esc(purchased)+'</div><div><b>'+esc(poNumber)+'</b><div class="muted" style="font-size:11px">'+(po.historical?'Historical purchase':'Bill '+esc(po.billNo||'Not recorded'))+'</div></div><div><b>'+esc(vendor)+'</b><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money">'+esc(quantity)+'</div><div class="money"><b>'+esc(amount)+'</b></div><div>'+purchasePaymentBadge(po)+'</div></div>';
     }
     function historyPoRow(po,idx){
       if(po.historical) return historicalPurchaseRow(po,idx);
@@ -797,7 +814,7 @@
       var head=purchaseHistoryHead(po,received,ordered==='—'?'Not recorded':ordered,po.id,po.vendor||'Not recorded',t.qty+' pcs',money(t.total));
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
         '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-bottom:10px"><span><b>Vendor:</b> '+esc(po.vendor||'—')+'</span><span><b>Bill:</b> '+esc(po.billNo||'—')+'</span><span><b>Line:</b> '+esc(lineLabel)+'</span>'+(po.sourceBatchName?'<span><b>Fresh batch:</b> '+esc(po.sourceBatchName)+'</span>':'')+'<span><b>Source:</b> '+esc(po.origin==='india'?'India':'China')+'</span><span><b>Created by:</b> '+esc(po.createdBy||'—')+'</span><span><b>Expected:</b> '+esc(po.expectedDate||'—')+'</span><span><b>Received by:</b> '+esc(po.receivedBy||'—')+'</span></div>'+
-        purchaseCostPanel(po)+
+        purchasePaymentPanel(po)+purchaseCostPanel(po)+
         (po.status==='posted'?'<div class="banner ok" style="margin-top:9px">Posted to Shopify'+(po.postedAt?' on '+esc(String(po.postedAt).replace('T',' ').slice(0,19)):'')+'.</div>':'')+'</div>';
       return head+detail;
     }
