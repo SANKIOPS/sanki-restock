@@ -2786,6 +2786,29 @@ router.get('/api/expenses/bank-statements/correction-candidates',(req,res)=>{
   const candidates=appBankMovements(s,account,nature).filter(x=>!linked.has(x.id)&&(num(x.debit)>0)===debit&&Math.abs(num(x.debit)+num(x.credit)-amount)<=.01);
   res.json({success:true,candidates,bank:row.bank});
 });
+router.post('/api/expenses/bank-statements/restore-finalized-transfer',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Owner only.'});
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),account=String(b.account||''),reason=String(b.reason||'').trim();
+  if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'Account access denied.'});
+  const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)],record=book&&(book.imports||[]).find(x=>x.id===b.recordId),row=record&&[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).find(x=>x.id===b.rowId),bank=row&&row.bank;
+  if(!bank||num(bank.debit)>0||!(num(bank.credit)>0))return res.status(400).json({success:false,error:'Choose an incoming finalized bank row.'});
+  if((row.linkedRecordIds||[]).length||row.ledger&&row.ledger.id)return res.status(409).json({success:false,error:'This row already has a ledger connection.'});
+  const from=allowedTransferAccount(nature,b.fromAccount),to=allowedTransferAccount(nature,account);
+  if(!from||!to||from===to||!reason)return res.status(400).json({success:false,error:'Choose a different source account and enter a reason.'});
+  const movements=appBankMovements(s,account,nature),ref=reconciliationReference(bank.reference);
+  if(movements.some(x=>num(x.credit)>0&&Math.abs(num(x.credit)-num(bank.credit))<.01&&(ref&&reconciliationReference(x.reference)===ref||x.date===bank.date)))return res.status(409).json({success:false,error:'A matching incoming entry already exists. Link it instead of creating a duplicate.'});
+  const signature=reconciliationBankSignature(bank);
+  if((book.imports||[]).flatMap(x=>[].concat(x.reconciliationRows||[],x.carriedReconciliationRows||[])).some(x=>x!==row&&x.bank&&reconciliationBankSignature(x.bank)===signature&&(x.linkedRecordIds||[]).length))return res.status(409).json({success:false,error:'This bank transaction is already linked in another statement.'});
+  const at=new Date().toISOString();s.transferSeq=num(s.transferSeq)+1;
+  const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature,fromNature:nature,toNature:nature,classification:'internal_transfer',fromAccount:from,toAccount:to,amount:num(bank.credit),date:bank.date,proof:'',note:reason,createdBy:req.user.username,createdAt:at,bankReconciliationEvidence:{recordId:record.id,rowId:row.id,reference:bank.reference||'',description:bank.description||''}};
+  s.transfers=s.transfers||[];s.transfers.push(transfer);s.bankDateOverrides=s.bankDateOverrides||{};s.bankDateOverrides[transfer.id]={bankDate:bank.date,originalDate:bank.date,bankReference:bank.reference||'',reconciliationDraft:record.id,remark:reason,by:req.user.username,at};
+  const before={linkedRecordIds:[],decision:row.decision,reason:row.reason};row.linkedRecordIds=[transfer.id];row.ledger=appBankMovements(s,account,nature).find(x=>x.id===transfer.id);row.decision='Restored bank-confirmed internal transfer';row.reason=reason;row.corrected=true;row.resolvedBy=req.user.username;row.resolvedAt=at;row.correctionHistory=row.correctionHistory||[];row.correctionHistory.push({before,after:{linkedRecordIds:[transfer.id],ledger:row.ledger},reason,by:req.user.username,at});
+  book.transactions=book.transactions||{};if(!Object.values(book.transactions).some(x=>reconciliationBankSignature(x)===signature)){const key=bankRowKey(account,bank,1);book.transactions[key]=Object.assign({},bank,{id:'BTX-'+key,firstSeenImport:record.id,lastSeenImport:record.id});}
+  const opening=nature==='SANKI'?s.openingBalances||{}:(s.openingBalancesByNature||{})[nature]||{},closing=roundMoney(num(opening[account])+appBankMovements(s,account,nature).filter(x=>!record.to||x.date<=record.to).reduce((n,x)=>n+num(x.credit)-num(x.debit),0));
+  record.ledgerClosingBalance=closing;record.balanceDifference=roundMoney(num((record.statementSummary||{}).closingBalance)-closing);record.balanceReconciled=Math.abs(record.balanceDifference)<.01;record.closingBalanceDeferred=!record.balanceReconciled;
+  if((book.imports||[]).at(-1)===record&&book.lastReconciliation)Object.assign(book.lastReconciliation,{ledgerClosingBalance:closing,balanceDifference:record.balanceDifference,balanceReconciled:record.balanceReconciled,reconciled:record.balanceReconciled,closingBalanceDeferred:!record.balanceReconciled});
+  audit(s,req,'FINALIZED_BANK_TRANSFER_RESTORED','bank_reconciliation',record.id,{nature,account,before,after:transfer,note:reason});saveStore(s);res.json({success:true,transfer,balanceDifference:record.balanceDifference});
+});
 router.post('/api/expenses/bank-statements/correct-finalized-link',(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can correct a finalized reconciliation link.'});
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),account=String(b.account||''),recordId=String(b.recordId||''),rowId=String(b.rowId||''),appId=String(b.appId||'').trim(),reason=String(b.reason||'').trim();

@@ -2332,6 +2332,19 @@ test('full-volume recovery compresses only oversized historical JPEG proofs in p
   assert.match(source,/fs\.writeFileSync\(fp,replacement\)/);
 });
 
+test('Owner restores an omitted finalized incoming transfer once and recalculates balance',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(file,'utf8');
+  try{
+    const s=JSON.parse(baseline),account='ICICI Bank 0993',recordId='BST-RESTORE';
+    s.transfers=[];s.receipts=[];s.adjustments=[];s.expenses={};s.receivables={};s.vendorAdvances=[];s.bankTruthMovements=[];s.bankDateOverrides={};s.openingBalancesByNature={PERSONAL:{[account]:54.41}};
+    s.bankStatements={['PERSONAL|'+account]:{transactions:{},imports:[{id:recordId,to:'2026-09-15',statementSummary:{closingBalance:60786.41},carriedReconciliationRows:[{id:'missing',bank:{date:'2026-09-13',reference:'314625916938',credit:60732,debit:0},linkedRecordIds:[]}]}],lastReconciliation:{}}};fs.writeFileSync(file,JSON.stringify(s));
+    const body={nature:'PERSONAL',account,recordId,rowId:'missing',fromAccount:'IndusInd Bank 7883',reason:'Restore verified bank receipt'};
+    assert.equal(invoke('POST','/api/expenses/bank-statements/restore-finalized-transfer',{role:'admin',body}).status,403);
+    const result=invoke('POST','/api/expenses/bank-statements/restore-finalized-transfer',{role:'owner',body});assert.equal(result.status,200,JSON.stringify(result.body));assert.equal(result.body.balanceDifference,0);
+    assert.equal(invoke('POST','/api/expenses/bank-statements/restore-finalized-transfer',{role:'owner',body}).status,409);
+    const saved=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(saved.transfers.length,1);assert.equal(saved.bankStatements['PERSONAL|'+account].imports[0].balanceReconciled,true);
+  }finally{fs.writeFileSync(file,baseline);}
+});
 test('Owner can replace a deleted expense link in finalized reconciliation with the correct transfer',()=>{
   invoke('POST','/api/expenses',{body:{ledger:'FOOD EXPENSE',vendor:'Fixture',particulars:'Fixture',amount:1,billPhoto:'/fixture.jpg',paymentType:'Cash'}});
   const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8');
