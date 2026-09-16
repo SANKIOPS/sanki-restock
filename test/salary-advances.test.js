@@ -342,44 +342,31 @@ test('positive and negative balances carry forward once and payroll respects emp
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(source,/Extra salary paid earlier/);assert.match(source,/Salary left unpaid earlier/);assert.match(html,/positive balances remain payable/);
 });
 
-test('owner sees historical payroll as unverified and can reopen one August employee without fabricating a payment',()=>{
-  const august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'},role:'owner'}).body.rows;
-  const row=august.find(x=>Math.abs(x.historicalCloseAdjustment||0)>0.005);
-  assert.ok(row,'an August offset is available to review');
-  assert.ok(row.adjustmentDetails.some(x=>x.kind==='historical_payroll_unverified'));
-  assert.equal(invoke('POST','/api/salary/historical-offset/:ym/:empId/reopen',{params:{ym:'2026-08',empId:row.id},body:{reason:'Verified bank payment history'},role:'accounting'}).status,403);
-  const beforePayments=invoke('GET','/api/salary/payments/:ym',{params:{ym:'2026-08'},role:'owner'}).body.payments.length;
-  const result=invoke('POST','/api/salary/historical-offset/:ym/:empId/reopen',{params:{ym:'2026-08',empId:row.id},body:{reason:'Bank payments must be reviewed individually'},role:'owner'});
-  assert.equal(result.status,200);
-  assert.equal(result.body.row.historicalCloseAdjustment,0);
-  assert.equal(invoke('GET','/api/salary/payments/:ym',{params:{ym:'2026-08'},role:'owner'}).body.payments.length,beforePayments);
-  assert.equal(invoke('POST','/api/salary/historical-offset/:ym/:empId/reopen',{params:{ym:'2026-08',empId:row.id},body:{reason:'Again'},role:'owner'}).status,404);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
-  assert.match(html,/August salary needs payment review/);
-  assert.match(html,/Review balance \/ enable Pay/);
-  assert.match(html,/Link existing 3645 debit/);
-  assert.match(html,/Ask the Owner or Prashant to review these historical balances first/);
+test('August historical closing offsets are removed without fabricating payments or closing the month',()=>{
+  const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'},role:'owner'}).body;
+  assert.equal(month.finalized,false);
+  assert.ok(month.rows.every(x=>!x.historicalCloseAdjustment));
+  const salary=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'));
+  assert.ok(salary.oneTimeMigrations.reopen_august_2026_payroll_for_payments_v18);
+  assert.ok(salary.salaryPaymentAudit.some(x=>x.action==='AUGUST_PAYROLL_REOPENED'));
+  assert.equal(salary.salaryPayments.filter(x=>x.ym==='2026-08').length,0);
+  const reopened=salary.oneTimeMigrations.reopen_august_2026_payroll_for_payments_v18.removedOffsets.length;
+  invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'},role:'owner'});
+  assert.equal(JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8')).oneTimeMigrations.reopen_august_2026_payroll_for_payments_v18.removedOffsets.length,reopened);
 });
 
-test('Prashant can review only SANKI August historical balance with a reason, without recording payment',()=>{
+test('Prashant can pay August salary with proof; a changed amount requires a note, not a reopening reason',()=>{
   const who={role:'claimant',username:'prashant'},month=invoke('GET','/api/salary/month/:ym',{...who,params:{ym:'2026-08'}}).body;
-  assert.equal(month.permissions.canReviewAugust,true);
-  assert.equal(month.permissions.canModifyPayroll,false);
-  const row=month.rows.find(x=>Math.abs(x.historicalCloseAdjustment||0)>0.005);
-  assert.ok(row);
-  const params={ym:'2026-08',empId:row.id},routePath='/api/salary/historical-offset/:ym/:empId/reopen';
-  const beforePayments=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym:'2026-08'}}).body.payments.length;
-  assert.equal(invoke('POST',routePath,{...who,params,body:{reason:''}}).status,400);
-  assert.equal(invoke('POST',routePath,{...who,params:{...params,ym:'2026-09'},body:{reason:'Not August'}}).status,403);
-  assert.equal(invoke('POST',routePath,{...who,query:{entity:'SAMAST'},params,body:{reason:'Wrong entity'}}).status,403);
-  const result=invoke('POST',routePath,{...who,params,body:{reason:'Verified this historical balance against payment records'}});
+  const row=month.rows.find(x=>x.balance>1000&&x.paid===0);
+  assert.ok(row,'an August salary is payable');
+  const amount=Math.round((row.balance-100)*100)/100;
+  const body={ym:'2026-08',date:'2026-09-16',account:'Prashant Axis 3645',proof:'/august-proof.jpg',items:[{empId:row.id,amount}]};
+  assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body}).status,400);
+  body.items[0].modificationReason='Paying the remaining ₹100 separately';
+  const result=invoke('POST','/api/salary/payments/batch',{...who,body});
   assert.equal(result.status,200);
-  assert.equal(result.body.row.historicalCloseAdjustment,0);
-  assert.equal(invoke('GET','/api/salary/payments/:ym',{...who,params:{ym:'2026-08'}}).body.payments.length,beforePayments);
-  const salary=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'));
-  assert.ok(salary.salaryPaymentAudit.some(x=>x.action==='HISTORICAL_OFFSET_REOPENED'&&x.empId===row.id&&x.by==='prashant'));
-  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
-  assert.match(html,/d\.permissions&&d\.permissions\.canReviewAugust/);
+  const payment=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym:'2026-08'}}).body.payments.find(x=>x.empId===row.id);
+  assert.equal(payment.amount,amount);assert.equal(payment.modificationReason,body.items[0].modificationReason);assert.equal(payment.proof,'/august-proof.jpg');
 });
 
 test('owner can correct a proof-backed salary payment and correction is audited',()=>{
@@ -442,8 +429,8 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   const arshpreet=month.rows.find(r=>/^Arshpreet/i.test(r.name)),ravi=month.rows.find(r=>r.name==='Ravi');
   const august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows,finalNames=new Set(_finalJuly2026Payroll.map(x=>String(x[0]).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(x[1]).toLowerCase())),finalAugust=august.filter(r=>finalNames.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
   assert.equal(august.find(r=>r.id===arshpreet.id).advance,0);assert.equal(august.find(r=>r.id===arshpreet.id).outstandingAdvance,0);assert.equal(august.find(r=>r.id===ravi.id).advance,0);assert.equal(august.find(r=>r.id===suraj.id).advance,0);
-  assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);assert.ok(finalAugust.every(r=>r.balance===0||!r.historicalCloseAdjustment),'historical offsets remain until the owner reopens an employee');
-  const september=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows;assert.ok(finalAugust.every(r=>september.find(x=>x.id===r.id).openingBalanceCarry===r.balance),'September carries any owner-reopened August balance');
+  assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);assert.ok(finalAugust.every(r=>!r.historicalCloseAdjustment),'August historical closing offsets are removed');
+  const september=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows;assert.ok(finalAugust.every(r=>september.find(x=>x.id===r.id).openingBalanceCarry===r.balance),'September carries remaining August balance');
   assert.ok(finalAugust.every(r=>r.outstandingAdvance===0),'no spreadsheet-imported advance survives the cleanup');
   const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
   assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');

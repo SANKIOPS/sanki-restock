@@ -56,7 +56,8 @@ function load() {
     const allocatedAshpreetSalary=entity==='SANKI'&&allocateAshpreetSalaryRecoveryV15(s);
     const removedHistoricalAdvances=removeHistoricalAdvancesV16(s);
     const closedHistoricalPayroll=entity==='SANKI'&&closeHistoricalPayrollCarryV17(s);
-    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary||removedHistoricalAdvances||closedHistoricalPayroll) save(s);
+    const reopenedAugustPayroll=entity==='SANKI'&&reopenAugustPayrollForPaymentsV18(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary||removedHistoricalAdvances||closedHistoricalPayroll||reopenedAugustPayroll) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -95,6 +96,26 @@ function closeHistoricalPayrollCarryV17(s){
   });
   const now=new Date().toISOString(),total=round2(closed.reduce((n,x)=>n+x.adjustment,0));
   s.oneTimeMigrations[key]={appliedAt:now,throughMonth:ym,count:closed.length,totalAdjustment:total,entries:closed,rule:'Historical payroll is closed without creating salary-payment transactions; September 2026 starts with zero pre-app salary carry.'};
+  return true;
+}
+// August must remain payable until actual proof-backed salary payments are
+// recorded. The v17 offsets were bookkeeping placeholders, never payments.
+function reopenAugustPayrollForPaymentsV18(s){
+  const key='reopen_august_2026_payroll_for_payments_v18';s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  const ym='2026-08',mo=ensureMonth(s,ym),reopened=[];
+  Object.entries(mo.rows||{}).forEach(([empId,row])=>{
+    const offset=round2(num(row.historicalCloseAdjustment));
+    if(!offset)return;
+    delete row.historicalCloseAdjustment;
+    reopened.push({empId,employeeName:(s.employees[empId]||{}).name||'',removedOffset:offset});
+  });
+  const wasFinalized=!!mo.finalized;
+  mo.finalized=false;
+  const now=new Date().toISOString();
+  s.salaryPaymentAudit=s.salaryPaymentAudit||[];
+  s.salaryPaymentAudit.push({at:now,by:'Owner-authorized August reopening',action:'AUGUST_PAYROLL_REOPENED',ym,removedOffsets:reopened.length,wasFinalized,details:'Removed non-cash closing offsets. Existing recorded payments were preserved; no new payments were created.'});
+  s.oneTimeMigrations[key]={appliedAt:now,ym,removedOffsets:reopened,wasFinalized,rule:'August 2026 is open for proof-backed payments; changed payment amounts still require a note.'};
   return true;
 }
 function save(s) { const target=activeSalaryPath(),tmp = target + '.tmp-' + process.pid + '-' + Date.now(); fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, target); }
