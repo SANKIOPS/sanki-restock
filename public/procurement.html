@@ -1708,7 +1708,8 @@
       // photos + SEO are prepared during the shipping lead time, not at receive.
       if(me.canManage && !posted){
         h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
-           '<p class="sub">After Save corrections, the owner can generate OpenAI image and SEO drafts for up to 10 articles in the paid pilot. Every result remains unapproved until reviewed. The original photo can still be used at no image-generation cost.</p>'+
+           '<p class="sub">After Save corrections, generate five image drafts and AI-written listing/SEO copy for every new article in this PO with one click. Review and approve each result before Shopify posting. The original photos remain available.</p>'+
+           ((me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0)?'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px"><button class="btn" id="generatePoBtn">Generate all images + SEO for this PO (paid)</button><span class="muted" id="poGenerationStatus"></span></div>':'')+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
       }
       h+='<div id="receiveHost"></div>';
@@ -1978,7 +1979,46 @@
       (d.newProducts||[]).forEach(function(np,i){ html+='<div class="npcard" id="scard'+i+'">'+studioCard(np,i)+'</div>'; });
       host.innerHTML=html;
       (d.newProducts||[]).forEach(function(np,i){ wireStudioCard(np,i); });
+      var wholePo=el('generatePoBtn');
+      if(wholePo){wholePo.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);wholePo.onclick=generateWholePo;}
       refreshPostGate();
+    }
+    async function generateWholePo(){
+      var btn=el('generatePoBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
+      var groups=d&&d.newProducts||[],attempts=((po.openaiPilot||{}).attempts||[]),used={};
+      attempts.forEach(function(a){used[a.groupKey]=true;});
+      var pending=groups.map(function(np,i){return {np:np,i:i};}).filter(function(x){return !used[x.np.key];});
+      if(po.status!=='received'){alert('Receive and weigh this PO, then Save corrections before generating.');return;}
+      if((po.lines||[]).some(function(l){return !(Number(l.weightGrams)>0);})){
+        alert('Every line needs its saved weight before the one-click generation.');return;
+      }
+      if(pending.some(function(x){return !x.np.photoUrl;})){alert('Upload an original photo for every new product first.');return;}
+      var max=(openaiPilotConfig||{}).maxGroups||30;
+      if(attempts.length+pending.length>max){alert('This PO has '+groups.length+' articles, above the current '+max+'-article pilot limit. Increase PROCUREMENT_OPENAI_MAX_GROUPS in Railway after reviewing the cost.');return;}
+      if(!pending.length){alert('Every new article in this PO already has a pilot attempt. Review the saved drafts below.');return;}
+      if(!confirm('Generate up to five images and AI-written listing/SEO copy for '+pending.length+' article(s)? This uses separately billed OpenAI API calls (up to '+(pending.length*5)+' images plus text). No images or copy will be approved or posted to Shopify automatically. Confirm that corrections are saved.'))return;
+      btn.disabled=true;var finished=0;
+      try {
+        for(var item of pending){
+          status.textContent='Generating article '+(finished+1)+' of '+pending.length+' · '+(item.np.colour||item.np.designName||'product');
+          var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key})}).then(readJson);
+          if(!start.success)throw new Error(start.error||'Could not start generation.');
+          var result;
+          for(var poll=0;poll<180;poll++){
+            await new Promise(function(resolve){setTimeout(resolve,5000);});
+            result=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot-status?groupKey='+encodeURIComponent(item.np.key)).then(readJson);
+            if(!result.success)throw new Error(result.error||'Could not read generation progress.');
+            if(result.pilot.status!=='running')break;
+          }
+          if(result.pilot.status==='running')throw new Error('Generation is still running. Reopen this PO to inspect saved drafts.');
+          studio.images[item.np.key]=result.images||[];
+          if(result.seo&&result.seo.seo)studio.seo[item.np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved};
+          rerenderCard(item.i);finished++;
+          if(result.pilot.status==='failed')throw new Error('Article '+finished+' failed: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '));
+        }
+        status.textContent='Completed '+finished+' article(s). Review and approve the drafts below.';
+      }catch(e){status.textContent='Stopped after '+finished+' article(s): '+e.message;}
+      finally{btn.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);}
     }
     function studioCard(np,i){
       var imgs=studio.images[np.key]||[];
@@ -2012,10 +2052,10 @@
         sel('tuck','Tuck',TUCK,s.tuck)+
         sel('chain','Chain',CHAIN,s.chain)+
         chk('cap','Cap',s.cap)+chk('sunglasses','Sunglasses',s.sunglasses)+chk('watch','Watch',s.watch)+
-        '<span class="muted" style="font-size:11px">only affects the 2 model shots · AI picks colours</span></div>';
+        '<span class="muted" style="font-size:11px">manual/Gemini styling controls; the OpenAI set includes sneakers and a subtle chain</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
       var hasBackRef=!!studio.backRefs[np.key];
-      [['original','Original product photo']].concat(IMG_TYPES,[['model-front','Codex model front'],['model-side','Codex model side'],['model-back','Codex model back'],['detail','Codex detail']]).forEach(function(t){
+      [['original','Original product photo']].concat(IMG_TYPES,[['model-front','Styled model front'],['model-side','Styled three-quarter view'],['model-back','Codex model back'],['detail','Product detail']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         // "change back photo" link (only for the back slot once a ref exists)
         var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
@@ -2029,7 +2069,7 @@
             '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button>'+chg+'</div>';
         }
         if(t[0]==='original') empty='<div class="muted" style="padding:20px 0">Choose “Use original photo” above</div>';
-        if(t[0].indexOf('model-')===0 || t[0]==='detail') empty='<div class="muted" style="padding:20px 0">Awaiting Codex batch result</div>';
+        if(t[0].indexOf('model-')===0 || t[0]==='detail') empty='<div class="muted" style="padding:20px 0">Ready for image generation</div>';
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+

@@ -1,18 +1,21 @@
 // Metered, explicitly started PO pilot. No retries: a retry can be another billed call.
-const IMAGE_TYPES = ['front', 'female', 'male'];
+const IMAGE_TYPES = ['front', 'female', 'male', 'model-front', 'model-side', 'detail'];
 const SEO_FIELDS = ['displayName', 'title', 'metaTitle', 'metaDescription', 'imageAlt', 'bodyHtml'];
 
 function pilotTypes(group) {
   const audience = String(group.audience || '').toLowerCase();
-  if (audience === 'women') return ['front', 'female'];
-  if (audience === 'men') return ['front', 'male'];
-  return IMAGE_TYPES.slice();
+  if (audience === 'women') return ['front', 'female', 'model-front', 'model-side', 'detail'];
+  if (audience === 'men') return ['front', 'male', 'model-front', 'model-side', 'detail'];
+  return ['front', 'female', 'male', 'model-front', 'detail'];
 }
 
 function imagePrompt(group, type) {
   const facts = `${group.colour} ${group.productType}${group.fit ? `, ${group.fit} fit` : ''}`;
   const common = `The reference shows the actual ${facts}. Preserve its exact colour, visible print, seams, neckline, sleeves, cut and length. Do not invent a logo, fabric composition, unseen back, pockets or details. One garment, no collage, text or watermark.`;
   if (type === 'front') return `Create a clean, photorealistic product-only front catalogue photo on a white studio background. ${common}`;
+  if (type === 'detail') return `Create a photorealistic close-up detail photo of the garment's FRONT, showing only details clearly visible in the reference. No model or invented stitching, labels or fabric composition. ${common}`;
+  if (type === 'model-front') return `Create a photorealistic full-body front-facing adult ${String(group.audience).toLowerCase()==='women'?'female':'male'} model wearing this garment, styled with clean sneakers and a subtle chain. Keep the garment fully visible, face visible, neutral studio background. ${common}`;
+  if (type === 'model-side') return `Create a photorealistic three-quarter model view showing the garment's fit and silhouette, with clean sneakers and simple styling. Do not invent details on unseen parts of the garment. Neutral studio background. ${common}`;
   return `Create a photorealistic full-body front-facing ${type === 'female' ? 'female' : 'male'} adult model shot on a neutral studio background, wearing this exact garment. Keep the face and whole garment visible. ${common}`;
 }
 

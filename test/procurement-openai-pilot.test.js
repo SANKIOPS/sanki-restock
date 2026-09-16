@@ -4,8 +4,8 @@ const group={key:'971|black',colour:'Black',productType:'T-Shirt',audience:'Wome
 const source={buf:Buffer.from('test-image'),mime:'image/jpeg'};
 
 test('pilot limits views to supported front and audience model without a fabricated back',()=>{
-  assert.deepEqual(pilot.pilotTypes(group),['front','female']);
-  assert.deepEqual(pilot.pilotTypes({...group,audience:'Unisex'}),['front','female','male']);
+  assert.deepEqual(pilot.pilotTypes(group),['front','female','model-front','model-side','detail']);
+  assert.deepEqual(pilot.pilotTypes({...group,audience:'Unisex'}),['front','female','male','model-front','detail']);
   assert.match(pilot.imagePrompt(group,'front'),/Do not invent/);
 });
 

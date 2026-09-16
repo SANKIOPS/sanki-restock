@@ -1688,7 +1688,7 @@ router.get('/api/procurement/openai-pilot-status', (req,res) => {
   if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
   res.json({success:true,configured:!!process.env.OPENAI_API_KEY,
     imageModel:process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5',
-    maxGroups:Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||10))});
+    maxGroups:Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||30))});
 });
 router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
   if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Owner access required.'});
@@ -1698,7 +1698,7 @@ router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
   if (!record) return res.status(404).json({success:false,error:'No pilot attempt for this article.'});
   res.json({success:true,pilot:record,images:(po.aiImages||{})[key]||[],seo:(po.seoDraft||[]).find(x=>x.key===key)||null});
 });
-// Explicit, owner-started pilot. One colourway per request, at most three image
+// Explicit, owner-started pilot. One colourway per request, at most five image
 // calls, no automatic retries, and no approvals or Shopify writes.
 router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
   const lockKey=req.params.id;
@@ -1712,7 +1712,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const g=(await newGroupsOf(s,po)).find(x=>x.key===key);
     const source=g&&readStoredPhoto(g.photoUrl);
     if (!g || !source) return res.status(400).json({success:false,error:'Product group with original photo required.'});
-    const maxGroups=Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||10));
+    const maxGroups=Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||30));
     po.openaiPilot=po.openaiPilot||{attempts:[]};
     if (po.openaiPilot.attempts.some(x=>x.groupKey===key)) return res.status(409).json({success:false,error:'This article already used its pilot attempt; review its drafts before any paid retry.'});
     if (po.openaiPilot.attempts.length>=maxGroups) return res.status(409).json({success:false,error:`Pilot limit of ${maxGroups} articles reached for this PO.`});
