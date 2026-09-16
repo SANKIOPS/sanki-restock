@@ -2176,9 +2176,9 @@
         sel('aesthetic','Look',AESTHETIC,s.aesthetic)+
         sel('tuck','Tuck',TUCK,s.tuck)+
         sel('shoes','Shoes',SHOES,s.shoes)+'</div><div class="studio-controls-title" style="margin-top:12px">Indian model complexion</div><div class="studio-controls-row">'+
-        (np.audience!=='Men'?sel('femaleComplexion','Female',COMPLEXION,s.femaleComplexion):'')+
-        (np.audience!=='Women'?sel('maleComplexion','Male',COMPLEXION,s.maleComplexion):'')+
-        '</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
+        sel('maleComplexion','Male model',COMPLEXION,s.maleComplexion)+
+        sel('femaleComplexion','Female model',COMPLEXION,s.femaleComplexion)+
+        '</div><div class="muted" style="font-size:11px;margin-top:5px">Only the complexion for the generated model is used; unisex uses both.</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
         sel('chain','Chain',CHAIN,s.chain)+sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+
         chk('sunglasses','Elegant shades',s.sunglasses)+chk('watch','Watch',s.watch)+
         '</div><div class="muted" style="font-size:11px;margin-top:8px">'+(np.line==='casuals'?'Casuals defaults to an Indian model at a limestone estate, with understated old-money styling. ':'')+'Accessories are optional; none should hide the garment.</div><div data-style-message role="status" class="muted" style="font-size:11px;margin-top:5px">Each change is saved for this product before whole-PO generation.</div></div>';

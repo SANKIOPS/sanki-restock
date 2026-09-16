@@ -31,6 +31,22 @@ test('paid model prompts honor safe outfit choices without changing product-only
   assert.equal(pilot.normalizeStyling({femaleComplexion:'random'},group).femaleComplexion,'Medium');
 });
 
+test('men and women get a single-frame model photograph and visible complexion controls',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const femaleFront=pilot.imagePrompt(group,'model-front',{femaleComplexion:'Deep'});
+  const maleFront=pilot.imagePrompt({...group,audience:'Men'},'model-front',{maleComplexion:'Fair'});
+  for(const prompt of [femaleFront,maleFront]){
+    assert.match(prompt,/exactly ONE photorealistic/);
+    assert.match(prompt,/single continuous full-frame scene/);
+    assert.match(prompt,/Never make a split image/);
+    assert.doesNotMatch(prompt,/For the three-quarter shot/);
+  }
+  assert.match(femaleFront,/deep brown complexion/);
+  assert.match(maleFront,/light brown complexion/);
+  assert.match(html,/sel\('maleComplexion','Male model',COMPLEXION,s\.maleComplexion\)/);
+  assert.match(html,/sel\('femaleComplexion','Female model',COMPLEXION,s\.femaleComplexion\)/);
+});
+
 test('image request sends one referenced edit, medium quality and no retry',async()=>{
   let calls=0;
   const out=await pilot.generateImage({key:'test-only',group,source,type:'front',fetchImpl:async(url,options)=>{

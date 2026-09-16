@@ -110,10 +110,12 @@ function imagePrompt(group, type, styling) {
   const gender=type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':String(group.audience).toLowerCase()==='women'?'female':'male';
   const cast=castDescription(group,gender,styling);
   const setting=String(group.line||group.collection||'').toLowerCase().includes('casual')?'pale limestone colonnade of a refined heritage estate, natural daylight, understated global old-money mood':'restrained neutral editorial setting';
-  const angle=type==='model-side'||type.startsWith('model-side-')?'front-biased three-quarter view, keeping the unseen back out of view':'front-facing full-body view';
+  const isThreeQuarter=type==='model-side'||type.startsWith('model-side-');
+  const angle=isThreeQuarter?'front-biased three-quarter view, keeping the unseen back out of view':'front-facing full-body view';
   const resolvedStyle=normalizeStyling(styling,group);
   if(resolvedStyle.bagStyle==='Gender-matched bag')resolvedStyle.bagStyle=gender==='female'?'Structured handbag':'Minimal sling bag';
-  return `Create a photorealistic ${angle} of the same ${cast} wearing this exact garment. ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. For the three-quarter shot, maintain the same model identity, outfit and location as the matching front shot. Do not invent unseen garment details. ${common}`;
+  const continuity=isThreeQuarter?'Maintain the same model identity, outfit and location as the separate matching front photo. Do not include that front photo in this output.':'';
+  return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
 }
 
 function seoSchema() {
