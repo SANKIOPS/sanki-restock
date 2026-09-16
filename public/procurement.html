@@ -1943,6 +1943,7 @@
       return parts.join(', ');
     }
     function studioReadyFor(np){
+      if((np.variantConflicts||[]).length) return false;
       var imgs=studio.images[np.key]||[]; var okImg=imgs.some(function(x){return x.approved;});
       var seo=studio.seo[np.key], copy=seo&&seo.seo||{};
       return !!(okImg && seo && seo.approved && copy.displayName && copy.title && copy.metaTitle && copy.metaDescription && copy.imageAlt &&
@@ -1984,6 +1985,9 @@
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
         '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> <button class="btn sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
+      var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
+        np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
+        '. Confirm whether these are duplicate records or separate articles.</div>':'';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?PAIR_UPPER:PAIR_LOWER, s=stylingOf(np);
       function sel(kind,label,opts,val){
         var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
@@ -2054,7 +2058,7 @@
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs 1 approved photo + approved SEO</span>';
-      return head+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
+      return head+conflictNotice+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
     }
     function rerenderCard(i){
       var np=lastReceive.newProducts[i], c=el('scard'+i);

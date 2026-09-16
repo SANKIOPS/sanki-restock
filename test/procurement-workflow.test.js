@@ -20,6 +20,8 @@ test('original photo and server-side post checks exist in the purchase flow', ()
   assert.match(js, /images\.forEach\(image => \{ image\.approved = false; \}\)/);
   assert.match(js, /po\.status = 'posting_partial'/);
   assert.match(js, /Every new product needs an approved, readable image/);
+  assert.match(js, /const variantConflicts = \[\.\.\.bySize\]/);
+  assert.match(js, /Different SKUs have the same product, colour and size/);
 });
 
 test('purchase SKU serials roll from Z999 to AA1 without punctuation', () => {

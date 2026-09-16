@@ -655,9 +655,17 @@ async function computePreview(store, body) {
     // A representative uploaded photo (first line that has one) so the studio
     // can show what the product actually is.
     const repLine = g.lines.find(l => (l.photoUrl || '').trim());
+    const bySize = new Map();
+    g.lines.forEach(l => {
+      const size = String(sizeCodeOf(l.sizeLabel) || '').trim().toUpperCase();
+      if (!bySize.has(size)) bySize.set(size, []);
+      bySize.get(size).push(l.sku);
+    });
+    const variantConflicts = [...bySize].filter(([, skus]) => skus.length > 1)
+      .map(([size, skus]) => ({ size, skus }));
     return {
       key: g.key, vendor: g.vendor, designCode: g.designCode, designName: g.designName,
-      colour: g.colour, productType: g.productType, ambiguous,
+      colour: g.colour, productType: g.productType, ambiguous, variantConflicts,
       photoUrl: repLine ? repLine.photoUrl : '',
       seo,
       variants: g.lines.map(l => ({
@@ -1930,6 +1938,8 @@ router.post('/api/procurement/commit', async (req, res) => {
     const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate,
       freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     if (preview.counts.errors || preview.counts.ambiguous) return res.status(400).json({ success: false, error: 'Fix SKU or product-group errors before posting.' });
+    const conflicts = preview.newProducts.flatMap(p => (p.variantConflicts || []).map(c => `${p.designCode || p.designName} / ${p.colour} / ${c.size}: ${c.skus.join(', ')}`));
+    if (conflicts.length) return res.status(400).json({ success: false, error: 'Different SKUs have the same product, colour and size. Decide whether they are one article or separate products before posting: ' + conflicts.join('; ') });
     const allSkus = preview.lines.map(l => l.sku).filter(Boolean);
     if (allSkus.length !== preview.lines.length || new Set(allSkus).size !== allSkus.length) return res.status(400).json({ success: false, error: 'Every purchase line needs a unique SKU.' });
     for (const np of preview.newProducts) {
