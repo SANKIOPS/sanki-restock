@@ -12,14 +12,15 @@ test('listing copy does not repeat the product type and includes a display name'
   assert.doesNotMatch(seo.metaTitle, /T-Shirt\s+T-Shirt/i);
 });
 
-test('original photo and server-side post checks exist in the purchase flow', () => {
+test('original photo remains a private reference and posting requires approved views', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
-  assert.match(html, /Use original photo/);
+  assert.match(html, /Original reference · never posted/);
+  assert.doesNotMatch(html, /data-useoriginal/);
   assert.match(js, /\/use-original-photo'/);
-  assert.match(js, /images\.forEach\(image => \{ image\.approved = false; \}\)/);
+  assert.match(js, /x\.type !== 'original'/);
   assert.match(js, /po\.status = 'posting_partial'/);
-  assert.match(js, /Every new product needs an approved, readable image/);
+  assert.match(js, /Approve all required product and matching model views/);
   assert.match(js, /const variantConflicts = \[\.\.\.bySize\]/);
   assert.match(js, /Different SKUs have the same product, colour and size/);
 });

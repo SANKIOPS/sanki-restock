@@ -1654,9 +1654,10 @@ async function newGroupsOf(s, po) {
   const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
   return (preview.newProducts || []).map(np => {
     const line = (po.lines || []).find(l => groupKey(l) === np.key && (l.photoUrl || '').trim());
+    const details = (po.lines || []).find(l => groupKey(l) === np.key) || {};
     return { key: np.key, colour: np.colour, productType: np.productType, designName: np.designName,
-             designCode: np.designCode, audience: (line && line.audience) || 'Men',
-             fit: (line && line.fit) || '', sizeLabels: np.variants.map(v => v.sizeLabel),
+             designCode: np.designCode, audience: details.audience || '', line: po.line || '',
+             fit: details.fit || '', sizeLabels: np.variants.map(v => v.sizeLabel),
              photoUrl: line ? line.photoUrl : '' };
   });
 }
@@ -1671,7 +1672,10 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
     const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
-    res.json({ success: true, newProducts: preview.newProducts || [], po: publicPo(po, req) });
+    const groups = await newGroupsOf(s, po);
+    const byKey = new Map(groups.map(g => [g.key, g]));
+    res.json({ success: true, newProducts: (preview.newProducts || []).map(np => ({...np,
+      audience: byKey.get(np.key)?.audience || '', fit: byKey.get(np.key)?.fit || '', line: po.line || ''})), po: publicPo(po, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -1698,7 +1702,7 @@ router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
   if (!record) return res.status(404).json({success:false,error:'No pilot attempt for this article.'});
   res.json({success:true,pilot:record,images:(po.aiImages||{})[key]||[],seo:(po.seoDraft||[]).find(x=>x.key===key)||null});
 });
-// Explicit, owner-started pilot. One colourway per request, at most five image
+// Explicit, owner-started pilot. One colourway per request, at most six image
 // calls per explicit request, no automatic retries, and no approvals or Shopify writes.
 router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
   const lockKey=req.params.id;
@@ -1712,6 +1716,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const g=(await newGroupsOf(s,po)).find(x=>x.key===key);
     const source=g&&readStoredPhoto(g.photoUrl);
     if (!g || !source) return res.status(400).json({success:false,error:'Product group with original photo required.'});
+    if (!['Men','Women','Unisex'].includes(g.audience)) return res.status(400).json({success:false,error:'Set Men, Women or Unisex before paid image generation.'});
     const backSource=(po.backRefs||{})[key] ? readStoredPhoto(po.backRefs[key]) : null;
     const maxGroups=Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||30));
     po.openaiPilot=po.openaiPilot||{attempts:[]};
@@ -1827,28 +1832,9 @@ router.post('/api/procurement/pos/:id/codex-batch/:batchId/results', async (req,
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
 
-// Reuse the actual uploaded garment photo as a Shopify listing image. No image
-// generation or paid image API is called. One representative photo per colourway.
+// The source photograph is a reference only and must never become a listing view.
 router.post('/api/procurement/pos/:id/use-original-photo', async (req, res) => {
-  try {
-    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-    const s = loadStore(), po = s.pos[req.params.id];
-    if (!po || po.status === 'posted' || po.status === 'posting_partial') return res.status(400).json({ success: false, error: 'Editable purchase required.' });
-    const key = String((req.body || {}).groupKey || '');
-    const group = (await newGroupsOf(s, po)).find(g => g.key === key);
-    if (!group || !group.photoUrl || !readStoredPhoto(group.photoUrl)) return res.status(400).json({ success: false, error: 'The original product photo is missing. Upload it again before posting.' });
-    po.aiImages = po.aiImages || {};
-    const images = Array.isArray(po.aiImages[key]) ? po.aiImages[key] : [];
-    // Explicitly choosing the source photo means it is the only photo sent to
-    // Shopify, even if old generated views had previously been approved.
-    images.forEach(image => { image.approved = false; });
-    const at = images.findIndex(x => x.type === 'original');
-    const original = { type: 'original', label: 'Original product photo', url: group.photoUrl, approved: true };
-    if (at >= 0) images[at] = original; else images.unshift(original);
-    po.aiImages[key] = images;
-    saveStore(s);
-    res.json({ success: true, groupKey: key, images });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  res.status(409).json({ success: false, error: 'The original photograph is a private reference and cannot be posted to Shopify. Approve generated listing views instead.' });
 });
 
 // Generate the AI shots for ONE product group (or specific `types`).
@@ -2069,8 +2055,10 @@ router.post('/api/procurement/commit', async (req, res) => {
       if (!draft || !draft.seoApproved || seoNeedsReview(seo)) {
         return res.status(400).json({ success: false, error: 'Approve complete, non-repetitive listing copy for every new product.' });
       }
-      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved);
-      if (!approved.length || approved.some(x => !readStoredPhoto(x.url))) return res.status(400).json({ success: false, error: 'Every new product needs an approved, readable image. Use the original photo if you do not want image generation.' });
+      const group = (await newGroupsOf(s, po)).find(g => g.key === np.key);
+      const required = openaiPilot.pilotTypes(group || {}, !!(po.backRefs || {})[np.key]);
+      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && x.type !== 'original' && x.url !== group?.photoUrl);
+      if (!required.length || required.some(type => !approved.some(x => x.type === type && readStoredPhoto(x.url)))) return res.status(400).json({ success: false, error: 'Approve all required product and matching model views for each new product. The original reference photo cannot be posted.' });
       np.seo = seo;
       np.images = approved.map(x => ({ url: x.url, alt: seo.imageAlt }));
     }

@@ -1709,7 +1709,7 @@
       if(me.canManage && !posted){
         h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
            '<p class="sub">Choose the entire PO or tick specific products. Confirmed details and original photos stay unchanged; new images and SEO are drafts for review. No back view is invented without a real back photo.</p>'+
-           ((me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0)?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn" id="generatePoBtn">Generate entire PO (paid)</button><button class="btn ghost" id="generateSelectedBtn">Generate selected (paid)</button><label class="muted" style="display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="selectAllStudio"> Select all</label><span class="muted" id="selectedStudioCount">0 selected</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><b style="font-size:12px">Outfit for selected</b><label class="muted" style="font-size:12px">Uppers with <select id="bulkUpperPair"><option>Auto</option><option>Baggy trousers</option><option>Straight trousers</option><option>Jeans</option><option>Shorts</option></select></label><label class="muted" style="font-size:12px">Bottoms with <select id="bulkLowerPair"><option>Auto</option><option>Plain white tee</option><option>Plain black tee</option><option>Oversized tee</option><option>Button-up shirt</option><option>Hoodie</option></select></label><label class="muted" style="font-size:12px">Look <select id="bulkAesthetic"><option>Auto</option><option>Minimal</option><option>Streetwear</option><option>Editorial</option></select></label><label class="muted" style="font-size:12px"><input type="checkbox" id="bulkBag"> Bag</label><button class="btn ghost sm" id="applyBulkStyling">Apply to selected</button></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
+           ((me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0)?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn" id="generatePoBtn">Generate entire PO (paid)</button><button class="btn ghost" id="generateSelectedBtn">Generate selected (paid)</button><label class="muted" style="display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="selectAllStudio"> Select all</label><span class="muted" id="selectedStudioCount">0 selected</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><b style="font-size:12px">Outfit for selected</b><label class="muted" style="font-size:12px">Uppers with <select id="bulkUpperPair"><option>Auto</option><option>Baggy trousers</option><option>Straight trousers</option><option>Tailored trousers</option></select></label><label class="muted" style="font-size:12px">Bottoms with <select id="bulkLowerPair"><option>Auto</option><option>Plain white tee</option><option>Plain black tee</option><option>Button-up shirt</option></select></label><label class="muted" style="font-size:12px">Look <select id="bulkAesthetic"><option>Auto</option><option>Limestone estate</option><option>Minimal</option><option>Streetwear</option><option>Editorial</option></select></label><label class="muted" style="font-size:12px"><input type="checkbox" id="bulkBag"> Gender-matched bag</label><button class="btn ghost sm" id="applyBulkStyling">Apply to selected</button></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
       }
       h+='<div id="receiveHost"></div>';
@@ -1863,10 +1863,8 @@
         return fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/back-ref',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:groupKey, url:u.url })})
           .then(readJson).then(function(r){
             if(!r.success){ alert(r.error||'Could not attach back photo.'); return; }
-            // Build the back AI shot from this real photo, then re-render (studio + table).
-            fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/generate-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:groupKey, types:['back'] })})
-              .then(readJson).then(function(){ openPoId=null; openPo(id); })
-              .catch(function(){ openPoId=null; openPo(id); });
+            // The real back reference is saved; generation remains an explicit paid action.
+            openPoId=null; openPo(id);
           });
       }).catch(function(e){ alert(e.message); });
     }
@@ -1921,9 +1919,12 @@
     var FIT_UPPER=['Auto','Oversized','Boxy / relaxed','Normal fit','Slim fit'];
     var FIT_LOWER=['Auto','Shorts / half','Three-quarter (3/4)','Ankle length','Full length'];
     // ── Simple styling dropdowns (only affect the 2 model shots) ──
-    var PAIR_UPPER=['Auto','Baggy trousers','Straight trousers','Jeans','Shorts'];
-    var PAIR_LOWER=['Auto','Plain white tee','Plain black tee','Oversized tee','Button-up shirt','Hoodie'];
-    var AESTHETIC=['Auto','Minimal','Streetwear','Editorial'];
+    var PAIR_UPPER=['Auto','Baggy trousers','Straight trousers','Tailored trousers'];
+    var PAIR_LOWER=['Auto','Plain white tee','Plain black tee','Button-up shirt'];
+    var AESTHETIC=['Auto','Limestone estate','Minimal','Streetwear','Editorial'];
+    var SHOES=['Auto','Leather loafers','Minimal white sneakers','Ballet flats','Classic heels'];
+    var CAPS=['None','Classic linen cap','Refined baker-boy cap'];
+    var BAGS=['None','Gender-matched bag','Structured handbag','Minimal sling bag'];
     var TUCK=['Auto','Tucked in','Untucked'];
     var CHAIN=['None','Silver chain','Gold chain'];
     var ACC_TOGGLES=[['cap','Cap','a cap'],['sunglasses','Sunglasses','sunglasses'],['watch','Watch','a watch']];
@@ -1934,8 +1935,8 @@
       if(lowers.indexOf(pt)>=0) return 'lower';
       return 'other';
     }
-    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={fit:'',pair:'Auto',aesthetic:'Auto',tuck:'Auto',chain:'None',cap:false,sunglasses:false,watch:false,bag:false}); }
-    function paidStylingOf(np){ var s=stylingOf(np); return {pair:s.pair,aesthetic:s.aesthetic,tuck:s.tuck,chain:s.chain,cap:!!s.cap,sunglasses:!!s.sunglasses,watch:!!s.watch,bag:!!s.bag}; }
+    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={fit:'',pair:'Auto',aesthetic:'Auto',tuck:'Auto',chain:'None',shoes:'Auto',capStyle:'None',bagStyle:'None',sunglasses:false,watch:false}); }
+    function paidStylingOf(np){ var s=stylingOf(np); return {pair:s.pair,aesthetic:s.aesthetic,tuck:s.tuck,chain:s.chain,shoes:s.shoes,capStyle:s.capStyle,bagStyle:s.bagStyle,sunglasses:!!s.sunglasses,watch:!!s.watch}; }
     function fitOf(np){ var f=stylingOf(np).fit; return (f&&f!=='Auto')?f:''; }
     function composeStyling(np){
       var s=stylingOf(np), parts=[], acc=[];
@@ -1950,7 +1951,8 @@
     }
     function studioReadyFor(np){
       if((np.variantConflicts||[]).length) return false;
-      var imgs=studio.images[np.key]||[]; var okImg=imgs.some(function(x){return x.approved;});
+      var imgs=studio.images[np.key]||[]; var required=paidTypesFor(np);
+      var okImg=required.length>0&&required.every(function(type){return imgs.some(function(x){return x.type===type&&x.approved&&x.url&&x.url!==np.photoUrl;});});
       var seo=studio.seo[np.key], copy=seo&&seo.seo||{};
       return !!(okImg && seo && seo.approved && copy.displayName && copy.title && copy.metaTitle && copy.metaDescription && copy.imageAlt &&
         !/(t[ -]?shirt|shirt|trouser|jeans|lower|shorts)\s+\1/i.test(copy.title));
@@ -1991,7 +1993,7 @@
       var apply=el('applyBulkStyling');if(apply)apply.onclick=function(){
         var chosen=(d.newProducts||[]).filter(function(np){return studio.selected[np.key];});
         if(!chosen.length){alert('Tick one or more products first.');return;}
-        chosen.forEach(function(np){var s=stylingOf(np);s.pair=garmentCat(np.productType)==='upper'?el('bulkUpperPair').value:garmentCat(np.productType)==='lower'?el('bulkLowerPair').value:'Auto';s.aesthetic=el('bulkAesthetic').value;s.bag=el('bulkBag').checked;});
+        chosen.forEach(function(np){var s=stylingOf(np);s.pair=garmentCat(np.productType)==='upper'?el('bulkUpperPair').value:garmentCat(np.productType)==='lower'?el('bulkLowerPair').value:'Auto';s.aesthetic=el('bulkAesthetic').value;s.bagStyle=el('bulkBag').checked?'Gender-matched bag':'None';});
         renderStudio();
       };
       updateStudioSelection();
@@ -2004,10 +2006,10 @@
       if(el('selectAllStudio'))el('selectAllStudio').checked=!!groups.length&&n===groups.length;
     }
     function paidTypesFor(np){
-      var finalView=studio.backRefs[np.key]?'back':'detail';
-      if(np.audience==='Women')return ['front','female','model-front','model-side',finalView];
-      if(np.audience==='Men')return ['front','male','model-front','model-side',finalView];
-      return ['front','female','male','model-front',finalView];
+      var back=studio.backRefs[np.key]?['back']:[];
+      if(np.audience==='Women'||np.audience==='Men')return ['front'].concat(back,['model-front','model-side']);
+      if(np.audience==='Unisex')return ['front'].concat(back,['female','model-side-female','male','model-side-male']);
+      return [];
     }
     function missingPaidDrafts(np){
       var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url;}).map(function(v){return v.type;});
@@ -2025,6 +2027,7 @@
       if(po.status!=='received'){alert('Receive and weigh this PO, then Save corrections before generating.');return;}
       if((po.lines||[]).some(function(l){return !(Number(l.weightGrams)>0);})){alert('Every line needs its saved weight before generation.');return;}
       if(pending.some(function(x){return !x.np.photoUrl;})){alert('Upload an original photo for every selected product first.');return;}
+      if(pending.some(function(x){return !paidTypesFor(x.np).length;})){alert('Set Men, Women or Unisex for every selected product before generation.');return;}
       var max=(openaiPilotConfig||{}).maxGroups||30;
       var newArticles=pending.filter(function(x){return !used[x.np.key];}).length;
       if(Object.keys(used).length+newArticles>max){alert('This PO would exceed the '+max+'-article paid pilot limit. Select fewer products.');return;}
@@ -2051,7 +2054,7 @@
           studio.images[item.np.key]=result.images||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
           if(result.seo&&result.seo.seo)studio.seo[item.np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved};
           rerenderCard(item.i);finished++;
-          if(result.pilot.status==='failed')throw new Error('Article '+finished+' failed: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '));
+          if(result.pilot.status==='failed'||result.pilot.status==='partial')throw new Error('Article '+finished+' needs review: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '));
         }
         status.textContent='Completed '+finished+' product(s). Review and approve the drafts below.';
       }catch(e){status.textContent='Stopped after '+finished+' article(s): '+e.message;}
@@ -2068,11 +2071,11 @@
         '<div style="display:flex;align-items:center;gap:10px"><input type="checkbox" data-selectproduct="'+i+'" aria-label="Select '+esc(np.designName||np.designCode||'product')+' for generation"'+(studio.selected[np.key]?' checked':'')+'>'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> '+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> ':'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
+        '<div>'+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> ':'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
         '. Confirm whether these are duplicate records or separate articles.</div>':'';
-      var cat=garmentCat(np.productType), pairOpts=cat==='upper'?PAIR_UPPER:PAIR_LOWER, s=stylingOf(np);
+      var cat=garmentCat(np.productType), pairOpts=cat==='upper'?(np.line==='casuals'?PAIR_UPPER:PAIR_UPPER.concat(['Jeans','Shorts'])):PAIR_LOWER, s=stylingOf(np);
       function sel(kind,label,opts,val){
         var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
           '<select data-sty="'+kind+'" data-i="'+i+'" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px">';
@@ -2091,12 +2094,13 @@
         (cat!=='other'?sel('pair','Pair with',pairOpts,s.pair):'')+
         sel('aesthetic','Look',AESTHETIC,s.aesthetic)+
         sel('tuck','Tuck',TUCK,s.tuck)+
-        sel('chain','Chain',CHAIN,s.chain)+
-        chk('cap','Cap',s.cap)+chk('sunglasses','Sunglasses',s.sunglasses)+chk('watch','Watch',s.watch)+chk('bag','Bag',s.bag)+
+        sel('chain','Chain',CHAIN,s.chain)+sel('shoes','Shoes',SHOES,s.shoes)+
+        sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+
+        chk('sunglasses','Elegant shades',s.sunglasses)+chk('watch','Watch',s.watch)+
         '<span class="muted" style="font-size:11px">Model shots only · Auto pairs a simple complementary outfit</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
       var hasBackRef=!!studio.backRefs[np.key];
-      [['original','Original product photo']].concat(IMG_TYPES,[['model-front','Styled model front'],['model-side','Styled three-quarter view'],['model-back','Codex model back'],['detail','Product detail']]).forEach(function(t){
+      [['original','Original reference · never posted'],['front','Product front'],['back','Product back']].concat(np.audience==='Unisex'?[['female','Indian female front'],['model-side-female','Indian female three-quarter'],['male','Indian male front'],['model-side-male','Indian male three-quarter']]:[['model-front','Styled Indian model front'],['model-side','Styled three-quarter view']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         // "change back photo" link (only for the back slot once a ref exists)
         var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
@@ -2109,12 +2113,12 @@
           empty='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>'+
             '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button>'+chg+'</div>';
         }
-        if(t[0]==='original') empty='<div class="muted" style="padding:20px 0">Choose “Use original photo” above</div>';
+        if(t[0]==='original') empty=np.photoUrl?'<img data-zoom src="'+esc(np.photoUrl)+'" title="Source reference only · never posted" style="width:100%;height:120px;object-fit:contain;cursor:zoom-in">':'<div class="muted" style="padding:20px 0">Upload a source photo</div>';
         if(t[0]==='model-back'&&!hasBackRef) empty='<div class="muted" style="padding:20px 0">Upload a real back photo first</div>';
         else if(t[0].indexOf('model-')===0 || t[0]==='detail') empty='<div class="muted" style="padding:20px 0">Ready for image generation</div>';
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
-          (im?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
+          (im&&t[0]!=='original'?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
               '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.approved?'Approved — click to UNDO':'Approve this photo')+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
@@ -2143,7 +2147,7 @@
           '<button class="btn ghost sm" data-genseo="'+i+'">Anthropic rewrite (paid)</button>'+
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
-      var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs 1 approved photo + approved SEO</span>';
+      var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs required approved views + approved SEO</span>';
       return head+conflictNotice+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
     }
     function rerenderCard(i){
@@ -2157,24 +2161,13 @@
       btn.disabled=pend>0;
       var note=el('studioNote');
       if(note) note.innerHTML = pend>0
-        ? '<span style="color:#b42318">'+pend+' product(s) still need an approved photo and approved SEO before posting.</span>'
+        ? '<span style="color:#b42318">'+pend+' product(s) still need all required approved views and approved SEO before posting.</span>'
         : 'All products have approved photos + SEO. Posting creates <b>draft</b> products with their images and lands stock at the <b>warehouse</b>.';
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
       var pick=host.querySelector('[data-selectproduct]');if(pick)pick.onchange=function(){studio.selected[np.key]=pick.checked;updateStudioSelection();};
       var pilot=host.querySelector('[data-openai-pilot]'); if(pilot) pilot.onclick=function(){generatePaidGroups('single',np.key);};
-      var original=host.querySelector('[data-useoriginal]'); if(original) original.onclick=function(){
-        original.disabled=true;
-        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/use-original-photo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
-          .then(readJson).then(function(r){
-            if(!r.success)throw new Error(r.error||'Original photo is unavailable.');
-            studio.images[np.key]=r.images;rerenderCard(i);
-            // The Codex batch can return photo-judged copy. Do not silently
-            // invoke a separately billed Anthropic API when choosing a photo.
-          })
-          .catch(function(e){alert(e.message);original.disabled=false;});
-      };
       var cr=host.querySelector('[data-codexreturn]'); if(cr) cr.onchange=function(){
         var file=cr.files&&cr.files[0]; if(!file)return;
         var batchId=prompt('Paste the Codex batch ID for this product:'),type=prompt('View: front, model-front, model-side, model-back, or detail');
@@ -2307,7 +2300,7 @@
       var d=lastReceive;
       var nps=(d.newProducts||[]).map(function(np){
         var seo=(studio.seo[np.key]&&studio.seo[np.key].seo)||np.seo;
-        var imgs=(studio.images[np.key]||[]).filter(function(x){return x.approved;}).map(function(x){return { url:x.url, alt:seo.imageAlt }; });
+        var imgs=(studio.images[np.key]||[]).filter(function(x){return x.approved&&x.type!=='original'&&x.url!==np.photoUrl;}).map(function(x){return { url:x.url, alt:seo.imageAlt }; });
         return { key:np.key, colour:np.colour, productType:np.productType, vendor:np.vendor, designCode:np.designCode, variants:np.variants, seo:seo, images:imgs };
       });
       return { newProducts:nps, existingAdds:d.existingAdds||[] };
