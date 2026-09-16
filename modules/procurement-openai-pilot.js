@@ -10,8 +10,10 @@ const AESTHETICS = ['Auto','Limestone estate','Minimal','Streetwear','Editorial'
 const SHOES = ['Auto','Leather loafers','Minimal white sneakers','Ballet flats','Classic heels'];
 const CAPS = ['None','Classic linen cap','Refined baker-boy cap'];
 const BAGS = ['None','Gender-matched bag','Structured handbag','Minimal sling bag'];
+const BAG_COLOURS = ['Auto','Beige','Tan','Ivory','Brown','Black'];
 const COMPLEXIONS = ['Fair','Medium','Deep'];
-const UPPER_FITS = ['Auto','Oversized','Boxy / relaxed','Normal fit','Slim fit'];
+const MODEL_ORIGINS = ['Indian','International'];
+const UPPER_FITS = ['Auto','Fitted','Normal fit','Boxy / relaxed','Oversized','Slim fit'];
 const LOWER_FITS = ['Auto','Shorts / half','Three-quarter (3/4)','Ankle length','Full length'];
 
 function garmentCategory(group) {
@@ -34,8 +36,10 @@ function normalizeStyling(input,group) {
     shoes:choice(value.shoes,SHOES,'Auto'),
     femaleComplexion:choice(value.femaleComplexion,COMPLEXIONS,'Medium'),
     maleComplexion:choice(value.maleComplexion,COMPLEXIONS,'Medium'),
+    modelOrigin:choice(value.modelOrigin,MODEL_ORIGINS,'Indian'),
     capStyle:choice(value.capStyle,CAPS,value.cap===true?'Classic linen cap':'None'),
     bagStyle:choice(value.bagStyle,BAGS,value.bag===true?(String(group.audience).toLowerCase()==='men'?'Minimal sling bag':'Structured handbag'):'None'),
+    bagColour:choice(value.bagColour,BAG_COLOURS,'Auto'),
     sunglasses:value.sunglasses===true,watch:value.watch===true
   };
 }
@@ -53,10 +57,24 @@ function stylingPrompt(group,styling) {
   if(style.capStyle!=='None')extras.push(style.capStyle.toLowerCase());
   if(style.sunglasses)extras.push('elegant understated sunglasses');
   if(style.watch)extras.push('a watch');
-  if(style.bagStyle!=='None')extras.push(style.bagStyle.toLowerCase());
+  if(style.bagStyle!=='None'){
+    const colour=style.bagColour==='Auto'
+      ? (casuals?'beige or tan':'outfit-matching muted')
+      :style.bagColour.toLowerCase();
+    extras.push(`${colour} ${style.bagStyle.toLowerCase()}`);
+  }
+  const bagRule=style.bagStyle!=='None'&&style.bagColour==='Auto'&&casuals?'For a light ivory-and-beige outfit, the bag must be beige or tan, never black.':'';
   const aesthetic=style.aesthetic==='Auto'?(casuals?'global old-money, quiet luxury':'clean, restrained catalogue'):style.aesthetic.toLowerCase();
   const shoes=style.shoes==='Auto'?'subtle classic shoes appropriate to the outfit':style.shoes.toLowerCase();
-  return `Style the model with ${pair}, ${shoes} and ${aesthetic} styling. ${style.tuck==='Auto'?'Keep the featured garment unobstructed.':`Wear the top ${style.tuck.toLowerCase()}.`} ${extras.length?`Add only ${extras.join(', ')} when they do not hide the product. `:'No visible jewellery, hats, sunglasses, watches or bags. '}Supporting garments and accessories must never obscure or change the featured item.`;
+  const selectedFit=style.fit==='Auto' && /^muscle\s*fit$/i.test(String(group.fit||'')) && String(group.audience||'').toLowerCase()==='women'?'Fitted':style.fit;
+  const fitRule=category!=='upper'
+    ? 'Keep the featured garment cut and length faithful to the original reference.'
+    :selectedFit==='Fitted'||selectedFit==='Slim fit'
+      ? 'The featured upper garment must be fitted at the natural shoulder with set-in sleeves and a close, tidy torso silhouette; no dropped shoulder seam, boxy cut or oversized drape.'
+      :selectedFit==='Oversized'||selectedFit==='Boxy / relaxed'
+        ? `Use the selected ${selectedFit.toLowerCase()} cut, while keeping its visible seams and proportions faithful to the real reference.`
+        :selectedFit==='Normal fit'?'Use a regular, clean fit with shoulder seams at the natural shoulder; do not turn it into an oversized or drop-shoulder garment.':'Match the garment silhouette and shoulder seams visible in the reference; do not assume an oversized or drop-shoulder cut.';
+  return `Style the model with ${pair}, ${shoes} and ${aesthetic} styling. ${fitRule} ${style.tuck==='Auto'?'Keep the featured garment unobstructed.':`Wear the top ${style.tuck.toLowerCase()}.`} ${extras.length?`Add only ${extras.join(', ')} when they do not hide the product. `:'No visible jewellery, hats, sunglasses, watches or bags. '}${bagRule} Supporting garments and accessories must never obscure or change the featured item.`;
 }
 
 function pilotTypes(group,hasBackReference=false) {
@@ -73,10 +91,11 @@ function castDescription(group,gender,styling) {
   let hash=0;for(const char of key)hash=(hash*31+char.charCodeAt(0))>>>0;
   const style=normalizeStyling(styling,group);
   const tone=gender==='female'?style.femaleComplexion:style.maleComplexion;
-  const skin={Fair:'light brown complexion',Medium:'medium brown complexion',Deep:'deep brown complexion'}[tone];
+  const skin={Fair:'fair, light complexion (not medium or deep)',Medium:'medium brown complexion',Deep:'deep brown complexion'}[tone];
   const women=['dark hair in a neat low bun','dark shoulder-length wavy hair'];
   const men=['neatly styled short dark hair','short textured dark hair'];
-  return `adult Indian ${gender==='female'?'woman':'man'} with ${skin} and ${(gender==='female'?women:men)[hash%2]}`;
+  const origin=style.modelOrigin==='Indian'?'Indian':'international non-Indian';
+  return `adult ${origin} ${gender==='female'?'woman':'man'} with ${skin} and ${(gender==='female'?women:men)[hash%2]}`;
 }
 
 function isWinter(group) {
