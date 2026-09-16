@@ -1710,6 +1710,9 @@ router.post('/api/procurement/pos/:id/use-original-photo', async (req, res) => {
     if (!group || !group.photoUrl || !readStoredPhoto(group.photoUrl)) return res.status(400).json({ success: false, error: 'The original product photo is missing. Upload it again before posting.' });
     po.aiImages = po.aiImages || {};
     const images = Array.isArray(po.aiImages[key]) ? po.aiImages[key] : [];
+    // Explicitly choosing the source photo means it is the only photo sent to
+    // Shopify, even if old generated views had previously been approved.
+    images.forEach(image => { image.approved = false; });
     const at = images.findIndex(x => x.type === 'original');
     const original = { type: 'original', label: 'Original product photo', url: group.photoUrl, approved: true };
     if (at >= 0) images[at] = original; else images.unshift(original);

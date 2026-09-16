@@ -2081,7 +2081,7 @@
             // Name/SEO is judged from this exact uploaded photo when the
             // configured vision writer is available. Corrections also keep a
             // product-facts draft ready for manual review if that service fails.
-            if(!(studio.seo[np.key]&&studio.seo[np.key].approved)) genSeoFor(np,i,null);
+            if(!(studio.seo[np.key]&&studio.seo[np.key].approved) || !studioReadyFor(np)) genSeoFor(np,i,null);
           })
           .catch(function(e){alert(e.message);original.disabled=false;});
       };

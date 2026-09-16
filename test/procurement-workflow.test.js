@@ -17,6 +17,7 @@ test('original photo and server-side post checks exist in the purchase flow', ()
   const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
   assert.match(html, /Use original photo/);
   assert.match(js, /\/use-original-photo'/);
+  assert.match(js, /images\.forEach\(image => \{ image\.approved = false; \}\)/);
   assert.match(js, /po\.status = 'posting_partial'/);
   assert.match(js, /Every new product needs an approved, readable image/);
 });
