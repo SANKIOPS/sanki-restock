@@ -83,7 +83,7 @@ test('three-quarter image uses matching front and garment references to preserve
   }});
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
   assert.match(server,/continuitySource=matchingFront\?readStoredPhoto\(matchingFront\.url\):null/);
-  assert.match(server,/Approve a good single-frame front model image first/);
+  assert.match(server,/Approve a good single-frame front model image before generating only its three-quarter view/);
 });
 
 test('purchase studio offers whole-PO, selected and single-product paid generation',()=>{

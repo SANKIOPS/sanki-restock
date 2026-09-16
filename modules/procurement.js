@@ -1758,15 +1758,15 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     }
     const regenerateTypes=requestedRegeneration||[];
     const sideToFront={ 'model-side':'model-front', 'model-side-female':'female', 'model-side-male':'male' };
-    if(regenerateTypes.some(type=>sideToFront[type]&&!regenerateTypes.includes(sideToFront[type])&&!savedImages.some(image=>image.type===sideToFront[type]&&image.url&&image.approved))) {
-      return res.status(409).json({success:false,error:'Approve a good single-frame front model image first, or regenerate the front and three-quarter views together.'});
-    }
     const neededTypes=allowedTypes.filter(type=>!savedImages.some(x=>x.type===type&&x.url));
     const existingSeo=(po.seoDraft||[]).find(x=>x.key===key);
     // A deterministic draft made when corrections were saved is NOT AI-written.
     // Preserve approved manual copy; replace unapproved placeholders with AI copy.
     const needsSeo=!regenerateTypes.length&&!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
     const types=regenerateTypes.length?regenerateTypes:neededTypes;
+    if(types.some(type=>sideToFront[type]&&!types.includes(sideToFront[type])&&!savedImages.some(image=>image.type===sideToFront[type]&&image.url&&image.approved))) {
+      return res.status(409).json({success:false,error:'Approve a good single-frame front model image before generating only its three-quarter view.'});
+    }
     if (!types.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
     const styling=openaiPilot.normalizeStyling((req.body||{}).styling||(po.imageStyling||{})[key],g);
     const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
