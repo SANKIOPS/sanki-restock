@@ -1757,6 +1757,10 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       return res.status(400).json({success:false,error:'Select existing, supported image views to regenerate.'});
     }
     const regenerateTypes=requestedRegeneration||[];
+    const sideToFront={ 'model-side':'model-front', 'model-side-female':'female', 'model-side-male':'male' };
+    if(regenerateTypes.some(type=>sideToFront[type]&&!regenerateTypes.includes(sideToFront[type])&&!savedImages.some(image=>image.type===sideToFront[type]&&image.url&&image.approved))) {
+      return res.status(409).json({success:false,error:'Approve a good single-frame front model image first, or regenerate the front and three-quarter views together.'});
+    }
     const neededTypes=allowedTypes.filter(type=>!savedImages.some(x=>x.type===type&&x.url));
     const existingSeo=(po.seoDraft||[]).find(x=>x.key===key);
     // A deterministic draft made when corrections were saved is NOT AI-written.
@@ -1773,7 +1777,12 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     for(const type of types){
       try {
         if (!regenerateTypes.length&&((po.aiImages||{})[key]||[]).some(x=>x.type===type && x.url)) continue;
-        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,type,styling,model:imageModel});
+        const matchingFrontType=type==='model-side'?'model-front':type==='model-side-female'?'female':type==='model-side-male'?'male':'';
+        const currentForReference=matchingFrontType?loadStore().pos[req.params.id]:null;
+        const matchingFront=matchingFrontType&&((currentForReference?.aiImages||{})[key]||[]).find(image=>image.type===matchingFrontType&&image.url);
+        const continuitySource=matchingFront?readStoredPhoto(matchingFront.url):null;
+        if(matchingFrontType&&!continuitySource) throw new Error('Generate the matching front model view first so the three-quarter view can keep the same outfit.');
+        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,continuitySource,type,styling,model:imageModel});
         const fresh=loadStore(),current=fresh.pos[req.params.id];
         const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
         if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; result was discarded.');

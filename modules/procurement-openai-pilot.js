@@ -101,7 +101,7 @@ function seoCopyNeedsReview(seo,group) {
   return false;
 }
 
-function imagePrompt(group, type, styling) {
+function imagePrompt(group, type, styling, hasContinuityReference=false) {
   const facts = `${group.colour} ${group.productType}${retailFacts(group).fit ? `, ${retailFacts(group).fit}` : ''}`;
   const common = `The reference shows the actual ${facts}. Preserve its exact colour, visible print, seams, neckline, sleeves, cut and length. Do not invent a logo, fabric composition, unseen back, pockets or details. One garment, no collage, text or watermark.`;
   if (type === 'front') return `Create a clean, photorealistic product-only front catalogue photo on a warm ivory studio background. ${String(group.audience).toLowerCase()==='women'&&garmentCategory(group)==='upper'?'Show the true fitted silhouette and bust shaping of the fully opaque garment on an invisible female-form mannequin, with no visible skin or mannequin parts. ':''}${common}`;
@@ -111,11 +111,12 @@ function imagePrompt(group, type, styling) {
   const cast=castDescription(group,gender,styling);
   const setting=String(group.line||group.collection||'').toLowerCase().includes('casual')?'pale limestone colonnade of a refined heritage estate, natural daylight, understated global old-money mood':'restrained neutral editorial setting';
   const isThreeQuarter=type==='model-side'||type.startsWith('model-side-');
-  const angle=isThreeQuarter?'front-biased three-quarter view, keeping the unseen back out of view':'front-facing full-body view';
+  const angle=isThreeQuarter?'full-body three-quarter-angle':'front-facing full-body';
+  const poseInstruction=isThreeQuarter?'Turn the model approximately 45 degrees toward the camera. Keep the head and shoes visible; this is a three-quarter ANGLE, not a three-quarter-length crop. Keep the unseen back out of view.':'Face the camera and show the full outfit from head to shoes.';
   const resolvedStyle=normalizeStyling(styling,group);
   if(resolvedStyle.bagStyle==='Gender-matched bag')resolvedStyle.bagStyle=gender==='female'?'Structured handbag':'Minimal sling bag';
-  const continuity=isThreeQuarter?'Maintain the same model identity, outfit and location as the separate matching front photo. Do not include that front photo in this output.':'';
-  return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
+  const continuity=isThreeQuarter?(hasContinuityReference?'The FIRST reference image shows the matching front model photograph: use that exact person, outfit, trouser colour, trouser cut, shoes, accessories and location as a visual continuity anchor. The SECOND reference is the original garment photo: preserve the featured garment exactly. Rotate the same model to a 45-degree pose; do not change the trousers or add another outfit. Neither reference image should appear as a separate panel in the output.':'Maintain the same model identity, trouser colour, outfit and location as the separate matching front photo. Do not include that front photo in this output.'):'One model only, in one pose; do not create a before-and-after layout.';
+  return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. ${poseInstruction} The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
 }
 
 function seoSchema() {
@@ -139,13 +140,17 @@ async function readApiResponse(response) {
   return body;
 }
 
-async function generateImage({key, group, source, type, styling, model='gpt-image-1.5', fetchImpl=global.fetch}) {
+async function generateImage({key, group, source, continuitySource=null, type, styling, model='gpt-image-1.5', fetchImpl=global.fetch}) {
   if (!IMAGE_TYPES.includes(type)) throw new Error('Unsupported pilot image view.');
   const form = new FormData();
   form.append('model', model);
   const sourceExt = source.mime==='image/png'?'.png':source.mime==='image/webp'?'.webp':'.jpg';
-  form.append('image', new Blob([source.buf],{type:source.mime}), 'source'+sourceExt);
-  form.append('prompt', imagePrompt(group,type,styling));
+  if(continuitySource){
+    const continuityExt=continuitySource.mime==='image/png'?'.png':continuitySource.mime==='image/webp'?'.webp':'.jpg';
+    form.append('image[]',new Blob([continuitySource.buf],{type:continuitySource.mime}),'matching-front'+continuityExt);
+    form.append('image[]',new Blob([source.buf],{type:source.mime}),'original-garment'+sourceExt);
+  } else form.append('image', new Blob([source.buf],{type:source.mime}), 'source'+sourceExt);
+  form.append('prompt', imagePrompt(group,type,styling,!!continuitySource));
   form.append('quality','medium');
   form.append('size','1024x1536');
   const response = await fetchImpl('https://api.openai.com/v1/images/edits', {

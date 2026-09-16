@@ -69,6 +69,23 @@ test('paid image edit sends the selected outfit in model prompt',async()=>{
   }});
 });
 
+test('three-quarter image uses matching front and garment references to preserve the outfit',async()=>{
+  const matchingFront={buf:Buffer.from('front-model'),mime:'image/png'};
+  await pilot.generateImage({key:'test-only',group,source,continuitySource:matchingFront,type:'model-side',styling:{pair:'Tailored trousers'},fetchImpl:async(url,options)=>{
+    assert.equal(url,'https://api.openai.com/v1/images/edits');
+    assert.equal(options.body.getAll('image[]').length,2);
+    assert.equal(options.body.getAll('image[]')[0].size,matchingFront.buf.length);
+    assert.equal(options.body.getAll('image[]')[1].size,source.buf.length);
+    assert.match(options.body.get('prompt'),/Turn the model approximately 45 degrees/);
+    assert.match(options.body.get('prompt'),/trouser colour, trouser cut/);
+    assert.match(options.body.get('prompt'),/not a three-quarter-length crop/);
+    return {ok:true,json:async()=>({data:[{b64_json:Buffer.from('image').toString('base64')}]})};
+  }});
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(server,/continuitySource=matchingFront\?readStoredPhoto\(matchingFront\.url\):null/);
+  assert.match(server,/Approve a good single-frame front model image first/);
+});
+
 test('purchase studio offers whole-PO, selected and single-product paid generation',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   assert.match(html,/Listing images &amp; copy — new products<\/h2>'\+\s*'<p class="sub">Choose the entire PO/);
