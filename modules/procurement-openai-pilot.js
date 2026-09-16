@@ -82,7 +82,7 @@ function retailFacts(group) {
 
 function seoCopyNeedsReview(seo,group) {
   const copy=[seo.displayName,seo.title,seo.metaTitle,seo.metaDescription,seo.imageAlt,seo.bodyHtml,...(seo.tags||[])].join(' ');
-  if(String(group.audience||'').toLowerCase()==='women' && (/\bmuscle\s*fit\b/i.test(copy)||/\bt[ -]?shirts?\b/i.test(copy)))return true;
+  if(String(group.audience||'').toLowerCase()==='women' && (/\bmuscle\s*fit\b/i.test(copy)||/\b(?<!polo\s)t[ -]?shirts?\b/i.test(copy)))return true;
   if(/^(?:sanki\s+)?casuals?$/i.test(String(seo.displayName||'').trim()))return true;
   return false;
 }
@@ -145,7 +145,7 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   const retail=retailFacts(group);
   const facts = {brand:'SANKI',productType:retail.productType,colour:group.colour,
     audience:group.audience,fit:retail.fit,sizes:group.sizeLabels};
-  const prompt = `Inspect the actual garment photo FIRST and use these confirmed facts: ${JSON.stringify(facts)}. Write distinctive, accurate storefront and SEO/AEO/GEO listing copy. The internal vendor design name and category are not customer-facing descriptions. Describe only visible neckline, collar, trim, pattern and silhouette; distinguish each colourway. For women's tops, write "top", "knit top", "polo top", "crew-neck top" or another PHOTO-SUPPORTED style; never call it a T-shirt or muscle fit. A polo/collar must be visibly present before naming it. If fit is omitted, do not invent one. Display name must describe a visible detail or style, never just "Casuals" or "SANKI". Alt text must literally describe the photographed garment, not make a generic streetwear claim. Do not infer fabric composition, origin, availability, COD or unseen details. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
+  const prompt = `Inspect the actual garment photo FIRST and use these confirmed facts: ${JSON.stringify(facts)}. Write distinctive, accurate storefront and SEO/AEO/GEO listing copy. The internal vendor design name and category are not customer-facing descriptions. Describe only visible neckline, collar, trim, pattern and silhouette; distinguish each colourway. For women's uppers, write "top", "knit top", "polo top", "crew-neck top" or another PHOTO-SUPPORTED style. Never say "muscle fit"; do not call an ordinary women's top a generic T-shirt. "Polo T-shirt" is acceptable only when a polo collar is unmistakably visible. If fit is omitted, do not invent one. Display name must describe a visible detail or style, never just "Casuals" or "SANKI". Alt text must literally describe the photographed garment, not make a generic streetwear claim. Do not infer fabric composition, origin, availability, COD or unseen details. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
   const response = await fetchImpl('https://api.openai.com/v1/responses',{
     method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,store:false,max_output_tokens:900,input:[{role:'user',content:[

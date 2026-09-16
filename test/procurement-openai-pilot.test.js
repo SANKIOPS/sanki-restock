@@ -85,7 +85,7 @@ test('SEO request uses the original photo and returns complete structured draft'
     assert.equal(body.store,false);
     assert.equal(body.text.format.type,'json_schema');
     assert.match(body.input[0].content[1].image_url,/^data:image\/jpeg;base64,/);
-    assert.match(body.input[0].content[0].text,/never call it a T-shirt or muscle fit/);
+    assert.match(body.input[0].content[0].text,/Polo T-shirt.*only when a polo collar/);
     return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(seo)}]}],usage:{input_tokens:200}})};
   }});
   assert.deepEqual(out.seo,seo);
@@ -96,6 +96,7 @@ test('women’s storefront terms are independent of internal SKU category and un
   assert.deepEqual(pilot.retailFacts({...group,fit:'Muscle Fit'}),{productType:'Top',fit:''});
   assert.equal(pilot.seoCopyNeedsReview({displayName:'Casuals',title:'Muscle Fit T-Shirt',tags:[]},group),true);
   assert.equal(pilot.seoCopyNeedsReview({displayName:'Diamond Stitch',title:'White Knit Top',tags:[]},group),false);
+  assert.equal(pilot.seoCopyNeedsReview({displayName:'Polo Collar',title:'White Polo T-shirt',tags:[]},group),false);
 });
 
 test('purchase pilot does not mistake initial product-detail SEO for AI-written copy',()=>{
