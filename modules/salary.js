@@ -170,11 +170,13 @@ function advanceSheetRows(s,file){
   let rows;try{const book=XLSX.read(file.buffer,{type:'buffer',cellDates:false});rows=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{defval:'',raw:false});}catch{throw new Error('Could not read the advances sheet. Use the template.');}
   if(!rows.length||rows.length>250)throw new Error('The sheet must contain 1 to 250 advances.');
   const norm=x=>String(x||'').trim().toLowerCase().replace(/[^a-z0-9]/g,''),get=(r,keys)=>{const key=Object.keys(r).find(k=>keys.includes(norm(k)));return key==null?'':String(r[key]??'').trim();};
+  const sheetDate=value=>{const text=String(value||'').trim();if(/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(text)){const [year,month,day]=text.split(/[-/]/).map(Number);const iso=[year,String(month).padStart(2,'0'),String(day).padStart(2,'0')].join('-');const parsed=new Date(iso+'T00:00:00Z');return !Number.isNaN(parsed.getTime())&&parsed.toISOString().slice(0,10)===iso?iso:'';}if(/^\d{5}$/.test(text)){const parts=XLSX.SSF.parse_date_code(Number(text));if(parts){const iso=[parts.y,String(parts.m).padStart(2,'0'),String(parts.d).padStart(2,'0')].join('-');return sheetDate(iso);}}return '';};
+  const sheetMonth=(value,date)=>{const text=String(value||'').trim();if(!text)return date.slice(0,7);if(/^\d{4}-(0[1-9]|1[0-2])$/.test(text))return text;const match=text.match(/^([A-Za-z]+)(?:\s+(\d{4}))?$/);if(match){const months=['january','february','march','april','may','june','july','august','september','october','november','december'],index=months.indexOf(match[1].toLowerCase());if(index>=0)return String(match[2]||date.slice(0,4))+'-'+String(index+1).padStart(2,'0');}return '';};
   const changes=[],seen=new Set(),matched=new Set();
   rows.forEach((r,index)=>{
     const label='Row '+(index+2),empId=get(r,['employeeid','empid']),name=get(r,['employeename','employee','name']),matches=empId?[s.employees[empId]].filter(Boolean):Object.values(s.employees).filter(e=>norm(e.name)===norm(name));
     if(matches.length!==1)throw new Error(label+': employee must match exactly one existing employee by ID or name.');
-    const emp=matches[0],advanceId=get(r,['advanceid','requestid']),forceNew=norm(advanceId)==='new',raw=get(r,['advanceamount','amount']).replace(/[₹,\s]/g,''),amount=Number(raw),date=get(r,['requestdate','proposeddate','date']),account=get(r,['payingaccount','account']),recoveryStartMonth=get(r,['recoverystartmonth','recoverymonth'])||date.slice(0,7),note=get(r,['note','remarks','reason']),reference=get(r,['reference','ref']);
+    const emp=matches[0],advanceId=get(r,['advanceid','requestid']),forceNew=norm(advanceId)==='new',raw=get(r,['advanceamount','amount']).replace(/[₹,\s]/g,''),amount=Number(raw),date=sheetDate(get(r,['requestdate','proposeddate','date'])),account=get(r,['payingaccount','account']),recoveryStartMonth=sheetMonth(get(r,['recoverystartmonth','recoverymonth']),date),note=get(r,['note','remarks','reason']),reference=get(r,['reference','ref']);
     if(!raw||!Number.isFinite(amount)||amount<=0||amount>100000000)throw new Error(label+': enter a valid advance amount.');
     const parsedDate=new Date(date+'T00:00:00Z');if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||Number.isNaN(parsedDate.getTime())||parsedDate.toISOString().slice(0,10)!==date)throw new Error(label+': use YYYY-MM-DD for Request Date.');
     if(!account)throw new Error(label+': paying account is required.');
@@ -189,11 +191,13 @@ function advanceSheetRows(s,file){
     const match=candidates[0],existing=match&&match.record;if(existing&&matched.has(existing.id))throw new Error(label+': the same existing advance appears twice in the sheet.');if(existing)matched.add(existing.id);
     const next={empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account,recoveryStartMonth,note,reference},previous=existing?{amount:round2(num(existing.amount)),date:existing.date,account:existing.account||'',recoveryStartMonth:existing.recoveryStartMonth||'',note:existing.note||'',reference:existing.reference||''}:null;
     const different=!!previous&&Object.keys(previous).some(k=>String(previous[k])!==String(next[k]));
-    changes.push(Object.assign({advanceId:existing&&existing.id||'',status:!existing?'New request':!different?'Unchanged':match.kind==='posted'||existing.status==='Posted'?'Needs individual correction':'Update existing request',previous,existingStatus:existing&&existing.status||''},next));
+    const historicalCarry=/last\s+month.*carry|carried\s+forward/i.test(note),nonPaymentSource=/^(?:n\/?a|recharge|sir\s+psnl\s+a\/?c)$/i.test(account);
+    changes.push(Object.assign({advanceId:existing&&existing.id||'',status:historicalCarry||nonPaymentSource?'Source row — review only':!existing?'New request':!different?'Unchanged':match.kind==='posted'||existing.status==='Posted'?'Needs individual correction':'Update existing request',previous,existingStatus:existing&&existing.status||''},next));
   });
   const hash=crypto.createHash('sha256').update(file.buffer).digest('hex');return {changes,hash,previewToken:crypto.createHash('sha256').update(hash+JSON.stringify(changes)).digest('hex')};
 }
 function applyAdvanceSheetRows(s,result,reason,req,fileName){
+  if(result.changes.some(x=>x.status==='Source row — review only'))throw new Error('This sheet contains carried-forward advances or non-payment sources. Save the exact sheet for review; do not import these as new payments.');
   if(result.changes.some(x=>x.status==='Needs individual correction'))throw new Error('A posted advance differs from the sheet. Correct that advance individually before applying this sheet.');
   s.advanceRequests=s.advanceRequests||{};const ids=[],at=new Date().toISOString(),counts={created:0,updated:0,unchanged:0};
   result.changes.forEach(row=>{if(row.status==='Unchanged'){counts.unchanged++;return;}const fields={empId:row.empId,employeeName:row.employeeName,amount:row.amount,date:row.date,account:row.account,note:row.note,reference:row.reference,recoveryStartMonth:row.recoveryStartMonth};
@@ -201,6 +205,17 @@ function applyAdvanceSheetRows(s,result,reason,req,fileName){
     s.advanceRequestSeq=(s.advanceRequestSeq||0)+1;const id='ADVR-'+String(s.advanceRequestSeq).padStart(5,'0');s.advanceRequests[id]=Object.assign({id,status:'Pending approval',createdBy:req.user&&req.user.username||'admin',createdAt:at,importReason:reason,importHash:result.hash},fields);auditAdvanceRequest(s,req,'IMPORTED',id,{fileName:path.basename(fileName||''),reason,amount:row.amount});ids.push(id);counts.created++;
   });
   return {ids,counts};
+}
+function advanceSourceSheet(file){
+  if(!file||!file.buffer||!/^\.(xlsx|xls|csv)$/i.test(path.extname(file.originalname||'')))throw new Error('Choose an Excel or CSV advances sheet.');
+  let rows;try{const book=XLSX.read(file.buffer,{type:'buffer',cellDates:false});rows=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{defval:'',raw:false});}catch{throw new Error('Could not read the advances sheet.');}
+  if(!rows.length||rows.length>250)throw new Error('The sheet must contain 1 to 250 advances.');
+  const norm=x=>String(x||'').trim().toLowerCase().replace(/[^a-z0-9]/g,''),get=(r,keys)=>{const key=Object.keys(r).find(k=>keys.includes(norm(k)));return key==null?'':String(r[key]??'').trim();};
+  const items=rows.map((row,index)=>{const amountText=get(row,['advanceamount','amount']).replace(/[₹,\s]/g,''),amount=Number(amountText),dateText=get(row,['requestdate','proposeddate','date']),date=/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(dateText)?dateText.replace(/\//g,'-'):dateText;
+    if(!get(row,['employeename','employee','name'])||!amountText||!Number.isFinite(amount)||amount<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error('Row '+(index+2)+': employee, positive amount and valid request date are required.');
+    return {row:index+2,advanceId:get(row,['advanceid','requestid']),employeeId:get(row,['employeeid','empid']),employeeName:get(row,['employeename','employee','name']),amount:round2(amount),requestDate:date,payingAccount:get(row,['payingaccount','account']),recoveryStartMonth:get(row,['recoverystartmonth','recoverymonth']),note:get(row,['note','remarks','reason']),reference:get(row,['reference','ref'])};
+  });
+  return {hash:crypto.createHash('sha256').update(file.buffer).digest('hex'),items,total:round2(items.reduce((sum,item)=>sum+item.amount,0))};
 }
 
 // Owner-confirmed historical import. It is deliberately idempotent and only
@@ -812,7 +827,11 @@ router.get('/api/salary/advances', guard, (req, res) => {
     const payroll=payrollRows.get(e.id),transactions=all.map(a=>advanceView(a,s)).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),employeeRequests=requests.filter(r=>r.empId===e.id&&r.status!=='Posted'),activityDates=transactions.map(x=>x.date).concat(employeeRequests.map(x=>x.payoutDate||x.date)).filter(Boolean).sort().reverse();return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:activityDates[0]||'',transactions,requests:employeeRequests };
   }).filter(x => x.total || x.recovered || x.companyOwes || x.requests.length);
   const totals = summary.reduce((t, x) => ({ total: t.total + x.total, recovered: t.recovered + x.recovered, outstanding: t.outstanding + x.outstanding }), { total: 0, recovered: 0, outstanding: 0 });
-  res.json({ success: true, advances: rows, summary, totals, requests, permissions:{canRequest:canRequestOrPostAdvance(req),canDirectPost:canApproveAdvance(req),canApprove:canApproveAdvance(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canApproveAdvance(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
+  res.json({ success: true, advances: rows, summary, totals, requests, sourceSheet:(s.advanceSourceSheets||[]).at(-1)||null, permissions:{canRequest:canRequestOrPostAdvance(req),canDirectPost:canApproveAdvance(req),canApprove:canApproveAdvance(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canApproveAdvance(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
+});
+router.post('/api/salary/advances/source-sheet',guard,receiveSalarySheet,(req,res)=>{
+  if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only a salary manager can save an advances source sheet.'});
+  try{const parsed=advanceSourceSheet(req.file),s=load();s.advanceSourceSheets=s.advanceSourceSheets||[];const existing=s.advanceSourceSheets.find(x=>x.hash===parsed.hash);if(existing)return res.json({success:true,alreadySaved:true,sourceSheet:existing});const sourceSheet={hash:parsed.hash,fileName:path.basename(req.file.originalname||''),savedAt:new Date().toISOString(),savedBy:req.user&&req.user.username||'admin',items:parsed.items,total:parsed.total};s.advanceSourceSheets.push(sourceSheet);save(s);res.json({success:true,alreadySaved:false,sourceSheet});}catch(err){res.status(400).json({success:false,error:err.message});}
 });
 router.get('/api/salary/advances/import/template',guard,(req,res)=>{
   if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only a salary manager can import advances.'});
@@ -1075,4 +1094,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows, _advanceSourceSheet:advanceSourceSheet };

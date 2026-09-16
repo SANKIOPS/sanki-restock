@@ -8,7 +8,7 @@ const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -56,6 +56,14 @@ test('advances Excel preview imports requests but never posts payments',()=>{
   s.advances.ADV001={id:'ADV001',empId:'E001',employeeName:'Excel Employee',amount:7000,date:'2026-09-20',account:'Prashant Axis 3645',recoveryStartMonth:'2026-09',note:'',reference:'',active:true};
   const postedBook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(postedBook,XLSX.utils.json_to_sheet([{'Advance ID':'ADV001','Employee ID':'E001','Advance Amount':8000,'Request Date':'2026-09-20','Paying Account':'Prashant Axis 3645','Recovery Start Month':'2026-09'}]),'Advances');
   const posted=_advanceSheetRows(s,{originalname:'posted.xlsx',buffer:XLSX.write(postedBook,{type:'buffer',bookType:'xlsx'})});assert.equal(posted.changes[0].status,'Needs individual correction');assert.throws(()=>_applyAdvanceSheetRows(s,posted,'No silent payment edit',{user:{username:'prashant'}},'posted.xlsx'),/individual/);assert.equal(s.advances.ADV001.amount,7000);
+});
+
+test('formatted Excel dates and named recovery months are read without creating carried-forward payments',()=>{
+  const s={employees:{E001:{id:'E001',name:'Excel Employee'}},advanceRequests:{},advances:{}};
+  const sheet=XLSX.utils.json_to_sheet([{'Employee Name':'Excel Employee','Advance Amount':27000,'Request Date':new Date(Date.UTC(2026,7,1)),'Paying Account':'N/A','Recovery Start Month':'August','Note':'Last Month Advance carried forward'}]);
+  sheet.C2.z='yyyy/mm/dd';const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,sheet,'Advances');const file={originalname:'advances.xlsx',buffer:XLSX.write(book,{type:'buffer',bookType:'xlsx'})};
+  const preview=_advanceSheetRows(s,file);assert.equal(preview.changes[0].date,'2026-08-01');assert.equal(preview.changes[0].recoveryStartMonth,'2026-08');assert.equal(preview.changes[0].status,'Source row — review only');assert.throws(()=>_applyAdvanceSheetRows(s,preview,'Import',{user:{username:'owner'}},file.originalname),/Save the exact sheet/);
+  const source=_advanceSourceSheet(file);assert.equal(source.items[0].amount,27000);assert.equal(source.items[0].note,'Last Month Advance carried forward');assert.deepEqual(s.advances,{});
 });
 
 test('salary advances require owner approval and proof-backed posting, then recover oldest first', () => {
