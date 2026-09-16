@@ -420,12 +420,14 @@ function prashantSalaryRouteAllowed(req){
   if(salaryEntity(req.query&&req.query.entity)!=='SANKI')return false;
   const route=String(req.route&&req.route.path||req.path||''),method=String(req.method||'').toUpperCase();
   return (method==='GET'&&['/api/salary/employees','/api/salary/month/:ym','/api/salary/payments/:ym','/api/salary/advances'].includes(route))||
-    (method==='POST'&&['/api/salary/payments/batch','/api/salary/payments/:id/proofs','/api/salary/advances','/api/salary/advance-requests/:id/post'].includes(route));
+    (method==='POST'&&['/api/salary/payments/batch','/api/salary/payments/:id/proofs','/api/salary/advances','/api/salary/advance-requests/:id/post'].includes(route))||
+    (method==='POST'&&route==='/api/salary/historical-offset/:ym/:empId/reopen'&&req.params.ym==='2026-08');
 }
 function canRequestOrPostAdvance(req) { return rolesOf(req).includes('admin') || rolesOf(req).includes('owner') || advanceUsername(req) === 'prashant'; }
 function canApproveAdvance(req) { return rolesOf(req).includes('owner'); }
+function canReviewAugustSalary(req) { return canApproveAdvance(req) || (advanceUsername(req) === 'prashant' && salaryEntity(req.query&&req.query.entity)==='SANKI'); }
 function guard(req, res, next) {
-  if(prashantPaymentOnly(req))return prashantSalaryRouteAllowed(req)?next():res.status(403).json({success:false,error:'Prashant may view salary, post proof-backed payments, and handle approved advances only.'});
+  if(prashantPaymentOnly(req))return prashantSalaryRouteAllowed(req)?next():res.status(403).json({success:false,error:'Prashant may view salary, review August balances, post proof-backed payments, and handle approved advances only.'});
   const r = rolesOf(req);
   if (r.includes('admin') || r.includes('accounting') || r.includes('owner')) return next();
   return res.status(403).json({ success: false, error: 'Salary is admin/accounting only.' });
@@ -682,7 +684,7 @@ router.post('/api/salary/payments/link-existing',guard,(req,res)=>{
   res.json({success:true,payment,noAdditionalLedgerDebit:true});
 });
 router.post('/api/salary/historical-offset/:ym/:empId/reopen',guard,(req,res)=>{
-  if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only the Owner can reopen historical salary.'});
+  if(!canReviewAugustSalary(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can review August salary balances.'});
   const ym=String(req.params.ym||''),empId=String(req.params.empId||''),reason=String(req.body&&req.body.reason||'').trim();
   if(ym!=='2026-08'||!reason)return res.status(400).json({success:false,error:'Choose August 2026 and enter a reason.'});
   const s=load(),mo=s.months[ym],row=mo&&mo.rows&&mo.rows[empId],employee=s.employees[empId];
@@ -803,7 +805,7 @@ router.get('/api/salary/month/:ym', guard, (req, res) => {
     t.netPayable += r.netPayable; t.paid += r.paid; t.balance += r.balance; return t;
   }, { salary: 0, salaryAmt: 0, advance: 0, netPayable: 0, paid: 0, balance: 0 });
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
-  res.json({ success: true, ym, divisor: num(s.divisor) || 30, daysInMonth: daysInMonth(ym), finalized: !!mo.finalized, rows, attendance: mo.attendance || {}, totals, finalSalaryAudit:(s.finalSalaryAudit||[]).filter(x=>x.ym===ym), permissions:{canModifyPayroll:canApproveAdvance(req),canPay:true,paymentOnly:prashantPaymentOnly(req)} });
+  res.json({ success: true, ym, divisor: num(s.divisor) || 30, daysInMonth: daysInMonth(ym), finalized: !!mo.finalized, rows, attendance: mo.attendance || {}, totals, finalSalaryAudit:(s.finalSalaryAudit||[]).filter(x=>x.ym===ym), permissions:{canModifyPayroll:canApproveAdvance(req),canReviewAugust:canReviewAugustSalary(req),canPay:true,paymentOnly:prashantPaymentOnly(req)} });
 });
 
 // Correct the earned amount for one employee/month; never invent a payment.

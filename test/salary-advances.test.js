@@ -358,7 +358,28 @@ test('owner sees historical payroll as unverified and can reopen one August empl
   assert.match(html,/August salary needs payment review/);
   assert.match(html,/Review balance \/ enable Pay/);
   assert.match(html,/Link existing 3645 debit/);
-  assert.match(html,/Ask the Owner to review these historical balances first/);
+  assert.match(html,/Ask the Owner or Prashant to review these historical balances first/);
+});
+
+test('Prashant can review only SANKI August historical balance with a reason, without recording payment',()=>{
+  const who={role:'claimant',username:'prashant'},month=invoke('GET','/api/salary/month/:ym',{...who,params:{ym:'2026-08'}}).body;
+  assert.equal(month.permissions.canReviewAugust,true);
+  assert.equal(month.permissions.canModifyPayroll,false);
+  const row=month.rows.find(x=>Math.abs(x.historicalCloseAdjustment||0)>0.005);
+  assert.ok(row);
+  const params={ym:'2026-08',empId:row.id},routePath='/api/salary/historical-offset/:ym/:empId/reopen';
+  const beforePayments=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym:'2026-08'}}).body.payments.length;
+  assert.equal(invoke('POST',routePath,{...who,params,body:{reason:''}}).status,400);
+  assert.equal(invoke('POST',routePath,{...who,params:{...params,ym:'2026-09'},body:{reason:'Not August'}}).status,403);
+  assert.equal(invoke('POST',routePath,{...who,query:{entity:'SAMAST'},params,body:{reason:'Wrong entity'}}).status,403);
+  const result=invoke('POST',routePath,{...who,params,body:{reason:'Verified this historical balance against payment records'}});
+  assert.equal(result.status,200);
+  assert.equal(result.body.row.historicalCloseAdjustment,0);
+  assert.equal(invoke('GET','/api/salary/payments/:ym',{...who,params:{ym:'2026-08'}}).body.payments.length,beforePayments);
+  const salary=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'));
+  assert.ok(salary.salaryPaymentAudit.some(x=>x.action==='HISTORICAL_OFFSET_REOPENED'&&x.empId===row.id&&x.by==='prashant'));
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/d\.permissions&&d\.permissions\.canReviewAugust/);
 });
 
 test('owner can correct a proof-backed salary payment and correction is audited',()=>{

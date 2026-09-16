@@ -138,6 +138,8 @@ test('Prashant has proof-backed salary payment access but cannot edit payroll',(
   assert.equal(apiAllowedForUser(p,'/api/salary/month/2026-09','GET'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/payments/batch','POST'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/payments/SALB-001-001/proofs','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/historical-offset/2026-08/EMP-1/reopen','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/historical-offset/2026-09/EMP-1/reopen','POST'),false);
   assert.equal(apiAllowedForUser(p,'/api/expenses/upload','POST'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/final-amount/2026-09/EMP-1','PATCH'),false);
   assert.equal(apiAllowedForUser(p,'/api/salary/row/2026-09','POST'),false);
