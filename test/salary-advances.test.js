@@ -243,9 +243,23 @@ test('one salary batch posts multiple employees atomically from the payroll tabl
   const batch=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Gagan Sir Cash',proof:'/batch.jpg',reference:'BATCH-UTR',items:[{empId:a.id,amount:30000},{empId:b.id,amount:15000}]}});
   assert.equal(batch.status,200);assert.equal(batch.body.count,2);assert.equal(batch.body.total,45000);
   const month=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(month.rows.find(x=>x.id===a.id).transactionPaid,30000);assert.equal(month.rows.find(x=>x.id===b.id).balance,0);
-  const bad=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Counter Cash',proof:'/batch.jpg',items:[{empId:a.id,amount:1},{empId:b.id,amount:99999}]}});assert.equal(bad.status,400);assert.match(bad.body.error,/Batch A.*Pay Now.*balance/);assert.equal(bad.body.remaining,0);
+  const bad=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-10',date:'2026-10-31',account:'Counter Cash',proof:'/batch.jpg',items:[{empId:a.id,amount:1},{empId:b.id,amount:99999}]}});assert.equal(bad.status,400);assert.match(bad.body.error,/Batch A.*no salary is payable/);assert.equal(bad.body.remaining,0);
   const again=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-10'}}).body;assert.equal(again.rows.find(x=>x.id===a.id).transactionPaid,30000,'invalid batch posts nothing');
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Select all payable/);assert.match(html,/Clear selection/);assert.match(html,/Only checked employees will be paid/);assert.match(html,/Partially paid/);
+});
+
+test('a noted extra salary payment records the actual cash and carries the excess forward',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Extra Paid Employee',salary:30000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-03'},body:{empId:emp.id,paidDays:30}});
+  const payload={ym:'2099-03',date:'2099-03-31',account:'Gagan Sir Cash',proof:'/cash-proof.jpg',items:[{empId:emp.id,amount:31000}]};
+  const missingNote=invoke('POST','/api/salary/payments/batch',{body:payload});
+  assert.equal(missingNote.status,400);assert.match(missingNote.body.error,/Enter why/);
+  payload.items[0].modificationReason='₹1,000 extra cash salary paid with this batch';
+  const posted=invoke('POST','/api/salary/payments/batch',{body:payload});assert.equal(posted.status,200);
+  const march=invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-03'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(march.transactionPaid,31000);assert.equal(march.balance,-1000);
+  const april=invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-04'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(april.openingBalanceCarry,-1000);
 });
 
 test('payroll presents a prominent salary payment action without offering zero-balance payments',()=>{
