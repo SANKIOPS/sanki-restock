@@ -36,7 +36,8 @@ function salaryForMonth(e, ym) {
 }
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
-const SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'Gagan Sir Cash', 'Counter Cash'];
+const SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash'];
+const PRASHANT_SALARY_ACCOUNTS = ['Prashant Axis 3645', 'Prashant Cash'];
 const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 // Paid-day value per attendance mark: Present 1, Half 0.5, Paid-leave 1,
 // Week-off 1 (paid), Absent 0.
@@ -414,9 +415,17 @@ function applyJuly2026AttendanceAndPayroll(s){
 // ── Access: salary is sensitive → admin or accounting only ──
 function rolesOf(req) { return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || []; }
 function advanceUsername(req) { return String(req.user && req.user.username || '').trim().toLowerCase(); }
+function prashantPaymentOnly(req){return advanceUsername(req)==='prashant'&&!rolesOf(req).some(r=>['admin','accounting','owner'].includes(r));}
+function prashantSalaryRouteAllowed(req){
+  if(salaryEntity(req.query&&req.query.entity)!=='SANKI')return false;
+  const route=String(req.route&&req.route.path||req.path||''),method=String(req.method||'').toUpperCase();
+  return (method==='GET'&&['/api/salary/employees','/api/salary/month/:ym','/api/salary/payments/:ym','/api/salary/advances'].includes(route))||
+    (method==='POST'&&['/api/salary/payments/batch','/api/salary/payments/:id/proofs','/api/salary/advances','/api/salary/advance-requests/:id/post'].includes(route));
+}
 function canRequestOrPostAdvance(req) { return rolesOf(req).includes('admin') || rolesOf(req).includes('owner') || advanceUsername(req) === 'prashant'; }
 function canApproveAdvance(req) { return rolesOf(req).includes('owner'); }
 function guard(req, res, next) {
+  if(prashantPaymentOnly(req))return prashantSalaryRouteAllowed(req)?next():res.status(403).json({success:false,error:'Prashant may view salary, post proof-backed payments, and handle approved advances only.'});
   const r = rolesOf(req);
   if (r.includes('admin') || r.includes('accounting') || r.includes('owner')) return next();
   return res.status(403).json({ success: false, error: 'Salary is admin/accounting only.' });
@@ -541,7 +550,7 @@ router.use('/api/salary',(req,res,next)=>salaryContext.run({entity:salaryEntity(
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
   const currentMonth=new Date().toISOString().slice(0,7),employees=Object.values(s.employees).sort(byEmployeeName).map(e=>Object.assign({},e,{salaryHistory:salaryHistoryOf(e),effectiveSalary:salaryForMonth(e,currentMonth)}));
-  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS });
+  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:prashantPaymentOnly(req)?PRASHANT_SALARY_ACCOUNTS:SALARY_PAYING_ACCOUNTS });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -602,9 +611,21 @@ router.post('/api/salary/post/:ym', guard, (req,res)=>{
 });
 router.post('/api/salary/payments/batch',guard,(req,res)=>{
   const s=load(),b=req.body||{},ym=String(b.ym||''),date=String(b.date||''),account=String(b.account||'').trim(),proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean))),proof=proofs[0]||'',items=Array.isArray(b.items)?b.items:[];
-  if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!SALARY_PAYING_ACCOUNTS.includes(account)||!proofs.length||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, Prashant Axis 3645 or an available cash account, and at least one payment proof.'});
+  const allowedAccounts=prashantPaymentOnly(req)?PRASHANT_SALARY_ACCOUNTS:SALARY_PAYING_ACCOUNTS;
+  if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!allowedAccounts.includes(account)||!proofs.length||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, Prashant Axis 3645 or an authorized cash account, and at least one payment proof.'});
   const rows=computeMonth(s,ym),seen=new Set(),prepared=[];for(const x of items){const row=rows.find(r=>r.id===x.empId),amount=round2(num(x.amount)),remaining=round2(Math.max(0,row&&row.balance||0)),modificationReason=String(x.modificationReason||'').trim();if(!row||seen.has(x.empId)||!(amount>0)||amount>remaining+.001)return res.status(400).json({success:false,error:'A payment is invalid or exceeds the employee’s remaining payable balance.'});if(Math.abs(amount-remaining)>.001&&!modificationReason)return res.status(400).json({success:false,error:'Enter why '+row.name+' is being paid '+amount+' instead of the full balance '+remaining+'.'});seen.add(x.empId);prepared.push({row,amount,modificationReason,remainingBeforePayment:remaining});}
   s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,proofs:proofs.slice(),reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),modificationReason:x.modificationReason,remainingBeforePayment:x.remainingBeforePayment,balanceAfterPayment:round2(x.remainingBeforePayment-x.amount),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0)),proofCount:proofs.length});
+});
+router.post('/api/salary/payments/:id/proofs',guard,(req,res)=>{
+  const s=load(),p=(s.salaryPayments||[]).find(x=>x.id===req.params.id&&x.active!==false),proofs=Array.isArray((req.body||{}).proofs)?req.body.proofs.map(x=>String(x||'').trim()):[];
+  if(!p)return res.status(404).json({success:false,error:'Recorded salary payment not found.'});
+  if(prashantPaymentOnly(req)&&!PRASHANT_SALARY_ACCOUNTS.includes(p.account))return res.status(403).json({success:false,error:'Prashant can attach proofs only to salary payments from his accounts.'});
+  if(!proofs.length||proofs.some(x=>!/^\/api\/expenses\/photo\/[A-Za-z0-9._-]+$/.test(x)))return res.status(400).json({success:false,error:'Upload at least one valid payment proof.'});
+  const before=(p.proofs&&p.proofs.length?p.proofs:[p.proof]).filter(Boolean),added=proofs.filter(x=>!before.includes(x));
+  if(!added.length)return res.status(400).json({success:false,error:'These proofs are already attached.'});
+  p.proofs=before.concat(added);p.proof=p.proofs[0];p.proofsUpdatedAt=new Date().toISOString();p.proofsUpdatedBy=req.user&&req.user.username||'admin';
+  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.proofsUpdatedAt,by:p.proofsUpdatedBy,action:'PAYMENT_PROOFS_ADDED',paymentId:p.id,ym:p.ym,empId:p.empId,account:p.account,proofsAdded:added.slice()});
+  save(s);res.json({success:true,paymentId:p.id,proofCount:p.proofs.length});
 });
 router.get('/api/salary/payments/:ym',guard,(req,res)=>{
   const ym=String(req.params.ym||'');if(!/^\d{4}-\d{2}$/.test(ym))return res.status(400).json({success:false,error:'Invalid payroll month.'});
@@ -782,7 +803,7 @@ router.get('/api/salary/month/:ym', guard, (req, res) => {
     t.netPayable += r.netPayable; t.paid += r.paid; t.balance += r.balance; return t;
   }, { salary: 0, salaryAmt: 0, advance: 0, netPayable: 0, paid: 0, balance: 0 });
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
-  res.json({ success: true, ym, divisor: num(s.divisor) || 30, daysInMonth: daysInMonth(ym), finalized: !!mo.finalized, rows, attendance: mo.attendance || {}, totals, finalSalaryAudit:(s.finalSalaryAudit||[]).filter(x=>x.ym===ym), permissions:{canModifyPayroll:canApproveAdvance(req),canPay:true} });
+  res.json({ success: true, ym, divisor: num(s.divisor) || 30, daysInMonth: daysInMonth(ym), finalized: !!mo.finalized, rows, attendance: mo.attendance || {}, totals, finalSalaryAudit:(s.finalSalaryAudit||[]).filter(x=>x.ym===ym), permissions:{canModifyPayroll:canApproveAdvance(req),canPay:true,paymentOnly:prashantPaymentOnly(req)} });
 });
 
 // Correct the earned amount for one employee/month; never invent a payment.

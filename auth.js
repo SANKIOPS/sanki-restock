@@ -134,13 +134,22 @@ function apiRuleFor(p) {
   ) || null;
 }
 
-function apiAllowedForUser(user, p) {
+function apiAllowedForUser(user, p, method='GET') {
+  if(isPrashantPaymentOnly(user)&&p.startsWith('/api/salary/'))return prashantSalaryApiAllowed(method,p);
+  if(isPrashantUser(user)&&((method==='POST'&&p==='/api/expenses/upload')||(method==='GET'&&p==='/api/expenses/config')))return true;
   const userRoles = rolesOf(user);
   if (userRoles.includes('admin') || userRoles.includes('owner')) return true;
   const rule = apiRuleFor(p);
   if (!rule) return false; // new APIs must opt in instead of silently opening
   if (rule.roles === '*') return true;
   return rule.roles.some(role => userRoles.includes(role));
+}
+
+function isPrashantUser(user){return String(user&&user.username||'').trim().toLowerCase()==='prashant';}
+function isPrashantPaymentOnly(user){return isPrashantUser(user)&&!rolesOf(user).some(r=>['admin','accounting','owner'].includes(r));}
+function prashantSalaryApiAllowed(method,p){
+  return (method==='GET'&&(p==='/api/salary/employees'||p==='/api/salary/advances'||/^\/api\/salary\/month\/\d{4}-\d{2}$/.test(p)||/^\/api\/salary\/payments\/\d{4}-\d{2}$/.test(p)))||
+    (method==='POST'&&(p==='/api/salary/payments/batch'||p==='/api/salary/advances'||/^\/api\/salary\/advance-requests\/[^/]+\/post$/.test(p)||/^\/api\/salary\/payments\/[^/]+\/proofs$/.test(p)));
 }
 
 function gate(req, res, next) {
@@ -207,7 +216,7 @@ function gate(req, res, next) {
   // API permissions are enforced independently of page visibility. Unknown
   // endpoints fail closed for non-admin users until a rule is added above.
   if (p.startsWith('/api/')) {
-    if (!apiAllowedForUser(user, p)) {
+    if (!apiAllowedForUser(user, p, req.method)) {
       return res.status(403).json({ success: false, error: 'Forbidden for this role' });
     }
     return next();
@@ -217,6 +226,7 @@ function gate(req, res, next) {
   if (rolesOf(user).includes('admin') || rolesOf(user).includes('owner')) return next();
   if (isAssetPath(p)) return next();                 // shared JS/CSS/images
   if (p === '/') return res.redirect(302, landingFor(user.role));
+  if(isPrashantUser(user)&&p==='/salary.html')return next();
   if (userCanAccessPath(user, p)) return next();     // union across all roles
   // Any other page/route this role isn't allowed → send to their home.
   return res.redirect(302, landingFor(user.role));

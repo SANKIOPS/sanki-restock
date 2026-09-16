@@ -13,7 +13,7 @@ test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
   const layer=router.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);
   assert.ok(layer, 'route exists: '+method+' '+routePath); let status=200,result;
-  const req={body,params,query,user:{username,role,roles:[role]}};
+  const req={body,params,query,method:method.toUpperCase(),path:routePath,route:{path:routePath},user:{username,role,roles:[role]}};
   const res={status(n){status=n;return this;},json(v){result=v;return this;}};
   let i=0; const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);}; next();
   return {status,body:result};
@@ -437,4 +437,24 @@ test('owner final salary correction requires a reason and updates earned payroll
   assert.equal(salary.salaryPayments.filter(x=>x.empId===emp.id&&x.ym===ym).length,0);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/Change final salary/);assert.match(html,/openFinalSalary/);assert.match(html,/saveFinalSalary/);
+});
+
+test('Prashant can record only his account payments and append proof without another debit',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Prashant Payment Access Test',salary:20000,joiningDate:'2099-02-01'}}).body.employee,ym='2099-02';
+  assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:20}}).status,200);
+  const who={role:'claimant',username:'prashant'},accounts=invoke('GET','/api/salary/employees',who).body.salaryPayingAccounts;
+  assert.deepEqual(accounts,['Prashant Axis 3645','Prashant Cash']);
+  assert.equal(invoke('POST','/api/salary/row/:ym',{...who,params:{ym},body:{empId:emp.id,paidDays:15}}).status,403);
+  assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{...who,params:{ym,empId:emp.id},body:{amount:10000,reason:'No'}}).status,403);
+  const payload={ym,date:'2099-02-20',account:'Gagan Sir Cash',proofs:['/api/expenses/photo/no.jpg'],items:[{empId:emp.id,amount:1000,modificationReason:'Partial'}]};
+  assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body:payload}).status,400);
+  payload.account='Prashant Cash';
+  const made=invoke('POST','/api/salary/payments/batch',{...who,body:payload});assert.equal(made.status,200);
+  const payment=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym}}).body.payments.find(x=>x.empId===emp.id);
+  assert.ok(payment);assert.equal(payment.amount,1000);
+  assert.equal(invoke('POST','/api/salary/payments/:id/proofs',{...who,params:{id:payment.id},body:{proofs:['/api/expenses/photo/more.jpg']}}).status,200);
+  const after=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym}}).body.payments.find(x=>x.id===payment.id);
+  assert.deepEqual(after.proofs,['/api/expenses/photo/no.jpg','/api/expenses/photo/more.jpg']);
+  assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.rows.find(x=>x.id===emp.id).paid,1000);
+  assert.equal(invoke('POST','/api/salary/payments/:id/proofs',{...who,params:{id:payment.id},body:{proofs:['https://other.test/not-proof']}}).status,400);
 });

@@ -132,3 +132,14 @@ test('confirmed owner account always retains distinct owner access', () => {
   assert.equal(apiAllowedForUser({ roles: ['owner'] }, '/api/owner/summary'), true);
   assert.equal(apiAllowedForUser({ roles: ['accounting'] }, '/api/owner/summary'), false);
 });
+
+test('Prashant has proof-backed salary payment access but cannot edit payroll',()=>{
+  const p={username:'prashant',role:'claimant',roles:['claimant']};
+  assert.equal(apiAllowedForUser(p,'/api/salary/month/2026-09','GET'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/payments/batch','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/payments/SALB-001-001/proofs','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/expenses/upload','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/final-amount/2026-09/EMP-1','PATCH'),false);
+  assert.equal(apiAllowedForUser(p,'/api/salary/row/2026-09','POST'),false);
+  assert.equal(apiAllowedForUser(p,'/api/salary/payments/SALB-001-001','PATCH'),false);
+});
