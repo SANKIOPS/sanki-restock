@@ -278,7 +278,7 @@ test('partial salary payment requires a reason and preserves the remaining balan
   const paid=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-10',date:'2098-10-31',account:'Gagan Sir Cash',proof:'/partial.jpg',items:[{empId:emp.id,amount:5500,modificationReason:'First partial salary payment'}]}});assert.equal(paid.status,200);
   const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2098-10'}}).body.rows.find(x=>x.id===emp.id);assert.equal(row.paid,5500);assert.equal(row.balance,24500);
   const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8')).salaryPayments.find(x=>x.empId===emp.id&&x.ym==='2098-10');assert.equal(stored.modificationReason,'First partial salary payment');assert.equal(stored.remainingBeforePayment,30000);assert.equal(stored.balanceAfterPayment,24500);assert.equal(stored.proof,'/partial.jpg');
-  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Deductions \/ adjustments/);assert.match(html,/Balance to pay/);assert.match(html,/Reason when amount differs/);assert.match(html,/submitSingleSalaryPayment/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Deductions \/ adjustments/);assert.match(html,/Balance to pay/);assert.match(html,/Comment \/ reason for different amount/);assert.match(html,/submitSingleSalaryPayment/);
 });
 
 test('salary payments upload and preserve multiple screenshots as one payment',()=>{
@@ -458,12 +458,18 @@ test('Prashant can record only his account payments and append proof without ano
   const payload={ym,date:'2099-02-20',account:'Gagan Sir Cash',proofs:['/api/expenses/photo/no.jpg'],items:[{empId:emp.id,amount:1000,modificationReason:'Partial'}]};
   assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body:payload}).status,400);
   payload.account='Prashant Cash';
+  const withoutComment={...payload,items:[{empId:emp.id,amount:1000}]};
+  assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body:withoutComment}).status,400);
   const made=invoke('POST','/api/salary/payments/batch',{...who,body:payload});assert.equal(made.status,200);
   const payment=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym}}).body.payments.find(x=>x.empId===emp.id);
-  assert.ok(payment);assert.equal(payment.amount,1000);
+  assert.ok(payment);assert.equal(payment.amount,1000);assert.equal(payment.modificationReason,'Partial');assert.equal(payment.createdBy,'prashant');
   assert.equal(invoke('POST','/api/salary/payments/:id/proofs',{...who,params:{id:payment.id},body:{proofs:['/api/expenses/photo/more.jpg']}}).status,200);
   const after=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym}}).body.payments.find(x=>x.id===payment.id);
   assert.deepEqual(after.proofs,['/api/expenses/photo/no.jpg','/api/expenses/photo/more.jpg']);
   assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.rows.find(x=>x.id===emp.id).paid,1000);
   assert.equal(invoke('POST','/api/salary/payments/:id/proofs',{...who,params:{id:payment.id},body:{proofs:['https://other.test/not-proof']}}).status,400);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/Amount actually paid ₹ — editable/);
+  assert.match(html,/Comment \/ reason for different amount/);
+  assert.match(html,/p\.modificationReason\|\|'—'/);
 });
