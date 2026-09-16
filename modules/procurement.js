@@ -1677,6 +1677,108 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
 
 // Included-usage generation happens in a user-started Codex session, not Railway.
 const codexBatch = require('./procurement-codex-batch');
+const openaiPilot = require('./procurement-openai-pilot');
+const paidPilotInFlight = new Set();
+function canStartPaidPilot(req) {
+  const roles = (req.user && Array.isArray(req.user.roles) && req.user.roles.length)
+    ? req.user.roles : [req.user && req.user.role];
+  return roles.some(r => ['owner','admin'].includes(String(r).toLowerCase()));
+}
+router.get('/api/procurement/openai-pilot-status', (req,res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+  res.json({success:true,configured:!!process.env.OPENAI_API_KEY,
+    imageModel:process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5',
+    maxGroups:Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||10))});
+});
+router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
+  if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Owner access required.'});
+  const po=loadStore().pos[req.params.id],key=String(req.query.groupKey||'');
+  if (!po) return res.status(404).json({success:false,error:'PO not found.'});
+  const record=((po.openaiPilot||{}).attempts||[]).find(x=>x.groupKey===key);
+  if (!record) return res.status(404).json({success:false,error:'No pilot attempt for this article.'});
+  res.json({success:true,pilot:record,images:(po.aiImages||{})[key]||[],seo:(po.seoDraft||[]).find(x=>x.key===key)||null});
+});
+// Explicit, owner-started pilot. One colourway per request, at most three image
+// calls, no automatic retries, and no approvals or Shopify writes.
+router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
+  const lockKey=req.params.id;
+  if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Owner approval required for paid AI generation.'});
+  if (!process.env.OPENAI_API_KEY) return res.status(503).json({success:false,error:'Set OPENAI_API_KEY in Railway before starting the paid pilot.'});
+  if (paidPilotInFlight.has(lockKey)) return res.status(409).json({success:false,error:'Another paid generation is running for this PO.'});
+  paidPilotInFlight.add(lockKey);
+  try {
+    const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
+    if (!po || isLockedPo(po)) return res.status(400).json({success:false,error:'Editable PO required.'});
+    const g=(await newGroupsOf(s,po)).find(x=>x.key===key);
+    const source=g&&readStoredPhoto(g.photoUrl);
+    if (!g || !source) return res.status(400).json({success:false,error:'Product group with original photo required.'});
+    const maxGroups=Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||10));
+    po.openaiPilot=po.openaiPilot||{attempts:[]};
+    if (po.openaiPilot.attempts.some(x=>x.groupKey===key)) return res.status(409).json({success:false,error:'This article already used its pilot attempt; review its drafts before any paid retry.'});
+    if (po.openaiPilot.attempts.length>=maxGroups) return res.status(409).json({success:false,error:`Pilot limit of ${maxGroups} articles reached for this PO.`});
+    const fingerprint=codexBatch.fingerprint(g,(po.backRefs||{})[key]);
+    const attempt={groupKey:key,sourceFingerprint:fingerprint,startedAt:new Date().toISOString(),status:'running',views:[],errors:[]};
+    po.openaiPilot.attempts.push(attempt);saveStore(s);
+    res.status(202).json({success:true,groupKey:key,pilot:attempt});
+    const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
+    const textModel=process.env.PROCUREMENT_OPENAI_TEXT_MODEL||'gpt-4.1-mini';
+    const types=openaiPilot.pilotTypes(g);
+    for(const type of types){
+      try {
+        if (((po.aiImages||{})[key]||[]).some(x=>x.type===type && x.approved)) continue;
+        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source,type,model:imageModel});
+        const fresh=loadStore(),current=fresh.pos[req.params.id];
+        const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
+        if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; result was discarded.');
+        current.aiImages=current.aiImages||{};const images=current.aiImages[key]||[];
+        const prior=images.find(x=>x.type===type);
+        if(prior && prior.approved) throw new Error('An approved image already exists for this view; generated draft was not attached.');
+        const saved=savePhotoBuffer(generated.buffer,'.png');
+        const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot'};
+        const idx=images.findIndex(x=>x.type===type);if(idx>=0)images[idx]=rec;else images.push(rec);
+        current.aiImages[key]=images;
+        const item=current.openaiPilot.attempts.find(x=>x.groupKey===key);item.views.push({type,model:imageModel,usage:generated.usage||null});
+        saveStore(fresh);
+      }catch(e){
+        const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.find(x=>x.groupKey===key);
+        if(item){item.errors.push({type,error:e.message});saveStore(fresh);}
+      }
+    }
+    try {
+      if ((po.seoDraft||[]).some(x=>x.key===key && x.seoApproved)) throw new Error('SEO is already approved; no paid SEO call was made.');
+      const generated=await openaiPilot.generateSeo({key:process.env.OPENAI_API_KEY,group:g,source,model:textModel});
+      const fresh=loadStore(),current=fresh.pos[req.params.id];
+      const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
+      if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; SEO was discarded.');
+      const base=genSeo({...g,sizeCodeOf:label=>fresh.sizes[label]||label});
+      const clean=(value,fallback)=>stripInternalCodes(String(value||'').trim(),g.designCode)||fallback;
+      const draft=generated.seo;
+      const seo={displayName:clean(draft.displayName,base.displayName),title:clean(draft.title,base.title),handle:base.handle,
+        metaTitle:clean(draft.metaTitle,base.metaTitle).slice(0,70),metaDescription:clean(draft.metaDescription,base.metaDescription).slice(0,320),
+        imageAlt:clean(draft.imageAlt,base.imageAlt),tags:draft.tags.map(x=>clean(x,'')).filter(Boolean),
+        bodyHtml:clean(draft.bodyHtml,base.bodyHtml).replace(/<([^>]+)>/g,(tag,inside)=>/^\/?p$/i.test(inside.trim())?tag:'')};
+      if(seoNeedsReview(seo)) throw new Error('Generated SEO was incomplete or repetitive.');
+      current.seoDraft=current.seoDraft||[];
+      const rec={key,designCode:g.designCode,colour:g.colour,productType:g.productType,seo,seoApproved:false,source:'openai-pilot'};
+      const idx=current.seoDraft.findIndex(x=>x.key===key);if(idx>=0)current.seoDraft[idx]=rec;else current.seoDraft.push(rec);
+      const item=current.openaiPilot.attempts.find(x=>x.groupKey===key);item.seo={model:textModel,usage:generated.usage||null};
+      saveStore(fresh);
+    }catch(e){
+      const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.find(x=>x.groupKey===key);
+      if(item){item.errors.push({type:'seo',error:e.message});saveStore(fresh);}
+    }
+    const done=loadStore(),donePo=done.pos[req.params.id],record=donePo.openaiPilot.attempts.find(x=>x.groupKey===key);
+    record.status=record.errors.length?(record.views.length||record.seo?'partial':'failed'):'drafts-ready';
+    record.completedAt=new Date().toISOString();saveStore(done);
+  }catch(e){
+    if (!res.headersSent) res.status(500).json({success:false,error:e.message});
+    else {
+      const s=loadStore(),record=(((s.pos[req.params.id]||{}).openaiPilot||{}).attempts||[]).find(x=>x.status==='running');
+      if(record){record.errors.push({type:'job',error:e.message});record.status='failed';record.completedAt=new Date().toISOString();saveStore(s);}
+    }
+  }
+  finally{paidPilotInFlight.delete(lockKey);}
+});
 router.post('/api/procurement/pos/:id/codex-batch', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});

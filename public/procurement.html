@@ -1708,7 +1708,7 @@
       // photos + SEO are prepared during the shipping lead time, not at receive.
       if(me.canManage && !posted){
         h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
-           '<p class="sub">Use the original uploaded photo at no image-generation cost, or prepare additional Codex images later. Review the name, SEO title, description and alt text before posting. Photo-based AI copy requires the configured vision service; a product-details draft is available after Save corrections.</p>'+
+           '<p class="sub">After Save corrections, the owner can generate OpenAI image and SEO drafts for up to 10 articles in the paid pilot. Every result remains unapproved until reviewed. The original photo can still be used at no image-generation cost.</p>'+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
       }
       h+='<div id="receiveHost"></div>';
@@ -1913,6 +1913,7 @@
 
     // ══════════ AI STUDIO ══════════
     var studio={ images:{}, seo:{}, styling:{}, backRefs:{} };     // keyed by product group key
+    var openaiPilotConfig=null;
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
     // ── Fit / length (affects EVERY shot — the strongest lever for the cut) ──
@@ -1966,6 +1967,9 @@
         if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
         if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved }; }); }
         renderStudio();
+        fetch('/api/procurement/openai-pilot-status').then(readJson).then(function(status){
+          openaiPilotConfig=status;renderStudio();
+        }).catch(function(){ /* Generation endpoint will explain configuration errors. */ });
       }).catch(function(e){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     }
     function renderStudio(){
@@ -1984,7 +1988,7 @@
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> <button class="btn sm" data-codexbatch="'+i+'">Prepare Codex images + SEO</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
+        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> '+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>Generate images + SEO (paid pilot)</button> ':'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
         '. Confirm whether these are duplicate records or separate articles.</div>':'';
@@ -2076,6 +2080,30 @@
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
+      var pilot=host.querySelector('[data-openai-pilot]'); if(pilot) pilot.onclick=function(){
+        if(!confirm('This calls the separately billed OpenAI image and text APIs for this article. It creates unapproved drafts only. The PO pilot is limited to 10 articles by default, with no automatic retries. Continue?'))return;
+        pilot.disabled=true;pilot.textContent='Generating drafts…';
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
+          .then(readJson).then(function(r){
+            if(!r.success)throw new Error(r.error||'OpenAI pilot failed.');
+            var polls=0;
+            function checkProgress(){
+              fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot-status?groupKey='+encodeURIComponent(np.key))
+                .then(readJson).then(function(result){
+                  if(!result.success)throw new Error(result.error||'Could not read pilot progress.');
+                  var p=result.pilot||{};
+                  if(p.status==='running'&&polls++<120){setTimeout(checkProgress,5000);return;}
+                  if(p.status==='running')throw new Error('Generation is still running. Reopen this PO to check saved drafts.');
+                  studio.images[np.key]=result.images||[];
+                  if(result.seo&&result.seo.seo)studio.seo[np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved};
+                  rerenderCard(i);
+                  alert((p.views||[]).length+' image draft(s) and '+(p.seo?'SEO draft':'no SEO draft')+' returned for review.'+
+                    ((p.errors||[]).length?' Issues: '+p.errors.map(function(e){return e.type+': '+e.error;}).join('; '):''));
+                }).catch(function(e){pilot.disabled=false;pilot.textContent='Generate images + SEO (paid pilot)';alert(e.message);});
+            }
+            checkProgress();
+          }).catch(function(e){pilot.disabled=false;pilot.textContent='Generate images + SEO (paid pilot)';alert(e.message);});
+      };
       var original=host.querySelector('[data-useoriginal]'); if(original) original.onclick=function(){
         original.disabled=true;
         fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/use-original-photo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
