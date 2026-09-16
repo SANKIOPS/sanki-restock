@@ -1984,7 +1984,7 @@
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> <button class="btn sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
+        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> <button class="btn sm" data-codexbatch="'+i+'">Prepare Codex images + SEO</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
         '. Confirm whether these are duplicate records or separate articles.</div>':'';
@@ -2040,7 +2040,7 @@
       var seo=studio.seo[np.key];
       var seoBlock;
       if(!seo){
-        seoBlock='<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)"><button class="btn sm" data-genseo="'+i+'">Generate name &amp; SEO from photo</button> <span class="muted" style="font-size:12px">approve a photo first for best results</span></div>';
+        seoBlock='<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)"><button class="btn sm" data-genseo="'+i+'">Anthropic SEO from photo (paid)</button> <span class="muted" style="font-size:12px">or use the Codex batch above</span></div>';
       } else {
         var g=seo.seo||{};
         seoBlock='<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)">'+
@@ -2054,7 +2054,7 @@
           '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
           '<button class="btn sm" data-saveseo="'+i+'">Save</button>'+
           '<button class="btn sm" data-approveseo="'+i+'" title="'+(seo.approved?'Approved — click to UNDO':'Approve this SEO')+'" style="'+(seo.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(seo.approved?'✓ SEO approved · undo':'Approve SEO')+'</button>'+
-          '<button class="btn ghost sm" data-genseo="'+i+'">↻ Regenerate</button>'+
+          '<button class="btn ghost sm" data-genseo="'+i+'">Anthropic rewrite (paid)</button>'+
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs 1 approved photo + approved SEO</span>';
@@ -2082,10 +2082,8 @@
           .then(readJson).then(function(r){
             if(!r.success)throw new Error(r.error||'Original photo is unavailable.');
             studio.images[np.key]=r.images;rerenderCard(i);
-            // Name/SEO is judged from this exact uploaded photo when the
-            // configured vision writer is available. Corrections also keep a
-            // product-facts draft ready for manual review if that service fails.
-            if(!(studio.seo[np.key]&&studio.seo[np.key].approved) || !studioReadyFor(np)) genSeoFor(np,i,null);
+            // The Codex batch can return photo-judged copy. Do not silently
+            // invoke a separately billed Anthropic API when choosing a photo.
           })
           .catch(function(e){alert(e.message);original.disabled=false;});
       };
@@ -2100,6 +2098,18 @@
         }).then(readJson).then(function(r){if(!r.success)throw new Error(r.error);studio.images[np.key]=r.images;rerenderCard(i);})
           .catch(function(e){alert(e.message);}).finally(function(){cr.value='';});
       };
+      var cs=host.querySelector('[data-codexseo]'); if(cs) cs.onchange=function(){
+        var file=cs.files&&cs.files[0]; if(!file)return;
+        file.text().then(function(raw){
+          var result=JSON.parse(raw);
+          if(!result.batchId || result.groupKey!==np.key || !result.seo)throw new Error('This SEO result must include the matching batchId, groupKey and seo.');
+          return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/codex-batch/'+encodeURIComponent(result.batchId)+'/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,seo:result.seo})});
+        }).then(readJson).then(function(r){
+          if(!r.success)throw new Error(r.error||'Could not import Codex SEO.');
+          studio.seo[np.key]={seo:r.seo,approved:false};rerenderCard(i);
+          alert('Codex SEO imported. Review the copy and click Approve SEO when correct.');
+        }).catch(function(e){alert(e.message);}).finally(function(){cs.value='';});
+      };
       var cb=host.querySelector('[data-codexbatch]'); if(cb) cb.onclick=function(){
         cb.disabled=true;
         fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/codex-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
@@ -2107,13 +2117,13 @@
             if(!r.success) throw new Error(r.error||'Batch preparation failed.');
             var blob=new Blob([JSON.stringify(r.batch,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
             a.href=url;a.download='codex-image-batch-'+r.batch.id+'.json';a.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);
-            alert('Batch '+r.batch.id+' prepared. Share this manifest in Codex to start generation. No paid generation was called. Results must be returned to this purchase before approval/posting.');
+            alert('Batch '+r.batch.id+' prepared for Codex images and SEO. Share this manifest in Codex. No paid Railway AI call was made. Return results here for review before posting.');
           }).catch(function(e){alert(e.message);}).finally(function(){cb.disabled=false;});
       };
       var gi=host.querySelector('[data-genimg]'); if(gi) gi.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImagesSequential(np,i); };
       Array.prototype.forEach.call(host.querySelectorAll('[data-regen]'),function(b){ if(b.getAttribute('data-type').indexOf('model-')===0 || b.getAttribute('data-type')==='detail'){b.remove();return;} b.title='Gemini generation: paid API usage'; b.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImages(np,i,[b.getAttribute('data-type')],b); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-approveimg]'),function(b){ b.onclick=function(){ toggleImg(np,i,b.getAttribute('data-type')); }; });
-      var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ genSeoFor(np,i,gs); };
+      var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ if(confirm('This calls the separately billed Anthropic API. Continue?'))genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
       Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ stylingOf(np)[sel.getAttribute('data-sty')]=sel.value; }; });
@@ -2180,8 +2190,7 @@
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ aiImages:(function(){var o={};o[np.key]=imgs;return o;})() })})
         .then(readJson).then(function(r){
           if(!r.success) throw new Error(r.error||'Could not save photo approval.');
-          // Wait until approval is saved, so SEO judges the selected image.
-          if(!wasApproved && im.approved && !(studio.seo[np.key]&&studio.seo[np.key].approved)) genSeoFor(np,i,null);
+          // Image approval must not silently invoke a billed SEO API.
         }).catch(function(e){ im.approved=wasApproved;rerenderCard(i);alert(e.message); });
     }
     function genSeoFor(np,i,btn){

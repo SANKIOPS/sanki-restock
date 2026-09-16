@@ -1697,12 +1697,24 @@ router.post('/api/procurement/pos/:id/codex-batch/:batchId/results', async (req,
     if((req.body||{}).groupKey!==batch.groupKey) throw new Error('Batch belongs to a different product/colour.');
     const g=(await newGroupsOf(s,po)).find(g=>g.key===batch.groupKey);
     if(!g) throw new Error('Product group no longer exists.');
-    const images=codexBatch.accept(batch,g,(po.backRefs||{})[g.key],(req.body||{}).images,readStoredPhoto);
+    const submitted=req.body||{};
+    if(!submitted.seo && (!Array.isArray(submitted.images) || !submitted.images.length)) throw new Error('Return images or listing copy.');
+    const images=Array.isArray(submitted.images) && submitted.images.length
+      ? codexBatch.accept(batch,g,(po.backRefs||{})[g.key],submitted.images,readStoredPhoto) : [];
+    const seo=submitted.seo ? codexBatch.acceptSeo(batch,g,(po.backRefs||{})[g.key],submitted.seo) : null;
+    if(seo && seoNeedsReview(seo)) throw new Error('Review incomplete or repetitive listing copy.');
     po.aiImages=po.aiImages||{}; const existing=po.aiImages[g.key]||[];
     for(const img of images){const old=existing.find(x=>x.type===img.type);if(old && old.url!==img.url) throw new Error('View already exists; use the existing replacement controls.');}
     for(const img of images) if(!existing.some(x=>x.type===img.type)) existing.push(img);
     po.aiImages[g.key]=existing; batch.status='returned'; batch.returnedAt=new Date().toISOString();saveStore(s);
-    res.json({success:true,images:existing});
+    if(seo){
+      po.seoDraft=Array.isArray(po.seoDraft)?po.seoDraft:[];
+      const rec={key:g.key,designCode:g.designCode,colour:g.colour,productType:g.productType,seo,seoApproved:false,source:'codex-batch',codexBatchId:batch.id};
+      const at=po.seoDraft.findIndex(x=>x.key===g.key);
+      if(at>=0)po.seoDraft[at]=rec;else po.seoDraft.push(rec);
+    }
+    saveStore(s);
+    res.json({success:true,images:existing,seo});
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
 
