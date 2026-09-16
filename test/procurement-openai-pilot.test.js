@@ -77,10 +77,23 @@ test('paid retry is explicit and only requests missing image or SEO drafts',()=>
   assert.match(html,/Generate missing drafts \(paid\)/);
   assert.match(html,/retry:!!used\[item\.np\.key\]/);
   assert.match(html,/separately billed image calls and .* SEO call/);
-  assert.match(server,/const neededTypes=openaiPilot\.pilotTypes\(g,!!backSource\)\.filter\(type=>!/);
+  assert.match(server,/const neededTypes=allowedTypes\.filter\(type=>!/);
   assert.match(server,/if \(needsSeo\) try \{/);
   assert.match(server,/All image and SEO drafts already exist/);
   assert.match(server,/\.attempts\.slice\(\)\.reverse\(\)\.find\(x=>x\.groupKey===key\)/);
+});
+
+test('existing image views can be regenerated separately or together without rewriting SEO',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/data-paid-regen=/);
+  assert.match(html,/data-regen-product=/);
+  assert.match(html,/regenerateTypes:chosen/);
+  assert.match(html,/Successful replacements will need your approval again/);
+  assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\|\|!savedImages\.some/);
+  assert.match(server,/const needsSeo=!regenerateTypes\.length/);
+  assert.match(server,/approved:false,source:'openai-pilot'/);
+  assert.match(server,/This view changed during regeneration; result was discarded/);
 });
 
 test('SEO request uses the original photo and returns complete structured draft',async()=>{

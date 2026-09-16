@@ -1750,29 +1750,37 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     if (!priorAttempts.length&&retry) return res.status(409).json({success:false,error:'No earlier paid attempt exists for this article. Reload the PO before generating.'});
     if (new Set(po.openaiPilot.attempts.map(x=>x.groupKey)).size>=maxGroups&&!priorAttempts.length) return res.status(409).json({success:false,error:`Pilot limit of ${maxGroups} articles reached for this PO.`});
     const fingerprint=codexBatch.fingerprint(g,(po.backRefs||{})[key]);
-    const neededTypes=openaiPilot.pilotTypes(g,!!backSource).filter(type=>!((po.aiImages||{})[key]||[]).some(x=>x.type===type&&x.url));
+    const allowedTypes=openaiPilot.pilotTypes(g,!!backSource);
+    const savedImages=((po.aiImages||{})[key]||[]);
+    const requestedRegeneration=(req.body||{}).regenerateTypes;
+    if(requestedRegeneration!==undefined && (!Array.isArray(requestedRegeneration)||!requestedRegeneration.length||requestedRegeneration.length>6||new Set(requestedRegeneration).size!==requestedRegeneration.length||requestedRegeneration.some(type=>!allowedTypes.includes(type)||!savedImages.some(image=>image.type===type&&image.url)))) {
+      return res.status(400).json({success:false,error:'Select existing, supported image views to regenerate.'});
+    }
+    const regenerateTypes=requestedRegeneration||[];
+    const neededTypes=allowedTypes.filter(type=>!savedImages.some(x=>x.type===type&&x.url));
     const existingSeo=(po.seoDraft||[]).find(x=>x.key===key);
     // A deterministic draft made when corrections were saved is NOT AI-written.
     // Preserve approved manual copy; replace unapproved placeholders with AI copy.
-    const needsSeo=!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
-    if (!neededTypes.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
+    const needsSeo=!regenerateTypes.length&&!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
+    const types=regenerateTypes.length?regenerateTypes:neededTypes;
+    if (!types.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
     const styling=openaiPilot.normalizeStyling((req.body||{}).styling||(po.imageStyling||{})[key],g);
-    const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
+    const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});
     const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
     const textModel=process.env.PROCUREMENT_OPENAI_TEXT_MODEL||'gpt-4.1-mini';
-    const types=neededTypes;
     for(const type of types){
       try {
-        if (((po.aiImages||{})[key]||[]).some(x=>x.type===type && x.url)) continue;
+        if (!regenerateTypes.length&&((po.aiImages||{})[key]||[]).some(x=>x.type===type && x.url)) continue;
         const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,type,styling,model:imageModel});
         const fresh=loadStore(),current=fresh.pos[req.params.id];
         const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
         if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; result was discarded.');
         current.aiImages=current.aiImages||{};const images=current.aiImages[key]||[];
         const prior=images.find(x=>x.type===type);
-        if(prior && prior.url) throw new Error('An image already exists for this view; generated draft was not attached.');
+        if(regenerateTypes.includes(type) && prior?.url!==savedImages.find(image=>image.type===type)?.url) throw new Error('This view changed during regeneration; result was discarded.');
+        if(prior && prior.url && !regenerateTypes.includes(type)) throw new Error('An image already exists for this view; generated draft was not attached.');
         const saved=savePhotoBuffer(generated.buffer,'.png');
         const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot'};
         const idx=images.findIndex(x=>x.type===type);if(idx>=0)images[idx]=rec;else images.push(rec);
