@@ -1712,21 +1712,23 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const g=(await newGroupsOf(s,po)).find(x=>x.key===key);
     const source=g&&readStoredPhoto(g.photoUrl);
     if (!g || !source) return res.status(400).json({success:false,error:'Product group with original photo required.'});
+    const backSource=(po.backRefs||{})[key] ? readStoredPhoto(po.backRefs[key]) : null;
     const maxGroups=Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||30));
     po.openaiPilot=po.openaiPilot||{attempts:[]};
     if (po.openaiPilot.attempts.some(x=>x.groupKey===key)) return res.status(409).json({success:false,error:'This article already used its pilot attempt; review its drafts before any paid retry.'});
     if (po.openaiPilot.attempts.length>=maxGroups) return res.status(409).json({success:false,error:`Pilot limit of ${maxGroups} articles reached for this PO.`});
     const fingerprint=codexBatch.fingerprint(g,(po.backRefs||{})[key]);
-    const attempt={groupKey:key,sourceFingerprint:fingerprint,startedAt:new Date().toISOString(),status:'running',views:[],errors:[]};
+    const styling=openaiPilot.normalizeStyling((req.body||{}).styling,g);
+    const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,startedAt:new Date().toISOString(),status:'running',views:[],errors:[]};
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});
     const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
     const textModel=process.env.PROCUREMENT_OPENAI_TEXT_MODEL||'gpt-4.1-mini';
-    const types=openaiPilot.pilotTypes(g);
+    const types=openaiPilot.pilotTypes(g,!!backSource);
     for(const type of types){
       try {
         if (((po.aiImages||{})[key]||[]).some(x=>x.type===type && x.approved)) continue;
-        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source,type,model:imageModel});
+        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,type,styling,model:imageModel});
         const fresh=loadStore(),current=fresh.pos[req.params.id];
         const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
         if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; result was discarded.');
