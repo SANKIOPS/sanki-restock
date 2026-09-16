@@ -354,6 +354,11 @@ test('owner sees historical payroll as unverified and can reopen one August empl
   assert.equal(result.body.row.historicalCloseAdjustment,0);
   assert.equal(invoke('GET','/api/salary/payments/:ym',{params:{ym:'2026-08'},role:'owner'}).body.payments.length,beforePayments);
   assert.equal(invoke('POST','/api/salary/historical-offset/:ym/:empId/reopen',{params:{ym:'2026-08',empId:row.id},body:{reason:'Again'},role:'owner'}).status,404);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/August salary needs payment review/);
+  assert.match(html,/Review balance \/ enable Pay/);
+  assert.match(html,/Link existing 3645 debit/);
+  assert.match(html,/Ask the Owner to review these historical balances first/);
 });
 
 test('owner can correct a proof-backed salary payment and correction is audited',()=>{
