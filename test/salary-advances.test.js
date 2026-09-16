@@ -335,6 +335,7 @@ test('payroll presents a prominent salary payment action without offering zero-b
 test('Prashant Axis 3645 is available for advances and full or partial salary payments',()=>{
   const config=invoke('GET','/api/salary/employees').body;
   assert.ok(config.salaryPayingAccounts.includes('Prashant Axis 3645'));
+  assert.ok(config.salaryPayingAccounts.includes('IndusInd Bank 8181'));
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Axis Salary Employee',salary:20000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-09'},body:{empId:emp.id,paidDays:30}});
   const partial=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-09',date:'2098-09-30',account:'Prashant Axis 3645',proof:'/axis-partial.jpg',items:[{empId:emp.id,amount:5000,modificationReason:'Fraction salary payment'}]}});
@@ -413,7 +414,7 @@ test('positive and negative balances carry forward once and payroll respects emp
   assert.equal(february.find(x=>x.id===leaverWithBalance.id).openingAdvanceCarry,2400,'a former employee remains visible until their balance is settled');
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
   const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
-  assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/Prashant Axis 3645|cash account/);
+  assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/authorized salary paying account/);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(source,/Extra salary paid earlier/);assert.match(source,/Salary left unpaid earlier/);assert.match(html,/positive balances remain payable/);
 });
 
@@ -540,7 +541,7 @@ test('Prashant can edit salary and record proof-backed payments from authorized 
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Prashant Payment Access Test',salary:20000,joiningDate:'2099-02-01'}}).body.employee,ym='2099-02';
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:20}}).status,200);
   const who={role:'claimant',username:'prashant'},accounts=invoke('GET','/api/salary/employees',who).body.salaryPayingAccounts;
-  assert.deepEqual(accounts,['Prashant Axis 3645','Prashant Cash','Gagan Sir Cash','Counter Cash']);
+  assert.deepEqual(accounts,['Prashant Axis 3645','IndusInd Bank 8181','Prashant Cash','Gagan Sir Cash','Counter Cash']);
   assert.equal(invoke('POST','/api/salary/row/:ym',{...who,params:{ym},body:{empId:emp.id,paidDays:15}}).status,200);
   assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{...who,params:{ym,empId:emp.id},body:{amount:10000,reason:'Confirmed final amount'}}).status,200);
   assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.permissions.canModifyPayroll,true);
@@ -553,7 +554,8 @@ test('Prashant can edit salary and record proof-backed payments from authorized 
   assert.equal(invoke('POST','/api/salary/payments/:id/proofs',{...who,params:{id:payment.id},body:{proofs:['/api/expenses/photo/more.jpg']}}).status,200);
   const after=invoke('GET','/api/salary/payments/:ym',{...who,params:{ym}}).body.payments.find(x=>x.id===payment.id);
   assert.deepEqual(after.proofs,['/api/expenses/photo/no.jpg','/api/expenses/photo/more.jpg']);
-  assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.rows.find(x=>x.id===emp.id).paid,1000);
+  const from8181=invoke('POST','/api/salary/payments/batch',{...who,body:{...payload,account:'IndusInd Bank 8181',date:'2099-02-21',proofs:['/api/expenses/photo/8181.jpg']}});assert.equal(from8181.status,200);assert.equal(from8181.body.total,1000);
+  assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.rows.find(x=>x.id===emp.id).paid,2000);
   assert.equal(invoke('POST','/api/salary/payments/:id/proofs',{...who,params:{id:payment.id},body:{proofs:['https://other.test/not-proof']}}).status,400);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/Amount actually paid ₹ — editable/);
