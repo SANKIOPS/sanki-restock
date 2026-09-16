@@ -66,6 +66,26 @@ test('formatted Excel dates and named recovery months are read without creating 
   const source=_advanceSourceSheet(file);assert.equal(source.items[0].amount,27000);assert.equal(source.items[0].note,'Last Month Advance carried forward');assert.deepEqual(s.advances,{});
 });
 
+test('uploaded advance rows can be edited, linked, or proof-posted without duplicate payments',()=>{
+  const employee=invoke('POST','/api/salary/employees',{body:{name:'Sheet Editor',salary:20000,channel:'Shared'}}).body.employee;
+  const salPath=path.join(tempDir,'salary.json'),state=JSON.parse(fs.readFileSync(salPath,'utf8'));
+  state.advanceSourceSheets=[{hash:'sheet-test-hash',fileName:'advances.xlsx',items:[
+    {row:2,advanceId:'',employeeId:employee.id,employeeName:employee.name,amount:1200,requestDate:'2026-09-16',payingAccount:'3645',recoveryStartMonth:'2026-10',note:'New advance',reference:'sheet-ref'},
+    {row:3,advanceId:'',employeeId:employee.id,employeeName:employee.name,amount:900,requestDate:'2026-08-01',payingAccount:'N/A',recoveryStartMonth:'August',note:'Last Month Advance carried forward',reference:''}
+  ],total:2100}];fs.writeFileSync(salPath,JSON.stringify(state));
+  const edited=invoke('PATCH','/api/salary/advances/source-sheet/rows/:row',{params:{row:'2'},body:{hash:'sheet-test-hash',amount:1250,note:'Corrected from worksheet'},role:'owner'});
+  assert.equal(edited.status,200);assert.equal(edited.body.item.amount,1250);
+  assert.equal(invoke('POST','/api/salary/advances/source-sheet/rows/:row/post',{params:{row:'3'},body:{hash:'sheet-test-hash',account:'Prashant Axis 3645',proofs:['/proof.jpg']},role:'owner'}).status,400,'carry-forward cannot create a bank debit');
+  assert.equal(invoke('POST','/api/salary/advances/source-sheet/rows/:row/post',{params:{row:'2'},body:{hash:'sheet-test-hash',account:'Prashant Axis 3645'},role:'owner'}).status,400,'proof required');
+  const posted=invoke('POST','/api/salary/advances/source-sheet/rows/:row/post',{params:{row:'2'},body:{hash:'sheet-test-hash',account:'Prashant Axis 3645',proofs:['/proof.jpg']},role:'owner'});
+  assert.equal(posted.status,200);assert.equal(posted.body.advance.amount,1250);
+  assert.equal(invoke('POST','/api/salary/advances/source-sheet/rows/:row/post',{params:{row:'2'},body:{hash:'sheet-test-hash',account:'Prashant Axis 3645',proofs:['/proof.jpg']},role:'owner'}).status,409,'cannot repost linked row');
+  const view=invoke('GET','/api/salary/advances',{role:'owner'}).body;
+  assert.equal(view.sourceSheet.items[0].linkedAdvanceId,posted.body.advance.id);assert.equal(view.sourceSheet.total,2150);
+  assert.equal(invoke('PATCH','/api/salary/advances/source-sheet/rows/:row',{params:{row:'2'},body:{hash:'sheet-test-hash',amount:1300},role:'owner'}).status,409,'posted amount cannot silently change');
+  assert.equal(view.advances.filter(a=>a.id===posted.body.advance.id).length,1);
+});
+
 test('salary advances require owner approval and proof-backed posting, then recover oldest first', () => {
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Employee A',salary:30000,channel:'Shared'}}).body.employee;
   const request=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:1000,date:'2026-08-22',account:'Axis Bank 3448'}}).body.request;
