@@ -58,6 +58,10 @@ test('purchase studio offers whole-PO, selected and single-product paid generati
   assert.match(html,/data-selectproduct/);
   assert.match(html,/generatePaidGroups\('single',np\.key\)/);
   assert.match(html,/styling:paidStylingOf\(item\.np\)/);
+  assert.match(html,/Five photo slots · source is not posted/);
+  assert.match(html,/Optional accessories · select only what suits this article/);
+  assert.match(html,/Auto — limestone old-money/);
+  assert.match(html,/5 · Styled three-quarter view/);
 });
 
 test('paid retry is explicit and only requests missing image or SEO drafts',()=>{

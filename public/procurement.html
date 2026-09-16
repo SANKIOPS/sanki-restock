@@ -79,6 +79,12 @@
     #postPreview .ppbody{ padding:14px 18px; overflow:auto; }
     #postPreview .ppfoot{ padding:12px 18px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:10px; }
     .npcard{ border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; background:var(--ivory2); }
+    .studio-controls{ margin-top:10px; padding:10px 12px; border:1px solid var(--line); border-radius:9px; background:#fff; }
+    .studio-controls-title{ font-size:12px; font-weight:800; color:var(--emerald-d); margin-bottom:8px; }
+    .studio-controls-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .studio-photo-grid{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; margin-top:10px; }
+    @media(max-width:1100px){ .studio-photo-grid{ grid-template-columns:repeat(3,minmax(0,1fr)); } }
+    @media(max-width:760px){ .studio-photo-grid{ grid-template-columns:repeat(2,minmax(0,1fr)); } }
     .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .banner{ border-radius:10px; padding:10px 14px; font-size:13px; margin:10px 0; }
     .banner.ok{ background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
@@ -1943,8 +1949,11 @@
       if(s.pair && s.pair!=='Auto') parts.push('paired with '+s.pair.toLowerCase());
       if(s.tuck && s.tuck!=='Auto') parts.push(garmentCat(np.productType)==='upper'?('worn '+s.tuck.toLowerCase()):('with the top '+s.tuck.toLowerCase()));
       if(s.chain && s.chain!=='None') acc.push('a '+s.chain.toLowerCase());
-      ACC_TOGGLES.forEach(function(a){ if(s[a[0]]) acc.push(a[2]); });
-      if(s.bag) acc.push('a simple bag');
+      if(s.capStyle && s.capStyle!=='None') acc.push('a '+s.capStyle.toLowerCase());
+      if(s.sunglasses) acc.push('elegant shades');
+      if(s.watch) acc.push('a watch');
+      if(s.bagStyle && s.bagStyle!=='None') acc.push(s.bagStyle==='Gender-matched bag'?(np.audience==='Women'?'a structured handbag':np.audience==='Men'?'a minimal sling bag':'a gender-appropriate bag'):'a '+s.bagStyle.toLowerCase());
+      if(s.shoes && s.shoes!=='Auto') parts.push('with '+s.shoes.toLowerCase());
       if(s.aesthetic && s.aesthetic!=='Auto') parts.push(s.aesthetic.toLowerCase()+' styling');
       if(acc.length) parts.push('accessorised with '+(acc.length>1?acc.slice(0,-1).join(', ')+' and '+acc[acc.length-1]:acc[0]));
       return parts.join(', ');
@@ -2079,7 +2088,14 @@
       function sel(kind,label,opts,val){
         var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
           '<select data-sty="'+kind+'" data-i="'+i+'" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px">';
-        opts.forEach(function(op){ o+='<option'+((val||opts[0])===op?' selected':'')+'>'+esc(op)+'</option>'; });
+        opts.forEach(function(op){
+          var shown=op;
+          if(op==='Auto'&&np.line==='casuals'){
+            if(kind==='pair'&&cat==='upper') shown='Auto — trousers';
+            if(kind==='aesthetic') shown='Auto — limestone old-money';
+          }
+          o+='<option value="'+esc(op)+'"'+((val||opts[0])===op?' selected':'')+'>'+esc(shown)+'</option>';
+        });
         return o+'</select>';
       }
       function chk(kind,label,on){
@@ -2090,17 +2106,17 @@
       var fitRow=fitOpts?('<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
         sel('fit','Fit / length',fitOpts,s.fit)+
         '<span class="muted" style="font-size:11px">Manual/Gemini setting; paid OpenAI images use the saved product fit</span></div>'):'';
-      var pair='<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+      var pair='<div class="studio-controls"><div class="studio-controls-title">Outfit &amp; setting · applies to model photos</div><div class="studio-controls-row">'+
         (cat!=='other'?sel('pair','Pair with',pairOpts,s.pair):'')+
         sel('aesthetic','Look',AESTHETIC,s.aesthetic)+
         sel('tuck','Tuck',TUCK,s.tuck)+
-        sel('chain','Chain',CHAIN,s.chain)+sel('shoes','Shoes',SHOES,s.shoes)+
-        sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+
+        sel('shoes','Shoes',SHOES,s.shoes)+'</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
+        sel('chain','Chain',CHAIN,s.chain)+sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+
         chk('sunglasses','Elegant shades',s.sunglasses)+chk('watch','Watch',s.watch)+
-        '<span class="muted" style="font-size:11px">Model shots only · Auto pairs a simple complementary outfit</span></div>';
-      var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
+        '</div><div class="muted" style="font-size:11px;margin-top:8px">'+(np.line==='casuals'?'Casuals defaults to an Indian model at a limestone estate, with understated old-money styling. ':'')+'Accessories are optional; none should hide the garment.</div></div>';
+      var grid='<div class="studio-controls-title" style="margin-top:12px">Five photo slots · source is not posted; back needs a real reference</div><div class="studio-photo-grid">';
       var hasBackRef=!!studio.backRefs[np.key];
-      [['original','Original reference · never posted'],['front','Product front'],['back','Product back']].concat(np.audience==='Unisex'?[['female','Indian female front'],['model-side-female','Indian female three-quarter'],['male','Indian male front'],['model-side-male','Indian male three-quarter']]:[['model-front','Styled Indian model front'],['model-side','Styled three-quarter view']]).forEach(function(t){
+      [['original','1 · Original reference · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(np.audience==='Unisex'?[['female','4a · Indian female front'],['model-side-female','5a · Female three-quarter'],['male','4b · Indian male front'],['model-side-male','5b · Male three-quarter']]:[['model-front','4 · Styled Indian model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         // "change back photo" link (only for the back slot once a ref exists)
         var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
