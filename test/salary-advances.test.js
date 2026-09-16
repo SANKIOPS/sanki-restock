@@ -248,6 +248,15 @@ test('one salary batch posts multiple employees atomically from the payroll tabl
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Select all payable/);assert.match(html,/Clear selection/);assert.match(html,/Only checked employees will be paid/);assert.match(html,/Partially paid/);
 });
 
+test('payroll presents a prominent salary payment action without offering zero-balance payments',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/payableEmployees=d\.rows\.filter\(function\(r\)\{return Number\(r\.balance\)>0\.005;\}\)/);
+  assert.match(html,/id="quickPayEmployee"/);
+  assert.match(html,/id="quickPayButton"/);
+  assert.match(html,/No salary balance is currently payable for this month/);
+  assert.match(html,/openSalaryPay\(id\)/);
+});
+
 test('Prashant Axis 3645 is available for advances and full or partial salary payments',()=>{
   const config=invoke('GET','/api/salary/employees').body;
   assert.ok(config.salaryPayingAccounts.includes('Prashant Axis 3645'));
