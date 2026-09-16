@@ -183,7 +183,7 @@ function loadStore() {
   // The intended Excel-style sequence continues Z999 → AA1.
   let repairedInvalidSerials = false;
   Object.values(s.pos).forEach(po => {
-    if (!po || po.status === 'posted') return;
+    if (!po || po.status === 'posted' || po.status === 'posting_partial') return;
     (po.lines || []).forEach(line => {
       const serial = line && line.serialUsed;
       if (!serial || serial.alpha !== '[') return;
@@ -422,7 +422,9 @@ function genSeo(g) {
   // is left, we simply omit the name and let colour + product type carry it.
   const designName  = stripInternalCodes(titleCase(g.designName || ''), designCode);
   // Customer-facing copy NEVER falls back to the raw design code.
-  const nameForTitle = designName;
+  // Vendor names often already end in the product type ("Casuals T-shirt").
+  // Do not produce customer-facing names such as "T-shirt T-Shirt".
+  const nameForTitle = designName.replace(new RegExp('\\s+' + String(g.productType || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'), '').trim();
   const productType = g.productType || '';
   const colour      = titleCase(g.colour || '');
   const fit         = titleCase(g.fit || '');
@@ -482,7 +484,13 @@ function genSeo(g) {
     `<li>Cash on Delivery available · Limited drop</li>` +
     `</ul>`;
 
-  return { title, handle, metaTitle, metaDescription, imageAlt, tags, bodyHtml };
+  return { displayName: nameForTitle, title, handle, metaTitle, metaDescription, imageAlt, tags, bodyHtml };
+}
+
+function seoNeedsReview(seo) {
+  return !seo || !seo.displayName || !seo.title || !seo.metaTitle || !seo.metaDescription || !seo.imageAlt ||
+    !seo.handle || !seo.bodyHtml || !Array.isArray(seo.tags) || !seo.tags.length ||
+    /(t[ -]?shirt|shirt|trouser|jeans|lower|shorts)\s+\1/i.test(seo.title);
 }
 
 // A trailing SIZE token on a design name ("FY5002 Black S", "Cargo 32") — the
@@ -777,6 +785,7 @@ function canManagePurchases(req) {
   return roles.map(r => String(r).toLowerCase()).some(r =>
     r === 'admin' || r === 'owner' || r === 'procurement' || r === 'inventory');
 }
+function isLockedPo(po) { return po.status === 'posted' || po.status === 'posting_partial'; }
 function publicPo(po, req) {
   if (canManagePurchases(req)) return po;
   const clone = JSON.parse(JSON.stringify(po));
@@ -1336,7 +1345,7 @@ router.patch('/api/procurement/pos/:id/weights', (req, res) => {
   if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Only authorised Purchases users can save weights.' });
   const s = loadStore(), po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Use Edit cost calculation for a posted PO.' });
+  if (po.status === 'posted' || po.status === 'posting_partial') return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
   const weights = (req.body || {}).weights;
   if (!weights || typeof weights !== 'object' || Array.isArray(weights) || !Object.keys(weights).length)
     return res.status(400).json({ success: false, error: 'Enter at least one weight.' });
@@ -1360,7 +1369,7 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'This PO is already posted to Shopify.' });
+    if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
     const b = req.body || {};
     const weights = b.weights || {};            // { lineIndex: grams }
     const qtys    = b.qtys || {};               // { lineIndex: actual received qty }
@@ -1404,7 +1413,7 @@ router.post('/api/procurement/pos/:id/mark-received', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
   const b = req.body || {};
   if (b.undo) {
     // Roll back an accidental "received" (or a stale awaiting_approval) to advance.
@@ -1428,11 +1437,18 @@ router.post('/api/procurement/pos/:id/line-photo', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
   const b = req.body || {};
   const i = Number(b.lineIndex);
   if (!Array.isArray(po.lines) || !(i >= 0 && i < po.lines.length)) return res.status(400).json({ success: false, error: 'Bad line index.' });
-  po.lines[i].photoUrl = String(b.url || '').trim();
+  const url = String(b.url || '').trim();
+  if (!url.startsWith('/api/procurement/photo/') || !readStoredPhoto(url)) return res.status(400).json({ success: false, error: 'Upload a readable product photo first.' });
+  const key = groupKey(po.lines[i]);
+  if (po.lines[i].photoUrl !== url) {
+    ((po.aiImages || {})[key] || []).forEach(image => { image.approved = false; });
+    (po.seoDraft || []).filter(d => d.key === key).forEach(d => { d.seoApproved = false; });
+  }
+  po.lines[i].photoUrl = url;
   saveStore(s);
   res.json({ success: true, lineIndex: i, url: po.lines[i].photoUrl });
 });
@@ -1450,13 +1466,14 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be edited.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
   const b = req.body || {};
   const edits = b.edits || {};      // { lineIndex: { field: value } }
   const qtys  = b.qtys  || {};      // { lineIndex: qty }
   const who = (req.user && req.user.username) || 'system';
   const now = new Date().toISOString();
   let touched = 0;
+  const copyChanged = new Set();
   (po.lines || []).forEach((l, i) => {
     const e = edits[i];
     const hasQty = qtys[i] != null && qtys[i] !== '';
@@ -1465,6 +1482,8 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
     // that introduces a difference is captured against the prior values.
     if (!l.ordered || typeof l.ordered !== 'object') l.ordered = orderedSnapshot(l);
     let changed = false;
+    const oldGroup = groupKey(l);
+    const oldCopy = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'fit', 'audience'].map(k => String(l[k] || ''));
     const priorSku = l.sku;
     const priorIdentity = [l.productType, l.colour, l.sizeLabel].map(v => String(v == null ? '' : v));
     if (e) LINE_EDIT_FIELDS.forEach(k => {
@@ -1484,8 +1503,29 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
       l.serialUsed = rebuilt.serialUsed;
       l.skuError = rebuilt.error;
     }
+    if (oldCopy.some((v, idx) => v !== ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'fit', 'audience'].map(k => String(l[k] || ''))[idx])) {
+      copyChanged.add(oldGroup);
+      copyChanged.add(groupKey(l));
+    }
     if (changed) { l.editedAt = now; l.editedBy = who; touched++; }
   });
+  // Keep a fresh, editable SEO/AEO/GEO draft aligned with corrected product
+  // facts. Corrections invalidate prior copy approval; quantity-only edits do not.
+  if (copyChanged.size || (po.seoDraft || []).some(d => seoNeedsReview(d.seo))) {
+    po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
+    const refreshKeys = new Set([...copyChanged, ...po.seoDraft.filter(d => seoNeedsReview(d.seo)).map(d => d.key)]);
+    for (const key of refreshKeys) {
+      const lines = (po.lines || []).filter(l => groupKey(l) === key);
+      if (!lines.length) continue;
+      const l = lines[0];
+      const seo = genSeo({ designName: stripSizeSuffix(l.designName), designCode: l.designCode,
+        productType: l.productType, colour: l.colour, fit: l.fit, audience: l.audience,
+        sizeLabels: lines.map(x => x.sizeLabel), sizeCodeOf: label => s.sizes[label] || label });
+      const rec = { key, seo, seoApproved: false, source: 'product-details' };
+      const at = po.seoDraft.findIndex(x => x.key === key);
+      if (at >= 0) po.seoDraft[at] = rec; else po.seoDraft.push(rec);
+    }
+  }
   saveStore(s);
   res.json({ success: true, poId: po.id, touched, po: publicPo(po, req) });
 });
@@ -1499,7 +1539,7 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be edited.' });
+    if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
     const b = req.body || {};
     if (b.vendor != null)       po.vendor = String(b.vendor).toUpperCase().trim();
     if (b.line != null)         po.line = normLine(b.line);
@@ -1588,7 +1628,7 @@ router.delete('/api/procurement/pos/:id', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'A posted PO can no longer be deleted.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be deleted.' });
   delete s.pos[req.params.id];
   saveStore(s);
   res.json({ success: true, deleted: req.params.id });
@@ -1633,7 +1673,7 @@ router.post('/api/procurement/pos/:id/codex-batch', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
     const s=loadStore(), po=s.pos[req.params.id];
-    if (!po || po.status==='posted') return res.status(400).json({success:false,error:'Editable purchase required.'});
+    if (!po || isLockedPo(po)) return res.status(400).json({success:false,error:'Editable purchase required.'});
     const g=(await newGroupsOf(s,po)).find(g=>g.key===(req.body||{}).groupKey);
     if (!g || !readStoredPhoto(g.photoUrl)) return res.status(400).json({success:false,error:'Product group with source photo required.'});
     const batch=codexBatch.prepare(po,g); batch.poId=req.params.id;
@@ -1645,7 +1685,7 @@ router.post('/api/procurement/pos/:id/codex-batch/:batchId/results', async (req,
   try {
     if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
     const s=loadStore(),po=s.pos[req.params.id],batch=po&&(po.codexBatches||{})[req.params.batchId];
-    if(!batch || po.status==='posted') throw new Error('Editable batch not found.');
+    if(!batch || isLockedPo(po)) throw new Error('Editable batch not found.');
     if((req.body||{}).groupKey!==batch.groupKey) throw new Error('Batch belongs to a different product/colour.');
     const g=(await newGroupsOf(s,po)).find(g=>g.key===batch.groupKey);
     if(!g) throw new Error('Product group no longer exists.');
@@ -1658,6 +1698,27 @@ router.post('/api/procurement/pos/:id/codex-batch/:batchId/results', async (req,
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
 
+// Reuse the actual uploaded garment photo as a Shopify listing image. No image
+// generation or paid image API is called. One representative photo per colourway.
+router.post('/api/procurement/pos/:id/use-original-photo', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    const s = loadStore(), po = s.pos[req.params.id];
+    if (!po || po.status === 'posted' || po.status === 'posting_partial') return res.status(400).json({ success: false, error: 'Editable purchase required.' });
+    const key = String((req.body || {}).groupKey || '');
+    const group = (await newGroupsOf(s, po)).find(g => g.key === key);
+    if (!group || !group.photoUrl || !readStoredPhoto(group.photoUrl)) return res.status(400).json({ success: false, error: 'The original product photo is missing. Upload it again before posting.' });
+    po.aiImages = po.aiImages || {};
+    const images = Array.isArray(po.aiImages[key]) ? po.aiImages[key] : [];
+    const at = images.findIndex(x => x.type === 'original');
+    const original = { type: 'original', label: 'Original product photo', url: group.photoUrl, approved: true };
+    if (at >= 0) images[at] = original; else images.unshift(original);
+    po.aiImages[key] = images;
+    saveStore(s);
+    res.json({ success: true, groupKey: key, images });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // Generate the AI shots for ONE product group (or specific `types`).
 router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
   try {
@@ -1666,7 +1727,7 @@ router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'This PO is already posted.' });
+    if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
     const b = req.body || {};
     if (!b.groupKey) return res.status(400).json({ success: false, error: 'groupKey required.' });
     const groups = await newGroupsOf(s, po);
@@ -1731,7 +1792,7 @@ router.post('/api/procurement/pos/:id/images', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
   const b = req.body || {};
   if (b.aiImages && typeof b.aiImages === 'object') {
     po.aiImages = po.aiImages || {};
@@ -1751,7 +1812,7 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-    if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+    if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
     const b = req.body || {};
     if (!b.groupKey) return res.status(400).json({ success: false, error: 'groupKey required.' });
     const groups = await newGroupsOf(s, po);
@@ -1841,7 +1902,7 @@ router.post('/api/procurement/pos/:id/seo', (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-  if (po.status === 'posted') return res.status(400).json({ success: false, error: 'Already posted.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
   const b = req.body || {};
   if (!b.groupKey || !b.seo) return res.status(400).json({ success: false, error: 'groupKey and seo required.' });
   po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
@@ -1855,70 +1916,67 @@ router.post('/api/procurement/pos/:id/seo', (req, res) => {
 
 // The gated write. Body carries the user-approved plan (edited SEO allowed).
 router.post('/api/procurement/commit', async (req, res) => {
-  if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return res.status(400).json({ success: false, error: 'Shopify env not configured' });
-  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-  const s = loadStore();
-  const b = req.body || {};
-  if (!b.approve) return res.status(400).json({ success: false, error: 'Missing approval flag' });
-  const warehouseLocationId = String(b.warehouseLocationId || s.settings.warehouseLocationId || '');
-  if (!warehouseLocationId) return res.status(400).json({ success: false, error: 'Warehouse location not set — choose it in Settings first.' });
-
-  // Approved AI images live on the PO (keyed by product group). Attach them
-  // to each new product at post time so the listing is born with photos.
-  const poForImages = (b.poId && s.pos[b.poId]) ? s.pos[b.poId] : null;
-  const results = { created: [], adjusted: [], errors: [] };
-  // 1) Create new draft products.
-  for (const np of (b.newProducts || [])) {
-    try {
-      if (!np.images && poForImages && poForImages.aiImages && poForImages.aiImages[np.key]) {
-        np.images = poForImages.aiImages[np.key].filter(x => x.approved).map(x => ({ url: x.url, alt: np.seo && np.seo.imageAlt }));
+  try {
+    if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return res.status(400).json({ success: false, error: 'Shopify env not configured' });
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    const s = loadStore(), b = req.body || {}, po = s.pos[b.poId];
+    if (!b.approve || !po) return res.status(400).json({ success: false, error: 'A saved, approved purchase is required.' });
+    if (po.status !== 'received') return res.status(409).json({ success: false, error: 'Purchase must be received and not already posted or partially posted.' });
+    const warehouseLocationId = String(s.settings.warehouseLocationId || '');
+    if (!warehouseLocationId) return res.status(400).json({ success: false, error: 'Warehouse location not set — save it in Settings first.' });
+    const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate,
+      freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
+    if (preview.counts.errors || preview.counts.ambiguous) return res.status(400).json({ success: false, error: 'Fix SKU or product-group errors before posting.' });
+    const allSkus = preview.lines.map(l => l.sku).filter(Boolean);
+    if (allSkus.length !== preview.lines.length || new Set(allSkus).size !== allSkus.length) return res.status(400).json({ success: false, error: 'Every purchase line needs a unique SKU.' });
+    for (const np of preview.newProducts) {
+      const draft = (po.seoDraft || []).find(x => x.key === np.key);
+      const seo = draft && draft.seo;
+      if (!draft || !draft.seoApproved || seoNeedsReview(seo)) {
+        return res.status(400).json({ success: false, error: 'Approve complete, non-repetitive listing copy for every new product.' });
       }
-      const r = await createDraftProduct(np, warehouseLocationId);
-      results.created.push(r);
-    } catch (e) { results.errors.push({ kind: 'create', product: np.seo && np.seo.title, error: e.message }); }
-  }
-  // 2) Add received qty to existing variants.
-  for (const ea of (b.existingAdds || [])) {
-    try {
-      const r = await addExistingInventory(ea, warehouseLocationId);
-      results.adjusted.push(r);
-    } catch (e) { results.errors.push({ kind: 'adjust', sku: ea.sku, error: e.message }); }
-  }
-
-  // Finalize the PO. If a poId is supplied (Stage-2 receive→post flow) we mark
-  // that advance PO as posted; otherwise we record a fresh one (legacy path).
-  let poId, po;
-  if (b.poId && s.pos[b.poId]) {
-    poId = b.poId; po = s.pos[poId];
-    po.status = 'posted';
-    po.postedAt = new Date().toISOString();
-    po.dateReceive = b.dateReceive || po.dateReceive || '';
-    po.warehouseLocationId = warehouseLocationId;
-    po.newProducts = b.newProducts || [];
-    po.existingAdds = b.existingAdds || [];
+      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved);
+      if (!approved.length || approved.some(x => !readStoredPhoto(x.url))) return res.status(400).json({ success: false, error: 'Every new product needs an approved, readable image. Use the original photo if you do not want image generation.' });
+      np.seo = seo;
+      np.images = approved.map(x => ({ url: x.url, alt: seo.imageAlt }));
+    }
+    // Reserve the PO before the first external write. Any uncertain/partial
+    // result needs manual reconciliation, never a blind retry that duplicates stock.
+    const results = { created: [], adjusted: [], errors: [] };
+    po.status = 'posting_partial';
+    po.postingStartedAt = new Date().toISOString();
     po.results = results;
-  } else {
-    s.seq += 1;
-    poId = 'PO-' + String(s.seq).padStart(4, '0');
-    po = s.pos[poId] = {
-      id: poId,
-      status: 'posted',
-      createdAt: new Date().toISOString(),
-      postedAt: new Date().toISOString(),
-      createdBy: (req.user && req.user.username) || 'system',
-      vendor: b.vendor || '',
-      billNo: b.billNo || '',
-      datePurchase: b.datePurchase || '',
-      dateReceive: b.dateReceive || '',
-      warehouseLocationId,
-      newProducts: b.newProducts || [],
-      existingAdds: b.existingAdds || [],
-      results
-    };
-  }
-  saveStore(s);
-  _catalogue = null; // invalidate cache so new SKUs are seen next time
-  res.json({ success: true, poId, results });
+    saveStore(s);
+    for (const np of preview.newProducts) {
+      try {
+        const result = await createDraftProduct(np, warehouseLocationId);
+        results.created.push(result);
+        saveStore(s);
+        const stockError = (result.variants || []).find(v => v.stockError);
+        if (stockError) throw new Error('Product created, but stock failed for ' + stockError.sku + ': ' + stockError.stockError);
+      } catch (e) { results.errors.push({ kind: 'create', product: np.seo.title, error: e.message }); break; }
+    }
+    if (!results.errors.length) for (const ea of preview.existingAdds) {
+      try {
+        const result = await addExistingInventory(ea, warehouseLocationId);
+        if (result.error) throw new Error(result.error);
+        results.adjusted.push(result);
+        saveStore(s);
+      } catch (e) { results.errors.push({ kind: 'adjust', sku: ea.sku, error: e.message }); break; }
+    }
+    po.newProducts = preview.newProducts;
+    po.existingAdds = preview.existingAdds;
+    po.warehouseLocationId = warehouseLocationId;
+    if (!results.errors.length) {
+      po.status = 'posted';
+      po.postedAt = new Date().toISOString();
+    }
+    saveStore(s);
+    _catalogue = null;
+    if (results.errors.length) return res.status(409).json({ success: false, poId: po.id, results,
+      error: 'Shopify posting stopped after an error. This PO is locked as partially posted; inspect Shopify and the saved results before any retry. ' + results.errors[0].error });
+    res.json({ success: true, poId: po.id, results });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 router.get('/api/procurement/pos', (req, res) => {

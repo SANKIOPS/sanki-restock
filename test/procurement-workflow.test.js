@@ -3,7 +3,23 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, parseLocalInvoiceText } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, parseLocalInvoiceText, genSeo } = require('../modules/procurement');
+
+test('listing copy does not repeat the product type and includes a display name', () => {
+  const seo = genSeo({ designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'Pink', fit: 'Oversized', audience: 'Unisex', sizeLabels: ['FS'] });
+  assert.equal(seo.displayName, 'Casuals');
+  assert.equal(seo.title, 'Casuals T-Shirt — Oversized Fit, Pink');
+  assert.doesNotMatch(seo.metaTitle, /T-Shirt\s+T-Shirt/i);
+});
+
+test('original photo and server-side post checks exist in the purchase flow', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(html, /Use original photo/);
+  assert.match(js, /\/use-original-photo'/);
+  assert.match(js, /po\.status = 'posting_partial'/);
+  assert.match(js, /Every new product needs an approved, readable image/);
+});
 
 test('purchase SKU serials roll from Z999 to AA1 without punctuation', () => {
   assert.deepEqual(nextSerial({ alpha: 'Z', num: 999 }), { alpha: 'AA', num: 1 });

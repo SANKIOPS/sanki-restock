@@ -1456,7 +1456,7 @@
       var e=el(id); if(!e) return;
       e.oninput=renderPoList; e.onchange=renderPoList;
     });
-    var STATUS_META={ advance:['adv','Advance — awaiting goods'], received:['rec','Received — weighed'], awaiting_approval:['rec','Received — weighed'], posted:['posted','Posted to Shopify'] };
+    var STATUS_META={ advance:['adv','Advance — awaiting goods'], received:['rec','Received — weighed'], awaiting_approval:['rec','Received — weighed'], posting_partial:['rec','Posting interrupted — review Shopify'], posted:['posted','Posted to Shopify'] };
     var poIndex={};   // id → full PO (from the last list load), used for list-level edit
     var allPos=[];    // full unfiltered list from the last load (search/filter work on this)
     function loadPos(){
@@ -1612,7 +1612,7 @@
     function poDiffCount(po){ return (po.lines||[]).filter(function(l){ return l&&l.ordered && ['qty','colour','productType','sizeLabel','chinaSize','designName','designCode','sku','fit','audience'].some(function(f){return isDiff(l,f);}); }).length; }
     function renderPoDetail(po){
       lastReceive=null; currentPo=po;
-      var posted = po.status==='posted';
+      var posted = po.status==='posted' || po.status==='posting_partial';
       var india = po.origin==='india';
       var unit=function(v){ return india?money(v):yuan(v); };
       var etaHdr='';
@@ -1707,8 +1707,8 @@
       // AI STUDIO — available at every non-posted stage (incl. ADVANCE) so listing
       // photos + SEO are prepared during the shipping lead time, not at receive.
       if(me.canManage && !posted){
-        h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">AI image studio — new products</h2>'+
-           '<p class="sub">Prepare listing images &amp; SEO <b>now</b>, during the shipping lead time. Per new product: <b>1)</b> generate 4 photos &amp; approve the good ones, <b>2)</b> generate the name &amp; SEO from an approved photo and approve it. When the goods arrive you just enter weights and post — no waiting.</p>'+
+        h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
+           '<p class="sub">Use the original uploaded photo at no image-generation cost, or prepare additional Codex images later. Review the name, SEO title, description and alt text before posting. Photo-based AI copy requires the configured vision service; a product-details draft is available after Save corrections.</p>'+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
       }
       h+='<div id="receiveHost"></div>';
@@ -1849,7 +1849,7 @@
     // optional back reference attaches to the same product group the AI studio uses.
     function groupKeyOf(l){
       var design=String((l.designCode||l.designName||'')).trim().toLowerCase();
-      return [design, l.productType||'', l.colour||'', l.fit||'', l.audience||'Men']
+      return [design, l.colour||'']
         .map(function(x){ return String(x).trim().toLowerCase(); }).join('|');
     }
     // Optional back raw-photo attached while receiving. The AI back shot is built
@@ -1895,7 +1895,7 @@
           h+='</tbody></table></div>';
         }
         h+='<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'+
-          '<div class="muted" style="font-size:12.5px" id="studioNote">New products are created as <b>draft</b> with their approved AI photos; stock lands at the <b>warehouse</b>. This writes to the live Shopify store.</div>'+
+          '<div class="muted" style="font-size:12.5px" id="studioNote">New products are created as <b>draft</b> with their approved photos; stock lands at the <b>warehouse</b>. This writes to the live Shopify store.</div>'+
           '<button class="btn warn" id="postBtn">✓ Approve &amp; post to Shopify</button></div>';
       } else {
         h+='<div class="banner ok">Purchase received and saved. No separate admin approval is required.</div>';
@@ -1944,7 +1944,9 @@
     }
     function studioReadyFor(np){
       var imgs=studio.images[np.key]||[]; var okImg=imgs.some(function(x){return x.approved;});
-      var seo=studio.seo[np.key]; return okImg && seo && seo.approved;
+      var seo=studio.seo[np.key], copy=seo&&seo.seo||{};
+      return !!(okImg && seo && seo.approved && copy.displayName && copy.title && copy.metaTitle && copy.metaDescription && copy.imageAlt &&
+        !/(t[ -]?shirt|shirt|trouser|jeans|lower|shorts)\s+\1/i.test(copy.title));
     }
     // Load the NEW-product groups for a PO and render the studio into the PO
     // detail view — works at the advance stage (no receive/weights needed).
@@ -1981,7 +1983,7 @@
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div><button class="btn sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
+        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> <button class="btn sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?PAIR_UPPER:PAIR_LOWER, s=stylingOf(np);
       function sel(kind,label,opts,val){
         var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
@@ -2005,7 +2007,7 @@
         '<span class="muted" style="font-size:11px">only affects the 2 model shots · AI picks colours</span></div>';
       var grid='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">';
       var hasBackRef=!!studio.backRefs[np.key];
-      IMG_TYPES.concat([['model-front','Codex model front'],['model-side','Codex model side'],['model-back','Codex model back'],['detail','Codex detail']]).forEach(function(t){
+      [['original','Original product photo']].concat(IMG_TYPES,[['model-front','Codex model front'],['model-side','Codex model side'],['model-back','Codex model back'],['detail','Codex detail']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         // "change back photo" link (only for the back slot once a ref exists)
         var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
@@ -2018,6 +2020,7 @@
           empty='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>'+
             '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button>'+chg+'</div>';
         }
+        if(t[0]==='original') empty='<div class="muted" style="padding:20px 0">Choose “Use original photo” above</div>';
         if(t[0].indexOf('model-')===0 || t[0]==='detail') empty='<div class="muted" style="padding:20px 0">Awaiting Codex batch result</div>';
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
@@ -2025,7 +2028,7 @@
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
               '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.approved?'Approved — click to UNDO':'Approve this photo')+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
-              '<button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">↻</button>'+chg+'</div>')
+              (t[0]==='original'?'':'<button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">↻</button>')+chg+'</div>')
              :empty)+
           '</div>';
       });
@@ -2069,6 +2072,19 @@
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
+      var original=host.querySelector('[data-useoriginal]'); if(original) original.onclick=function(){
+        original.disabled=true;
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/use-original-photo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
+          .then(readJson).then(function(r){
+            if(!r.success)throw new Error(r.error||'Original photo is unavailable.');
+            studio.images[np.key]=r.images;rerenderCard(i);
+            // Name/SEO is judged from this exact uploaded photo when the
+            // configured vision writer is available. Corrections also keep a
+            // product-facts draft ready for manual review if that service fails.
+            if(!(studio.seo[np.key]&&studio.seo[np.key].approved)) genSeoFor(np,i,null);
+          })
+          .catch(function(e){alert(e.message);original.disabled=false;});
+      };
       var cr=host.querySelector('[data-codexreturn]'); if(cr) cr.onchange=function(){
         var file=cr.files&&cr.files[0]; if(!file)return;
         var batchId=prompt('Paste the Codex batch ID for this product:'),type=prompt('View: front, model-front, model-side, model-back, or detail');
@@ -2157,16 +2173,12 @@
       var imgs=studio.images[np.key]||[]; var im=imgs.find(function(x){return x.type===type;}); if(!im) return;
       var wasApproved=im.approved;
       im.approved=!im.approved; rerenderCard(i);
-      fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ aiImages:(function(){var o={};o[np.key]=imgs;return o;})() })}).catch(function(){});
-      // Approving a photo auto-generates the name & SEO from it — unless the SEO
-      // for this product is already approved (don't clobber a blessed one).
-      if(!wasApproved && im.approved){
-        var cur=studio.seo[np.key];
-        if(!(cur&&cur.approved)){
-          var host=el('scard'+i); var gs=host?host.querySelector('[data-genseo]'):null;
-          genSeoFor(np,i,gs);
-        }
-      }
+      fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ aiImages:(function(){var o={};o[np.key]=imgs;return o;})() })})
+        .then(readJson).then(function(r){
+          if(!r.success) throw new Error(r.error||'Could not save photo approval.');
+          // Wait until approval is saved, so SEO judges the selected image.
+          if(!wasApproved && im.approved && !(studio.seo[np.key]&&studio.seo[np.key].approved)) genSeoFor(np,i,null);
+        }).catch(function(e){ im.approved=wasApproved;rerenderCard(i);alert(e.message); });
     }
     function genSeoFor(np,i,btn){
       var lbl=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='Reading photo…'; }
@@ -2179,14 +2191,15 @@
     }
     function saveSeo(np,i,approve){
       var host=el('scard'+i); var seo=studio.seo[np.key]; if(!seo) return;
+      var priorApproval=seo.approved;
       ['displayName','title','metaTitle','metaDescription','imageAlt'].forEach(function(f){
         var e=host.querySelector('[data-seo="'+f+'"]'); if(e) seo.seo[f]=e.value;
       });
       seo.approved=approve;
       var note=host.querySelector('[data-seonote="'+i+'"]'); if(note) note.textContent='Saving…';
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/seo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, seo:seo.seo, seoApproved:approve })})
-        .then(readJson).then(function(dd){ if(note) note.textContent=dd.success?'Saved.':(dd.error||'Save failed.'); rerenderCard(i); })
-        .catch(function(e){ if(note) note.textContent=e.message; });
+        .then(readJson).then(function(dd){ if(!dd.success){seo.approved=priorApproval;alert(dd.error||'Save failed.');} rerenderCard(i); })
+        .catch(function(e){ seo.approved=priorApproval;rerenderCard(i);alert(e.message); });
     }
 
     function collectApproved(){
