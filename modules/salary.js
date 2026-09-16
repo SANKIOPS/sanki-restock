@@ -145,48 +145,62 @@ function salarySheetChanges(s,ym,file){
     if(seen.has(emp.id))throw new Error('Row '+(index+2)+': '+emp.name+' appears more than once.');seen.add(emp.id);
     const daysText=get(r,aliases.paidDays),finalText=get(r,aliases.finalAmount),remarks=get(r,aliases.remarks);
     let paidDays=null,finalAmount=null;
-    if(daysText){paidDays=amount(daysText,'Row '+(index+2)+' Paid Days');if(paidDays<0||paidDays>50)throw new Error('Row '+(index+2)+': Paid Days must be between 0 and 50.');if((before.computedPaidDays!=null||before.historicalPaidDays!=null)&&Math.abs(paidDays-before.paidDays)>.001)throw new Error('Row '+(index+2)+': '+emp.name+' Paid Days come from attendance or a locked historical sheet. Edit Attendance instead.');}
+    if(daysText){paidDays=amount(daysText,'Row '+(index+2)+' Paid Days');if(paidDays<0||paidDays>50)throw new Error('Row '+(index+2)+': Paid Days must be between 0 and 50.');}
     if(finalText){finalAmount=amount(finalText,'Row '+(index+2)+' Final Salary Amount');if(finalAmount<0||finalAmount>100000000)throw new Error('Row '+(index+2)+': Final Salary Amount is out of range.');}
     if(paidDays==null&&finalAmount==null&&!remarks)throw new Error('Row '+(index+2)+': no salary or remark value was supplied.');
-    changes.push({empId:emp.id,name:emp.name,previousPaidDays:before.paidDays,paidDays,previousFinalAmount:before.salaryAmt,finalAmount,remarks});
+    const previousRemarks=before.remarks||'',changesDays=paidDays!=null&&Math.abs(paidDays-num(before.paidDays))>.001,changesAmount=finalAmount!=null&&Math.abs(finalAmount-before.salaryAmt)>.001,changesRemarks=!!remarks&&remarks!==previousRemarks;
+    changes.push({empId:emp.id,name:emp.name,previousPaidDays:before.paidDays,paidDays,previousFinalAmount:before.salaryAmt,finalAmount,previousRemarks,remarks,attendanceDerived:before.computedPaidDays!=null,status:changesDays||changesAmount||changesRemarks?'Update existing':'Unchanged'});
   });
   if(!changes.length)throw new Error('No employee rows were found in the sheet.');
-  return {changes,hash:crypto.createHash('sha256').update(file.buffer).digest('hex')};
+  const hash=crypto.createHash('sha256').update(file.buffer).digest('hex');return {changes,hash,previewToken:crypto.createHash('sha256').update(hash+JSON.stringify(changes)).digest('hex')};
 }
 function applySalarySheetChanges(s,ym,result,reason,by,fileName){
   const mo=ensureMonth(s,ym),at=new Date().toISOString();
   result.changes.forEach(change=>{
     const row=mo.rows[change.empId]=mo.rows[change.empId]||{};
-    if(change.paidDays!=null&&change.previousPaidDays!==change.paidDays)row.paidDays=change.paidDays;
+    if(change.paidDays!=null&&Math.abs(num(change.previousPaidDays)-change.paidDays)>.001){row.sheetPaidDaysOverride=change.paidDays;row.sheetPaidDaysReason=reason;row.sheetPaidDaysEditedAt=at;row.sheetPaidDaysEditedBy=by;}
     if(change.finalAmount!=null&&Math.abs(change.previousFinalAmount-change.finalAmount)>.001){row.finalSalaryAmount=change.finalAmount;row.finalSalaryReason=reason;row.finalSalaryEditedAt=at;row.finalSalaryEditedBy=by;s.finalSalaryAudit=s.finalSalaryAudit||[];s.finalSalaryAudit.push({ym,empId:change.empId,employeeName:change.name,at,by,previousAmount:change.previousFinalAmount,finalAmount:change.finalAmount,reason,source:'salary_excel_import'});}
     if(change.remarks)row.remarks=change.remarks;
   });
   const posting=(s.payrollPostings||{})[ym];if(posting){posting.rows=posting.rows||[];const current=computeMonth(s,ym);result.changes.forEach(change=>{const after=current.find(x=>x.id===change.empId);let posted=posting.rows.find(x=>x.empId===change.empId);if(!posted){posted={empId:change.empId,employeeName:change.name};posting.rows.push(posted);}Object.assign(posted,{salaryAmt:after.salaryAmt,netPayable:after.netPayable,paid:after.paid,advanceRecovery:after.loggedAdvanceRecovery,legacyAdvance:after.legacyAdvance,legacyPaid:after.legacyPaid});});posting.correctedAt=at;posting.correctedBy=by;}
-  s.salarySheetAudit=s.salarySheetAudit||[];s.salarySheetAudit.push({at,by,ym,fileName:path.basename(fileName||''),fileHash:result.hash,reason,employeeIds:result.changes.map(x=>x.empId)});
+  s.salarySheetAudit=s.salarySheetAudit||[];s.salarySheetAudit.push({at,by,ym,fileName:path.basename(fileName||''),fileHash:result.hash,reason,employeeIds:result.changes.map(x=>x.empId),changes:result.changes.filter(x=>x.status!=='Unchanged')});
 }
 function advanceSheetRows(s,file){
   if(!file||!file.buffer||!/^\.(xlsx|xls|csv)$/i.test(path.extname(file.originalname||'')))throw new Error('Choose an Excel or CSV advances sheet.');
   let rows;try{const book=XLSX.read(file.buffer,{type:'buffer',cellDates:false});rows=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{defval:'',raw:false});}catch{throw new Error('Could not read the advances sheet. Use the template.');}
   if(!rows.length||rows.length>250)throw new Error('The sheet must contain 1 to 250 advances.');
   const norm=x=>String(x||'').trim().toLowerCase().replace(/[^a-z0-9]/g,''),get=(r,keys)=>{const key=Object.keys(r).find(k=>keys.includes(norm(k)));return key==null?'':String(r[key]??'').trim();};
-  const changes=[],seen=new Set();
+  const changes=[],seen=new Set(),matched=new Set();
   rows.forEach((r,index)=>{
     const label='Row '+(index+2),empId=get(r,['employeeid','empid']),name=get(r,['employeename','employee','name']),matches=empId?[s.employees[empId]].filter(Boolean):Object.values(s.employees).filter(e=>norm(e.name)===norm(name));
     if(matches.length!==1)throw new Error(label+': employee must match exactly one existing employee by ID or name.');
-    const emp=matches[0],raw=get(r,['advanceamount','amount']).replace(/[₹,\s]/g,''),amount=Number(raw),date=get(r,['requestdate','proposeddate','date']),account=get(r,['payingaccount','account']),recoveryStartMonth=get(r,['recoverystartmonth','recoverymonth'])||date.slice(0,7),note=get(r,['note','remarks','reason']),reference=get(r,['reference','ref']);
+    const emp=matches[0],advanceId=get(r,['advanceid','requestid']),forceNew=norm(advanceId)==='new',raw=get(r,['advanceamount','amount']).replace(/[₹,\s]/g,''),amount=Number(raw),date=get(r,['requestdate','proposeddate','date']),account=get(r,['payingaccount','account']),recoveryStartMonth=get(r,['recoverystartmonth','recoverymonth'])||date.slice(0,7),note=get(r,['note','remarks','reason']),reference=get(r,['reference','ref']);
     if(!raw||!Number.isFinite(amount)||amount<=0||amount>100000000)throw new Error(label+': enter a valid advance amount.');
     const parsedDate=new Date(date+'T00:00:00Z');if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||Number.isNaN(parsedDate.getTime())||parsedDate.toISOString().slice(0,10)!==date)throw new Error(label+': use YYYY-MM-DD for Request Date.');
     if(!account)throw new Error(label+': paying account is required.');
     if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(recoveryStartMonth))throw new Error(label+': recovery start month must be YYYY-MM.');
     const key=[emp.id,date,amount,account,reference].join('|');if(seen.has(key))throw new Error(label+': duplicate advance row.');seen.add(key);
-    changes.push({empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account,recoveryStartMonth,note,reference});
+    const all=[...Object.values(s.advanceRequests||{}).filter(x=>x.status!=='Posted').map(x=>({record:x,kind:'request'})),...Object.values(s.advances||{}).filter(x=>x.active!==false).map(x=>({record:x,kind:'posted'}))].filter(x=>x.record.empId===emp.id&&x.record.status!=='Rejected');
+    let candidates=forceNew?[]:advanceId?all.filter(x=>x.record.id===advanceId):reference?all.filter(x=>x.record.reference===reference):[];
+    if(!advanceId&&!candidates.length)candidates=all.filter(x=>x.record.date===date&&x.record.account===account);
+    if(!advanceId&&!candidates.length&&all.some(x=>String(x.record.date||'').slice(0,7)===date.slice(0,7)&&round2(num(x.record.amount))===round2(amount)))throw new Error(label+': a similar advance already exists for '+emp.name+' this month. Enter its Advance ID to update it, or put NEW in Advance ID to confirm a separate advance.');
+    if(candidates.length>1)throw new Error(label+': more than one existing advance matches. Enter its Advance ID in the sheet.');
+    if(advanceId&&!forceNew&&!candidates.length)throw new Error(label+': Advance ID '+advanceId+' was not found for '+emp.name+'.');
+    const match=candidates[0],existing=match&&match.record;if(existing&&matched.has(existing.id))throw new Error(label+': the same existing advance appears twice in the sheet.');if(existing)matched.add(existing.id);
+    const next={empId:emp.id,employeeName:emp.name,amount:round2(amount),date,account,recoveryStartMonth,note,reference},previous=existing?{amount:round2(num(existing.amount)),date:existing.date,account:existing.account||'',recoveryStartMonth:existing.recoveryStartMonth||'',note:existing.note||'',reference:existing.reference||''}:null;
+    const different=!!previous&&Object.keys(previous).some(k=>String(previous[k])!==String(next[k]));
+    changes.push(Object.assign({advanceId:existing&&existing.id||'',status:!existing?'New request':!different?'Unchanged':match.kind==='posted'||existing.status==='Posted'?'Needs individual correction':'Update existing request',previous,existingStatus:existing&&existing.status||''},next));
   });
-  return {changes,hash:crypto.createHash('sha256').update(file.buffer).digest('hex')};
+  const hash=crypto.createHash('sha256').update(file.buffer).digest('hex');return {changes,hash,previewToken:crypto.createHash('sha256').update(hash+JSON.stringify(changes)).digest('hex')};
 }
 function applyAdvanceSheetRows(s,result,reason,req,fileName){
-  s.advanceRequests=s.advanceRequests||{};const ids=[],at=new Date().toISOString();
-  result.changes.forEach(row=>{s.advanceRequestSeq=(s.advanceRequestSeq||0)+1;const id='ADVR-'+String(s.advanceRequestSeq).padStart(5,'0');s.advanceRequests[id]=Object.assign({id,status:'Pending approval',createdBy:req.user&&req.user.username||'admin',createdAt:at,importReason:reason,importHash:result.hash},row);auditAdvanceRequest(s,req,'IMPORTED',id,{fileName:path.basename(fileName||''),reason,amount:row.amount});ids.push(id);});
-  return ids;
+  if(result.changes.some(x=>x.status==='Needs individual correction'))throw new Error('A posted advance differs from the sheet. Correct that advance individually before applying this sheet.');
+  s.advanceRequests=s.advanceRequests||{};const ids=[],at=new Date().toISOString(),counts={created:0,updated:0,unchanged:0};
+  result.changes.forEach(row=>{if(row.status==='Unchanged'){counts.unchanged++;return;}const fields={empId:row.empId,employeeName:row.employeeName,amount:row.amount,date:row.date,account:row.account,note:row.note,reference:row.reference,recoveryStartMonth:row.recoveryStartMonth};
+    if(row.status==='Update existing request'){const request=s.advanceRequests[row.advanceId],before=JSON.parse(JSON.stringify(request));Object.assign(request,fields,{status:'Pending approval',updatedBy:req.user&&req.user.username||'admin',updatedAt:at,importReason:reason,importHash:result.hash});delete request.approvedBy;delete request.approvedAt;delete request.approvalNote;auditAdvanceRequest(s,req,'SHEET_UPDATED',request.id,{before,after:fields,fileName:path.basename(fileName||''),reason});ids.push(request.id);counts.updated++;return;}
+    s.advanceRequestSeq=(s.advanceRequestSeq||0)+1;const id='ADVR-'+String(s.advanceRequestSeq).padStart(5,'0');s.advanceRequests[id]=Object.assign({id,status:'Pending approval',createdBy:req.user&&req.user.username||'admin',createdAt:at,importReason:reason,importHash:result.hash},fields);auditAdvanceRequest(s,req,'IMPORTED',id,{fileName:path.basename(fileName||''),reason,amount:row.amount});ids.push(id);counts.created++;
+  });
+  return {ids,counts};
 }
 
 // Owner-confirmed historical import. It is deliberately idempotent and only
@@ -568,7 +582,7 @@ function auditAdvanceRequest(s, req, action, requestId, details) { s.advanceRequ
 function employeeMonthBase(s,e,ym){
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
-  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),historicalPaidDays=row.historicalPaidDays!=null?num(row.historicalPaidDays):null,paidDays=historicalPaidDays!=null?historicalPaidDays:(computed!=null?computed:(row.paidDays!=null?num(row.paidDays):null));
+  const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),historicalPaidDays=row.historicalPaidDays!=null?num(row.historicalPaidDays):null,paidDays=row.sheetPaidDaysOverride!=null?num(row.sheetPaidDaysOverride):(historicalPaidDays!=null?historicalPaidDays:(computed!=null?computed:(row.paidDays!=null?num(row.paidDays):null)));
   const monthlySalary=salaryForMonth(e,ym),calculatedSalaryAmt=round2(paidDays!=null?(monthlySalary/div*paidDays):0),salaryAmt=row.finalSalaryAmount==null?calculatedSalaryAmt:round2(num(row.finalSalaryAmount)),legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery),historicalCloseAdjustment=num(row.historicalCloseAdjustment);
   const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
   return {row,computed,historicalPaidDays,paidDays,monthlySalary,calculatedSalaryAmt,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,historicalCloseAdjustment,legacyPaid,transactionPaid,paid};
@@ -587,7 +601,7 @@ function computeMonth(s, ym) {
     const x=employeeMonthBase(s,e,ym),openingBalanceCarry=payrollBalanceCarryIn(s,e,ym),openingAdvanceCarry=round2(Math.max(0,-openingBalanceCarry)),openingPayableCarry=round2(Math.max(0,openingBalanceCarry)),advance=round2(x.currentAdvance+openingAdvanceCarry),netPayable=x.salaryAmt-x.currentAdvance+openingBalanceCarry+x.historicalCloseAdjustment;
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
-      salary: x.monthlySalary, paidDays:x.paidDays, computedPaidDays:x.computed, historicalPaidDays:x.historicalPaidDays,
+      salary: x.monthlySalary, paidDays:x.paidDays, computedPaidDays:x.computed, historicalPaidDays:x.historicalPaidDays, sheetPaidDaysOverride:x.row.sheetPaidDaysOverride==null?null:num(x.row.sheetPaidDaysOverride),sheetPaidDaysReason:x.row.sheetPaidDaysReason||'',
       salaryAmt: round2(x.salaryAmt), calculatedSalaryAmt:x.calculatedSalaryAmt, finalSalaryAmount:x.row.finalSalaryAmount==null?null:round2(num(x.row.finalSalaryAmount)), finalSalaryReason:x.row.finalSalaryReason||'', finalSalaryEditedAt:x.row.finalSalaryEditedAt||'', finalSalaryEditedBy:x.row.finalSalaryEditedBy||'', advance, currentAdvance:x.currentAdvance, openingBalanceCarry, openingAdvanceCarry, openingPayableCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, historicalCloseAdjustment:x.historicalCloseAdjustment, netPayable: round2(netPayable),
       deductionAdjustment:round2(openingBalanceCarry-x.currentAdvance+x.historicalCloseAdjustment), adjustmentDetails:[
         ...(x.loggedAdvanceRecovery?[{kind:'advance_recovery',amount:-x.loggedAdvanceRecovery,description:'Salary advance recovered in '+ym}]:[]),
@@ -802,16 +816,16 @@ router.get('/api/salary/advances', guard, (req, res) => {
 });
 router.get('/api/salary/advances/import/template',guard,(req,res)=>{
   if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only a salary manager can import advances.'});
-  const sheet=XLSX.utils.aoa_to_sheet([['Employee ID','Employee Name','Advance Amount','Request Date','Paying Account','Recovery Start Month','Note','Reference']]);const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,sheet,'Advances');res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition','attachment; filename="advances-import-template.xlsx"');res.send(XLSX.write(workbook,{type:'buffer',bookType:'xlsx'}));
+  const sheet=XLSX.utils.aoa_to_sheet([['Advance ID','Employee ID','Employee Name','Advance Amount','Request Date','Paying Account','Recovery Start Month','Note','Reference']]);const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,sheet,'Advances');res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition','attachment; filename="advances-import-template.xlsx"');res.send(XLSX.write(workbook,{type:'buffer',bookType:'xlsx'}));
 });
 router.post('/api/salary/advances/import/preview',guard,receiveSalarySheet,(req,res)=>{
   if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only a salary manager can import advances.'});
-  try{const result=advanceSheetRows(load(),req.file);res.json({success:true,changes:result.changes,hash:result.hash});}catch(err){res.status(400).json({success:false,error:err.message});}
+  try{const result=advanceSheetRows(load(),req.file);res.json({success:true,changes:result.changes,hash:result.hash,previewToken:result.previewToken});}catch(err){res.status(400).json({success:false,error:err.message});}
 });
 router.post('/api/salary/advances/import/apply',guard,receiveSalarySheet,(req,res)=>{
   if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only a salary manager can import advances.'});
   const reason=String((req.body||{}).reason||'').trim();if(!reason)return res.status(400).json({success:false,error:'Enter a reason for the advances import.'});
-  try{const s=load(),result=advanceSheetRows(s,req.file);if(result.hash!==String((req.body||{}).previewHash||''))return res.status(409).json({success:false,error:'The file changed after preview. Preview it again.'});if(Object.values(s.advanceRequests||{}).some(x=>x.importHash===result.hash))return res.status(409).json({success:false,error:'This advances sheet has already been imported.'});const ids=applyAdvanceSheetRows(s,result,reason,req,req.file.originalname);save(s);res.json({success:true,requests:ids.length,ids});}catch(err){res.status(400).json({success:false,error:err.message});}
+  try{const s=load(),result=advanceSheetRows(s,req.file);if(result.previewToken!==String((req.body||{}).previewToken||''))return res.status(409).json({success:false,error:'The sheet or advance records changed after preview. Preview it again.'});const applied=applyAdvanceSheetRows(s,result,reason,req,req.file.originalname);if(applied.ids.length)save(s);res.json({success:true,requests:applied.ids.length,ids:applied.ids,counts:applied.counts});}catch(err){res.status(400).json({success:false,error:err.message});}
 });
 
 router.patch('/api/salary/advances/:id',guard,(req,res)=>{
@@ -911,14 +925,14 @@ router.get('/api/salary/import/template',guard,(req,res)=>{
   res.send(XLSX.write(workbook,{type:'buffer',bookType:'xlsx'}));
 });
 router.post('/api/salary/import/:ym/preview',guard,receiveSalarySheet,(req,res)=>{
-  try{const result=salarySheetChanges(load(),req.params.ym,req.file);res.json({success:true,ym:req.params.ym,changes:result.changes,hash:result.hash});}
+  try{const result=salarySheetChanges(load(),req.params.ym,req.file);res.json({success:true,ym:req.params.ym,changes:result.changes,hash:result.hash,previewToken:result.previewToken});}
   catch(err){res.status(400).json({success:false,error:err.message});}
 });
 router.post('/api/salary/import/:ym/apply',guard,receiveSalarySheet,(req,res)=>{
   const reason=String((req.body||{}).reason||'').trim();if(!reason)return res.status(400).json({success:false,error:'Enter a reason for importing or changing the salary sheet.'});
   try{
     const s=load(),result=salarySheetChanges(s,req.params.ym,req.file);
-    if(result.hash!==String((req.body||{}).previewHash||''))return res.status(409).json({success:false,error:'The selected file changed after preview. Preview it again before applying.'});
+    if(result.previewToken!==String((req.body||{}).previewToken||''))return res.status(409).json({success:false,error:'The sheet or current payroll changed after preview. Preview it again before applying.'});
     applySalarySheetChanges(s,req.params.ym,result,reason,req.user&&req.user.username||'admin',req.file.originalname);
     save(s);res.json({success:true,employees:result.changes.length,ym:req.params.ym});
   }catch(err){res.status(400).json({success:false,error:err.message});}
@@ -959,7 +973,7 @@ router.post('/api/salary/attendance/:ym', guard, (req, res) => {
     if((mark==='A'||mark==='PL')&&emp)mark=normalizedAbsentMark(emp,req.params.ym,b.day);
     if (mark && MARKS[mark] != null) mo.attendance[b.empId][b.day] = mark;
     else delete mo.attendance[b.empId][b.day];
-    if(mo.rows[b.empId])delete mo.rows[b.empId].paidDays;
+    if(mo.rows[b.empId]){delete mo.rows[b.empId].paidDays;delete mo.rows[b.empId].sheetPaidDaysOverride;}
     b.savedMark=mark;
   }
   save(s);
@@ -989,7 +1003,7 @@ router.post('/api/salary/attendance/:ym/batch', guard, (req, res) => {
     seen.add(emp.id);prepared.push({emp,normalized});
   }
   const mo=ensureMonth(s,ym);
-  prepared.forEach(({emp,normalized})=>{mo.attendance[emp.id]=mo.attendance[emp.id]||{};Object.entries(normalized).forEach(([day,mark])=>{if(mark)mo.attendance[emp.id][day]=mark;else delete mo.attendance[emp.id][day];});if(mo.rows[emp.id])delete mo.rows[emp.id].paidDays;});
+  prepared.forEach(({emp,normalized})=>{mo.attendance[emp.id]=mo.attendance[emp.id]||{};Object.entries(normalized).forEach(([day,mark])=>{if(mark)mo.attendance[emp.id][day]=mark;else delete mo.attendance[emp.id][day];});if(mo.rows[emp.id]){delete mo.rows[emp.id].paidDays;delete mo.rows[emp.id].sheetPaidDaysOverride;}});
   save(s);
   res.json({success:true,employees:prepared.length,cells:prepared.reduce((n,x)=>n+Object.keys(x.normalized).length,0),rows:computeMonth(s,ym).filter(r=>seen.has(r.id)).map(r=>({empId:r.id,name:r.name,paidDays:r.computedPaidDays}))});
 });
@@ -1003,7 +1017,7 @@ router.post('/api/salary/row/:ym', guard, (req, res) => {
   if (b.paidDays !== undefined) {
     const computed=attPaidDays(employmentAttendance((mo.attendance||{})[b.empId],s.employees[b.empId],req.params.ym),s.employees[b.empId],req.params.ym);
     if(computed!=null)return res.status(409).json({success:false,error:'Paid days come from attendance for this employee. Update the Attendance tab instead.'});
-    row.paidDays = (b.paidDays === '' || b.paidDays === null) ? null : num(b.paidDays);
+    row.paidDays = (b.paidDays === '' || b.paidDays === null) ? null : num(b.paidDays);delete row.sheetPaidDaysOverride;
   }
   if (b.advance !== undefined) row.advance = num(b.advance);
   if (b.paid !== undefined) row.paid = num(b.paid);

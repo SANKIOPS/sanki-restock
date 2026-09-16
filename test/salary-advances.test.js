@@ -26,7 +26,7 @@ function postAdvance(emp,body={}){
   return invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{payoutDate:body.payoutDate||body.date||'2026-08-22',proofs:[body.proof||'/proof.jpg']},role:'admin'}).body.advance;
 }
 
-test('salary Excel preview matches existing employees and rejects ambiguous or attendance-locked changes',()=>{
+test('salary Excel preview updates existing employees and audits attendance-derived paid-day overrides',()=>{
   const s={employees:{E001:{id:'E001',name:'Excel Employee',salary:30000,active:true,joiningDate:'2099-01-01'}},months:{'2099-05':{rows:{E001:{paidDays:30}},attendance:{}}},divisor:30,salaryPayments:[],advances:{}};
   const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.json_to_sheet([{'Employee ID':'E001','Employee Name':'Excel Employee','Paid Days':30,'Final Salary Amount':28500,'Remarks':'Verified sheet'}]),'Salary');
   const file={originalname:'salary.xlsx',buffer:XLSX.write(workbook,{type:'buffer',bookType:'xlsx'})};
@@ -36,7 +36,10 @@ test('salary Excel preview matches existing employees and rejects ambiguous or a
   assert.equal(s.months['2099-05'].rows.E001.finalSalaryAmount,28500);assert.equal(s.finalSalaryAudit[0].by,'prashant');assert.equal(s.salarySheetAudit[0].fileHash,preview.hash);assert.equal(s.salaryPayments.length,0);
   s.months['2099-05'].attendance.E001={'01':'P'};
   const locked=XLSX.utils.book_new();XLSX.utils.book_append_sheet(locked,XLSX.utils.json_to_sheet([{'Employee ID':'E001','Paid Days':29}]),'Salary');
-  assert.throws(()=>_salarySheetChanges(s,'2099-05',{originalname:'salary.xlsx',buffer:XLSX.write(locked,{type:'buffer',bookType:'xlsx'})}),/Edit Attendance instead/);
+  const dayChange=_salarySheetChanges(s,'2099-05',{originalname:'salary.xlsx',buffer:XLSX.write(locked,{type:'buffer',bookType:'xlsx'})});
+  assert.equal(dayChange.changes[0].attendanceDerived,true);assert.equal(dayChange.changes[0].status,'Update existing');
+  _applySalarySheetChanges(s,'2099-05',dayChange,'Revised paid-day count','prashant','salary.xlsx');
+  assert.equal(s.months['2099-05'].rows.E001.sheetPaidDaysOverride,29);assert.equal(s.months['2099-05'].attendance.E001['01'],'P');
 });
 
 test('advances Excel preview imports requests but never posts payments',()=>{
@@ -44,8 +47,15 @@ test('advances Excel preview imports requests but never posts payments',()=>{
   const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet([{'Employee ID':'E001','Advance Amount':5000,'Request Date':'2026-09-16','Paying Account':'Prashant Axis 3645','Recovery Start Month':'2026-10','Note':'Employee request'}]),'Advances');
   const file={originalname:'advances.xlsx',buffer:XLSX.write(book,{type:'buffer',bookType:'xlsx'})};
   const preview=_advanceSheetRows(s,file);assert.equal(preview.changes.length,1);assert.equal(preview.changes[0].amount,5000);assert.deepEqual(s.advanceRequests,{});
-  const ids=_applyAdvanceSheetRows(s,preview,'Import test',{user:{username:'prashant'}},file.originalname);
-  assert.equal(ids.length,1);assert.equal(s.advanceRequests[ids[0]].status,'Pending approval');assert.equal(s.advanceRequests[ids[0]].account,'Prashant Axis 3645');assert.deepEqual(s.advances,{});
+  const applied=_applyAdvanceSheetRows(s,preview,'Import test',{user:{username:'prashant'}},file.originalname);
+  assert.equal(applied.ids.length,1);assert.equal(s.advanceRequests[applied.ids[0]].status,'Pending approval');assert.equal(s.advanceRequests[applied.ids[0]].account,'Prashant Axis 3645');assert.deepEqual(s.advances,{});
+  const unchanged=_advanceSheetRows(s,file);assert.equal(unchanged.changes[0].status,'Unchanged');
+  const changedBook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(changedBook,XLSX.utils.json_to_sheet([{'Employee ID':'E001','Advance Amount':6000,'Request Date':'2026-09-16','Paying Account':'Prashant Axis 3645','Recovery Start Month':'2026-10','Note':'Employee request'}]),'Advances');
+  const changed=_advanceSheetRows(s,{originalname:'revised.xlsx',buffer:XLSX.write(changedBook,{type:'buffer',bookType:'xlsx'})});assert.equal(changed.changes[0].status,'Update existing request');
+  const update=_applyAdvanceSheetRows(s,changed,'Revised amount',{user:{username:'prashant'}},'revised.xlsx');assert.equal(update.counts.updated,1);assert.equal(Object.keys(s.advanceRequests).length,1);assert.equal(s.advanceRequests[applied.ids[0]].amount,6000);
+  s.advances.ADV001={id:'ADV001',empId:'E001',employeeName:'Excel Employee',amount:7000,date:'2026-09-20',account:'Prashant Axis 3645',recoveryStartMonth:'2026-09',note:'',reference:'',active:true};
+  const postedBook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(postedBook,XLSX.utils.json_to_sheet([{'Advance ID':'ADV001','Employee ID':'E001','Advance Amount':8000,'Request Date':'2026-09-20','Paying Account':'Prashant Axis 3645','Recovery Start Month':'2026-09'}]),'Advances');
+  const posted=_advanceSheetRows(s,{originalname:'posted.xlsx',buffer:XLSX.write(postedBook,{type:'buffer',bookType:'xlsx'})});assert.equal(posted.changes[0].status,'Needs individual correction');assert.throws(()=>_applyAdvanceSheetRows(s,posted,'No silent payment edit',{user:{username:'prashant'}},'posted.xlsx'),/individual/);assert.equal(s.advances.ADV001.amount,7000);
 });
 
 test('salary advances require owner approval and proof-backed posting, then recover oldest first', () => {
