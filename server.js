@@ -2592,6 +2592,7 @@ app.get('/api/showroom/notify/test', async (req, res) => {
 //    catch-all so their /api/* routes resolve instead of falling
 //    through to index.html). Each module owns its own store + helpers.
 app.use(require('./modules/rack-locations').router);
+app.use(require('./modules/stock-movements').router);
 app.use(require('./modules/auth-users').router);
 app.use(require('./modules/sales').router);
 app.use(require('./modules/orders').router);
