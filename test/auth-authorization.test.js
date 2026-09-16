@@ -133,15 +133,18 @@ test('confirmed owner account always retains distinct owner access', () => {
   assert.equal(apiAllowedForUser({ roles: ['accounting'] }, '/api/owner/summary'), false);
 });
 
-test('Prashant has proof-backed salary payment access but cannot edit payroll',()=>{
+test('Prashant can administer salary without gaining access to unrelated modules',()=>{
   const p={username:'prashant',role:'claimant',roles:['claimant']};
   assert.equal(apiAllowedForUser(p,'/api/salary/month/2026-09','GET'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/payments/batch','POST'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/payments/SALB-001-001/proofs','POST'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/historical-offset/2026-08/EMP-1/reopen','POST'),true);
-  assert.equal(apiAllowedForUser(p,'/api/salary/historical-offset/2026-09/EMP-1/reopen','POST'),false);
+  assert.equal(apiAllowedForUser(p,'/api/salary/historical-offset/2026-09/EMP-1/reopen','POST'),true);
   assert.equal(apiAllowedForUser(p,'/api/expenses/upload','POST'),true);
-  assert.equal(apiAllowedForUser(p,'/api/salary/final-amount/2026-09/EMP-1','PATCH'),false);
-  assert.equal(apiAllowedForUser(p,'/api/salary/row/2026-09','POST'),false);
-  assert.equal(apiAllowedForUser(p,'/api/salary/payments/SALB-001-001','PATCH'),false);
+  assert.equal(apiAllowedForUser(p,'/api/salary/final-amount/2026-09/EMP-1','PATCH'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/row/2026-09','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/payments/SALB-001-001','PATCH'),true);
+  assert.equal(apiAllowedForUser(p,'/api/salary/import/2026-09/preview','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/admin/users','GET'),false);
+  assert.equal(apiAllowedForUser(p,'/api/owner/summary','GET'),false);
 });

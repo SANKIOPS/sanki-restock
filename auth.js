@@ -135,7 +135,7 @@ function apiRuleFor(p) {
 }
 
 function apiAllowedForUser(user, p, method='GET') {
-  if(isPrashantPaymentOnly(user)&&p.startsWith('/api/salary/'))return prashantSalaryApiAllowed(method,p);
+  if(isPrashantUser(user)&&p.startsWith('/api/salary/'))return true;
   if(isPrashantUser(user)&&((method==='POST'&&p==='/api/expenses/upload')||(method==='GET'&&p==='/api/expenses/config')))return true;
   const userRoles = rolesOf(user);
   if (userRoles.includes('admin') || userRoles.includes('owner')) return true;
@@ -146,11 +146,6 @@ function apiAllowedForUser(user, p, method='GET') {
 }
 
 function isPrashantUser(user){return String(user&&user.username||'').trim().toLowerCase()==='prashant';}
-function isPrashantPaymentOnly(user){return isPrashantUser(user)&&!rolesOf(user).some(r=>['admin','accounting','owner'].includes(r));}
-function prashantSalaryApiAllowed(method,p){
-  return (method==='GET'&&(p==='/api/salary/employees'||p==='/api/salary/advances'||/^\/api\/salary\/month\/\d{4}-\d{2}$/.test(p)||/^\/api\/salary\/payments\/\d{4}-\d{2}$/.test(p)))||
-    (method==='POST'&&(p==='/api/salary/payments/batch'||p==='/api/salary/advances'||/^\/api\/salary\/advance-requests\/[^/]+\/post$/.test(p)||/^\/api\/salary\/payments\/[^/]+\/proofs$/.test(p)||/^\/api\/salary\/historical-offset\/2026-08\/[^/]+\/reopen$/.test(p)));
-}
 
 function gate(req, res, next) {
   // Decide on the NORMALIZED path so encoded/`..` traversal can't bypass the gate.

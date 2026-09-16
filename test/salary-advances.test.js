@@ -4,10 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16 } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -24,6 +25,28 @@ function postAdvance(emp,body={}){
   assert.ok(request&&request.id);assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.id},role:'owner'}).status,200);
   return invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.id},body:{payoutDate:body.payoutDate||body.date||'2026-08-22',proofs:[body.proof||'/proof.jpg']},role:'admin'}).body.advance;
 }
+
+test('salary Excel preview matches existing employees and rejects ambiguous or attendance-locked changes',()=>{
+  const s={employees:{E001:{id:'E001',name:'Excel Employee',salary:30000,active:true,joiningDate:'2099-01-01'}},months:{'2099-05':{rows:{E001:{paidDays:30}},attendance:{}}},divisor:30,salaryPayments:[],advances:{}};
+  const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.json_to_sheet([{'Employee ID':'E001','Employee Name':'Excel Employee','Paid Days':30,'Final Salary Amount':28500,'Remarks':'Verified sheet'}]),'Salary');
+  const file={originalname:'salary.xlsx',buffer:XLSX.write(workbook,{type:'buffer',bookType:'xlsx'})};
+  const preview=_salarySheetChanges(s,'2099-05',file);assert.equal(preview.changes.length,1);assert.equal(preview.changes[0].finalAmount,28500);assert.equal(preview.changes[0].previousFinalAmount,30000);assert.match(preview.hash,/^[a-f0-9]{64}$/);
+  assert.equal(s.months['2099-05'].rows.E001.finalSalaryAmount,undefined,'preview does not mutate payroll');
+  _applySalarySheetChanges(s,'2099-05',preview,'Approved revised salary sheet','prashant','salary.xlsx');
+  assert.equal(s.months['2099-05'].rows.E001.finalSalaryAmount,28500);assert.equal(s.finalSalaryAudit[0].by,'prashant');assert.equal(s.salarySheetAudit[0].fileHash,preview.hash);assert.equal(s.salaryPayments.length,0);
+  s.months['2099-05'].attendance.E001={'01':'P'};
+  const locked=XLSX.utils.book_new();XLSX.utils.book_append_sheet(locked,XLSX.utils.json_to_sheet([{'Employee ID':'E001','Paid Days':29}]),'Salary');
+  assert.throws(()=>_salarySheetChanges(s,'2099-05',{originalname:'salary.xlsx',buffer:XLSX.write(locked,{type:'buffer',bookType:'xlsx'})}),/Edit Attendance instead/);
+});
+
+test('advances Excel preview imports requests but never posts payments',()=>{
+  const s={employees:{E001:{id:'E001',name:'Excel Employee'}},advanceRequests:{},advanceRequestSeq:0,advances:{}};
+  const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.json_to_sheet([{'Employee ID':'E001','Advance Amount':5000,'Request Date':'2026-09-16','Paying Account':'Prashant Axis 3645','Recovery Start Month':'2026-10','Note':'Employee request'}]),'Advances');
+  const file={originalname:'advances.xlsx',buffer:XLSX.write(book,{type:'buffer',bookType:'xlsx'})};
+  const preview=_advanceSheetRows(s,file);assert.equal(preview.changes.length,1);assert.equal(preview.changes[0].amount,5000);assert.deepEqual(s.advanceRequests,{});
+  const ids=_applyAdvanceSheetRows(s,preview,'Import test',{user:{username:'prashant'}},file.originalname);
+  assert.equal(ids.length,1);assert.equal(s.advanceRequests[ids[0]].status,'Pending approval');assert.equal(s.advanceRequests[ids[0]].account,'Prashant Axis 3645');assert.deepEqual(s.advances,{});
+});
 
 test('salary advances require owner approval and proof-backed posting, then recover oldest first', () => {
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Employee A',salary:30000,channel:'Shared'}}).body.employee;
@@ -475,16 +498,15 @@ test('owner final salary correction requires a reason and updates earned payroll
   assert.match(html,/Change final salary/);assert.match(html,/openFinalSalary/);assert.match(html,/saveFinalSalary/);
 });
 
-test('Prashant can record only his account payments and append proof without another debit',()=>{
+test('Prashant can edit salary and record proof-backed payments from authorized salary accounts',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Prashant Payment Access Test',salary:20000,joiningDate:'2099-02-01'}}).body.employee,ym='2099-02';
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:20}}).status,200);
   const who={role:'claimant',username:'prashant'},accounts=invoke('GET','/api/salary/employees',who).body.salaryPayingAccounts;
-  assert.deepEqual(accounts,['Prashant Axis 3645','Prashant Cash']);
-  assert.equal(invoke('POST','/api/salary/row/:ym',{...who,params:{ym},body:{empId:emp.id,paidDays:15}}).status,403);
-  assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{...who,params:{ym,empId:emp.id},body:{amount:10000,reason:'No'}}).status,403);
+  assert.deepEqual(accounts,['Prashant Axis 3645','Prashant Cash','Gagan Sir Cash','Counter Cash']);
+  assert.equal(invoke('POST','/api/salary/row/:ym',{...who,params:{ym},body:{empId:emp.id,paidDays:15}}).status,200);
+  assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{...who,params:{ym,empId:emp.id},body:{amount:10000,reason:'Confirmed final amount'}}).status,200);
+  assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.permissions.canModifyPayroll,true);
   const payload={ym,date:'2099-02-20',account:'Gagan Sir Cash',proofs:['/api/expenses/photo/no.jpg'],items:[{empId:emp.id,amount:1000,modificationReason:'Partial'}]};
-  assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body:payload}).status,400);
-  payload.account='Prashant Cash';
   const withoutComment={...payload,items:[{empId:emp.id,amount:1000}]};
   assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body:withoutComment}).status,400);
   const made=invoke('POST','/api/salary/payments/batch',{...who,body:payload});assert.equal(made.status,200);
