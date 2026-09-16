@@ -13,9 +13,10 @@
   function racks() {
     if (!state) return;
     var rows = state.positions.filter(function(p){return p.sku === sku() && p.quantity > 0;});
-    options('move-from-rack', Array.from(new Set(rows.filter(function(p){return p.location === el('move-from').value;}).map(function(p){return p.rack;}).filter(Boolean))).sort());
-    options('move-to-rack', (state.baseline && state.baseline.racks && state.baseline.racks[el('move-to').value]) || []);
-    el('move-position').textContent = rows.length ? rows.map(function(p){return p.location+' · '+(p.rack || 'Rack unassigned')+' · '+p.quantity+' pieces';}).join('\n') : 'No counted stock found for this SKU.';
+    var sourceRacks = state.ready ? Array.from(new Set(rows.filter(function(p){return p.location === el('move-from').value;}).map(function(p){return p.rack;}).filter(Boolean))).sort() : (state.rackOptions && state.rackOptions[el('move-from').value]) || [];
+    options('move-from-rack', sourceRacks);
+    options('move-to-rack', (state.rackOptions && state.rackOptions[el('move-to').value]) || []);
+    el('move-position').textContent = rows.length ? rows.map(function(p){return p.location+' · '+(p.rack || 'Rack unassigned')+' · '+p.quantity+' pieces';}).join('\n') : state.ready ? 'No counted stock found for this SKU.' : 'Rack choices come from the physical count. This SKU’s individual rack and quantity are not yet loaded into the movement register.';
     if (state.movements.some(function(m){return m.sku === sku() && m.status !== 'approved';})) el('move-position').textContent += '\nReported positions include movements awaiting approval.';
   }
   async function api(url, body) {
@@ -34,11 +35,12 @@
   async function refresh() {
     state = await api('/api/stock-movements');
     el('move-skus').innerHTML = Array.from(new Set(state.positions.map(function(p){return p.sku;}))).sort().map(function(s){return '<option value="'+esc(s)+'">';}).join('');
-    message(state.ready ? 'Reported physical position updates immediately. Manager approval confirms the Shopify transfer.' : 'Moves are locked until the new physical count and Shopify SKU mappings are reconciled. No old stock quantities will be used.');
+    message(state.ready ? 'Reported physical position updates immediately. Manager approval confirms the Shopify transfer.' : 'Display and Warehouse rack choices are from the physical count. Moves remain locked until SKU positions and Shopify mappings are reconciled.');
     render();
   }
   host.querySelectorAll('[data-view]').forEach(function(b){b.onclick = function(){view = b.dataset.view;render();};});
   ['move-sku','move-from','move-to'].forEach(function(id){el(id).addEventListener('change',racks);});
+  el('move-sku').addEventListener('input', racks);
   // USB/Bluetooth scanners enter the SKU exactly like a keyboard. Do not
   // interpret scanner Enter as a physical transfer confirmation.
   el('move-sku').addEventListener('keydown', function(e){if(e.key === 'Enter'){e.preventDefault();racks();el('move-quantity').focus();}});

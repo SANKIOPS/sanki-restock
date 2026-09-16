@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const { shopifyClient } = require('./shopify-client');
+const countedRackOptions = require('./counted-rack-options.json');
 const storePath = process.env.STOCK_MOVEMENTS_PATH || path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'), 'stock_movements.json');
 const locations = ['Display', 'Warehouse'];
 function fail(message, status = 409) { const e = new Error(message); e.status = status; throw e; }
@@ -26,6 +27,7 @@ function save(s, file = storePath) {
   fs.renameSync(tmp, file);
 }
 function ready(s) { return s.baseline?.reconciled === true && !!s.baseline?.reviewedBy && !!s.baseline?.reconciledAt; }
+function rackChoices(s) { return ready(s) ? s.baseline.racks : { Display: countedRackOptions.Display, Warehouse: countedRackOptions.Warehouse }; }
 function point(p) {
   if (!p || !locations.includes(p.location) || (p.rack != null && typeof p.rack !== 'string')) fail('Select a valid location and rack.', 400);
   const rack = (p.rack || '').trim();
@@ -92,7 +94,7 @@ const router = express.Router();
 router.get('/api/stock-movements', (req, res) => {
   try {
     const s = load();
-    res.json({ success: true, ready: ready(s), canApprove: canApprove(req.user), baseline: s.baseline ? { reconciledAt: s.baseline.reconciledAt, racks: s.baseline.racks } : null, positions: s.positions, movements: s.movements.slice(-500).reverse() });
+    res.json({ success: true, ready: ready(s), canApprove: canApprove(req.user), baseline: s.baseline ? { reconciledAt: s.baseline.reconciledAt, racks: s.baseline.racks } : null, rackOptions: rackChoices(s), rackSource: ready(s) ? 'Approved movement baseline' : countedRackOptions.source, positions: s.positions, movements: s.movements.slice(-500).reverse() });
   } catch (e) { res.status(e.status || 503).json({ success: false, error: 'Movement data unavailable. Contact the inventory manager.' }); }
 });
 router.post('/api/stock-movements', (req, res) => serial(async () => {
@@ -120,4 +122,4 @@ router.post('/api/stock-movements/:id/review', (req, res) => serial(async () => 
   }
   res.json({ success: true, movement: m });
 }).catch(e => res.status(e.status || 500).json({ success: false, error: e.message })));
-module.exports = { router, submit, ready, canApprove, load, save };
+module.exports = { router, submit, ready, rackChoices, canApprove, load, save };

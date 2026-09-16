@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { submit, canApprove, ready, load, save } = require('../modules/stock-movements');
+const { submit, canApprove, ready, rackChoices, load, save } = require('../modules/stock-movements');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -13,3 +13,4 @@ test('insufficient source stock and identical positions are rejected',()=>{const
 test('unassigned rack is permitted, correction-required SKU is blocked',()=>{const s=baseline();submit(s,{...body(),to:{location:'Display',rack:''}},{username:'staff'});assert.equal(s.positions[1].rack,'');s.movements[0].status='correction_required';assert.throws(()=>submit(s,{...body(),requestId:'other-unique-request-1234',quantity:1},{username:'staff'}),/correction/);});
 test('warehouse users cannot approve; only owner/admin or explicitly assigned managers',()=>{assert.equal(canApprove({role:'warehouse',username:'staff'}),false);assert.equal(canApprove({role:'inventory',username:'staff'}),false);assert.equal(canApprove({role:'admin'}),true);assert.equal(canApprove({roles:['owner']}),true);});
 test('atomic store survives reload; corrupt data fails closed',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sanki-move-test-'));const file=path.join(dir,'moves.json');assert.equal(ready(load(file)),false);save(baseline(),file);assert.equal(load(file).positions[0].quantity,3);fs.writeFileSync(file,'broken');assert.throws(()=>load(file));fs.rmSync(dir,{recursive:true});});
+test('unreconciled form lists counted racks by location without enabling moves',()=>{const s={version:1,baseline:null,positions:[],movements:[]};const racks=rackChoices(s);assert.equal(ready(s),false);assert.ok(racks.Display.includes('Accesorries'));assert.ok(racks.Display.includes('T1'));assert.ok(racks.Warehouse.includes('5A'));assert.ok(racks.Warehouse.includes('14C'));assert.equal(racks.Warehouse.includes('T1'),false);assert.throws(()=>submit(s,body(),{username:'staff'}),/baseline/);assert.deepEqual(rackChoices(baseline()),baseline().baseline.racks);});

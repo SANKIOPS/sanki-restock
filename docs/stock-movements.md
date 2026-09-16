@@ -5,6 +5,8 @@ Keyboard/USB/Bluetooth scanners can enter an exact SKU. Scanner Enter never subm
 
 Deployment is not activation. The old static inventory is NOT a baseline. Moves remain locked until an audited `stock_movements.json` has been provisioned on the persistent data volume by the reconciliation workflow. Do not hand-set `reconciled: true` before matching the new physical count to live Shopify and verifying opening quantities at both locations.
 
+While reconciliation is pending, the movement form displays the nonempty rack labels from the 15 September physical-count sheet, separately for Display and Warehouse. These are choices for orientation only; they are not SKU-level position evidence. The source list is `modules/counted-rack-options.json`, and the approved baseline supersedes it after activation. A source rack becomes SKU-specific once an approved baseline is available.
+
 Store schema:
 
 ```json
