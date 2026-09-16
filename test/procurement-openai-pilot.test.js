@@ -59,6 +59,19 @@ test('purchase studio offers whole-PO, selected and single-product paid generati
   assert.match(html,/styling:paidStylingOf\(item\.np\)/);
 });
 
+test('paid retry is explicit and only requests missing image or SEO drafts',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/function missingPaidDrafts\(np\)/);
+  assert.match(html,/Generate missing drafts \(paid\)/);
+  assert.match(html,/retry:!!used\[item\.np\.key\]/);
+  assert.match(html,/separately billed image calls and .* SEO call/);
+  assert.match(server,/const neededTypes=openaiPilot\.pilotTypes\(g,!!backSource\)\.filter\(type=>!/);
+  assert.match(server,/if \(needsSeo\) try \{/);
+  assert.match(server,/All image and SEO drafts already exist/);
+  assert.match(server,/\.attempts\.slice\(\)\.reverse\(\)\.find\(x=>x\.groupKey===key\)/);
+});
+
 test('SEO request uses the original photo and returns complete structured draft',async()=>{
   const seo={displayName:'Diamond Stitch',title:'Black Diamond Stitch T-Shirt | SANKI',metaTitle:'Black Diamond Stitch T-Shirt | SANKI',metaDescription:'A black crew neck T-shirt with diamond stitching.',imageAlt:'Black diamond stitch T-shirt front view',tags:['Black','Crew Neck'],bodyHtml:'<p>Black crew neck T-shirt.</p>'};
   const out=await pilot.generateSeo({key:'test-only',group,source,fetchImpl:async(url,options)=>{

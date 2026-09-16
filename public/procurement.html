@@ -2009,6 +2009,10 @@
       if(np.audience==='Men')return ['front','male','model-front','model-side',finalView];
       return ['front','female','male','model-front',finalView];
     }
+    function missingPaidDrafts(np){
+      var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url;}).map(function(v){return v.type;});
+      return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(studio.seo[np.key]&&studio.seo[np.key].seo)};
+    }
     async function generatePaidGroups(mode,singleKey){
       var btn=mode==='single'?null:el(mode==='all'?'generatePoBtn':'generateSelectedBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
       po.openaiPilot=po.openaiPilot||{attempts:[]};
@@ -2017,21 +2021,23 @@
       var selected=groups.map(function(np,i){return {np:np,i:i};}).filter(function(x){return mode==='all'||mode==='single'&&x.np.key===singleKey||mode==='selected'&&studio.selected[x.np.key];});
       if(mode==='single'&&selected.length)btn=el('scard'+selected[0].i).querySelector('[data-openai-pilot]');
       if(!selected.length){alert('Tick at least one product first.');return;}
-      var pending=selected.filter(function(x){return !used[x.np.key];});
+      var pending=selected.filter(function(x){var missing=missingPaidDrafts(x.np);return missing.images.length||missing.seo;});
       if(po.status!=='received'){alert('Receive and weigh this PO, then Save corrections before generating.');return;}
       if((po.lines||[]).some(function(l){return !(Number(l.weightGrams)>0);})){alert('Every line needs its saved weight before generation.');return;}
       if(pending.some(function(x){return !x.np.photoUrl;})){alert('Upload an original photo for every selected product first.');return;}
       var max=(openaiPilotConfig||{}).maxGroups||30;
-      if(attempts.length+pending.length>max){alert('This PO would exceed the '+max+'-article paid pilot limit. Select fewer products.');return;}
-      if(!pending.length){alert('These products already have a paid attempt. Review their saved drafts before any paid retry.');return;}
-      var imageCalls=pending.reduce(function(total,x){var approved=(studio.images[x.np.key]||[]).filter(function(v){return v.approved;}).map(function(v){return v.type;});return total+paidTypesFor(x.np).filter(function(type){return approved.indexOf(type)<0;}).length;},0);
+      var newArticles=pending.filter(function(x){return !used[x.np.key];}).length;
+      if(Object.keys(used).length+newArticles>max){alert('This PO would exceed the '+max+'-article paid pilot limit. Select fewer products.');return;}
+      if(!pending.length){status.textContent='All selected products already have their image and SEO drafts. Review and approve them below; no new paid call was made.';return;}
+      var imageCalls=pending.reduce(function(total,x){return total+missingPaidDrafts(x.np).images.length;},0);
+      var seoCalls=pending.filter(function(x){return missingPaidDrafts(x.np).seo;}).length;
       var skipped=selected.length-pending.length;
-      if(!confirm('Generate drafts for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already attempted and skipped)':'')+'? Up to '+imageCalls+' separately billed image calls plus SEO text. Confirm product corrections are saved. Approved photos are kept; an unseen back will NOT be generated. Your outfit settings will be used for model shots. Nothing is approved or posted to Shopify automatically. Continue?'))return;
+      if(!confirm('Generate missing drafts for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Up to '+imageCalls+' separately billed image calls and '+seoCalls+' SEO call(s). Existing drafts and approved photos are kept; an unseen back will NOT be generated. Your outfit settings will be used for model shots. Nothing is approved or posted to Shopify automatically. Continue?'))return;
       btn.disabled=true;var finished=0;
       try {
         for(var item of pending){
           status.textContent='Generating article '+(finished+1)+' of '+pending.length+' · '+(item.np.colour||item.np.designName||'product');
-          var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,styling:paidStylingOf(item.np)})}).then(readJson);
+          var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,retry:!!used[item.np.key],styling:paidStylingOf(item.np)})}).then(readJson);
           if(!start.success)throw new Error(start.error||'Could not start generation.');
           attempts.push({groupKey:item.np.key});used[item.np.key]=true;
           var result;
@@ -2054,12 +2060,15 @@
     function studioCard(np,i){
       var imgs=studio.images[np.key]||[];
       var byType={}; imgs.forEach(function(x){ byType[x.type]=x; });
+      var paidAttempts=(((lastReceive||{}).po||{}).openaiPilot||{}).attempts||[];
+      var hasPaidAttempt=paidAttempts.some(function(a){return a.groupKey===np.key;});
+      var missing=missingPaidDrafts(np),paidLabel=hasPaidAttempt?(missing.images.length||missing.seo?'Generate missing drafts (paid)':'Drafts ready — review below'):'Generate images + SEO (paid pilot)';
       var thumb=np.photoUrl?('<img data-zoom src="'+esc(np.photoUrl)+'" title="Uploaded product photo — click to enlarge" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;flex:none">'):'';
       var head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
         '<div style="display:flex;align-items:center;gap:10px"><input type="checkbox" data-selectproduct="'+i+'" aria-label="Select '+esc(np.designName||np.designCode||'product')+' for generation"'+(studio.selected[np.key]?' checked':'')+'>'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> '+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>Generate images + SEO (paid pilot)</button> ':'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
+        '<div><button class="btn sm" data-useoriginal="'+i+'">Use original photo</button> '+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> ':'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
         '. Confirm whether these are duplicate records or separate articles.</div>':'';
