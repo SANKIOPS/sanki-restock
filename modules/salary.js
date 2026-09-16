@@ -860,7 +860,7 @@ router.patch('/api/salary/advances/source-sheet/rows/:row',guard,(req,res)=>{
     const employee=sheetEmployee(s,next);if(!employee)return res.status(400).json({success:false,error:'Select an existing employee before saving this row.'});
     next.employeeId=employee.id;next.employeeName=employee.name;
     if(item.linkedAdvanceId&&['employeeId','amount','requestDate','payingAccount'].some(k=>String(next[k])!==String(item[k])))return res.status(409).json({success:false,error:'This row is linked to a posted advance. Edit the posted advance separately before changing its employee, amount, date or paying account.'});
-    const before=Object.assign({},item);Object.assign(item,next);
+    const before=Object.assign({},item);Object.assign(item,next);item.reviewedAt=new Date().toISOString();item.reviewedBy=req.user.username;
     sheet.total=round2(sheet.items.reduce((sum,x)=>sum+num(x.amount),0));sheet.edits=sheet.edits||[];sheet.edits.push({at:new Date().toISOString(),by:req.user.username,row:item.row,before,after:Object.assign({},item)});
     save(s);res.json({success:true,item,total:sheet.total});
   }catch(err){res.status(409).json({success:false,error:err.message});}
@@ -881,6 +881,7 @@ router.post('/api/salary/advances/source-sheet/rows/:row/post',guard,(req,res)=>
   try{
     const s=load(),b=req.body||{},{item}=currentAdvanceSheet(s,String(b.hash||''),req.params.row),employee=sheetEmployee(s,item);
     if(item.linkedAdvanceId)return res.status(409).json({success:false,error:'Already linked. No second payment was posted.'});
+    if(!item.reviewedAt)return res.status(409).json({success:false,error:'Save and review this sheet row before posting it.'});
     if(!employee)return res.status(400).json({success:false,error:'Choose an existing employee first.'});
     if(/carried forward/i.test(item.note)||!item.payingAccount||/^(n\/?a|recharge)$/i.test(item.payingAccount))return res.status(400).json({success:false,error:'This looks like a carried-forward balance or unclear source, not a new payment. Confirm and correct it before posting.'});
     if(sourceCandidates(s,item).some(a=>a.date===item.requestDate||a.id===item.advanceId))return res.status(409).json({success:false,error:'A posted advance for this employee, date and amount already exists. Link it instead of posting another debit.'});
