@@ -425,11 +425,14 @@ function genSeo(g) {
   // Vendor names often already end in the product type ("Casuals T-shirt").
   // Do not produce customer-facing names such as "T-shirt T-Shirt".
   const nameForTitle = designName.replace(new RegExp('\\s+' + String(g.productType || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'), '').trim();
-  const productType = g.productType || '';
-  const colour      = titleCase(g.colour || '');
-  const fit         = titleCase(g.fit || '');
-  const fitBase     = fit.replace(/\s*fit$/i, '').trim();   // strip trailing "Fit" so we never double it
   const audience    = g.audience || 'Men';           // 'Men' | 'Women' | 'Unisex'
+  const winter = /^winter$/i.test(g.season || '') || /^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(g.productType || '');
+  const productType = audience === 'Women' && !winter && /^t[ -]?shirt$/i.test(g.productType || '')
+    ? 'Top' // Basic copy cannot verify a polo collar; only photo-based AI copy may say that.
+    : (g.productType || '');
+  const colour      = titleCase(g.colour || '');
+  const fit         = audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(g.fit || '') ? '' : titleCase(g.fit || '');
+  const fitBase     = fit.replace(/\s*fit$/i, '').trim();   // strip trailing "Fit" so we never double it
   const sizeList    = (g.sizeLabels || []).map(l => (g.sizeCodeOf ? g.sizeCodeOf(l) : l)).join(', ');
   const nm          = nameForTitle ? nameForTitle + ' ' : '';
 
@@ -914,7 +917,15 @@ router.post('/api/procurement/pos/:id/back-ref', (req, res) => {
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
   const b = req.body || {};
   if (!b.groupKey) return res.status(400).json({ success: false, error: 'groupKey required.' });
+  if (isLockedPo(po)) return res.status(409).json({ success: false, error: 'Posted purchases cannot change image references.' });
+  if (!(po.lines||[]).some(line=>groupKey(line)===b.groupKey)) return res.status(404).json({ success:false,error:'Product group not found.' });
+  if (b.url && (!String(b.url).startsWith('/api/procurement/photo/') || !readStoredPhoto(b.url))) return res.status(400).json({ success:false,error:'Upload a readable back photo first.' });
   po.backRefs = po.backRefs || {};
+  if (po.backRefs[b.groupKey] !== (b.url || '')) {
+    // A draft created from a different back reference must not remain approvable.
+    po.aiImages=po.aiImages||{};
+    po.aiImages[b.groupKey]=(po.aiImages[b.groupKey]||[]).filter(image=>image.type!=='back');
+  }
   if (b.url) po.backRefs[b.groupKey] = String(b.url);
   else delete po.backRefs[b.groupKey];
   saveStore(s);
@@ -1656,7 +1667,7 @@ async function newGroupsOf(s, po) {
     const line = (po.lines || []).find(l => groupKey(l) === np.key && (l.photoUrl || '').trim());
     const details = (po.lines || []).find(l => groupKey(l) === np.key) || {};
     return { key: np.key, colour: np.colour, productType: np.productType, designName: np.designName,
-             designCode: np.designCode, audience: details.audience || '', line: po.line || '',
+             designCode: np.designCode, audience: details.audience || '', line: po.line || '', season: details.season || po.season || '',
              fit: details.fit || '', sizeLabels: np.variants.map(v => v.sizeLabel),
              photoUrl: line ? line.photoUrl : '' };
   });
@@ -1675,13 +1686,26 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     const groups = await newGroupsOf(s, po);
     const byKey = new Map(groups.map(g => [g.key, g]));
     res.json({ success: true, newProducts: (preview.newProducts || []).map(np => ({...np,
-      audience: byKey.get(np.key)?.audience || '', fit: byKey.get(np.key)?.fit || '', line: po.line || ''})), po: publicPo(po, req) });
+      audience: byKey.get(np.key)?.audience || '', fit: byKey.get(np.key)?.fit || '', line: po.line || '', season:byKey.get(np.key)?.season||''})), po: publicPo(po, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // Included-usage generation happens in a user-started Codex session, not Railway.
 const codexBatch = require('./procurement-codex-batch');
 const openaiPilot = require('./procurement-openai-pilot');
+router.post('/api/procurement/pos/:id/image-styling', async (req,res) => {
+  try {
+  if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+  const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
+  if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'Editable PO required.'});
+  const group=(await newGroupsOf(s,po)).find(g=>g.key===key);
+  if(!group)return res.status(404).json({success:false,error:'Product group not found.'});
+  const styling=openaiPilot.normalizeStyling((req.body||{}).styling,group);
+  po.imageStyling=po.imageStyling||{};po.imageStyling[key]=styling;
+  saveStore(s);
+  res.json({success:true,groupKey:key,styling});
+  } catch(e) { res.status(500).json({success:false,error:e.message}); }
+});
 const paidPilotInFlight = new Set();
 function canStartPaidPilot(req) {
   const roles = (req.user && Array.isArray(req.user.roles) && req.user.roles.length)
@@ -1732,7 +1756,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     // Preserve approved manual copy; replace unapproved placeholders with AI copy.
     const needsSeo=!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
     if (!neededTypes.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
-    const styling=openaiPilot.normalizeStyling((req.body||{}).styling,g);
+    const styling=openaiPilot.normalizeStyling((req.body||{}).styling||(po.imageStyling||{})[key],g);
     const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});
@@ -2058,10 +2082,10 @@ router.post('/api/procurement/commit', async (req, res) => {
     for (const np of preview.newProducts) {
       const draft = (po.seoDraft || []).find(x => x.key === np.key);
       const seo = draft && draft.seo;
-      if (!draft || !draft.seoApproved || seoNeedsReview(seo)) {
+      const group = (await newGroupsOf(s, po)).find(g => g.key === np.key);
+      if (!draft || !draft.seoApproved || seoNeedsReview(seo) || (group&&openaiPilot.seoCopyNeedsReview(seo,group))) {
         return res.status(400).json({ success: false, error: 'Approve complete, non-repetitive listing copy for every new product.' });
       }
-      const group = (await newGroupsOf(s, po)).find(g => g.key === np.key);
       const required = openaiPilot.pilotTypes(group || {}, !!(po.backRefs || {})[np.key]);
       const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && x.type !== 'original' && x.url !== group?.photoUrl);
       if (!required.length || required.some(type => !approved.some(x => x.type === type && readStoredPhoto(x.url)))) return res.status(400).json({ success: false, error: 'Approve all required product and matching model views for each new product. The original reference photo cannot be posted.' });

@@ -10,6 +10,9 @@ const AESTHETICS = ['Auto','Limestone estate','Minimal','Streetwear','Editorial'
 const SHOES = ['Auto','Leather loafers','Minimal white sneakers','Ballet flats','Classic heels'];
 const CAPS = ['None','Classic linen cap','Refined baker-boy cap'];
 const BAGS = ['None','Gender-matched bag','Structured handbag','Minimal sling bag'];
+const COMPLEXIONS = ['Fair','Medium','Deep'];
+const UPPER_FITS = ['Auto','Oversized','Boxy / relaxed','Normal fit','Slim fit'];
+const LOWER_FITS = ['Auto','Shorts / half','Three-quarter (3/4)','Ankle length','Full length'];
 
 function garmentCategory(group) {
   const type=String(group.productType||'').toLowerCase();
@@ -23,11 +26,14 @@ function normalizeStyling(input,group) {
   const pairs=category==='upper'?(casuals?UPPER_PAIRS:FUNKY_UPPER_PAIRS):category==='lower'?LOWER_PAIRS:['Auto'];
   const choice=(raw,allowed,fallback)=>allowed.includes(raw)?raw:fallback;
   return {
+    fit:choice(value.fit,category==='upper'?UPPER_FITS:category==='lower'?LOWER_FITS:['Auto'],'Auto'),
     pair:choice(value.pair,pairs,'Auto'),
     aesthetic:choice(value.aesthetic,AESTHETICS,'Auto'),
     tuck:choice(value.tuck,['Auto','Tucked in','Untucked'],'Auto'),
     chain:choice(value.chain,['None','Silver chain','Gold chain'],'None'),
     shoes:choice(value.shoes,SHOES,'Auto'),
+    femaleComplexion:choice(value.femaleComplexion,COMPLEXIONS,'Medium'),
+    maleComplexion:choice(value.maleComplexion,COMPLEXIONS,'Medium'),
     capStyle:choice(value.capStyle,CAPS,value.cap===true?'Classic linen cap':'None'),
     bagStyle:choice(value.bagStyle,BAGS,value.bag===true?(String(group.audience).toLowerCase()==='men'?'Minimal sling bag':'Structured handbag'):'None'),
     sunglasses:value.sunglasses===true,watch:value.watch===true
@@ -62,27 +68,35 @@ function pilotTypes(group,hasBackReference=false) {
   return ['front',...finish]; // Unspecified audience must be corrected, not guessed.
 }
 
-function castDescription(group,gender) {
+function castDescription(group,gender,styling) {
   const key=String(group.designCode||group.key||group.designName||'SANKI');
   let hash=0;for(const char of key)hash=(hash*31+char.charCodeAt(0))>>>0;
-  const women=['adult Indian woman with warm brown skin and dark hair in a neat low bun','adult Indian woman with deep brown skin and dark shoulder-length wavy hair'];
-  const men=['adult Indian man with warm brown skin and neatly styled short dark hair','adult Indian man with deep brown skin and short textured dark hair'];
-  return (gender==='female'?women:men)[hash%2];
+  const style=normalizeStyling(styling,group);
+  const tone=gender==='female'?style.femaleComplexion:style.maleComplexion;
+  const skin={Fair:'light brown complexion',Medium:'medium brown complexion',Deep:'deep brown complexion'}[tone];
+  const women=['dark hair in a neat low bun','dark shoulder-length wavy hair'];
+  const men=['neatly styled short dark hair','short textured dark hair'];
+  return `adult Indian ${gender==='female'?'woman':'man'} with ${skin} and ${(gender==='female'?women:men)[hash%2]}`;
+}
+
+function isWinter(group) {
+  return /^winter$/i.test(String(group.season||'')) || /^(?:hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(String(group.productType||''));
 }
 
 function retailFacts(group) {
   const women=String(group.audience||'').toLowerCase()==='women';
+  const womenTop=women&&!isWinter(group);
   const rawType=String(group.productType||'').trim();
   const rawFit=String(group.fit||'').trim();
   return {
-    productType:women && /^t[ -]?shirt$/i.test(rawType)?'Top':rawType,
-    fit:women && /^muscle\s*fit$/i.test(rawFit)?'':rawFit
+    productType:womenTop && /^t[ -]?shirt$/i.test(rawType)?'Top':rawType,
+    fit:womenTop && /^muscle\s*fit$/i.test(rawFit)?'':rawFit
   };
 }
 
 function seoCopyNeedsReview(seo,group) {
   const copy=[seo.displayName,seo.title,seo.metaTitle,seo.metaDescription,seo.imageAlt,seo.bodyHtml,...(seo.tags||[])].join(' ');
-  if(String(group.audience||'').toLowerCase()==='women' && (/\bmuscle\s*fit\b/i.test(copy)||/\b(?<!polo\s)t[ -]?shirts?\b/i.test(copy)))return true;
+  if(String(group.audience||'').toLowerCase()==='women'&&!isWinter(group) && (/\bmuscle\s*fit\b/i.test(copy)||/\b(?<!polo\s)t[ -]?shirts?\b/i.test(copy)))return true;
   if(/^(?:sanki\s+)?casuals?$/i.test(String(seo.displayName||'').trim()))return true;
   return false;
 }
@@ -94,7 +108,7 @@ function imagePrompt(group, type, styling) {
   if (type === 'back') return `Create a clean, photorealistic product-only BACK catalogue photo on a white studio background. The reference is a real photo of the back of this garment. Preserve only details actually visible in that back reference; do not copy front artwork onto the back or invent unseen details. ${common}`;
   if (type === 'detail') return `Create a photorealistic close-up detail photo of the garment's FRONT, showing only details clearly visible in the reference. No model or invented stitching, labels or fabric composition. ${common}`;
   const gender=type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':String(group.audience).toLowerCase()==='women'?'female':'male';
-  const cast=castDescription(group,gender);
+  const cast=castDescription(group,gender,styling);
   const setting=String(group.line||group.collection||'').toLowerCase().includes('casual')?'pale limestone colonnade of a refined heritage estate, natural daylight, understated global old-money mood':'restrained neutral editorial setting';
   const angle=type==='model-side'||type.startsWith('model-side-')?'front-biased three-quarter view, keeping the unseen back out of view':'front-facing full-body view';
   const resolvedStyle=normalizeStyling(styling,group);
@@ -145,7 +159,10 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   const retail=retailFacts(group);
   const facts = {brand:'SANKI',productType:retail.productType,colour:group.colour,
     audience:group.audience,fit:retail.fit,sizes:group.sizeLabels};
-  const prompt = `Inspect the actual garment photo FIRST and use these confirmed facts: ${JSON.stringify(facts)}. Write distinctive, accurate storefront and SEO/AEO/GEO listing copy. The internal vendor design name and category are not customer-facing descriptions. Describe only visible neckline, collar, trim, pattern and silhouette; distinguish each colourway. For women's uppers, write "top", "knit top", "polo top", "crew-neck top" or another PHOTO-SUPPORTED style. Never say "muscle fit"; do not call an ordinary women's top a generic T-shirt. "Polo T-shirt" is acceptable only when a polo collar is unmistakably visible. If fit is omitted, do not invent one. Display name must describe a visible detail or style, never just "Casuals" or "SANKI". Alt text must literally describe the photographed garment, not make a generic streetwear claim. Do not infer fabric composition, origin, availability, COD or unseen details. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
+  const namingRule=String(group.audience||'').toLowerCase()==='women'&&!isWinter(group)
+    ?'For women’s non-winter uppers, write "top", "knit top", "polo top", "crew-neck top" or another PHOTO-SUPPORTED style. Never say "muscle fit"; do not call an ordinary women’s top a generic T-shirt. "Polo T-shirt" is acceptable only when a polo collar is unmistakably visible.'
+    :'For winter garments, preserve the bill’s confirmed product type (such as sweater, hoodie or jacket); do not relabel it as a top.';
+  const prompt = `Inspect the actual garment photo FIRST and use these confirmed facts: ${JSON.stringify(facts)}. Write distinctive, accurate storefront and SEO/AEO/GEO listing copy. The internal vendor design name and category are not customer-facing descriptions. Describe only visible neckline, collar, trim, pattern and silhouette; distinguish each colourway. ${namingRule} If fit is omitted, do not invent one. Display name must describe a visible detail or style, never just "Casuals" or "SANKI". Alt text must literally describe the photographed garment, not make a generic streetwear claim. Do not infer fabric composition, origin, availability, COD or unseen details. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
   const response = await fetchImpl('https://api.openai.com/v1/responses',{
     method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,store:false,max_output_tokens:900,input:[{role:'user',content:[
@@ -161,4 +178,4 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   return {seo,usage:body.usage || null,model};
 }
 
-module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview};
+module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};

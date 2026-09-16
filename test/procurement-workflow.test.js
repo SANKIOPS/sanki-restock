@@ -12,10 +12,19 @@ test('listing copy does not repeat the product type and includes a display name'
   assert.doesNotMatch(seo.metaTitle, /T-Shirt\s+T-Shirt/i);
 });
 
+test('basic women’s listing copy says Top, while winter keeps the bill product type', () => {
+  const base = { designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'White', fit: 'Muscle Fit', audience: 'Women', sizeLabels: ['FS'] };
+  const summer = genSeo(base);
+  assert.match(summer.title, /Casuals Top/);
+  assert.doesNotMatch([summer.title, summer.metaTitle, summer.metaDescription, summer.imageAlt].join(' '), /\b(?:t[ -]?shirt|muscle\s*fit)\b/i);
+  const winter = genSeo({ ...base, season: 'Winter' });
+  assert.match(winter.title, /T-Shirt/);
+});
+
 test('original photo remains a private reference and posting requires approved views', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
-  assert.match(html, /Original reference · never posted/);
+  assert.match(html, /Original references · never posted/);
   assert.doesNotMatch(html, /data-useoriginal/);
   assert.match(js, /\/use-original-photo'/);
   assert.match(js, /x\.type !== 'original'/);
