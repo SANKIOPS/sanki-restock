@@ -42,7 +42,7 @@ const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 
-function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], advanceRequests:{}, advanceRequestSeq:0, advanceRequestAudit:[], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, salaryPaymentAudit:[], oneTimeMigrations:{} }; }
+function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], advanceRequests:{}, advanceRequestSeq:0, advanceRequestAudit:[], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, salaryPaymentAudit:[], finalSalaryAudit:[], oneTimeMigrations:{} }; }
 function load() {
   try {
     const entity=activeSalaryEntity(),s=Object.assign(blank(), JSON.parse(fs.readFileSync(activeSalaryPath(), 'utf8')));
@@ -476,9 +476,9 @@ function employeeMonthBase(s,e,ym){
   const mo = s.months[ym] || { rows: {}, attendance: {} };
   const div = num(s.divisor) || 30;
   const row=(mo.rows||{})[e.id]||{},computed=attPaidDays(employmentAttendance((mo.attendance||{})[e.id],e,ym),e,ym),historicalPaidDays=row.historicalPaidDays!=null?num(row.historicalPaidDays):null,paidDays=historicalPaidDays!=null?historicalPaidDays:(computed!=null?computed:(row.paidDays!=null?num(row.paidDays):null));
-  const monthlySalary=salaryForMonth(e,ym),salaryAmt=paidDays!=null?(monthlySalary/div*paidDays):0,legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery),historicalCloseAdjustment=num(row.historicalCloseAdjustment);
+  const monthlySalary=salaryForMonth(e,ym),calculatedSalaryAmt=round2(paidDays!=null?(monthlySalary/div*paidDays):0),salaryAmt=row.finalSalaryAmount==null?calculatedSalaryAmt:round2(num(row.finalSalaryAmount)),legacyAdvance=num(row.advance),loggedAdvanceRecovery=monthRecovery(s,e.id,ym),currentAdvance=round2(legacyAdvance+loggedAdvanceRecovery),historicalCloseAdjustment=num(row.historicalCloseAdjustment);
   const legacyPaid=num(row.paid),transactionPaid=round2((s.salaryPayments||[]).filter(p=>p.empId===e.id&&p.ym===ym&&p.active!==false).reduce((n,p)=>n+num(p.amount),0)),paid=round2(legacyPaid+transactionPaid);
-  return {row,computed,historicalPaidDays,paidDays,monthlySalary,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,historicalCloseAdjustment,legacyPaid,transactionPaid,paid};
+  return {row,computed,historicalPaidDays,paidDays,monthlySalary,calculatedSalaryAmt,salaryAmt,legacyAdvance,loggedAdvanceRecovery,currentAdvance,historicalCloseAdjustment,legacyPaid,transactionPaid,paid};
 }
 function payrollBalanceCarryIn(s,e,ym){
   let carry=0;
@@ -495,7 +495,7 @@ function computeMonth(s, ym) {
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
       salary: x.monthlySalary, paidDays:x.paidDays, computedPaidDays:x.computed, historicalPaidDays:x.historicalPaidDays,
-      salaryAmt: round2(x.salaryAmt), advance, currentAdvance:x.currentAdvance, openingBalanceCarry, openingAdvanceCarry, openingPayableCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, historicalCloseAdjustment:x.historicalCloseAdjustment, netPayable: round2(netPayable),
+      salaryAmt: round2(x.salaryAmt), calculatedSalaryAmt:x.calculatedSalaryAmt, finalSalaryAmount:x.row.finalSalaryAmount==null?null:round2(num(x.row.finalSalaryAmount)), finalSalaryReason:x.row.finalSalaryReason||'', finalSalaryEditedAt:x.row.finalSalaryEditedAt||'', finalSalaryEditedBy:x.row.finalSalaryEditedBy||'', advance, currentAdvance:x.currentAdvance, openingBalanceCarry, openingAdvanceCarry, openingPayableCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, historicalCloseAdjustment:x.historicalCloseAdjustment, netPayable: round2(netPayable),
       deductionAdjustment:round2(openingBalanceCarry-x.currentAdvance+x.historicalCloseAdjustment), adjustmentDetails:[
         ...(x.loggedAdvanceRecovery?[{kind:'advance_recovery',amount:-x.loggedAdvanceRecovery,description:'Salary advance recovered in '+ym}]:[]),
         ...(x.legacyAdvance?[{kind:'historical_deduction',amount:-x.legacyAdvance,description:'Historical salary deduction recorded for '+ym}]:[]),
@@ -782,7 +782,31 @@ router.get('/api/salary/month/:ym', guard, (req, res) => {
     t.netPayable += r.netPayable; t.paid += r.paid; t.balance += r.balance; return t;
   }, { salary: 0, salaryAmt: 0, advance: 0, netPayable: 0, paid: 0, balance: 0 });
   Object.keys(totals).forEach(k => totals[k] = round2(totals[k]));
-  res.json({ success: true, ym, divisor: num(s.divisor) || 30, daysInMonth: daysInMonth(ym), finalized: !!mo.finalized, rows, attendance: mo.attendance || {}, totals, permissions:{canModifyPayroll:canApproveAdvance(req),canPay:true} });
+  res.json({ success: true, ym, divisor: num(s.divisor) || 30, daysInMonth: daysInMonth(ym), finalized: !!mo.finalized, rows, attendance: mo.attendance || {}, totals, finalSalaryAudit:(s.finalSalaryAudit||[]).filter(x=>x.ym===ym), permissions:{canModifyPayroll:canApproveAdvance(req),canPay:true} });
+});
+
+// Correct the earned amount for one employee/month; never invent a payment.
+router.patch('/api/salary/final-amount/:ym/:empId', guard, (req, res) => {
+  if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only the Owner can change the final salary amount.'});
+  const ym=String(req.params.ym||''),empId=String(req.params.empId||''),b=req.body||{},reason=String(b.reason||'').trim(),raw=b.amount,amount=Number(raw);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym))return res.status(400).json({success:false,error:'Choose a valid payroll month.'});
+  if(raw==null||String(raw).trim()===''||!Number.isFinite(amount)||amount<0||amount>100000000)return res.status(400).json({success:false,error:'Enter a valid final salary amount.'});
+  if(!reason)return res.status(400).json({success:false,error:'Explain why the final salary was changed.'});
+  const s=load(),emp=s.employees[empId];
+  if(!emp||!employeeInPayrollMonth(emp,ym))return res.status(404).json({success:false,error:'Employee is not in this payroll month.'});
+  const before=computeMonth(s,ym).find(x=>x.id===empId),mo=ensureMonth(s,ym),row=mo.rows[empId]=mo.rows[empId]||{},at=new Date().toISOString(),by=req.user&&req.user.username||'Owner';
+  row.finalSalaryAmount=round2(amount);row.finalSalaryReason=reason;row.finalSalaryEditedAt=at;row.finalSalaryEditedBy=by;
+  const after=computeMonth(s,ym).find(x=>x.id===empId);
+  s.finalSalaryAudit=s.finalSalaryAudit||[];
+  s.finalSalaryAudit.push({ym,empId,employeeName:emp.name,at,by,previousAmount:before.salaryAmt,calculatedAmount:after.calculatedSalaryAmt,finalAmount:after.salaryAmt,reason});
+  const posting=(s.payrollPostings||{})[ym];
+  if(posting){
+    posting.rows=posting.rows||[];
+    let posted=posting.rows.find(x=>x.empId===empId);
+    if(!posted){posted={empId,employeeName:emp.name,advanceRecovery:after.loggedAdvanceRecovery,legacyAdvance:after.legacyAdvance,legacyPaid:after.legacyPaid,paid:after.paid};posting.rows.push(posted);}
+    posted.salaryAmt=after.salaryAmt;posted.netPayable=after.netPayable;posting.correctedAt=at;posting.correctedBy=by;
+  }
+  save(s);res.json({success:true,row:after});
 });
 
 // Mark one attendance cell. mark='' clears it.

@@ -417,3 +417,24 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   assert.equal(twoLeaves.paidDays,32,'two unused allowance days become extra paid days after the July adjustment');
   assert.equal(fiveLeaves.paidDays,29,'a fifth leave reduces the normal 30 paid days by one');
 });
+
+test('owner final salary correction requires a reason and updates earned payroll without recording a payment',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Final Salary Correction Test',salary:30000,joiningDate:'2099-01-01'}}).body.employee;
+  const ym='2099-01',params={ym,empId:emp.id};
+  assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:20}}).status,200);
+  assert.equal(invoke('POST','/api/salary/post/:ym',{params:{ym}}).status,200);
+  assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{params,role:'admin',body:{amount:19000,reason:'Approved correction'}}).status,403);
+  assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{params,role:'owner',body:{amount:19000}}).status,400);
+  assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{params,role:'owner',body:{amount:'invalid',reason:'Test'}}).status,400);
+  const correction=invoke('PATCH','/api/salary/final-amount/:ym/:empId',{params,role:'owner',username:'owner',body:{amount:19000,reason:'Approved attendance correction'}});
+  assert.equal(correction.status,200);
+  const month=invoke('GET','/api/salary/month/:ym',{params:{ym},role:'owner'}).body,row=month.rows.find(x=>x.id===emp.id);
+  assert.equal(row.calculatedSalaryAmt,20000);assert.equal(row.salaryAmt,19000);assert.equal(row.finalSalaryReason,'Approved attendance correction');
+  assert.equal(row.paid,0);assert.equal(row.balance,19000);
+  assert.equal(month.finalSalaryAudit.find(x=>x.empId===emp.id).previousAmount,20000);
+  const salary=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'));
+  assert.equal(salary.payrollPostings[ym].rows.find(x=>x.empId===emp.id).salaryAmt,19000);
+  assert.equal(salary.salaryPayments.filter(x=>x.empId===emp.id&&x.ym===ym).length,0);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/Change final salary/);assert.match(html,/openFinalSalary/);assert.match(html,/saveFinalSalary/);
+});
