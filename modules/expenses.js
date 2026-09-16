@@ -1058,7 +1058,7 @@ function salaryAdvanceEntries() {
 }
 function loadSalaryStore(){try{return JSON.parse(fs.readFileSync(SALARY_PATH,'utf8'));}catch(_){return null;}}
 function saveSalaryStore(s){const tmp=SALARY_PATH+'.tmp-'+process.pid+'-'+Date.now();fs.writeFileSync(tmp,JSON.stringify(s,null,2));fs.renameSync(tmp,SALARY_PATH);}
-function salaryPaymentEntries(){try{const sal=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'salary.json'),'utf8'));return (sal.salaryPayments||[]).filter(p=>p.active!==false&&num(p.amount)>0).map(p=>Object.assign({},p,{account:canonicalAccountName(p.account)}));}catch(_){return[];}}
+function salaryPaymentEntries(){try{const sal=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'salary.json'),'utf8'));return (sal.salaryPayments||[]).filter(p=>p.active!==false&&num(p.amount)>0&&!p.linkedLedgerEntryId).map(p=>Object.assign({},p,{account:canonicalAccountName(p.account)}));}catch(_){return[];}}
 function companyAccountsForNature(nature) {
   return (ENTITY_ACCOUNTS[normalizedNature(nature)] || []).slice();
 }

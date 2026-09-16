@@ -18,6 +18,7 @@ const router = express.Router();
 const DATA_DIR = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 const SAL_PATH = path.join(DATA_DIR, 'salary.json');
 const SAMAST_SAL_PATH = path.join(DATA_DIR, 'salary-samast.json');
+const EXP_PATH = path.join(DATA_DIR, 'expenses.json');
 const salaryContext = new AsyncLocalStorage();
 function salaryEntity(value){return String(value||'SANKI').toUpperCase()==='SAMAST'?'SAMAST':'SANKI';}
 function activeSalaryEntity(){const context=salaryContext.getStore();return salaryEntity(context&&context.entity);}
@@ -41,7 +42,7 @@ const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
 
-function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], advanceRequests:{}, advanceRequestSeq:0, advanceRequestAudit:[], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, oneTimeMigrations:{} }; }
+function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], advanceRequests:{}, advanceRequestSeq:0, advanceRequestAudit:[], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, salaryPaymentAudit:[], oneTimeMigrations:{} }; }
 function load() {
   try {
     const entity=activeSalaryEntity(),s=Object.assign(blank(), JSON.parse(fs.readFileSync(activeSalaryPath(), 'utf8')));
@@ -494,13 +495,13 @@ function computeMonth(s, ym) {
     return {
       id: e.id, name: e.name, post: e.post, channel: e.channel, weekOffDay: e.weekOffDay || '', joiningDate:e.joiningDate||'', lastWorkingDate:e.lastWorkingDate||'', active: e.active !== false,
       salary: x.monthlySalary, paidDays:x.paidDays, computedPaidDays:x.computed, historicalPaidDays:x.historicalPaidDays,
-      salaryAmt: round2(x.salaryAmt), advance, currentAdvance:x.currentAdvance, openingBalanceCarry, openingAdvanceCarry, openingPayableCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, netPayable: round2(netPayable),
+      salaryAmt: round2(x.salaryAmt), advance, currentAdvance:x.currentAdvance, openingBalanceCarry, openingAdvanceCarry, openingPayableCarry, legacyAdvance:x.legacyAdvance, loggedAdvanceRecovery:x.loggedAdvanceRecovery, historicalCloseAdjustment:x.historicalCloseAdjustment, netPayable: round2(netPayable),
       deductionAdjustment:round2(openingBalanceCarry-x.currentAdvance+x.historicalCloseAdjustment), adjustmentDetails:[
         ...(x.loggedAdvanceRecovery?[{kind:'advance_recovery',amount:-x.loggedAdvanceRecovery,description:'Salary advance recovered in '+ym}]:[]),
         ...(x.legacyAdvance?[{kind:'historical_deduction',amount:-x.legacyAdvance,description:'Historical salary deduction recorded for '+ym}]:[]),
         ...(openingAdvanceCarry?[{kind:'previous_overpayment',amount:-openingAdvanceCarry,description:'Extra salary paid earlier; carried forward as a deduction'}]:[]),
         ...(openingPayableCarry?[{kind:'previous_payable',amount:openingPayableCarry,description:'Salary left unpaid earlier; added this month'}]:[]),
-        ...(x.historicalCloseAdjustment?[{kind:'historical_payroll_closed',amount:x.historicalCloseAdjustment,description:'Historical payroll closed by Owner through August 2026'}]:[])
+        ...(x.historicalCloseAdjustment?[{kind:'historical_payroll_unverified',amount:x.historicalCloseAdjustment,description:'Unverified historical offset — not evidence of payment. Owner must review actual 3645/cash payments.'}]:[])
       ],
       outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
       paid:x.paid, legacyPaid:x.legacyPaid, transactionPaid:x.transactionPaid, balance:round2(netPayable-x.paid), carryForwardAdvance:round2(Math.max(0,-(netPayable-x.paid))),carryForwardPayable:round2(Math.max(0,netPayable-x.paid)),remarks:x.row.remarks||''
@@ -604,6 +605,70 @@ router.post('/api/salary/payments/batch',guard,(req,res)=>{
   if(!/^\d{4}-\d{2}$/.test(ym)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!SALARY_PAYING_ACCOUNTS.includes(account)||!proofs.length||!items.length)return res.status(400).json({success:false,error:'Choose employees, date, Prashant Axis 3645 or an available cash account, and at least one payment proof.'});
   const rows=computeMonth(s,ym),seen=new Set(),prepared=[];for(const x of items){const row=rows.find(r=>r.id===x.empId),amount=round2(num(x.amount)),remaining=round2(Math.max(0,row&&row.balance||0)),modificationReason=String(x.modificationReason||'').trim();if(!row||seen.has(x.empId)||!(amount>0)||amount>remaining+.001)return res.status(400).json({success:false,error:'A payment is invalid or exceeds the employee’s remaining payable balance.'});if(Math.abs(amount-remaining)>.001&&!modificationReason)return res.status(400).json({success:false,error:'Enter why '+row.name+' is being paid '+amount+' instead of the full balance '+remaining+'.'});seen.add(x.empId);prepared.push({row,amount,modificationReason,remainingBeforePayment:remaining});}
   s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const batchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0'),now=new Date().toISOString();s.salaryPayments=s.salaryPayments||[];prepared.forEach((x,i)=>s.salaryPayments.push({id:batchId+'-'+String(i+1).padStart(3,'0'),batchId,ym,empId:x.row.id,employeeName:x.row.name,amount:x.amount,date,account,proof,proofs:proofs.slice(),reference:String(b.reference||'').trim(),note:String(b.note||'').trim(),modificationReason:x.modificationReason,remainingBeforePayment:x.remainingBeforePayment,balanceAfterPayment:round2(x.remainingBeforePayment-x.amount),active:true,createdBy:req.user&&req.user.username||'admin',createdAt:now}));save(s);res.json({success:true,batchId,count:prepared.length,total:round2(prepared.reduce((n,x)=>n+x.amount,0)),proofCount:proofs.length});
+});
+router.get('/api/salary/payments/:ym',guard,(req,res)=>{
+  const ym=String(req.params.ym||'');if(!/^\d{4}-\d{2}$/.test(ym))return res.status(400).json({success:false,error:'Invalid payroll month.'});
+  const s=load(),payments=(s.salaryPayments||[]).filter(p=>p.active!==false&&p.ym===ym).slice().sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
+  res.json({success:true,payments,audit:(s.salaryPaymentAudit||[]).filter(x=>x.ym===ym).slice().reverse()});
+});
+router.patch('/api/salary/payments/:id',guard,(req,res)=>{
+  if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only the Owner can correct a salary payment.'});
+  const s=load(),p=(s.salaryPayments||[]).find(x=>x.id===req.params.id&&x.active!==false),b=req.body||{};
+  if(!p)return res.status(404).json({success:false,error:'Salary payment not found.'});
+  if(p.linkedLedgerEntryId)return res.status(409).json({success:false,error:'This salary payment is linked to an existing ledger debit. Correct that original ledger entry before changing its amount, date, or account.'});
+  const amount=round2(num(b.amount)),date=String(b.date||''),account=String(b.account||'').trim(),reason=String(b.reason||'').trim();
+  const proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
+  if(!(amount>0)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!SALARY_PAYING_ACCOUNTS.includes(account)||!proofs.length||!reason)return res.status(400).json({success:false,error:'Amount, date, paying account, at least one proof, and correction reason are required.'});
+  const before={amount:p.amount,date:p.date,account:p.account,proofs:p.proofs||[p.proof].filter(Boolean),reference:p.reference||''};
+  const changed=amount!==round2(num(p.amount))||date!==p.date||account!==p.account||JSON.stringify(proofs)!==JSON.stringify(before.proofs)||String(b.reference||'').trim()!==before.reference;
+  if(!changed)return res.status(400).json({success:false,error:'No payment details changed.'});
+  const otherPaid=(s.salaryPayments||[]).filter(x=>x!==p&&x.active!==false&&x.empId===p.empId&&x.ym===p.ym).reduce((n,x)=>n+num(x.amount),0);
+  const row=computeMonth(s,p.ym).find(x=>x.id===p.empId),available=row?round2(row.netPayable-num((s.months[p.ym]&&s.months[p.ym].rows[p.empId]||{}).paid)-otherPaid):0;
+  if(amount>available+.001)return res.status(400).json({success:false,error:'Corrected amount exceeds this employee’s available salary balance.'});
+  Object.assign(p,{amount,date,account,proof:proofs[0],proofs,reference:String(b.reference||'').trim(),editedAt:new Date().toISOString(),editedBy:req.user.username});
+  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.editedAt,by:req.user.username,action:'PAYMENT_CORRECTED',paymentId:p.id,ym:p.ym,empId:p.empId,before,after:{amount,date,account,proofs,reference:p.reference},reason});
+  save(s);res.json({success:true,payment:p});
+});
+function existing3645DebitCandidates(s){
+  let store;try{store=JSON.parse(fs.readFileSync(EXP_PATH,'utf8'));}catch{return[];}
+  const book=(store.bankStatements||{})['Prashant Axis 3645'],used=new Set((s.salaryPayments||[]).filter(p=>p.active!==false&&p.linkedLedgerEntryId).map(p=>p.linkedLedgerEntryId)),seen=new Set(),out=[];
+  for(const record of book&&book.imports||[])for(const row of [].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[])){
+    const bank=row.bank||{},ledger=row.ledger||{},ledgerId=String(ledger.id||'');
+    if(!ledgerId||!num(bank.debit)||!num(ledger.debit)||Math.abs(num(bank.debit)-num(ledger.debit))>.01||used.has(ledgerId)||seen.has(ledgerId)||ledgerId.startsWith('SALB-'))continue;
+    seen.add(ledgerId);out.push({ledgerEntryId:ledgerId,recordId:record.id,rowId:row.id,date:bank.date,amount:round2(num(bank.debit)),reference:String(bank.reference||''),description:String(bank.description||''),ledgerDescription:String(ledger.description||''),ledgerProof:String(ledger.proof||'')});
+  }
+  return out.sort((a,b)=>String(b.date+b.ledgerEntryId).localeCompare(String(a.date+a.ledgerEntryId)));
+}
+router.get('/api/salary/existing-3645-debits',guard,(req,res)=>{
+  if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only the Owner can link existing salary payments.'});
+  if(activeSalaryEntity()!=='SANKI')return res.status(400).json({success:false,error:'3645 belongs to SANKI payroll.'});
+  res.json({success:true,candidates:existing3645DebitCandidates(load())});
+});
+router.post('/api/salary/payments/link-existing',guard,(req,res)=>{
+  if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only the Owner can link existing salary payments.'});
+  if(activeSalaryEntity()!=='SANKI')return res.status(400).json({success:false,error:'3645 belongs to SANKI payroll.'});
+  const s=load(),b=req.body||{},ym=String(b.ym||''),emp=s.employees[String(b.empId||'')],ledgerEntryId=String(b.ledgerEntryId||''),reason=String(b.reason||'').trim();
+  const proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
+  if(!/^\d{4}-\d{2}$/.test(ym)||!emp||!ledgerEntryId||!reason||!proofs.length)return res.status(400).json({success:false,error:'Choose employee, payroll month, existing 3645 debit, reason, and payment proof.'});
+  const candidate=existing3645DebitCandidates(s).find(x=>x.ledgerEntryId===ledgerEntryId);if(!candidate)return res.status(409).json({success:false,error:'The 3645 debit is no longer eligible or has already been linked.'});
+  const mo=ensureMonth(s,ym),stored=mo.rows[emp.id]||{},offset=ym==='2026-08'?num(stored.historicalCloseAdjustment):0;
+  if(offset)delete stored.historicalCloseAdjustment;mo.rows[emp.id]=stored;
+  const row=computeMonth(s,ym).find(x=>x.id===emp.id),remaining=round2(num(row&&row.balance));
+  if(!row||candidate.amount>remaining+.001){if(offset)stored.historicalCloseAdjustment=offset;return res.status(400).json({success:false,error:'This debit exceeds the reopened salary balance. Review the employee and amount before linking.'});}
+  s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;const id='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0')+'-001',now=new Date().toISOString();
+  const payment={id,batchId:id.slice(0,-4),ym,empId:emp.id,employeeName:emp.name,amount:candidate.amount,date:candidate.date,account:'Prashant Axis 3645',proof:proofs[0],proofs,reference:candidate.reference||ledgerEntryId,linkedLedgerEntryId:ledgerEntryId,linkedBankRecordId:candidate.recordId,linkedBankRowId:candidate.rowId,modificationReason:reason,remainingBeforePayment:remaining,balanceAfterPayment:round2(remaining-candidate.amount),active:true,createdBy:req.user.username,createdAt:now};
+  s.salaryPayments=s.salaryPayments||[];s.salaryPayments.push(payment);s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:now,by:req.user.username,action:'EXISTING_3645_DEBIT_LINKED',paymentId:id,ym,empId:emp.id,ledgerEntryId,bankRecordId:candidate.recordId,bankRowId:candidate.rowId,historicalOffsetReopened:round2(offset),reason});save(s);
+  res.json({success:true,payment,noAdditionalLedgerDebit:true});
+});
+router.post('/api/salary/historical-offset/:ym/:empId/reopen',guard,(req,res)=>{
+  if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only the Owner can reopen historical salary.'});
+  const ym=String(req.params.ym||''),empId=String(req.params.empId||''),reason=String(req.body&&req.body.reason||'').trim();
+  if(ym!=='2026-08'||!reason)return res.status(400).json({success:false,error:'Choose August 2026 and enter a reason.'});
+  const s=load(),mo=s.months[ym],row=mo&&mo.rows&&mo.rows[empId],employee=s.employees[empId];
+  if(!employee||!row||!num(row.historicalCloseAdjustment))return res.status(404).json({success:false,error:'No unverified historical offset for this employee.'});
+  const before=round2(num(row.historicalCloseAdjustment));delete row.historicalCloseAdjustment;
+  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:new Date().toISOString(),by:req.user.username,action:'HISTORICAL_OFFSET_REOPENED',ym,empId,employeeName:employee.name,beforeOffset:before,reason});
+  save(s);res.json({success:true,employeeName:employee.name,reopenedAmount:round2(-before),row:computeMonth(s,ym).find(x=>x.id===empId)});
 });
 router.get('/api/salary/ledgers',guard,(req,res)=>{
   const s=load(),by={};const ensure=(id,name)=>by[id]||(by[id]={empId:id,name,ledgerName:(name||id)+' — Salary',entries:[]});

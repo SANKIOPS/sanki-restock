@@ -333,6 +333,51 @@ test('positive and negative balances carry forward once and payroll respects emp
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(source,/Extra salary paid earlier/);assert.match(source,/Salary left unpaid earlier/);assert.match(html,/positive balances remain payable/);
 });
 
+test('owner sees historical payroll as unverified and can reopen one August employee without fabricating a payment',()=>{
+  const august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'},role:'owner'}).body.rows;
+  const row=august.find(x=>Math.abs(x.historicalCloseAdjustment||0)>0.005);
+  assert.ok(row,'an August offset is available to review');
+  assert.ok(row.adjustmentDetails.some(x=>x.kind==='historical_payroll_unverified'));
+  assert.equal(invoke('POST','/api/salary/historical-offset/:ym/:empId/reopen',{params:{ym:'2026-08',empId:row.id},body:{reason:'Verified bank payment history'},role:'accounting'}).status,403);
+  const beforePayments=invoke('GET','/api/salary/payments/:ym',{params:{ym:'2026-08'},role:'owner'}).body.payments.length;
+  const result=invoke('POST','/api/salary/historical-offset/:ym/:empId/reopen',{params:{ym:'2026-08',empId:row.id},body:{reason:'Bank payments must be reviewed individually'},role:'owner'});
+  assert.equal(result.status,200);
+  assert.equal(result.body.row.historicalCloseAdjustment,0);
+  assert.equal(invoke('GET','/api/salary/payments/:ym',{params:{ym:'2026-08'},role:'owner'}).body.payments.length,beforePayments);
+  assert.equal(invoke('POST','/api/salary/historical-offset/:ym/:empId/reopen',{params:{ym:'2026-08',empId:row.id},body:{reason:'Again'},role:'owner'}).status,404);
+});
+
+test('owner can correct a proof-backed salary payment and correction is audited',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Correction employee',salary:30000},role:'owner'}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-01'},body:{empId:emp.id,paidDays:30},role:'owner'});
+  const made=invoke('POST','/api/salary/payments/batch',{body:{ym:'2099-01',date:'2099-01-31',account:'Prashant Axis 3645',proof:'/first.jpg',items:[{empId:emp.id,amount:10000,modificationReason:'First tranche'}]},role:'owner'});
+  assert.equal(made.status,200);
+  const id=made.body.batchId+'-001';
+  const edited=invoke('PATCH','/api/salary/payments/:id',{params:{id},body:{amount:9000,date:'2099-01-30',account:'Gagan Sir Cash',proofs:['/corrected.jpg'],reference:'CASH-1',reason:'Actual cash receipt'},role:'owner'});
+  assert.equal(edited.status,200);
+  assert.equal(edited.body.payment.amount,9000);
+  assert.equal(edited.body.payment.account,'Gagan Sir Cash');
+  assert.equal(invoke('PATCH','/api/salary/payments/:id',{params:{id},body:{amount:8000,date:'2099-01-30',account:'Gagan Sir Cash',proofs:['/corrected.jpg'],reason:'No'},role:'accounting'}).status,403);
+  const view=invoke('GET','/api/salary/payments/:ym',{params:{ym:'2099-01'},role:'owner'}).body;
+  assert.equal(view.payments.find(x=>x.id===id).proof,'/corrected.jpg');
+  assert.equal(view.audit.find(x=>x.paymentId===id).before.amount,10000);
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-01'},role:'owner'}).body.rows.find(x=>x.id===emp.id).paid,9000);
+});
+
+test('owner links one finalized 3645 debit to salary without a second account-ledger debit',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Linked debit employee',salary:12000},role:'owner'}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-03'},body:{empId:emp.id,paidDays:30},role:'owner'});
+  fs.writeFileSync(path.join(tempDir,'expenses.json'),JSON.stringify({bankStatements:{'Prashant Axis 3645':{imports:[{id:'BST-1',reconciliationRows:[{id:'row-1',bank:{date:'2099-03-31',debit:12000,reference:'UTR-SALARY',description:'Salary paid'},ledger:{id:'EX-1/PAY-1',date:'2099-03-31',debit:12000,description:'Employee salary'}}]}]}}}));
+  const candidates=invoke('GET','/api/salary/existing-3645-debits',{role:'owner'}).body.candidates;
+  assert.equal(candidates.length,1);
+  const linked=invoke('POST','/api/salary/payments/link-existing',{role:'owner',body:{ym:'2099-03',empId:emp.id,ledgerEntryId:'EX-1/PAY-1',proofs:['/salary-proof.jpg'],reason:'Existing bank payment for this employee'}});
+  assert.equal(linked.status,200);assert.equal(linked.body.noAdditionalLedgerDebit,true);
+  assert.equal(linked.body.payment.linkedLedgerEntryId,'EX-1/PAY-1');
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-03'}}).body.rows.find(x=>x.id===emp.id).balance,0);
+  assert.equal(invoke('GET','/api/salary/existing-3645-debits',{role:'owner'}).body.candidates.length,0);
+  assert.equal(invoke('POST','/api/salary/payments/link-existing',{role:'owner',body:{ym:'2099-03',empId:emp.id,ledgerEntryId:'EX-1/PAY-1',proofs:['/salary-proof.jpg'],reason:'Duplicate'}}).status,409);
+});
+
 test('July 2026 historical attendance prepares payroll with paid-off and 31-day rules',()=>{
   assert.equal(_findImportedEmployee({employees:{x:{id:'x',name:'Arshpreet Singh Arora',post:'Manager'}}},'ARSHPREET SINGH','MANAGER').id,'x','longer employee-master name is matched safely by post');
   assert.equal(_findImportedEmployee({employees:{x:{id:'x',name:'Nandini',post:'Sales Executive'}}},'NANDANI','SALES EXECUTIVE').id,'x','Nandini production spelling matches the supplied NANDANI row');
@@ -362,8 +407,8 @@ test('July 2026 historical attendance prepares payroll with paid-off and 31-day 
   const arshpreet=month.rows.find(r=>/^Arshpreet/i.test(r.name)),ravi=month.rows.find(r=>r.name==='Ravi');
   const august=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-08'}}).body.rows,finalNames=new Set(_finalJuly2026Payroll.map(x=>String(x[0]).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(x[1]).toLowerCase())),finalAugust=august.filter(r=>finalNames.has(String(r.name).replace(/\s*\([^)]*\)\s*/g,'').trim().toLowerCase()+'|'+String(r.post).toLowerCase()));
   assert.equal(august.find(r=>r.id===arshpreet.id).advance,0);assert.equal(august.find(r=>r.id===arshpreet.id).outstandingAdvance,0);assert.equal(august.find(r=>r.id===ravi.id).advance,0);assert.equal(august.find(r=>r.id===suraj.id).advance,0);
-  assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);assert.ok(finalAugust.every(r=>r.balance===0),'historical payroll is closed through August');
-  const september=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows;assert.ok(finalAugust.every(r=>september.find(x=>x.id===r.id).openingBalanceCarry===0),'September starts without a historical salary carry-forward');
+  assert.equal(august.find(r=>r.name==='PIYUSH').openingPayableCarry,266.67);assert.ok(finalAugust.every(r=>r.balance===0||!r.historicalCloseAdjustment),'historical offsets remain until the owner reopens an employee');
+  const september=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows;assert.ok(finalAugust.every(r=>september.find(x=>x.id===r.id).openingBalanceCarry===r.balance),'September carries any owner-reopened August balance');
   assert.ok(finalAugust.every(r=>r.outstandingAdvance===0),'no spreadsheet-imported advance survives the cleanup');
   const sundayOff=_julyImportedMarks({weekOffDay:'Sunday'},'A'.repeat(31));
   assert.equal(sundayOff.attendance['05'],'WO','an absent weekly-off date stays visibly marked WO');
