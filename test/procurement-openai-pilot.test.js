@@ -78,15 +78,31 @@ test('paid retry is explicit and only requests missing image or SEO drafts',()=>
 });
 
 test('SEO request uses the original photo and returns complete structured draft',async()=>{
-  const seo={displayName:'Diamond Stitch',title:'Black Diamond Stitch T-Shirt | SANKI',metaTitle:'Black Diamond Stitch T-Shirt | SANKI',metaDescription:'A black crew neck T-shirt with diamond stitching.',imageAlt:'Black diamond stitch T-shirt front view',tags:['Black','Crew Neck'],bodyHtml:'<p>Black crew neck T-shirt.</p>'};
+  const seo={displayName:'Diamond Stitch',title:'Black Diamond Stitch Top | SANKI',metaTitle:'Black Diamond Stitch Top | SANKI',metaDescription:'A black crew-neck top with diamond stitching.',imageAlt:'Black diamond stitch top front view',tags:['Black','Crew Neck'],bodyHtml:'<p>Black crew-neck top.</p>'};
   const out=await pilot.generateSeo({key:'test-only',group,source,fetchImpl:async(url,options)=>{
     assert.equal(url,'https://api.openai.com/v1/responses');
     const body=JSON.parse(options.body);
     assert.equal(body.store,false);
     assert.equal(body.text.format.type,'json_schema');
     assert.match(body.input[0].content[1].image_url,/^data:image\/jpeg;base64,/);
+    assert.match(body.input[0].content[0].text,/never call it a T-shirt or muscle fit/);
     return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(seo)}]}],usage:{input_tokens:200}})};
   }});
   assert.deepEqual(out.seo,seo);
   assert.deepEqual(out.usage,{input_tokens:200});
+});
+
+test('women’s storefront terms are independent of internal SKU category and unsuitable fit',()=>{
+  assert.deepEqual(pilot.retailFacts({...group,fit:'Muscle Fit'}),{productType:'Top',fit:''});
+  assert.equal(pilot.seoCopyNeedsReview({displayName:'Casuals',title:'Muscle Fit T-Shirt',tags:[]},group),true);
+  assert.equal(pilot.seoCopyNeedsReview({displayName:'Diamond Stitch',title:'White Knit Top',tags:[]},group),false);
+});
+
+test('purchase pilot does not mistake initial product-detail SEO for AI-written copy',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(server,/existingSeo\.source==='openai-pilot'/);
+  assert.match(html,/copy\.source==='openai-pilot'/);
+  assert.match(html,/data-pilot-message/);
+  assert.match(html,/Basic placeholder copy from purchase details/);
 });

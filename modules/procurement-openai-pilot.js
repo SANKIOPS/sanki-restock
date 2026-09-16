@@ -70,8 +70,25 @@ function castDescription(group,gender) {
   return (gender==='female'?women:men)[hash%2];
 }
 
+function retailFacts(group) {
+  const women=String(group.audience||'').toLowerCase()==='women';
+  const rawType=String(group.productType||'').trim();
+  const rawFit=String(group.fit||'').trim();
+  return {
+    productType:women && /^t[ -]?shirt$/i.test(rawType)?'Top':rawType,
+    fit:women && /^muscle\s*fit$/i.test(rawFit)?'':rawFit
+  };
+}
+
+function seoCopyNeedsReview(seo,group) {
+  const copy=[seo.displayName,seo.title,seo.metaTitle,seo.metaDescription,seo.imageAlt,seo.bodyHtml,...(seo.tags||[])].join(' ');
+  if(String(group.audience||'').toLowerCase()==='women' && (/\bmuscle\s*fit\b/i.test(copy)||/\bt[ -]?shirts?\b/i.test(copy)))return true;
+  if(/^(?:sanki\s+)?casuals?$/i.test(String(seo.displayName||'').trim()))return true;
+  return false;
+}
+
 function imagePrompt(group, type, styling) {
-  const facts = `${group.colour} ${group.productType}${group.fit ? `, ${group.fit} fit` : ''}`;
+  const facts = `${group.colour} ${group.productType}${retailFacts(group).fit ? `, ${retailFacts(group).fit}` : ''}`;
   const common = `The reference shows the actual ${facts}. Preserve its exact colour, visible print, seams, neckline, sleeves, cut and length. Do not invent a logo, fabric composition, unseen back, pockets or details. One garment, no collage, text or watermark.`;
   if (type === 'front') return `Create a clean, photorealistic product-only front catalogue photo on a warm ivory studio background. ${String(group.audience).toLowerCase()==='women'&&garmentCategory(group)==='upper'?'Show the true fitted silhouette and bust shaping of the fully opaque garment on an invisible female-form mannequin, with no visible skin or mannequin parts. ':''}${common}`;
   if (type === 'back') return `Create a clean, photorealistic product-only BACK catalogue photo on a white studio background. The reference is a real photo of the back of this garment. Preserve only details actually visible in that back reference; do not copy front artwork onto the back or invent unseen details. ${common}`;
@@ -125,9 +142,10 @@ async function generateImage({key, group, source, type, styling, model='gpt-imag
 }
 
 async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=global.fetch}) {
-  const facts = {brand:'SANKI',productType:group.productType,colour:group.colour,
-    audience:group.audience,fit:group.fit,sizes:group.sizeLabels};
-  const prompt = `Inspect the source garment photo and these confirmed product facts: ${JSON.stringify(facts)}. Write accurate, natural storefront and SEO/AEO/GEO listing copy. Do not infer fabric, origin, availability, COD, unseen details or unverified gender/fit from the photo. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Display name should be short; meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
+  const retail=retailFacts(group);
+  const facts = {brand:'SANKI',productType:retail.productType,colour:group.colour,
+    audience:group.audience,fit:retail.fit,sizes:group.sizeLabels};
+  const prompt = `Inspect the actual garment photo FIRST and use these confirmed facts: ${JSON.stringify(facts)}. Write distinctive, accurate storefront and SEO/AEO/GEO listing copy. The internal vendor design name and category are not customer-facing descriptions. Describe only visible neckline, collar, trim, pattern and silhouette; distinguish each colourway. For women's tops, write "top", "knit top", "polo top", "crew-neck top" or another PHOTO-SUPPORTED style; never call it a T-shirt or muscle fit. A polo/collar must be visibly present before naming it. If fit is omitted, do not invent one. Display name must describe a visible detail or style, never just "Casuals" or "SANKI". Alt text must literally describe the photographed garment, not make a generic streetwear claim. Do not infer fabric composition, origin, availability, COD or unseen details. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
   const response = await fetchImpl('https://api.openai.com/v1/responses',{
     method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,store:false,max_output_tokens:900,input:[{role:'user',content:[
@@ -139,7 +157,8 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   const body = await readApiResponse(response);
   const seo = JSON.parse(responseText(body));
   if (SEO_FIELDS.some(k=>typeof seo[k]!=='string' || !seo[k].trim()) || !Array.isArray(seo.tags) || !seo.tags.length) throw new Error('OpenAI returned incomplete SEO copy.');
+  if(seoCopyNeedsReview(seo,group))throw new Error('AI copy used an unsuitable women’s category/fit or a generic display name; no SEO draft was saved. Retry after reviewing product facts.');
   return {seo,usage:body.usage || null,model};
 }
 
-module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,generateSeo,responseText,castDescription};
+module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview};

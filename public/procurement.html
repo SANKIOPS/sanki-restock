@@ -1982,7 +1982,7 @@
         if(po.backRefs){ Object.keys(po.backRefs).forEach(function(k){ studio.backRefs[k]=po.backRefs[k]; }); }
         if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
         if(po.openaiPilot&&Array.isArray(po.openaiPilot.attempts)){po.openaiPilot.attempts.forEach(function(a){if(a.styling)studio.styling[a.groupKey]=Object.assign({fit:''},a.styling);});}
-        if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved }; }); }
+        if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved, source:dd.source||'product-details' }; }); }
         renderStudio();
         fetch('/api/procurement/openai-pilot-status').then(readJson).then(function(status){
           openaiPilotConfig=status;renderStudio();
@@ -2022,10 +2022,15 @@
     }
     function missingPaidDrafts(np){
       var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url;}).map(function(v){return v.type;});
-      return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(studio.seo[np.key]&&studio.seo[np.key].seo)};
+      var copy=studio.seo[np.key];
+      return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(copy&&copy.seo&&(copy.approved||copy.source==='openai-pilot'))};
     }
     async function generatePaidGroups(mode,singleKey){
       var btn=mode==='single'?null:el(mode==='all'?'generatePoBtn':'generateSelectedBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
+      function report(message,item){
+        if(status)status.textContent=message;
+        if(item){var card=el('scard'+item.i),local=card&&card.querySelector('[data-pilot-message]');if(local)local.textContent=message;}
+      }
       po.openaiPilot=po.openaiPilot||{attempts:[]};
       var groups=d&&d.newProducts||[],attempts=po.openaiPilot.attempts,used={};
       attempts.forEach(function(a){used[a.groupKey]=true;});
@@ -2033,22 +2038,24 @@
       if(mode==='single'&&selected.length)btn=el('scard'+selected[0].i).querySelector('[data-openai-pilot]');
       if(!selected.length){alert('Tick at least one product first.');return;}
       var pending=selected.filter(function(x){var missing=missingPaidDrafts(x.np);return missing.images.length||missing.seo;});
-      if(po.status!=='received'){alert('Receive and weigh this PO, then Save corrections before generating.');return;}
-      if((po.lines||[]).some(function(l){return !(Number(l.weightGrams)>0);})){alert('Every line needs its saved weight before generation.');return;}
-      if(pending.some(function(x){return !x.np.photoUrl;})){alert('Upload an original photo for every selected product first.');return;}
-      if(pending.some(function(x){return !paidTypesFor(x.np).length;})){alert('Set Men, Women or Unisex for every selected product before generation.');return;}
+      if(po.status!=='received'){report('Receive and weigh this PO, then Save corrections before generating.',selected[0]);return;}
+      if((po.lines||[]).some(function(l){return !(Number(l.weightGrams)>0);})){report('Every line needs its saved weight before generation.',selected[0]);return;}
+      if(pending.some(function(x){return !x.np.photoUrl;})){report('Upload an original photo for every selected product first.',selected[0]);return;}
+      if(pending.some(function(x){return !paidTypesFor(x.np).length;})){report('Set Men, Women or Unisex for every selected product before generation.',selected[0]);return;}
       var max=(openaiPilotConfig||{}).maxGroups||30;
       var newArticles=pending.filter(function(x){return !used[x.np.key];}).length;
-      if(Object.keys(used).length+newArticles>max){alert('This PO would exceed the '+max+'-article paid pilot limit. Select fewer products.');return;}
-      if(!pending.length){status.textContent='All selected products already have their image and SEO drafts. Review and approve them below; no new paid call was made.';return;}
+      if(Object.keys(used).length+newArticles>max){report('This PO would exceed the '+max+'-article paid pilot limit. Select fewer products.',selected[0]);return;}
+      if(!pending.length){report('All selected products already have their image and AI SEO drafts. Review and approve them below; no new paid call was made.',selected[0]);return;}
       var imageCalls=pending.reduce(function(total,x){return total+missingPaidDrafts(x.np).images.length;},0);
       var seoCalls=pending.filter(function(x){return missingPaidDrafts(x.np).seo;}).length;
       var skipped=selected.length-pending.length;
-      if(!confirm('Generate missing drafts for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Up to '+imageCalls+' separately billed image calls and '+seoCalls+' SEO call(s). Existing drafts and approved photos are kept; an unseen back will NOT be generated. Your outfit settings will be used for model shots. Nothing is approved or posted to Shopify automatically. Continue?'))return;
+      if(!confirm('Generate missing drafts for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Up to '+imageCalls+' separately billed image calls and '+seoCalls+' SEO call(s). Existing drafts and approved photos are kept; an unseen back will NOT be generated. Your outfit settings will be used for model shots. Nothing is approved or posted to Shopify automatically. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
       btn.disabled=true;var finished=0;
+      var active=null;
       try {
         for(var item of pending){
-          status.textContent='Generating article '+(finished+1)+' of '+pending.length+' · '+(item.np.colour||item.np.designName||'product');
+          active=item;
+          report('Generating article '+(finished+1)+' of '+pending.length+' · '+(item.np.colour||item.np.designName||'product')+'… This can take several minutes.',item);
           var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,retry:!!used[item.np.key],styling:paidStylingOf(item.np)})}).then(readJson);
           if(!start.success)throw new Error(start.error||'Could not start generation.');
           attempts.push({groupKey:item.np.key});used[item.np.key]=true;
@@ -2061,12 +2068,13 @@
           }
           if(result.pilot.status==='running')throw new Error('Generation is still running. Reopen this PO to inspect saved drafts.');
           studio.images[item.np.key]=result.images||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
-          if(result.seo&&result.seo.seo)studio.seo[item.np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved};
+          if(result.seo&&result.seo.seo)studio.seo[item.np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
           rerenderCard(item.i);finished++;
           if(result.pilot.status==='failed'||result.pilot.status==='partial')throw new Error('Article '+finished+' needs review: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '));
+          report('Drafts saved for '+(item.np.colour||'this product')+'. Review each image and the AI-written SEO.',item);
         }
-        status.textContent='Completed '+finished+' product(s). Review and approve the drafts below.';
-      }catch(e){status.textContent='Stopped after '+finished+' article(s): '+e.message;}
+        report('Completed '+finished+' product(s). Review and approve the drafts below.',active);
+      }catch(e){report('Stopped after '+finished+' article(s): '+e.message,active);}
       finally{if(btn&&btn.isConnected)btn.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);updateStudioSelection();}
     }
     function studioCard(np,i){
@@ -2074,16 +2082,23 @@
       var byType={}; imgs.forEach(function(x){ byType[x.type]=x; });
       var paidAttempts=(((lastReceive||{}).po||{}).openaiPilot||{}).attempts||[];
       var hasPaidAttempt=paidAttempts.some(function(a){return a.groupKey===np.key;});
+      var lastAttempt=paidAttempts.slice().reverse().find(function(a){return a.groupKey===np.key;});
       var missing=missingPaidDrafts(np),paidLabel=hasPaidAttempt?(missing.images.length||missing.seo?'Generate missing drafts (paid)':'Drafts ready — review below'):'Generate images + SEO (paid pilot)';
       var thumb=np.photoUrl?('<img data-zoom src="'+esc(np.photoUrl)+'" title="Uploaded product photo — click to enlarge" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;flex:none">'):'';
+      var attemptNote=lastAttempt&&lastAttempt.errors&&lastAttempt.errors.length
+        ? 'Previous paid attempt '+esc(lastAttempt.status||'needs review')+': '+esc(lastAttempt.errors.map(function(e){return e.type+': '+e.error;}).join('; '))
+        :lastAttempt?'Previous paid attempt: '+esc(lastAttempt.status||'running'):'';
       var head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
         '<div style="display:flex;align-items:center;gap:10px"><input type="checkbox" data-selectproduct="'+i+'" aria-label="Select '+esc(np.designName||np.designCode||'product')+' for generation"'+(studio.selected[np.key]?' checked':'')+'>'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div>'+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> ':'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>';
+        '<div>'+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> ':'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>'+
+        '<div data-pilot-message role="status" style="font-size:12px;min-height:18px;margin:6px 0;color:var(--emerald-d)">'+attemptNote+'</div>';
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
         '. Confirm whether these are duplicate records or separate articles.</div>':'';
+      var retailNotice=np.audience==='Women'&&(/t[ -]?shirt/i.test(np.productType)||/muscle\s*fit/i.test(np.fit||''))
+        ?'<div class="banner warn" style="font-size:12px">Purchase fields say '+esc(np.productType)+' / '+esc(np.fit||'no fit')+'. AI storefront copy will use a photo-verified women’s top description and omit “muscle fit”. This does not alter the internal SKU or category; correct those separately if needed.</div>':'';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?(np.line==='casuals'?PAIR_UPPER:PAIR_UPPER.concat(['Jeans','Shorts'])):PAIR_LOWER, s=stylingOf(np);
       function sel(kind,label,opts,val){
         var o='<label class="muted" style="font-size:12px;white-space:nowrap">'+label+'</label>'+
@@ -2150,6 +2165,7 @@
       } else {
         var g=seo.seo||{};
         seoBlock='<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)">'+
+          '<div class="muted" style="font-size:12px;margin-bottom:8px">'+(seo.source==='openai-pilot'?'AI-written SEO draft · review before approval':seo.approved?'Approved manual listing copy':'Basic placeholder copy from purchase details · Generate images + SEO to replace it with image-judged copy')+'</div>'+
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
           '<div class="fld"><label>Display name</label><input data-seo="displayName" data-i="'+i+'" value="'+esc(g.displayName||'')+'"></div>'+
           '<div class="fld"><label>Storefront title (H1)</label><input data-seo="title" data-i="'+i+'" value="'+esc(g.title||'')+'"></div>'+
@@ -2164,7 +2180,7 @@
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs required approved views + approved SEO</span>';
-      return head+conflictNotice+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
+      return head+conflictNotice+retailNotice+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
     }
     function rerenderCard(i){
       var np=lastReceive.newProducts[i], c=el('scard'+i);

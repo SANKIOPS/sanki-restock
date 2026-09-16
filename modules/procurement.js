@@ -1727,7 +1727,10 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     if (new Set(po.openaiPilot.attempts.map(x=>x.groupKey)).size>=maxGroups&&!priorAttempts.length) return res.status(409).json({success:false,error:`Pilot limit of ${maxGroups} articles reached for this PO.`});
     const fingerprint=codexBatch.fingerprint(g,(po.backRefs||{})[key]);
     const neededTypes=openaiPilot.pilotTypes(g,!!backSource).filter(type=>!((po.aiImages||{})[key]||[]).some(x=>x.type===type&&x.url));
-    const needsSeo=!(po.seoDraft||[]).some(x=>x.key===key&&x.seo);
+    const existingSeo=(po.seoDraft||[]).find(x=>x.key===key);
+    // A deterministic draft made when corrections were saved is NOT AI-written.
+    // Preserve approved manual copy; replace unapproved placeholders with AI copy.
+    const needsSeo=!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
     if (!neededTypes.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
     const styling=openaiPilot.normalizeStyling((req.body||{}).styling,g);
     const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
@@ -1765,11 +1768,14 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       const base=genSeo({...g,sizeCodeOf:label=>fresh.sizes[label]||label});
       const clean=(value,fallback)=>stripInternalCodes(String(value||'').trim(),g.designCode)||fallback;
       const draft=generated.seo;
-      const seo={displayName:clean(draft.displayName,base.displayName),title:clean(draft.title,base.title),handle:base.handle,
+      const retail=openaiPilot.retailFacts(g);
+      const seo={displayName:clean(draft.displayName,base.displayName),title:clean(draft.title,base.title),
+        handle:slugify([draft.displayName,g.colour,retail.productType,g.designCode].filter(Boolean).join(' ')) || base.handle,
         metaTitle:clean(draft.metaTitle,base.metaTitle).slice(0,70),metaDescription:clean(draft.metaDescription,base.metaDescription).slice(0,320),
         imageAlt:clean(draft.imageAlt,base.imageAlt),tags:draft.tags.map(x=>clean(x,'')).filter(Boolean),
         bodyHtml:clean(draft.bodyHtml,base.bodyHtml).replace(/<([^>]+)>/g,(tag,inside)=>/^\/?p$/i.test(inside.trim())?tag:'')};
       if(seoNeedsReview(seo)) throw new Error('Generated SEO was incomplete or repetitive.');
+      if(openaiPilot.seoCopyNeedsReview(seo,g)) throw new Error('Generated SEO did not meet the women’s top/fit and distinctive-name rules. The earlier draft was kept for review.');
       current.seoDraft=current.seoDraft||[];
       const rec={key,designCode:g.designCode,colour:g.colour,productType:g.productType,seo,seoApproved:false,source:'openai-pilot'};
       const idx=current.seoDraft.findIndex(x=>x.key===key);if(idx>=0)current.seoDraft[idx]=rec;else current.seoDraft.push(rec);
