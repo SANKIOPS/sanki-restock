@@ -1773,7 +1773,7 @@ const paidPilotInFlight = new Set();
 function canStartPaidPilot(req) {
   const roles = (req.user && Array.isArray(req.user.roles) && req.user.roles.length)
     ? req.user.roles : [req.user && req.user.role];
-  return roles.some(r => ['owner','admin'].includes(String(r).toLowerCase()));
+  return roles.some(r => ['owner','admin','inventory'].includes(String(r).toLowerCase()));
 }
 router.get('/api/procurement/openai-pilot-status', (req,res) => {
   if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
@@ -1782,18 +1782,18 @@ router.get('/api/procurement/openai-pilot-status', (req,res) => {
     maxGroups:Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||30))});
 });
 router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
-  if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Owner access required.'});
+  if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Paid image-generation access required.'});
   const po=loadStore().pos[req.params.id],key=String(req.query.groupKey||'');
   if (!po) return res.status(404).json({success:false,error:'PO not found.'});
   const record=((po.openaiPilot||{}).attempts||[]).slice().reverse().find(x=>x.groupKey===key);
   if (!record) return res.status(404).json({success:false,error:'No pilot attempt for this article.'});
   res.json({success:true,pilot:record,images:(po.aiImages||{})[key]||[],seo:(po.seoDraft||[]).find(x=>x.key===key)||null});
 });
-// Explicit, owner-started pilot. One colourway per request, at most six image
+// Explicit, authorised-user-started pilot. One colourway per request, at most six image
 // calls per explicit request, no automatic retries, and no approvals or Shopify writes.
 router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
   const lockKey=req.params.id;
-  if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Owner approval required for paid AI generation.'});
+  if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Paid image-generation access required.'});
   if (!process.env.OPENAI_API_KEY) return res.status(503).json({success:false,error:'Set OPENAI_API_KEY in Railway before starting the paid pilot.'});
   if (paidPilotInFlight.has(lockKey)) return res.status(409).json({success:false,error:'Another paid generation is running for this PO.'});
   paidPilotInFlight.add(lockKey);
@@ -2376,4 +2376,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, parseLocalInvoiceText };
+module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText };
