@@ -2058,7 +2058,7 @@
         var po=d.po||{};
         if(po.backRefs){ Object.keys(po.backRefs).forEach(function(k){ studio.backRefs[k]=po.backRefs[k]; }); }
         if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
-        if(po.qaRejected){ Object.keys(po.qaRejected).forEach(function(k){ studio.rejected[k]=po.qaRejected[k]; }); }
+        if(po.qaRejected){ Object.keys(po.qaRejected).forEach(function(k){ studio.rejected[k]=(po.qaRejected[k]||[]).filter(function(x){return !x.supersededBy;}); }); }
         if(po.openaiPilot&&Array.isArray(po.openaiPilot.attempts)){po.openaiPilot.attempts.forEach(function(a){if(a.styling)studio.styling[a.groupKey]=Object.assign({fit:''},a.styling);});}
         if(po.imageStyling){Object.keys(po.imageStyling).forEach(function(k){studio.styling[k]=Object.assign({fit:''},po.imageStyling[k]);});}
         if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved, source:dd.source||'product-details' }; }); }
@@ -2100,7 +2100,7 @@
       return [];
     }
     function missingPaidDrafts(np){
-      var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url;}).map(function(v){return v.type;});
+      var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url&&(!v.qa||v.qa.status==='pass'||v.qa.status==='manual-reviewed');}).map(function(v){return v.type;});
       var copy=studio.seo[np.key];
       return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(copy&&copy.seo&&(copy.approved||copy.source==='openai-pilot'))};
     }
@@ -2128,20 +2128,22 @@
       if(Object.keys(used).length+newArticles>max){report('This PO would exceed the '+max+'-article paid pilot limit. Select fewer products.',selected[0]);return;}
       if(!pending.length){report('All selected products already have their image and AI SEO drafts. Review and approve them below; no new paid call was made.',selected[0]);return;}
       var imageCalls=pending.reduce(function(total,x){return total+missingPaidDrafts(x.np).images.length;},0);
+      var preflightCalls=pending.filter(function(x){return missingPaidDrafts(x.np).images.length>0&&garmentCat(x.np.productType)==='upper'&&paidStylingOf(x.np).fit!=='Auto';}).length;
       var seoCalls=pending.filter(function(x){return missingPaidDrafts(x.np).seo;}).length;
       var skipped=selected.length-pending.length;
-      if(!confirm('Generate missing drafts for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Up to '+imageCalls+' separately billed image calls, '+imageCalls+' billed visual-check calls, and '+seoCalls+' SEO call(s). Failed visual checks are held for review; there are no automatic paid retries. Existing approved photos are kept. An unseen back will NOT be generated. Your saved outfit settings will be used. Nothing is approved or posted to Shopify automatically. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
+      if(!confirm('Generate photos and listing copy for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Hard limit: up to '+(imageCalls*2)+' billed image calls and '+(imageCalls*2)+' billed visual checks (one corrective retry per view), plus up to '+preflightCalls+' original-fit check(s) and '+seoCalls+' SEO call(s). These are call limits, not a fixed currency price. A visibly conflicting selected fit stops before image generation. No back is invented. Drafts are not approved or posted to Shopify automatically. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
       btn.disabled=true;var finished=0;
-      var active=null;
+      var active=null,attention=[];
       try {
         for(var item of pending){
           active=item;
+          try {
           report('Generating article '+(finished+1)+' of '+pending.length+' · '+(item.np.colour||item.np.designName||'product')+'… This can take several minutes.',item);
-          var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,retry:!!used[item.np.key],styling:paidStylingOf(item.np)})}).then(readJson);
+          var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,retry:!!used[item.np.key],maxImageAttempts:2,styling:paidStylingOf(item.np)})}).then(readJson);
           if(!start.success)throw new Error(start.error||'Could not start generation.');
           attempts.push({groupKey:item.np.key});used[item.np.key]=true;
           var result;
-          for(var poll=0;poll<180;poll++){
+          for(var poll=0;poll<900;poll++){
             await new Promise(function(resolve){setTimeout(resolve,5000);});
             result=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot-status?groupKey='+encodeURIComponent(item.np.key)).then(readJson);
             if(!result.success)throw new Error(result.error||'Could not read generation progress.');
@@ -2151,10 +2153,18 @@
           studio.images[item.np.key]=result.images||[];studio.rejected[item.np.key]=result.rejectedImages||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
           if(result.seo&&result.seo.seo)studio.seo[item.np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
           rerenderCard(item.i);finished++;
-          if(result.pilot.status==='failed'||result.pilot.status==='partial')throw new Error('Article '+finished+' needs review: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '));
+          if(result.pilot.status==='failed'||result.pilot.status==='partial'){
+            attention.push(item.np.designName||item.np.colour||item.np.key);
+            report('Article '+finished+' needs review: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '),item);
+            continue;
+          }
           report('Drafts saved for '+(item.np.colour||'this product')+'. Review each image and the AI-written SEO.',item);
+          }catch(articleError){
+            attention.push(item.np.designName||item.np.colour||item.np.key);
+            report('This article needs review: '+articleError.message+'. Continuing with the rest of the PO.',item);
+          }
         }
-        report('Completed '+finished+' product(s). Review and approve the drafts below.',active);
+        report('Processed '+pending.length+' product(s). '+(attention.length?attention.length+' need review ('+attention.join(', ')+'); other products continued.':'Review and approve the drafts below.'),active);
       }catch(e){report('Stopped after '+finished+' article(s): '+e.message,active);}
       finally{if(btn&&btn.isConnected)btn.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);updateStudioSelection();}
     }
@@ -2164,18 +2174,18 @@
       if(!chosen.length){alert('No existing image was found for the selected view.');return;}
       if(po.status!=='received'||(po.lines||[]).some(function(line){return !(Number(line.weightGrams)>0);})){alert('Receive and weigh this PO, then Save corrections before regeneration.');return;}
       if(!np.photoUrl){alert('Upload the original front reference first.');return;}
-      if(!confirm('Regenerate '+chosen.length+' image view(s) for '+(np.designName||np.colour||'this product')+'? Each view uses a billed OpenAI image call and a billed visual-check call. Rejected replacements remain separate for review; no automatic paid retry occurs. Existing images remain if generation or checking fails. Successful replacements need approval again. SEO and Shopify will not change. Continue?'))return;
+      if(!confirm('Regenerate '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(garmentCat(np.productType)==='upper'&&paidStylingOf(np).fit!=='Auto'?1:0)+' original-fit check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
       var label=button.textContent;
       function note(message){var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node)node.textContent=message;}
       button.disabled=true;button.textContent='Regenerating…';
       try{
         await (studio.styleSaves[np.key]||Promise.resolve());
         var attempted=(((po.openaiPilot||{}).attempts)||[]).some(function(attempt){return attempt.groupKey===np.key;});
-        var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,retry:attempted,regenerateTypes:chosen,styling:paidStylingOf(np)})}).then(readJson);
+        var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,retry:attempted,regenerateTypes:chosen,maxImageAttempts:2,styling:paidStylingOf(np)})}).then(readJson);
         if(!start.success)throw new Error(start.error||'Could not start regeneration.');
         note('Regenerating '+chosen.length+' selected image view(s)…');
         var result;
-        for(var poll=0;poll<180;poll++){
+        for(var poll=0;poll<900;poll++){
           await new Promise(function(resolve){setTimeout(resolve,5000);});
           result=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot-status?groupKey='+encodeURIComponent(np.key)).then(readJson);
           if(!result.success)throw new Error(result.error||'Could not read regeneration progress.');
