@@ -162,7 +162,28 @@ async function readApiResponse(response) {
   return body;
 }
 
-async function generateImage({key, group, source, continuitySource=null, type, styling, model='gpt-image-1.5', fetchImpl=global.fetch}) {
+function repairGuidance(fields,group,styling,type) {
+  const style=normalizeStyling(styling,group);
+  const guidance={
+    garmentMatch:'Keep the featured garment identical to the original photo in colour, neckline, seams, sleeves and silhouette.',
+    singleFrame:'Output one model in one continuous photograph; no panels or split composition.',
+    angleMatch:type.startsWith('model-side')?'Rotate the same model about 45 degrees and show head to shoes.':'Face the camera directly and show head to shoes.',
+    fitMatch:`Match the real garment shoulder and cut shown in the source, respecting the selected ${style.fit} fit only where the source supports it.`,
+    pairMatch:`Make the supporting bottom or top visibly ${style.pair.toLowerCase()}; distinguish baggy from straight by leg silhouette, not colour.`,
+    shoeMatch:`Use the selected ${style.shoes.toLowerCase()} shape.`,
+    tuckMatch:`Wear the top ${style.tuck.toLowerCase()}, with waist and hem visible.`,
+    bagMatch:style.bagStyle==='None'?'No bag at all.':`Show only the selected ${style.bagColour} ${style.bagStyle.toLowerCase()}.`,
+    shadesMatch:style.sunglasses?'Show selected understated sunglasses.':'No sunglasses.',
+    capMatch:style.capStyle==='None'?'No cap.':`Show the selected ${style.capStyle.toLowerCase()}.`,
+    chainMatch:style.chain==='None'?'No chain.':`Show the selected ${style.chain.toLowerCase()}.`,
+    watchMatch:style.watch?'Show a subtle watch.':'No watch.',
+    modelMatch:'Use exactly one model of the selected gender, with the garment unobstructed.',
+    outfitContinuity:'Match the accepted front image: same person, trousers and trouser colour, shoes and accessories.'
+  };
+  return [...new Set(fields||[])].map(field=>guidance[field]).filter(Boolean).join(' ');
+}
+
+async function generateImage({key, group, source, continuitySource=null, type, styling, repairFields=[], model='gpt-image-1.5', fetchImpl=global.fetch}) {
   if (!IMAGE_TYPES.includes(type)) throw new Error('Unsupported pilot image view.');
   const form = new FormData();
   form.append('model', model);
@@ -172,7 +193,7 @@ async function generateImage({key, group, source, continuitySource=null, type, s
     form.append('image[]',new Blob([continuitySource.buf],{type:continuitySource.mime}),'matching-front'+continuityExt);
     form.append('image[]',new Blob([source.buf],{type:source.mime}),'original-garment'+sourceExt);
   } else form.append('image', new Blob([source.buf],{type:source.mime}), 'source'+sourceExt);
-  form.append('prompt', imagePrompt(group,type,styling,!!continuitySource));
+  form.append('prompt', imagePrompt(group,type,styling,!!continuitySource)+(repairFields.length?' Correct these specific issues from the prior draft: '+repairGuidance(repairFields,group,styling,type):''));
   form.append('quality','medium');
   form.append('size','1024x1536');
   const response = await fetchImpl('https://api.openai.com/v1/images/edits', {
@@ -182,6 +203,18 @@ async function generateImage({key, group, source, continuitySource=null, type, s
   const encoded = body.data && body.data[0] && body.data[0].b64_json;
   if (!encoded) throw new Error('OpenAI returned no image.');
   return {buffer:Buffer.from(encoded,'base64'),usage:body.usage || null,model};
+}
+
+async function preflightFit({key,group,source,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
+  const style=normalizeStyling(styling,group);
+  if(garmentCategory(group)!=='upper'||style.fit==='Auto')return {status:'not-required',reason:''};
+  const schema={type:'object',additionalProperties:false,required:['status','reason'],properties:{status:{type:'string',enum:['compatible','conflict','uncertain']},reason:{type:'string'}}};
+  const prompt=`Look ONLY at the original garment photograph. The user selected ${style.fit} for the model image. Is that choice visibly compatible with the actual shoulder seam and cut of this ${group.productType}? A hanger, fold or camera angle alone does not prove a garment is oversized. Treat a vendor label such as 'muscle fit' as unreliable; the photo is the authority. 'Fitted' and 'Slim fit' describe a close natural-shoulder silhouette, not a rigid measurement. Return conflict ONLY for a clear, obvious visual contradiction (for example, unmistakably dropped shoulder and broad boxy cut versus fitted). If not observable, return uncertain. Do not compare any generated image or supporting trousers.`;
+  const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
+    body:JSON.stringify({model,store:false,max_output_tokens:180,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'}]}],text:{format:{type:'json_schema',name:'sanki_fit_preflight',strict:true,schema}}}),signal:AbortSignal.timeout(90000)});
+  const body=await readApiResponse(response),result=JSON.parse(responseText(body));
+  if(!['compatible','conflict','uncertain'].includes(result.status))throw new Error('Invalid fit preflight response.');
+  return {status:result.status,reason:String(result.reason||'').slice(0,220),model,usage:body.usage||null};
 }
 
 // A separate vision check, not the generator's own claim of success. The
@@ -207,6 +240,9 @@ function evaluateImageCheck(check,type,styling={},group={}) {
   const uncertain=required.filter(field=>check?.[field]?.status==='uncertain').concat(missing);
   const issues=failed.concat(uncertain).map(field=>`${field}: ${String(check?.[field]?.evidence||'Cannot verify from this image').slice(0,180)}`);
   return {status:failed.length||uncertain.length?'needs-review':'pass',failed,uncertain,issues};
+}
+function shouldRetryImageCheck(check,attempt,maxAttempts) {
+  return check?.status==='needs-review'&&Array.isArray(check.failed)&&check.failed.length>0&&!(check.uncertain||[]).length&&attempt<maxAttempts;
 }
 
 async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
@@ -251,4 +287,4 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   return {seo,usage:body.usage || null,model};
 }
 
-module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,verifyImage,evaluateImageCheck,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
+module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,verifyImage,evaluateImageCheck,shouldRetryImageCheck,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};

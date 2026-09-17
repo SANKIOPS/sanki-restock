@@ -83,6 +83,33 @@ test('paid image edit sends the selected outfit in model prompt',async()=>{
   }});
 });
 
+test('fit preflight checks the original before paid image edits and never guesses from a hanger',async()=>{
+  let calls=0;
+  const result=await pilot.preflightFit({key:'test-only',group,source,styling:{fit:'Slim fit'},fetchImpl:async(url,options)=>{
+    calls++;assert.equal(url,'https://api.openai.com/v1/responses');
+    const body=JSON.parse(options.body);
+    assert.equal(body.store,false);
+    assert.match(body.input[0].content[0].text,/hanger, fold or camera angle alone does not prove/);
+    assert.match(body.input[0].content[1].image_url,/^data:image\/jpeg;base64,/);
+    return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify({status:'conflict',reason:'Clearly dropped shoulder'})}]}]})};
+  }});
+  assert.equal(calls,1);assert.equal(result.status,'conflict');
+  assert.equal((await pilot.preflightFit({key:'test-only',group,source,styling:{fit:'Auto'},fetchImpl:()=>{throw new Error('No call expected');}})).status,'not-required');
+});
+
+test('corrective retry only follows a clear mismatch and uses fixed guidance',async()=>{
+  assert.equal(pilot.shouldRetryImageCheck({status:'needs-review',failed:['pairMatch'],uncertain:[]},1,2),true);
+  assert.equal(pilot.shouldRetryImageCheck({status:'needs-review',failed:['pairMatch'],uncertain:[]},2,2),false);
+  assert.equal(pilot.shouldRetryImageCheck({status:'needs-review',failed:[],uncertain:['fitMatch']},1,2),false);
+  assert.equal(pilot.shouldRetryImageCheck({status:'unavailable',failed:['verification']},1,2),false);
+  assert.match(pilot.repairGuidance(['pairMatch'],group,{pair:'Baggy trousers'},'model-front'),/baggy trousers/);
+  await pilot.generateImage({key:'test-only',group,source,type:'model-front',styling:{pair:'Baggy trousers'},repairFields:['pairMatch'],fetchImpl:async(url,options)=>{
+    assert.match(options.body.get('prompt'),/Correct these specific issues from the prior draft/);
+    assert.match(options.body.get('prompt'),/distinguish baggy from straight by leg silhouette/);
+    return {ok:true,json:async()=>({data:[{b64_json:Buffer.from('result').toString('base64')}]})};
+  }});
+});
+
 test('three-quarter image uses matching front and garment references to preserve the outfit',async()=>{
   const matchingFront={buf:Buffer.from('front-model'),mime:'image/png'};
   await pilot.generateImage({key:'test-only',group,source,continuitySource:matchingFront,type:'model-side',styling:{pair:'Tailored trousers'},fetchImpl:async(url,options)=>{
@@ -97,7 +124,7 @@ test('three-quarter image uses matching front and garment references to preserve
   }});
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
   assert.match(server,/continuitySource=matchingFront\?readStoredPhoto\(matchingFront\.url\):null/);
-  assert.match(server,/Approve a good single-frame front model image before generating only its three-quarter view/);
+  assert.match(server,/Generate a visually checked front model image before its three-quarter view/);
 });
 
 test('purchase studio offers whole-PO, selected and single-product paid generation',()=>{
@@ -117,15 +144,18 @@ test('purchase studio offers whole-PO, selected and single-product paid generati
   assert.match(html,/await Promise\.all\(selected\.map/);
 });
 
-test('paid retry is explicit and only requests missing image or SEO drafts',()=>{
+test('one-click generation has a confirmed two-attempt cap and requests only missing or invalid drafts',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
   assert.match(html,/function missingPaidDrafts\(np\)/);
   assert.match(html,/Generate missing drafts \(paid\)/);
   assert.match(html,/retry:!!used\[item\.np\.key\]/);
-  assert.match(html,/separately billed image calls, .* billed visual-check calls, and .* SEO call/);
+  assert.match(html,/Hard limit: up to .* billed image calls and .* billed visual checks/);
+  assert.match(html,/maxImageAttempts:2/);
+  assert.match(html,/other products continued/);
   assert.match(server,/const neededTypes=allowedTypes\.filter\(type=>!/);
-  assert.match(server,/if \(needsSeo\) try \{/);
+  assert.match(server,/if \(!preflightBlocked&&needsSeo\) try \{/);
+  assert.match(server,/const maxImageAttempts=\(req\.body\|\|\{\}\)\.maxImageAttempts===2\?2:1/);
   assert.match(server,/All image and SEO drafts already exist/);
   assert.match(server,/\.attempts\.slice\(\)\.reverse\(\)\.find\(x=>x\.groupKey===key\)/);
 });
@@ -136,7 +166,7 @@ test('existing image views can be regenerated separately or together without rew
   assert.match(html,/data-paid-regen=/);
   assert.match(html,/data-regen-product=/);
   assert.match(html,/regenerateTypes:chosen/);
-  assert.match(html,/Successful replacements need approval again/);
+  assert.match(html,/Earlier images remain if checking fails/);
   assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\|\|!savedImages\.some/);
   assert.match(server,/const needsSeo=!regenerateTypes\.length/);
   assert.match(server,/approved:false,source:'openai-pilot'/);
