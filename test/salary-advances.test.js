@@ -8,7 +8,7 @@ const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -40,6 +40,32 @@ test('salary Excel preview updates existing employees and audits attendance-deri
   assert.equal(dayChange.changes[0].attendanceDerived,true);assert.equal(dayChange.changes[0].status,'Update existing');
   _applySalarySheetChanges(s,'2099-05',dayChange,'Revised paid-day count','prashant','salary.xlsx');
   assert.equal(s.months['2099-05'].rows.E001.sheetPaidDaysOverride,29);assert.equal(s.months['2099-05'].attendance.E001['01'],'P');
+});
+
+test('final August workbook reconciles historical advances without a second salary or bank payment',()=>{
+  const amounts=[27000,4900,2700,100,100,67,333,500,500,500,6000,2500,1000,1000,650,5000,17000,10000,1000,1000];
+  assert.equal(amounts.reduce((n,x)=>n+x,0),81850);
+  const book=XLSX.utils.book_new(),salary=[['S.NO.','NAME','POST','SALARY','PAID DAYS','MONTH DAY','SALARY AMT','ADVANCE SALARY','BILLING AMT','NET PAYABLE',null,null,null,'PAIDSALARY',null,'Paid in Cash','Paid by 3645']],attendance=[['NAME','POST',...Array.from({length:31},(_,i)=>new Date(Date.UTC(2026,7,i+1)))]],advances=[['Date','Particular','Amount','Account']];
+  const state={employees:{},months:{'2026-08':{rows:{},attendance:{}}},divisor:30,salaryPayments:[],advances:{},advanceSeq:0,oneTimeMigrations:{}};
+  for(let i=0;i<23;i++){
+    const id='E'+i,name='Employee '+i,monthlySalary=200000,advance=amounts[i]||0,cash=i===0?171000:0,bank=i===1?102703:0;
+    state.employees[id]={id,name,salary:monthlySalary,active:true};salary.push([i+1,name,'Staff',monthlySalary,30,30,monthlySalary,advance,0,monthlySalary-advance,null,null,null,cash+bank,null,cash,bank]);attendance.push([name,'Staff',...Array(31).fill('P')]);
+    if(i<20)advances.push([new Date(Date.UTC(2026,7,12+i%20)),name,advance,'']);
+    if(cash||bank)state.salaryPayments.push({empId:id,ym:'2026-08',amount:cash||bank,account:cash?'Gagan Sir Cash':'Prashant Axis 3645',proof:'/proof.jpg',active:true});
+  }
+  state.employees.EXTRA={id:'EXTRA',name:'Not on August sheet',salary:5000,active:true};
+  for(const [name,rows] of [['SALARY(Up.)',salary],['Attendance(Up.)',attendance],['ADV',advances]])XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(rows),name);
+  const file={originalname:'final.xlsb',buffer:XLSX.write(book,{type:'buffer',bookType:'xlsx'})},plan=_finalAugustPlan(state,file),paymentCount=state.salaryPayments.length;
+  assert.equal(plan.salaryRows.length,23);assert.equal(plan.advances.length,20);assert.equal(plan.extras.length,1);
+  state.advances.CONFLICT={id:'CONFLICT',empId:'E0',employeeName:'Employee 0',date:'2026-08-31',amount:1000,proof:'/real-payout.jpg',recoveries:[],active:true};
+  const conflicted=_finalAugustPlan(state,file);assert.equal(conflicted.unmatchedAdvances.length,1);
+  assert.throws(()=>_applyFinalAugustPlan(state,conflicted,'owner',file.originalname),/Existing advances disagree/);
+  assert.equal(state.advances.CONFLICT.proof,'/real-payout.jpg');delete state.advances.CONFLICT;
+  const result=_applyFinalAugustPlan(state,plan,'owner',file.originalname);
+  assert.equal(result.rows.length,23);assert.equal(result.totals.actualPaid,273703);assert.equal(state.salaryPayments.length,paymentCount);assert.equal(Object.keys(state.advances).length,20);
+  assert.ok(Object.values(state.advances).every(a=>a.historicalOpening&&a.proof===''&&a.recoveries[0].ym==='2026-08'));
+  assert.equal(result.rows.reduce((n,r)=>n+r.loggedAdvanceRecovery,0),81850);
+  state.salaryPayments[0].amount++;assert.throws(()=>_finalAugustPlan(state,file),/paid amounts differ/);
 });
 
 test('advances Excel preview imports requests but never posts payments',()=>{
@@ -109,7 +135,7 @@ test('salary advances require owner approval and proof-backed posting, then reco
   });
   let list=invoke('GET','/api/salary/advances',{query:{summaryMonth:'2026-08'}}).body;
   const summary=list.summary.find(x=>x.empId===emp.id); assert.equal(summary.total,5000); assert.equal(summary.thisMonth,5000); assert.equal(summary.outstanding,5000);
-  const recovered=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:2500},role:'owner'});
+  const recovered=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:2500,reason:'Deduct half this cycle'},role:'owner'});
   assert.equal(recovered.status,200);
   list=invoke('GET','/api/salary/advances').body; const own=list.advances.filter(x=>x.empId===emp.id).sort((a,b)=>a.date.localeCompare(b.date));
   assert.equal(own[0].status,'Recovered'); assert.equal(own[1].recovered,1500); assert.equal(own[1].status,'Partially recovered'); assert.equal(list.summary.find(x=>x.empId===emp.id).outstanding,2500);
@@ -124,7 +150,7 @@ test('advance recovery starts from its actual payout month, not a proposed recov
   const made=postAdvance(emp,{amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'});
   assert.equal(made.date,'2026-12-07');assert.equal(made.recoveryStartMonth,'2026-12');
   assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000},role:'owner'}).status,400);
-  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-12'},body:{empId:emp.id,amount:1000},role:'owner'}).status,200);
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-12'},body:{empId:emp.id,amount:1000,reason:'Partial recovery'},role:'owner'}).status,200);
   const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-12'}}).body.rows.find(x=>x.id===emp.id);
   assert.equal(row.loggedAdvanceRecovery,1000);
   const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,2000);
@@ -254,7 +280,7 @@ test('joining and leaving dates limit attendance and earned paid-leave days', ()
 });
 
 test('paid-leave allowance follows the final salary-sheet attendance bands',()=>{
-  const expected=new Map([[5,5],[6,7],[8,9],[9,10.5],[11,12.5],[12,14],[14,15],[15,16.5],[17,18.5],[18,20],[20,22],[21,23.5],[23,25.5],[24,27],[30,33]]);
+  const expected=new Map([[5,4],[6,6],[8,8],[9,9.5],[11,11.5],[12,13],[14,15],[15,16.5],[17,18.5],[18,20],[20,22],[21,23.5],[23,25.5],[24,27],[30,33]]);
   expected.forEach((paidDays,presentDays)=>{
     const emp=invoke('POST','/api/salary/employees',{body:{name:'Band '+presentDays,salary:30000,monthlyPaidLeaveAllowance:4}}).body.employee;
     const marks=Array(31).fill('A');for(let i=0;i<presentDays;i++)marks[i]='P';
@@ -357,7 +383,7 @@ test('partial salary payment requires a reason and preserves the remaining balan
   const paid=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-10',date:'2098-10-31',account:'Gagan Sir Cash',proof:'/partial.jpg',items:[{empId:emp.id,amount:5500,modificationReason:'First partial salary payment'}]}});assert.equal(paid.status,200);
   const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2098-10'}}).body.rows.find(x=>x.id===emp.id);assert.equal(row.paid,5500);assert.equal(row.balance,24500);
   const stored=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8')).salaryPayments.find(x=>x.empId===emp.id&&x.ym==='2098-10');assert.equal(stored.modificationReason,'First partial salary payment');assert.equal(stored.remainingBeforePayment,30000);assert.equal(stored.balanceAfterPayment,24500);assert.equal(stored.proof,'/partial.jpg');
-  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Deductions \/ adjustments/);assert.match(html,/Balance to pay/);assert.match(html,/Comment \/ reason for different amount/);assert.match(html,/submitSingleSalaryPayment/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary adjustment/);assert.match(html,/Advance due/);assert.match(html,/Deduct now/);assert.match(html,/Balance to pay/);assert.match(html,/Comment \/ reason for different amount/);assert.match(html,/submitSingleSalaryPayment/);
 });
 
 test('salary payments upload and preserve multiple screenshots as one payment',()=>{
@@ -372,9 +398,13 @@ test('salary payments upload and preserve multiple screenshots as one payment',(
   assert.match(html,/id="one_proof"[^>]*multiple/);assert.match(html,/id="sp_proof"[^>]*multiple/);assert.match(html,/proofs:proofs/);
 });
 
-test('only owner can edit posted advances and every correction remains audited',()=>{
+test('staff advance edits require owner approval and every correction remains audited',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Editable Advance Employee',salary:20000}}).body.employee,advance=postAdvance(emp,{amount:2000,date:'2098-11-01',account:'Axis Bank 3448',proof:'/advance-edit.jpg'});
-  assert.equal(invoke('PATCH','/api/salary/advances/:id',{params:{id:advance.id},body:{amount:2200,date:'2098-11-02',account:'Axis Bank 3448',reason:'Correction'}}).status,403);
+  const proposed=invoke('PATCH','/api/salary/advances/:id',{params:{id:advance.id},body:{amount:2100,date:'2098-11-02',account:'Axis Bank 3448',reason:'Correction'}});
+  assert.equal(proposed.status,200);assert.equal(proposed.body.pendingApproval,true);
+  assert.equal(invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===advance.id).amount,2000);
+  assert.equal(invoke('POST','/api/salary/advance-edit-requests/:id/decision',{params:{id:proposed.body.request.id},body:{decision:'approve'}}).status,403);
+  assert.equal(invoke('POST','/api/salary/advance-edit-requests/:id/decision',{params:{id:proposed.body.request.id},role:'owner',body:{decision:'approve'}}).status,200);
   const edited=invoke('PATCH','/api/salary/advances/:id',{params:{id:advance.id},role:'owner',body:{amount:2200,date:'2098-11-02',account:'Axis Bank 3448',note:'Corrected advance',reason:'Proof showed corrected amount'}});assert.equal(edited.status,200);assert.equal(edited.body.advance.amount,2200);assert.equal(edited.body.advance.date,'2098-11-02');
   const saved=JSON.parse(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'));assert.ok(saved.advanceAudit.some(x=>x.action==='EDITED'&&x.advanceId===advance.id&&x.details.reason==='Proof showed corrected amount'));
 });
@@ -537,7 +567,24 @@ test('owner final salary correction requires a reason and updates earned payroll
   assert.equal(salary.payrollPostings[ym].rows.find(x=>x.empId===emp.id).salaryAmt,19000);
   assert.equal(salary.salaryPayments.filter(x=>x.empId===emp.id&&x.ym===ym).length,0);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
-  assert.match(html,/Change final salary/);assert.match(html,/openFinalSalary/);assert.match(html,/saveFinalSalary/);
+  assert.match(html,/Salary adjustment/);assert.match(html,/openFinalSalary/);assert.match(html,/saveFinalSalary/);
+});
+
+test('signed salary adjustment and partial advance deduction stay separate to the paisa',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Signed Salary Example',salary:7600}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-06'},body:{empId:emp.id,paidDays:30}});
+  postAdvance(emp,{amount:1000,date:'2098-06-02',payoutDate:'2098-06-02',recoveryStartMonth:'2098-06'});
+  const adjust=invoke('PATCH','/api/salary/final-amount/:ym/:empId',{params:{ym:'2098-06',empId:emp.id},role:'owner',body:{adjustment:400,reason:'Approved extra salary'}});
+  assert.equal(adjust.status,200);
+  const recover=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2098-06'},role:'owner',body:{empId:emp.id,amount:500,reason:'Recover half now'}});
+  assert.equal(recover.status,200);
+  const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2098-06'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.calculatedSalaryAmt,7600);assert.equal(row.salaryAdjustment,400);assert.equal(row.salaryAmt,8000);
+  assert.equal(row.advanceDueBeforeDeduction,1000);assert.equal(row.loggedAdvanceRecovery,500);assert.equal(row.outstandingAdvance,500);assert.equal(row.netPayable,7500);
+  const revised=invoke('PATCH','/api/salary/final-amount/:ym/:empId',{params:{ym:'2098-06',empId:emp.id},role:'owner',body:{adjustment:-400.25,reason:'Approved deduction'}});
+  assert.equal(revised.status,200);
+  const row2=invoke('GET','/api/salary/month/:ym',{params:{ym:'2098-06'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row2.salaryAmt,7199.75);assert.equal(row2.netPayable,6699.75);
 });
 
 test('Prashant can edit salary and record proof-backed payments from authorized salary accounts',()=>{
