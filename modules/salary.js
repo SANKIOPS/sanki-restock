@@ -62,7 +62,8 @@ function load() {
     const closedHistoricalPayroll=entity==='SANKI'&&closeHistoricalPayrollCarryV17(s);
     const reopenedAugustPayroll=entity==='SANKI'&&reopenAugustPayrollForPaymentsV18(s);
     const finalAugustRosterRepair=entity==='SANKI'&&repairFinalAugustImportedRoster(s);
-    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary||removedHistoricalAdvances||closedHistoricalPayroll||reopenedAugustPayroll||finalAugustRosterRepair) save(s);
+    const finalAugustSourceLinks=entity==='SANKI'&&linkFinalAugustSourceSheetRows(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary||removedHistoricalAdvances||closedHistoricalPayroll||reopenedAugustPayroll||finalAugustRosterRepair||finalAugustSourceLinks) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -1116,6 +1117,21 @@ function repairFinalAugustImportedRoster(s){
   s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),sourceHash:audit.hash,excluded:before,rule:'Remove carried-forward employees absent from the final August roster; no bank or cash debit changed.'};
   return true;
 }
+function linkFinalAugustSourceSheetRows(s){
+  const audit=(s.finalAugustSheetAudit||[]).at(-1),sheet=(s.advanceSourceSheets||[]).at(-1),key='final_august_sheet_source_links_v1';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(!audit||!sheet||s.oneTimeMigrations[key])return false;
+  const norm=x=>String(x||'').toLowerCase().replace(/[^a-z0-9]/g,''),linked=[];
+  for(const item of sheet.items||[]){
+    if(item.linkedAdvanceId)continue;
+    let emp;try{emp=augustEmployee(s,item.employeeName);}catch{continue;}
+    const matches=Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===emp.id&&a.date===item.requestDate&&Math.abs(num(a.amount)-num(item.amount))<.005&&(String(a.sourceKey||'').startsWith('final-aug-2026:'+audit.hash+':ADV:')||!!(a.proof||(a.proofs||[]).length)));
+    if(matches.length!==1||sheet.items.some(other=>other!==item&&other.linkedAdvanceId===matches[0].id))continue;
+    item.linkedAdvanceId=matches[0].id;item.linkedAt=new Date().toISOString();item.linkedBy='Final August workbook import';linked.push({row:item.row,advanceId:matches[0].id});
+  }
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),sourceHash:audit.hash,sheetHash:sheet.hash,linked,rule:'Link only exact employee/date/amount historical or proof-backed advance matches; no new account debits.'};
+  return true;
+}
 router.post('/api/salary/final-august/preview',guard,receiveSalarySheet,(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can apply the final historical workbook.'});
   try{const plan=finalAugustPlan(load(),req.file);res.json({success:true,previewToken:plan.previewToken,salaryRows:plan.salaryRows.map(({attendance,...row})=>row),advances:plan.advances,extras:plan.extras,unmatchedAdvances:plan.unmatchedAdvances,totals:plan.totals});}catch(err){res.status(400).json({success:false,error:err.message});}
@@ -1286,4 +1302,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows, _advanceSourceSheet:advanceSourceSheet, _finalAugustPlan:finalAugustPlan, _applyFinalAugustPlan:applyFinalAugustPlan, _repairFinalAugustImportedRoster:repairFinalAugustImportedRoster };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows, _advanceSourceSheet:advanceSourceSheet, _finalAugustPlan:finalAugustPlan, _applyFinalAugustPlan:applyFinalAugustPlan, _repairFinalAugustImportedRoster:repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows:linkFinalAugustSourceSheetRows };

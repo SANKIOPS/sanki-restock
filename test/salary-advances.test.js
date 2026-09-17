@@ -8,7 +8,7 @@ const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -72,6 +72,11 @@ test('final August workbook reconciles historical advances without a second sala
   assert.equal(_repairFinalAugustImportedRoster(state),true);
   assert.equal(state.months['2026-08'].rows.LATE.sheetExcluded,true);
   assert.equal(state.oneTimeMigrations.final_august_sheet_roster_carry_repair_v1.excluded[0].name,'Historical carry not on sheet');
+  state.advanceSourceSheets=[{hash:'source-sheet',items:plan.advances.map((a,i)=>({row:i+2,employeeName:a.name,requestDate:a.date,amount:a.amount}))}];
+  assert.equal(_linkFinalAugustSourceSheetRows(state),true);
+  assert.equal(state.oneTimeMigrations.final_august_sheet_source_links_v1.linked.length,20);
+  assert.ok(state.advanceSourceSheets[0].items.every(x=>state.advances[x.linkedAdvanceId]));
+  assert.equal(_linkFinalAugustSourceSheetRows(state),false,'migration is idempotent');
   state.salaryPayments[0].amount++;assert.throws(()=>_finalAugustPlan(state,file),/paid amounts differ/);
 });
 
