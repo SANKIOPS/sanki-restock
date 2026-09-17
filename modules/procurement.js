@@ -863,6 +863,7 @@ function collectReferencedPhotos(s) {
   const add = url => { const n = path.basename(String(url || '')); if (n) keep.add(n); };
   Object.values(s.pos || {}).forEach(po => {
     Object.values(po.aiImages || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
+    Object.values(po.qaRejected || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
     Object.values(po.backRefs || {}).forEach(add);
     (po.lines || []).forEach(l => add(l && l.photoUrl));
   });
@@ -1764,12 +1765,32 @@ router.post('/api/procurement/pos/:id/image-styling', async (req,res) => {
   const group=(await newGroupsOf(s,po)).find(g=>g.key===key);
   if(!group)return res.status(404).json({success:false,error:'Product group not found.'});
   const styling=openaiPilot.normalizeStyling((req.body||{}).styling,group);
-  po.imageStyling=po.imageStyling||{};po.imageStyling[key]=styling;
+  po.imageStyling=po.imageStyling||{};
+  const changed=JSON.stringify(po.imageStyling[key]||{})!==JSON.stringify(styling);
+  po.imageStyling[key]=styling;
+  if(changed) for(const image of ((po.aiImages||{})[key]||[])) {
+    if(image.source==='openai-pilot' && image.styling && ['female','male','model-front','model-side','model-side-female','model-side-male'].includes(image.type)) {
+      image.approved=false;
+      image.qa={...(image.qa||{}),status:'needs-review',issues:['Model styling changed after this image was generated. Regenerate this view.']};
+    }
+  }
   saveStore(s);
-  res.json({success:true,groupKey:key,styling});
+  res.json({success:true,groupKey:key,styling,images:(po.aiImages||{})[key]||[]});
   } catch(e) { res.status(500).json({success:false,error:e.message}); }
 });
 const paidPilotInFlight = new Set();
+function expireStalePaidAttempts(po) {
+  let changed=false;
+  for(const attempt of ((po.openaiPilot||{}).attempts||[])) {
+    if(attempt.status==='running' && Date.now()-Date.parse(attempt.startedAt||'')>40*60*1000) {
+      attempt.status='interrupted';attempt.completedAt=new Date().toISOString();
+      attempt.errors=Array.isArray(attempt.errors)?attempt.errors:[];
+      attempt.errors.push({type:'job',error:'Generation stopped or lost contact. Saved drafts remain; review them before an explicit retry.'});
+      changed=true;
+    }
+  }
+  return changed;
+}
 function canStartPaidPilot(req) {
   const roles = (req.user && Array.isArray(req.user.roles) && req.user.roles.length)
     ? req.user.roles : [req.user && req.user.role];
@@ -1783,11 +1804,12 @@ router.get('/api/procurement/openai-pilot-status', (req,res) => {
 });
 router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
   if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Paid image-generation access required.'});
-  const po=loadStore().pos[req.params.id],key=String(req.query.groupKey||'');
+  const s=loadStore(),po=s.pos[req.params.id],key=String(req.query.groupKey||'');
   if (!po) return res.status(404).json({success:false,error:'PO not found.'});
+  if(expireStalePaidAttempts(po))saveStore(s);
   const record=((po.openaiPilot||{}).attempts||[]).slice().reverse().find(x=>x.groupKey===key);
   if (!record) return res.status(404).json({success:false,error:'No pilot attempt for this article.'});
-  res.json({success:true,pilot:record,images:(po.aiImages||{})[key]||[],seo:(po.seoDraft||[]).find(x=>x.key===key)||null});
+  res.json({success:true,pilot:record,images:(po.aiImages||{})[key]||[],rejectedImages:(po.qaRejected||{})[key]||[],seo:(po.seoDraft||[]).find(x=>x.key===key)||null});
 });
 // Explicit, authorised-user-started pilot. One colourway per request, at most six image
 // calls per explicit request, no automatic retries, and no approvals or Shopify writes.
@@ -1800,6 +1822,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
   try {
     const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
     if (!po || isLockedPo(po)) return res.status(400).json({success:false,error:'Editable PO required.'});
+    if(expireStalePaidAttempts(po))saveStore(s);
     const g=(await newGroupsOf(s,po)).find(x=>x.key===key);
     const source=g&&readStoredPhoto(g.photoUrl);
     if (!g || !source) return res.status(400).json({success:false,error:'Product group with original photo required.'});
@@ -1832,11 +1855,15 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     }
     if (!types.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
     const styling=openaiPilot.normalizeStyling((req.body||{}).styling||(po.imageStyling||{})[key],g);
+    po.imageStyling=po.imageStyling||{};
+    if(!po.imageStyling[key])po.imageStyling[key]=styling;
+    else if(JSON.stringify(po.imageStyling[key])!==JSON.stringify(styling))return res.status(409).json({success:false,error:'Styling changed or is still saving. Wait for it to save, then retry.'});
     const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});
     const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
     const textModel=process.env.PROCUREMENT_OPENAI_TEXT_MODEL||'gpt-4.1-mini';
+    const checkModel=process.env.PROCUREMENT_OPENAI_CHECK_MODEL||'gpt-4.1-mini';
     for(const type of types){
       try {
         if (!regenerateTypes.length&&((po.aiImages||{})[key]||[]).some(x=>x.type===type && x.url)) continue;
@@ -1846,15 +1873,30 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         const continuitySource=matchingFront?readStoredPhoto(matchingFront.url):null;
         if(matchingFrontType&&!continuitySource) throw new Error('Generate the matching front model view first so the three-quarter view can keep the same outfit.');
         const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,continuitySource,type,styling,model:imageModel});
+        let check;
+        try {check=await openaiPilot.verifyImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,generated:generated.buffer,continuitySource,type,styling,model:checkModel});}
+        catch(e){check={status:'unavailable',failed:['verification'],issues:['Visual check unavailable: '+e.message.slice(0,140)]};}
         const fresh=loadStore(),current=fresh.pos[req.params.id];
         const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
         if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; result was discarded.');
+        if(JSON.stringify(openaiPilot.normalizeStyling((current.imageStyling||{})[key],freshGroup))!==JSON.stringify(styling)) throw new Error('Styling changed during generation; result was discarded. Regenerate with the saved settings.');
         current.aiImages=current.aiImages||{};const images=current.aiImages[key]||[];
         const prior=images.find(x=>x.type===type);
         if(regenerateTypes.includes(type) && prior?.url!==savedImages.find(image=>image.type===type)?.url) throw new Error('This view changed during regeneration; result was discarded.');
         if(prior && prior.url && !regenerateTypes.includes(type)) throw new Error('An image already exists for this view; generated draft was not attached.');
         const saved=savePhotoBuffer(generated.buffer,'.png');
-        const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot'};
+        if(check.status!=='pass') {
+          current.qaRejected=current.qaRejected||{};
+          current.qaRejected[key]=Array.isArray(current.qaRejected[key])?current.qaRejected[key]:[];
+          current.qaRejected[key].push({type,url:saved.url,qa:check,at:new Date().toISOString()});
+          current.qaRejected[key]=current.qaRejected[key].slice(-12);
+          const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
+          item.errors.push({type,error:'Visual check: '+(check.issues.join('; ')||check.failed.join(', '))+'. Earlier image kept; rejected draft needs regeneration.'});
+          saveStore(fresh);
+          continue;
+        }
+        const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot',qa:check,
+          sourceFingerprint:fingerprint,styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type)?styling:null};
         const idx=images.findIndex(x=>x.type===type);if(idx>=0)images[idx]=rec;else images.push(rec);
         current.aiImages[key]=images;
         const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);item.views.push({type,model:imageModel,usage:generated.usage||null});
@@ -2024,9 +2066,22 @@ router.post('/api/procurement/pos/:id/images', (req, res) => {
   const b = req.body || {};
   if (b.aiImages && typeof b.aiImages === 'object') {
     po.aiImages = po.aiImages || {};
-    Object.keys(b.aiImages).forEach(k => {
-      po.aiImages[k] = (b.aiImages[k] || []).map(x => ({ type: String(x.type || ''), label: String(x.label || x.type || ''), url: String(x.url || ''), approved: !!x.approved })).filter(x => x.url);
-    });
+    const updates={};
+    for(const [k,submitted] of Object.entries(b.aiImages)) {
+      if(!Array.isArray(submitted))return res.status(400).json({success:false,error:'Image approvals must be a list.'});
+      const existing=po.aiImages[k]||[];
+      if(submitted.length!==existing.length)return res.status(409).json({success:false,error:'Images changed. Reopen the PO before approving.'});
+      if(new Set(submitted.map(x=>x.type+'\n'+x.url)).size!==submitted.length)return res.status(400).json({success:false,error:'Duplicate image approval entries are not allowed.'});
+      const next=[];
+      for(const x of submitted) {
+        const saved=existing.find(image=>image.type===x.type&&image.url===x.url);
+        if(!saved)return res.status(409).json({success:false,error:'An image changed. Reopen the PO before approving.'});
+        if(x.approved && saved.qa && saved.qa.status!=='pass')return res.status(409).json({success:false,error:'This image did not pass visual verification. Regenerate it before approval.'});
+        next.push({...saved,approved:!!x.approved});
+      }
+      updates[k]=next;
+    }
+    Object.assign(po.aiImages,updates);
     saveStore(s);
   }
   res.json({ success: true, aiImages: po.aiImages || {} });
@@ -2171,7 +2226,8 @@ router.post('/api/procurement/commit', async (req, res) => {
         return res.status(400).json({ success: false, error: 'Approve complete, non-repetitive listing copy for every new product.' });
       }
       const required = openaiPilot.pilotTypes(group || {}, !!(po.backRefs || {})[np.key]);
-      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && x.type !== 'original' && x.url !== group?.photoUrl);
+      const currentFingerprint=group?codexBatch.fingerprint(group,(po.backRefs||{})[np.key]):'';
+      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && (!x.qa || x.qa.status==='pass') && (!x.sourceFingerprint || x.sourceFingerprint===currentFingerprint) && x.type !== 'original' && x.url !== group?.photoUrl);
       if (!required.length || required.some(type => !approved.some(x => x.type === type && readStoredPhoto(x.url)))) return res.status(400).json({ success: false, error: 'Approve all required product and matching model views for each new product. The original reference photo cannot be posted.' });
       np.seo = seo;
       np.images = approved.map(x => ({ url: x.url, alt: seo.imageAlt }));

@@ -1969,7 +1969,7 @@
     }
 
     // ══════════ AI STUDIO ══════════
-    var studio={ images:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };     // keyed by product group key
+    var studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };     // keyed by product group key
     var openaiPilotConfig=null;
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
@@ -2004,7 +2004,7 @@
       var chosen=paidStylingOf(np);
       note('Saving styling…');
       var saved=previous.catch(function(){}).then(function(){
-        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/image-styling',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,styling:chosen})}).then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not save styling.');return r;});
+        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/image-styling',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,styling:chosen})}).then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not save styling.');if(r.images)studio.images[np.key]=r.images;return r;});
       }).then(function(r){note('Styling saved for this product.');return r;},function(e){note('Styling not saved: '+e.message);throw e;});
       studio.styleSaves[np.key]=saved;
       return saved;
@@ -2032,7 +2032,7 @@
     function studioReadyFor(np){
       if((np.variantConflicts||[]).length) return false;
       var imgs=studio.images[np.key]||[]; var required=paidTypesFor(np);
-      var okImg=required.length>0&&required.every(function(type){return imgs.some(function(x){return x.type===type&&x.approved&&x.url&&x.url!==np.photoUrl;});});
+      var okImg=required.length>0&&required.every(function(type){return imgs.some(function(x){return x.type===type&&x.approved&&x.url&&x.url!==np.photoUrl&&(!x.qa||x.qa.status==='pass');});});
       var seo=studio.seo[np.key], copy=seo&&seo.seo||{};
       var winter=/^winter$/i.test(np.season||'')||/^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(np.productType||'');
       var badWomenCopy=np.audience==='Women'&&!winter&&(/\bmuscle\s*fit\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' '))||/\b(?<!polo\s)t[ -]?shirts?\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' ')));
@@ -2050,10 +2050,11 @@
           return;
         }
         lastReceive=d;                          // studio funcs read lastReceive.newProducts
-        studio={ images:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };
+        studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };
         var po=d.po||{};
         if(po.backRefs){ Object.keys(po.backRefs).forEach(function(k){ studio.backRefs[k]=po.backRefs[k]; }); }
         if(po.aiImages){ Object.keys(po.aiImages).forEach(function(k){ studio.images[k]=po.aiImages[k]; }); }
+        if(po.qaRejected){ Object.keys(po.qaRejected).forEach(function(k){ studio.rejected[k]=po.qaRejected[k]; }); }
         if(po.openaiPilot&&Array.isArray(po.openaiPilot.attempts)){po.openaiPilot.attempts.forEach(function(a){if(a.styling)studio.styling[a.groupKey]=Object.assign({fit:''},a.styling);});}
         if(po.imageStyling){Object.keys(po.imageStyling).forEach(function(k){studio.styling[k]=Object.assign({fit:''},po.imageStyling[k]);});}
         if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved, source:dd.source||'product-details' }; }); }
@@ -2125,7 +2126,7 @@
       var imageCalls=pending.reduce(function(total,x){return total+missingPaidDrafts(x.np).images.length;},0);
       var seoCalls=pending.filter(function(x){return missingPaidDrafts(x.np).seo;}).length;
       var skipped=selected.length-pending.length;
-      if(!confirm('Generate missing drafts for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Up to '+imageCalls+' separately billed image calls and '+seoCalls+' SEO call(s). Existing drafts and approved photos are kept; an unseen back will NOT be generated. Your outfit settings will be used for model shots. Nothing is approved or posted to Shopify automatically. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
+      if(!confirm('Generate missing drafts for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Up to '+imageCalls+' separately billed image calls, '+imageCalls+' billed visual-check calls, and '+seoCalls+' SEO call(s). Failed visual checks are held for review; there are no automatic paid retries. Existing approved photos are kept. An unseen back will NOT be generated. Your saved outfit settings will be used. Nothing is approved or posted to Shopify automatically. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
       btn.disabled=true;var finished=0;
       var active=null;
       try {
@@ -2143,7 +2144,7 @@
             if(result.pilot.status!=='running')break;
           }
           if(result.pilot.status==='running')throw new Error('Generation is still running. Reopen this PO to inspect saved drafts.');
-          studio.images[item.np.key]=result.images||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
+          studio.images[item.np.key]=result.images||[];studio.rejected[item.np.key]=result.rejectedImages||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
           if(result.seo&&result.seo.seo)studio.seo[item.np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
           rerenderCard(item.i);finished++;
           if(result.pilot.status==='failed'||result.pilot.status==='partial')throw new Error('Article '+finished+' needs review: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '));
@@ -2159,7 +2160,7 @@
       if(!chosen.length){alert('No existing image was found for the selected view.');return;}
       if(po.status!=='received'||(po.lines||[]).some(function(line){return !(Number(line.weightGrams)>0);})){alert('Receive and weigh this PO, then Save corrections before regeneration.');return;}
       if(!np.photoUrl){alert('Upload the original front reference first.');return;}
-      if(!confirm('Regenerate '+chosen.length+' image view(s) for '+(np.designName||np.colour||'this product')+'? Each view is a separately billed OpenAI image call. Existing images remain if generation fails. Successful replacements will need your approval again. SEO and Shopify will not change. Continue?'))return;
+      if(!confirm('Regenerate '+chosen.length+' image view(s) for '+(np.designName||np.colour||'this product')+'? Each view uses a billed OpenAI image call and a billed visual-check call. Rejected replacements remain separate for review; no automatic paid retry occurs. Existing images remain if generation or checking fails. Successful replacements need approval again. SEO and Shopify will not change. Continue?'))return;
       var label=button.textContent;
       function note(message){var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node)node.textContent=message;}
       button.disabled=true;button.textContent='Regenerating…';
@@ -2177,7 +2178,7 @@
           if(result.pilot.status!=='running')break;
         }
         if(result.pilot.status==='running')throw new Error('Regeneration is still running. Reopen this PO to inspect saved drafts.');
-        studio.images[np.key]=result.images||[];
+        studio.images[np.key]=result.images||[];studio.rejected[np.key]=result.rejectedImages||[];
         if(result.seo&&result.seo.seo)studio.seo[np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
         rerenderCard(i);
         var errors=(result.pilot.errors||[]).map(function(error){return error.type+': '+error.error;});
@@ -2268,13 +2269,16 @@
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im&&t[0]!=='original'?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
-              '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.approved?'Approved — click to UNDO':'Approve this photo')+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
+              '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.qa&&im.qa.status!=='pass'?'Visual check did not pass — regenerate this view':im.approved?'Approved — click to UNDO':'Approve this photo')+'"'+(im.qa&&im.qa.status!=='pass'?' disabled':'')+' style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
-              (t[0]==='original'?'':(canStartPaidImages()?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>')
+              (t[0]==='original'?'':(canStartPaidImages()?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>'+
+              (im.qa&&im.qa.status!=='pass'?'<div class="banner warn" style="font-size:11px;margin-top:5px">Visual check: '+esc((im.qa.issues||[]).join('; ')||im.qa.status)+'</div>':''))
              :empty)+
           '</div>';
       });
       grid+='</div>';
+      var rejected=studio.rejected[np.key]||[];
+      if(rejected.length) grid+='<div class="banner warn" style="margin-top:8px"><b>Images held by visual check — not approved or posted</b><div style="display:flex;gap:8px;overflow-x:auto;margin-top:6px">'+rejected.slice(-6).reverse().map(function(item){return '<div style="min-width:130px;max-width:170px;font-size:11px"><img data-zoom src="'+esc(item.url)+'" title="Rejected draft — click to inspect" style="width:120px;height:120px;object-fit:cover;cursor:zoom-in"><div><b>'+esc(item.type)+'</b>: '+esc(((item.qa||{}).issues||[]).join('; ')||'Visual check unavailable')+'</div></div>';}).join('')+'</div></div>';
       var seo=studio.seo[np.key];
       var seoBlock;
       if(!seo){
@@ -2361,8 +2365,8 @@
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ if(confirm('This calls the separately billed Anthropic API. Continue?'))genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
-      Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ var field=sel.getAttribute('data-sty');stylingOf(np)[field]=sel.value;saveStudioStyling(np).then(function(){if(field==='modelOrigin')rerenderCard(i);}).catch(function(){}); }; });
-      Array.prototype.forEach.call(host.querySelectorAll('[data-styck]'),function(cb){ cb.onchange=function(){ stylingOf(np)[cb.getAttribute('data-styck')]=cb.checked;saveStudioStyling(np).catch(function(){}); }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ var field=sel.getAttribute('data-sty');stylingOf(np)[field]=sel.value;saveStudioStyling(np).then(function(){rerenderCard(i);}).catch(function(e){alert(e.message);}); }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-styck]'),function(cb){ cb.onchange=function(){ stylingOf(np)[cb.getAttribute('data-styck')]=cb.checked;saveStudioStyling(np).then(function(){rerenderCard(i);}).catch(function(e){alert(e.message);}); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-backup]'),function(inp){ inp.onchange=function(){ uploadBackPhoto(np,i,inp.files&&inp.files[0]); }; });
     }
     function uploadBackPhoto(np,i,file){
@@ -2422,11 +2426,13 @@
     }
     function toggleImg(np,i,type){
       var imgs=studio.images[np.key]||[]; var im=imgs.find(function(x){return x.type===type;}); if(!im) return;
+      if(!im.approved&&im.qa&&im.qa.status!=='pass'){alert('This image did not pass the visual check. Inspect the reason and regenerate it before approval.');return;}
       var wasApproved=im.approved;
       im.approved=!im.approved; rerenderCard(i);
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ aiImages:(function(){var o={};o[np.key]=imgs;return o;})() })})
         .then(readJson).then(function(r){
           if(!r.success) throw new Error(r.error||'Could not save photo approval.');
+          if(r.aiImages&&r.aiImages[np.key])studio.images[np.key]=r.aiImages[np.key];
           // Image approval must not silently invoke a billed SEO API.
         }).catch(function(e){ im.approved=wasApproved;rerenderCard(i);alert(e.message); });
     }

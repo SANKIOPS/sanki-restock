@@ -123,7 +123,7 @@ test('paid retry is explicit and only requests missing image or SEO drafts',()=>
   assert.match(html,/function missingPaidDrafts\(np\)/);
   assert.match(html,/Generate missing drafts \(paid\)/);
   assert.match(html,/retry:!!used\[item\.np\.key\]/);
-  assert.match(html,/separately billed image calls and .* SEO call/);
+  assert.match(html,/separately billed image calls, .* billed visual-check calls, and .* SEO call/);
   assert.match(server,/const neededTypes=allowedTypes\.filter\(type=>!/);
   assert.match(server,/if \(needsSeo\) try \{/);
   assert.match(server,/All image and SEO drafts already exist/);
@@ -136,11 +136,50 @@ test('existing image views can be regenerated separately or together without rew
   assert.match(html,/data-paid-regen=/);
   assert.match(html,/data-regen-product=/);
   assert.match(html,/regenerateTypes:chosen/);
-  assert.match(html,/Successful replacements will need your approval again/);
+  assert.match(html,/Successful replacements need approval again/);
   assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\|\|!savedImages\.some/);
   assert.match(server,/const needsSeo=!regenerateTypes\.length/);
   assert.match(server,/approved:false,source:'openai-pilot'/);
   assert.match(server,/This view changed during regeneration; result was discarded/);
+});
+
+test('visual checks reject mismatched outfit, accessories, angle or continuity',()=>{
+  const pass={garmentMatch:true,singleFrame:true,angleMatch:true,fitMatch:true,pairMatch:true,shoeMatch:true,tuckMatch:true,bagMatch:true,shadesMatch:true,capMatch:true,chainMatch:true,modelMatch:true,outfitContinuity:true,issues:[]};
+  assert.equal(pilot.evaluateImageCheck(pass,'model-side').status,'pass');
+  for(const field of ['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','modelMatch','outfitContinuity']) {
+    const result=pilot.evaluateImageCheck({...pass,[field]:false,issues:[field+' failed']},'model-side');
+    assert.equal(result.status,'needs-review',field);
+    assert.deepEqual(result.failed,[field]);
+  }
+  assert.equal(pilot.evaluateImageCheck({...pass,bagMatch:false},'front').status,'pass');
+  assert.equal(pilot.evaluateImageCheck({garmentMatch:true},'model-front').status,'needs-review');
+});
+
+test('independent visual check sends original, candidate and matching model front without retry',async()=>{
+  let calls=0;
+  const continuitySource={buf:Buffer.from('matching-front'),mime:'image/png'};
+  const allTrue={garmentMatch:true,singleFrame:true,angleMatch:true,fitMatch:true,pairMatch:true,shoeMatch:true,tuckMatch:true,bagMatch:true,shadesMatch:true,capMatch:true,chainMatch:true,modelMatch:true,outfitContinuity:true,issues:[]};
+  const out=await pilot.verifyImage({key:'test-only',group,source,generated:Buffer.from('candidate'),continuitySource,type:'model-side',styling:{pair:'Baggy trousers',bagStyle:'None',sunglasses:false},fetchImpl:async(url,options)=>{
+    calls++;assert.equal(url,'https://api.openai.com/v1/responses');
+    const body=JSON.parse(options.body);
+    assert.equal(body.store,false);
+    assert.equal(body.text.format.type,'json_schema');
+    assert.equal(body.input[0].content.filter(x=>x.type==='input_image').length,3);
+    assert.match(body.input[0].content[0].text,/baggy versus straight/);
+    return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(allTrue)}]}]})};
+  }});
+  assert.equal(calls,1);assert.equal(out.status,'pass');
+});
+
+test('purchase image approval and posting are gated by visual check, with rejected drafts retained',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/Images held by visual check/);
+  assert.match(html,/x\.qa\.status==='pass'/);
+  assert.match(server,/saved\.qa\.status!=='pass'/);
+  assert.match(server,/po\.qaRejected \|\| \{\}/);
+  assert.match(server,/sourceFingerprint===currentFingerprint/);
+  assert.match(server,/Generation stopped or lost contact/);
 });
 
 test('SEO request uses the original photo and returns complete structured draft',async()=>{

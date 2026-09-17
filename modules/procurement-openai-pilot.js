@@ -181,6 +181,47 @@ async function generateImage({key, group, source, continuitySource=null, type, s
   return {buffer:Buffer.from(encoded,'base64'),usage:body.usage || null,model};
 }
 
+// A separate vision check, not the generator's own claim of success. The
+// response is deliberately small and structured so a failed/uncertain check
+// blocks approval without another image-generation charge or silent retry.
+function imageCheckSchema() {
+  return {type:'object',additionalProperties:false,required:['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','modelMatch','outfitContinuity','issues'],properties:{
+    garmentMatch:{type:'boolean'},singleFrame:{type:'boolean'},angleMatch:{type:'boolean'},
+    fitMatch:{type:'boolean'},pairMatch:{type:'boolean'},shoeMatch:{type:'boolean'},tuckMatch:{type:'boolean'},bagMatch:{type:'boolean'},
+    shadesMatch:{type:'boolean'},capMatch:{type:'boolean'},chainMatch:{type:'boolean'},modelMatch:{type:'boolean'},outfitContinuity:{type:'boolean'},
+    issues:{type:'array',items:{type:'string'}}
+  }};
+}
+
+function evaluateImageCheck(check,type) {
+  const modelView=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
+  const side=type==='model-side'||type.startsWith('model-side-');
+  const required=['garmentMatch','singleFrame'];
+  if(modelView) required.push('angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','modelMatch');
+  if(side) required.push('outfitContinuity');
+  const failed=required.filter(field=>check?.[field]!==true);
+  return {status:failed.length?'needs-review':'pass',failed,issues:(Array.isArray(check?.issues)?check.issues:[]).map(x=>String(x).slice(0,180)).slice(0,8)};
+}
+
+async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
+  const style=normalizeStyling(styling,group),side=type==='model-side'||type.startsWith('model-side-');
+  const isModel=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
+  const checks={type,productColour:group.colour,productType:group.productType,originalFit:group.fit,
+    chosenFit:style.fit,pair:style.pair,shoes:style.shoes,tuck:style.tuck,chain:style.chain,bag:style.bagStyle,bagColour:style.bagColour,
+    sunglasses:style.sunglasses,cap:style.capStyle,modelOrigin:style.modelOrigin,modelGender:type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':group.audience,
+    femaleComplexion:style.femaleComplexion,maleComplexion:style.maleComplexion};
+  const prompt=`Independently inspect the original product photo, generated candidate, and optional matching front photo in that order. Check actual visible evidence against ${JSON.stringify(checks)}. The featured garment must retain its colour, neckline, sleeves and silhouette. singleFrame means exactly one photo/one person, no collage. For a model front, angleMatch means front-facing; for a three-quarter view, the body must be visibly rotated about 45 degrees, not merely a different front pose. fitMatch checks the requested garment fit, including natural shoulder when fitted or slim. pairMatch checks the selected trousers or other pairing, including baggy versus straight. shoeMatch checks selected shoes when not Auto; tuckMatch checks selected tuck when not Auto. bagMatch is false if ANY bag is visible when bag is None, or if a selected bag style or colour is wrong; shadesMatch is false if sunglasses are visible when unchecked. capMatch and chainMatch likewise reject unrequested accessories or a wrong selected style. modelMatch checks the requested male/female model and origin; complexion is subjective, so flag obvious mismatch but do not claim ethnicity or identity from appearance alone. When a matching front is supplied, outfitContinuity requires the same person, trousers, shoes and accessories. For product-only views, mark model-only checks true. If a required detail is not visible enough to judge, mark it false. Keep issues factual and brief; do not infer unseen details.`;
+  const content=[{type:'input_text',text:prompt},
+    {type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'},
+    {type:'input_image',image_url:`data:image/png;base64,${generated.toString('base64')}`,detail:'high'}];
+  if(continuitySource)content.push({type:'input_image',image_url:`data:${continuitySource.mime};base64,${continuitySource.buf.toString('base64')}`,detail:'high'});
+  const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
+    body:JSON.stringify({model,store:false,max_output_tokens:500,input:[{role:'user',content}],text:{format:{type:'json_schema',name:'sanki_image_check',strict:true,schema:imageCheckSchema()}}}),
+    signal:AbortSignal.timeout(90000)});
+  const body=await readApiResponse(response),check=JSON.parse(responseText(body));
+  return {...evaluateImageCheck(check,type),model,usage:body.usage||null};
+}
+
 async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=global.fetch}) {
   const retail=retailFacts(group);
   const facts = {brand:'SANKI',productType:retail.productType,colour:group.colour,
@@ -204,4 +245,4 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   return {seo,usage:body.usage || null,model};
 }
 
-module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
+module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,verifyImage,evaluateImageCheck,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
