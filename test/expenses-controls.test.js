@@ -144,18 +144,22 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
 
 test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
   const fundingBody={account:'IndusInd Bank 8181',amount:5000,date:'2026-09-16',reference:'PF-TEST-IN-001',bankName:'Test Bank',last4:'4321',proof:'/api/expenses/photo/funding-test.jpg'};
-  assert.equal(invoke('POST','/api/expenses/prashant-funding',{role:'owner',body:fundingBody}).status,403);
-  const created=invoke('POST','/api/expenses/prashant-funding',{role:'admin',body:fundingBody});assert.equal(created.status,200);
+  assert.equal(invoke('POST','/api/expenses/prashant-funding',{role:'claimant',body:fundingBody}).status,403);
+  const created=invoke('POST','/api/expenses/prashant-funding',{role:'owner',body:fundingBody});assert.equal(created.status,200);
   const id=created.body.funding.id;assert.equal(created.body.funding.due,5000);
   assert.equal(invoke('POST','/api/expenses/prashant-funding',{role:'admin',body:fundingBody}).status,409);
+  const prashantFunding=invoke('POST','/api/expenses/prashant-funding',{role:'admin',body:{...fundingBody,amount:100,reference:'PF-TEST-IN-002'}});
+  assert.equal(prashantFunding.status,200);
   const incoming=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'IndusInd Bank 8181',from:'2026-09-16',to:'2026-09-17'}}).body;
   assert.equal(incoming.entries.find(x=>x.id===id).credit,5000);
   const repaymentBody={account:'Prashant Axis 3645',amount:3000,date:'2026-09-17',reference:'PF-TEST-OUT-001',proof:'/api/expenses/photo/repay-test.jpg'};
-  assert.equal(invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'owner',params:{id},body:repaymentBody}).status,403);
-  const repaid=invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'admin',params:{id},body:repaymentBody});assert.equal(repaid.status,200);assert.equal(repaid.body.due,2000);
+  assert.equal(invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'claimant',params:{id},body:repaymentBody}).status,403);
+  const repaid=invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'owner',params:{id},body:repaymentBody});assert.equal(repaid.status,200);assert.equal(repaid.body.due,2000);
+  const prashantRepayment=invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'admin',params:{id},body:{...repaymentBody,amount:500,reference:'PF-TEST-OUT-003'}});
+  assert.equal(prashantRepayment.status,200);assert.equal(prashantRepayment.body.due,1500);
   assert.equal(invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'admin',params:{id},body:{...repaymentBody,amount:3001,reference:'PF-TEST-OUT-002'}}).status,400);
-  const list=invoke('GET','/api/expenses/prashant-funding',{role:'owner'}).body;assert.equal(list.rows.find(x=>x.id===id).due,2000);
-  assert.equal(invoke('GET','/api/expenses/prashant-funding',{role:'admin'}).body.rows.find(x=>x.id===id).due,2000);
+  const list=invoke('GET','/api/expenses/prashant-funding',{role:'owner'}).body;assert.equal(list.rows.find(x=>x.id===id).due,1500);
+  assert.equal(invoke('GET','/api/expenses/prashant-funding',{role:'admin'}).body.rows.find(x=>x.id===id).due,1500);
   const outgoing=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-09-16',to:'2026-09-17'}}).body;
   assert.equal(outgoing.entries.find(x=>x.id===id+'/'+repaid.body.repayment.id).debit,3000);
 });

@@ -2359,7 +2359,7 @@ router.get('/api/expenses/prashant-funding',(req,res)=>{
   res.json({success:true,rows,totalDue:roundMoney(rows.reduce((sum,f)=>sum+f.due,0)),accounts:PRASHANT_FUNDING_ACCOUNTS});
 });
 router.post('/api/expenses/prashant-funding',(req,res)=>{
-  if(!isPrashant(req))return res.status(403).json({success:false,error:'Only Prashant can record his personal funding.'});
+  if(!isOwner(req)&&!isPrashant(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can record his personal funding.'});
   const b=req.body||{},account=String(b.account||''),amount=roundMoney(b.amount),date=String(b.date||''),reference=String(b.reference||'').trim(),bankName=String(b.bankName||'').trim(),last4=String(b.last4||'').trim(),proofs=proofList(b.proofs,b.proof);
   if(!PRASHANT_FUNDING_ACCOUNTS.includes(account)||!(amount>0)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||!reference||!bankName||!/^[0-9]{4}$/.test(last4)||!proofs.length)return res.status(400).json({success:false,error:'Choose 8181 or 3645 and provide a positive amount, date, bank reference, Prashant personal bank name and last four digits, and proof.'});
   const s=loadStore(),rows=personalFundingRows(s);
@@ -2370,7 +2370,7 @@ router.post('/api/expenses/prashant-funding',(req,res)=>{
   audit(s,req,'PRASHANT_PERSONAL_FUNDING_RECORDED','personal_funding',f.id,{nature:'SANKI',account,after:f});saveStore(s);res.json({success:true,funding:{...f,due:amount}});
 });
 router.post('/api/expenses/prashant-funding/:id/repay',(req,res)=>{
-  if(!isPrashant(req))return res.status(403).json({success:false,error:'Only Prashant can record a repayment to his personal account.'});
+  if(!isOwner(req)&&!isPrashant(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can record a repayment to his personal account.'});
   const s=loadStore(),f=personalFundingRows(s).find(x=>x.id===req.params.id),b=req.body||{},account=String(b.account||''),amount=roundMoney(b.amount),date=String(b.date||''),reference=String(b.reference||'').trim(),proofs=proofList(b.proofs,b.proof);
   if(!f)return res.status(404).json({success:false,error:'Funding record not found.'});
   if(!PRASHANT_FUNDING_ACCOUNTS.includes(account)||!(amount>0)||amount>personalFundingDue(f)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||!reference||!proofs.length)return res.status(400).json({success:false,error:'Choose a paying account, amount no more than due, repayment date, bank reference, and proof.'});
