@@ -1053,8 +1053,9 @@ function finalAugustPlan(s,file){
     const actual=(s.salaryPayments||[]).filter(p=>p.active!==false&&p.ym==='2026-08'&&p.empId===emp.id);
     const actualCash=round2(actual.filter(p=>p.account==='Gagan Sir Cash').reduce((n,p)=>n+num(p.amount),0)),actualBank=round2(actual.filter(p=>p.account==='Prashant Axis 3645').reduce((n,p)=>n+num(p.amount),0));
     if(actual.length&&actual.some(p=>!p.proof&&!((p.proofs||[]).length)))throw new Error(emp.name+' has a salary payment without proof; review it before importing.');
-    if(Math.abs(actualCash-cash)>.005||Math.abs(actualBank-bank)>.005||actual.some(p=>!['Gagan Sir Cash','Prashant Axis 3645'].includes(p.account)))throw new Error(emp.name+' paid amounts differ from the existing cash/3645 payments. Do not duplicate or rewrite payments.');
-    return {empId:emp.id,name:emp.name,monthlySalary,paidDays,earned,adjustment,advanceDeduction,net,cash,bank,attendance:daily,sourceRow:index+2};
+    const additionalPaid=round2(actualBank-bank),laterBank=actual.filter(p=>p.account==='Prashant Axis 3645'&&p.date>'2026-09-12'),laterBankTotal=round2(laterBank.reduce((n,p)=>n+num(p.amount),0));
+    if(Math.abs(actualCash-cash)>.005||additionalPaid<-.005||actual.some(p=>!['Gagan Sir Cash','Prashant Axis 3645'].includes(p.account))||(additionalPaid>.005&&(Math.abs(laterBankTotal-additionalPaid)>.005||additionalPaid>Math.max(0,round2(net-cash-bank))+.005)))throw new Error(emp.name+' paid amounts differ from the existing cash/3645 payments. Do not duplicate or rewrite payments.');
+    return {empId:emp.id,name:emp.name,monthlySalary,paidDays,earned,adjustment,advanceDeduction,net,cash,bank,additionalPaid,attendance:daily,sourceRow:index+2};
   });
   const sum=(list,key)=>round2(list.reduce((n,x)=>n+num(x[key]),0));
   if(sum(salaryRows,'cash')!==171000||sum(salaryRows,'bank')!==102703||sum(salaryRows,'advanceDeduction')!==81850)throw new Error('The final workbook must show ₹1,71,000 cash, ₹1,02,703 from 3645 and ₹81,850 advances.');
@@ -1072,7 +1073,8 @@ function finalAugustPlan(s,file){
   if(extras.some(x=>x.existingPayments))throw new Error('An employee missing from the workbook has recorded August payments; review before importing.');
   const hash=crypto.createHash('sha256').update(file.buffer).digest('hex');
   const stateHash=crypto.createHash('sha256').update(JSON.stringify({aug:s.months['2026-08'],advances:s.advances,payments:(s.salaryPayments||[]).filter(p=>p.ym==='2026-08')})).digest('hex');
-  return {hash,stateHash,salaryRows,advances,extras,unmatchedAdvances,totals:{cash:171000,bank:102703,actualPaid:273703,advance:81850,net:sum(salaryRows,'net')},previewToken:crypto.createHash('sha256').update(hash+stateHash).digest('hex')};
+  const supplemental=sum(salaryRows,'additionalPaid');
+  return {hash,stateHash,salaryRows,advances,extras,unmatchedAdvances,totals:{cash:171000,bank:102703,supplemental,actualBank:round2(102703+supplemental),actualPaid:round2(273703+supplemental),advance:81850,net:sum(salaryRows,'net')},previewToken:crypto.createHash('sha256').update(hash+stateHash).digest('hex')};
 }
 function applyFinalAugustPlan(s,plan,by,fileName){
   if(plan.unmatchedAdvances.length)throw new Error('Existing advances disagree with the final sheet: '+plan.unmatchedAdvances.map(a=>a.name+' ₹'+a.amount+' on '+a.date+' ('+a.id+')').join('; ')+'. No changes saved; review the original payment proof before correcting these records.');
@@ -1096,7 +1098,7 @@ function applyFinalAugustPlan(s,plan,by,fileName){
   }
   for(const x of plan.extras){const row=mo.rows[x.empId]=mo.rows[x.empId]||{};Object.assign(row,{sheetExcluded:true,sheetOpeningCarryOverride:0,sheetPaidDaysOverride:0,salaryAdjustment:0,advance:0,paid:0});delete row.historicalCloseAdjustment;delete row.finalSalaryAmount;}
   mo.finalized=false;
-  const actual=computeMonth(s,ym),mismatch=plan.salaryRows.find(x=>{const r=actual.find(y=>y.id===x.empId);return !r||Math.abs(r.netPayable-x.net)>.015||Math.abs(r.transactionPaid-(x.cash+x.bank))>.005;});
+  const actual=computeMonth(s,ym),mismatch=plan.salaryRows.find(x=>{const r=actual.find(y=>y.id===x.empId);return !r||Math.abs(r.netPayable-x.net)>.015||Math.abs(r.transactionPaid-(x.cash+x.bank+x.additionalPaid))>.005;});
   if(mismatch)throw new Error('August payroll did not reconcile for '+mismatch.name+'; no changes saved.');
   const posting=(s.payrollPostings||{})[ym];if(posting){posting.rows=actual.map(r=>({empId:r.id,employeeName:r.name,salaryAmt:r.salaryAmt,netPayable:r.netPayable,paid:r.paid,advanceRecovery:r.loggedAdvanceRecovery,legacyAdvance:0,legacyPaid:0}));posting.correctedAt=at;posting.correctedBy=by;}
   s.finalAugustSheetAudit=s.finalAugustSheetAudit||[];s.finalAugustSheetAudit.push({at,by,fileName:path.basename(fileName),hash:plan.hash,totals:plan.totals,before,employeeIds:plan.salaryRows.map(x=>x.empId),source:'Owner-confirmed August workbook; proof-backed salary debits retained'});

@@ -54,15 +54,17 @@ test('final August workbook reconciles historical advances without a second sala
     if(cash||bank)state.salaryPayments.push({empId:id,ym:'2026-08',amount:cash||bank,account:cash?'Gagan Sir Cash':'Prashant Axis 3645',proof:'/proof.jpg',active:true});
   }
   state.employees.EXTRA={id:'EXTRA',name:'Not on August sheet',salary:5000,active:true};
+  state.salaryPayments.push({empId:'E2',ym:'2026-08',date:'2026-09-16',amount:650,account:'Prashant Axis 3645',proof:'/later-fraction.jpg',active:true});
   for(const [name,rows] of [['SALARY(Up.)',salary],['Attendance(Up.)',attendance],['ADV',advances]])XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(rows),name);
   const file={originalname:'final.xlsb',buffer:XLSX.write(book,{type:'buffer',bookType:'xlsx'})},plan=_finalAugustPlan(state,file),paymentCount=state.salaryPayments.length;
   assert.equal(plan.salaryRows.length,23);assert.equal(plan.advances.length,20);assert.equal(plan.extras.length,1);
+  assert.equal(plan.totals.bank,102703);assert.equal(plan.totals.supplemental,650);assert.equal(plan.totals.actualPaid,274353);
   state.advances.CONFLICT={id:'CONFLICT',empId:'E0',employeeName:'Employee 0',date:'2026-08-31',amount:1000,proof:'/real-payout.jpg',recoveries:[],active:true};
   const conflicted=_finalAugustPlan(state,file);assert.equal(conflicted.unmatchedAdvances.length,1);
   assert.throws(()=>_applyFinalAugustPlan(state,conflicted,'owner',file.originalname),/Existing advances disagree/);
   assert.equal(state.advances.CONFLICT.proof,'/real-payout.jpg');delete state.advances.CONFLICT;
   const result=_applyFinalAugustPlan(state,plan,'owner',file.originalname);
-  assert.equal(result.rows.length,23);assert.equal(result.totals.actualPaid,273703);assert.equal(state.salaryPayments.length,paymentCount);assert.equal(Object.keys(state.advances).length,20);
+  assert.equal(result.rows.length,23);assert.equal(result.totals.actualPaid,274353);assert.equal(state.salaryPayments.length,paymentCount);assert.equal(Object.keys(state.advances).length,20);
   assert.ok(Object.values(state.advances).every(a=>a.historicalOpening&&a.proof===''&&a.recoveries[0].ym==='2026-08'));
   assert.equal(result.rows.reduce((n,r)=>n+r.loggedAdvanceRecovery,0),81850);
   state.salaryPayments[0].amount++;assert.throws(()=>_finalAugustPlan(state,file),/paid amounts differ/);
