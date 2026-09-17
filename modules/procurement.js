@@ -1902,11 +1902,14 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       return res.status(409).json({success:false,error:'Generate a visually checked front model image before its three-quarter view.'});
     }
     if (!types.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
+    // An already-open browser tab may still run the older one-attempt UI after a
+    // deployment. Do not spend credits under that stale confirmation dialog.
+    if((req.body||{}).maxImageAttempts!==2) return res.status(409).json({success:false,error:'Purchases page is out of date. Refresh the page and reopen this PO before generating photos. No paid call was made.'});
     const styling=openaiPilot.normalizeStyling((req.body||{}).styling||(po.imageStyling||{})[key],g);
     po.imageStyling=po.imageStyling||{};
     if(!po.imageStyling[key])po.imageStyling[key]=styling;
     else if(JSON.stringify(po.imageStyling[key])!==JSON.stringify(styling))return res.status(409).json({success:false,error:'Styling changed or is still saving. Wait for it to save, then retry.'});
-    const maxImageAttempts=(req.body||{}).maxImageAttempts===2?2:1;
+    const maxImageAttempts=2;
     const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,maxImageAttempts,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});

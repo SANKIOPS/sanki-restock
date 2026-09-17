@@ -155,7 +155,9 @@ test('one-click generation has a confirmed two-attempt cap and requests only mis
   assert.match(html,/other products continued/);
   assert.match(server,/const neededTypes=allowedTypes\.filter\(type=>!/);
   assert.match(server,/if \(!preflightBlocked&&needsSeo\) try \{/);
-  assert.match(server,/const maxImageAttempts=\(req\.body\|\|\{\}\)\.maxImageAttempts===2\?2:1/);
+  assert.match(server,/if\(\(req\.body\|\|\{\}\)\.maxImageAttempts!==2\) return res\.status\(409\)/);
+  assert.match(server,/Purchases page is out of date\. Refresh the page/);
+  assert.match(server,/const maxImageAttempts=2/);
   assert.match(server,/All image and SEO drafts already exist/);
   assert.match(server,/\.attempts\.slice\(\)\.reverse\(\)\.find\(x=>x\.groupKey===key\)/);
 });
