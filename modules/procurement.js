@@ -1796,6 +1796,20 @@ function canStartPaidPilot(req) {
     ? req.user.roles : [req.user && req.user.role];
   return roles.some(r => ['owner','admin','inventory'].includes(String(r).toLowerCase()));
 }
+function canReviewPaidImage(req) {
+  const roles=(req.user && Array.isArray(req.user.roles) && req.user.roles.length)
+    ? req.user.roles : [req.user && req.user.role];
+  return roles.some(r=>['owner','admin'].includes(String(r).toLowerCase()));
+}
+function imageCheckAccepted(image) {
+  return !image.qa || ['pass','manual-reviewed'].includes(image.qa.status);
+}
+function invalidateDependentSides(images,frontType) {
+  const sideType={'model-front':'model-side',female:'model-side-female',male:'model-side-male'}[frontType];
+  if(!sideType)return;
+  const side=images.find(image=>image.type===sideType);
+  if(side){side.approved=false;side.qa={...(side.qa||{}),status:'needs-review',issues:['Matching front image changed. Regenerate this three-quarter view.']};}
+}
 router.get('/api/procurement/openai-pilot-status', (req,res) => {
   if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
   res.json({success:true,configured:!!process.env.OPENAI_API_KEY,
@@ -1810,6 +1824,37 @@ router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
   const record=((po.openaiPilot||{}).attempts||[]).slice().reverse().find(x=>x.groupKey===key);
   if (!record) return res.status(404).json({success:false,error:'No pilot attempt for this article.'});
   res.json({success:true,pilot:record,images:(po.aiImages||{})[key]||[],rejectedImages:(po.qaRejected||{})[key]||[],seo:(po.seoDraft||[]).find(x=>x.key===key)||null});
+});
+// A mistaken visual-check verdict can be resolved without another paid image
+// call, but only by an owner/admin who inspects the held draft and records why.
+router.post('/api/procurement/pos/:id/qa-review', async (req,res) => {
+  try {
+    if(!canReviewPaidImage(req))return res.status(403).json({success:false,error:'Owner or admin review required.'});
+    const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||''),url=String((req.body||{}).url||'');
+    const reason=String((req.body||{}).reason||'').trim();
+    if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'Editable PO required.'});
+    if(reason.length<12||reason.length>500)return res.status(400).json({success:false,error:'Give a short, specific reason (12–500 characters) for accepting this image.'});
+    const group=(await newGroupsOf(s,po)).find(g=>g.key===key);
+    const rejected=(po.qaRejected||{})[key]||[];
+    const candidate=rejected.find(image=>image.url===url&&image.type===(req.body||{}).type);
+    if(!group||!candidate||!readStoredPhoto(candidate.url))return res.status(404).json({success:false,error:'Held image not found.'});
+    const attempt=((po.openaiPilot||{}).attempts||[]).filter(item=>item.groupKey===key&&item.startedAt<=candidate.at).slice(-1)[0];
+    const fingerprint=candidate.sourceFingerprint||attempt?.sourceFingerprint;
+    const styling=candidate.styling||attempt?.styling;
+    if(!fingerprint||fingerprint!==codexBatch.fingerprint(group,(po.backRefs||{})[key]))return res.status(409).json({success:false,error:'The product reference changed. Generate a new image before review.'});
+    if(!styling||JSON.stringify(openaiPilot.normalizeStyling(styling,group))!==JSON.stringify(openaiPilot.normalizeStyling((po.imageStyling||{})[key],group)))return res.status(409).json({success:false,error:'The styling changed. Generate a new image before review.'});
+    po.aiImages=po.aiImages||{};
+    const images=po.aiImages[key]||[];
+    const rec={type:candidate.type,label:(AI_IMAGE_SPECS.find(x=>x.type===candidate.type)||{}).label||candidate.type,url:candidate.url,approved:false,source:'openai-pilot',
+      qa:{...candidate.qa,status:'manual-reviewed',issues:[],manualReview:{reason,by:String(req.user?.username||req.user?.role||'owner'),at:new Date().toISOString()}},sourceFingerprint:fingerprint,
+      styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(candidate.type)?styling:null};
+    const idx=images.findIndex(image=>image.type===rec.type);if(idx>=0)images[idx]=rec;else images.push(rec);
+    invalidateDependentSides(images,rec.type);
+    po.aiImages[key]=images;
+    po.qaRejected[key]=rejected.filter(image=>image!==candidate);
+    saveStore(s);
+    res.json({success:true,images,rejectedImages:po.qaRejected[key]});
+  } catch(e){res.status(500).json({success:false,error:e.message});}
 });
 // Explicit, authorised-user-started pilot. One colourway per request, at most six image
 // calls per explicit request, no automatic retries, and no approvals or Shopify writes.
@@ -1888,7 +1933,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         if(check.status!=='pass') {
           current.qaRejected=current.qaRejected||{};
           current.qaRejected[key]=Array.isArray(current.qaRejected[key])?current.qaRejected[key]:[];
-          current.qaRejected[key].push({type,url:saved.url,qa:check,at:new Date().toISOString()});
+          current.qaRejected[key].push({type,url:saved.url,qa:check,sourceFingerprint:fingerprint,styling,at:new Date().toISOString()});
           current.qaRejected[key]=current.qaRejected[key].slice(-12);
           const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
           item.errors.push({type,error:'Visual check: '+(check.issues.join('; ')||check.failed.join(', '))+'. Earlier image kept; rejected draft needs regeneration.'});
@@ -1898,6 +1943,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot',qa:check,
           sourceFingerprint:fingerprint,styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type)?styling:null};
         const idx=images.findIndex(x=>x.type===type);if(idx>=0)images[idx]=rec;else images.push(rec);
+        invalidateDependentSides(images,type);
         current.aiImages[key]=images;
         const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);item.views.push({type,model:imageModel,usage:generated.usage||null});
         saveStore(fresh);
@@ -2076,7 +2122,7 @@ router.post('/api/procurement/pos/:id/images', (req, res) => {
       for(const x of submitted) {
         const saved=existing.find(image=>image.type===x.type&&image.url===x.url);
         if(!saved)return res.status(409).json({success:false,error:'An image changed. Reopen the PO before approving.'});
-        if(x.approved && saved.qa && saved.qa.status!=='pass')return res.status(409).json({success:false,error:'This image did not pass visual verification. Regenerate it before approval.'});
+        if(x.approved && !imageCheckAccepted(saved))return res.status(409).json({success:false,error:'This image has not passed visual verification or owner review.'});
         next.push({...saved,approved:!!x.approved});
       }
       updates[k]=next;
@@ -2227,7 +2273,7 @@ router.post('/api/procurement/commit', async (req, res) => {
       }
       const required = openaiPilot.pilotTypes(group || {}, !!(po.backRefs || {})[np.key]);
       const currentFingerprint=group?codexBatch.fingerprint(group,(po.backRefs||{})[np.key]):'';
-      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && (!x.qa || x.qa.status==='pass') && (!x.sourceFingerprint || x.sourceFingerprint===currentFingerprint) && x.type !== 'original' && x.url !== group?.photoUrl);
+      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && imageCheckAccepted(x) && (!x.sourceFingerprint || x.sourceFingerprint===currentFingerprint) && x.type !== 'original' && x.url !== group?.photoUrl);
       if (!required.length || required.some(type => !approved.some(x => x.type === type && readStoredPhoto(x.url)))) return res.status(400).json({ success: false, error: 'Approve all required product and matching model views for each new product. The original reference photo cannot be posted.' });
       np.seo = seo;
       np.images = approved.map(x => ({ url: x.url, alt: seo.imageAlt }));

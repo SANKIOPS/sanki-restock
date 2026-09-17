@@ -74,7 +74,9 @@ function stylingPrompt(group,styling) {
       :selectedFit==='Oversized'||selectedFit==='Boxy / relaxed'
         ? `Use the selected ${selectedFit.toLowerCase()} cut, while keeping its visible seams and proportions faithful to the real reference.`
         :selectedFit==='Normal fit'?'Use a regular, clean fit with shoulder seams at the natural shoulder; do not turn it into an oversized or drop-shoulder garment.':'Match the garment silhouette and shoulder seams visible in the reference; do not assume an oversized or drop-shoulder cut.';
-  return `Style the model with ${pair}, ${shoes} and ${aesthetic} styling. ${fitRule} ${style.tuck==='Auto'?'Keep the featured garment unobstructed.':`Wear the top ${style.tuck.toLowerCase()}.`} ${extras.length?`Add only ${extras.join(', ')} when they do not hide the product. `:'No visible jewellery, hats, sunglasses, watches or bags. '}${bagRule} Supporting garments and accessories must never obscure or change the featured item.`;
+  const pairingRule=style.pair==='Straight trousers'?'The supporting trousers have a visibly straight leg from knee to hem; their colour may be ivory, cream, beige, tan or another quiet neutral. ':style.pair==='Baggy trousers'?'The supporting trousers have a visibly generous, baggy leg; do not turn them into straight or narrow trousers. ':'';
+  const shoeRule=style.shoes==='Leather loafers'?'Show classic loafer-shaped shoes, preferably dark brown or black; shoe colour is not the shoe type. ':'';
+  return `Style the model with ${pair}, ${shoes} and ${aesthetic} styling. ${pairingRule}${shoeRule}${fitRule} ${style.tuck==='Auto'?'Keep the featured garment unobstructed.':`Wear the top ${style.tuck.toLowerCase()}; make the waist/hem visible enough to verify that choice.`} ${extras.length?`Add only ${extras.join(', ')} when they do not hide the product. `:'No visible jewellery, hats, sunglasses, watches or bags. '}${bagRule} Supporting garments and accessories must never obscure or change the featured item.`;
 }
 
 function pilotTypes(group,hasBackReference=false) {
@@ -122,7 +124,7 @@ function seoCopyNeedsReview(seo,group) {
 
 function imagePrompt(group, type, styling, hasContinuityReference=false) {
   const facts = `${group.colour} ${group.productType}${retailFacts(group).fit ? `, ${retailFacts(group).fit}` : ''}`;
-  const common = `The reference shows the actual ${facts}. Preserve its exact colour, visible print, seams, neckline, sleeves, cut and length. Do not invent a logo, fabric composition, unseen back, pockets or details. One garment, no collage, text or watermark.`;
+  const common = `The reference shows the actual ${facts}. Treat the photograph as the garment authority if the purchase label conflicts with what is visibly shown. Preserve its exact colour, visible print, seams, neckline, sleeves, cut and length. The saved fit/style controls the model pose and garment silhouette only where the reference supports it; never invent a different shoulder construction. Do not invent a logo, fabric composition, unseen back, pockets or details. One garment, no collage, text or watermark.`;
   if (type === 'front') return `Create a clean, photorealistic product-only front catalogue photo on a warm ivory studio background. ${String(group.audience).toLowerCase()==='women'&&garmentCategory(group)==='upper'?'Show the true fitted silhouette and bust shaping of the fully opaque garment on an invisible female-form mannequin, with no visible skin or mannequin parts. ':''}${common}`;
   if (type === 'back') return `Create a clean, photorealistic product-only BACK catalogue photo on a white studio background. The reference is a real photo of the back of this garment. Preserve only details actually visible in that back reference; do not copy front artwork onto the back or invent unseen details. ${common}`;
   if (type === 'detail') return `Create a photorealistic close-up detail photo of the garment's FRONT, showing only details clearly visible in the reference. No model or invented stitching, labels or fabric composition. ${common}`;
@@ -135,7 +137,8 @@ function imagePrompt(group, type, styling, hasContinuityReference=false) {
   const resolvedStyle=normalizeStyling(styling,group);
   if(resolvedStyle.bagStyle==='Gender-matched bag')resolvedStyle.bagStyle=gender==='female'?'Structured handbag':'Minimal sling bag';
   const continuity=isThreeQuarter?(hasContinuityReference?'The FIRST reference image shows the matching front model photograph: use that exact person, outfit, trouser colour, trouser cut, shoes, accessories and location as a visual continuity anchor. The SECOND reference is the original garment photo: preserve the featured garment exactly. Rotate the same model to a 45-degree pose; do not change the trousers or add another outfit. Neither reference image should appear as a separate panel in the output.':'Maintain the same model identity, trouser colour, outfit and location as the separate matching front photo. Do not include that front photo in this output.'):'One model only, in one pose; do not create a before-and-after layout.';
-  return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. ${poseInstruction} The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
+  const artDirection=String(group.line||group.collection||'').toLowerCase().includes('casual')?'understated international old-money fashion editorial, natural daylight, refined stone architecture, quiet ivory and beige supporting palette, no loud props':'restrained editorial fashion photography that keeps the real product as the hero';
+  return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. Art direction: ${artDirection}. ${poseInstruction} The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. Follow every saved styling choice exactly: ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
 }
 
 function seoSchema() {
@@ -185,22 +188,25 @@ async function generateImage({key, group, source, continuitySource=null, type, s
 // response is deliberately small and structured so a failed/uncertain check
 // blocks approval without another image-generation charge or silent retry.
 function imageCheckSchema() {
-  return {type:'object',additionalProperties:false,required:['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','modelMatch','outfitContinuity','issues'],properties:{
-    garmentMatch:{type:'boolean'},singleFrame:{type:'boolean'},angleMatch:{type:'boolean'},
-    fitMatch:{type:'boolean'},pairMatch:{type:'boolean'},shoeMatch:{type:'boolean'},tuckMatch:{type:'boolean'},bagMatch:{type:'boolean'},
-    shadesMatch:{type:'boolean'},capMatch:{type:'boolean'},chainMatch:{type:'boolean'},modelMatch:{type:'boolean'},outfitContinuity:{type:'boolean'},
-    issues:{type:'array',items:{type:'string'}}
-  }};
+  const fields=['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'];
+  const finding={type:'object',additionalProperties:false,required:['status','evidence'],properties:{status:{type:'string',enum:['pass','fail','uncertain']},evidence:{type:'string'}}};
+  return {type:'object',additionalProperties:false,required:fields,properties:Object.fromEntries(fields.map(field=>[field,finding]))};
 }
 
-function evaluateImageCheck(check,type) {
+function evaluateImageCheck(check,type,styling={},group={}) {
   const modelView=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
   const side=type==='model-side'||type.startsWith('model-side-');
+  const style=normalizeStyling(styling,group);
   const required=['garmentMatch','singleFrame'];
-  if(modelView) required.push('angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','modelMatch');
+  if(modelView) required.push('angleMatch','fitMatch','pairMatch','modelMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch');
+  if(modelView&&style.shoes!=='Auto')required.push('shoeMatch');
+  if(modelView&&style.tuck!=='Auto'&&garmentCategory(group)==='upper')required.push('tuckMatch');
   if(side) required.push('outfitContinuity');
-  const failed=required.filter(field=>check?.[field]!==true);
-  return {status:failed.length?'needs-review':'pass',failed,issues:(Array.isArray(check?.issues)?check.issues:[]).map(x=>String(x).slice(0,180)).slice(0,8)};
+  const missing=required.filter(field=>!check?.[field]||!['pass','fail','uncertain'].includes(check[field].status));
+  const failed=required.filter(field=>check?.[field]?.status==='fail');
+  const uncertain=required.filter(field=>check?.[field]?.status==='uncertain').concat(missing);
+  const issues=failed.concat(uncertain).map(field=>`${field}: ${String(check?.[field]?.evidence||'Cannot verify from this image').slice(0,180)}`);
+  return {status:failed.length||uncertain.length?'needs-review':'pass',failed,uncertain,issues};
 }
 
 async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
@@ -208,18 +214,18 @@ async function verifyImage({key,group,source,generated,continuitySource=null,typ
   const isModel=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
   const checks={type,productColour:group.colour,productType:group.productType,originalFit:group.fit,
     chosenFit:style.fit,pair:style.pair,shoes:style.shoes,tuck:style.tuck,chain:style.chain,bag:style.bagStyle,bagColour:style.bagColour,
-    sunglasses:style.sunglasses,cap:style.capStyle,modelOrigin:style.modelOrigin,modelGender:type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':group.audience,
+    sunglasses:style.sunglasses,cap:style.capStyle,watch:style.watch,modelOrigin:style.modelOrigin,modelGender:type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':group.audience,
     femaleComplexion:style.femaleComplexion,maleComplexion:style.maleComplexion};
-  const prompt=`Independently inspect the original product photo, generated candidate, and optional matching front photo in that order. Check actual visible evidence against ${JSON.stringify(checks)}. The featured garment must retain its colour, neckline, sleeves and silhouette. singleFrame means exactly one photo/one person, no collage. For a model front, angleMatch means front-facing; for a three-quarter view, the body must be visibly rotated about 45 degrees, not merely a different front pose. fitMatch checks the requested garment fit, including natural shoulder when fitted or slim. pairMatch checks the selected trousers or other pairing, including baggy versus straight. shoeMatch checks selected shoes when not Auto; tuckMatch checks selected tuck when not Auto. bagMatch is false if ANY bag is visible when bag is None, or if a selected bag style or colour is wrong; shadesMatch is false if sunglasses are visible when unchecked. capMatch and chainMatch likewise reject unrequested accessories or a wrong selected style. modelMatch checks the requested male/female model and origin; complexion is subjective, so flag obvious mismatch but do not claim ethnicity or identity from appearance alone. When a matching front is supplied, outfitContinuity requires the same person, trousers, shoes and accessories. For product-only views, mark model-only checks true. If a required detail is not visible enough to judge, mark it false. Keep issues factual and brief; do not infer unseen details.`;
+  const prompt=`Independently inspect three images in this order: original product photo, generated candidate, then optional matching model-front photo. Compare visible evidence to ${JSON.stringify(checks)}. For EACH named finding return status pass, fail, or uncertain plus one short evidence sentence. Do not list generic complaints or mix criteria. Product garment must retain visible colour, neckline, sleeves and construction; if the purchase title or fit conflicts with the original photograph, the photograph wins. For a women's top, an internal 'muscle fit' label and selected fitted/slim silhouette are not by themselves a contradiction; compare the actual shoulder seam and cut. singleFrame means one continuous photo/one person, not a diptych. Front angle is front-facing; three-quarter means body visibly rotated about 45 degrees rather than only a different crop. For pairMatch judge the supporting TROUSER CUT by leg silhouette: straight, baggy or tailored. Off-white, beige or other neutral trouser COLOUR is not evidence that straight trousers are wrong. If the trouser silhouette is hidden, return uncertain, never fail. For shoeMatch judge visible SHOE SHAPE: loafers are loafers whether black or brown. Do not infer leather material from pixels; black loafers do NOT fail 'leather loafers'. For tuckMatch use only a clearly visible waist or hem; if hidden, uncertain, not fail. Check bag style/colour only when a bag is requested; if None, any bag fails. Check shades, cap, chain and watch against selected presence/absence; do not mention a missing cap if None was selected. modelMatch checks visible model count and apparent requested gender; do not infer nationality from a face or penalize a complexion difference that lighting could explain. When a matching front is supplied, outfitContinuity requires same visible model, trouser cut AND colour, shoes and accessories. For product-only views set all model-only findings to pass. If evidence is ambiguous, choose uncertain over fail. Report a failure only when the actual visual evidence contradicts the specific choice; do not judge one field by another field's colour or material.`;
   const content=[{type:'input_text',text:prompt},
     {type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'},
     {type:'input_image',image_url:`data:image/png;base64,${generated.toString('base64')}`,detail:'high'}];
   if(continuitySource)content.push({type:'input_image',image_url:`data:${continuitySource.mime};base64,${continuitySource.buf.toString('base64')}`,detail:'high'});
   const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
-    body:JSON.stringify({model,store:false,max_output_tokens:500,input:[{role:'user',content}],text:{format:{type:'json_schema',name:'sanki_image_check',strict:true,schema:imageCheckSchema()}}}),
+    body:JSON.stringify({model,store:false,max_output_tokens:1000,input:[{role:'user',content}],text:{format:{type:'json_schema',name:'sanki_image_check',strict:true,schema:imageCheckSchema()}}}),
     signal:AbortSignal.timeout(90000)});
   const body=await readApiResponse(response),check=JSON.parse(responseText(body));
-  return {...evaluateImageCheck(check,type),model,usage:body.usage||null};
+  return {...evaluateImageCheck(check,type,style,group),model,usage:body.usage||null};
 }
 
 async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=global.fetch}) {

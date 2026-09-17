@@ -144,28 +144,33 @@ test('existing image views can be regenerated separately or together without rew
 });
 
 test('visual checks reject mismatched outfit, accessories, angle or continuity',()=>{
-  const pass={garmentMatch:true,singleFrame:true,angleMatch:true,fitMatch:true,pairMatch:true,shoeMatch:true,tuckMatch:true,bagMatch:true,shadesMatch:true,capMatch:true,chainMatch:true,modelMatch:true,outfitContinuity:true,issues:[]};
-  assert.equal(pilot.evaluateImageCheck(pass,'model-side').status,'pass');
-  for(const field of ['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','modelMatch','outfitContinuity']) {
-    const result=pilot.evaluateImageCheck({...pass,[field]:false,issues:[field+' failed']},'model-side');
+  const fields=['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'];
+  const pass=Object.fromEntries(fields.map(field=>[field,{status:'pass',evidence:'Visible match'}]));
+  const styling={shoes:'Leather loafers',tuck:'Tucked in'};
+  assert.equal(pilot.evaluateImageCheck(pass,'model-side',styling,group).status,'pass');
+  for(const field of fields) {
+    const result=pilot.evaluateImageCheck({...pass,[field]:{status:'fail',evidence:field+' visibly wrong'}},'model-side',styling,group);
     assert.equal(result.status,'needs-review',field);
     assert.deepEqual(result.failed,[field]);
   }
-  assert.equal(pilot.evaluateImageCheck({...pass,bagMatch:false},'front').status,'pass');
-  assert.equal(pilot.evaluateImageCheck({garmentMatch:true},'model-front').status,'needs-review');
+  assert.equal(pilot.evaluateImageCheck({...pass,bagMatch:{status:'fail',evidence:'bag'}},'front',styling,group).status,'pass');
+  assert.equal(pilot.evaluateImageCheck({...pass,shoeMatch:{status:'fail',evidence:'shoes'}},'model-front',{},group).status,'pass');
+  assert.deepEqual(pilot.evaluateImageCheck({...pass,tuckMatch:{status:'uncertain',evidence:'Hem hidden'}},'model-front',styling,group).uncertain,['tuckMatch']);
+  assert.equal(pilot.evaluateImageCheck({garmentMatch:{status:'pass',evidence:'match'}},'model-front',styling,group).status,'needs-review');
 });
 
 test('independent visual check sends original, candidate and matching model front without retry',async()=>{
   let calls=0;
   const continuitySource={buf:Buffer.from('matching-front'),mime:'image/png'};
-  const allTrue={garmentMatch:true,singleFrame:true,angleMatch:true,fitMatch:true,pairMatch:true,shoeMatch:true,tuckMatch:true,bagMatch:true,shadesMatch:true,capMatch:true,chainMatch:true,modelMatch:true,outfitContinuity:true,issues:[]};
+  const allTrue=Object.fromEntries(['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'].map(field=>[field,{status:'pass',evidence:'Visible match'}]));
   const out=await pilot.verifyImage({key:'test-only',group,source,generated:Buffer.from('candidate'),continuitySource,type:'model-side',styling:{pair:'Baggy trousers',bagStyle:'None',sunglasses:false},fetchImpl:async(url,options)=>{
     calls++;assert.equal(url,'https://api.openai.com/v1/responses');
     const body=JSON.parse(options.body);
     assert.equal(body.store,false);
     assert.equal(body.text.format.type,'json_schema');
     assert.equal(body.input[0].content.filter(x=>x.type==='input_image').length,3);
-    assert.match(body.input[0].content[0].text,/baggy versus straight/);
+    assert.match(body.input[0].content[0].text,/Off-white, beige or other neutral trouser COLOUR is not evidence/);
+    assert.match(body.input[0].content[0].text,/black loafers do NOT fail/);
     return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(allTrue)}]}]})};
   }});
   assert.equal(calls,1);assert.equal(out.status,'pass');
@@ -176,7 +181,10 @@ test('purchase image approval and posting are gated by visual check, with reject
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
   assert.match(html,/Images held by visual check/);
   assert.match(html,/x\.qa\.status==='pass'/);
-  assert.match(server,/saved\.qa\.status!=='pass'/);
+  assert.match(html,/Owner review · accept/);
+  assert.match(server,/function imageCheckAccepted/);
+  assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/qa-review'/);
+  assert.match(server,/invalidateDependentSides\(images,type\)/);
   assert.match(server,/po\.qaRejected \|\| \{\}/);
   assert.match(server,/sourceFingerprint===currentFingerprint/);
   assert.match(server,/Generation stopped or lost contact/);
