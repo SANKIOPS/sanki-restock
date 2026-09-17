@@ -339,6 +339,10 @@
     var lookups = { products:{}, colours:{}, sizes:{} };
     var settings = {};
     var me = { isAdmin:false, role:'', username:'' };
+    function canStartPaidImages(){
+      var roles=(me.roles||[]).concat([me.role]).map(function(role){return String(role||'').toLowerCase();});
+      return !!me.isAdmin || roles.some(function(role){return role==='owner'||role==='admin'||role==='inventory';});
+    }
     var pendingPhotoUrl = '';       // uploaded photo for the line being added
     var pendingInvoice = null;      // original vendor bill retained with the PO
     var lastReceive = null;         // last receive preview (for admin commit)
@@ -1653,6 +1657,8 @@
       h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">'+(india?'₹/pc':'¥/pc')+'</th><th>Weight g/pc '+((posted||india)?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
       (po.lines||[]).forEach(function(l,i){
         var cls = l.classification==='EXISTING' ? '<span class="pill exist">restock</span>' : '<span class="pill new">new</span>';
+        if(l.receiptAdded) cls+=' <span class="pill" style="background:#e0f2fe;color:#075985">Extra on arrival</span>';
+        else if(Number(l.qty)===0 && l.ordered && Number(l.ordered.qty)>0) cls+=' <span class="pill" style="background:#fef3c7;color:#92400e">Not received</span>';
         var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
         var lw=(Number(l.weightGrams)||0)*(Number(l.qty)||0);
         var photoCell=(l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'">':'<span class="muted" style="font-size:11px">none</span>')+
@@ -1687,7 +1693,7 @@
           '<td style="min-width:150px">'+designCell+'</td>'+
           '<td class="mono" style="min-width:120px">'+skuCell+'</td>'+
           '<td style="min-width:150px">'+pcsCell+'</td><td>'+cls+'</td>'+
-          '<td>'+(posted?esc(l.qty):'<input type="number" min="0" step="1" data-q="'+i+'" value="'+(Number(l.qty)||0)+'" class="rcell'+(qtyDiff?' diffcell':'')+'" style="width:70px"'+(qtyDiff?(' title="'+esc(diffTitle(l,'qty'))+'"'):' title="Actual received qty — edit if it differs from ordered"')+'>')+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
+          '<td>'+(posted?esc(l.qty):'<input type="number" min="0" step="1" data-q="'+i+'" value="'+(Number(l.qty)||0)+'" class="rcell'+(qtyDiff?' diffcell':'')+'" style="width:70px"'+(qtyDiff?(' title="'+esc(diffTitle(l,'qty'))+'"'):' title="Actual received qty — edit if it differs from ordered"')+'><div class="muted" style="font-size:10px">Billed '+esc(l.ordered&&l.ordered.qty!=null?l.ordered.qty:l.qty)+'</div>'+(Number(l.qty)>0?'<button type="button" class="btn ghost sm" data-notreceived="'+i+'" style="margin-top:4px;white-space:nowrap">Did not arrive</button>':''))+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
           '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" data-qty="'+(Number(l.qty)||0)+'" value="'+(l.weightGrams||'')+'" style="width:90px"'+(india?' placeholder="optional"':'')+'>')+'</td>'+
           '<td class="money" data-lw="'+i+'">'+(lw?(lw.toLocaleString('en-IN')+' g'):'—')+'</td></tr>';
       });
@@ -1695,6 +1701,16 @@
       var tq=(po.lines||[]).reduce(function(s,l){ return s+(Number(l.qty)||0); },0);
       h+='<tr class="totalrow"><td colspan="5" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600" id="totQty">'+tq+'</td><td></td><td></td><td class="money" id="totWeight" style="font-weight:700">'+(tw?(tw.toLocaleString('en-IN')+' g / '+(tw/1000).toFixed(2)+' kg'):'—')+'</td></tr>';
       h+='</tbody></table>';
+      if(!posted) h+='<div style="margin-top:10px"><button type="button" class="btn ghost sm" id="showReceiptAdd">+ Add product received but not on bill</button><span class="muted" style="font-size:12px;margin-left:8px">The original invoice stays attached. Missing lines remain at zero; only received pieces go to Shopify.</span></div>'+
+        '<div id="receiptAddForm" class="hidden" style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--ivory2)"><b>Unexpected product received</b><div class="muted" style="font-size:12px;margin:4px 0 10px">Add one SKU/size row at a time. This is recorded as an arrival difference, not added to the original bill.</div><div class="lineform">'+
+        '<div class="fld wide"><label>Design name</label><input data-ra="designName" placeholder="Product name"></div><div class="fld"><label>Vendor product code</label><input data-ra="designCode"></div>'+
+        '<div class="fld"><label>Product</label><select data-ra="productType" id="receiptAddType">'+objOpts(lookups.products,'')+'</select></div><div class="fld"><label>Colour</label><select data-ra="colour">'+objOpts(lookups.colours,'')+'</select></div>'+
+        '<div class="fld"><label>Fit</label><select data-ra="fit" id="receiptAddFit"><option value="">— choose product first —</option></select></div><div class="fld"><label>Size</label><select data-ra="sizeLabel" id="receiptAddSize"><option value="">— choose product first —</option></select></div>'+
+        '<div class="fld"><label>China size (if used)</label><select data-ra="chinaSize"><option value="">—</option>'+optList(CHINA_SIZES,'')+'</select></div><div class="fld"><label>Gender</label><select data-ra="audience">'+optList(['Men','Women','Unisex'],'Men')+'</select></div>'+
+        '<div class="fld"><label>Actual pieces</label><input data-ra="qty" type="number" min="1" step="1" value="1"></div><div class="fld"><label>'+(india?'₹':'¥')+' per piece</label><input data-ra="perPcsYuan" type="number" min="0.01" step="0.01"></div>'+
+        '<div class="fld"><label>Weight g/piece</label><input data-ra="weightGrams" type="number" min="0" step="1"></div><div class="fld"><label>SKU (optional)</label><input data-ra="sku" placeholder="Auto if blank"></div>'+
+        '<div class="fld wide"><label>Original product photo</label><input id="receiptAddPhoto" type="file" accept="image/*"><span class="muted" id="receiptAddPhotoStatus">Required for new products</span></div></div>'+
+        '<div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button type="button" class="btn sm" id="saveReceiptAdd">Save extra product</button><button type="button" class="btn ghost sm" id="cancelReceiptAdd">Cancel</button><span id="receiptAddStatus" role="status" class="muted"></span></div></div>';
       if(posted) h+=purchaseCostPanel(po);
       var nDiff=poDiffCount(po);
       if(nDiff) h+='<div class="diffnote">⚠ <b>'+nDiff+' line'+(nDiff===1?'':'s')+'</b> differ'+(nDiff===1?'s':'')+' from what was ordered — the highlighted cells were corrected after ordering. Hover a highlighted cell to see the original value.</div>';
@@ -1715,7 +1731,7 @@
       if(me.canManage && !posted){
         h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
            '<p class="sub">Choose the entire PO or tick specific products. Confirmed details and original photos stay unchanged; new images and SEO are drafts for review. No back view is invented without a real back photo.</p>'+
-           ((me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0)?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn" id="generatePoBtn">Generate entire PO (paid)</button><button class="btn ghost" id="generateSelectedBtn">Generate selected (paid)</button><label class="muted" style="display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="selectAllStudio"> Select all</label><span class="muted" id="selectedStudioCount">0 selected</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><b style="font-size:12px">Outfit for selected</b><label class="muted" style="font-size:12px">Uppers with <select id="bulkUpperPair"><option>Auto</option><option>Baggy trousers</option><option>Straight trousers</option><option>Tailored trousers</option></select></label><label class="muted" style="font-size:12px">Bottoms with <select id="bulkLowerPair"><option>Auto</option><option>Plain white tee</option><option>Plain black tee</option><option>Button-up shirt</option></select></label><label class="muted" style="font-size:12px">Look <select id="bulkAesthetic"><option>Auto</option><option>Limestone estate</option><option>Minimal</option><option>Streetwear</option><option>Editorial</option></select></label><label class="muted" style="font-size:12px"><input type="checkbox" id="bulkBag"> Gender-matched bag</label><button class="btn ghost sm" id="applyBulkStyling">Apply to selected</button></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
+           (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button class="btn" id="generatePoBtn">Generate entire PO (paid)</button><button class="btn ghost" id="generateSelectedBtn">Generate selected (paid)</button><label class="muted" style="display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="selectAllStudio"> Select all</label><span class="muted" id="selectedStudioCount">0 selected</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px"><b style="font-size:12px">Outfit for selected</b><label class="muted" style="font-size:12px">Uppers with <select id="bulkUpperPair"><option>Auto</option><option>Baggy trousers</option><option>Straight trousers</option><option>Tailored trousers</option></select></label><label class="muted" style="font-size:12px">Bottoms with <select id="bulkLowerPair"><option>Auto</option><option>Plain white tee</option><option>Plain black tee</option><option>Button-up shirt</option></select></label><label class="muted" style="font-size:12px">Look <select id="bulkAesthetic"><option>Auto</option><option>Limestone estate</option><option>Minimal</option><option>Streetwear</option><option>Editorial</option></select></label><label class="muted" style="font-size:12px"><input type="checkbox" id="bulkBag"> Gender-matched bag</label><button class="btn ghost sm" id="applyBulkStyling">Apply to selected</button></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
       }
       h+='<div id="receiveHost"></div>';
@@ -1723,6 +1739,42 @@
       el('poDetailHost').scrollIntoView({behavior:'smooth'});
       if(me.canManage && !posted) initStudioFor(po.id);
       if(!posted){
+        var addToggle=el('showReceiptAdd'),addForm=el('receiptAddForm');
+        if(addToggle) addToggle.onclick=function(){addForm.classList.remove('hidden');addToggle.classList.add('hidden');};
+        var addCancel=el('cancelReceiptAdd');
+        if(addCancel) addCancel.onclick=function(){addForm.classList.add('hidden');addToggle.classList.remove('hidden');};
+        var addType=el('receiptAddType');
+        if(addType) addType.onchange=function(){
+          el('receiptAddFit').innerHTML='<option value="">— choose —</option>'+optList(fitsFor(addType.value),'');
+          el('receiptAddSize').innerHTML='<option value="">— choose —</option>'+optList(sizesFor(addType.value),'');
+        };
+        var addSave=el('saveReceiptAdd');
+        if(addSave) addSave.onclick=async function(){
+          var raw={},file=el('receiptAddPhoto').files&&el('receiptAddPhoto').files[0],status=el('receiptAddStatus');
+          Array.prototype.forEach.call(addForm.querySelectorAll('[data-ra]'),function(input){raw[input.getAttribute('data-ra')]=input.value.trim();});
+          if(!raw.designName||!raw.designCode||!raw.productType||!raw.colour||!raw.fit||!raw.sizeLabel||!(Number(raw.qty)>0)||!(Number(raw.perPcsYuan)>0)||!file){status.textContent='Complete all required fields and choose an original photo.';return;}
+          addSave.disabled=true;status.textContent='Uploading photo and saving…';
+          try{
+            var form=new FormData();form.append('photo',file);
+            var uploaded=await fetch('/api/procurement/photo',{method:'POST',body:form}).then(readJson);
+            if(!uploaded.success)throw new Error(uploaded.error||'Photo upload failed.');
+            raw.photoUrl=uploaded.url;
+            var saved=await fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/receipt-add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({line:raw})}).then(readJson);
+            if(!saved.success)throw new Error(saved.error||'Could not add received product.');
+            loadPos();openPoId=null;openPo(po.id);
+          }catch(error){addSave.disabled=false;status.textContent=error.message;}
+        };
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-notreceived]'),function(button){
+          button.onclick=function(){
+            var index=Number(button.getAttribute('data-notreceived')),line=(po.lines||[])[index];
+            if(!confirm('Mark '+(line.sku||line.designName||'this product')+' as not received? Its actual quantity becomes zero; the billed line remains in this PO. Save any other edits first.'))return;
+            button.disabled=true;
+            fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/receipt-missing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineIndex:index})}).then(readJson).then(function(d){
+              if(!d.success)throw new Error(d.error||'Could not mark the product missing.');
+              loadPos();openPoId=null;openPo(po.id);
+            }).catch(function(error){button.disabled=false;alert(error.message);});
+          };
+        });
         el('computeBtn').onclick=function(){ computeReceive(po.id); };
         var scb=el('saveCorrBtn'); if(scb) scb.onclick=function(){ saveCorrections(po.id); };
         // live-highlight a field the moment it's edited away from what was ordered
@@ -1921,8 +1973,8 @@
     var openaiPilotConfig=null;
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
-    // ── Fit / length (affects EVERY shot — the strongest lever for the cut) ──
-    var FIT_UPPER=['Auto','Oversized','Boxy / relaxed','Normal fit','Slim fit'];
+    // ── Fit / length (saved per product and used in paid model shots) ──
+    var FIT_UPPER=['Auto','Fitted','Normal fit','Boxy / relaxed','Oversized','Slim fit'];
     var FIT_LOWER=['Auto','Shorts / half','Three-quarter (3/4)','Ankle length','Full length'];
     // ── Simple styling dropdowns (only affect the 2 model shots) ──
     var PAIR_UPPER=['Auto','Baggy trousers','Straight trousers','Tailored trousers'];
@@ -1931,6 +1983,8 @@
     var SHOES=['Auto','Leather loafers','Minimal white sneakers','Ballet flats','Classic heels'];
     var CAPS=['None','Classic linen cap','Refined baker-boy cap'];
     var BAGS=['None','Gender-matched bag','Structured handbag','Minimal sling bag'];
+    var BAG_COLOURS=['Auto','Beige','Tan','Ivory','Brown','Black'];
+    var MODEL_ORIGINS=['Indian','International'];
     var TUCK=['Auto','Tucked in','Untucked'];
     var CHAIN=['None','Silver chain','Gold chain'];
     var COMPLEXION=['Fair','Medium','Deep'];
@@ -1942,8 +1996,8 @@
       if(lowers.indexOf(pt)>=0) return 'lower';
       return 'other';
     }
-    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={fit:'Auto',pair:'Auto',aesthetic:'Auto',tuck:'Auto',chain:'None',shoes:'Auto',capStyle:'None',bagStyle:'None',femaleComplexion:'Medium',maleComplexion:'Medium',sunglasses:false,watch:false}); }
-    function paidStylingOf(np){ var s=stylingOf(np); return {fit:s.fit,pair:s.pair,aesthetic:s.aesthetic,tuck:s.tuck,chain:s.chain,shoes:s.shoes,capStyle:s.capStyle,bagStyle:s.bagStyle,femaleComplexion:s.femaleComplexion,maleComplexion:s.maleComplexion,sunglasses:!!s.sunglasses,watch:!!s.watch}; }
+    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={fit:'Auto',pair:'Auto',aesthetic:'Auto',tuck:'Auto',chain:'None',shoes:'Auto',capStyle:'None',bagStyle:'None',bagColour:'Auto',modelOrigin:'Indian',femaleComplexion:'Medium',maleComplexion:'Medium',sunglasses:false,watch:false}); }
+    function paidStylingOf(np){ var s=stylingOf(np); return {fit:s.fit,pair:s.pair,aesthetic:s.aesthetic,tuck:s.tuck,chain:s.chain,shoes:s.shoes,capStyle:s.capStyle,bagStyle:s.bagStyle,bagColour:s.bagColour||'Auto',modelOrigin:s.modelOrigin||'Indian',femaleComplexion:s.femaleComplexion,maleComplexion:s.maleComplexion,sunglasses:!!s.sunglasses,watch:!!s.watch}; }
     function saveStudioStyling(np){
       function note(message){var card=(lastReceive&&lastReceive.newProducts||[]).findIndex(function(x){return x.key===np.key;}),node=el('scard'+card)&&el('scard'+card).querySelector('[data-style-message]');if(node)node.textContent=message;}
       var previous=studio.styleSaves[np.key]||Promise.resolve();
@@ -1958,13 +2012,18 @@
     function fitOf(np){ var f=stylingOf(np).fit; return (f&&f!=='Auto')?f:''; }
     function composeStyling(np){
       var s=stylingOf(np), parts=[], acc=[];
+      parts.push((s.modelOrigin==='International'?'international non-Indian':'Indian')+' model');
       if(s.pair && s.pair!=='Auto') parts.push('paired with '+s.pair.toLowerCase());
       if(s.tuck && s.tuck!=='Auto') parts.push(garmentCat(np.productType)==='upper'?('worn '+s.tuck.toLowerCase()):('with the top '+s.tuck.toLowerCase()));
       if(s.chain && s.chain!=='None') acc.push('a '+s.chain.toLowerCase());
       if(s.capStyle && s.capStyle!=='None') acc.push('a '+s.capStyle.toLowerCase());
       if(s.sunglasses) acc.push('elegant shades');
       if(s.watch) acc.push('a watch');
-      if(s.bagStyle && s.bagStyle!=='None') acc.push(s.bagStyle==='Gender-matched bag'?(np.audience==='Women'?'a structured handbag':np.audience==='Men'?'a minimal sling bag':'a gender-appropriate bag'):'a '+s.bagStyle.toLowerCase());
+      if(s.bagStyle && s.bagStyle!=='None'){
+        var bag=s.bagStyle==='Gender-matched bag'?(np.audience==='Women'?'a structured handbag':np.audience==='Men'?'a minimal sling bag':'a gender-appropriate bag'):'a '+s.bagStyle.toLowerCase();
+        if(s.bagColour&&s.bagColour!=='Auto')bag=bag.replace(/^a /,'a '+s.bagColour.toLowerCase()+' ');
+        acc.push(bag);
+      }
       if(s.shoes && s.shoes!=='Auto') parts.push('with '+s.shoes.toLowerCase());
       if(s.aesthetic && s.aesthetic!=='Auto') parts.push(s.aesthetic.toLowerCase()+' styling');
       if(acc.length) parts.push('accessorised with '+(acc.length>1?acc.slice(0,-1).join(', ')+' and '+acc[acc.length-1]:acc[0]));
@@ -2142,7 +2201,7 @@
         '<div style="display:flex;align-items:center;gap:10px"><input type="checkbox" data-selectproduct="'+i+'" aria-label="Select '+esc(np.designName||np.designCode||'product')+' for generation"'+(studio.selected[np.key]?' checked':'')+'>'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div>'+(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> '+(existingPaidViews.length?'<button class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>'+
+        '<div>'+(canStartPaidImages()?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> '+(existingPaidViews.length?'<button class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>'+
         '<div data-pilot-message role="status" style="font-size:12px;min-height:18px;margin:6px 0;color:var(--emerald-d)">'+attemptNote+'</div>';
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
@@ -2170,21 +2229,23 @@
       var fitOpts=cat==='upper'?FIT_UPPER:(cat==='lower'?FIT_LOWER:null);
       var fitRow=fitOpts?('<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
         sel('fit','Fit / length',fitOpts,s.fit)+
-        '<span class="muted" style="font-size:11px">Manual/Gemini setting; paid OpenAI images use the saved product fit</span></div>'):'';
+        '<span class="muted" style="font-size:11px">Used for paid model photos. Fitted keeps shoulder seams at the natural shoulder; Auto follows the saved product fit and reference.</span></div>'):'';
       var pair='<div class="studio-controls"><div class="studio-controls-title">Outfit &amp; setting · applies to model photos</div><div class="studio-controls-row">'+
         (cat!=='other'?sel('pair','Pair with',pairOpts,s.pair):'')+
         sel('aesthetic','Look',AESTHETIC,s.aesthetic)+
         sel('tuck','Tuck',TUCK,s.tuck)+
-        sel('shoes','Shoes',SHOES,s.shoes)+'</div><div class="studio-controls-title" style="margin-top:12px">Indian model complexion</div><div class="studio-controls-row">'+
+        sel('shoes','Shoes',SHOES,s.shoes)+'</div><div class="studio-controls-title" style="margin-top:12px">Model casting</div><div class="studio-controls-row">'+
+        sel('modelOrigin','Model origin',MODEL_ORIGINS,s.modelOrigin)+
         sel('maleComplexion','Male model',COMPLEXION,s.maleComplexion)+
         sel('femaleComplexion','Female model',COMPLEXION,s.femaleComplexion)+
         '</div><div class="muted" style="font-size:11px;margin-top:5px">Only the complexion for the generated model is used; unisex uses both.</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
-        sel('chain','Chain',CHAIN,s.chain)+sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+
+        sel('chain','Chain',CHAIN,s.chain)+sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+sel('bagColour','Bag colour',BAG_COLOURS,s.bagColour)+
         chk('sunglasses','Elegant shades',s.sunglasses)+chk('watch','Watch',s.watch)+
-        '</div><div class="muted" style="font-size:11px;margin-top:8px">'+(np.line==='casuals'?'Casuals defaults to an Indian model at a limestone estate, with understated old-money styling. ':'')+'Accessories are optional; none should hide the garment.</div><div data-style-message role="status" class="muted" style="font-size:11px;margin-top:5px">Each change is saved for this product before whole-PO generation.</div></div>';
-      var grid='<div class="studio-controls-title" style="margin-top:12px">Five photo slots · source is not posted; back needs a real reference</div><div class="muted" style="font-size:11px;margin:0 0 7px">Three-quarter view uses the matching front model image to keep the same person and trousers. If both are wrong, regenerate the product images together; if only the angle is wrong, approve a good front image first.</div><div class="studio-photo-grid">';
+        '</div><div class="muted" style="font-size:11px;margin-top:8px">'+(np.line==='casuals'?'Casuals defaults to a limestone-estate setting and understated old-money styling. ':'')+'With light neutral outfits, Auto chooses a beige or tan bag. Accessories must not hide the garment.</div><div data-style-message role="status" class="muted" style="font-size:11px;margin-top:5px">Each change is saved for this product. Existing images do not change until you regenerate them.</div></div>';
+      var grid='<div class="studio-controls-title" style="margin-top:12px">Five photo slots · source is not posted; back needs a real reference</div><div class="muted" style="font-size:11px;margin:0 0 7px">Three-quarter view uses the matching front model image to keep the same person and trousers. If model casting or outfit changes, regenerate the product images together; if only the angle is wrong, approve a good front image first.</div><div class="studio-photo-grid">';
       var hasBackRef=!!studio.backRefs[np.key];
-      [['original','1 · Original references · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(np.audience==='Unisex'?[['female','4a · Indian female front'],['model-side-female','5a · Female three-quarter'],['male','4b · Indian male front'],['model-side-male','5b · Male three-quarter']]:[['model-front','4 · Styled Indian model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
+      var modelLabel=s.modelOrigin==='International'?'International':'Indian';
+      [['original','1 · Original references · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(np.audience==='Unisex'?[['female','4a · '+modelLabel+' female front'],['model-side-female','5a · Female three-quarter'],['male','4b · '+modelLabel+' male front'],['model-side-male','5b · Male three-quarter']]:[['model-front','4 · Styled '+modelLabel+' model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         // "change back photo" link (only for the back slot once a ref exists)
         var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
@@ -2209,7 +2270,7 @@
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
               '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.approved?'Approved — click to UNDO':'Approve this photo')+'" style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
-              (t[0]==='original'?'':(me.isAdmin||me.role==='owner'||(me.roles||[]).indexOf('owner')>=0?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>')
+              (t[0]==='original'?'':(canStartPaidImages()?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>')
              :empty)+
           '</div>';
       });
@@ -2300,7 +2361,7 @@
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ if(confirm('This calls the separately billed Anthropic API. Continue?'))genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
-      Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ stylingOf(np)[sel.getAttribute('data-sty')]=sel.value;saveStudioStyling(np).catch(function(){}); }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ var field=sel.getAttribute('data-sty');stylingOf(np)[field]=sel.value;saveStudioStyling(np).then(function(){if(field==='modelOrigin')rerenderCard(i);}).catch(function(){}); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-styck]'),function(cb){ cb.onchange=function(){ stylingOf(np)[cb.getAttribute('data-styck')]=cb.checked;saveStudioStyling(np).catch(function(){}); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-backup]'),function(inp){ inp.onchange=function(){ uploadBackPhoto(np,i,inp.files&&inp.files[0]); }; });
     }

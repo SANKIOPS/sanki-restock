@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, parseLocalInvoiceText, genSeo } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, genSeo } = require('../modules/procurement');
 
 test('listing copy does not repeat the product type and includes a display name', () => {
   const seo = genSeo({ designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'Pink', fit: 'Oversized', audience: 'Unisex', sizeLabels: ['FS'] });
@@ -107,6 +107,19 @@ test('Nida-style Inventory users can call the complete Purchases workflow', () =
   assert.equal(canManagePurchases({ user: { role: 'sales', roles: ['sales'] } }), false);
 });
 
+test('inventory can start paid image generation, without granting it to other staff roles', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.equal(canStartPaidPilot({ user: { role: 'inventory', roles: ['inventory'] } }), true);
+  assert.equal(canStartPaidPilot({ user: { role: 'owner', roles: ['owner'] } }), true);
+  assert.equal(canStartPaidPilot({ user: { role: 'admin' } }), true);
+  assert.equal(canStartPaidPilot({ user: { role: 'procurement', roles: ['procurement'] } }), false);
+  assert.equal(canStartPaidPilot({ user: { role: 'sales', roles: ['sales'] } }), false);
+  assert.match(html, /function canStartPaidImages\(\)/);
+  assert.match(html, /role==='owner'\|\|role==='admin'\|\|role==='inventory'/);
+  assert.match(html, /canStartPaidImages\(\)\?'<button class="btn sm" data-openai-pilot=/);
+  assert.match(html, /canStartPaidImages\(\)\?'<button class="btn ghost sm" data-paid-regen=/);
+});
+
 test('Purchases Summary has a category-first PO explorer plus the complete history', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   assert.match(html, /Purchase history/);
@@ -172,4 +185,17 @@ test('audience and fit can be corrected during purchase audit', () => {
   assert.match(html, /edSelect\(l,'fit'/);
   assert.match(js, /ORDERED_FIELDS = \[[^\]]*'audience'/);
   assert.match(js, /LINE_EDIT_FIELDS = \[[^\]]*'audience'/);
+});
+
+test('receipt can record missing and extra products without deleting the billed line', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(html, /Did not arrive/);
+  assert.match(html, /Add product received but not on bill/);
+  assert.match(html, /Billed '\+esc\(l\.ordered/);
+  assert.match(js, /router\.post\('\/api\/procurement\/pos\/:id\/receipt-missing'/);
+  assert.match(js, /line\.qty = 0/);
+  assert.match(js, /router\.post\('\/api\/procurement\/pos\/:id\/receipt-add'/);
+  assert.match(js, /line\.ordered = \{ \.\.\.orderedSnapshot\(line\), qty: 0 \}/);
+  assert.match(js, /const receivedLines = \(po\.lines \|\| \[\]\)\.filter\(line => num\(line\.qty\) > 0\)/);
 });
