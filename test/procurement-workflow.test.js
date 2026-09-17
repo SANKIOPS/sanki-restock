@@ -173,3 +173,16 @@ test('audience and fit can be corrected during purchase audit', () => {
   assert.match(js, /ORDERED_FIELDS = \[[^\]]*'audience'/);
   assert.match(js, /LINE_EDIT_FIELDS = \[[^\]]*'audience'/);
 });
+
+test('receipt can record missing and extra products without deleting the billed line', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(html, /Did not arrive/);
+  assert.match(html, /Add product received but not on bill/);
+  assert.match(html, /Billed '\+esc\(l\.ordered/);
+  assert.match(js, /router\.post\('\/api\/procurement\/pos\/:id\/receipt-missing'/);
+  assert.match(js, /line\.qty = 0/);
+  assert.match(js, /router\.post\('\/api\/procurement\/pos\/:id\/receipt-add'/);
+  assert.match(js, /line\.ordered = \{ \.\.\.orderedSnapshot\(line\), qty: 0 \}/);
+  assert.match(js, /const receivedLines = \(po\.lines \|\| \[\]\)\.filter\(line => num\(line\.qty\) > 0\)/);
+});

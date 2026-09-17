@@ -1409,7 +1409,7 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     // previewing costs during the advance/lead-time stage never mis-marks a PO.
     saveStore(s);
     const preview = await computePreview(s, {
-      lines: po.lines, vendor: po.vendor,
+      lines: po.lines.filter(line => num(line.qty) > 0), vendor: po.vendor,
       exRate: po.exRate, freightPerGram: po.freightPerGram,
       origin: po.origin, transportTotal: po.transportTotal
     });
@@ -1470,6 +1470,65 @@ router.post('/api/procurement/pos/:id/line-photo', (req, res) => {
   po.lines[i].photoUrl = url;
   saveStore(s);
   res.json({ success: true, lineIndex: i, url: po.lines[i].photoUrl });
+});
+
+// Reconcile the physical delivery without rewriting the vendor's bill. A
+// missing line remains in the PO at zero received pieces; an extra line gets
+// an ordered baseline of zero and its own audit entry. Neither action writes
+// to Shopify until the normal received/approved posting gate.
+router.post('/api/procurement/pos/:id/receipt-missing', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+  const s = loadStore(), po = s.pos[req.params.id], index = Number((req.body || {}).lineIndex);
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
+  if (!Number.isInteger(index) || index < 0 || index >= (po.lines || []).length)
+    return res.status(400).json({ success: false, error: 'Choose a valid bill line.' });
+  const line = po.lines[index], before = num(line.qty);
+  if (!line.ordered || typeof line.ordered !== 'object') line.ordered = orderedSnapshot(line);
+  line.qty = 0;
+  po.receiptHistory = Array.isArray(po.receiptHistory) ? po.receiptHistory : [];
+  po.receiptHistory.push({ action: 'not-received', lineIndex: index, sku: line.sku,
+    before, after: 0, at: new Date().toISOString(), by: (req.user || {}).username || 'system' });
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req) });
+});
+
+router.post('/api/procurement/pos/:id/receipt-add', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    const s = loadStore(), po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+    if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
+    const raw = normalizeLine((req.body || {}).line || {}, { vendor: po.vendor });
+    if (!raw.designName || !raw.designCode || !raw.productType || !raw.colour || !raw.sizeLabel || !raw.audience || !raw.fit ||
+        !Number.isInteger(raw.qty) || raw.qty <= 0 || !Number.isFinite(raw.perPcsYuan) || raw.perPcsYuan <= 0)
+      return res.status(400).json({ success: false, error: 'Complete the product, colour, size, fit, audience, positive quantity and unit cost.' });
+    if (!raw.photoUrl.startsWith('/api/procurement/photo/') || !readStoredPhoto(raw.photoUrl))
+      return res.status(400).json({ success: false, error: 'Upload a readable original product photo first.' });
+    const preview = await computePreview(s, { lines: [raw], vendor: po.vendor, origin: po.origin,
+      exRate: po.exRate, freightPerGram: po.freightPerGram, transportTotal: po.transportTotal });
+    const line = preview.lines[0];
+    if (line.skuError || !line.sku) return res.status(400).json({ success: false, error: line.skuError || 'Could not assign a SKU.' });
+    if ((po.lines || []).some(existing => String(existing.sku || '').toUpperCase() === line.sku))
+      return res.status(409).json({ success: false, error: 'This SKU is already on the PO. Correct its received quantity instead.' });
+    // The vendor bill had zero of this article; the actual delivery has qty.
+    line.ordered = { ...orderedSnapshot(line), qty: 0 };
+    line.receiptAdded = { at: new Date().toISOString(), by: (req.user || {}).username || 'system' };
+    po.lines = Array.isArray(po.lines) ? po.lines : [];
+    po.lines.push(line);
+    po.receiptHistory = Array.isArray(po.receiptHistory) ? po.receiptHistory : [];
+    po.receiptHistory.push({ action: 'added', lineIndex: po.lines.length - 1, sku: line.sku,
+      before: 0, after: line.qty, at: line.receiptAdded.at, by: line.receiptAdded.by });
+    for (const np of preview.newProducts) {
+      if (!(po.seoDraft || []).some(d => d.key === np.key)) {
+        po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
+        po.seoDraft.push({ key: np.key, designCode: np.designCode, colour: np.colour,
+          productType: np.productType, seo: np.seo, seoApproved: false, source: 'product-details' });
+      }
+    }
+    saveStore(s);
+    res.json({ success: true, po: publicPo(po, req), lineIndex: po.lines.length - 1, sku: line.sku });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ── Inline line corrections during receiving/audit (pre-post) ────────
@@ -1584,8 +1643,11 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     if (Array.isArray(b.lines)) {
       // Carry each line's frozen "ordered" baseline across a full-form edit. The
       // preview rebuild drops unknown fields, so we re-attach by (stable) SKU.
-      const prevOrdered = {};
-      (po.lines || []).forEach(l => { if (l.sku && l.ordered) prevOrdered[l.sku] = l.ordered; });
+      const prevOrdered = {}, prevReceiptAdded = {};
+      (po.lines || []).forEach(l => {
+        if (l.sku && l.ordered) prevOrdered[l.sku] = l.ordered;
+        if (l.sku && l.receiptAdded) prevReceiptAdded[l.sku] = l.receiptAdded;
+      });
       const preparedLines = b.lines.map((raw, idx) => {
         const incoming = { ...raw };
         const old = (po.lines || [])[idx];
@@ -1610,7 +1672,8 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
         classification: l.classification,
         // Preserve the frozen ordered baseline: carried on the line, else matched
         // by SKU from before the edit, else seeded fresh so tracking still starts.
-        ordered: (l.ordered && typeof l.ordered === 'object') ? l.ordered : (prevOrdered[l.sku] || orderedSnapshot(l))
+        ordered: (l.ordered && typeof l.ordered === 'object') ? l.ordered : (prevOrdered[l.sku] || orderedSnapshot(l)),
+        receiptAdded: prevReceiptAdded[l.sku] || null
       }));
       po.seoDraft = (preview.newProducts || []).map(np => ({ key: np.key, designCode: np.designCode, colour: np.colour, productType: np.productType, seo: np.seo }));
     } else if (Array.isArray(b.removeLineIndexes) && b.removeLineIndexes.length) {
@@ -1662,7 +1725,7 @@ router.delete('/api/procurement/pos/:id', (req, res) => {
 // photo to feed the image model. Only NEW products need images (EXISTING ones
 // already have a Shopify listing we only add stock to).
 async function newGroupsOf(s, po) {
-  const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
+  const preview = await computePreview(s, { lines: (po.lines || []).filter(line => num(line.qty) > 0), vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
   return (preview.newProducts || []).map(np => {
     const line = (po.lines || []).find(l => groupKey(l) === np.key && (l.photoUrl || '').trim());
     const details = (po.lines || []).find(l => groupKey(l) === np.key) || {};
@@ -2089,7 +2152,11 @@ router.post('/api/procurement/commit', async (req, res) => {
     if (po.status !== 'received') return res.status(409).json({ success: false, error: 'Purchase must be received and not already posted or partially posted.' });
     const warehouseLocationId = String(s.settings.warehouseLocationId || '');
     if (!warehouseLocationId) return res.status(400).json({ success: false, error: 'Warehouse location not set — save it in Settings first.' });
-    const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate,
+    // Zero-quantity bill lines stay in the PO for audit, but never create a
+    // Shopify product/variant or adjust existing stock.
+    const receivedLines = (po.lines || []).filter(line => num(line.qty) > 0);
+    if (!receivedLines.length) return res.status(400).json({ success: false, error: 'No received pieces to post.' });
+    const preview = await computePreview(s, { lines: receivedLines, vendor: po.vendor, exRate: po.exRate,
       freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     if (preview.counts.errors || preview.counts.ambiguous) return res.status(400).json({ success: false, error: 'Fix SKU or product-group errors before posting.' });
     const conflicts = preview.newProducts.flatMap(p => (p.variantConflicts || []).map(c => `${p.designCode || p.designName} / ${p.colour} / ${c.size}: ${c.skus.join(', ')}`));
