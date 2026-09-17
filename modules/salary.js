@@ -61,7 +61,8 @@ function load() {
     const removedHistoricalAdvances=removeHistoricalAdvancesV16(s);
     const closedHistoricalPayroll=entity==='SANKI'&&closeHistoricalPayrollCarryV17(s);
     const reopenedAugustPayroll=entity==='SANKI'&&reopenAugustPayrollForPaymentsV18(s);
-    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary||removedHistoricalAdvances||closedHistoricalPayroll||reopenedAugustPayroll) save(s);
+    const finalAugustRosterRepair=entity==='SANKI'&&repairFinalAugustImportedRoster(s);
+    if(julyImported||employeeRepair||correctedJuly||normalizedLeaveMarks||finalJulyPayroll||correctedAshpreetAdvance||allocatedAshpreetSalary||removedHistoricalAdvances||closedHistoricalPayroll||reopenedAugustPayroll||finalAugustRosterRepair) save(s);
     return s;
   } catch { return blank(); }
 }
@@ -1069,7 +1070,7 @@ function finalAugustPlan(s,file){
   // Existing proof-backed advances are evidence of actual payouts. A workbook
   // cannot silently replace their dates or amounts, or create a second payout.
   const unmatchedAdvances=Object.values(s.advances||{}).filter(a=>a.active!==false&&a.date>='2026-08-01'&&a.date<='2026-09-12'&&!advances.some(x=>x.empId===a.empId&&x.date===a.date&&Math.abs(num(a.amount)-x.amount)<.005)).map(a=>({id:a.id,name:(s.employees[a.empId]||{}).name||a.employeeName,date:a.date,amount:round2(a.amount),recovered:advanceRecovered(a),proofBacked:!!(a.proof||(a.proofs||[]).length)}));
-  const extras=Object.values(s.employees).filter(e=>employeeInPayrollMonth(e,'2026-08')&&!seen.has(e.id)).map(e=>({empId:e.id,name:e.name,existingPayments:(s.salaryPayments||[]).filter(p=>p.active!==false&&p.ym==='2026-08'&&p.empId===e.id).length}));
+  const extras=computeMonth(s,'2026-08').filter(e=>!seen.has(e.id)).map(e=>({empId:e.id,name:e.name,existingPayments:(s.salaryPayments||[]).filter(p=>p.active!==false&&p.ym==='2026-08'&&p.empId===e.id).length}));
   if(extras.some(x=>x.existingPayments))throw new Error('An employee missing from the workbook has recorded August payments; review before importing.');
   const hash=crypto.createHash('sha256').update(file.buffer).digest('hex');
   const stateHash=crypto.createHash('sha256').update(JSON.stringify({aug:s.months['2026-08'],advances:s.advances,payments:(s.salaryPayments||[]).filter(p=>p.ym==='2026-08')})).digest('hex');
@@ -1103,6 +1104,17 @@ function applyFinalAugustPlan(s,plan,by,fileName){
   const posting=(s.payrollPostings||{})[ym];if(posting){posting.rows=actual.map(r=>({empId:r.id,employeeName:r.name,salaryAmt:r.salaryAmt,netPayable:r.netPayable,paid:r.paid,advanceRecovery:r.loggedAdvanceRecovery,legacyAdvance:0,legacyPaid:0}));posting.correctedAt=at;posting.correctedBy=by;}
   s.finalAugustSheetAudit=s.finalAugustSheetAudit||[];s.finalAugustSheetAudit.push({at,by,fileName:path.basename(fileName),hash:plan.hash,totals:plan.totals,before,employeeIds:plan.salaryRows.map(x=>x.empId),source:'Owner-confirmed August workbook; proof-backed salary debits retained'});
   return {rows:actual,totals:plan.totals};
+}
+function repairFinalAugustImportedRoster(s){
+  const audit=(s.finalAugustSheetAudit||[]).at(-1),key='final_august_sheet_roster_carry_repair_v1';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(!audit||s.oneTimeMigrations[key])return false;
+  const included=new Set(audit.employeeIds||[]),ym='2026-08',mo=ensureMonth(s,ym),extras=computeMonth(s,ym).filter(r=>!included.has(r.id));
+  if(extras.some(r=>(s.salaryPayments||[]).some(p=>p.active!==false&&p.ym===ym&&p.empId===r.id)))return false;
+  const before=extras.map(r=>({id:r.id,name:r.name,row:JSON.parse(JSON.stringify(mo.rows[r.id]||{}))}));
+  extras.forEach(r=>{const row=mo.rows[r.id]=mo.rows[r.id]||{};Object.assign(row,{sheetExcluded:true,sheetOpeningCarryOverride:0,sheetPaidDaysOverride:0,salaryAdjustment:0,advance:0,paid:0});delete row.historicalCloseAdjustment;delete row.finalSalaryAmount;});
+  s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),sourceHash:audit.hash,excluded:before,rule:'Remove carried-forward employees absent from the final August roster; no bank or cash debit changed.'};
+  return true;
 }
 router.post('/api/salary/final-august/preview',guard,receiveSalarySheet,(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can apply the final historical workbook.'});
@@ -1274,4 +1286,4 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows, _advanceSourceSheet:advanceSourceSheet, _finalAugustPlan:finalAugustPlan, _applyFinalAugustPlan:applyFinalAugustPlan };
+module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows, _advanceSourceSheet:advanceSourceSheet, _finalAugustPlan:finalAugustPlan, _applyFinalAugustPlan:applyFinalAugustPlan, _repairFinalAugustImportedRoster:repairFinalAugustImportedRoster };

@@ -8,7 +8,7 @@ const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -67,6 +67,11 @@ test('final August workbook reconciles historical advances without a second sala
   assert.equal(result.rows.length,23);assert.equal(result.totals.actualPaid,274352.67);assert.equal(state.salaryPayments.length,paymentCount);assert.equal(Object.keys(state.advances).length,20);
   assert.ok(Object.values(state.advances).every(a=>a.historicalOpening&&a.proof===''&&a.recoveries[0].ym==='2026-08'));
   assert.equal(result.rows.reduce((n,r)=>n+r.loggedAdvanceRecovery,0),81850);
+  state.employees.LATE={id:'LATE',name:'Historical carry not on sheet',salary:5000,active:true};
+  state.months['2026-08'].rows.LATE={paidDays:30};
+  assert.equal(_repairFinalAugustImportedRoster(state),true);
+  assert.equal(state.months['2026-08'].rows.LATE.sheetExcluded,true);
+  assert.equal(state.oneTimeMigrations.final_august_sheet_roster_carry_repair_v1.excluded[0].name,'Historical carry not on sheet');
   state.salaryPayments[0].amount++;assert.throws(()=>_finalAugustPlan(state,file),/paid amounts differ/);
 });
 
