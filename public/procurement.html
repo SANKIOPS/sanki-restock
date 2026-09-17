@@ -343,6 +343,10 @@
       var roles=(me.roles||[]).concat([me.role]).map(function(role){return String(role||'').toLowerCase();});
       return !!me.isAdmin || roles.some(function(role){return role==='owner'||role==='admin'||role==='inventory';});
     }
+    function canReviewHeldImage(){
+      var roles=(me.roles||[]).concat([me.role]).map(function(role){return String(role||'').toLowerCase();});
+      return !!me.isAdmin || roles.some(function(role){return role==='owner'||role==='admin';});
+    }
     var pendingPhotoUrl = '';       // uploaded photo for the line being added
     var pendingInvoice = null;      // original vendor bill retained with the PO
     var lastReceive = null;         // last receive preview (for admin commit)
@@ -2032,7 +2036,7 @@
     function studioReadyFor(np){
       if((np.variantConflicts||[]).length) return false;
       var imgs=studio.images[np.key]||[]; var required=paidTypesFor(np);
-      var okImg=required.length>0&&required.every(function(type){return imgs.some(function(x){return x.type===type&&x.approved&&x.url&&x.url!==np.photoUrl&&(!x.qa||x.qa.status==='pass');});});
+      var okImg=required.length>0&&required.every(function(type){return imgs.some(function(x){return x.type===type&&x.approved&&x.url&&x.url!==np.photoUrl&&(!x.qa||x.qa.status==='pass'||x.qa.status==='manual-reviewed');});});
       var seo=studio.seo[np.key], copy=seo&&seo.seo||{};
       var winter=/^winter$/i.test(np.season||'')||/^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(np.productType||'');
       var badWomenCopy=np.audience==='Women'&&!winter&&(/\bmuscle\s*fit\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' '))||/\b(?<!polo\s)t[ -]?shirts?\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' ')));
@@ -2269,16 +2273,16 @@
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im&&t[0]!=='original'?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
-              '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.qa&&im.qa.status!=='pass'?'Visual check did not pass — regenerate this view':im.approved?'Approved — click to UNDO':'Approve this photo')+'"'+(im.qa&&im.qa.status!=='pass'?' disabled':'')+' style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
+              '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.qa&&!['pass','manual-reviewed'].includes(im.qa.status)?'Visual check did not pass — regenerate this view':im.approved?'Approved — click to UNDO':'Approve this photo')+'"'+(im.qa&&!['pass','manual-reviewed'].includes(im.qa.status)?' disabled':'')+' style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
               (t[0]==='original'?'':(canStartPaidImages()?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>'+
-              (im.qa&&im.qa.status!=='pass'?'<div class="banner warn" style="font-size:11px;margin-top:5px">Visual check: '+esc((im.qa.issues||[]).join('; ')||im.qa.status)+'</div>':''))
+              (im.qa&&im.qa.status==='manual-reviewed'?'<div class="muted" style="font-size:11px;margin-top:5px">Owner-reviewed: '+esc((im.qa.manualReview||{}).reason||'')+'</div>':im.qa&&im.qa.status!=='pass'?'<div class="banner warn" style="font-size:11px;margin-top:5px">Visual check: '+esc((im.qa.issues||[]).join('; ')||im.qa.status)+'</div>':''))
              :empty)+
           '</div>';
       });
       grid+='</div>';
       var rejected=studio.rejected[np.key]||[];
-      if(rejected.length) grid+='<div class="banner warn" style="margin-top:8px"><b>Images held by visual check — not approved or posted</b><div style="display:flex;gap:8px;overflow-x:auto;margin-top:6px">'+rejected.slice(-6).reverse().map(function(item){return '<div style="min-width:130px;max-width:170px;font-size:11px"><img data-zoom src="'+esc(item.url)+'" title="Rejected draft — click to inspect" style="width:120px;height:120px;object-fit:cover;cursor:zoom-in"><div><b>'+esc(item.type)+'</b>: '+esc(((item.qa||{}).issues||[]).join('; ')||'Visual check unavailable')+'</div></div>';}).join('')+'</div></div>';
+      if(rejected.length) grid+='<div class="banner warn" style="margin-top:8px"><b>Images held by visual check — not approved or posted</b><div style="display:flex;gap:8px;overflow-x:auto;margin-top:6px">'+rejected.slice(-6).reverse().map(function(item){return '<div style="min-width:150px;max-width:190px;font-size:11px"><img data-zoom src="'+esc(item.url)+'" title="Held draft — click to inspect at full size" style="width:120px;height:120px;object-fit:cover;cursor:zoom-in"><div><b>'+esc(item.type)+'</b>: '+esc(((item.qa||{}).issues||[]).join('; ')||'Visual check unavailable')+'</div>'+(canReviewHeldImage()?'<button class="btn ghost sm" data-accept-held="'+i+'" data-held-type="'+esc(item.type)+'" data-held-url="'+esc(item.url)+'" style="margin-top:5px">Owner review · accept</button>':'')+'</div>';}).join('')+'</div></div>';
       var seo=studio.seo[np.key];
       var seoBlock;
       if(!seo){
@@ -2326,6 +2330,17 @@
         regeneratePaidImages(np,i,types,productRegen);
       };
       Array.prototype.forEach.call(host.querySelectorAll('[data-paid-regen]'),function(button){button.onclick=function(){regeneratePaidImages(np,i,[button.getAttribute('data-type')],button);};});
+      Array.prototype.forEach.call(host.querySelectorAll('[data-accept-held]'),function(button){button.onclick=function(){
+        var type=button.getAttribute('data-held-type'),url=button.getAttribute('data-held-url');
+        var reason=prompt('Inspect this held photo at full size against the original. If the visual check is mistaken, explain specifically why (at least 12 characters). This does not approve or post the image.');
+        if(reason===null)return;
+        if(reason.trim().length<12){alert('Please give a specific reason of at least 12 characters.');return;}
+        if(!confirm('Accept this '+type+' draft for manual photo approval? The checker warning will be retained in the audit record. No paid call will be made.'))return;
+        button.disabled=true;
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/qa-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,type:type,url:url,reason:reason.trim()})})
+          .then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not accept held image.');studio.images[np.key]=r.images;studio.rejected[np.key]=r.rejectedImages;rerenderCard(i);})
+          .catch(function(e){button.disabled=false;alert(e.message);});
+      };});
       var cr=host.querySelector('[data-codexreturn]'); if(cr) cr.onchange=function(){
         var file=cr.files&&cr.files[0]; if(!file)return;
         var batchId=prompt('Paste the Codex batch ID for this product:'),type=prompt('View: front, model-front, model-side, model-back, or detail');
@@ -2426,7 +2441,7 @@
     }
     function toggleImg(np,i,type){
       var imgs=studio.images[np.key]||[]; var im=imgs.find(function(x){return x.type===type;}); if(!im) return;
-      if(!im.approved&&im.qa&&im.qa.status!=='pass'){alert('This image did not pass the visual check. Inspect the reason and regenerate it before approval.');return;}
+      if(!im.approved&&im.qa&&!['pass','manual-reviewed'].includes(im.qa.status)){alert('This image did not pass the visual check. Inspect the reason and regenerate it before approval.');return;}
       var wasApproved=im.approved;
       im.approved=!im.approved; rerenderCard(i);
       fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ aiImages:(function(){var o={};o[np.key]=imgs;return o;})() })})
