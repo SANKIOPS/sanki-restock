@@ -8,7 +8,7 @@ const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows } = require('../modules/salary');
+const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement, _computeMonth } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -78,6 +78,24 @@ test('final August workbook reconciles historical advances without a second sala
   assert.ok(state.advanceSourceSheets[0].items.every(x=>state.advances[x.linkedAdvanceId]));
   assert.equal(_linkFinalAugustSourceSheetRows(state),false,'migration is idempotent');
   state.salaryPayments[0].amount++;assert.throws(()=>_finalAugustPlan(state,file),/paid amounts differ/);
+});
+
+test('Guard August increment supersedes only the old workbook salary and keeps payment history',()=>{
+  const state={employees:{GUARD:{id:'GUARD',name:'Guard',salary:16000,baseSalary:15000,active:true,salaryHistory:[{id:'INC-GUARD',effectiveMonth:'2026-08',previousSalary:15000,updatedSalary:16000}]}},months:{'2026-08':{rows:{GUARD:{sheetMonthlySalaryOverride:15000,sheetPaidDaysOverride:30,salaryAdjustment:0,sheetOpeningCarryOverride:0}},attendance:{}}},salaryPayments:[{empId:'GUARD',ym:'2026-08',amount:15000,account:'Gagan Sir Cash',proof:'/guard.jpg',active:true}],advances:{},oneTimeMigrations:{},finalAugustSheetAudit:[{hash:'confirmed-workbook'}],payrollPostings:{'2026-08':{rows:[{empId:'GUARD',salaryAmt:15000,netPayable:15000}]}}};
+  assert.equal(_applyGuardAugustIncrement(state),true);
+  assert.equal(_computeMonth(state,'2026-08')[0].salaryAmt,16000);
+  assert.equal(_computeMonth(state,'2026-08')[0].balance,1000);
+  assert.equal(state.salaryPayments[0].amount,15000);
+  assert.equal(state.payrollPostings['2026-08'].rows[0].salaryAmt,16000);
+  assert.equal(_applyGuardAugustIncrement(state),false);
+});
+
+test('former-employee action and attendance cells require an end date and confirmation',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/Mark ex-employee/);
+  assert.match(html,/Choose the employee’s last working date first/);
+  assert.match(html,/You are marking .* for .* for .*Please confirm/);
+  assert.match(html,/event\.key!=='Enter'/);
 });
 
 test('advances Excel preview imports requests but never posts payments',()=>{
@@ -252,7 +270,7 @@ test('assigned weekly off converts an absent mark only on that weekday', () => {
   assert.equal(month.attendance[created.id]['23'],'WO'); assert.equal(month.attendance[created.id]['24'],'A');
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/Weekly off day/); assert.match(html,/cal-sunday/); assert.match(html,/cal-weekoff/); assert.match(html,/attendanceCellInfo/);
-  assert.match(html,/MARK_NEXT\s*=\s*\{\s*'':'P',\s*'P':'H',\s*'H':'A',\s*'A':'',\s*'WO':''\s*\}/);
+  assert.match(html,/MARK_NEXT\s*=\s*\{\s*'':'P',\s*'P':'H',\s*'H':'A',\s*'A':'P',\s*'WO':'P'\s*\}/);
   assert.match(html,/Week-off is assigned automatically/);
 });
 
@@ -456,7 +474,8 @@ test('positive and negative balances carry forward once and payroll respects emp
   assert.equal(july.some(x=>x.id===joiner.id),false);assert.equal(august.some(x=>x.id===joiner.id),true);
   assert.equal(july.some(x=>x.id===leaver.id),true);assert.equal(august.some(x=>x.id===leaver.id),false);
   const february=invoke('GET','/api/salary/month/:ym',{params:{ym:'2027-02'}}).body.rows;
-  assert.equal(february.find(x=>x.id===leaverWithBalance.id).openingAdvanceCarry,2400,'a former employee remains visible until their balance is settled');
+  assert.equal(february.some(x=>x.id===leaverWithBalance.id),false,'a former employee does not appear on a later salary sheet even with an old balance');
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2027-01'}}).body.rows.some(x=>x.id===leaverWithBalance.id),true,'the last employed month stays in history');
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
   const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
   assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/authorized salary paying account/);

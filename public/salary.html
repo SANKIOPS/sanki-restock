@@ -101,7 +101,7 @@
     var fmtSigned = function(n){ n=Number(n)||0; return (n>0?'+₹':n<0?'−₹':'₹')+Math.abs(n).toLocaleString('en-IN',{maximumFractionDigits:2}); };
     // WO is assigned automatically by the server when A falls on the
     // employee's configured weekly-off day. It is not a manual choice.
-    var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'', 'WO':'' };
+    var MARK_NEXT = { '':'P', 'P':'H', 'H':'A', 'A':'P', 'WO':'P' };
     var state = { entity:'SANKI', view:'payroll', ym:'', data:null, employees:null, accounts:[], payments:[], paymentOnly:false, attendanceInfo:'', advanceFilters:{employee:'',month:'',status:'',account:''} },advanceEditRows={};
 
     function pad(n){ return String(n).padStart(2,'0'); }
@@ -297,7 +297,7 @@
           var dd = pad(day);
           var m = (att[r.id]||{})[dd] || '';
           var isoDate=state.ym+'-'+dd,dt=new Date(isoDate+'T00:00:00'),weekday=weekShort[dt.getDay()],fullDate=dd+' '+weekday+' · '+ymLabel(state.ym),outside=(r.joiningDate&&isoDate<r.joiningDate)||(r.lastWorkingDate&&isoDate>r.lastWorkingDate),calendarClass=outside?'not-employed':(weekday==='Sun'?'cal-sunday':(r.weekOffDay===['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dt.getDay()]?'cal-weekoff':''));
-          cells += '<td class="daycell '+calendarClass+' '+(m?('m-'+m):'')+'" data-emp="'+r.id+'" data-name="'+esc(r.name)+'" data-day="'+dd+'" data-date="'+esc(fullDate)+'" data-disabled="'+(outside?'1':'')+'" title="'+esc(r.name+' · '+fullDate+(outside?' · outside employment period':(calendarClass==='cal-weekoff'?' · assigned weekly off':'')))+'">'+(outside?'×':(m||'·'))+'</td>';
+          cells += '<td class="daycell '+calendarClass+' '+(m?('m-'+m):'')+'" tabindex="0" data-emp="'+r.id+'" data-name="'+esc(r.name)+'" data-day="'+dd+'" data-date="'+esc(fullDate)+'" data-disabled="'+(outside?'1':'')+'" title="'+esc(r.name+' · '+fullDate+(outside?' · outside employment period':(calendarClass==='cal-weekoff'?' · assigned weekly off':'')))+'">'+(outside?'×':(m||'·'))+'</td>';
         }
         var pdShown = r.computedPaidDays!=null ? r.computedPaidDays : '—';
         return '<tr><td>'+(index+1)+'</td><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+pdShown+'</b></td></tr>';
@@ -307,22 +307,38 @@
           '<thead><tr><th>S.No.</th><th class="l">Name</th>'+headDays+'<th>Paid days</th></tr></thead>'+
           '<tbody>'+body+'</tbody>'+
         '</table></div>'+
-        '<div class="legend">Click a cell to cycle: '+
-          '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent · <b>·</b> clear. Week-off is assigned automatically from the employee’s configured weekly-off day.'+
+        '<div class="legend">Click a cell to choose a mark, then press Enter to review and confirm: '+
+          '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent. Press Backspace to clear a selected cell. Week-off is assigned automatically from the employee’s configured weekly-off day.'+
         '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+ 
         '<div class="conf">Attendance stores P, H, A or WO only. Paid leave is earned from full present days: 6–8 gives 1 day, then +0.5 for each three-day band, up to 4 days at 24+. The employee setting is the monthly cap; when it is 0, every A or WO deducts salary.</div>'+
         '<details class="card"><summary>Bulk attendance import</summary><label>Validated JSON rows</label><textarea id="bulkAttendance" rows="8" style="width:100%" placeholder=\'[{"employeeName":"Employee name","marks":["P","A","HD"]}]\'></textarea><label><input id="confirmBulkAttendance" type="checkbox"> I confirm that supplied dates may replace existing attendance</label><button class="btn" id="saveBulkAttendance">Import this month atomically</button><div class="conf">All rows are validated before anything is saved. Blank marks clear those dates; HD is stored as Half Day.</div></details>';
-      el('saveBulkAttendance').onclick=function(){var items;try{items=JSON.parse(el('bulkAttendance').value);}catch(e){flash('Enter valid JSON rows.',false);return;}if(!Array.isArray(items)||!items.length){flash('Add at least one employee row.',false);return;}if(!el('confirmBulkAttendance').checked){flash('Confirm that supplied dates may replace existing attendance.',false);return;}this.disabled=true;api('/api/salary/attendance/'+state.ym+'/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})}).then(function(x){if(!x.success)throw new Error(x.error||'Import failed');flash('Imported '+x.cells+' attendance cells for '+x.employees+' employees.',true);load();}).catch(function(e){flash(e.message,false);el('saveBulkAttendance').disabled=false;});};
+      el('saveBulkAttendance').onclick=function(){var items;try{items=JSON.parse(el('bulkAttendance').value);}catch(e){flash('Enter valid JSON rows.',false);return;}if(!Array.isArray(items)||!items.length){flash('Add at least one employee row.',false);return;}if(!el('confirmBulkAttendance').checked){flash('Confirm that supplied dates may replace existing attendance.',false);return;}if(!confirm('Replace attendance for '+items.length+' employee(s) in '+ymLabel(state.ym)+'? Please confirm.'))return;this.disabled=true;api('/api/salary/attendance/'+state.ym+'/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})}).then(function(x){if(!x.success)throw new Error(x.error||'Import failed');flash('Imported '+x.cells+' attendance cells for '+x.employees+' employees.',true);load();}).catch(function(e){flash(e.message,false);el('saveBulkAttendance').disabled=false;});};
+      var pending=null,markName={'P':'Present','H':'Half Day','A':'Absent','WO':'Weekly Off','':'Clear'};
+      function revertPending(){if(!pending)return;pending.cell.textContent=pending.original||'·';pending.cell.classList.remove('m-'+pending.mark);if(pending.original)pending.cell.classList.add('m-'+pending.original);pending.cell.style.outline='';pending=null;}
       Array.prototype.forEach.call(document.querySelectorAll('.daycell'), function(c){
         c.addEventListener('click', function(){
           state.attendanceInfo=this.dataset.name+' · '+this.dataset.date;
           el('attendanceCellInfo').textContent=state.attendanceInfo;
           if(this.dataset.disabled==='1'){state.attendanceInfo+=' · outside employment period';el('attendanceCellInfo').textContent=state.attendanceInfo;return;}
+          if(pending&&pending.cell!==this)revertPending();
           var cur = this.textContent==='·' ? '' : this.textContent;
-          var next = MARK_NEXT[cur];
-          var emp=this.dataset.emp, day=this.dataset.day;
-          api('/api/salary/attendance/'+state.ym, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ empId:emp, day:day, mark:next }) })
-            .then(function(){ load(); });
+          var next = MARK_NEXT[cur];if(next==='A'&&this.classList.contains('cal-weekoff'))next='WO';
+          var original=pending&&pending.cell===this?pending.original:cur;
+          this.classList.remove('m-'+cur);this.classList.add('m-'+next);this.textContent=next||'·';this.style.outline='2px solid #b7791f';this.focus();
+          pending={cell:this,original:original,mark:next};
+          state.attendanceInfo='Pending: '+markName[next]+' for '+this.dataset.name+' · '+this.dataset.date+'. Press Enter to confirm; Escape to cancel.';
+          el('attendanceCellInfo').textContent=state.attendanceInfo;
+        });
+        c.addEventListener('keydown',function(event){
+          if(this.dataset.disabled==='1')return;
+          if(event.key==='Escape'&&pending&&pending.cell===this){event.preventDefault();revertPending();el('attendanceCellInfo').textContent='Attendance change cancelled.';return;}
+          if(event.key==='Backspace'){event.preventDefault();if(pending&&pending.cell!==this)revertPending();var previous=pending&&pending.cell===this?pending.original:(this.textContent==='·'?'':this.textContent);this.classList.remove('m-'+this.textContent);this.textContent='·';this.style.outline='2px solid #b7791f';pending={cell:this,original:previous,mark:''};el('attendanceCellInfo').textContent='Pending: Clear for '+this.dataset.name+' · '+this.dataset.date+'. Press Enter to confirm; Escape to cancel.';return;}
+          if(event.key!=='Enter'||!pending||pending.cell!==this)return;
+          event.preventDefault();var chosen=pending,parts=state.ym.split('-'),date=new Date(Number(parts[0]),Number(parts[1])-1,Number(this.dataset.day)).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
+          if(!confirm('You are marking '+markName[chosen.mark]+' for '+this.dataset.name+' for '+date+'. Please confirm.')){revertPending();el('attendanceCellInfo').textContent='Attendance change cancelled.';return;}
+          api('/api/salary/attendance/'+state.ym,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:this.dataset.emp,day:this.dataset.day,mark:chosen.mark})})
+            .then(function(result){if(!result.success)throw new Error(result.error||'Attendance was not saved.');pending=null;load();})
+            .catch(function(error){revertPending();flash(error.message,false);});
         });
       });
     }
@@ -341,12 +357,13 @@
             '<td class="l"><select onchange="saveEmp(\''+e.id+'\',\'weekOffDay\',this.value)">'+weekOpts(e.weekOffDay)+'</select></td>'+
             '<td><input class="cell" style="width:70px" type="number" min="0" value="'+(e.monthlyPaidLeaveAllowance==null?4:e.monthlyPaidLeaveAllowance)+'" onchange="saveEmp(\''+e.id+'\',\'monthlyPaidLeaveAllowance\',this.value)"></td>'+
             '<td><input type="date" value="'+esc(e.joiningDate||'')+'" onchange="saveEmp(\''+e.id+'\',\'joiningDate\',this.value)"></td>'+
-            '<td><input type="date" value="'+esc(e.lastWorkingDate||'')+'" onchange="saveEmp(\''+e.id+'\',\'lastWorkingDate\',this.value)"></td>'+
-            '<td><button class="btn mini ghost" onclick="toggleEmp(\''+e.id+'\','+(e.active===false)+')">'+(e.active===false?'Reactivate':'Deactivate')+'</button></td>'+
+            '<td><input id="employee_end_'+esc(e.id)+'" type="date" value="'+esc(e.lastWorkingDate||'')+'" onchange="saveEmp(\''+e.id+'\',\'lastWorkingDate\',this.value)"></td>'+
+            '<td>'+(e.active===false?'Ex-employee':'Active')+'</td>'+
+            '<td><button class="btn mini ghost" onclick="'+(e.active===false?'toggleEmp(\''+e.id+'\',true)':'markFormerEmployee(\''+e.id+'\')')+'">'+(e.active===false?'Reactivate':'Mark ex-employee')+'</button></td>'+
           '</tr>';
         }).join('');
         el('host').innerHTML =
-          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th class="l">Weekly off day</th><th>Maximum paid leaves/month</th><th>Joining date</th><th>Last working date</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+          '<div class="card"><table><thead><tr><th>S.No.</th><th class="l">Name</th><th class="l">Post</th><th>Monthly salary</th><th class="l">Channel</th><th class="l">Weekly off day</th><th>Maximum paid leaves/month</th><th>Joining date</th><th>Last working date</th><th>Status</th><th>Action</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
           '<div class="card" style="margin-top:14px"><div class="empform">'+
             '<div class="fld"><label>Name</label><input id="ne_name" placeholder="full name"></div>'+
             '<div class="fld"><label>Post</label><input id="ne_post" placeholder="e.g. Sales Executive"></div>'+
@@ -374,6 +391,12 @@
     window.toggleEmp = function(id, reactivate){
       if(reactivate){ api('/api/salary/employees', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ id:id, active:true }) }).then(function(){ loadEmployees(); }); }
       else { api('/api/salary/employees/'+id, { method:'DELETE' }).then(function(){ loadEmployees(); }); }
+    };
+    window.markFormerEmployee=function(id){
+      var field=el('employee_end_'+id),date=field&&field.value,emp=(state.employees||[]).find(function(e){return e.id===id;});
+      if(!date){flash('Choose the employee’s last working date first.',false);if(field)field.focus();return;}
+      if(!confirm('Mark '+(emp&&emp.name||'this employee')+' as an ex-employee after '+date+'? Earlier payroll and payment history will stay available.'))return;
+      api('/api/salary/employees',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,lastWorkingDate:date,active:false})}).then(function(d){flash(d.success?'Marked ex-employee. Future salary sheets will not include this employee.':(d.error||'Could not update employee.'),!!d.success);loadEmployees();});
     };
 
     // ── EFFECTIVE-DATED SALARY INCREMENTS ──
