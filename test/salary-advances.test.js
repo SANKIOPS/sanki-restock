@@ -51,20 +51,20 @@ test('final August workbook reconciles historical advances without a second sala
     const id='E'+i,name='Employee '+i,monthlySalary=200000,advance=amounts[i]||0,cash=i===0?171000:0,bank=i===1?102703:0;
     state.employees[id]={id,name,salary:monthlySalary,active:true};salary.push([i+1,name,'Staff',monthlySalary,30,30,monthlySalary,advance,0,monthlySalary-advance,null,null,null,cash+bank,null,cash,bank]);attendance.push([name,'Staff',...Array(31).fill('P')]);
     if(i<20)advances.push([new Date(Date.UTC(2026,7,12+i%20)),name,advance,'']);
-    if(cash||bank)state.salaryPayments.push({empId:id,ym:'2026-08',amount:cash||bank,account:cash?'Gagan Sir Cash':'Prashant Axis 3645',proof:'/proof.jpg',active:true});
+    if(cash||bank)state.salaryPayments.push({empId:id,ym:'2026-08',amount:cash?cash:bank-.33,account:cash?'Gagan Sir Cash':'Prashant Axis 3645',proof:'/proof.jpg',active:true});
   }
   state.employees.EXTRA={id:'EXTRA',name:'Not on August sheet',salary:5000,active:true};
   state.salaryPayments.push({empId:'E2',ym:'2026-08',date:'2026-09-16',amount:650,account:'Prashant Axis 3645',proof:'/later-fraction.jpg',active:true});
   for(const [name,rows] of [['SALARY(Up.)',salary],['Attendance(Up.)',attendance],['ADV',advances]])XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(rows),name);
   const file={originalname:'final.xlsb',buffer:XLSX.write(book,{type:'buffer',bookType:'xlsx'})},plan=_finalAugustPlan(state,file),paymentCount=state.salaryPayments.length;
   assert.equal(plan.salaryRows.length,23);assert.equal(plan.advances.length,20);assert.equal(plan.extras.length,1);
-  assert.equal(plan.totals.bank,102703);assert.equal(plan.totals.supplemental,650);assert.equal(plan.totals.actualPaid,274353);
+  assert.equal(plan.totals.bank,102703);assert.equal(plan.totals.supplemental,650);assert.equal(plan.totals.actualPaid,274352.67);
   state.advances.CONFLICT={id:'CONFLICT',empId:'E0',employeeName:'Employee 0',date:'2026-08-31',amount:1000,proof:'/real-payout.jpg',recoveries:[],active:true};
   const conflicted=_finalAugustPlan(state,file);assert.equal(conflicted.unmatchedAdvances.length,1);
   assert.throws(()=>_applyFinalAugustPlan(state,conflicted,'owner',file.originalname),/Existing advances disagree/);
   assert.equal(state.advances.CONFLICT.proof,'/real-payout.jpg');delete state.advances.CONFLICT;
   const result=_applyFinalAugustPlan(state,plan,'owner',file.originalname);
-  assert.equal(result.rows.length,23);assert.equal(result.totals.actualPaid,274353);assert.equal(state.salaryPayments.length,paymentCount);assert.equal(Object.keys(state.advances).length,20);
+  assert.equal(result.rows.length,23);assert.equal(result.totals.actualPaid,274352.67);assert.equal(state.salaryPayments.length,paymentCount);assert.equal(Object.keys(state.advances).length,20);
   assert.ok(Object.values(state.advances).every(a=>a.historicalOpening&&a.proof===''&&a.recoveries[0].ym==='2026-08'));
   assert.equal(result.rows.reduce((n,r)=>n+r.loggedAdvanceRecovery,0),81850);
   state.salaryPayments[0].amount++;assert.throws(()=>_finalAugustPlan(state,file),/paid amounts differ/);
