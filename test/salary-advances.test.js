@@ -488,11 +488,16 @@ test('owner can correct a proof-backed salary payment and correction is audited'
   assert.equal(edited.status,200);
   assert.equal(edited.body.payment.amount,9000);
   assert.equal(edited.body.payment.account,'Gagan Sir Cash');
+  const excess={amount:31000,date:'2099-01-30',account:'Gagan Sir Cash',proofs:['/corrected.jpg'],reference:'CASH-1',reason:'Proof shows additional cash; carry excess'};
+  assert.equal(invoke('PATCH','/api/salary/payments/:id',{params:{id},body:excess,role:'owner'}).status,400);
+  assert.equal(invoke('PATCH','/api/salary/payments/:id',{params:{id},body:{...excess,allowOverpayment:true},role:'accounting'}).status,403);
+  assert.equal(invoke('PATCH','/api/salary/payments/:id',{params:{id},body:{...excess,allowOverpayment:true},role:'owner'}).status,200);
   assert.equal(invoke('PATCH','/api/salary/payments/:id',{params:{id},body:{amount:8000,date:'2099-01-30',account:'Gagan Sir Cash',proofs:['/corrected.jpg'],reason:'No'},role:'accounting'}).status,403);
   const view=invoke('GET','/api/salary/payments/:ym',{params:{ym:'2099-01'},role:'owner'}).body;
   assert.equal(view.payments.find(x=>x.id===id).proof,'/corrected.jpg');
-  assert.equal(view.audit.find(x=>x.paymentId===id).before.amount,10000);
-  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-01'},role:'owner'}).body.rows.find(x=>x.id===emp.id).paid,9000);
+  assert.equal(view.audit.find(x=>x.paymentId===id).overpayment,1000);
+  assert.equal(view.audit.find(x=>x.paymentId===id&&x.before.amount===10000).before.amount,10000);
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-01'},role:'owner'}).body.rows.find(x=>x.id===emp.id).paid,31000);
 });
 
 test('owner links one finalized 3645 debit to salary without a second account-ledger debit',()=>{

@@ -760,9 +760,10 @@ router.patch('/api/salary/payments/:id',guard,(req,res)=>{
   if(!changed)return res.status(400).json({success:false,error:'No payment details changed.'});
   const otherPaid=(s.salaryPayments||[]).filter(x=>x!==p&&x.active!==false&&x.empId===p.empId&&x.ym===p.ym).reduce((n,x)=>n+num(x.amount),0);
   const row=computeMonth(s,p.ym).find(x=>x.id===p.empId),available=row?round2(row.netPayable-num((s.months[p.ym]&&s.months[p.ym].rows[p.empId]||{}).paid)-otherPaid):0;
-  if(amount>available+.001)return res.status(400).json({success:false,error:'Corrected amount exceeds this employee’s available salary balance.'});
+  const overpayment=round2(Math.max(0,amount-available));
+  if(overpayment>.001&&!(isOwner(req)&&b.allowOverpayment===true))return res.status(400).json({success:false,error:'Corrected amount exceeds this employee’s available salary balance. Only the Owner may explicitly approve a proof-backed overpayment.'});
   Object.assign(p,{amount,date,account,proof:proofs[0],proofs,reference:String(b.reference||'').trim(),editedAt:new Date().toISOString(),editedBy:req.user.username});
-  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.editedAt,by:req.user.username,action:'PAYMENT_CORRECTED',paymentId:p.id,ym:p.ym,empId:p.empId,before,after:{amount,date,account,proofs,reference:p.reference},reason});
+  s.salaryPaymentAudit=s.salaryPaymentAudit||[];s.salaryPaymentAudit.push({at:p.editedAt,by:req.user.username,action:'PAYMENT_CORRECTED',paymentId:p.id,ym:p.ym,empId:p.empId,before,after:{amount,date,account,proofs,reference:p.reference},overpayment,reason});
   save(s);res.json({success:true,payment:p});
 });
 function existing3645DebitCandidates(s){
