@@ -303,18 +303,32 @@
         return '<tr><td>'+(index+1)+'</td><td class="l" style="white-space:nowrap"><b>'+esc(r.name)+'</b></td>'+cells+'<td><b>'+pdShown+'</b></td></tr>';
       }).join('');
       el('host').innerHTML =
+        '<div class="card" id="attendanceCellInfo" role="status" style="position:sticky;top:0;z-index:5;background:#fff;padding:12px;margin-bottom:8px;border:1px solid #d1d5db">'+esc(state.attendanceInfo||'Click a date to choose a mark. Then click Enter to confirm it.')+'</div>'+
         '<div class="card"><table class="att">'+
           '<thead><tr><th>S.No.</th><th class="l">Name</th>'+headDays+'<th>Paid days</th></tr></thead>'+
           '<tbody>'+body+'</tbody>'+
         '</table></div>'+
-        '<div class="legend">Click a cell to choose a mark, then press Enter to review and confirm: '+
+        '<div class="legend">Click a cell to choose a mark, then click Enter above the table to review and confirm (keyboard Enter also works): '+
           '<b class="m-P">P</b> Present · <b class="m-H">H</b> Half · <b class="m-A">A</b> Absent. Press Backspace to clear a selected cell. Week-off is assigned automatically from the employee’s configured weekly-off day.'+
-        '</div><div class="conf" id="attendanceCellInfo">'+esc(state.attendanceInfo||'Tap or hover over a cell to see the employee and full date.')+'</div>'+ 
+        '</div>'+
         '<div class="conf">Attendance stores P, H, A or WO only. Paid leave is earned from full present days: 6–8 gives 1 day, then +0.5 for each three-day band, up to 4 days at 24+. The employee setting is the monthly cap; when it is 0, every A or WO deducts salary.</div>'+
         '<details class="card"><summary>Bulk attendance import</summary><label>Validated JSON rows</label><textarea id="bulkAttendance" rows="8" style="width:100%" placeholder=\'[{"employeeName":"Employee name","marks":["P","A","HD"]}]\'></textarea><label><input id="confirmBulkAttendance" type="checkbox"> I confirm that supplied dates may replace existing attendance</label><button class="btn" id="saveBulkAttendance">Import this month atomically</button><div class="conf">All rows are validated before anything is saved. Blank marks clear those dates; HD is stored as Half Day.</div></details>';
       el('saveBulkAttendance').onclick=function(){var items;try{items=JSON.parse(el('bulkAttendance').value);}catch(e){flash('Enter valid JSON rows.',false);return;}if(!Array.isArray(items)||!items.length){flash('Add at least one employee row.',false);return;}if(!el('confirmBulkAttendance').checked){flash('Confirm that supplied dates may replace existing attendance.',false);return;}if(!confirm('Replace attendance for '+items.length+' employee(s) in '+ymLabel(state.ym)+'? Please confirm.'))return;this.disabled=true;api('/api/salary/attendance/'+state.ym+'/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})}).then(function(x){if(!x.success)throw new Error(x.error||'Import failed');flash('Imported '+x.cells+' attendance cells for '+x.employees+' employees.',true);load();}).catch(function(e){flash(e.message,false);el('saveBulkAttendance').disabled=false;});};
       var pending=null,markName={'P':'Present','H':'Half Day','A':'Absent','WO':'Weekly Off','':'Clear'};
       function revertPending(){if(!pending)return;pending.cell.textContent=pending.original||'·';pending.cell.classList.remove('m-'+pending.mark);if(pending.original)pending.cell.classList.add('m-'+pending.original);pending.cell.style.outline='';pending=null;}
+      function showPending(){
+        var info=el('attendanceCellInfo');info.textContent='Pending: '+markName[pending.mark]+' for '+pending.cell.dataset.name+' · '+pending.cell.dataset.date+'. ';
+        var enter=document.createElement('button');enter.type='button';enter.className='btn mini';enter.textContent='Enter — confirm change';enter.onclick=confirmPending;info.appendChild(enter);
+        var cancel=document.createElement('button');cancel.type='button';cancel.className='btn mini ghost';cancel.textContent='Cancel';cancel.onclick=function(){revertPending();info.textContent='Attendance change cancelled.';};info.appendChild(cancel);
+      }
+      function confirmPending(){
+        if(!pending)return;
+        var chosen=pending,parts=state.ym.split('-'),date=new Date(Number(parts[0]),Number(parts[1])-1,Number(chosen.cell.dataset.day)).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
+        if(!confirm('You are marking '+markName[chosen.mark]+' for '+chosen.cell.dataset.name+' for '+date+'. Please confirm.')){revertPending();el('attendanceCellInfo').textContent='Attendance change cancelled.';return;}
+        api('/api/salary/attendance/'+state.ym,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:chosen.cell.dataset.emp,day:chosen.cell.dataset.day,mark:chosen.mark})})
+          .then(function(result){if(!result.success)throw new Error(result.error||'Attendance was not saved.');pending=null;load();})
+          .catch(function(error){revertPending();flash(error.message,false);});
+      }
       Array.prototype.forEach.call(document.querySelectorAll('.daycell'), function(c){
         c.addEventListener('click', function(){
           state.attendanceInfo=this.dataset.name+' · '+this.dataset.date;
@@ -326,19 +340,14 @@
           var original=pending&&pending.cell===this?pending.original:cur;
           this.classList.remove('m-'+cur);this.classList.add('m-'+next);this.textContent=next||'·';this.style.outline='2px solid #b7791f';this.focus();
           pending={cell:this,original:original,mark:next};
-          state.attendanceInfo='Pending: '+markName[next]+' for '+this.dataset.name+' · '+this.dataset.date+'. Press Enter to confirm; Escape to cancel.';
-          el('attendanceCellInfo').textContent=state.attendanceInfo;
+          showPending();
         });
         c.addEventListener('keydown',function(event){
           if(this.dataset.disabled==='1')return;
           if(event.key==='Escape'&&pending&&pending.cell===this){event.preventDefault();revertPending();el('attendanceCellInfo').textContent='Attendance change cancelled.';return;}
-          if(event.key==='Backspace'){event.preventDefault();if(pending&&pending.cell!==this)revertPending();var previous=pending&&pending.cell===this?pending.original:(this.textContent==='·'?'':this.textContent);this.classList.remove('m-'+this.textContent);this.textContent='·';this.style.outline='2px solid #b7791f';pending={cell:this,original:previous,mark:''};el('attendanceCellInfo').textContent='Pending: Clear for '+this.dataset.name+' · '+this.dataset.date+'. Press Enter to confirm; Escape to cancel.';return;}
+          if(event.key==='Backspace'){event.preventDefault();if(pending&&pending.cell!==this)revertPending();var previous=pending&&pending.cell===this?pending.original:(this.textContent==='·'?'':this.textContent);this.classList.remove('m-'+this.textContent);this.textContent='·';this.style.outline='2px solid #b7791f';pending={cell:this,original:previous,mark:''};showPending();return;}
           if(event.key!=='Enter'||!pending||pending.cell!==this)return;
-          event.preventDefault();var chosen=pending,parts=state.ym.split('-'),date=new Date(Number(parts[0]),Number(parts[1])-1,Number(this.dataset.day)).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
-          if(!confirm('You are marking '+markName[chosen.mark]+' for '+this.dataset.name+' for '+date+'. Please confirm.')){revertPending();el('attendanceCellInfo').textContent='Attendance change cancelled.';return;}
-          api('/api/salary/attendance/'+state.ym,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({empId:this.dataset.emp,day:this.dataset.day,mark:chosen.mark})})
-            .then(function(result){if(!result.success)throw new Error(result.error||'Attendance was not saved.');pending=null;load();})
-            .catch(function(error){revertPending();flash(error.message,false);});
+          event.preventDefault();confirmPending();
         });
       });
     }

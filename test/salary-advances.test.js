@@ -96,6 +96,9 @@ test('former-employee action and attendance cells require an end date and confir
   assert.match(html,/Choose the employee’s last working date first/);
   assert.match(html,/You are marking .* for .* for .*Please confirm/);
   assert.match(html,/event\.key!=='Enter'/);
+  assert.match(html,/Enter — confirm change/);
+  assert.match(html,/function confirmPending\(\)/);
+  assert.match(html,/attendanceCellInfo[^\n]*position:sticky/);
 });
 
 test('advances Excel preview imports requests but never posts payments',()=>{
