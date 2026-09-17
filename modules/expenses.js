@@ -985,6 +985,9 @@ function includeAutomaticSale(x) {
 }
 function transferDebitAmount(x){return num(x&&x.amount);}
 function transferCreditAmount(x){return x&&x.classification==='money_exchange'&&x.receivedAmount!=null?num(x.receivedAmount):num(x&&x.amount);}
+const PRASHANT_FUNDING_ACCOUNTS=['IndusInd Bank 8181','Prashant Axis 3645'];
+function personalFundingRows(s){return Array.isArray(s.prashantPersonalFundings)?s.prashantPersonalFundings:[];}
+function personalFundingDue(f){return roundMoney(num(f.amount)-(f.repayments||[]).reduce((sum,p)=>sum+num(p.amount),0));}
 
 function reconciliationIssues(s, nature, account) {
   const issues = [], seen = new Set();
@@ -2318,6 +2321,10 @@ router.get('/api/expenses/balances', (req, res) => {
     (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && posted(x.account,x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
     Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>posted(c.account,c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
     (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+    if(nature==='SANKI')personalFundingRows(s).forEach(f=>{
+      if(posted(f.account,f.date))collected[f.account]=(collected[f.account]||0)+num(f.amount);
+      (f.repayments||[]).forEach(p=>{if(posted(p.account,p.date))paidOut[p.account]=(paidOut[p.account]||0)+num(p.amount);});
+    });
     (s.salesRefunds||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.refundAccount,x.date)).forEach(x=>{paidOut[x.refundAccount]=(paidOut[x.refundAccount]||0)+num(x.amount);});
     if(nature==='SANKI') salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
     (s.transfers || []).filter(x => inRange(x.date)).forEach(x => {
@@ -2346,6 +2353,32 @@ router.get('/api/expenses/balances', (req, res) => {
 });
 
 // A transfer is one atomic event that produces a debit and matching credit.
+router.get('/api/expenses/prashant-funding',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Owner only.'});
+  const rows=personalFundingRows(loadStore()).map(f=>({...f,due:personalFundingDue(f)}));
+  res.json({success:true,rows,totalDue:roundMoney(rows.reduce((sum,f)=>sum+f.due,0)),accounts:PRASHANT_FUNDING_ACCOUNTS});
+});
+router.post('/api/expenses/prashant-funding',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Owner only.'});
+  const b=req.body||{},account=String(b.account||''),amount=roundMoney(b.amount),date=String(b.date||''),reference=String(b.reference||'').trim(),bankName=String(b.bankName||'').trim(),last4=String(b.last4||'').trim(),proofs=proofList(b.proofs,b.proof);
+  if(!PRASHANT_FUNDING_ACCOUNTS.includes(account)||!(amount>0)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||!reference||!bankName||!/^[0-9]{4}$/.test(last4)||!proofs.length)return res.status(400).json({success:false,error:'Choose 8181 or 3645 and provide a positive amount, date, bank reference, Prashant personal bank name and last four digits, and proof.'});
+  const s=loadStore(),rows=personalFundingRows(s);
+  if(rows.some(f=>f.account===account&&f.reference.toLowerCase()===reference.toLowerCase()))return res.status(409).json({success:false,error:'This bank reference is already recorded as Prashant funding.'});
+  s.prashantPersonalFundingSeq=num(s.prashantPersonalFundingSeq)+1;
+  const f={id:'PF-'+String(s.prashantPersonalFundingSeq).padStart(5,'0'),account,amount,date,reference,bankName,last4,proof:proofs[0],proofs,note:String(b.note||'').trim(),repayments:[],createdBy:req.user.username,createdAt:new Date().toISOString()};
+  s.prashantPersonalFundings=rows;s.prashantPersonalFundings.push(f);
+  audit(s,req,'PRASHANT_PERSONAL_FUNDING_RECORDED','personal_funding',f.id,{nature:'SANKI',account,after:f});saveStore(s);res.json({success:true,funding:{...f,due:amount}});
+});
+router.post('/api/expenses/prashant-funding/:id/repay',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Owner only.'});
+  const s=loadStore(),f=personalFundingRows(s).find(x=>x.id===req.params.id),b=req.body||{},account=String(b.account||''),amount=roundMoney(b.amount),date=String(b.date||''),reference=String(b.reference||'').trim(),proofs=proofList(b.proofs,b.proof);
+  if(!f)return res.status(404).json({success:false,error:'Funding record not found.'});
+  if(!PRASHANT_FUNDING_ACCOUNTS.includes(account)||!(amount>0)||amount>personalFundingDue(f)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||!reference||!proofs.length)return res.status(400).json({success:false,error:'Choose a paying account, amount no more than due, repayment date, bank reference, and proof.'});
+  if(date<f.date)return res.status(400).json({success:false,error:'Repayment cannot predate the funding.'});
+  if(personalFundingRows(s).some(row=>(row.repayments||[]).some(p=>p.account===account&&p.reference.toLowerCase()===reference.toLowerCase())))return res.status(409).json({success:false,error:'This repayment bank reference is already recorded.'});
+  f.repayments=f.repayments||[];const repayment={id:'REPAY-'+String(f.repayments.length+1).padStart(3,'0'),account,amount,date,reference,proof:proofs[0],proofs,note:String(b.note||'').trim(),toBankName:f.bankName,toLast4:f.last4,createdBy:req.user.username,createdAt:new Date().toISOString()};f.repayments.push(repayment);
+  audit(s,req,'PRASHANT_PERSONAL_FUNDING_REPAID','personal_funding',f.id,{nature:'SANKI',account,after:repayment,note:'Repayment linked to '+f.id});saveStore(s);res.json({success:true,repayment,due:personalFundingDue(f)});
+});
 router.post('/api/expenses/exchanges',(req,res)=>{
   if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can record a money exchange.'});
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),direction=String(b.direction||''),source=String(b.source||'').trim(),amount=roundMoney(b.amount),receivedAmount=b.receivedAmount==null?amount:roundMoney(b.receivedAmount),adjustmentAmount=roundMoney(amount-receivedAmount),adjustmentLedger=String(b.adjustmentLedger||'').trim(),adjustmentNote=String(b.adjustmentNote||'').trim(),date=String(b.date||'').slice(0,10),proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',note=String(b.note||'').trim();
@@ -2493,6 +2526,10 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   (s.adjustments || []).filter(x => !x.accountingExcluded&&normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',note:x.note||'',by:x.createdBy||'',editable:true }));
   (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>{const gross=num(x.grossPaymentAmount);entries.push({id:x.paymentReference||x.id,date:x.date,kind:gross?'expense':'vendor_advance',description:(gross?'Vendor payment · ':'Vendor advance · ')+x.vendor+' · '+x.note,credit:0,debit:gross||num(x.amount),proof:x.proof||'',reference:x.bankReference||x.paymentReference||x.id,by:x.createdBy||'',vendorAdvanceAmount:gross?num(x.amount):0});});
   (s.receipts || []).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='product_sale'?'Product sale':x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,source:x.source||'',by:x.createdBy,manualSaleId:x.manualSaleId||'',editable:!x.manualSaleId}));
+  if(nature==='SANKI')personalFundingRows(s).forEach(f=>{
+    if(f.account===account)entries.push({id:f.id,date:f.date,kind:'personal_funding',description:'Temporary personal funding from Prashant · due to Prashant · '+f.bankName+' '+f.last4,reference:f.reference,credit:num(f.amount),debit:0,proof:f.proof,note:f.note,by:f.createdBy});
+    (f.repayments||[]).filter(p=>p.account===account).forEach(p=>entries.push({id:f.id+'/'+p.id,date:p.date,kind:'personal_funding_repayment',description:'Repayment to Prashant · clears '+f.id+' · '+f.bankName+' '+f.last4,reference:p.reference,credit:0,debit:num(p.amount),proof:p.proof,note:p.note,by:p.createdBy}));
+  });
   (s.salesRefunds||[]).filter(x=>normalizedNature(x.nature)===nature&&x.refundAccount===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'sales_refund',description:'Customer refund · original sale '+x.saleReference+' · originally received into '+x.originalReceiptAccount,reference:x.saleReference,credit:0,debit:num(x.amount),proof:x.proof,note:x.reason,by:x.createdBy}));
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>{const companyAdjusted=usesCompanyAdjustedBankTruth(nature,account);entries.push({id:x.id,date:x.date,kind:'bank_truth',description:(companyAdjusted?'Excluded personal bank movement · no company-balance effect · ':'Bank truth · excluded from business books · ')+(x.description||x.reason||'Statement transaction'),reference:x.reference||x.bankTransactionId||x.id,credit:companyAdjusted?0:num(x.credit),debit:companyAdjusted?0:num(x.debit),actualCredit:num(x.credit),actualDebit:num(x.debit),note:x.reason||'',by:x.createdBy||''});});
   (s.transfers || []).filter(x=>!x.accountingExcluded).forEach(x => {
@@ -2650,6 +2687,10 @@ function appBankMovements(s,account,nature){const rows=[],n=normalizedNature(nat
   (s.adjustments||[]).filter(x=>!x.accountingExcluded&&x.account===account&&normalizedNature(x.nature)===n).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:x.note||'Adjustment',reference:x.bankReference||'',proof:x.proof||'',debit:Math.max(0,-num(x.amount)),credit:Math.max(0,num(x.amount))}));
   (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&normalizedNature(x.nature)===n).forEach(x=>rows.push({id:x.paymentReference||x.id,date:x.date,createdAt:x.createdAt,description:(num(x.grossPaymentAmount)>0?'Vendor payment · ':'Vendor advance · ')+x.vendor,reference:x.bankReference||x.paymentReference||'',proof:x.proof||'',debit:num(x.grossPaymentAmount)||num(x.amount),credit:0}));
   (s.receipts||[]).filter(x=>!x.accountingExcluded&&x.account===account&&normalizedNature(x.nature)===n).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:x.source,reference:x.bankReference||x.bankReconciliationEvidence&&x.bankReconciliationEvidence.reference||'',proof:x.proof||'',credit:num(x.amount),debit:0}));
+  if(n==='SANKI')personalFundingRows(s).forEach(f=>{
+    if(f.account===account)rows.push({id:f.id,date:f.date,createdAt:f.createdAt,description:'Prashant personal funding · '+f.bankName+' '+f.last4,reference:f.reference,proof:f.proof,credit:num(f.amount),debit:0});
+    (f.repayments||[]).filter(p=>p.account===account).forEach(p=>rows.push({id:f.id+'/'+p.id,date:p.date,createdAt:p.createdAt,description:'Repayment to Prashant · '+f.bankName+' '+f.last4,reference:p.reference,proof:p.proof,credit:0,debit:num(p.amount)}));
+  });
   (s.salesRefunds||[]).filter(x=>x.refundAccount===account&&normalizedNature(x.nature)===n).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Customer refund · '+x.saleReference,reference:x.saleReference,proof:x.proof||'',credit:0,debit:num(x.amount),category:'Customer Refund'}));
   (s.transfers||[]).filter(x=>!x.accountingExcluded).forEach(x=>{if(x.fromAccount===account&&normalizedNature(x.fromNature||x.nature)===n)rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Transfer to '+x.toAccount,reference:x.bankReference||x.bankReconciliationEvidence&&x.bankReconciliationEvidence.reference||'',proof:x.proof||'',debit:transferDebitAmount(x),credit:0});if(x.toAccount===account&&normalizedNature(x.toNature||x.nature)===n)rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Transfer from '+x.fromAccount,reference:x.bankReference||x.bankReconciliationEvidence&&x.bankReconciliationEvidence.reference||'',proof:x.proof||'',debit:0,credit:transferCreditAmount(x)});});
   // Reconciliation follows the account that actually moved. An expense may

@@ -142,6 +142,22 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
   return { status, body: result };
 }
 
+test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
+  const fundingBody={account:'IndusInd Bank 8181',amount:5000,date:'2026-09-16',reference:'PF-TEST-IN-001',bankName:'Test Bank',last4:'4321',proof:'/api/expenses/photo/funding-test.jpg'};
+  assert.equal(invoke('POST','/api/expenses/prashant-funding',{role:'admin',body:fundingBody}).status,403);
+  const created=invoke('POST','/api/expenses/prashant-funding',{role:'owner',body:fundingBody});assert.equal(created.status,200);
+  const id=created.body.funding.id;assert.equal(created.body.funding.due,5000);
+  assert.equal(invoke('POST','/api/expenses/prashant-funding',{role:'owner',body:fundingBody}).status,409);
+  const incoming=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'IndusInd Bank 8181',from:'2026-09-16',to:'2026-09-17'}}).body;
+  assert.equal(incoming.entries.find(x=>x.id===id).credit,5000);
+  const repaymentBody={account:'Prashant Axis 3645',amount:3000,date:'2026-09-17',reference:'PF-TEST-OUT-001',proof:'/api/expenses/photo/repay-test.jpg'};
+  const repaid=invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'owner',params:{id},body:repaymentBody});assert.equal(repaid.status,200);assert.equal(repaid.body.due,2000);
+  assert.equal(invoke('POST','/api/expenses/prashant-funding/:id/repay',{role:'owner',params:{id},body:{...repaymentBody,amount:3001,reference:'PF-TEST-OUT-002'}}).status,400);
+  const list=invoke('GET','/api/expenses/prashant-funding',{role:'owner'}).body;assert.equal(list.rows.find(x=>x.id===id).due,2000);
+  const outgoing=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-09-16',to:'2026-09-17'}}).body;
+  assert.equal(outgoing.entries.find(x=>x.id===id+'/'+repaid.body.repayment.id).debit,3000);
+});
+
 test('claimant cannot submit an expense without a bill photo', async () => {
   const result = invoke('POST', '/api/expenses', { body: { ledger: 'FOOD EXPENSE', amount: 100, bill: 'handwritten' } });
   assert.equal(result.status, 400);
