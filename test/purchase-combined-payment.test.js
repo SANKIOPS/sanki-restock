@@ -1,9 +1,9 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../modules/expenses.js'),'utf8');
-function route(items){
+function route(items,combinedInvoices={}){
   const start=source.indexOf("router.post('/api/expenses/procurement-payables/batch'"),end=source.indexOf('\n});',start)+4;
   let fn,saves=0;const store={procurementAccounting:{paymentsByPo:{}}},calls=[];
-  vm.runInNewContext(source.slice(start,end),{router:{post:(_,f)=>fn=f},canApprove:()=>true,loadStore:()=>store,procurementPayables:()=>items,proofList:(a,b)=>b?[b]:[],allowedPayingAccount:(_,n,a)=>a==='SANKI Bank'?a:'',round0:Math.round,procurementAccounting:s=>s.procurementAccounting,PAYMENT_TYPES:['UPI'],crypto:require('node:crypto'),audit:(...a)=>calls.push(a),saveStore:()=>saves++});
+  vm.runInNewContext(source.slice(start,end),{router:{post:(_,f)=>fn=f},canApprove:()=>true,loadStore:()=>store,loadProcurementStore:()=>({combinedVendorInvoices:combinedInvoices}),procurementPayables:()=>items,proofList:(a,b)=>b?[b]:[],allowedPayingAccount:(_,n,a)=>a==='SANKI Bank'?a:'',round0:Math.round,procurementAccounting:s=>s.procurementAccounting,PAYMENT_TYPES:['UPI'],crypto:require('node:crypto'),audit:(...a)=>calls.push(a),saveStore:()=>saves++});
   return {pay:body=>{let code=200,result;const res={status:n=>{code=n;return res;},json:x=>{result=x;}};fn({body,user:{username:'tester'}},res);return {code,result,saves};},store,calls};
 }
 const items=[{id:'PO-1',supplier:'Vendor A',billNo:'101',balanceDue:30000},{id:'PO-2',supplier:'Vendor A',billNo:'102',balanceDue:40000}];
@@ -16,6 +16,23 @@ test('combined purchase payment retains one reference and separate bill allocati
 test('combined payment rejects cross-vendor and wrong amount atomically',()=>{
  let ctx=route([{...items[0]},{...items[1],supplier:'Vendor B'}]);assert.equal(ctx.pay({poIds:['PO-1','PO-2']}).code,400);assert.equal(ctx.store.procurementAccounting.paymentsByPo['PO-1'],undefined);
  ctx=route(items);assert.equal(ctx.pay({poIds:['PO-1','PO-2'],amount:60000,account:'SANKI Bank',date:'2026-09-18',paymentProof:'/proof.png'}).code,400);assert.equal(ctx.store.procurementAccounting.paymentsByPo['PO-1'],undefined);
+});
+
+test('mixed-vendor combined invoice payment keeps one bank batch and each supplier allocation',()=>{
+ const mixed=[{...items[0]},{...items[1],supplier:'Vendor B'}];
+ const ctx=route(mixed,{'CVI-1':{poIds:['PO-1','PO-2']}});
+ const r=ctx.pay({poIds:['PO-1','PO-2'],combinedInvoiceId:'CVI-1',amount:70000,account:'SANKI Bank',date:'2026-09-18',paymentProof:'/proof.png'});
+ assert.equal(r.code,200);assert.equal(r.result.vendor,'Multiple vendors');assert.equal(r.result.allocations.length,2);
+ assert.equal(r.result.allocations[0].supplier,'Vendor A');assert.equal(r.result.allocations[1].supplier,'Vendor B');
+ assert.equal(ctx.store.procurementAccounting.paymentsByPo['PO-1'].payments[0].combinedInvoiceId,'CVI-1');
+ assert.equal(ctx.store.procurementAccounting.paymentsByPo['PO-2'].payments[0].supplier,'Vendor B');
+});
+
+test('mixed-vendor payment cannot borrow an unrelated combined invoice',()=>{
+ const mixed=[{...items[0]},{...items[1],supplier:'Vendor B'}];
+ const ctx=route(mixed,{'CVI-1':{poIds:['PO-1','PO-3']}});
+ const r=ctx.pay({poIds:['PO-1','PO-2'],combinedInvoiceId:'CVI-1',amount:70000,account:'SANKI Bank',date:'2026-09-18',paymentProof:'/proof.png'});
+ assert.equal(r.code,400);assert.equal(ctx.store.procurementAccounting.paymentsByPo['PO-1'],undefined);
 });
 
 test('bank ledger shows one debit for a combined purchase payment',()=>{

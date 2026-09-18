@@ -2084,8 +2084,19 @@ router.post('/api/expenses/procurement-payables/batch', (req, res) => {
   if (items.some(item => !item || !(item.balanceDue > 0)))
     return res.status(400).json({ success: false, error: 'All selected bills must have an outstanding balance.' });
   const supplier = String(items[0].supplier || '').trim().toLowerCase();
-  if (!supplier || items.some(item => String(item.supplier || '').trim().toLowerCase() !== supplier))
-    return res.status(400).json({ success: false, error: 'Select bills from one vendor only.' });
+  const mixedSuppliers = items.some(item => String(item.supplier || '').trim().toLowerCase() !== supplier);
+  const combinedInvoiceId = String(b.combinedInvoiceId || '').trim();
+  if (mixedSuppliers || combinedInvoiceId) {
+    const invoice = combinedInvoiceId && (loadProcurementStore().combinedVendorInvoices || {})[combinedInvoiceId];
+    const outstandingIds = invoice && (invoice.poIds || []).filter(id => {
+      const item = available.get(id);
+      return item && item.balanceDue > 0;
+    });
+    if (!invoice || outstandingIds.length !== ids.length || outstandingIds.some(id => !ids.includes(id)))
+      return res.status(400).json({ success: false, error: 'Mixed-vendor payment must select exactly the outstanding bills of one combined invoice.' });
+  } else if (!supplier) {
+    return res.status(400).json({ success: false, error: 'Selected bills need a recorded vendor.' });
+  }
   const proofs = proofList(b.paymentProofs, b.paymentProof), account = allowedPayingAccount(req, 'SANKI', String(b.account || '').trim());
   if (!proofs.length) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select a SANKI paying account.' });
@@ -2100,17 +2111,19 @@ router.post('/api/expenses/procurement-payables/batch', (req, res) => {
     const state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
     state.payments = Array.isArray(state.payments) ? state.payments : [];
     const payment = { id: 'PPAY-' + String(state.payments.length + 1).padStart(3, '0'), batchPaymentId,
-      linkedPoIds: ids, amount: item.balanceDue, account, date, reference,
+      linkedPoIds: ids, combinedInvoiceId: combinedInvoiceId || '', supplier: item.supplier,
+      amount: item.balanceDue, account, date, reference,
       paymentType: ['UPI','Cash','Credit','Bank Transfer','NEFT','IMPS'].includes(b.paymentType) ? b.paymentType : 'UPI',
       proof: proofs[0], proofs, note: String(b.note || '').trim().slice(0, 500),
       paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString() };
     state.payments.push(payment);
-    allocations.push({ poId: item.id, billNo: item.billNo, amount: payment.amount, paymentId: payment.id });
+    allocations.push({ poId: item.id, billNo: item.billNo, supplier: item.supplier, amount: payment.amount, paymentId: payment.id });
     audit(s, req, 'PROCUREMENT_PAYMENT_ALLOCATED', 'procurement', item.id,
       { nature: 'SANKI', account, batchPaymentId, paymentId: payment.id, after: payment });
   });
   saveStore(s);
-  res.json({ success: true, batchPaymentId, vendor: items[0].supplier, totalAmount: expected, allocations });
+  res.json({ success: true, batchPaymentId, vendor: mixedSuppliers ? 'Multiple vendors' : items[0].supplier,
+    totalAmount: expected, allocations });
 });
 router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can pay.' });

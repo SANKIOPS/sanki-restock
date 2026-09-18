@@ -2457,7 +2457,7 @@ router.patch('/api/procurement/pos/:id/vendor-bill', (req, res) => {
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req) });
 });
-// A vendor's consolidated invoice is a parent record. Its child POs remain
+// A combined invoice is a parent record. Its child POs remain
 // untouched, including their accounting balances and individual payment trail.
 router.post('/api/procurement/combined-invoices', (req, res) => {
   if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
@@ -2467,16 +2467,17 @@ router.post('/api/procurement/combined-invoices', (req, res) => {
   const pos = ids.map(id => s.pos[id]);
   if (pos.some(po => !po || po.historical || po.id === 'PO-0001' || po.id === 'PO-0002'))
     return res.status(400).json({ success: false, error: 'Every selected bill must be a visible purchase PO.' });
-  const vendor = String(pos[0].vendor || '').trim();
-  if (!vendor || pos.some(po => String(po.vendor || '').trim().toLowerCase() !== vendor.toLowerCase()))
-    return res.status(400).json({ success: false, error: 'Combined bills must belong to the same vendor.' });
-  if (pos.some(po => po.origin !== pos[0].origin))
-    return res.status(400).json({ success: false, error: 'Combined bills must use the same purchase currency.' });
+  const vendors = [...new Map(pos.map(po => {
+    const name = String(po.vendor || 'Not recorded').trim() || 'Not recorded';
+    return [name.toLowerCase(), name];
+  })).values()];
   const alreadyGrouped = new Set(Object.values(s.combinedVendorInvoices).flatMap(invoice => invoice.poIds || []));
   if (ids.some(id => alreadyGrouped.has(id)))
     return res.status(409).json({ success: false, error: 'One or more bills already belong to a combined invoice.' });
   const id = 'CVI-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
-  const invoice = { id, vendor, origin: pos[0].origin, poIds: ids, childBills: {}, combined: {},
+  const invoice = { id, vendor: vendors.length === 1 ? vendors[0] : 'Multiple vendors', vendors,
+    origin: pos.every(po => po.origin === pos[0].origin) ? pos[0].origin : 'mixed',
+    poIds: ids, childBills: {}, combined: {},
     createdAt: new Date().toISOString(), createdBy: (req.user || {}).username || 'system' };
   s.combinedVendorInvoices[id] = invoice;
   saveStore(s);
