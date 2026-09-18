@@ -49,6 +49,15 @@ test('accounting can use P&L and expense APIs but cannot adjust stock', () => {
   assert.equal(apiAllowedForUser(accounting, '/api/inventory/adjust'), false);
 });
 
+test('accounting can reconcile combined vendor invoices without editing purchase costs', () => {
+  const accounting = user('accounting');
+  assert.equal(apiAllowedForUser(accounting, '/api/procurement/history'), true);
+  assert.equal(apiAllowedForUser(accounting, '/api/procurement/combined-invoices', 'POST'), true);
+  assert.equal(apiAllowedForUser(accounting, '/api/procurement/combined-invoices/CVI-1', 'PATCH'), true);
+  assert.equal(apiAllowedForUser(accounting, '/api/procurement/pos/PO-1/vendor-bill', 'PATCH'), true);
+  assert.equal(apiAllowedForUser(accounting, '/api/procurement/pos/PO-1/summary-calculation', 'PATCH'), false);
+});
+
 test('Samast Accounting role can use expenses but not SANKI P&L or stock', () => {
   const samast = user('samast_accounting');
   assert.equal(apiAllowedForUser(samast, '/api/expenses/list'), true);

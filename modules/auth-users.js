@@ -112,7 +112,7 @@ const DEFAULT_ROLE_PAGES = {
   inventory:   ['/showroom-replenishment.html', '/inventory-stats.html', '/rack-locations.html', '/procurement.html'],
   sales:       ['/orders.html', '/sales.html', '/analytics.html', '/velocity.html'],
   procurement: ['/procurement.html'],
-  accounting:  ['/accounting.html', '/expenses.html'],
+  accounting:  ['/accounting.html', '/expenses.html', '/procurement.html'],
   model_calendar: ['/model-calendar.html'],
   samast_accounting: ['/expenses.html'],
   personal_claimant: ['/expenses.html'],

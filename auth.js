@@ -100,6 +100,8 @@ const API_ROLE_RULES = [
   { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'samast_accounting', 'claimant', 'personal_claimant', 'owner'] },
   { prefix: '/api/telegram/',             roles: ['admin', 'accounting', 'claimant', 'owner'] },
   { prefix: '/api/pl/',                   roles: ['admin', 'accounting', 'revenue', 'owner'] },
+  { prefix: '/api/procurement/combined-invoices', roles: ['admin', 'owner', 'procurement', 'inventory', 'accounting'] },
+  { path: '/api/procurement/history',     roles: ['admin', 'owner', 'procurement', 'inventory', 'accounting'] },
   { prefix: '/api/procurement/',          roles: ['admin', 'procurement', 'inventory'] },
   { prefix: '/api/fresh/',                roles: ['admin', 'procurement'] },
   { prefix: '/api/casuals/',              roles: ['admin', 'procurement'] },
@@ -139,6 +141,14 @@ function apiAllowedForUser(user, p, method='GET') {
   if(isPrashantUser(user)&&((method==='POST'&&p==='/api/expenses/upload')||(method==='GET'&&p==='/api/expenses/config')))return true;
   const userRoles = rolesOf(user);
   if (userRoles.includes('admin') || userRoles.includes('owner')) return true;
+  // Accounting may review purchase figures and record vendor invoice data,
+  // but cannot change PO quantities, inventory, or purchase settings.
+  if (userRoles.includes('accounting')) {
+    if (method === 'GET' && ['/api/procurement/settings', '/api/procurement/lookups', '/api/procurement/vendors', '/api/procurement/pos', '/api/procurement/history'].includes(p)) return true;
+    if (method === 'GET' && (p.startsWith('/api/procurement/pos/') || p.startsWith('/api/procurement/invoice/'))) return true;
+    if (method === 'PATCH' && /^\/api\/procurement\/pos\/[^/]+\/vendor-bill$/.test(p)) return true;
+    if (method === 'POST' && /^\/api\/procurement\/pos\/[^/]+\/invoice$/.test(p)) return true;
+  }
   const rule = apiRuleFor(p);
   if (!rule) return false; // new APIs must opt in instead of silently opening
   if (rule.roles === '*') return true;

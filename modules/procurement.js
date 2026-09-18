@@ -177,6 +177,7 @@ function loadStore() {
   if (!s.settings) s.settings = { ...SEED.settings };
   else s.settings = { ...SEED.settings, ...s.settings };
   if (!s.pos)      s.pos = {};      // { [poId]: PO }
+  if (!s.combinedVendorInvoices) s.combinedVendorInvoices = {};
   if (!s.seq)      s.seq = 0;       // internal PO counter
   // Repair the old Z999 rollover bug. String.fromCharCode('Z' + 1) produced
   // '[' and reserved malformed SKUs such as SA111[134 on unposted POs.
@@ -2456,6 +2457,61 @@ router.patch('/api/procurement/pos/:id/vendor-bill', (req, res) => {
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req) });
 });
+// A vendor's consolidated invoice is a parent record. Its child POs remain
+// untouched, including their accounting balances and individual payment trail.
+router.post('/api/procurement/combined-invoices', (req, res) => {
+  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
+  const s = loadStore(), ids = (req.body || {}).poIds;
+  if (!Array.isArray(ids) || ids.length < 2 || ids.length !== new Set(ids).size || ids.some(id => typeof id !== 'string'))
+    return res.status(400).json({ success: false, error: 'Select at least two distinct purchase bills.' });
+  const pos = ids.map(id => s.pos[id]);
+  if (pos.some(po => !po || po.historical || po.id === 'PO-0001' || po.id === 'PO-0002'))
+    return res.status(400).json({ success: false, error: 'Every selected bill must be a visible purchase PO.' });
+  const vendor = String(pos[0].vendor || '').trim();
+  if (!vendor || pos.some(po => String(po.vendor || '').trim().toLowerCase() !== vendor.toLowerCase()))
+    return res.status(400).json({ success: false, error: 'Combined bills must belong to the same vendor.' });
+  if (pos.some(po => po.origin !== pos[0].origin))
+    return res.status(400).json({ success: false, error: 'Combined bills must use the same purchase currency.' });
+  const alreadyGrouped = new Set(Object.values(s.combinedVendorInvoices).flatMap(invoice => invoice.poIds || []));
+  if (ids.some(id => alreadyGrouped.has(id)))
+    return res.status(409).json({ success: false, error: 'One or more bills already belong to a combined invoice.' });
+  const id = 'CVI-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const invoice = { id, vendor, origin: pos[0].origin, poIds: ids, childBills: {}, combined: {},
+    createdAt: new Date().toISOString(), createdBy: (req.user || {}).username || 'system' };
+  s.combinedVendorInvoices[id] = invoice;
+  saveStore(s);
+  res.status(201).json({ success: true, invoice });
+});
+router.patch('/api/procurement/combined-invoices/:id', (req, res) => {
+  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
+  const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id], body = req.body || {};
+  if (!invoice) return res.status(404).json({ success: false, error: 'Combined invoice not found.' });
+  if (!body.childBills || typeof body.childBills !== 'object' || Array.isArray(body.childBills) || !body.combined || typeof body.combined !== 'object')
+    return res.status(400).json({ success: false, error: 'Enter bill-level and combined vendor figures.' });
+  if (Object.keys(body.childBills).some(id => !invoice.poIds.includes(id)))
+    return res.status(400).json({ success: false, error: 'A bill is not linked to this combined invoice.' });
+  const numeric = (value, integer) => value === '' || value == null ? null :
+    Number.isFinite(Number(value)) && Number(value) >= 0 && (!integer || Number.isInteger(Number(value))) ? Number(value) : undefined;
+  const childBills = {};
+  for (const id of invoice.poIds) {
+    const child = body.childBills[id] || {}, quantity = numeric(child.totalQuantity, true), value = numeric(child.billValueYuan, false);
+    if (quantity === undefined || value === undefined) return res.status(400).json({ success: false, error: 'Bill quantities and Yuan values must be non-negative numbers.' });
+    childBills[id] = { billNumber: String(child.billNumber || '').trim().slice(0, 160), totalQuantity: quantity, billValueYuan: value };
+  }
+  const combined = {};
+  for (const key of ['totalWeightGrams', 'localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan', 'combinedFreightYuan', 'exchangeRate']) {
+    const value = numeric(body.combined[key], false);
+    if (value === undefined) return res.status(400).json({ success: false, error: 'Combined costs, weight and rate must be non-negative numbers.' });
+    combined[key] = value;
+  }
+  if (combined.exchangeRate === 0) return res.status(400).json({ success: false, error: 'Exchange rate must be greater than zero.' });
+  invoice.history = Array.isArray(invoice.history) ? invoice.history : [];
+  if (invoice.updatedAt) invoice.history.push({ childBills: invoice.childBills, combined: invoice.combined, updatedAt: invoice.updatedAt, updatedBy: invoice.updatedBy });
+  invoice.childBills = childBills; invoice.combined = combined;
+  invoice.updatedAt = new Date().toISOString(); invoice.updatedBy = (req.user || {}).username || 'system';
+  saveStore(s);
+  res.json({ success: true, invoice });
+});
 router.get('/api/procurement/history', (req, res) => {
   const s = loadStore();
   let accounting = null;
@@ -2466,7 +2522,7 @@ router.get('/api/procurement/history', (req, res) => {
     .filter(p => !p.historical && p.id !== 'PO-0001' && p.id !== 'PO-0002')
     .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canReconcileVendorBill(req), s.settings) }))
     .sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
-  res.json({ success: true, history, completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
+  res.json({ success: true, history, combinedInvoices: Object.values(s.combinedVendorInvoices), completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
 });
 router.get('/api/procurement/pos/:id', (req, res) => {
   const s = loadStore();
