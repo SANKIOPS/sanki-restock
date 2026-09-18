@@ -796,6 +796,10 @@ function canManagePurchases(req) {
   return roles.map(r => String(r).toLowerCase()).some(r =>
     r === 'admin' || r === 'owner' || r === 'procurement' || r === 'inventory');
 }
+function canReconcileVendorBill(req) {
+  const roles = (req.user && (Array.isArray(req.user.roles) ? req.user.roles : []).concat([req.user.role])) || [];
+  return canManagePurchases(req) || roles.some(role => String(role).toLowerCase() === 'accounting');
+}
 function isLockedPo(po) { return po.status === 'posted' || po.status === 'posting_partial'; }
 function publicPo(po, req) {
   if (canManagePurchases(req)) return po;
@@ -847,7 +851,7 @@ router.post('/api/procurement/pos/:id/invoice', invoiceUpload.single('invoice'),
   const role=String(req.user&&req.user.role||'').toLowerCase();
   if(!req.file)return res.status(400).json({success:false,error:'Choose the original vendor bill.'});
   const s=loadStore(),po=s.pos[req.params.id];if(!po)return res.status(404).json({success:false,error:'PO not found.'});
-  if (po.status === 'posted' ? (!isAdmin(req) && role !== 'owner') : !canManagePurchases(req))
+  if (po.status === 'posted' ? (!isAdmin(req) && role !== 'owner') : !canReconcileVendorBill(req))
     return res.status(403).json({success:false,error:'Purchases access is required; only the Owner can replace a posted bill.'});
   const invoice=persistInvoice(req.file);invoice.uploadedBy=(req.user&&req.user.username)||'owner';po.invoice=invoice;
   po.invoiceHistory=Array.isArray(po.invoiceHistory)?po.invoiceHistory:[];po.invoiceHistory.push({...invoice,reason:'Original bill attached to PO'});saveStore(s);
@@ -2372,8 +2376,13 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   if (po.status !== 'posted') return res.status(400).json({ success: false, error: 'Use the normal PO editor until this purchase is posted.' });
   const reason = String(b.reason || '').trim();
   if (!reason) return res.status(400).json({ success: false, error: 'A correction reason is required.' });
+  const rateForExtras = Number(b.exRate != null ? b.exRate : po.exRate != null ? po.exRate : (s.settings || {}).exRate);
+  const localForExtras = Number(b.localTransportYuan != null ? b.localTransportYuan : po.localTransportYuan) || 0;
+  const otherForExtras = Number(b.otherCostsYuan != null ? b.otherCostsYuan : po.otherCostsYuan) || 0;
+  if ((localForExtras + otherForExtras) > 0 && !(rateForExtras > 0))
+    return res.status(400).json({ success: false, error: 'An exchange rate is required for local transport and other Yuan costs.' });
   const validPostedNumber = (v, integer) => v == null || (v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && (!integer || Number.isInteger(Number(v))));
-  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].some(k => !validPostedNumber(b[k], false)) ||
+  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan', 'otherCostsYuan'].some(k => !validPostedNumber(b[k], false)) ||
       (Array.isArray(b.lines) && b.lines.some(l => !validPostedNumber(l.qty, true) || !validPostedNumber(l.unitPrice, false) || !validPostedNumber(l.weightGrams, false))))
     return res.status(400).json({ success: false, error: 'Enter valid non-negative quantities, prices, weights and rates.' });
   const before = poCostBreakdown(po, s.settings);
@@ -2381,6 +2390,7 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = Math.max(0, num(b.freightPerGram));
   if (b.transportTotal != null && b.transportTotal !== '') po.transportTotal = Math.max(0, num(b.transportTotal));
   if (b.localTransportYuan != null && b.localTransportYuan !== '') po.localTransportYuan = Math.max(0, num(b.localTransportYuan));
+  if (b.otherCostsYuan != null && b.otherCostsYuan !== '') po.otherCostsYuan = Math.max(0, num(b.otherCostsYuan));
   if (Array.isArray(b.lines)) b.lines.forEach((edit, i) => {
     const line = (po.lines || [])[i]; if (!line) return;
     if (edit.qty != null && edit.qty !== '') line.qty = Math.max(0, Math.round(num(edit.qty)));
@@ -2406,11 +2416,14 @@ router.patch('/api/procurement/pos/:id/summary-calculation', (req, res) => {
   if (!Array.isArray(b.lines) || b.lines.length !== (po.lines || []).length)
     return res.status(400).json({ success: false, error: 'Submit every PO line in its original order.' });
   const validNumber = (v, integer) => v !== '' && v != null && Number.isFinite(Number(v)) && Number(v) >= 0 && (!integer || Number.isInteger(Number(v)));
-  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].some(k => b[k] != null && !validNumber(b[k], false)) ||
+  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan', 'otherCostsYuan'].some(k => b[k] != null && !validNumber(b[k], false)) ||
       b.lines.some(l => !validNumber(l.qty, true) || !validNumber(l.unitPrice, false) || !validNumber(l.weightGrams, false)))
     return res.status(400).json({ success: false, error: 'Enter valid non-negative quantities, prices, weights and rates.' });
+  const effectiveRate = Number(b.exRate != null ? b.exRate : po.exRate != null ? po.exRate : (s.settings || {}).exRate);
+  const extraYuan = (Number(b.localTransportYuan != null ? b.localTransportYuan : po.localTransportYuan) || 0) + (Number(b.otherCostsYuan != null ? b.otherCostsYuan : po.otherCostsYuan) || 0);
+  if (extraYuan > 0 && !(effectiveRate > 0)) return res.status(400).json({ success: false, error: 'An exchange rate is required for local transport and other Yuan costs.' });
   const before = poCostBreakdown(po, s.settings);
-  ['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].forEach(k => { if (b[k] != null) po[k] = Number(b[k]); });
+  ['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan', 'otherCostsYuan'].forEach(k => { if (b[k] != null) po[k] = Number(b[k]); });
   b.lines.forEach((edit, i) => { const line = po.lines[i]; line.qty = Number(edit.qty); line.perPcsYuan = Number(edit.unitPrice); line.weightGrams = Number(edit.weightGrams); });
   po.costCorrectionHistory = Array.isArray(po.costCorrectionHistory) ? po.costCorrectionHistory : [];
   po.costCorrectionHistory.push({ correctedAt: new Date().toISOString(), correctedBy: (req.user || {}).username || 'system', reason: 'Purchase Summary inline correction', before, after: poCostBreakdown(po, s.settings) });
@@ -2419,13 +2432,14 @@ router.patch('/api/procurement/pos/:id/summary-calculation', (req, res) => {
 });
 // Vendor-stated figures are separate from our receipt and landed-cost figures.
 router.patch('/api/procurement/pos/:id/vendor-bill', (req, res) => {
-  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
   const s = loadStore(), po = s.pos[req.params.id], b = req.body || {};
   if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
   const bill = {};
   ['billNumber', 'billDate', 'vendorName', 'currency'].forEach(k => { bill[k] = String(b[k] || '').trim().slice(0, 160); });
+  if (bill.currency && !['CNY', 'INR'].includes(bill.currency)) return res.status(400).json({ success: false, error: 'Choose CNY or INR for the vendor bill.' });
   if (bill.billDate && !/^\d{4}-\d{2}-\d{2}$/.test(bill.billDate)) return res.status(400).json({ success: false, error: 'Use a valid bill date.' });
-  for (const k of ['totalValue', 'totalQuantity', 'localTransportation', 'exchangeRate']) {
+  for (const k of ['totalValue', 'totalQuantity', 'freight', 'localTransportation', 'otherCosts', 'totalAmount', 'exchangeRate']) {
     if (b[k] === '' || b[k] == null) { bill[k] = null; continue; }
     const n = Number(b[k]);
     if (!Number.isFinite(n) || n < 0 || (k === 'totalQuantity' && !Number.isInteger(n))) return res.status(400).json({ success: false, error: 'Vendor bill figures must be non-negative numbers.' });
@@ -2446,7 +2460,7 @@ router.get('/api/procurement/history', (req, res) => {
   // from this list. Preserve their stored records and Shopify inventory.
   const history = Object.values(s.pos)
     .filter(p => !p.historical && p.id !== 'PO-0001' && p.id !== 'PO-0002')
-    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canManagePurchases(req), s.settings) }))
+    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canReconcileVendorBill(req), s.settings) }))
     .sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
   res.json({ success: true, history, completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
 });
