@@ -1771,10 +1771,14 @@ router.post('/api/procurement/pos/:id/image-styling', async (req,res) => {
   if(!group)return res.status(404).json({success:false,error:'Product group not found.'});
   const styling=openaiPilot.normalizeStyling((req.body||{}).styling,group);
   po.imageStyling=po.imageStyling||{};
-  const changed=JSON.stringify(po.imageStyling[key]||{})!==JSON.stringify(styling);
+  const previous=openaiPilot.normalizeStyling(po.imageStyling[key],group);
+  const changedFields=Object.keys(styling).filter(field=>previous[field]!==styling[field]);
   po.imageStyling[key]=styling;
-  if(changed) for(const image of ((po.aiImages||{})[key]||[])) {
+  if(changedFields.length) for(const image of ((po.aiImages||{})[key]||[])) {
     if(image.source==='openai-pilot' && image.styling && ['female','male','model-front','model-side','model-side-female','model-side-male'].includes(image.type)) {
+      const gender= image.type==='female'||image.type==='model-side-female'?'female'
+        :image.type==='male'||image.type==='model-side-male'?'male':group.audience==='Men'?'male':'female';
+      if(changedFields.every(field=>field===(gender==='female'?'maleComplexion':'femaleComplexion')))continue;
       image.approved=false;
       image.qa={...(image.qa||{}),status:'needs-review',issues:['Model styling changed after this image was generated. Regenerate this view.']};
     }

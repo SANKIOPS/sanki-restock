@@ -2278,6 +2278,8 @@
       var lastAttempt=paidAttempts.slice().reverse().find(function(a){return a.groupKey===np.key;});
       var existingPaidViews=imgs.filter(function(image){return image.url&&paidTypesFor(np).indexOf(image.type)>=0;}).map(function(image){return image.type;});
       var missing=missingPaidDrafts(np),paidLabel=hasPaidAttempt?(missing.images.length||missing.seo?'Generate missing drafts (paid)':'Drafts ready — review below'):'Generate images + SEO (paid pilot)';
+      var viewNames={'front':'product front','back':'product back','model-front':'model front','model-side':'model three-quarter','female':'female front','model-side-female':'female three-quarter','male':'male front','model-side-male':'male three-quarter'};
+      var missingNote=missing.images.length?'Missing views: '+missing.images.map(function(type){return viewNames[type]||type;}).join(', ')+'. Select Generate missing drafts to attempt only these views.':'';
       var thumb=np.photoUrl?('<img data-zoom src="'+esc(np.photoUrl)+'" title="Uploaded product photo — click to enlarge" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;flex:none">'):'';
       var attemptNote=lastAttempt&&lastAttempt.errors&&lastAttempt.errors.length
         ? 'Previous paid attempt '+esc(lastAttempt.status||'needs review')+': '+esc(lastAttempt.errors.map(function(e){return e.type+': '+e.error;}).join('; '))
@@ -2288,7 +2290,8 @@
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
         '<div>'+(canStartPaidImages()?'<button class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+paidLabel+'</button> '+(existingPaidViews.length?'<button class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+'<button class="btn ghost sm" data-codexbatch="'+i+'">Prepare Codex batch</button> <label class="btn ghost sm">Return Codex image<input type="file" accept="image/jpeg,image/png,image/webp" data-codexreturn="'+i+'" style="display:none"></label> <label class="btn ghost sm">Return Codex SEO<input type="file" accept="application/json,.json" data-codexseo="'+i+'" style="display:none"></label> <button class="btn ghost sm" data-genimg="'+i+'">Gemini generation (paid)</button></div></div>'+
-        '<div data-pilot-message role="status" style="font-size:12px;min-height:18px;margin:6px 0;color:var(--emerald-d)">'+attemptNote+'</div>';
+        '<div data-pilot-message role="status" style="font-size:12px;min-height:18px;margin:6px 0;color:var(--emerald-d)">'+attemptNote+'</div>'+
+        (hasPaidAttempt&&missingNote?'<div class="muted" style="font-size:11px;margin-bottom:6px">'+esc(missingNote)+'</div>':'');
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
         '. Confirm whether these are duplicate records or separate articles.</div>':'';
@@ -2349,7 +2352,14 @@
           '<div style="width:50%"><div class="muted" style="font-size:10px">Back reference</div>'+(studio.backRefs[np.key]?'<img data-zoom src="'+esc(studio.backRefs[np.key])+'" title="Original back · never posted" style="width:100%;height:105px;object-fit:contain;cursor:zoom-in">':'<div class="muted" style="height:105px;display:flex;align-items:center;justify-content:center">Not supplied</div>')+'</div></div>'+
           '<label class="btn ghost sm" style="cursor:pointer;margin-top:5px">'+(studio.backRefs[np.key]?'Replace':'Add')+' back reference<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>';
         if(t[0]==='model-back'&&!hasBackRef) empty='<div class="muted" style="padding:20px 0">Upload a real back photo first</div>';
-        else if(t[0].indexOf('model-')===0 || t[0]==='detail') empty='<div class="muted" style="padding:20px 0">Ready for image generation</div>';
+        else if(t[0].indexOf('model-')===0 || t[0]==='female'||t[0]==='male') {
+          var viewError=lastAttempt&&(lastAttempt.errors||[]).slice().reverse().find(function(error){return error.type===t[0];});
+          var frontType={'model-side':'model-front','model-side-female':'female','model-side-male':'male'}[t[0]];
+          var frontImage=frontType&&byType[frontType];
+          var frontReady=!frontType||(frontImage&&frontImage.url&&(!frontImage.qa||['pass','manual-reviewed'].indexOf(frontImage.qa.status)>=0));
+          empty='<div class="muted" style="padding:16px 4px;font-size:12px">'+
+            (viewError?'<b>Previous attempt did not complete this view</b><br>'+esc(viewError.error):!frontReady?'Matching front view must pass its visual check first.':'Not generated yet. Use Generate missing drafts (paid).')+'</div>';
+        }
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im&&t[0]!=='original'?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:'+(t[0].indexOf('model-')===0||t[0]==='female'||t[0]==='male'?'190':'160')+'px;object-fit:contain;background:var(--ivory2);border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+

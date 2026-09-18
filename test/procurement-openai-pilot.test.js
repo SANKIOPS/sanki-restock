@@ -12,6 +12,16 @@ test('pilot limits views to supported front and audience model without a fabrica
   assert.match(pilot.imagePrompt(group,'back'),/real photo of the back/);
 });
 
+test('missing unisex side views show their own last failure and styling changes preserve the other gender',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/Missing views: .*Generate missing drafts/);
+  assert.match(html,/lastAttempt\.errors\|\|\[\]\)\.slice\(\)\.reverse\(\)\.find\(function\(error\)\{return error\.type===t\[0\];\}\)/);
+  assert.match(html,/Matching front view must pass its visual check first/);
+  assert.match(server,/const changedFields=Object\.keys\(styling\)\.filter\(field=>previous\[field\]!==styling\[field\]\)/);
+  assert.match(server,/changedFields\.every\(field=>field===\(gender==='female'\?'maleComplexion':'femaleComplexion'\)\)/);
+});
+
 test('paid model prompts honor safe outfit choices without changing product-only shots',()=>{
   const styling={pair:'Baggy trousers',aesthetic:'Streetwear',bag:true,chain:'Gold chain',cap:true};
   assert.deepEqual(pilot.normalizeStyling(styling,group),{
