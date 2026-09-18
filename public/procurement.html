@@ -855,6 +855,7 @@
     function renderVendorPaymentSummary(){
       var host=el('vendorPaymentSummary');if(!host)return;
       var pos=purchaseHistory.filter(function(po){var p=po.paymentSummary||{},due=Number(p.balanceDue!=null?p.balanceDue:Number(p.amount||0)-Number(p.paidAmount||0));return !po.historical&&Number(p.amount)>0&&due>0;});
+      Object.keys(selectedPaymentBills).forEach(function(id){if(!pos.some(function(po){return po.id===id;}))delete selectedPaymentBills[id];});
       var groups={};pos.forEach(function(po){var vendor=String(po.vendor||'Unknown vendor').trim(),key=vendor.toLowerCase(),g=groups[key]||(groups[key]={vendor:vendor,pos:[]});g.pos.push(po);});
       var selected=pos.filter(function(po){return !!selectedPaymentBills[po.id];}),selectedVendor=selected.length?String(selected[0].vendor||'').trim().toLowerCase():'';
       var selectedDue=selected.reduce(function(sum,po){var p=po.paymentSummary||{};return sum+Math.max(0,Number(p.balanceDue!=null?p.balanceDue:Number(p.amount||0)-Number(p.paidAmount||0)));},0);
