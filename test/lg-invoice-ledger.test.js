@@ -107,21 +107,25 @@ test('LG payment records partial and final allocations under one reference per p
     crypto: { randomBytes: () => Buffer.from(String(++nonce).padStart(3, '0')) }, procurementAccounting: s => s.procurementAccounting,
     audit: () => {}, saveStore: () => { saved++; }, Date, Math, Number, String, Array, Set, Buffer };
   vm.runInNewContext(source.slice(start, end), context);
-  const pay = (amount, method = 'UPI') => { let status = 200, body;
-    handler({ params: { id: 'CVI-1' }, body: { amount, account: 'Bank 1234', date: '2026-09-18',
-      reference: 'UTR-123', paymentProofs: ['/proof.jpg'], paymentType: method }, user: { username: 'owner' } },
+  const pay = (amount, account = 'Axis Bank 3448') => { let status = 200, body;
+    handler({ params: { id: 'CVI-1' }, body: { amount, account, date: '2026-09-18',
+      reference: 'UTR-123', paymentProofs: ['/proof.jpg'] }, user: { username: 'owner' } },
     { status(n) { status = n; return this; }, json(x) { body = x; } }); return { status, body }; };
+  assert.equal(pay(100, 'Prashant Axis 3645').status, 400);
   assert.equal(pay(1001).status, 400);
   const first = pay(250);assert.equal(first.body.success, true);assert.equal(first.body.payable.balanceDue, 750);
   assert.equal(first.body.allocations.reduce((n, a) => n + a.amount, 0), 250);
   assert.equal(new Set(first.body.allocations.map(a => a.poId)).size, 2);
-  const second = pay(750, 'NEFT');assert.equal(second.body.success, true);assert.equal(second.body.payable.balanceDue, 0);
+  const second = pay(250, 'Tiana 0425');assert.equal(second.body.success, true);assert.equal(second.body.payable.balanceDue, 500);
+  const third = pay(500, 'Gagan Sir Cash');assert.equal(third.body.success, true);assert.equal(third.body.payable.balanceDue, 0);
   assert.equal(pay(1).status, 400);
-  assert.equal(saved, 2);
+  assert.equal(saved, 3);
   const payments = Object.values(store.procurementAccounting.paymentsByPo).flatMap(x => x.payments);
-  assert.equal(new Set(payments.map(x => x.batchPaymentId)).size, 2);
+  assert.equal(new Set(payments.map(x => x.batchPaymentId)).size, 3);
   assert.ok(payments.every(x => x.combinedInvoiceId === 'CVI-1' && x.bankReference === 'UTR-123'));
-  assert.ok(payments.some(x => x.paymentType === 'NEFT'));
+  assert.ok(payments.some(x => x.account === 'Axis Bank 3448' && x.paymentType === 'Bank Transfer'));
+  assert.ok(payments.some(x => x.account === 'Tiana 0425' && x.paymentType === 'Bank Transfer'));
+  assert.ok(payments.some(x => x.account === 'Gagan Sir Cash' && x.paymentType === 'Cash'));
 });
 
 test('legacy Logistics Mediator label appears as LG without changing payment history', () => {

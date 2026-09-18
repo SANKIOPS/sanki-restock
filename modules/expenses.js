@@ -2217,8 +2217,9 @@ router.post('/api/expenses/procurement-lg/:id/pay', (req, res) => {
   const amount = Number(b.amount), due = round0(payable.balanceDue);
   if (!Number.isInteger(amount) || amount <= 0 || amount > due)
     return res.status(400).json({ success: false, error: 'Enter a whole-rupee payment from ₹1 to ₹' + due + '.' });
-  const account = allowedPayingAccount(req, 'SANKI', String(b.account || '').trim());
-  if (!account) return res.status(400).json({ success: false, error: 'Select a SANKI paying account.' });
+  const lgAccounts = ['Axis Bank 3448', 'Gagan Sir Cash', 'Tiana 0425'];
+  const account = lgAccounts.find(name => name === String(b.account || '').trim());
+  if (!account) return res.status(400).json({ success: false, error: 'Select Axis Bank 3448, Gagan Sir Cash, or Tiana 0425 for this LG payment.' });
   const proofs = proofList(b.paymentProofs, b.paymentProof);
   if (!proofs.length) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
   const date = String(b.date || '').slice(0, 10);
@@ -2234,7 +2235,7 @@ router.post('/api/expenses/procurement-lg/:id/pay', (req, res) => {
   if (left) return res.status(409).json({ success: false, error: 'Could not allocate the LG payment.' });
   const batchPaymentId = 'PPB-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
   const cfg = procurementAccounting(s), linkedPoIds = payable.poIds, reference = String(b.reference || '').trim().slice(0, 120);
-  const paymentType = ['UPI', 'Cash', 'Bank Transfer', 'NEFT', 'IMPS'].includes(b.paymentType) ? b.paymentType : 'UPI';
+  const paymentType = account === 'Gagan Sir Cash' ? 'Cash' : 'Bank Transfer';
   const recorded = [];
   payable.purchaseBills.forEach((item, index) => {
     if (!allocations[index]) return;

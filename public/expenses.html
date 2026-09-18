@@ -214,10 +214,9 @@
     <p class="sub">Record a payment already made against a finalized LG bill. Partial payments remain due on the same bill.</p>
     <div class="grid">
       <div class="fld full"><label>LG bill</label><select id="lgPayBill"></select></div>
-      <div class="fld"><label>Paying SANKI account</label><select id="lgPayAccount"></select></div>
       <div class="fld"><label>Amount paid ₹</label><input id="lgPayAmount" type="number" min="1" step="1"><button type="button" class="btn mini ghost" id="lgPayFull">Use full outstanding</button></div>
       <div class="fld"><label>Payment date</label><input id="lgPayDate" type="date"></div>
-      <div class="fld"><label>Method</label><select id="lgPayType"><option>UPI</option><option>Bank Transfer</option><option>NEFT</option><option>IMPS</option><option>Cash</option></select></div>
+      <div class="fld"><label>Payment method / paying account</label><select id="lgPayAccount"><option value="">Choose paying account</option><option value="Axis Bank 3448">Axis Bank 3448</option><option value="Gagan Sir Cash">Gagan Sir Cash</option><option value="Tiana 0425">Tiana 0425</option></select></div>
       <div class="fld"><label>Payment reference / ID</label><input id="lgPayReference"></div>
       <div class="fld full"><label>Payment proof (required)</label><input id="lgPayProof" type="file" accept="image/*" multiple></div>
       <div class="fld full"><label>Note (optional)</label><input id="lgPayNote"></div>
@@ -892,8 +891,8 @@
     function chooseLgPayment(){var p=lgPayablesById[el('lgPayBill').value];if(!p)return;el('lgPayAmount').value=p.balanceDue;el('lgPayAmount').max=p.balanceDue;el('lgPayDue').textContent='LG bill '+p.billNo+' · Outstanding '+fmt(p.balanceDue)+' · '+(p.poIds||[]).length+' linked purchase bill(s).';}
     window.openLgPayment=function(id){
       var dialog=el('lgPayDlg');el('lgPayMessage').textContent='Loading finalized LG bills…';
-      el('lgPayAccount').innerHTML='<option value="">Choose SANKI paying account</option>'+opts(payingAccountsForNature('SANKI'));
-      el('lgPayDate').value=today();el('lgPayType').value='UPI';el('lgPayProof').value='';el('lgPayReference').value='';el('lgPayNote').value='';
+      el('lgPayAccount').value='';
+      el('lgPayDate').value=today();el('lgPayProof').value='';el('lgPayReference').value='';el('lgPayNote').value='';
       if(!dialog.open)dialog.showModal();
       loadLgPayables().then(function(items){el('lgPayBill').innerHTML=items.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.billNo)+' · '+fmt(p.balanceDue)+' due</option>';}).join('');if(id&&items.some(function(p){return p.id===id;}))el('lgPayBill').value=id;chooseLgPayment();el('lgPayMessage').textContent=items.length?'':'No finalized LG bills are pending.';}).catch(function(error){el('lgPayMessage').textContent=error.message;});
     };
@@ -904,7 +903,7 @@
       var p=lgPayablesById[el('lgPayBill').value],amount=Number(el('lgPayAmount').value),account=el('lgPayAccount').value,files=el('lgPayProof').files,button=el('lgPaySave');
       if(!p||!Number.isInteger(amount)||amount<1||amount>p.balanceDue||!account||!el('lgPayDate').value||!files.length){el('lgPayMessage').textContent='Choose an LG bill, account, payment date, proof and whole-rupee amount up to the outstanding balance.';return;}
       button.disabled=true;el('lgPayMessage').textContent='Uploading payment proof…';
-      uploadFiles(files,'SANKI').then(function(proofs){return api('/api/expenses/procurement-lg/'+encodeURIComponent(p.id)+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:amount,account:account,date:el('lgPayDate').value,paymentType:el('lgPayType').value,reference:el('lgPayReference').value,note:el('lgPayNote').value,paymentProofs:proofs})});}).then(function(d){
+      uploadFiles(files,'SANKI').then(function(proofs){return api('/api/expenses/procurement-lg/'+encodeURIComponent(p.id)+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:amount,account:account,date:el('lgPayDate').value,reference:el('lgPayReference').value,note:el('lgPayNote').value,paymentProofs:proofs})});}).then(function(d){
         button.disabled=false;if(!d.success){el('lgPayMessage').textContent=d.error||'Could not record payment.';return;}
         el('lgPayDlg').close();setMsg('Payment '+d.batchPaymentId+' recorded against '+p.billNo+'. Remaining '+fmt(d.payable.balanceDue)+'.',true);
         if(tab==='vendors')loadVendors();else if(tab==='pending')loadPendingPayments();else if(tab==='log')loadLgPayables();
