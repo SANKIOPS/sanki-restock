@@ -193,6 +193,7 @@
       <button data-t="salaryledgers">Salary ledgers</button>
       <button data-t="creditcards">Credit cards</button>
       <button data-t="cash">Account ledgers</button>
+      <button data-t="paytm" id="paytmTab" style="display:none">Paytm reports</button>
       <button data-t="reimbursements">Reimbursements</button>
       <button data-t="rentals" id="rentalsTab" style="display:none">Rental income</button>
       <button data-t="categories" id="categoriesTab" style="display:none">Manage categories</button>
@@ -462,6 +463,7 @@
       if(tab==='salaryledgers') return renderSalaryLedgers();
       if(tab==='creditcards') return renderCreditCards();
       if(tab==='cash') return renderCash();
+      if(tab==='paytm') return renderPaytmReports();
       if(tab==='reimbursements') return renderReimbursements();
       if(tab==='rentals'&&cfg.isOwner) return window.mountRentalRegister(el('panel'),api,esc,fmt);
       if(tab==='categories'&&cfg.isOwner) return renderCategories();
@@ -1253,6 +1255,31 @@
     });
 
     // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS ──
+    function renderPaytmReports(){
+      el('panel').innerHTML='<div class="card"><h3 style="margin-top:0">Paytm payments and settlements</h3><p class="sub">Upload detailed Paytm transaction CSVs from 22 August 2026 onward. Re-uploading the same report will not duplicate transactions. This is evidence for review; it does not change Shopify sales, Paytm Clearing, Axis 3448, or a finalized reconciliation.</p><div class="filters"><div class="fld"><label>Paytm transaction report CSV(s)</label><input id="ptFiles" type="file" accept=".csv,text/csv" multiple></div><button class="btn primary mini" id="ptPreview">Upload and preview</button></div><div id="ptMessage" class="msg"></div><div id="ptPreviewResult"></div></div><div class="card"><h3 style="margin-top:0">Imported Paytm transactions</h3><div id="ptSaved" class="muted">Loading…</div></div>';
+      el('ptPreview').onclick=function(){
+        var files=Array.from(el('ptFiles').files||[]);if(!files.length){el('ptMessage').textContent='Choose one or more Paytm CSV files.';return;}
+        var form=new FormData();files.forEach(function(file){form.append('reports',file);});
+        el('ptPreview').disabled=true;el('ptMessage').textContent='Reading '+files.length+' report(s)…';
+        fetch('/api/expenses/paytm-reports/preview',{method:'POST',body:form}).then(function(response){return response.json();}).then(function(d){
+          el('ptPreview').disabled=false;
+          if(!d.success){el('ptMessage').textContent=d.error||'Could not read reports.';return;}
+          el('ptMessage').textContent=d.newTransactions+' new successful transactions · '+d.duplicates+' already imported. No accounting entry has changed.';
+          var rows=(d.payouts||[]).map(function(p){return '<tr><td>'+esc(p.payoutDate||'—')+'</td><td>'+esc(p.payoutId)+'</td><td>'+p.count+'</td><td class="r">'+fmt(p.gross)+'</td><td class="r">'+fmt(p.commission)+'</td><td class="r">'+fmt(p.gst)+'</td><td class="r">'+fmt(p.net)+'</td></tr>';}).join('');
+          el('ptPreviewResult').innerHTML='<h4>Preview before saving</h4>'+(d.warnings||[]).map(function(w){return '<p class="neg">'+esc(w)+'</p>';}).join('')+'<p class="sub">Only transactions with a unique Paytm transaction ID are imported. Confirming stores report evidence; it does not post or reconcile money.</p>'+(rows?'<div style="overflow:auto"><table class="resp"><thead><tr><th>Payout date</th><th>Payout ID</th><th>Payments</th><th>Gross</th><th>Fee</th><th>GST</th><th>Net</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p class="muted">No payout groups in this upload.</p>')+'<button class="btn green" id="ptConfirm">Save report evidence</button>';
+          el('ptConfirm').onclick=function(){var button=this;button.disabled=true;api('/api/expenses/paytm-reports/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:d.draftId})}).then(function(saved){button.disabled=false;if(!saved.success){el('ptMessage').textContent=saved.error||'Could not save report.';return;}el('ptPreviewResult').innerHTML='';el('ptFiles').value='';el('ptMessage').textContent='Saved '+saved.added+' new transactions. No ledger or bank reconciliation was changed.';showPaytmSaved(saved.view);});};
+        }).catch(function(){el('ptPreview').disabled=false;el('ptMessage').textContent='Upload failed. Please try again.';});
+      };
+      api('/api/expenses/paytm-reports').then(function(d){if(!d.success){el('ptSaved').textContent=d.error||'Could not load Paytm reports.';return;}showPaytmSaved(d);});
+    }
+    function showPaytmSaved(d){
+      var host=el('ptSaved');if(!host)return;
+      var payouts=d.payouts||[],matches={};(d.orderMatches||[]).forEach(function(m){matches[m.transactionId]=m;});
+      var summary='<p class="sub">Period: '+esc(d.from)+' to '+esc(d.through)+' · '+(d.transactions||[]).length+' unique successful payments · '+payouts.length+' payout groups. A suggested match is not a confirmed reconciliation.</p>';
+      var payoutRows=payouts.map(function(p){var detail=(p.bankCandidates||[]).map(function(b){return esc(b.date)+' · '+fmt(b.credit)+' · '+esc(b.reference);}).join('<br>');return '<tr><td>'+esc(p.payoutDate||'—')+'</td><td>'+esc(p.payoutId)+'<div class="muted">UTR '+esc(p.utr||'—')+'</div></td><td>'+p.count+'</td><td class="r">'+fmt(p.gross)+'</td><td class="r">'+fmt(p.commission+p.gst)+'</td><td class="r">'+fmt(p.net)+'</td><td>'+esc(p.bankMatch)+(detail?'<div class="muted">'+detail+'</div>':'')+'</td></tr>';}).join('');
+      var txRows=(d.transactions||[]).map(function(t){var m=matches[t.transactionId]||{},candidate=(m.orderCandidates||[]).map(function(o){return '#'+esc(o.number)+' · '+esc(o.customer||'Customer not recorded')+' · '+fmt(o.total);}).join(', ');return '<tr><td>'+esc(t.date)+'</td><td>'+esc(t.transactionId)+'</td><td>'+esc(t.paymentMode||'—')+'</td><td class="r">'+fmt(t.amount)+'</td><td class="r">'+fmt(t.commission+t.gst)+'</td><td>'+esc(m.orderMatch||'not found')+(candidate?'<div class="muted">'+candidate+'</div>':'')+'</td></tr>';}).join('');
+      host.innerHTML=summary+(payoutRows?'<h4>Paytm payouts compared with Axis 3448</h4><div style="overflow:auto"><table class="resp"><thead><tr><th>Payout date</th><th>Payout / UTR</th><th>Payments</th><th>Gross</th><th>Charges</th><th>Bank net</th><th>Axis 3448 candidate</th></tr></thead><tbody>'+payoutRows+'</tbody></table></div>':'<p class="muted">No payout IDs imported yet.</p>')+(txRows?'<details><summary>View individual payments and Shopify suggestions</summary><div style="overflow:auto"><table class="resp"><thead><tr><th>Date</th><th>Paytm transaction ID</th><th>Mode</th><th>Gross</th><th>Charges</th><th>Shopify match</th></tr></thead><tbody>'+txRows+'</tbody></table></div></details>':'')+'<p class="sub">Rows without a transaction ID and missing report dates need a detailed Paytm export. Exact customer-to-payment matching requires the Paytm transaction ID in the Shopify order note.</p>';
+    }
     function renderSalaryLedgers(){
       el('panel').innerHTML='<div class="card"><h3 style="margin-top:0">Salary ledgers</h3><p class="sub">Employee-wise salary earned, advances, payments and current settlement balance.</p><div id="salaryLedgerList" class="muted">Loading…</div></div>';
       api('/api/salary/ledgers').then(function(d){if(!d.success){el('salaryLedgerList').textContent=d.error||'Could not load salary ledgers.';return;}if(!d.ledgers.length){el('salaryLedgerList').textContent='No salary ledger has been created yet. Record an advance or post payroll to create one.';return;}el('salaryLedgerList').innerHTML='<div class="claim-list">'+d.ledgers.map(function(l,i){var rows=l.entries.map(function(x){return '<tr><td>'+esc(x.date)+'</td><td>'+esc(x.description)+'</td><td>'+esc(x.reference||x.id)+'</td><td class="r neg">'+(x.debit?fmt(x.debit):'—')+'</td><td class="r pos">'+(x.credit?fmt(x.credit):'—')+'</td><td class="r"><b>'+fmt(x.balance)+'</b></td><td>'+proofGallery(x.proofs||[x.proof],'Salary payment')+'</td></tr>';}).join('');return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc"><b>#'+(i+1)+'</b> · '+esc(l.ledgerName)+'<div class="claim-row-meta">Outstanding advance '+fmt(l.outstandingAdvance)+' · Last entry '+esc(l.lastPostingDate||'—')+'</div></div><div class="claim-amount">'+fmt(Math.abs(l.balance))+' · '+esc(l.status)+'</div></div></summary><div class="claim-detail"><table class="resp"><thead><tr><th>Date</th><th>Entry</th><th>Reference</th><th class="r">Debit</th><th class="r">Credit</th><th class="r">Balance</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table></div></details>';}).join('')+'</div>';});
@@ -1565,7 +1592,7 @@
       if(cfg.isOwner){el('rentalsTab').style.display='';el('categoriesTab').style.display='';}
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
       bankNature=selectedNature;
-      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';}
+      if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';el('paytmTab').style.display='';}
       if(!cfg.isAdmin){ // every non-Owner/Admin user: log + view own list only
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn) cashBtn.remove();

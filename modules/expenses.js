@@ -26,6 +26,8 @@ const pdfjs = require('pdf-parse/lib/pdf.js/v1.10.88/build/pdf.js');
 const { createWorker } = require('tesseract.js');
 const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
+const { START_DATE: PAYTM_START_DATE, parsePaytmReport, summarizePayouts } = require('./paytm-report');
+const { registerPaytmReports } = require('./paytm-reports-routes');
 
 const router = express.Router();
 const modelCalendar = require('./model-calendar');
@@ -45,6 +47,7 @@ const STATEMENT_DRAFT_DIR = path.join(DATA_DIR, 'bank-statement-drafts');
 try { fs.mkdirSync(STATEMENT_DIR, { recursive:true }); } catch {}
 try { fs.mkdirSync(STATEMENT_DRAFT_DIR, { recursive:true }); } catch {}
 const statementUpload=multer({storage:multer.diskStorage({destination:(req,file,cb)=>cb(null,STATEMENT_DRAFT_DIR),filename:(req,file,cb)=>cb(null,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+path.extname(file.originalname||'.xlsx').toLowerCase())}),limits:{fileSize:15*1024*1024}});
+const paytmUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:15*1024*1024,files:20}});
 const DEFAULT_SALES_BANK = 'Axis Bank 3448';
 const DEFAULT_COUNTER_CASH = 'Counter Cash';
 const PAYTM_CLEARING_ACCOUNT = 'Paytm Settlement Clearing';
@@ -225,6 +228,9 @@ function blankStore() {
     bankStatements: {},                  // cumulative normalized statement rows by account
     bankTruthMovements: [],              // excluded statement rows: affect bank balance, never expenses/P&L
     paytmSettlements: [],                // finalized Paytm-to-bank settlement explanations
+    paytmReportTransactions: {},         // imported evidence only; never an accounting posting
+    paytmReportImports: [],
+    paytmReportDrafts: {},               // upload previews awaiting explicit confirmation
     reconciliationExpenses: [],          // P&L/category postings backed by official bank rows
     vendorOpeningPayables: [],           // pre-system vendor dues paid after books started; never enter the P&L
     vendorAdvances: [],                   // vendor credits created by overpayments; applied without another bank movement
@@ -1141,6 +1147,31 @@ function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
+function paytmReportView(s) {
+  const transactions=Object.values(s.paytmReportTransactions||{}).sort((a,b)=>String(a.date+a.transactionId).localeCompare(String(b.date+b.transactionId)));
+  const payouts=summarizePayouts(transactions);
+  const bankBook=(s.bankStatements||{})[DEFAULT_SALES_BANK]||{};
+  const bankRows=Object.values(bankBook.transactions||{}).filter(row=>Number(row.credit)>0);
+  const bankMatches=payouts.map(payout=>{
+    const exact=bankRows.filter(row=>payout.utr&&Math.abs(num(row.credit)-payout.net)<.01&&(String(row.reference||'')+' '+String(row.description||'')).includes(payout.utr));
+    const amount=bankRows.filter(row=>Math.abs(num(row.credit)-payout.net)<.01&&Math.abs((Date.parse(String(row.date||'')+'T00:00:00Z')-Date.parse(payout.payoutDate+'T00:00:00Z'))/86400000)<=3);
+    const candidates=exact.length?exact:amount;
+    return Object.assign({},payout,{bankMatch:exact.length===1?'reference candidate':amount.length===1?'amount/date candidate':candidates.length?'ambiguous':'not found',bankCandidates:candidates.map(row=>({id:row.id,date:row.date,credit:num(row.credit),reference:row.reference||row.description||''}))});
+  });
+  const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(order=>!order.cancelledAt&&String(order.financialStatus||'').toLowerCase()==='paid');
+  const orderMatches=transactions.map(tx=>{
+    if(tx.posId==='DEFAULT')return {transactionId:tx.transactionId,orderMatch:'non-POS channel — review',orderCandidates:[]};
+    const byId=orders.filter(order=>tx.transactionId&&String(order.note||'').includes(tx.transactionId));
+    const candidates=byId.length?byId:orders.filter(order=>{
+      const when=String(order.processedAt||order.createdAt||'').slice(0,10),delta=Math.abs((Date.parse(when+'T00:00:00Z')-Date.parse(tx.date+'T00:00:00Z'))/86400000);
+      return delta<=1&&Math.abs(num(order.total)-num(order.refundAmount)-tx.amount)<.01;
+    });
+    return {transactionId:tx.transactionId,orderMatch:byId.length===1?'transaction ID in Shopify note':candidates.length===1?'amount/date candidate':candidates.length?'ambiguous':'not found',orderCandidates:candidates.slice(0,10).map(order=>({id:String(order.id),number:String(order.number||order.name||order.id).replace(/^#/,''),customer:String(order.customer&&order.customer.name||''),total:roundMoney(num(order.total)-num(order.refundAmount))}))};
+  });
+  const suggestedCounts={};orderMatches.filter(match=>match.orderMatch==='amount/date candidate').forEach(match=>{const id=match.orderCandidates[0].id;suggestedCounts[id]=(suggestedCounts[id]||0)+1;});
+  orderMatches.forEach(match=>{if(match.orderMatch==='amount/date candidate'&&suggestedCounts[match.orderCandidates[0].id]>1)match.orderMatch='ambiguous';});
+  return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),from:PAYTM_START_DATE,through:indiaBusinessDate()};
+}
 function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&!/cash/i.test(name);}
 function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&String(name||'')!==PAYTM_CLEARING_ACCOUNT;}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
@@ -2906,6 +2937,7 @@ async function combineStatementScreenshots(files){
   const sheetRows=clean.map(row=>({Date:row.date,Narration:row.description,Reference:row.reference,Debit:row.debit||'',Credit:row.credit||'',Balance:row.balance})),workbook=XLSX.utils.book_new(),sheet=XLSX.utils.json_to_sheet(sheetRows),filePath=path.join(STATEMENT_DRAFT_DIR,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.xlsx');XLSX.utils.book_append_sheet(workbook,sheet,'Statement');XLSX.writeFile(workbook,filePath);
   files.forEach(file=>{try{fs.unlinkSync(file.path);}catch{}});return{filePath,originalName:'Statement screenshots ('+files.length+').xlsx',warnings};
 }
+registerPaytmReports(router,{loadStore,saveStore,audit,upload:paytmUpload,today:indiaBusinessDate,view:paytmReportView,canAccess:req=>canAccessBankReconciliation(req,loadStore(),'SANKI',DEFAULT_SALES_BANK)});
 router.post('/api/expenses/bank-statements/import',statementUpload.fields([{name:'statements',maxCount:30},{name:'statement',maxCount:1}]),(req,res,next)=>{req.statementFiles=[...((req.files&&req.files.statements)||[]),...((req.files&&req.files.statement)||[])];const s=loadStore();if(canAccessBankReconciliation(req,s,req.body&&req.body.nature,req.body&&req.body.account))return next();req.statementFiles.forEach(file=>{try{fs.unlinkSync(file.path);}catch{}});return res.status(403).json({success:false,error:'You cannot reconcile this bank account.'});},async(req,res)=>{const files=req.statementFiles||[];if(!files.length)return res.status(400).json({success:false,error:'Choose an XLS, XLSX, CSV, PDF or one or more statement images.'});let prepared;try{prepared=await combineStatementScreenshots(files);const out=await createBankReconciliationDraft({filePath:prepared.filePath,originalName:prepared.originalName,password:String(req.body&&req.body.password||''),account:req.body.account,nature:req.body.nature,username:req.user.username,device:'Web'});if(prepared.warnings&&prepared.warnings.length)out.warnings=prepared.warnings;return res.status(out.success?200:400).json(out);}catch(e){files.forEach(file=>{try{if(fs.existsSync(file.path))fs.unlinkSync(file.path);}catch{}});if(prepared&&prepared.filePath)try{if(fs.existsSync(prepared.filePath))fs.unlinkSync(prepared.filePath);}catch{}return res.status(400).json({success:false,error:e.message||'Could not read these bank statement files.'});}});
 router.get('/api/expenses/bank-statements',(req,res)=>{const s=loadStore(),account=String(req.query.account||''),nature=normalizedNature(req.query.nature);if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation.'});const key=bankStatementBookKey(nature,account),book=((s.bankStatements||{})[key])||{transactions:{},imports:[]},transactions=Object.values(book.transactions||{}).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),drafts=Object.values(s.bankReconciliationDrafts||{}).filter(x=>x.account===account&&normalizedNature(x.nature)===nature).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))),requested=String(req.query.draftId||''),draft=(requested&&drafts.find(x=>x.id===requested))||drafts[0];if(draft&&repairOrphanedReconciliationExpenses(s,draft))saveStore(s);const draftOptions=drafts.map(x=>({draftId:x.id,from:x.summary&&x.summary.from||'',to:x.summary&&x.summary.to||'',originalName:x.originalName||'',createdAt:x.createdAt||'',resolved:Object.keys(x.resolutions||{}).length,rows:(x.transactions||[]).length}));res.json({success:true,account,nature,imports:(book.imports||[]).slice().reverse(),transactions,lastReconciliation:book.lastReconciliation||null,updatedThrough:book.reconciledThrough||'',closingBalance:book.lastReconciliation&&(book.lastReconciliation.companyAdjustedClosingBalance??book.lastReconciliation.closingBalance)||0,actualClosingBalance:book.lastReconciliation&&book.lastReconciliation.closingBalance||0,draftOptions,draft:draft?draftReconciliation(s,draft):null});});
 router.get('/api/expenses/bank-statements/correction-candidates',(req,res)=>{
