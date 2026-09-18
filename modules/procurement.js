@@ -2440,8 +2440,8 @@ router.patch('/api/procurement/pos/:id/summary-calculation', (req, res) => {
 router.post('/api/procurement/combined-invoices', (req, res) => {
   if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
   const s = loadStore(), ids = (req.body || {}).poIds;
-  if (!Array.isArray(ids) || ids.length < 2 || ids.length !== new Set(ids).size || ids.some(id => typeof id !== 'string'))
-    return res.status(400).json({ success: false, error: 'Select at least two distinct purchase bills.' });
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length !== new Set(ids).size || ids.some(id => typeof id !== 'string'))
+    return res.status(400).json({ success: false, error: 'Select one or more distinct purchase bills.' });
   const pos = ids.map(id => s.pos[id]);
   if (pos.some(po => !po || po.historical || po.id === 'PO-0001' || po.id === 'PO-0002'))
     return res.status(400).json({ success: false, error: 'Every selected bill must be a visible purchase PO.' });

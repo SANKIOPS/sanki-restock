@@ -50,11 +50,39 @@ test('combined invoice links bills from any vendors without modifying their POs'
   assert.equal(p1.lines[0].qty, 2);
 });
 
-test('purchase UI offers combined invoice selection, vendor figures and component comparison', () => {
-  for (const text of ['data-combine-po', 'Combine Invoices', 'data-payment-group', 'Enter Vendor Data',
+test('purchase UI offers invoice calculation for selected bills, vendor figures and component comparison', () => {
+  for (const text of ['data-combine-po', 'Calculate invoices', 'data-payment-group', 'Enter Vendor Data',
     'data-combined-child', 'data-combined-field', 'data-compare-combined', 'Final total (INR)']) {
     assert.ok(html.includes(text), `Missing ${text}`);
   }
+  assert.match(html, /!ids\.length\?' disabled'/);
+});
+
+test('one selected bill creates an invoice calculation and can be reconciled', () => {
+  const po = { id: 'PO-SINGLE', vendor: 'Logistics vendor', origin: 'india', billNo: 'B-1', lines: [{ qty: 2, perPcsYuan: 50 }] };
+  const store = { pos: { 'PO-SINGLE': po }, combinedVendorInvoices: {} };
+  const routes = handlers(store), create = routes['/api/procurement/combined-invoices'];
+  assert.equal(call(create, { poIds: [] }).status, 400);
+  const made = call(create, { poIds: ['PO-SINGLE'] });
+  assert.equal(made.status, 201);
+  assert.deepEqual(Array.from(made.result.invoice.poIds), ['PO-SINGLE']);
+  assert.equal(call(create, { poIds: ['PO-SINGLE'] }).status, 409);
+  const saved = call(routes['/api/procurement/combined-invoices/:id'], { childBills: {
+    'PO-SINGLE': { billNumber: 'LV-1', totalQuantity: 2, billValueYuan: 10 }
+  }, combined: { totalWeightGrams: 0, localTransportationYuan: 0, fixedTransportationYuan: 0,
+    extraChargesYuan: 0, combinedFreightYuan: 0, exchangeRate: 10 } }, made.result.invoice.id);
+  assert.equal(saved.result.success, true);
+  assert.equal(saved.result.invoice.childBills['PO-SINGLE'].billNumber, 'LV-1');
+  assert.equal(po.billNo, 'B-1');
+  const start = html.indexOf('    function combinedInvoiceComparison(inv)');
+  const end = html.indexOf('    var selectedPaymentBills=', start);
+  const detail = vm.runInNewContext(html.slice(start, end) + '\ncombinedInvoiceDetail;', {
+    purchaseHistory: [po], settings: {}, esc: String, yuan: n => '¥' + n, money: n => '₹' + n
+  });
+  const rendered = detail(saved.result.invoice);
+  assert.match(rendered, /Invoice calculation: B-1/);
+  assert.match(rendered, /data-combined-child="PO-SINGLE"/);
+  assert.doesNotMatch(rendered, /Combined invoice calculation:/);
 });
 
 test('combined invoice accepts bills with different purchase currencies', () => {
