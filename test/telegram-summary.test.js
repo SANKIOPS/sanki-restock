@@ -2,6 +2,13 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sanki-telegram-summary-'));process.env.DATA_PATH=path.join(dir,'data.json');fs.writeFileSync(process.env.DATA_PATH,'{}');
 const expenses=require('../modules/expenses'),telegram=require('../modules/telegram');
 
+test('Owner Personal bot offers salary advance while Namita does not',()=>{
+  const owner=telegram.personalMenu({roles:['owner']});
+  const namita=telegram.personalMenu({roles:['personal']});
+  assert.ok(owner.inline_keyboard.flat().some(button=>button.callback_data==='pm:advance'));
+  assert.ok(!namita.inline_keyboard.flat().some(button=>button.callback_data==='pm:advance'));
+});
+
 test('daily Telegram summary separates activity, pending work and employee settlement',()=>{
   const store={openingBalances:{'Prashant Axis 3645':-1049.08,'Prashant Cash':-523},expenses:{
     old:{id:'EX-OLD',date:'2026-09-01',amount:5000,nature:'SANKI',status:'paid',approvedAt:'x',vendor:'The Printing Solutions',payments:[{id:'PAY-1',date:'2026-09-05',amount:2000,account:'Prashant Axis 3645'}]},

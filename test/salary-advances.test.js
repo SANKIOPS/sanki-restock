@@ -440,7 +440,7 @@ test('Owner Telegram salary advance uses the existing dated advance route, not p
   assert.equal(telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body}).status,409,'Telegram confirmation cannot duplicate an advance');
   assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-06'}}).body.rows.find(e=>e.id===employee.id).balance,9000);
   const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
-  assert.match(source,/callback_data:'am:advance'/);assert.match(source,/callback_data:'am:adv:confirm'/);assert.match(source,/telegramApi\('POST','\/api\/salary\/advances'/);
+  assert.match(source,/callback_data:'am:advance'/);assert.match(source,/callback_data:prefix\+'confirm'/);assert.match(source,/telegramApi\('POST','\/api\/salary\/advances'/);
 });
 
 test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
