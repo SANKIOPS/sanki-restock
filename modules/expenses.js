@@ -1,4 +1,5 @@
 const { purchaseBillingAmount } = require('./purchase-payment-status');
+const { finalizedByPo } = require('./lg-invoices');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -1028,17 +1029,41 @@ function poCostBreakdown(po, defaults) {
   return{origin:india?'india':'china',exRate:roundMoney(exRate),freightPerGram:roundMoney(freightPerGram),transportTotal:roundMoney(transportTotal),totalQty,goodsTotal:roundMoney(lines.reduce((n,l)=>n+l.goodsPerPc*l.qty,0)),freightTotal:roundMoney(lines.reduce((n,l)=>n+l.freightPerPc*l.qty,0)),landedTotal:roundMoney(lines.reduce((n,l)=>n+l.lineTotal,0)),formula:india?'Landed/pc = INR price/pc + (total transport / total quantity)':'Landed/pc = (Yuan price/pc x exchange rate) + (weight g/pc x freight rate/g)',lines};
 }
 function procurementPayables(s, includePaid) {
-  const cfg = procurementAccounting(s), proc = loadProcurementStore();
+  const cfg = procurementAccounting(s), proc = loadProcurementStore(), finalized = finalizedByPo(proc);
   return Object.values(proc.pos || {}).filter(po => !po.historical)
     .map(po => {
       const state = cfg.paymentsByPo[po.id] || {}, payments = Array.isArray(state.payments) ? state.payments : [];
-      const amount = purchaseBillingAmount(po, proc.settings || {}), paidAmount = round0(payments.reduce((n, p) => n + num(p.amount), 0));
+      const amount = finalized[po.id] ? finalized[po.id].amount : purchaseBillingAmount(po, proc.settings || {}), paidAmount = round0(payments.reduce((n, p) => n + num(p.amount), 0));
       return { id: po.id, source: 'procurement', nature: 'SANKI', vendor: state.mediator || cfg.mediator,
         supplier: po.vendor || '', billNo: po.billNo || '', date: po.datePurchase || String(po.createdAt || po.postedAt || '').slice(0, 10),
         postedAt: po.postedAt || '', particulars: 'Advanced purchase · goods and China-to-store transport', amount, paidAmount,
         balanceDue: Math.max(0, amount - paidAmount), status: paidAmount >= amount ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'approved'), payments,
         costBreakdown: poCostBreakdown(po, proc.settings || {}), costCorrectionHistory: po.costCorrectionHistory || [] };
     }).filter(x => includePaid || x.balanceDue > 0).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+function procurementLedgerPayables(s, includePaid) {
+  const children = procurementPayables(s, true), proc = loadProcurementStore(), finalized = finalizedByPo(proc);
+  const standalone = children.filter(item => !finalized[item.id]);
+  const grouped = Object.values(proc.combinedVendorInvoices || {}).filter(invoice => invoice.finalized).map(invoice => {
+    const bills = (invoice.poIds || []).map(id => children.find(item => item.id === id)).filter(Boolean);
+    const amount = Number(invoice.finalized.amountInr) || 0;
+    const paidAmount = bills.reduce((sum, bill) => sum + bill.paidAmount, 0);
+    const paymentsByReference = new Map();
+    bills.forEach(bill => (bill.payments || []).forEach(payment => {
+      const key = payment.batchPaymentId || bill.id + '/' + payment.id;
+      if (paymentsByReference.has(key)) paymentsByReference.get(key).amount += num(payment.amount);
+      else paymentsByReference.set(key, { ...payment, id: payment.batchPaymentId || payment.id, amount: num(payment.amount) });
+    }));
+    return { id: invoice.id, source: 'procurement_lg', nature: 'SANKI', vendor: procurementAccounting(s).mediator,
+      supplier: (invoice.vendors || []).join(', '), billNo: invoice.lgBillNumber, date: invoice.lgDate,
+      particulars: 'LG bill ' + invoice.lgBillNumber + ' · ' + bills.length + ' purchase bill' + (bills.length === 1 ? '' : 's'),
+      amount, paidAmount, balanceDue: Math.max(0, amount - paidAmount),
+      status: paidAmount >= amount ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'approved'),
+      poIds: invoice.poIds || [], purchaseBills: bills, finalized: invoice.finalized,
+      payments: Array.from(paymentsByReference.values()) };
+  });
+  return standalone.concat(grouped).filter(item => includePaid || item.balanceDue > 0)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 function ledgerMeta(s, name) {
   const ov = (s.ledgerOverrides || {})[name] || {};
@@ -2098,9 +2123,14 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     contractBalance: round0(num(e.amount) - num(e.paidAmount)),
     daysPending: Math.max(0, Math.floor((Date.parse(today) - Date.parse(String(e.approvedAt || e.date).slice(0, 10))) / 86400000))
   })).sort((a, b) => b.daysPending - a.daysPending || String(a.approvedAt || '').localeCompare(String(b.approvedAt || '')));
-  // Advanced-purchase mediator balances belong to the Purchases workflow.
-  // Keep this screen limited to approved expense/vendor payables for now.
-  const purchases = [];
+  // Only finalized LG bills become purchase payables here; their child POs
+  // remain linked for allocation but never appear as duplicate pending rows.
+  const purchases = (!nature || nature === 'SANKI') ? procurementLedgerPayables(s, false).filter(p => p.source === 'procurement_lg'
+    && (!vendor || String(p.vendor + ' ' + p.billNo).toLowerCase().includes(vendor))
+    && (!from || p.date >= from) && (!to || p.date <= to)
+    && (bucket !== 'approved' || p.paidAmount === 0)
+    && (bucket !== 'partial' || p.paidAmount > 0)
+    && bucket !== 'credit') : [];
   res.json({ success: true, expenses, purchases, mediator: procurementAccounting(s).mediator, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0) + purchases.reduce((n, p) => n + p.balanceDue, 0)) });
 });
 
@@ -2326,7 +2356,7 @@ router.get('/api/expenses/vendors', (req, res) => {
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
     b.paid+=remaining;b.count+=1;b.entries.push(Object.assign({},e,{source:'vendor_advance_credit',originalAmount:num(e.amount),amount:0,paidAmount:remaining,status:remaining>0?'credit_available':'applied'}));
   });
-  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementPayables(s,true).forEach(p=>{const key='SANKI|'+vendorIdentityKey(p.vendor),b=books[key]||(books[key]={name:cleanVendorName(p.vendor),nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[],ledgerItems:[]});addLedgerEntry(b,p,'Procurement expense');if(from&&String(p.date||'')<from)return;if(to&&String(p.date||'')>to)return;b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
+  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementLedgerPayables(s,true).forEach(p=>{const key='SANKI|'+vendorIdentityKey(p.vendor),b=books[key]||(books[key]={name:cleanVendorName(p.vendor),nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[],ledgerItems:[]});addLedgerEntry(b,p,'Procurement expense');if(from&&String(p.date||'')<from)return;if(to&&String(p.date||'')>to)return;b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
   const list = Object.values(books).map(b => {
     const all=b.ledgerItems.slice().sort((a,c)=>String(a.date).localeCompare(String(c.date))||num(a.order)-num(c.order)||String(a.reference).localeCompare(String(c.reference)));
     const opening=roundMoney(all.filter(x=>from&&x.date<from).reduce((n,x)=>n+num(x.out)-num(x.in),0));

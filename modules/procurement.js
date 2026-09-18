@@ -43,6 +43,7 @@ const { createWorker } = require('tesseract.js');
 const tesseractChinese = require('@tesseract.js-data/chi_sim');
 const { shopifyClient } = require('./shopify-client');
 const { purchasePaymentStatus } = require('./purchase-payment-status');
+const { invoiceAmounts, allocateAmount, finalizedByPo } = require('./lg-invoices');
 
 const router = express.Router();
 
@@ -2461,10 +2462,16 @@ router.post('/api/procurement/combined-invoices', (req, res) => {
   saveStore(s);
   res.status(201).json({ success: true, invoice });
 });
+function validLgDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
+  const date = new Date(value + 'T00:00:00Z');
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
 router.patch('/api/procurement/combined-invoices/:id', (req, res) => {
   if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
   const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id], body = req.body || {};
   if (!invoice) return res.status(404).json({ success: false, error: 'Combined invoice not found.' });
+  if (invoice.finalized) return res.status(409).json({ success: false, error: 'This LG bill is finalized and cannot be edited.' });
   if (!body.childBills || typeof body.childBills !== 'object' || Array.isArray(body.childBills) || !body.combined || typeof body.combined !== 'object')
     return res.status(400).json({ success: false, error: 'Enter bill-level and combined vendor figures.' });
   if (Object.keys(body.childBills).some(id => !invoice.poIds.includes(id)))
@@ -2484,22 +2491,53 @@ router.patch('/api/procurement/combined-invoices/:id', (req, res) => {
     combined[key] = value;
   }
   if (combined.exchangeRate === 0) return res.status(400).json({ success: false, error: 'Exchange rate must be greater than zero.' });
+  const lgDate = String(body.lgDate || '').trim(), lgBillNumber = String(body.lgBillNumber || '').trim().slice(0, 120);
+  if (lgDate && !validLgDate(lgDate)) return res.status(400).json({ success: false, error: 'Enter a valid LG date.' });
   invoice.history = Array.isArray(invoice.history) ? invoice.history : [];
   if (invoice.updatedAt) invoice.history.push({ childBills: invoice.childBills, combined: invoice.combined, updatedAt: invoice.updatedAt, updatedBy: invoice.updatedBy });
-  invoice.childBills = childBills; invoice.combined = combined;
+  invoice.childBills = childBills; invoice.combined = combined; invoice.lgDate = lgDate; invoice.lgBillNumber = lgBillNumber;
   invoice.updatedAt = new Date().toISOString(); invoice.updatedBy = (req.user || {}).username || 'system';
+  saveStore(s);
+  res.json({ success: true, invoice });
+});
+router.post('/api/procurement/combined-invoices/:id/finalize', (req, res) => {
+  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
+  const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id], basis = String((req.body || {}).basis || '');
+  if (!invoice) return res.status(404).json({ success: false, error: 'Invoice calculation not found.' });
+  if (invoice.finalized) return res.status(409).json({ success: false, error: 'This LG bill is already finalized.' });
+  if (!['purchase', 'vendor'].includes(basis)) return res.status(400).json({ success: false, error: 'Choose Purchase Summary or vendor invoice as the payable amount.' });
+  if (!invoice.lgBillNumber || !validLgDate(invoice.lgDate))
+    return res.status(400).json({ success: false, error: 'Save the LG bill number and LG date before finalizing.' });
+  if (Object.values(s.combinedVendorInvoices).some(other => other.id !== invoice.id && other.finalized && String(other.lgBillNumber).toLowerCase() === invoice.lgBillNumber.toLowerCase()))
+    return res.status(409).json({ success: false, error: 'This LG bill number is already finalized.' });
+  const amounts = invoiceAmounts(invoice, s.pos, s.settings);
+  if (!amounts || amounts.vendorAmountInr == null) return res.status(400).json({ success: false, error: 'Save complete vendor bill values, charges and exchange rate first.' });
+  const accountingPath = path.join(DATA_DIR, 'expenses.json');
+  let accounting;
+  try { accounting = JSON.parse(fs.readFileSync(accountingPath, 'utf8')); }
+  catch { return res.status(503).json({ success: false, error: 'Accounting payment history is unavailable; LG bill was not finalized.' }); }
+  const paymentsByPo = ((accounting.procurementAccounting || {}).paymentsByPo || {});
+  if (invoice.poIds.some(id => ((paymentsByPo[id] || {}).payments || []).length))
+    return res.status(409).json({ success: false, error: 'Existing PO payments must be reconciled before finalizing this LG bill.' });
+  const amountInr = basis === 'vendor' ? amounts.vendorAmountInr : amounts.purchaseAmountInr;
+  if (!(amountInr > 0)) return res.status(400).json({ success: false, error: 'The finalized bill amount must be greater than zero.' });
+  invoice.finalized = { basis, amountInr, purchaseAmountInr: amounts.purchaseAmountInr, vendorAmountInr: amounts.vendorAmountInr,
+    vendorBillYuan: amounts.vendorBillYuan, vendorTotalYuan: amounts.vendorTotalYuan,
+    allocations: allocateAmount(invoice.poIds, amounts.purchaseAmounts, amountInr),
+    finalizedAt: new Date().toISOString(), finalizedBy: (req.user || {}).username || 'system' };
   saveStore(s);
   res.json({ success: true, invoice });
 });
 router.get('/api/procurement/history', (req, res) => {
   const s = loadStore();
+  const finalized = finalizedByPo(s);
   let accounting = null;
   try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); } catch { /* Unavailable history must not imply unpaid. */ }
   // Owner removed the two old POs and every Shopify-recovered placeholder
   // from this list. Preserve their stored records and Shopify inventory.
   const history = Object.values(s.pos)
     .filter(p => !p.historical && p.id !== 'PO-0001' && p.id !== 'PO-0002')
-    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canReconcileVendorBill(req), s.settings) }))
+    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canReconcileVendorBill(req), s.settings, finalized[p.id] && finalized[p.id].amount) }))
     .sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
   res.json({ success: true, history, combinedInvoices: Object.values(s.combinedVendorInvoices), completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
 });

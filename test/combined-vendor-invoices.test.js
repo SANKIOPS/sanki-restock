@@ -5,11 +5,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../modules/procurement.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '../public/procurement.html'), 'utf8');
+const { invoiceAmounts, allocateAmount, finalizedByPo } = require('../modules/lg-invoices');
 
 function handlers(store) {
   const routes = {}, context = {
     router: { post: (route, fn) => routes[route] = fn, patch: (route, fn) => routes[route] = fn },
     canReconcileVendorBill: () => true, loadStore: () => store, saveStore: () => {},
+    invoiceAmounts, allocateAmount, finalizedByPo, DATA_DIR: '/tmp', path,
+    fs: { readFileSync: () => JSON.stringify({ procurementAccounting: { paymentsByPo: {} } }) },
     Date, Math, Number, String, Object, Array, Set
   };
   const start = source.indexOf("router.post('/api/procurement/combined-invoices'");
@@ -82,6 +85,10 @@ test('one selected bill creates an invoice calculation and can be reconciled', (
   const rendered = detail(saved.result.invoice);
   assert.match(rendered, /Invoice calculation: B-1/);
   assert.match(rendered, /data-combined-child="PO-SINGLE"/);
+  assert.match(rendered, /LG date.*LG bill number/);
+  assert.match(rendered, /Total LG bill value/);
+  assert.match(rendered, /Combined freight in INR/);
+  assert.match(rendered, /Finalize LG bill/);
   assert.doesNotMatch(rendered, /Combined invoice calculation:/);
 });
 
@@ -115,4 +122,30 @@ test('combined comparison identifies child bill and charge differences', () => {
   assert.match(out, /Freight \(Yuan\).*¥3.*¥4.*¥1/);
   assert.match(out, /Final total \(Yuan\).*¥148.*¥157.*¥9/);
   assert.match(out, /Final total \(INR\).*₹1480.*₹1570.*₹90/);
+});
+
+test('finalized LG bill snapshots the chosen amount and allocates it to original POs', () => {
+  const store = { settings: { exRate: 10 }, pos: {
+    'PO-A': { id: 'PO-A', vendor: 'A', origin: 'china', exRate: 10, lines: [{ qty: 1, perPcsYuan: 100 }] },
+    'PO-B': { id: 'PO-B', vendor: 'B', origin: 'china', exRate: 10, lines: [{ qty: 1, perPcsYuan: 100 }] }
+  }, combinedVendorInvoices: {} };
+  const routes = handlers(store), made = call(routes['/api/procurement/combined-invoices'], { poIds: ['PO-A', 'PO-B'] });
+  const id = made.result.invoice.id;
+  const saved = call(routes['/api/procurement/combined-invoices/:id'], {
+    lgDate: '2026-09-18', lgBillNumber: 'LG-501', childBills: {
+      'PO-A': { totalQuantity: 1, billValueYuan: 110 }, 'PO-B': { totalQuantity: 1, billValueYuan: 100 }
+    }, combined: { totalWeightGrams: 0, combinedFreightYuan: 10, localTransportationYuan: 0,
+      fixedTransportationYuan: 0, extraChargesYuan: 0, exchangeRate: 10 }
+  }, id);
+  assert.equal(saved.result.success, true);
+  const finalized = call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'vendor' }, id);
+  assert.equal(finalized.result.success, true);
+  assert.equal(finalized.result.invoice.finalized.amountInr, 2200);
+  assert.equal(Object.values(finalized.result.invoice.finalized.allocations).reduce((a, b) => a + b, 0), 2200);
+  assert.equal(finalizedByPo(store)['PO-A'].invoice.id, id);
+  assert.equal(finalized.result.invoice.lgDate, '2026-09-18');
+  assert.equal(finalized.result.invoice.lgBillNumber, 'LG-501');
+  assert.equal(call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'purchase' }, id).status, 409);
+  assert.equal(call(routes['/api/procurement/combined-invoices/:id'], { childBills: {}, combined: {} }, id).status, 409);
+  assert.equal(store.pos['PO-A'].lines[0].qty, 1);
 });

@@ -34,7 +34,7 @@ test('sourcing ledger includes bills in every fulfillment status on the purchase
   const source = fs.readFileSync(require('node:path').join(__dirname,'../modules/expenses.js'),'utf8');
   const start = source.indexOf('function procurementPayables('), end = source.indexOf('function ledgerMeta(',start);
   const pos = Object.fromEntries(['advance','received','posted'].map((status,i) => ['PO-'+i,{id:'PO-'+i,status,datePurchase:'2026-09-02',dateReceive:'2026-09-09',origin:'india',lines:[{qty:2,perPcsYuan:100}]}]));
-  const context = {procurementAccounting:()=>({paymentsByPo:{},mediator:'Mediator'}),loadProcurementStore:()=>({pos,settings:{}}),purchaseBillingAmount:require('../modules/purchase-payment-status').purchaseBillingAmount,round0:Math.round,num:x=>Number(x)||0,poCostBreakdown:()=>({})};
+  const context = {procurementAccounting:()=>({paymentsByPo:{},mediator:'Mediator'}),loadProcurementStore:()=>({pos,settings:{}}),finalizedByPo:()=>({}),purchaseBillingAmount:require('../modules/purchase-payment-status').purchaseBillingAmount,round0:Math.round,num:x=>Number(x)||0,poCostBreakdown:()=>({})};
   const read = vm.runInNewContext(source.slice(start,end)+'\nprocurementPayables;',context);
   const rows = read({},true);
   assert.equal(rows.length,3);
