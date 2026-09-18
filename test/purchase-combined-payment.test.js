@@ -19,7 +19,7 @@ test('combined payment rejects cross-vendor and wrong amount atomically',()=>{
 });
 
 test('bank ledger shows one debit for a combined purchase payment',()=>{
- const start=source.indexOf("  if (nature === 'SANKI') {\n    const combinedPurchases = new Map();"),end=source.indexOf("  if (nature === 'SANKI') salaryAdvanceEntries()",start);
+ const start=source.indexOf("  if (nature === 'SANKI') {\n    const combinedPurchases = new Map();"),end=source.indexOf("  salaryAdvanceEntries().filter(x=>x.payingNature===nature",start);
  assert.ok(start>0&&end>start);
  const block=source.slice(start,end),entries=[];
  const batchPaymentId='PPB-1',payments=[{id:'PO-1',vendor:'Mediator',payments:[{id:'PPAY-1',batchPaymentId,amount:30000,account:'SANKI Bank',date:'2026-09-18',reference:'BANK-123'}]},{id:'PO-2',vendor:'Mediator',payments:[{id:'PPAY-1',batchPaymentId,amount:40000,account:'SANKI Bank',date:'2026-09-18',reference:'BANK-123'}]}];

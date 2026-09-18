@@ -443,6 +443,22 @@ test('Owner Telegram salary advance uses the existing dated advance route, not p
   assert.match(source,/callback_data:'am:advance'/);assert.match(source,/callback_data:prefix\+'confirm'/);assert.match(source,/telegramApi\('POST','\/api\/salary\/advances'/);
 });
 
+test('Owner personal account advance debits PERSONAL ledger and employee advance once',()=>{
+  const owner={username:'gaganlambasanki',roles:['owner']};
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Personal Funded Advance Employee',salary:12000}}).body.employee;
+  const options=telegramApi('GET','/api/salary/employees',owner,{entity:'SANKI'}).advancePayingAccounts;
+  assert.ok(options.some(x=>x.name==='ICICI Bank 0992'&&x.nature==='PERSONAL'));
+  const body={empId:emp.id,amount:777,date:'2099-07-14',account:'ICICI Bank 0992',payingNature:'PERSONAL',proofs:['/api/expenses/photo/personal-advance.jpg']};
+  const posted=telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body});
+  assert.equal(posted.status,200);assert.equal(posted.advance.payingNature,'PERSONAL');
+  const expenses=require('../modules/expenses');
+  const ledger=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'PERSONAL',account:'ICICI Bank 0992'}});
+  assert.equal(ledger.success,true);assert.equal(ledger.entries.filter(x=>x.id===posted.advance.id&&x.debit===777).length,1);
+  assert.equal(telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body}).status,409);
+  const admin=invoke('POST','/api/salary/advances',{role:'admin',body:{...body,date:'2099-07-15'}});
+  assert.equal(admin.status,400,'staff cannot use Owner personal accounts for advances');
+});
+
 test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Partial Pay Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-10'},body:{empId:emp.id,paidDays:30}});

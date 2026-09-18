@@ -38,6 +38,7 @@ const CREDIT_CARD_PATH = path.join(DATA_DIR, 'credit-cards.json');
 const PROC_PATH = process.env.PROCUREMENT_PATH || path.join(DATA_DIR, 'procurement.json');
 const SALES_PATH = process.env.SALES_PATH || path.join(DATA_DIR, 'sales.json');
 const SALARY_PATH = path.join(DATA_DIR, 'salary.json');
+const SAMAST_SALARY_PATH = path.join(DATA_DIR, 'salary-samast.json');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
 const STATEMENT_DIR = path.join(DATA_DIR, 'bank-statements');
 const STATEMENT_DRAFT_DIR = path.join(DATA_DIR, 'bank-statement-drafts');
@@ -1050,14 +1051,13 @@ function storedAccountNames(s) {
     (e.payments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
     (e.reimbursementPayments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
   });
-  salaryAdvanceEntries().forEach(x => { if (x.account) names.add(x.account); });
+  salaryAdvanceEntries().filter(x=>x.payingNature===n).forEach(x => { if (x.account) names.add(x.account); });
   return Array.from(new Set(Array.from(names).map(canonicalAccountName))).map(x => String(x).trim()).filter(x => x && x !== '(unspecified)').sort((a, b) => a.localeCompare(b));
 }
 function salaryAdvanceEntries() {
-  try {
-    const sal = JSON.parse(fs.readFileSync(SALARY_PATH, 'utf8'));
-    return Object.values(sal.advances || {}).filter(a => a.active !== false && num(a.amount) > 0 && a.account).map(a => ({ id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:canonicalAccountName(a.account),amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,empId:a.empId||'',reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'',fundingTransferId:a.fundingTransferId||'',fundingToAccount:canonicalAccountName(a.fundingToAccount)||'' }));
-  } catch (_) { return []; }
+  return [[SALARY_PATH,'SANKI'],[SAMAST_SALARY_PATH,'SAMAST']].flatMap(([file,entity])=>{
+    try{const sal=JSON.parse(fs.readFileSync(file,'utf8'));return Object.values(sal.advances||{}).filter(a=>a.active!==false&&num(a.amount)>0&&a.account).map(a=>({id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:canonicalAccountName(a.account),payingNature:a.payingNature||entity,entity,amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,empId:a.empId||'',reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'',fundingTransferId:a.fundingTransferId||'',fundingToAccount:canonicalAccountName(a.fundingToAccount)||''}));}catch(_){return[];}
+  });
 }
 function loadSalaryStore(){try{return JSON.parse(fs.readFileSync(SALARY_PATH,'utf8'));}catch(_){return null;}}
 function saveSalaryStore(s){const tmp=SALARY_PATH+'.tmp-'+process.pid+'-'+Date.now();fs.writeFileSync(tmp,JSON.stringify(s,null,2));fs.renameSync(tmp,SALARY_PATH);}
@@ -2383,7 +2383,7 @@ router.get('/api/expenses/balances', (req, res) => {
     // A linked advance is still outstanding against the employee, but its bank
     // movement is represented by the internal transfer. Do not debit the source
     // account a second time here.
-    if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
+    salaryAdvanceEntries().filter(x=>x.payingNature===nature&&!x.fundingTransferId&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
     if (nature === 'SANKI') salaryPaymentEntries().filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
     (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && posted(x.account,x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
     Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>posted(c.account,c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
@@ -2625,7 +2625,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     }));
     combinedPurchases.forEach(row => { row.description += ' · '+row.linkedPoIds.join(', '); entries.push(row); });
   }
-  if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_advance',entity:'SANKI',description:'Salary advance · '+x.employee,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.by}));
+  salaryAdvanceEntries().filter(x=>x.payingNature===nature&&!x.fundingTransferId&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_advance',entity:x.entity,description:'Salary advance · '+x.employee+' ['+x.entity+']',credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.by}));
   if (nature === 'SANKI') salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_payment',entity:'SANKI',description:'Salary payment · '+x.employeeName+' · '+x.ym,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.createdBy}));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
   if(nature==='SANKI'){
@@ -2772,7 +2772,9 @@ function appBankMovements(s,account,nature){const rows=[],n=normalizedNature(nat
   // belong to SAMAST or PERSONAL while being paid by a SANKI bank account.
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p=>rows.push({id:e.id+'/'+p.id,date:p.date,createdAt:p.paidAt||e.createdAt,description:(e.vendor||e.particulars||e.id),particulars:e.particulars||'',category:e.ledger||'',reference:p.bankReference||e.reconciliationSource&&e.reconciliationSource.bankReference||'',proof:p.proof||e.billPhoto||e.paymentProof||'',debit:num(p.amount),credit:0,entity:normalizedNature(e.nature)}));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account).forEach(p=>rows.push({id:e.id+'/'+p.id,date:p.date,createdAt:p.paidAt||e.createdAt,description:'Reimbursement '+(e.claimant||e.createdBy||''),reference:p.bankReference||'',proof:p.proof||'',debit:num(p.amount),credit:0,entity:normalizedNature(e.nature)}));});
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===n).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>rows.push({id:x.id+'/'+c.id,date:c.date,description:x.party,credit:num(c.amount),debit:0})));
-  if(n==='SANKI'){salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:x.description,reference:x.reference||'',proof:x.proof||'',credit:num(x.amount),debit:0}));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:p.id+'/'+x.id,date:x.date,createdAt:x.paidAt,description:p.vendor||p.id,reference:x.bankReference||'',proof:x.proof||'',debit:num(x.amount),credit:0})));salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary advance · '+x.employee+(x.note?' · '+x.note:''),reference:x.reference||x.id,proof:x.proof||'',proofs:x.proofs||[],category:'Employee salary advance',debit:num(x.amount),credit:0}));salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary payment · '+x.employeeName+(x.note?' · '+x.note:''),reference:x.reference||x.batchId||x.id,proof:x.proof||'',category:'Salary payment',debit:num(x.amount),credit:0}));}return rows.map(x=>{const override=(s.bankDateOverrides||{})[x.id];return override?Object.assign({},x,{originalDate:x.date,date:override.bankDate,bankDateOverride:override}):x;});}
+  if(n==='SANKI'){salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:x.description,reference:x.reference||'',proof:x.proof||'',credit:num(x.amount),debit:0}));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:p.id+'/'+x.id,date:x.date,createdAt:x.paidAt,description:p.vendor||p.id,reference:x.bankReference||'',proof:x.proof||'',debit:num(x.amount),credit:0})));salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary payment · '+x.employeeName+(x.note?' · '+x.note:''),reference:x.reference||x.batchId||x.id,proof:x.proof||'',category:'Salary payment',debit:num(x.amount),credit:0}));}
+  salaryAdvanceEntries().filter(x=>x.payingNature===n&&!x.fundingTransferId&&x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary advance · '+x.employee+' ['+x.entity+']'+(x.note?' · '+x.note:''),reference:x.reference||x.id,proof:x.proof||'',proofs:x.proofs||[],category:'Employee salary advance',debit:num(x.amount),credit:0}));
+  return rows.map(x=>{const override=(s.bankDateOverrides||{})[x.id];return override?Object.assign({},x,{originalDate:x.date,date:override.bankDate,bankDateOverride:override}):x;});}
 const RECONCILIATION_IDENTITY_STOP_WORDS=new Set(['bank','payment','payments','transfer','transferred','transaction','account','limited','india','indusind','federal','axis','state','yes','upi','imps','neft','rtgs','ift','inb','p2a','p2m','kumar','singh','private','services']);
 function reconciliationIdentityTokens(value){return Array.from(new Set(String(value||'').toLowerCase().split(/[^a-z0-9]+/).filter(x=>x.length>=4&&!RECONCILIATION_IDENTITY_STOP_WORDS.has(x)&&!/^[0-9]+$/.test(x))));}
 function reconciliationIdentityMatches(bank,app){const bankText=String((bank&&bank.reference)||'')+' '+String((bank&&bank.description)||''),appText=String((app&&app.id)||'')+' '+String((app&&app.description)||''),reference=String((bank&&bank.reference)||'').trim().toLowerCase(),confirmedReference=String(app&&app.bankDateOverride&&app.bankDateOverride.bankReference||'').trim().toLowerCase();if(confirmedReference.length>=5&&bankText.toLowerCase().includes(confirmedReference))return true;if(reference.length>=5&&appText.toLowerCase().includes(reference))return true;const appTokens=new Set(reconciliationIdentityTokens(appText));return reconciliationIdentityTokens(bankText).some(x=>appTokens.has(x));}
@@ -3288,7 +3290,8 @@ function recordedAccountBalance(s,nature,account,asOf){
   Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&!grossPaymentBatches.has(p.batchPaymentId)&&paymentIsPosted(e)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)&&!usesCompanyAdjustedBankTruth(nature,account)).forEach(x=>total+=num(x.credit)-num(x.debit));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
-  if(nature==='SANKI'){salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));salaryPaymentEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
+  if(nature==='SANKI'){salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));salaryPaymentEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
+  salaryAdvanceEntries().filter(x=>x.payingNature===nature&&!x.fundingTransferId&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
   return round0(total);
 }
 
