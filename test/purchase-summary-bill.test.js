@@ -15,7 +15,7 @@ test('summary bill uses actual received lines and totals yuan and freight', () =
     billNo: 'B1', vendor: 'Vendor',
     lines: [
       { sku: 'MISSING', qty: 0, perPcsYuan: 10, weightGrams: 100 },
-      { sku: 'EXPECTED', qty: 2, perPcsYuan: 20, weightGrams: 100 },
+      { sku: 'EXPECTED', qty: 2, perPcsYuan: 20, weightGrams: 100, photoUrl: '/api/procurement/photo/expected' },
       { sku: 'EXTRA', qty: 2, perPcsYuan: 20, weightGrams: 200, receiptAdded: { at: 'today' } }
     ] };
   const out = render(po);
@@ -27,6 +27,9 @@ test('summary bill uses actual received lines and totals yuan and freight', () =
   assert.match(out, /<th class="money">₹300<\/th>/);
   assert.match(out, /<th class="money">₹1500<\/th>/);
   assert.match(out, /Edit calculation in this table/);
+  assert.match(out, /<th>Photo<\/th>/);
+  assert.match(out, /data-zoom src="\/api\/procurement\/photo\/expected"/);
+  assert.match(out, /data-bill-line="1" data-field="weightGrams"/);
   assert.doesNotMatch(out, /Vendor bill comparison|data-vendor-bill|data-vendor-field/);
   assert.doesNotMatch(out, /MISSING/);
 });
