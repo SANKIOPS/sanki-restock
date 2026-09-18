@@ -1341,6 +1341,7 @@ router.get('/api/expenses/config', (req, res) => {
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name)))).sort((a,b)=>a.localeCompare(b)) : []])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645']:[]) : (approvalNatures(req).includes(n) ? transferAccountsForNature(n) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
+    claimantPaymentAccountsByUser: (isPrashant(req)||ownerView) ? {arshpreet:CLAIMANT_ACCOUNTS.arshpreet.slice()} : {},
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
     types: TYPES, natures: allowed, channels: CHANNELS, creditCards,
     approvalNatures: approvalNatures(req),
@@ -1750,6 +1751,33 @@ function recordBatchVendorPayment(req, res) {
 // Keep the legacy direct-call route and expose an unambiguous live route.
 router.post('/api/expenses/batch-pay', recordBatchVendorPayment);
 router.post('/api/expenses/vendor-payments/batch', recordBatchVendorPayment);
+
+// Record a vendor bill paid from Ashpreet's own account, on her behalf. This
+// is a claimant-funded expense, not a debit from a SANKI/SAMAST bank account.
+router.post('/api/expenses/:id/claimant-pay', (req,res) => {
+  if(!canApprove(req)||(!isPrashant(req)&&!isOwner(req)))return res.status(403).json({success:false,error:'Only Prashant or the Owner can record this claimant payment.'});
+  const s=loadStore(),e=s.expenses[req.params.id],b=req.body||{};
+  if(!e)return res.status(404).json({success:false,error:'Expense not found.'});
+  if(!canApproveExpenseNature(req,e))return res.status(403).json({success:false,error:'You cannot pay this accounting entity.'});
+  if(String(e.createdBy||e.claimant||'').toLowerCase()!=='arshpreet')return res.status(403).json({success:false,error:'This payment option is only for Ashpreet’s expenses.'});
+  if(e.status!=='approved'||e.paidAlready||num(e.paidAmount)>0||(e.payments||[]).length||(e.vendorAdvanceApplications||[]).length||e.isInstallment)
+    return res.status(409).json({success:false,error:'Only a fully unpaid, approved Ashpreet expense can be recorded as paid personally. Review any existing payments first.'});
+  const account=canonicalAccountName(b.account);
+  if(!CLAIMANT_ACCOUNTS.arshpreet.some(name=>name.toLowerCase()===account.toLowerCase()))return res.status(400).json({success:false,error:'Select Ashpreet’s actual personal paying account.'});
+  const amount=roundMoney(num(b.amount));
+  if(!(amount>0)||amount!==roundMoney(num(e.amount)))return res.status(400).json({success:false,error:'Record the full unpaid amount for this personal-payment route.'});
+  const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
+  if(!proof)return res.status(400).json({success:false,error:'Ashpreet’s payment proof is required.'});
+  const paymentType=String(b.paymentType||'UPI');
+  if(paymentType!=='UPI')return res.status(400).json({success:false,error:'Ashpreet 1919 is a bank account; use UPI for this payment or the appropriate cash/card flow.'});
+  const now=new Date().toISOString(),actor=String(req.user&&req.user.username||'admin');
+  const payment={id:'PAY-001',amount,date:String(b.date||indiaBusinessDate()).slice(0,10),account,paymentType,proof,proofs,note:String(b.note||'').trim(),paidBy:'arshpreet',recordedBy:actor,paidAt:now,personalFunds:true};
+  e.paidAlready=true;e.fundedBy='claimant';e.personalPaidAmount=amount;e.reimbursementStatus='pending';e.reimbursementAmount=0;e.reimbursementPayments=[];
+  e.purchasePaymentProof=proof;e.purchasePaymentProofs=proofs;e.paymentType=paymentType;e.paidAmount=amount;e.payments=[payment];e.status='paid';e.vendorPaymentCompleted=true;e.paidAt=now;e.paidBy='arshpreet';
+  audit(s,req,'CLAIMANT_PAYMENT_RECORDED','expense',e.id,{nature:e.nature,account,paymentId:payment.id,after:payment});
+  saveStore(s);notifyExpenseUser(e,'paid',amount);
+  res.json({success:true,expense:e});
+});
 
 // ── Pay (GATE 2: payment screenshot required) ────────────────────
 router.post('/api/expenses/:id/pay', (req, res) => {

@@ -993,6 +993,53 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   assert.equal(blocked.status, 400);
   const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;assert.ok(ownerConfig.payingAccountsByNature.PERSONAL.includes('Prashant Axis 3645'),'Owner can record a PERSONAL expense actually paid by SANKI');
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;assert.equal(adminConfig.payingAccountsByNature.PERSONAL.includes('Prashant Axis 3645'),false,'Admin cannot see or post owner-private expenses');
+  assert.ok(adminConfig.payingAccountsByNature.SANKI.includes('IndusInd Bank 8181'));
+  assert.deepEqual(adminConfig.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919']);
+  assert.deepEqual(claimantConfig.claimantPaymentAccountsByUser,{});
+});
+
+test('Prashant records Ashpreet’s proven personal vendor payment without debiting 8181, then reimburses from 8181 once',()=>{
+  const created=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Ashpreet Vendor',amount:613,billPhoto:'/api/expenses/photo/ashpreet-bill.jpg',qrPhoto:'/api/expenses/photo/ashpreet-qr.jpg',paymentType:'UPI'}});
+  assert.equal(created.status,200);const id=created.body.expense.id;
+  invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id},role:'admin'}).status,200);
+  const missingProof=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:613}});
+  assert.equal(missingProof.status,400);
+  const wrongAccount=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'IndusInd Bank 8181',amount:613,paymentProof:'/api/expenses/photo/ashpreet-pay.jpg'}});
+  assert.equal(wrongAccount.status,400);
+  const recorded=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:613,paymentProof:'/api/expenses/photo/ashpreet-pay.jpg',date:'2026-09-18'}});
+  assert.equal(recorded.status,200);assert.equal(recorded.body.expense.status,'paid');assert.equal(recorded.body.expense.reimbursementStatus,'pending');
+  assert.equal(recorded.body.expense.payments[0].personalFunds,true);assert.equal(recorded.body.expense.payments[0].paidBy,'arshpreet');assert.equal(recorded.body.expense.payments[0].recordedBy,'prashant');
+  assert.equal(invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:613,paymentProof:'/api/expenses/photo/ashpreet-pay.jpg'}}).status,409);
+  const before=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'IndusInd Bank 8181'}}).body;
+  assert.equal(before.entries.some(x=>x.id===id+'/PAY-001'),false);
+  const claimant=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Arshpreet 1919'}}).body;
+  assert.equal(claimant.entries.find(x=>x.id===id+'/PAY-001').debit,613);
+  const reimbursed=invoke('POST','/api/expenses/:id/reimburse',{params:{id},role:'admin',body:{account:'IndusInd Bank 8181',amount:613,paymentProof:'/api/expenses/photo/ashpreet-reimburse.jpg'}});
+  assert.equal(reimbursed.status,200);assert.equal(reimbursed.body.expense.reimbursementStatus,'reimbursed');
+  const after=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'IndusInd Bank 8181'}}).body;
+  assert.equal(after.entries.find(x=>x.id===id+'/REIM-001').debit,613);
+});
+
+test('Ashpreet-only payment route does not grant Prashant other claimant accounts',()=>{
+  const created=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Other claimant',amount:45,billPhoto:'/api/expenses/photo/other-bill.jpg',qrPhoto:'/api/expenses/photo/other-qr.jpg',paymentType:'UPI'}});
+  const id=created.body.expense.id;
+  invoke('POST','/api/expenses/:id/approve',{params:{id},role:'owner'});
+  const denied=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:45,paymentProof:'/api/expenses/photo/other-proof.jpg'}});
+  assert.equal(denied.status,403);
+  const html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');
+  assert.match(html,/Record Ashpreet-paid/);assert.match(html,/openClaimantPay/);assert.match(html,/reimbursement is now due/);
+});
+
+test('Prashant can record a separate Ashpreet vendor bill directly from assigned 8181',()=>{
+  const made=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Ashpreet Bank Vendor',amount:75,billPhoto:'/api/expenses/photo/ashpreet-bank-bill.jpg',qrPhoto:'/api/expenses/photo/ashpreet-bank-qr.jpg',paymentType:'UPI'}});
+  const id=made.body.expense.id;
+  invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id},role:'admin'});
+  const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'admin',body:{expenseIds:[id],account:'IndusInd Bank 8181',amount:75,paymentProof:'/api/expenses/photo/ashpreet-bank-pay.jpg',reconciliationOverrideReason:'Approved urgent payment with matching bank proof'}});
+  assert.equal(paid.status,200);assert.equal(paid.body.expenses[0].paidAlready,false);
+  assert.equal(paid.body.expenses[0].payments.at(-1).account,'IndusInd Bank 8181');
+  assert.equal(paid.body.expenses[0].reimbursementStatus,'not_applicable');
 });
 
 test('claimant ledgers remain visible under both SANKI and SAMAST with zero activity', () => {
