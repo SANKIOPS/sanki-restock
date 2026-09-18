@@ -501,6 +501,7 @@
       var labels={};(cfg.approvalNatures||[]).forEach(function(n){(payingAccountsForNature(n)||[]).forEach(function(a){labels[a]=labels[a]||[];if(labels[a].indexOf(n)<0)labels[a].push(n);});});
       return Object.keys(labels).sort().map(function(a){return '<option value="'+esc(a)+'">'+esc(a)+' — '+esc(labels[a].join('/'))+'</option>';}).join('');
     }
+    function ashpreetPaymentAccounts(e){return String(e.createdBy||e.claimant||'').toLowerCase()==='arshpreet'?((cfg.claimantPaymentAccountsByUser||{}).arshpreet||[]):[];}
 
     // ── CREDIT CARDS: statement-first classification and liability ledgers ──
     function ccAllPayingAccounts(){var out=[];(cfg.approvalNatures||cfg.natures||[]).forEach(function(n){(payingAccountsForNature(n)||[]).forEach(function(a){if(out.indexOf(a)<0)out.push(a);});});return out;}
@@ -836,7 +837,8 @@
       if(!cfg.canApprove) return '';
       var edit=cfg.isAdmin?' <button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button>':'';
       if(e.status==='pending') return (canApproveExpense(e)?'<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button>':'<span class="badge b-nobill">proof incomplete</span>')+edit+' <button class="btn mini ghost" onclick="rejectExpense(\''+e.id+'\')">Reject</button>';
-      if((e.status==='approved'||e.status==='partially_paid')&&!e.paidAlready) return '<label class="btn mini ghost combined-pay-choice" title="Select this bill with other outstanding bills for the same vendor"><input type="checkbox" class="combined-pay-select" value="'+esc(e.id)+'" data-vendor="'+esc(String(e.vendor||'').trim().toLowerCase())+'" data-nature="'+esc(e.nature||'SANKI')+'" data-due="'+Math.max(0,(e.amount||0)-(e.paidAmount||0))+'"> Select to combine</label> <button class="btn mini green" onclick="openPay(\''+e.id+'\')">'+(e.status==='partially_paid'?'Record next payment':'Record payment')+'</button>'+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo approval</button>':'')+edit;
+      if((e.status==='approved'||e.status==='partially_paid')&&!e.paidAlready) return '<label class="btn mini ghost combined-pay-choice" title="Select this bill with other outstanding bills for the same vendor"><input type="checkbox" class="combined-pay-select" value="'+esc(e.id)+'" data-vendor="'+esc(String(e.vendor||'').trim().toLowerCase())+'" data-nature="'+esc(e.nature||'SANKI')+'" data-due="'+Math.max(0,(e.amount||0)-(e.paidAmount||0))+'"> Select to combine</label> <button class="btn mini green" onclick="openPay(\''+e.id+'\')">'+(e.status==='partially_paid'?'Record next payment':'Record payment')+'</button>'+(e.status==='approved'&&!(e.payments||[]).length&&!e.isInstallment&&ashpreetPaymentAccounts(e).length?' <button class="btn mini ghost" onclick="openClaimantPay(\''+e.id+'\')">Record Ashpreet-paid</button>':'')+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo approval</button>':'')+edit;
+      if(['pending','partially_reimbursed'].indexOf(e.reimbursementStatus)>=0&&e.paidAlready)return '<button class="btn mini green" onclick="openReimburse(\''+e.id+'\')">Reimburse '+esc(e.createdBy||e.claimant||'claimant')+'</button>'+edit;
       return edit;
     }
     function setupCombinedPaymentSelection(){
@@ -1053,6 +1055,7 @@
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
+      el('payType').disabled=false;el('payAddAcct').style.display='';
       el('payType').value=e.paymentType||'UPI';
       populatePaymentSource(e.nature||'SANKI',true);
       var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').removeAttribute('max');el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
@@ -1072,10 +1075,20 @@
       });
     };
     window.openPurchasePay = function(id){ openPay(id); payMode='procurement'; el('payTitle').textContent='Pay logistics mediator · '+id; };
+    window.openClaimantPay = function(id){
+      var e=expensesById[id]||{},accounts=ashpreetPaymentAccounts(e);if(!accounts.length){setMsg('Ashpreet’s account is not available to your role.',false);return;}
+      payId=id;payUrls=[];payMode='claimant';
+      el('payTitle').textContent='Record payment made by Ashpreet';el('payAcctLabel').textContent='Ashpreet’s actual paying account';
+      el('payProofLabel').textContent='Ashpreet → vendor payment proof — required';el('payGo').textContent='Record Ashpreet payment';
+      el('payAcct').innerHTML=opts(accounts);el('payAmount').value=e.amount||0;el('payAmount').readOnly=true;
+      el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';el('payDate').value=today();el('payType').value='UPI';el('payType').disabled=true;el('payAddAcct').style.display='none';el('payNote').value='';
+      el('payFile').value='';el('payPrev').style.display='none';el('payGo').disabled=true;el('payMsg').textContent='This creates an amount due back to Ashpreet; it does not debit a SANKI bank account.';el('payDlg').showModal();
+    };
     window.openReimburse = function(id){
       payId=id; payUrls=[]; payMode='reimburse'; var e=expensesById[id]||{};
       el('payTitle').textContent='Reimburse '+(e.createdBy||e.claimant||'claimant'); el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Company → claimant payment proof — required'; el('payGo').textContent='Save reimbursement';
+      el('payType').disabled=false;el('payAddAcct').style.display='';
       el('payAcct').innerHTML='<option value="">Select actual paying account</option>'+reimbursementAccountOptions(); el('payAmount').value=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));
       el('payAmount').readOnly=false;el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';
       el('payDate').value=today(); el('payType').value='UPI'; el('payNote').value=''; el('payFile').value=''; el('payPrev').style.display='none'; el('payGo').disabled=true; el('payMsg').textContent=''; el('payDlg').showModal();
@@ -1087,6 +1100,7 @@
       var total=selected.reduce(function(n,id){var e=expensesById[id]||{};return n+Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));},0);
       el('payTitle').textContent='Reimburse '+selected.length+' selected expenses';el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Common company → claimant payment proof — required';el('payGo').textContent='Reimburse selected together';
+      el('payType').disabled=false;el('payAddAcct').style.display='';
       el('payAcct').innerHTML='<option value="">Select actual paying account</option>'+reimbursementAccountOptions();el('payAmount').value=total;el('payAmount').readOnly=true;
       el('payBatchWrap').style.display='';el('payBatchList').innerHTML=selected.map(function(id){var e=expensesById[id],due=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));return '<div class="payment-entry"><span>'+esc(id)+' · '+esc(e.createdBy||e.claimant||'')+' · '+esc(e.vendor||e.particulars||'')+'</span><b>'+fmt(due)+'</b></div>';}).join('');
       el('payDate').value=today();el('payType').value='UPI';el('payNote').value='';el('payFile').value='';el('payPrev').style.display='none';el('payGo').disabled=true;el('payMsg').textContent='';el('payDlg').showModal();
@@ -1117,10 +1131,10 @@
       var applyVendorCredit=payMode==='vendor'&&el('payBatchWrap').getAttribute('data-apply-vendor-credit')==='true',bankAmount=Number(el('payAmount').value)||0;
       if(!payUrls.length&&bankAmount>0){ el('payMsg').textContent='At least one payment proof is required.'; return; }
       var selected=payMode==='vendor'?Array.prototype.map.call(document.querySelectorAll('.batch-expense:checked'),function(x){return x.value;}):(payMode==='batch-reimburse'?Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;}):[]);
-      var endpoint=payMode==='batch-reimburse'?'/api/expenses/reimbursements/batch':(payMode==='vendor'?'/api/expenses/vendor-payments/batch':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':'/pay')));
+      var endpoint=payMode==='batch-reimburse'?'/api/expenses/reimbursements/batch':(payMode==='vendor'?'/api/expenses/vendor-payments/batch':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':payMode==='claimant'?'/claimant-pay':'/pay')));
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ expenseIds:selected,paymentProof:payUrls[0],paymentProofs:payUrls, account:el('payAcct').value,amount:el('payAmount').value,applyVendorCredit:applyVendorCredit,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
-        if(d.success){ el('payDlg').close(); if(payMode==='reimburse'||payMode==='batch-reimburse') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg(payMode==='batch-reimburse'?'Selected expenses reimbursed together.':'Payment and proof saved.', true); }
+        if(d.success){ el('payDlg').close(); if((payMode==='reimburse'||payMode==='batch-reimburse')&&tab==='reimbursements') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg(payMode==='batch-reimburse'?'Selected expenses reimbursed together.':payMode==='claimant'?'Ashpreet’s payment recorded; reimbursement is now due.':'Payment and proof saved.', true); }
         else {el('payMsg').textContent = d.error||'Could not pay.';if(d.requiresOverride){el('payOverrideWrap').style.display='';el('payOverrideReason').focus();}}
       });
     });

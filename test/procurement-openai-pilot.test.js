@@ -52,13 +52,25 @@ test('selected model origin, fit and bag colour reach the paid image prompt',()=
   const chosen={modelOrigin:'International',femaleComplexion:'Fair',fit:'Fitted',bagStyle:'Structured handbag',bagColour:'Beige'};
   const prompt=pilot.imagePrompt({...group,line:'casuals'},'model-front',chosen);
   assert.match(prompt,/international non-Indian woman with fair, light complexion/);
-  assert.match(prompt,/fitted at the natural shoulder with set-in sleeves/);
+  assert.match(prompt,/fitted silhouette ONLY if the original garment visibly has that construction/);
   assert.match(prompt,/beige structured handbag/);
   assert.doesNotMatch(prompt,/black structured handbag/);
-  assert.match(pilot.imagePrompt({...group,line:'casuals',fit:'Muscle Fit'},'model-front',{bagStyle:'Structured handbag'}),/no dropped shoulder seam/);
+  assert.match(pilot.imagePrompt({...group,line:'casuals',fit:'Muscle Fit'},'model-front',{bagStyle:'Structured handbag'}),/do not infer a fit from purchase labels/);
   assert.match(html,/sel\('modelOrigin','Model origin',MODEL_ORIGINS,s\.modelOrigin\)/);
   assert.match(html,/sel\('bagColour','Bag colour',BAG_COLOURS,s\.bagColour\)/);
   assert.match(html,/bagColour:s\.bagColour\|\|'Auto',modelOrigin:s\.modelOrigin\|\|'Indian'/);
+});
+
+test('wrong purchase labels never tell the image model to turn a knit into a T-shirt',()=>{
+  const mislabeled={...group,productType:'T-Shirt',fit:'Muscle Fit',colour:'White',audience:'Women'};
+  for(const type of ['front','model-front','model-side']) {
+    const prompt=pilot.imagePrompt(mislabeled,type,{fit:'Slim fit'});
+    assert.match(prompt,/never change a long sleeve to a short sleeve, alter the neckline, substitute a different garment category/);
+    assert.match(prompt,/Ignore any contradictory purchase title, product type or fit setting/);
+    assert.doesNotMatch(prompt,/actual White T-Shirt|actual .*Muscle Fit/);
+  }
+  assert.match(pilot.imagePrompt(mislabeled,'front'),/do not add bust shaping or make a loose garment fitted/);
+  assert.match(pilot.imagePrompt(mislabeled,'model-side',{fit:'Slim fit'},true),/ORIGINAL PRODUCT PHOTO and overrides the first/);
 });
 
 test('image request sends one referenced edit, medium quality and no retry',async()=>{
@@ -95,6 +107,21 @@ test('fit preflight checks the original before paid image edits and never guesse
   }});
   assert.equal(calls,1);assert.equal(result.status,'conflict');
   assert.equal((await pilot.preflightFit({key:'test-only',group,source,styling:{fit:'Auto'},fetchImpl:()=>{throw new Error('No call expected');}})).status,'not-required');
+});
+
+test('a conflicting selected fit uses the photographed cut without stopping all three views',()=>{
+  const selected={fit:'Slim fit',pair:'Straight trousers',chain:'Gold chain'};
+  const effective=pilot.stylingForPhoto(selected,{status:'conflict',reason:'Dropped shoulders in original'});
+  assert.deepEqual(effective,{...selected,fit:'Auto'});
+  assert.equal(selected.fit,'Slim fit');
+  assert.strictEqual(pilot.stylingForPhoto(selected,{status:'compatible'}),selected);
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  assert.match(server,/photoStyling=openaiPilot\.stylingForPhoto\(styling,fitPreflight\)/);
+  assert.match(server,/generateImage\(\{[^\n]*styling:photoStyling/);
+  assert.match(server,/verifyImage\(\{[^\n]*styling:photoStyling/);
+  assert.match(html,/object-fit:contain;background:var\(--ivory2\)/);
+  assert.match(html,/Object\.assign\(queuedAttempt,result\.pilot\)/);
 });
 
 test('corrective retry only follows a clear mismatch and uses fixed guidance',async()=>{
@@ -155,7 +182,9 @@ test('one-click generation has a confirmed two-attempt cap and requests only mis
   assert.match(html,/other products continued/);
   assert.match(server,/const neededTypes=allowedTypes\.filter\(type=>!/);
   assert.match(server,/if \(!preflightBlocked&&needsSeo\) try \{/);
-  assert.match(server,/const maxImageAttempts=\(req\.body\|\|\{\}\)\.maxImageAttempts===2\?2:1/);
+  assert.match(server,/if\(\(req\.body\|\|\{\}\)\.maxImageAttempts!==2\) return res\.status\(409\)/);
+  assert.match(server,/Purchases page is out of date\. Refresh the page/);
+  assert.match(server,/const maxImageAttempts=2/);
   assert.match(server,/All image and SEO drafts already exist/);
   assert.match(server,/\.attempts\.slice\(\)\.reverse\(\)\.find\(x=>x\.groupKey===key\)/);
 });
@@ -183,6 +212,12 @@ test('visual checks reject mismatched outfit, accessories, angle or continuity',
     assert.equal(result.status,'needs-review',field);
     assert.deepEqual(result.failed,[field]);
   }
+  const missingChain=pilot.evaluateImageCheck({...pass,chainMatch:{status:'fail',evidence:'Gold chain is missing'}},'model-side',{...styling,chain:'Gold chain'},group);
+  assert.equal(missingChain.status,'pass');
+  assert.deepEqual(missingChain.failed,[]);
+  assert.match(missingChain.warnings[0],/chainMatch/);
+  assert.equal(pilot.evaluateImageCheck({...pass,chainMatch:{status:'fail',evidence:'An extra chain is visible'}},'model-side',{...styling,chain:'None'},group).status,'needs-review');
+  assert.equal(pilot.evaluateImageCheck({...pass,fitMatch:{status:'fail',evidence:'Garment cut visibly changed'}},'model-side',{...styling,chain:'Gold chain'},group).status,'needs-review');
   assert.equal(pilot.evaluateImageCheck({...pass,bagMatch:{status:'fail',evidence:'bag'}},'front',styling,group).status,'pass');
   assert.equal(pilot.evaluateImageCheck({...pass,shoeMatch:{status:'fail',evidence:'shoes'}},'model-front',{},group).status,'pass');
   assert.deepEqual(pilot.evaluateImageCheck({...pass,tuckMatch:{status:'uncertain',evidence:'Hem hidden'}},'model-front',styling,group).uncertain,['tuckMatch']);
@@ -199,8 +234,10 @@ test('independent visual check sends original, candidate and matching model fron
     assert.equal(body.store,false);
     assert.equal(body.text.format.type,'json_schema');
     assert.equal(body.input[0].content.filter(x=>x.type==='input_image').length,3);
+    assert.doesNotMatch(body.input[0].content[0].text,/"productType":"T-Shirt"|"originalFit":"Muscle Fit"/);
     assert.match(body.input[0].content[0].text,/Off-white, beige or other neutral trouser COLOUR is not evidence/);
     assert.match(body.input[0].content[0].text,/black loafers do NOT fail/);
+    assert.match(body.input[0].content[0].text,/a tuck, changed pose, drape, lighting or camera angle alone does not prove a different fit/);
     return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(allTrue)}]}]})};
   }});
   assert.equal(calls,1);assert.equal(out.status,'pass');

@@ -845,9 +845,10 @@ router.get('/api/procurement/invoice/:file', (req, res) => {
 });
 router.post('/api/procurement/pos/:id/invoice', invoiceUpload.single('invoice'), (req,res) => {
   const role=String(req.user&&req.user.role||'').toLowerCase();
-  if(!isAdmin(req)&&role!=='owner')return res.status(403).json({success:false,error:'Only the Owner can attach or replace a posted bill.'});
   if(!req.file)return res.status(400).json({success:false,error:'Choose the original vendor bill.'});
   const s=loadStore(),po=s.pos[req.params.id];if(!po)return res.status(404).json({success:false,error:'PO not found.'});
+  if (po.status === 'posted' ? (!isAdmin(req) && role !== 'owner') : !canManagePurchases(req))
+    return res.status(403).json({success:false,error:'Purchases access is required; only the Owner can replace a posted bill.'});
   const invoice=persistInvoice(req.file);invoice.uploadedBy=(req.user&&req.user.username)||'owner';po.invoice=invoice;
   po.invoiceHistory=Array.isArray(po.invoiceHistory)?po.invoiceHistory:[];po.invoiceHistory.push({...invoice,reason:'Original bill attached to PO'});saveStore(s);
   res.json({success:true,invoice,po:publicPo(po,req)});
@@ -1902,18 +1903,21 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       return res.status(409).json({success:false,error:'Generate a visually checked front model image before its three-quarter view.'});
     }
     if (!types.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
+    // An already-open browser tab may still run the older one-attempt UI after a
+    // deployment. Do not spend credits under that stale confirmation dialog.
+    if((req.body||{}).maxImageAttempts!==2) return res.status(409).json({success:false,error:'Purchases page is out of date. Refresh the page and reopen this PO before generating photos. No paid call was made.'});
     const styling=openaiPilot.normalizeStyling((req.body||{}).styling||(po.imageStyling||{})[key],g);
     po.imageStyling=po.imageStyling||{};
     if(!po.imageStyling[key])po.imageStyling[key]=styling;
     else if(JSON.stringify(po.imageStyling[key])!==JSON.stringify(styling))return res.status(409).json({success:false,error:'Styling changed or is still saving. Wait for it to save, then retry.'});
-    const maxImageAttempts=(req.body||{}).maxImageAttempts===2?2:1;
+    const maxImageAttempts=2;
     const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,maxImageAttempts,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});
     const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
     const textModel=process.env.PROCUREMENT_OPENAI_TEXT_MODEL||'gpt-4.1-mini';
     const checkModel=process.env.PROCUREMENT_OPENAI_CHECK_MODEL||'gpt-4.1-mini';
-    let preflightBlocked=false;
+    let preflightBlocked=false,photoStyling=styling;
     try {
       const fitPreflight=types.length?await openaiPilot.preflightFit({key:process.env.OPENAI_API_KEY,group:g,source,styling,model:checkModel}):{status:'not-required',reason:'SEO-only job'};
       const fresh=loadStore(),current=fresh.pos[req.params.id],item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
@@ -1922,7 +1926,9 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       if(!freshGroup||codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint||JSON.stringify(openaiPilot.normalizeStyling((current.imageStyling||{})[key],freshGroup))!==JSON.stringify(styling)) {
         preflightBlocked=true;item.errors.push({type:'preflight',error:'Product photo or styling changed during the source check. No image call was made.'});
       } else if(fitPreflight.status==='conflict') {
-        preflightBlocked=true;item.errors.push({type:'preflight',error:'Selected fit conflicts with the original garment photo: '+fitPreflight.reason+'. Check the physical article and correct the fit before generating; no image call was made.'});
+        photoStyling=openaiPilot.stylingForPhoto(styling,fitPreflight);
+        item.photoStyling=photoStyling;
+        item.warnings=[`The selected ${styling.fit} fit conflicts with the original photo (${fitPreflight.reason}). Images will follow the photographed cut instead. Correct the purchase fit before posting.`];
       }
       saveStore(fresh);
     } catch(e) {
@@ -1946,9 +1952,9 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         const before=loadStore(),started=before.pos[req.params.id].openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
         started.imageCalls=started.imageCalls||[];
         started.imageCalls.push({type,attempt:imageAttempt,startedAt:new Date().toISOString()});saveStore(before);
-        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,continuitySource,type,styling,repairFields,model:imageModel});
+        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,continuitySource,type,styling:photoStyling,repairFields,model:imageModel});
         let check;
-        try {check=await openaiPilot.verifyImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,generated:generated.buffer,continuitySource,type,styling,model:checkModel});}
+        try {check=await openaiPilot.verifyImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,generated:generated.buffer,continuitySource,type,styling:photoStyling,model:checkModel});}
         catch(e){check={status:'unavailable',failed:['verification'],issues:['Visual check unavailable: '+e.message.slice(0,140)]};}
         const fresh=loadStore(),current=fresh.pos[req.params.id];
         const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
@@ -1962,7 +1968,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         if(check.status!=='pass') {
           current.qaRejected=current.qaRejected||{};
           current.qaRejected[key]=Array.isArray(current.qaRejected[key])?current.qaRejected[key]:[];
-          current.qaRejected[key].push({type,url:saved.url,qa:check,sourceFingerprint:fingerprint,styling,at:new Date().toISOString()});
+          current.qaRejected[key].push({type,url:saved.url,qa:check,sourceFingerprint:fingerprint,styling:photoStyling,at:new Date().toISOString()});
           current.qaRejected[key]=current.qaRejected[key].slice(-12);
           const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
           const canRepair=openaiPilot.shouldRetryImageCheck(check,imageAttempt,maxImageAttempts);
@@ -1972,7 +1978,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
           break;
         }
         const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot',qa:check,
-          sourceFingerprint:fingerprint,styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type)?styling:null};
+          sourceFingerprint:fingerprint,styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type)?photoStyling:null};
         const idx=images.findIndex(x=>x.type===type);if(idx>=0)images[idx]=rec;else images.push(rec);
         for(const held of ((current.qaRejected||{})[key]||[]))if(held.type===type&&!held.supersededBy){held.supersededBy=rec.url;held.supersededAt=new Date().toISOString();}
         invalidateDependentSides(images,type);
@@ -2366,10 +2372,15 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   if (po.status !== 'posted') return res.status(400).json({ success: false, error: 'Use the normal PO editor until this purchase is posted.' });
   const reason = String(b.reason || '').trim();
   if (!reason) return res.status(400).json({ success: false, error: 'A correction reason is required.' });
+  const validPostedNumber = (v, integer) => v == null || (v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && (!integer || Number.isInteger(Number(v))));
+  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].some(k => !validPostedNumber(b[k], false)) ||
+      (Array.isArray(b.lines) && b.lines.some(l => !validPostedNumber(l.qty, true) || !validPostedNumber(l.unitPrice, false) || !validPostedNumber(l.weightGrams, false))))
+    return res.status(400).json({ success: false, error: 'Enter valid non-negative quantities, prices, weights and rates.' });
   const before = poCostBreakdown(po, s.settings);
   if (b.exRate != null && b.exRate !== '') po.exRate = Math.max(0, num(b.exRate));
   if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = Math.max(0, num(b.freightPerGram));
   if (b.transportTotal != null && b.transportTotal !== '') po.transportTotal = Math.max(0, num(b.transportTotal));
+  if (b.localTransportYuan != null && b.localTransportYuan !== '') po.localTransportYuan = Math.max(0, num(b.localTransportYuan));
   if (Array.isArray(b.lines)) b.lines.forEach((edit, i) => {
     const line = (po.lines || [])[i]; if (!line) return;
     if (edit.qty != null && edit.qty !== '') line.qty = Math.max(0, Math.round(num(edit.qty)));
@@ -2384,6 +2395,48 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   po.costCorrectionHistory.push({ correctedAt: new Date().toISOString(), correctedBy: by, reason, before, after });
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req), breakdown: after, warning: 'Accounting cost was corrected. Shopify inventory was not changed.' });
+});
+// Correct a pending PO's bill calculation in place. The ordered/receipt audit
+// baseline and Shopify state are deliberately left untouched.
+router.patch('/api/procurement/pos/:id/summary-calculation', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+  const s = loadStore(), po = s.pos[req.params.id], b = req.body || {};
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted purchases require an Owner correction with a reason.' });
+  if (!Array.isArray(b.lines) || b.lines.length !== (po.lines || []).length)
+    return res.status(400).json({ success: false, error: 'Submit every PO line in its original order.' });
+  const validNumber = (v, integer) => v !== '' && v != null && Number.isFinite(Number(v)) && Number(v) >= 0 && (!integer || Number.isInteger(Number(v)));
+  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].some(k => b[k] != null && !validNumber(b[k], false)) ||
+      b.lines.some(l => !validNumber(l.qty, true) || !validNumber(l.unitPrice, false) || !validNumber(l.weightGrams, false)))
+    return res.status(400).json({ success: false, error: 'Enter valid non-negative quantities, prices, weights and rates.' });
+  const before = poCostBreakdown(po, s.settings);
+  ['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].forEach(k => { if (b[k] != null) po[k] = Number(b[k]); });
+  b.lines.forEach((edit, i) => { const line = po.lines[i]; line.qty = Number(edit.qty); line.perPcsYuan = Number(edit.unitPrice); line.weightGrams = Number(edit.weightGrams); });
+  po.costCorrectionHistory = Array.isArray(po.costCorrectionHistory) ? po.costCorrectionHistory : [];
+  po.costCorrectionHistory.push({ correctedAt: new Date().toISOString(), correctedBy: (req.user || {}).username || 'system', reason: 'Purchase Summary inline correction', before, after: poCostBreakdown(po, s.settings) });
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req) });
+});
+// Vendor-stated figures are separate from our receipt and landed-cost figures.
+router.patch('/api/procurement/pos/:id/vendor-bill', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+  const s = loadStore(), po = s.pos[req.params.id], b = req.body || {};
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  const bill = {};
+  ['billNumber', 'billDate', 'vendorName', 'currency'].forEach(k => { bill[k] = String(b[k] || '').trim().slice(0, 160); });
+  if (bill.billDate && !/^\d{4}-\d{2}-\d{2}$/.test(bill.billDate)) return res.status(400).json({ success: false, error: 'Use a valid bill date.' });
+  for (const k of ['totalValue', 'totalQuantity', 'localTransportation', 'exchangeRate']) {
+    if (b[k] === '' || b[k] == null) { bill[k] = null; continue; }
+    const n = Number(b[k]);
+    if (!Number.isFinite(n) || n < 0 || (k === 'totalQuantity' && !Number.isInteger(n))) return res.status(400).json({ success: false, error: 'Vendor bill figures must be non-negative numbers.' });
+    bill[k] = n;
+  }
+  bill.updatedAt = new Date().toISOString(); bill.updatedBy = (req.user || {}).username || 'system';
+  po.vendorBillHistory = Array.isArray(po.vendorBillHistory) ? po.vendorBillHistory : [];
+  if (po.vendorBill) po.vendorBillHistory.push(po.vendorBill);
+  po.vendorBill = bill;
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req) });
 });
 router.get('/api/procurement/history', (req, res) => {
   const s = loadStore();
