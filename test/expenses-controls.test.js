@@ -1021,6 +1021,21 @@ test('Prashant records Ashpreet’s proven personal vendor payment without debit
   assert.equal(after.entries.find(x=>x.id===id+'/REIM-001').debit,613);
 });
 
+test('Prashant can record an initially company-payable SAMAST expense as paid by Ashpreet 1919',()=>{
+  const created=invoke('POST','/api/expenses',{body:{nature:'SAMAST',vendor:'Harjeet singh',amount:700,billPhoto:'/api/expenses/photo/cctv-bill.jpg',qrPhoto:'/api/expenses/photo/cctv-qr.jpg',paymentType:'UPI'}});
+  assert.equal(created.status,200);const id=created.body.expense.id;
+  invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'REPAIR & MAINTANCE'},role:'owner'});
+  assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id},role:'admin'}).status,200);
+  const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+  assert.deepEqual(config.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919']);
+  const paid=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:700,paymentProof:'/api/expenses/photo/cctv-payment.jpg',date:'2026-09-18'}});
+  assert.equal(paid.status,200);assert.equal(paid.body.expense.reimbursementStatus,'pending');
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'Arshpreet 1919'}}).body;
+  assert.equal(ledger.entries.find(x=>x.id===id+'/PAY-001').debit,700);
+  const html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');
+  assert.match(html,/id="payClaimantSwitch"/);assert.match(html,/openClaimantPay\(id\)/);
+});
+
 test('Ashpreet-only payment route does not grant Prashant other claimant accounts',()=>{
   const created=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Other claimant',amount:45,billPhoto:'/api/expenses/photo/other-bill.jpg',qrPhoto:'/api/expenses/photo/other-qr.jpg',paymentType:'UPI'}});
   const id=created.body.expense.id;

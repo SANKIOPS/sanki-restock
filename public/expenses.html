@@ -212,7 +212,8 @@
   <dialog id="payDlg"><div class="dlg">
     <h3 id="payTitle">Record payment</h3>
     <div class="fld"><label id="payAcctLabel">Pay from account</label><select id="payAcct"></select>
-      <button type="button" class="btn mini ghost" id="payAddAcct" style="margin-top:7px">＋ Add paying account</button></div>
+      <button type="button" class="btn mini ghost" id="payAddAcct" style="margin-top:7px">＋ Add paying account</button>
+      <button type="button" class="btn mini ghost" id="payClaimantSwitch" style="display:none;margin-top:7px">Paid personally by Arshpreet · 1919</button></div>
     <div class="grid" style="margin-top:10px">
       <div class="fld"><label>Amount ₹</label><input type="number" id="payAmount" min="1" step="1"></div>
       <div class="fld"><label>Date</label><input type="date" id="payDate"></div>
@@ -1033,6 +1034,9 @@
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
       el('payProofLabel').textContent='Company payment proof — required'; el('payGo').textContent='Save payment';
       el('payType').disabled=false;el('payAddAcct').style.display='';
+      var canRecordClaimant=e.status==='approved'&&!(e.payments||[]).length&&!e.paidAlready&&!e.isInstallment&&ashpreetPaymentAccounts(e).length;
+      el('payClaimantSwitch').style.display=canRecordClaimant?'':'none';
+      el('payClaimantSwitch').onclick=canRecordClaimant?function(){openClaimantPay(id);}:null;
       el('payType').value=e.paymentType||'UPI';
       populatePaymentSource(e.nature||'SANKI',true);
       var totalDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));el('payAmount').value=e.isInstallment&&!(e.paidAmount>0)?Math.min(totalDue,e.requestedAmount||totalDue):totalDue;el('payAmount').removeAttribute('max');el('payAmount').readOnly=false; el('payDate').value=today(); el('payType').value=e.paymentType||'UPI'; el('payNote').value='';
@@ -1040,7 +1044,7 @@
       el('payBatchWrap').style.display='none';el('payBatchWrap').setAttribute('data-apply-vendor-credit','false');el('payBatchList').innerHTML='';el('payAmount').oninput=null;
       el('payDlg').showModal();
       api('/api/expenses/'+id+'/payment-candidates').then(function(d){
-        if(!d.success)return;var otherExpenses=d.expenses||[];payVendorCreditAvailable=Number(d.availableVendorCredit)||0;
+        if(!d.success||payMode!=='vendor'||payId!==id)return;var otherExpenses=d.expenses||[];payVendorCreditAvailable=Number(d.availableVendorCredit)||0;
         var currentDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));
         el('payBatchWrap').style.display='';
         var wanted=Array.isArray(preselectedIds)?preselectedIds:[id];
@@ -1058,11 +1062,12 @@
       el('payTitle').textContent='Record payment made by Ashpreet';el('payAcctLabel').textContent='Ashpreet’s actual paying account';
       el('payProofLabel').textContent='Ashpreet → vendor payment proof — required';el('payGo').textContent='Record Ashpreet payment';
       el('payAcct').innerHTML=opts(accounts);el('payAmount').value=e.amount||0;el('payAmount').readOnly=true;
-      el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';el('payDate').value=today();el('payType').value='UPI';el('payType').disabled=true;el('payAddAcct').style.display='none';el('payNote').value='';
-      el('payFile').value='';el('payPrev').style.display='none';el('payGo').disabled=true;el('payMsg').textContent='This creates an amount due back to Ashpreet; it does not debit a SANKI bank account.';el('payDlg').showModal();
+      el('payBatchWrap').style.display='none';el('payBatchList').innerHTML='';el('payDate').value=today();el('payType').value='UPI';el('payType').disabled=true;el('payAddAcct').style.display='none';el('payClaimantSwitch').style.display='none';el('payNote').value='';
+      el('payFile').value='';el('payPrev').style.display='none';el('payGo').disabled=true;el('payMsg').textContent='This creates an amount due back to Ashpreet; it does not debit a company bank account.';if(!el('payDlg').open)el('payDlg').showModal();
     };
     window.openReimburse = function(id){
       payId=id; payUrls=[]; payMode='reimburse'; var e=expensesById[id]||{};
+      el('payClaimantSwitch').style.display='none';
       el('payTitle').textContent='Reimburse '+(e.createdBy||e.claimant||'claimant'); el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Company → claimant payment proof — required'; el('payGo').textContent='Save reimbursement';
       el('payType').disabled=false;el('payAddAcct').style.display='';
@@ -1074,6 +1079,7 @@
       var selected=Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;});
       if(selected.length<2){setMsg('Select at least two pending expenses.',false);return;}
       payId=selected[0];payUrls=[];payMode='batch-reimburse';
+      el('payClaimantSwitch').style.display='none';
       var total=selected.reduce(function(n,id){var e=expensesById[id]||{};return n+Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));},0);
       el('payTitle').textContent='Reimburse '+selected.length+' selected expenses';el('payAcctLabel').textContent='Reimburse from account';
       el('payProofLabel').textContent='Common company → claimant payment proof — required';el('payGo').textContent='Reimburse selected together';
