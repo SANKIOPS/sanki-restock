@@ -2435,28 +2435,6 @@ router.patch('/api/procurement/pos/:id/summary-calculation', (req, res) => {
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req) });
 });
-// Vendor-stated figures are separate from our receipt and landed-cost figures.
-router.patch('/api/procurement/pos/:id/vendor-bill', (req, res) => {
-  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
-  const s = loadStore(), po = s.pos[req.params.id], b = req.body || {};
-  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
-  const bill = {};
-  ['billNumber', 'billDate', 'vendorName', 'currency'].forEach(k => { bill[k] = String(b[k] || '').trim().slice(0, 160); });
-  if (bill.currency && !['CNY', 'INR'].includes(bill.currency)) return res.status(400).json({ success: false, error: 'Choose CNY or INR for the vendor bill.' });
-  if (bill.billDate && !/^\d{4}-\d{2}-\d{2}$/.test(bill.billDate)) return res.status(400).json({ success: false, error: 'Use a valid bill date.' });
-  for (const k of ['totalValue', 'totalQuantity', 'freight', 'localTransportation', 'otherCosts', 'totalAmount', 'exchangeRate']) {
-    if (b[k] === '' || b[k] == null) { bill[k] = null; continue; }
-    const n = Number(b[k]);
-    if (!Number.isFinite(n) || n < 0 || (k === 'totalQuantity' && !Number.isInteger(n))) return res.status(400).json({ success: false, error: 'Vendor bill figures must be non-negative numbers.' });
-    bill[k] = n;
-  }
-  bill.updatedAt = new Date().toISOString(); bill.updatedBy = (req.user || {}).username || 'system';
-  po.vendorBillHistory = Array.isArray(po.vendorBillHistory) ? po.vendorBillHistory : [];
-  if (po.vendorBill) po.vendorBillHistory.push(po.vendorBill);
-  po.vendorBill = bill;
-  saveStore(s);
-  res.json({ success: true, po: publicPo(po, req) });
-});
 // A combined invoice is a parent record. Its child POs remain
 // untouched, including their accounting balances and individual payment trail.
 router.post('/api/procurement/combined-invoices', (req, res) => {

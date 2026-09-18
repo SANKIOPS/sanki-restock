@@ -146,7 +146,6 @@ function apiAllowedForUser(user, p, method='GET') {
   if (userRoles.includes('accounting')) {
     if (method === 'GET' && ['/api/procurement/settings', '/api/procurement/lookups', '/api/procurement/vendors', '/api/procurement/pos', '/api/procurement/history'].includes(p)) return true;
     if (method === 'GET' && (p.startsWith('/api/procurement/pos/') || p.startsWith('/api/procurement/invoice/'))) return true;
-    if (method === 'PATCH' && /^\/api\/procurement\/pos\/[^/]+\/vendor-bill$/.test(p)) return true;
     if (method === 'POST' && /^\/api\/procurement\/pos\/[^/]+\/invoice$/.test(p)) return true;
   }
   const rule = apiRuleFor(p);

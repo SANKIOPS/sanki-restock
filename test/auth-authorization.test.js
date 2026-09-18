@@ -54,7 +54,7 @@ test('accounting can reconcile combined vendor invoices without editing purchase
   assert.equal(apiAllowedForUser(accounting, '/api/procurement/history'), true);
   assert.equal(apiAllowedForUser(accounting, '/api/procurement/combined-invoices', 'POST'), true);
   assert.equal(apiAllowedForUser(accounting, '/api/procurement/combined-invoices/CVI-1', 'PATCH'), true);
-  assert.equal(apiAllowedForUser(accounting, '/api/procurement/pos/PO-1/vendor-bill', 'PATCH'), true);
+  assert.equal(apiAllowedForUser(accounting, '/api/procurement/pos/PO-1/vendor-bill', 'PATCH'), false);
   assert.equal(apiAllowedForUser(accounting, '/api/procurement/pos/PO-1/summary-calculation', 'PATCH'), false);
 });
 
