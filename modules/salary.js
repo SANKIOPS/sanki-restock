@@ -737,37 +737,6 @@ router.post('/api/salary/payments/batch',guard,(req,res)=>{
 });
 // One employee-payment action can settle earned salary and create a separate
 // recoverable advance. Both allocations are validated before the single save.
-router.post('/api/salary/pay-employee',guard,(req,res)=>{
-  if(!isOwner(req)&&advanceUsername(req)!=='prashant')return res.status(403).json({success:false,error:'Only the Owner or Prashant can record an employee payment here.'});
-  const s=load(),b=req.body||{},emp=s.employees[b.empId],ym=String(b.ym||''),date=String(b.date||''),account=String(b.account||'').trim(),total=round2(Number(b.amount)),salaryAmount=round2(Number(b.salaryAmount)),advanceAmount=round2(Number(b.advanceAmount)),reference=String(b.reference||'').trim(),note=String(b.note||'').trim(),reason=String(b.partialReason||'').trim(),proofs=Array.from(new Set([].concat(Array.isArray(b.proofs)?b.proofs:[],b.proof||[]).map(x=>String(x||'').trim()).filter(Boolean)));
-  if(!emp||emp.active===false)return res.status(400).json({success:false,error:'Choose an active employee.'});
-  if(!/^\d{4}-\d{2}$/.test(ym)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)||!SALARY_PAYING_ACCOUNTS.includes(account)||!proofs.length)return res.status(400).json({success:false,error:'Choose a salary month, payment date, authorized account, and at least one payment proof.'});
-  if(!Number.isFinite(total)||!Number.isFinite(salaryAmount)||!Number.isFinite(advanceAmount)||!(total>0)||salaryAmount<0||advanceAmount<0||Math.abs(round2(salaryAmount+advanceAmount)-total)>.001)return res.status(400).json({success:false,error:'The salary and advance allocations must add up exactly to the amount paid.'});
-  const row=computeMonth(s,ym).find(x=>x.id===emp.id),remaining=round2(Math.max(0,row&&row.balance||0));
-  if(b.expectedRemaining!=null&&Math.abs(round2(Number(b.expectedRemaining))-remaining)>.001)return res.status(409).json({success:false,error:'Salary due has changed. Refresh this employee before recording the payment.',remaining});
-  if(salaryAmount>remaining+.001)return res.status(400).json({success:false,error:'Salary allocation exceeds the amount due for '+ym+'.',remaining});
-  if(salaryAmount>0&&salaryAmount<remaining-.001&&!reason)return res.status(400).json({success:false,error:'Enter why only part of the outstanding salary is being paid.'});
-  if(advanceAmount>0){
-    const duplicate=[...Object.values(s.advanceRequests||{}).filter(x=>!['Rejected','Posted'].includes(x.status)),...Object.values(s.advances||{}).filter(x=>x.active!==false)].find(x=>x.empId===emp.id&&String(x.account||'').trim()===account&&(reference&&String(x.reference||'').trim()?String(x.reference).trim()===reference:String(x.date||'')===date&&round2(num(x.amount))===advanceAmount));
-    if(duplicate)return res.status(409).json({success:false,error:'A matching advance already exists for this employee. Check the advance register before trying again.'});
-  }
-  const at=new Date().toISOString(),by=req.user&&req.user.username||'admin',paymentKey='EMP-'+at.replace(/[^0-9]/g,'')+'-'+String(Math.floor(Math.random()*1000000)).padStart(6,'0');
-  let salaryBatchId='',advance=null,request=null;
-  if(salaryAmount>0){
-    s.salaryPaymentBatchSeq=(s.salaryPaymentBatchSeq||0)+1;salaryBatchId='SALB-'+String(s.salaryPaymentBatchSeq).padStart(5,'0');s.salaryPayments=s.salaryPayments||[];
-    s.salaryPayments.push({id:salaryBatchId+'-001',batchId:salaryBatchId,employeePaymentKey:paymentKey,ym,empId:emp.id,employeeName:emp.name,amount:salaryAmount,date,account,proof:proofs[0],proofs:proofs.slice(),reference,note,modificationReason:reason,remainingBeforePayment:remaining,balanceAfterPayment:round2(remaining-salaryAmount),active:true,createdBy:by,createdAt:at});
-  }
-  if(advanceAmount>0&&isOwner(req)){
-    s.advanceSeq=(s.advanceSeq||0)+1;const id='ADV-'+String(s.advanceSeq).padStart(5,'0');s.advances=s.advances||{};
-    advance=s.advances[id]={id,employeePaymentKey:paymentKey,empId:emp.id,employeeName:emp.name,amount:advanceAmount,date,payoutDate:date,account,proof:proofs[0],proofs:proofs.slice(),reference,note,recoveryStartMonth:date.slice(0,7),recoveries:[],active:true,createdBy:by,createdAt:at,approvedBy:by,approvedAt:at,directOwnerPost:true};
-    auditAdvance(s,req,'OWNER_DIRECT_POST',id,{amount:advanceAmount,account,payoutDate:date,proofCount:proofs.length,employeePaymentKey:paymentKey});
-  }else if(advanceAmount>0){
-    s.advanceRequestSeq=(s.advanceRequestSeq||0)+1;const id='ADVR-'+String(s.advanceRequestSeq).padStart(5,'0');s.advanceRequests=s.advanceRequests||{};
-    request=s.advanceRequests[id]={id,employeePaymentKey:paymentKey,empId:emp.id,employeeName:emp.name,amount:advanceAmount,date,account,proof:proofs[0],proofs:proofs.slice(),reference,note,recoveryStartMonth:date.slice(0,7),status:'Pending approval',createdBy:by,createdAt:at};
-    auditAdvanceRequest(s,req,'SUBMITTED',id,{amount:advanceAmount,account,employeePaymentKey:paymentKey});
-  }
-  save(s);res.json({success:true,employeePaymentKey:paymentKey,salaryBatchId,salaryAmount,advanceAmount,advanceId:advance&&advance.id||'',requestId:request&&request.id||'',advancePendingApproval:!!request,remainingSalary:round2(remaining-salaryAmount)});
-});
 router.post('/api/salary/payments/:id/proofs',guard,(req,res)=>{
   const s=load(),p=(s.salaryPayments||[]).find(x=>x.id===req.params.id&&x.active!==false),proofs=Array.isArray((req.body||{}).proofs)?req.body.proofs.map(x=>String(x||'').trim()):[];
   if(!p)return res.status(404).json({success:false,error:'Recorded salary payment not found.'});

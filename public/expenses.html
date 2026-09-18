@@ -556,7 +556,7 @@
     function renderLog(){
       el('panel').innerHTML =
       '<div class="card">'+
-      ((cfg.isOwner||String(cfg.me||'').trim().toLowerCase()==='prashant')?'<div class="fld" style="margin-bottom:16px"><label>What are you recording?</label><select id="entryKind"><option value="expense">Vendor / other expense</option><option value="employee">Pay employee</option></select><div class="hint">Choose an employee once, then review how the payment is divided between salary and advance.</div></div>':'')+
+      ((cfg.isOwner||String(cfg.me||'').trim().toLowerCase()==='prashant')?'<div class="fld" style="margin-bottom:16px"><label>What are you recording?</label><select id="entryKind"><option value="expense">Vendor / other expense</option><option value="advance">Salary advance</option></select><div class="hint">Salary payments are recorded on the Salary page. This option records only an advance.</div></div>':'')+
       '<div id="normalExpenseFields" class="grid">'+
         '<div class="fld"><label>Date</label><input type="date" id="f_date" value="'+today()+'"></div>'+
         '<div class="fld" id="normalAmountWrap"><label>Amount ₹</label><input type="number" id="f_amount" min="0" step="1" placeholder="0"></div>'+
@@ -582,22 +582,16 @@
         '<div class="fld" id="billPhotoWrap"><label>Bill photo(s) (at least one required)</label><div class="row-actions"><label class="btn mini ghost">📷 Take photo<input type="file" id="f_billcamera" accept="image/*" capture="environment" hidden></label><label class="btn mini ghost">🖼 Choose gallery<input type="file" id="f_billfile" accept="image/*" multiple hidden></label></div></div>'+
       '</div>'+
       '<div id="salaryEntryFields" style="display:none"><div class="grid">'+
-        '<div class="fld"><label>Salary entity</label><select id="seEntity"><option value="SANKI">SANKI</option>'+(cfg.isOwner?'<option value="SAMAST">SAMAST</option>':'')+'</select></div>'+
-        '<div class="fld" id="seMonthWrap" style="display:none"><label>Salary for which month?</label><input id="seMonth" type="month"><div class="hint">Choose the month in which this salary was earned. This does not change the payment date.</div></div>'+
+        '<div class="fld"><label>Entity</label><select id="seEntity"><option value="SANKI">SANKI</option>'+(cfg.isOwner?'<option value="SAMAST">SAMAST</option>':'')+'</select></div>'+
         '<div class="fld"><label>Employee</label><select id="seEmployee"><option value="">Choose employee</option></select></div>'+
-        '<div class="fld"><label>Category / type</label><input id="seClassification" readonly value="Employee payment · salary / recoverable advance"></div>'+
-        '<div class="fld"><label>Total paid ₹</label><input id="seAmount" type="number" min="0.01" step="0.01"><div class="hint">Enter the amount once. We suggest how to record it below.</div></div>'+
-        '<div class="fld full"><details id="seBreakdown"><summary>Change the suggested salary / advance split</summary><div class="grid" style="margin-top:12px"><div class="fld"><label>For unpaid salary ₹</label><input id="seSalaryAmount" type="number" min="0" step="0.01" value="0"></div><div class="fld"><label>New advance ₹</label><input id="seAdvanceAmount" type="number" min="0" step="0.01" value="0"></div></div><div class="hint">Only change this if the suggested split is wrong. An advance is money to recover later, not salary.</div></details></div>'+
+        '<div class="fld"><label>Advance paid ₹</label><input id="seAmount" type="number" min="0.01" step="0.01"></div>'+
         '<div class="fld"><label>Payment date</label><input id="seDate" type="date" value="'+today()+'"></div>'+
         '<div class="fld"><label>Paying account / cash</label><select id="seAccount"></select></div>'+
-        '<div class="fld"><label>Bank / payment reference</label><input id="seReference"></div>'+
-        '<div class="fld full hint" id="seBalance"></div>'+
-        '<div class="fld full hint" id="seAllocationHint">The two allocations must add up to the amount paid. An advance remains recoverable; it is not a salary expense.</div>'+
-        '<div class="fld full" id="seReasonWrap" style="display:none"><label>Why is only part of the salary being paid?</label><input id="seReason" placeholder="Short reason for partial salary payment"></div>'+
-        '<div class="fld full"><label>Note</label><input id="seNote" placeholder="Optional details"></div>'+
+        '<div class="fld"><label>Payment reference (optional)</label><input id="seReference"></div>'+
+        '<div class="fld full"><label>Note (optional)</label><input id="seNote"></div>'+
         '<div class="fld full" id="seProofWrap"><label>Payment screenshot / proof (required)</label><input id="seProof" type="file" accept="image/*,.pdf" multiple></div>'+
-        '<div class="fld full hint" id="seAdvanceHint"></div>'+
-      '</div><div class="row-actions"><button class="btn primary" id="seSave">Record employee payment</button><span class="muted" id="seState"></span></div></div>'+
+        '<div class="fld full hint" id="seAdvanceHint">The advance is dated when it was paid and remains recoverable. It does not pay salary or change the payroll sheet.</div>'+
+      '</div><div class="row-actions"><button class="btn primary" id="seSave">Record advance</button><span class="muted" id="seState"></span></div></div>'+
       '<div class="row-actions" id="normalExpenseActions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
       '</div>'+(cfg.isOwner?'<div class="card"><b>Telegram notifications (Owner only)</b><div class="hint">A user can link more than one Telegram account. Generate a 15-minute link, open it in the additional Telegram account and tap Start. Existing links remain active.</div><div id="telegramBotStatus" class="hint">Checking bot connection…</div><div class="row-actions"><select id="telegramUser"><option value="">Loading users…</option></select><button class="btn ghost mini" id="linkTelegram">Add another Telegram</button><button class="btn ghost mini" id="testTelegram">Test all linked accounts</button><button class="btn ghost mini" id="unlinkTelegram">Disconnect all</button><button class="btn ghost mini" id="setupTelegram">Connect existing bot</button></div><div id="telegramUserStatus" class="hint"></div><div id="telegramConnections" class="hint"></div><div id="telegramLinkResult" class="hint"></div></div>':'');
 
@@ -612,7 +606,7 @@
       document.removeEventListener('click',closeVendorSuggestions,true);
       document.addEventListener('click',closeVendorSuggestions,true);
       el('saveExp').addEventListener('click', saveExpense);
-      if(el('entryKind')){el('entryKind').addEventListener('change',toggleSalaryEntry);el('seEntity').addEventListener('change',loadSalaryEntryEmployees);el('seMonth').addEventListener('change',function(){this.dataset.manual='true';loadSalaryEntryMonth();});el('seDate').addEventListener('change',suggestSalaryMonth);el('seEmployee').addEventListener('change',updateSalaryEntryBalance);el('seAmount').addEventListener('input',suggestSalaryAllocation);el('seSalaryAmount').addEventListener('input',updateSalaryAllocationHint);el('seAdvanceAmount').addEventListener('input',updateSalaryAllocationHint);el('seSave').addEventListener('click',saveSalaryEntry);suggestSalaryMonth();toggleSalaryEntry();}
+      if(el('entryKind')){el('entryKind').addEventListener('change',toggleSalaryEntry);el('seEntity').addEventListener('change',loadSalaryEntryEmployees);el('seSave').addEventListener('click',saveSalaryEntry);toggleSalaryEntry();}
       if(el('addCardFromExpense'))el('addCardFromExpense').addEventListener('click',function(){tab='creditcards';Array.prototype.forEach.call(el('tabs').children,function(b){b.classList.toggle('on',b.dataset.t===tab);});render();});
       if(el('linkTelegram')){el('linkTelegram').addEventListener('click',linkTelegram);loadTelegramUsers();}
       if(el('setupTelegram'))el('setupTelegram').addEventListener('click',setupTelegram);
@@ -621,74 +615,41 @@
       togglePaymentFlow(); toggleInstallment();
       prefillModelExpense();
     }
-    var salaryEntryRows=[],salaryEntryAccounts=[];
+    var salaryEntryAccounts=[];
     function toggleSalaryEntry(){
-      var kind=el('entryKind')&&el('entryKind').value||'expense',salary=kind==='employee';
-      el('normalExpenseFields').style.display=salary?'none':'';el('normalExpenseActions').style.display=salary?'none':'';el('salaryEntryFields').style.display=salary?'':'none';
-      if(!salary)return;
-      el('seAdvanceHint').textContent=cfg.isOwner?'Any advance portion is recorded immediately as recoverable.':'Any advance portion is sent to the Owner for approval; the salary portion is recorded immediately.';
+      var advance=el('entryKind')&&el('entryKind').value==='advance';
+      el('normalExpenseFields').style.display=advance?'none':'';el('normalExpenseActions').style.display=advance?'none':'';el('salaryEntryFields').style.display=advance?'':'none';
+      if(!advance)return;
+      el('seAdvanceHint').textContent=cfg.isOwner?'The advance is recorded on its payment date and remains recoverable. It does not change salary.':'The advance is sent to the Owner for approval. After approval and posting, it is recorded on the payment date. It does not change salary.';
+      el('seSave').textContent=cfg.isOwner?'Record advance':'Request advance approval';
       loadSalaryEntryEmployees();
     }
     function loadSalaryEntryEmployees(){
-      var entity=el('seEntity').value,select=el('seEmployee'),previous=select.value;select.innerHTML='<option value="">Loading employees…</option>';salaryEntryRows=[];
+      var entity=el('seEntity').value,select=el('seEmployee'),previous=select.value;select.innerHTML='<option value="">Loading employees…</option>';
       api('/api/salary/employees?entity='+encodeURIComponent(entity)).then(function(d){
         if(!el('seEntity')||el('seEntity').value!==entity)return;
-        if(!d.success){select.innerHTML='<option value="">Could not load employees</option>';el('seBalance').textContent=d.error||'';return;}
+        if(!d.success){select.innerHTML='<option value="">Could not load employees</option>';setMsg(d.error||'Could not load employees.',false);return;}
         var employees=(d.employees||[]).filter(function(e){return e.active!==false;});
         select.innerHTML='<option value="">Choose employee</option>'+employees.map(function(e){return '<option value="'+esc(e.id)+'">'+esc(e.name+(e.post?' · '+e.post:''))+'</option>';}).join('');
         if(employees.some(function(e){return e.id===previous;}))select.value=previous;
         salaryEntryAccounts=d.salaryPayingAccounts||[];var account=el('seAccount').value;
         el('seAccount').innerHTML='<option value="">Choose paying account</option>'+salaryEntryAccounts.map(function(a){return '<option value="'+esc(a)+'">'+esc(a)+'</option>';}).join('');
         if(salaryEntryAccounts.indexOf(account)>=0)el('seAccount').value=account;
-        loadSalaryEntryMonth();
-      });
-    }
-    function loadSalaryEntryMonth(){
-      if(!el('entryKind')||el('entryKind').value==='expense')return;
-      var ym=el('seMonth').value,entity=el('seEntity').value;if(!/^\d{4}-\d{2}$/.test(ym))return;
-      salaryEntryRows=[];el('seBalance').textContent='Loading salary balances…';
-      api('/api/salary/month/'+encodeURIComponent(ym)+'?entity='+encodeURIComponent(entity)).then(function(d){
-        if(!el('seMonth')||el('seMonth').value!==ym||el('seEntity').value!==entity)return;
-        salaryEntryRows=d.success?d.rows||[]:[];if(!d.success){el('seBalance').textContent=d.error||'Could not load payroll.';return;}updateSalaryEntryBalance();
-      });
-    }
-    function suggestSalaryMonth(){
-      var input=el('seMonth'),date=el('seDate')&&el('seDate').value;
-      if(!input||input.dataset.manual==='true'||!/^\d{4}-\d{2}-\d{2}$/.test(date))return;
-      var parts=date.split('-'),prior=new Date(Number(parts[0]),Number(parts[1])-2,1),ym=prior.getFullYear()+'-'+String(prior.getMonth()+1).padStart(2,'0');
-      if(input.value!==ym){input.value=ym;loadSalaryEntryMonth();}
-    }
-    function updateSalaryEntryBalance(){
-      var row=salaryEntryRows.find(function(r){return r.id===el('seEmployee').value;});
-      el('seBalance').textContent=!el('seEmployee').value?'Choose an employee to see the amount due.':!row?'No payable salary in this month. A payment can still be recorded as an advance.':'Salary due now: '+fmt(Math.max(0,Number(row.balance)||0))+' · Paid so far: '+fmt(row.paid||0);
-      suggestSalaryAllocation();
-    }
-    function suggestSalaryAllocation(){
-      var row=salaryEntryRows.find(function(r){return r.id===el('seEmployee').value;}),total=Math.round((Number(el('seAmount').value)||0)*100)/100,due=Math.max(0,Number(row&&row.balance)||0),salary=Math.min(Math.max(0,total),due);
-      el('seSalaryAmount').value=salary.toFixed(2);el('seAdvanceAmount').value=Math.max(0,total-salary).toFixed(2);updateSalaryAllocationHint();
-    }
-    function updateSalaryAllocationHint(){
-      var total=Number(el('seAmount').value)||0,salary=Number(el('seSalaryAmount').value)||0,advance=Number(el('seAdvanceAmount').value)||0,difference=Math.round((total-salary-advance)*100)/100,row=salaryEntryRows.find(function(r){return r.id===el('seEmployee').value;}),due=Math.max(0,Number(row&&row.balance)||0);
-      el('seMonthWrap').style.display=salary>0?'':'none';
-      el('seReasonWrap').style.display=salary>0&&salary<due-.001?'':'none';
-      el('seAllocationHint').textContent=Math.abs(difference)>.001?'The breakdown does not add up to the total paid. Difference: '+fmt(Math.abs(difference))+'.':!total?'Enter the amount paid to see the suggested breakdown.':salary>0&&advance>0?'Suggested: '+fmt(salary)+' pays salary for '+el('seMonth').value+'; '+fmt(advance)+' is a new advance. Open “Change the suggested split” only if this is wrong.':salary>0?'Suggested: '+fmt(salary)+' pays salary for '+el('seMonth').value+'.':fmt(advance)+' is a new advance to recover later. No salary is cleared.';
+      }).catch(function(e){setMsg(e.message||'Could not load employees.',false);});
     }
     function saveSalaryEntry(){
-      var empId=el('seEmployee').value,amount=Number(el('seAmount').value),salary=Number(el('seSalaryAmount').value),advance=Number(el('seAdvanceAmount').value),date=el('seDate').value,account=el('seAccount').value,reason=el('seReason').value.trim(),row=salaryEntryRows.find(function(r){return r.id===empId;}),due=Math.max(0,Number(row&&row.balance)||0),files=el('seProof').files||[],btn=el('seSave');
+      var empId=el('seEmployee').value,amount=Number(el('seAmount').value),date=el('seDate').value,account=el('seAccount').value,files=el('seProof').files||[],btn=el('seSave');
       if(!empId||!(amount>0)||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!account){setMsg('Choose an employee, positive amount, payment date and paying account.',false);return;}
       if(!files.length){setMsg('Attach at least one payment proof.',false);return;}
-      if(salary<0||advance<0||Math.abs(Math.round((salary+advance-amount)*100)/100)>.001){setMsg('Salary and advance amounts must add up to the payment amount.',false);return;}
-      if(salary>due+.001){setMsg('Salary allocation exceeds the salary due. Reduce it or use the advance allocation.',false);return;}
-      if(salary>0&&salary<due-.001&&!reason){setMsg('Enter why only part of the salary is being paid.',false);return;}
-      if(!confirm('Record '+fmt(amount)+' for '+el('seEmployee').selectedOptions[0].text+' from '+account+'?\n\nSalary for '+el('seMonth').value+': '+fmt(salary)+'\nRecoverable advance'+(cfg.isOwner?'':' (pending Owner approval)')+': '+fmt(advance)+'\n\nThese are separate accounting records.'))return;
+      if(!confirm((cfg.isOwner?'Record':'Request approval for')+' '+fmt(amount)+' advance for '+el('seEmployee').selectedOptions[0].text+' from '+account+' on '+date+'?\n\nThis does not pay salary.'))return;
       btn.disabled=true;el('seState').textContent='Uploading proof…';
       uploadFiles(files,el('seEntity').value).then(function(proofs){
-        var body={empId:empId,ym:el('seMonth').value,amount:amount,salaryAmount:salary,advanceAmount:advance,expectedRemaining:due,date:date,account:account,partialReason:reason,reference:el('seReference').value.trim(),note:el('seNote').value.trim(),proofs:proofs};
-        return api('/api/salary/pay-employee?entity='+encodeURIComponent(el('seEntity').value),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        var body={empId:empId,amount:amount,date:date,account:account,reference:el('seReference').value.trim(),note:el('seNote').value.trim(),proofs:proofs};
+        return api('/api/salary/advances?entity='+encodeURIComponent(el('seEntity').value),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       }).then(function(d){
         btn.disabled=false;el('seState').textContent='';if(!d.success){setMsg(d.error||'Could not record the payment.',false);return;}
-        setMsg((d.salaryBatchId?'Salary '+fmt(d.salaryAmount)+' recorded as '+d.salaryBatchId+'. ':'')+(d.advanceId?'Advance '+fmt(d.advanceAmount)+' recorded as '+d.advanceId+'. ':d.requestId?'Advance '+fmt(d.advanceAmount)+' sent to the Owner for approval as '+d.requestId+'. ':''),true);
-        el('seAmount').value='';el('seSalaryAmount').value='0';el('seAdvanceAmount').value='0';el('seProof').value='';el('seReference').value='';el('seNote').value='';el('seReason').value='';loadSalaryEntryMonth();
+        setMsg(d.directPost?'Advance '+d.advance.id+' recorded in the employee advances on '+date+'.':'Advance request '+d.request.id+' sent to the Owner. It will appear in advances after approval and posting.',true);
+        el('seAmount').value='';el('seProof').value='';el('seReference').value='';el('seNote').value='';
       }).catch(function(e){btn.disabled=false;el('seState').textContent='';setMsg(e.message||'Could not upload proof.',false);});
     }
     function renderVendorSuggestions(){
