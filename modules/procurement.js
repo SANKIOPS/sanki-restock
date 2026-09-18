@@ -845,9 +845,10 @@ router.get('/api/procurement/invoice/:file', (req, res) => {
 });
 router.post('/api/procurement/pos/:id/invoice', invoiceUpload.single('invoice'), (req,res) => {
   const role=String(req.user&&req.user.role||'').toLowerCase();
-  if(!isAdmin(req)&&role!=='owner')return res.status(403).json({success:false,error:'Only the Owner can attach or replace a posted bill.'});
   if(!req.file)return res.status(400).json({success:false,error:'Choose the original vendor bill.'});
   const s=loadStore(),po=s.pos[req.params.id];if(!po)return res.status(404).json({success:false,error:'PO not found.'});
+  if (po.status === 'posted' ? (!isAdmin(req) && role !== 'owner') : !canManagePurchases(req))
+    return res.status(403).json({success:false,error:'Purchases access is required; only the Owner can replace a posted bill.'});
   const invoice=persistInvoice(req.file);invoice.uploadedBy=(req.user&&req.user.username)||'owner';po.invoice=invoice;
   po.invoiceHistory=Array.isArray(po.invoiceHistory)?po.invoiceHistory:[];po.invoiceHistory.push({...invoice,reason:'Original bill attached to PO'});saveStore(s);
   res.json({success:true,invoice,po:publicPo(po,req)});
@@ -2369,10 +2370,15 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   if (po.status !== 'posted') return res.status(400).json({ success: false, error: 'Use the normal PO editor until this purchase is posted.' });
   const reason = String(b.reason || '').trim();
   if (!reason) return res.status(400).json({ success: false, error: 'A correction reason is required.' });
+  const validPostedNumber = (v, integer) => v == null || (v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && (!integer || Number.isInteger(Number(v))));
+  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].some(k => !validPostedNumber(b[k], false)) ||
+      (Array.isArray(b.lines) && b.lines.some(l => !validPostedNumber(l.qty, true) || !validPostedNumber(l.unitPrice, false) || !validPostedNumber(l.weightGrams, false))))
+    return res.status(400).json({ success: false, error: 'Enter valid non-negative quantities, prices, weights and rates.' });
   const before = poCostBreakdown(po, s.settings);
   if (b.exRate != null && b.exRate !== '') po.exRate = Math.max(0, num(b.exRate));
   if (b.freightPerGram != null && b.freightPerGram !== '') po.freightPerGram = Math.max(0, num(b.freightPerGram));
   if (b.transportTotal != null && b.transportTotal !== '') po.transportTotal = Math.max(0, num(b.transportTotal));
+  if (b.localTransportYuan != null && b.localTransportYuan !== '') po.localTransportYuan = Math.max(0, num(b.localTransportYuan));
   if (Array.isArray(b.lines)) b.lines.forEach((edit, i) => {
     const line = (po.lines || [])[i]; if (!line) return;
     if (edit.qty != null && edit.qty !== '') line.qty = Math.max(0, Math.round(num(edit.qty)));
@@ -2387,6 +2393,48 @@ router.patch('/api/procurement/pos/:id/cost-calculation', (req, res) => {
   po.costCorrectionHistory.push({ correctedAt: new Date().toISOString(), correctedBy: by, reason, before, after });
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req), breakdown: after, warning: 'Accounting cost was corrected. Shopify inventory was not changed.' });
+});
+// Correct a pending PO's bill calculation in place. The ordered/receipt audit
+// baseline and Shopify state are deliberately left untouched.
+router.patch('/api/procurement/pos/:id/summary-calculation', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+  const s = loadStore(), po = s.pos[req.params.id], b = req.body || {};
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted purchases require an Owner correction with a reason.' });
+  if (!Array.isArray(b.lines) || b.lines.length !== (po.lines || []).length)
+    return res.status(400).json({ success: false, error: 'Submit every PO line in its original order.' });
+  const validNumber = (v, integer) => v !== '' && v != null && Number.isFinite(Number(v)) && Number(v) >= 0 && (!integer || Number.isInteger(Number(v)));
+  if (['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].some(k => b[k] != null && !validNumber(b[k], false)) ||
+      b.lines.some(l => !validNumber(l.qty, true) || !validNumber(l.unitPrice, false) || !validNumber(l.weightGrams, false)))
+    return res.status(400).json({ success: false, error: 'Enter valid non-negative quantities, prices, weights and rates.' });
+  const before = poCostBreakdown(po, s.settings);
+  ['exRate', 'freightPerGram', 'transportTotal', 'localTransportYuan'].forEach(k => { if (b[k] != null) po[k] = Number(b[k]); });
+  b.lines.forEach((edit, i) => { const line = po.lines[i]; line.qty = Number(edit.qty); line.perPcsYuan = Number(edit.unitPrice); line.weightGrams = Number(edit.weightGrams); });
+  po.costCorrectionHistory = Array.isArray(po.costCorrectionHistory) ? po.costCorrectionHistory : [];
+  po.costCorrectionHistory.push({ correctedAt: new Date().toISOString(), correctedBy: (req.user || {}).username || 'system', reason: 'Purchase Summary inline correction', before, after: poCostBreakdown(po, s.settings) });
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req) });
+});
+// Vendor-stated figures are separate from our receipt and landed-cost figures.
+router.patch('/api/procurement/pos/:id/vendor-bill', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+  const s = loadStore(), po = s.pos[req.params.id], b = req.body || {};
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  const bill = {};
+  ['billNumber', 'billDate', 'vendorName', 'currency'].forEach(k => { bill[k] = String(b[k] || '').trim().slice(0, 160); });
+  if (bill.billDate && !/^\d{4}-\d{2}-\d{2}$/.test(bill.billDate)) return res.status(400).json({ success: false, error: 'Use a valid bill date.' });
+  for (const k of ['totalValue', 'totalQuantity', 'localTransportation', 'exchangeRate']) {
+    if (b[k] === '' || b[k] == null) { bill[k] = null; continue; }
+    const n = Number(b[k]);
+    if (!Number.isFinite(n) || n < 0 || (k === 'totalQuantity' && !Number.isInteger(n))) return res.status(400).json({ success: false, error: 'Vendor bill figures must be non-negative numbers.' });
+    bill[k] = n;
+  }
+  bill.updatedAt = new Date().toISOString(); bill.updatedBy = (req.user || {}).username || 'system';
+  po.vendorBillHistory = Array.isArray(po.vendorBillHistory) ? po.vendorBillHistory : [];
+  if (po.vendorBill) po.vendorBillHistory.push(po.vendorBill);
+  po.vendorBill = bill;
+  saveStore(s);
+  res.json({ success: true, po: publicPo(po, req) });
 });
 router.get('/api/procurement/history', (req, res) => {
   const s = loadStore();
