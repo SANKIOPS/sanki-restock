@@ -25,3 +25,17 @@ test('all purchase headers use the same seven-column layout',()=>{
   assert.match(head,/Not received.*2026-09-02.*PO-1.*Vendor.*48 pcs.*₹100/);
   assert.match(html,/purchaseHistoryHead\(po,'Not recorded','Not recorded'/);
 });
+
+test('filtered purchase redraw keeps combine actions outside the list and rebinds bill checkboxes',()=>{
+  assert.match(html, /id="combineInvoiceActions"[^>]*><\/div>\s*<div id="sumHost"/);
+  const start=html.indexOf('function renderHistoryExplorerResults('),end=html.indexOf('function historyExplorerPoRow(',start);
+  const host={innerHTML:'',querySelectorAll:()=>[]};let bound=0;
+  const render=vm.runInNewContext(html.slice(start,end)+'\nrenderHistoryExplorerResults;',{
+    historyCategory:'all',historyDrillCategory:'',historyScope:'all',purchaseHistory:[],
+    historyMatchingLines:po=>po.lines||[],purchaseHistoryTable:()=>'<div data-combine-po="PO-1"></div>',
+    el:()=>host,bindPurchaseHistoryRows:()=>{bound++;}
+  });
+  render([{id:'PO-1',datePurchase:'2026-09-02',lines:[1]}]);
+  assert.equal(bound,1);
+  assert.match(host.innerHTML,/data-combine-po="PO-1"/);
+});

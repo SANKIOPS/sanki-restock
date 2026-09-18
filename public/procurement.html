@@ -121,7 +121,7 @@
     @media(max-width:760px){ .ow-stats{ grid-template-columns:repeat(2,minmax(110px,1fr)); } .ow-card-head{ align-items:flex-start; flex-wrap:wrap; } }
     .hidden{ display:none !important; }
     .purchase-table{min-width:1080px;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#fff}
-    .purchase-table-row{display:grid;grid-template-columns:20px 130px 130px 125px minmax(180px,1fr) 85px 125px 135px;gap:12px;align-items:start;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}
+    .purchase-table-row{display:grid;grid-template-columns:76px 130px 130px 125px minmax(180px,1fr) 85px 125px 135px;gap:12px;align-items:start;padding:14px 16px;border-bottom:1px solid var(--line);font-size:13px}
     .purchase-table-row>div{min-width:0;overflow-wrap:anywhere}
     .purchase-table-heading{background:#f3f6f5;font-size:11px;font-weight:700;text-transform:uppercase;color:#64736c}
     .purchase-table-record{cursor:pointer;min-height:78px}
@@ -301,6 +301,7 @@
         </div>
         <h3 style="margin:18px 0 4px">All purchase records</h3>
         <p class="sub" style="margin:0">Received date → purchase date → PO number → vendor → quantity → billing amount → payment status. Expand a record for its bill, items and calculations. Filters above apply to this one list.</p>
+        <div id="combineInvoiceActions" style="margin-top:12px"></div>
         <div id="sumHost" style="margin-top:14px"></div>
         <section id="vendorPaymentSummary" style="margin-top:26px"></section>
       </div>
@@ -833,7 +834,7 @@
       pos.sort(function(a,b){return String(b.datePurchase||b.createdAt||'').localeCompare(String(a.datePurchase||a.createdAt||''))||String(b.id).localeCompare(String(a.id));});
       var host=el('sumHost');
       host.innerHTML=pos.length?purchaseHistoryTable(pos):'<p class="sub">No purchases match these filters.</p>';
-      Array.prototype.forEach.call(host.querySelectorAll('[data-history-po]'),function(row){row.onclick=function(e){if(e.target&&e.target.closest&&e.target.closest('img'))return;var body=el('historyBody'+row.getAttribute('data-history-po')),car=row.querySelector('.sumcaret');if(body){body.classList.toggle('hidden');if(car)car.textContent=body.classList.contains('hidden')?'▸':'▾';}};});
+      if(typeof bindPurchaseHistoryRows==='function')bindPurchaseHistoryRows();
     }
     function historyExplorerPoRow(po,idx,category){
       var groups=historyDesignGroups(po,category),lines=historyMatchingLines(po,category),pieces=lines.reduce(function(n,l){return n+(Number(l.qty)||0);},0),value=lines.reduce(function(n,l){return n+Math.round(historyLineCost(po,l)*(Number(l.qty)||0));},0);
@@ -854,7 +855,7 @@
     function renderCombineInvoiceActions(){
       var host=el('combineInvoiceActions');if(!host)return;
       var ids=Object.keys(selectedInvoiceBills).filter(function(id){return selectedInvoiceBills[id];});
-      host.innerHTML='<div class="banner"><b>'+ids.length+' Bills Selected</b> '+(ids.length?ids.map(esc).join(' + '):'')+' <button type="button" class="btn sm" id="combineInvoicesButton"'+(ids.length<2?' disabled':'')+'>Combine Invoices</button><span id="combineInvoicesStatus" role="status"></span></div>';
+      host.innerHTML='<div class="banner" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div><b>Combine vendor invoices</b><div class="muted">Select two or more bills from the same vendor in the first column.</div></div><b>'+ids.length+' Bills Selected</b> '+(ids.length?'<span>'+ids.map(esc).join(' + ')+'</span>':'')+' <button type="button" class="btn sm" id="combineInvoicesButton"'+(ids.length<2?' disabled':'')+'>Combine Invoices</button><span id="combineInvoicesStatus" role="status"></span></div>';
       var button=el('combineInvoicesButton');button.onclick=function(){button.disabled=true;el('combineInvoicesStatus').textContent=' Creating combined invoice…';fetch('/api/procurement/combined-invoices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({poIds:ids})}).then(readJson).then(function(d){if(!d.success)throw new Error(d.error||'Could not combine bills.');selectedInvoiceBills={};paymentNotice='Combined invoice '+d.invoice.id+' created; original purchase bills are preserved.';return loadPurchaseHistory();}).catch(function(e){button.disabled=false;el('combineInvoicesStatus').textContent=' '+e.message;});};
     }
     function combinedInvoiceComparison(inv){
@@ -902,9 +903,11 @@
         '<span class="pill">'+purchaseHistory.length+' purchase batches</span><span class="pill">'+totalQty+' known pieces</span><span class="pill">'+money(totalValue)+' known total</span><span class="pill">'+received+' received</span><span class="pill">'+posted+' posted</span>'+
         ((meta&&meta.recoveredProducts)?'<span class="pill">'+meta.recoveredProducts+' historical products recovered</span>':'')+'</div>'+
         ((meta&&meta.historyWarning)?'<div class="banner err" style="margin-top:8px">Complete POs are shown, but Shopify history could not be refreshed: '+esc(meta.historyWarning)+'</div>':'');
-      if(!purchaseHistory.length){el('sumHost').innerHTML='<p class="sub">No purchases have been created through this software yet.</p>';renderHistoryExplorer();renderVendorPaymentSummary();return;}
-      el('sumHost').innerHTML=purchaseHistoryTable(purchaseHistory)+'<div id="combineInvoiceActions" style="margin-top:12px"></div>';
+      if(!purchaseHistory.length){el('sumHost').innerHTML='<p class="sub">No purchases have been created through this software yet.</p>';renderCombineInvoiceActions();renderHistoryExplorer();renderVendorPaymentSummary();return;}
       renderCombineInvoiceActions();
+      renderHistoryExplorer();renderVendorPaymentSummary();loadPurchasePaymentAccounts();
+    }
+    function bindPurchaseHistoryRows(){
       Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-history-po]'),function(row){
         row.onclick=function(e){
           if(e.target&&e.target.closest&&e.target.closest('img,input,button,label'))return;
@@ -913,7 +916,6 @@
         };
       });
       Array.prototype.forEach.call(el('sumHost').querySelectorAll('[data-combine-po]'),function(input){input.onchange=function(){selectedInvoiceBills[input.getAttribute('data-combine-po')]=input.checked;if(!input.checked)delete selectedInvoiceBills[input.getAttribute('data-combine-po')];renderCombineInvoiceActions();};});
-      renderHistoryExplorer();renderVendorPaymentSummary();loadPurchasePaymentAccounts();
     }
     function purchasePaymentBadge(po){
       var payment=po.paymentSummary||{},status=payment.status||'not_recorded';
@@ -931,11 +933,11 @@
       return '<div class="banner"><b>Payment details</b><div>Accounting billing amount: '+money(payment.amount)+' · Paid: '+money(payment.paidAmount)+' · Balance due: '+money(payment.balanceDue)+(payment.mediator?' · Payee: '+esc(payment.mediator):'')+'</div></div>'+(rows?'<div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Payment</th><th class="money">Amount</th><th>Account</th><th>Method</th><th>Paid by</th><th>Note</th><th>Proof</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p class="sub">No payments recorded.</p>');
     }
     function purchaseHistoryTable(pos){
-      return '<div style="overflow-x:auto"><div class="purchase-table"><div class="purchase-table-row purchase-table-heading"><span></span><div>Received date</div><div>Purchase date</div><div>PO number</div><div>Vendor name</div><div class="money">Quantity</div><div class="money">Billing amount</div><div>Payment status</div></div>'+pos.map(historyPoRow).join('')+'</div></div>';
+      return '<div style="overflow-x:auto"><div class="purchase-table"><div class="purchase-table-row purchase-table-heading"><div>Select</div><div>Received date</div><div>Purchase date</div><div>PO number</div><div>Vendor name</div><div class="money">Quantity</div><div class="money">Billing amount</div><div>Payment status</div></div>'+pos.map(historyPoRow).join('')+'</div></div>';
     }
     function purchaseHistoryHead(po,received,purchased,poNumber,vendor,quantity,amount){
       var grouped=(typeof combinedVendorInvoices==='undefined'?[]:combinedVendorInvoices).some(function(inv){return (inv.poIds||[]).indexOf(po.id)>=0;});
-      return '<div data-history-po="'+esc(po.id)+'" class="purchase-table-row purchase-table-record"><span class="sumcaret muted">▸</span><div>'+esc(received)+'</div><div>'+esc(purchased)+'</div><div><b>'+esc(poNumber)+'</b><div class="muted" style="font-size:11px">'+(po.historical?'Historical purchase':'Bill '+esc(po.billNo||'Not recorded'))+'</div>'+(grouped?'<div class="muted">Combined invoice</div>':'<label style="display:inline-flex;gap:4px;align-items:center;font-size:11px;margin-top:4px"><input type="checkbox" data-combine-po="'+esc(po.id)+'"'+((typeof selectedInvoiceBills!=='undefined'&&selectedInvoiceBills[po.id])?' checked':'')+'> Select bill</label>')+'</div><div><b>'+esc(vendor)+'</b><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money">'+esc(quantity)+'</div><div class="money"><b>'+esc(amount)+'</b></div><div>'+purchasePaymentBadge(po)+'</div></div>';
+      return '<div data-history-po="'+esc(po.id)+'" class="purchase-table-row purchase-table-record"><div class="sumcaret muted">▸ '+(po.historical?'':grouped?'Linked':'<label style="display:inline-flex;gap:3px;align-items:center;font-size:11px;color:#111827"><input type="checkbox" data-combine-po="'+esc(po.id)+'" aria-label="Select bill '+esc(po.billNo||po.id)+' to combine"'+((typeof selectedInvoiceBills!=='undefined'&&selectedInvoiceBills[po.id])?' checked':'')+'> Bill</label>')+'</div><div>'+esc(received)+'</div><div>'+esc(purchased)+'</div><div><b>'+esc(poNumber)+'</b><div class="muted" style="font-size:11px">'+(po.historical?'Historical purchase':'Bill '+esc(po.billNo||'Not recorded'))+'</div>'+(grouped?'<div class="muted">Combined invoice</div>':'')+'</div><div><b>'+esc(vendor)+'</b><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money">'+esc(quantity)+'</div><div class="money"><b>'+esc(amount)+'</b></div><div>'+purchasePaymentBadge(po)+'</div></div>';
     }
     function historyPoRow(po,idx){
       if(po.historical) return historicalPurchaseRow(po,idx);
