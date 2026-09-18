@@ -185,6 +185,12 @@ test('visual checks reject mismatched outfit, accessories, angle or continuity',
     assert.equal(result.status,'needs-review',field);
     assert.deepEqual(result.failed,[field]);
   }
+  const missingChain=pilot.evaluateImageCheck({...pass,chainMatch:{status:'fail',evidence:'Gold chain is missing'}},'model-side',{...styling,chain:'Gold chain'},group);
+  assert.equal(missingChain.status,'pass');
+  assert.deepEqual(missingChain.failed,[]);
+  assert.match(missingChain.warnings[0],/chainMatch/);
+  assert.equal(pilot.evaluateImageCheck({...pass,chainMatch:{status:'fail',evidence:'An extra chain is visible'}},'model-side',{...styling,chain:'None'},group).status,'needs-review');
+  assert.equal(pilot.evaluateImageCheck({...pass,fitMatch:{status:'fail',evidence:'Garment cut visibly changed'}},'model-side',{...styling,chain:'Gold chain'},group).status,'needs-review');
   assert.equal(pilot.evaluateImageCheck({...pass,bagMatch:{status:'fail',evidence:'bag'}},'front',styling,group).status,'pass');
   assert.equal(pilot.evaluateImageCheck({...pass,shoeMatch:{status:'fail',evidence:'shoes'}},'model-front',{},group).status,'pass');
   assert.deepEqual(pilot.evaluateImageCheck({...pass,tuckMatch:{status:'uncertain',evidence:'Hem hidden'}},'model-front',styling,group).uncertain,['tuckMatch']);
@@ -203,6 +209,7 @@ test('independent visual check sends original, candidate and matching model fron
     assert.equal(body.input[0].content.filter(x=>x.type==='input_image').length,3);
     assert.match(body.input[0].content[0].text,/Off-white, beige or other neutral trouser COLOUR is not evidence/);
     assert.match(body.input[0].content[0].text,/black loafers do NOT fail/);
+    assert.match(body.input[0].content[0].text,/a tuck, changed pose, drape, lighting or camera angle alone does not prove a different fit/);
     return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(allTrue)}]}]})};
   }});
   assert.equal(calls,1);assert.equal(out.status,'pass');
