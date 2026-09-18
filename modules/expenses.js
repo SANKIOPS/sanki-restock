@@ -2073,6 +2073,45 @@ router.post('/api/expenses/procurement-payables/settings', (req, res) => {
   const before=procurementAccounting(s).mediator;procurementAccounting(s).mediator = name;audit(s,req,'LEDGER_SETTING_CHANGED','procurement','mediator',{nature:'SANKI',before,after:name});saveStore(s);
   res.json({ success: true, mediator: name });
 });
+// One bank payment, with a separate auditable allocation on each selected PO.
+router.post('/api/expenses/procurement-payables/batch', (req, res) => {
+  if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can record a purchase payment.' });
+  const s = loadStore(), b = req.body || {}, ids = Array.isArray(b.poIds) ? b.poIds.map(String) : [];
+  if (!ids.length || ids.length > 50 || new Set(ids).size !== ids.length)
+    return res.status(400).json({ success: false, error: 'Select 1–50 distinct bills.' });
+  const available = new Map(procurementPayables(s, true).map(item => [item.id, item]));
+  const items = ids.map(id => available.get(id));
+  if (items.some(item => !item || !(item.balanceDue > 0)))
+    return res.status(400).json({ success: false, error: 'All selected bills must have an outstanding balance.' });
+  const supplier = String(items[0].supplier || '').trim().toLowerCase();
+  if (!supplier || items.some(item => String(item.supplier || '').trim().toLowerCase() !== supplier))
+    return res.status(400).json({ success: false, error: 'Select bills from one vendor only.' });
+  const proofs = proofList(b.paymentProofs, b.paymentProof), account = allowedPayingAccount(req, 'SANKI', String(b.account || '').trim());
+  if (!proofs.length) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
+  if (!account) return res.status(400).json({ success: false, error: 'Select a SANKI paying account.' });
+  const date = String(b.date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ success: false, error: 'Payment date is required.' });
+  const expected = round0(items.reduce((sum, item) => sum + item.balanceDue, 0));
+  if (Number(b.amount) !== expected) return res.status(400).json({ success: false, error: 'Combined payment must equal the selected outstanding total of ₹' + expected + '.' });
+  const batchPaymentId = 'PPB-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+  const reference = String(b.reference || '').trim().slice(0, 120);
+  const cfg = procurementAccounting(s), allocations = [];
+  items.forEach(item => {
+    const state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
+    state.payments = Array.isArray(state.payments) ? state.payments : [];
+    const payment = { id: 'PPAY-' + String(state.payments.length + 1).padStart(3, '0'), batchPaymentId,
+      linkedPoIds: ids, amount: item.balanceDue, account, date, reference,
+      paymentType: ['UPI','Cash','Credit','Bank Transfer','NEFT','IMPS'].includes(b.paymentType) ? b.paymentType : 'UPI',
+      proof: proofs[0], proofs, note: String(b.note || '').trim().slice(0, 500),
+      paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString() };
+    state.payments.push(payment);
+    allocations.push({ poId: item.id, billNo: item.billNo, amount: payment.amount, paymentId: payment.id });
+    audit(s, req, 'PROCUREMENT_PAYMENT_ALLOCATED', 'procurement', item.id,
+      { nature: 'SANKI', account, batchPaymentId, paymentId: payment.id, after: payment });
+  });
+  saveStore(s);
+  res.json({ success: true, batchPaymentId, vendor: items[0].supplier, totalAmount: expected, allocations });
+});
 router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can pay.' });
   const s = loadStore(), b = req.body || {}, item = procurementPayables(s, true).find(x => x.id === req.params.id);
@@ -2577,7 +2616,15 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     (e.reimbursementPayments || []).filter(p => !p.accountingExcluded&&p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,editable:true}));
     (e.reimbursementPayments || []).filter(p => personalAccount === account).forEach(p => entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
   });
-  if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',entity:'SANKI',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport [SANKI]',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy})));
+  if (nature === 'SANKI') {
+    const combinedPurchases = new Map();
+    procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => {
+      if (!x.batchPaymentId) { entries.push({id:p.id+'/'+x.id,date:x.date,kind:'purchase',entity:'SANKI',description:(p.vendor||'Mediator')+' · '+p.id+' · goods and transport [SANKI]',credit:0,debit:num(x.amount),proof:x.proof,by:x.paidBy}); return; }
+      const key = String(x.batchPaymentId), row = combinedPurchases.get(key) || {id:key,date:x.date,kind:'purchase',entity:'SANKI',description:(p.vendor||'Mediator')+' · combined purchase payment [SANKI]',credit:0,debit:0,proof:x.proof,by:x.paidBy,reference:x.reference||key,linkedPoIds:[]};
+      row.debit += num(x.amount); row.linkedPoIds.push(p.id); combinedPurchases.set(key,row);
+    }));
+    combinedPurchases.forEach(row => { row.description += ' · '+row.linkedPoIds.join(', '); entries.push(row); });
+  }
   if (nature === 'SANKI') salaryAdvanceEntries().filter(x=>!x.fundingTransferId&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_advance',entity:'SANKI',description:'Salary advance · '+x.employee,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.by}));
   if (nature === 'SANKI') salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'salary_payment',entity:'SANKI',description:'Salary payment · '+x.employeeName+' · '+x.ym,credit:0,debit:num(x.amount),proof:x.proof,note:x.note,by:x.createdBy}));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
