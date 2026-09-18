@@ -65,7 +65,7 @@ test('wrong purchase labels never tell the image model to turn a knit into a T-s
   const mislabeled={...group,productType:'T-Shirt',fit:'Muscle Fit',colour:'White',audience:'Women'};
   for(const type of ['front','model-front','model-side']) {
     const prompt=pilot.imagePrompt(mislabeled,type,{fit:'Slim fit'});
-    assert.match(prompt,/long-sleeve V-neck knit must remain a long-sleeve V-neck knit/);
+    assert.match(prompt,/never change a long sleeve to a short sleeve, alter the neckline, substitute a different garment category/);
     assert.match(prompt,/Ignore any contradictory purchase title, product type or fit setting/);
     assert.doesNotMatch(prompt,/actual White T-Shirt|actual .*Muscle Fit/);
   }
