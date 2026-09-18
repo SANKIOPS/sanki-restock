@@ -8,7 +8,7 @@ const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement, _computeMonth } = require('../modules/salary');
+const { router, telegramApi, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement, _computeMonth } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -409,16 +409,15 @@ test('Prashant Axis 3645 is available for advances and full or partial salary pa
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(html,/ed\.salaryPayingAccounts/);
 });
 
-test('expense entry routes salary and advances into employee records without duplicate expenses',()=>{
+test('expense entry records only dated advances, leaving salary payments on payroll',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
-  assert.match(html,/Salary payment — full or part/);assert.match(html,/Salary advance/);
-  assert.match(html,/\/api\/salary\/payments\/batch/);assert.match(html,/\/api\/salary\/advances/);
+  assert.match(html,/<option value="advance">Salary advance<\/option>/);
+  assert.match(html,/\/api\/salary\/advances/);assert.doesNotMatch(html,/\/api\/salary\/pay-employee|id="seSalaryAmount"|id="seMonth"/);
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Quick Salary Employee',salary:10000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-04'},body:{empId:emp.id,paidDays:30}});
-  const body={ym:'2099-04',date:'2099-05-10',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-salary.jpg',items:[{empId:emp.id,amount:4000,modificationReason:'Part salary',expectedRemaining:10000}]};
-  const paid=invoke('POST','/api/salary/payments/batch',{body,role:'owner'});assert.equal(paid.status,200);
-  assert.equal(invoke('POST','/api/salary/payments/batch',{body,role:'owner'}).status,409,'stale form cannot post the same payment twice');
-  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-04'}}).body.rows.find(x=>x.id===emp.id).balance,6000);
+  const paid=invoke('POST','/api/salary/advances',{body:{empId:emp.id,amount:2000,date:'2099-05-10',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-salary.jpg'},role:'owner'});
+  assert.equal(paid.status,200);assert.equal(paid.body.advance.date,'2099-05-10');assert.equal(paid.body.advance.recoveryStartMonth,'2099-05');
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-04'}}).body.rows.find(x=>x.id===emp.id).balance,10000);
   const advanceBody={empId:emp.id,amount:500,date:'2099-05-11',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-advance.jpg'};
   const request=invoke('POST','/api/salary/advances',{body:advanceBody,role:'admin',username:'prashant'});
   assert.equal(request.status,200);assert.ok(request.body.request.proofs.length);
@@ -426,6 +425,22 @@ test('expense entry routes salary and advances into employee records without dup
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.body.request.id},role:'owner'}).status,200);
   const posted=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.body.request.id},body:{payoutDate:'2099-05-11'},role:'admin',username:'prashant'});
   assert.equal(posted.status,200);assert.equal(posted.body.advance.proof,'/api/expenses/photo/quick-advance.jpg');
+});
+
+test('Owner Telegram salary advance uses the existing dated advance route, not payroll',()=>{
+  const owner={username:'gaganlambasanki',roles:['owner']},outsider={username:'employee',roles:['accounting']};
+  const employee=invoke('POST','/api/salary/employees',{body:{name:'Telegram Advance Employee',salary:9000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-06'},body:{empId:employee.id,paidDays:30}});
+  const list=telegramApi('GET','/api/salary/employees',owner,{entity:'SANKI'});
+  assert.equal(list.status,200);assert.ok(list.employees.some(e=>e.id===employee.id));
+  assert.equal(telegramApi('GET','/api/salary/employees',outsider,{entity:'SANKI'}).status,403);
+  const body={empId:employee.id,amount:1250,date:'2099-07-03',account:'Prashant Axis 3645',proofs:['/api/expenses/photo/telegram-advance.jpg']};
+  const paid=telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body});
+  assert.equal(paid.status,200);assert.equal(paid.advance.date,'2099-07-03');assert.equal(paid.advance.recoveryStartMonth,'2099-07');
+  assert.equal(telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body}).status,409,'Telegram confirmation cannot duplicate an advance');
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-06'}}).body.rows.find(e=>e.id===employee.id).balance,9000);
+  const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  assert.match(source,/callback_data:'am:advance'/);assert.match(source,/callback_data:'am:adv:confirm'/);assert.match(source,/telegramApi\('POST','\/api\/salary\/advances'/);
 });
 
 test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
