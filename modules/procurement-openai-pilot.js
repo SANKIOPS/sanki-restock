@@ -220,6 +220,13 @@ async function preflightFit({key,group,source,styling,model='gpt-4.1-mini',fetch
   return {status:result.status,reason:String(result.reason||'').slice(0,220),model,usage:body.usage||null};
 }
 
+function stylingForPhoto(styling,fitPreflight) {
+  // A wrong selected fit must not stop the entire three-view job or reshape the
+  // real article. Keep the saved user controls untouched; only this generation
+  // attempt follows the photographed cut instead of the conflicting fit.
+  return fitPreflight?.status==='conflict'?{...styling,fit:'Auto'}:styling;
+}
+
 // A separate vision check, not the generator's own claim of success. The
 // response is deliberately small and structured so a failed/uncertain check
 // blocks approval without another image-generation charge or silent retry.
@@ -297,4 +304,4 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   return {seo,usage:body.usage || null,model};
 }
 
-module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,verifyImage,evaluateImageCheck,shouldRetryImageCheck,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
+module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};

@@ -2160,7 +2160,7 @@
       var preflightCalls=pending.filter(function(x){return missingPaidDrafts(x.np).images.length>0&&garmentCat(x.np.productType)==='upper'&&paidStylingOf(x.np).fit!=='Auto';}).length;
       var seoCalls=pending.filter(function(x){return missingPaidDrafts(x.np).seo;}).length;
       var skipped=selected.length-pending.length;
-      if(!confirm('Generate photos and listing copy for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Hard limit: up to '+(imageCalls*2)+' billed image calls and '+(imageCalls*2)+' billed visual checks (one corrective retry per view), plus up to '+preflightCalls+' original-fit check(s) and '+seoCalls+' SEO call(s). These are call limits, not a fixed currency price. A visibly conflicting selected fit stops before image generation. No back is invented. Drafts are not approved or posted to Shopify automatically. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
+      if(!confirm('Generate photos and listing copy for '+pending.length+' product(s)'+(skipped?' ('+skipped+' already complete and skipped)':'')+'? Hard limit: up to '+(imageCalls*2)+' billed image calls and '+(imageCalls*2)+' billed visual checks (one corrective retry per view), plus up to '+preflightCalls+' original-fit check(s) and '+seoCalls+' SEO call(s). These are call limits, not a fixed currency price. If a selected fit conflicts with the original photo, the model photos will follow the photographed cut and show a warning. No back is invented. Drafts are not approved or posted to Shopify automatically. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
       btn.disabled=true;var finished=0;
       var active=null,attention=[];
       try {
@@ -2170,7 +2170,7 @@
           report('Generating article '+(finished+1)+' of '+pending.length+' · '+(item.np.colour||item.np.designName||'product')+'… This can take several minutes.',item);
           var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,retry:!!used[item.np.key],maxImageAttempts:2,styling:paidStylingOf(item.np)})}).then(readJson);
           if(!start.success)throw new Error(start.error||'Could not start generation.');
-          attempts.push({groupKey:item.np.key});used[item.np.key]=true;
+          var queuedAttempt={groupKey:item.np.key};attempts.push(queuedAttempt);used[item.np.key]=true;
           var result;
           for(var poll=0;poll<900;poll++){
             await new Promise(function(resolve){setTimeout(resolve,5000);});
@@ -2179,6 +2179,7 @@
             if(result.pilot.status!=='running')break;
           }
           if(result.pilot.status==='running')throw new Error('Generation is still running. Reopen this PO to inspect saved drafts.');
+          Object.assign(queuedAttempt,result.pilot);
           studio.images[item.np.key]=result.images||[];studio.rejected[item.np.key]=result.rejectedImages||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
           if(result.seo&&result.seo.seo)studio.seo[item.np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
           rerenderCard(item.i);finished++;
@@ -2241,6 +2242,7 @@
       var attemptNote=lastAttempt&&lastAttempt.errors&&lastAttempt.errors.length
         ? 'Previous paid attempt '+esc(lastAttempt.status||'needs review')+': '+esc(lastAttempt.errors.map(function(e){return e.type+': '+e.error;}).join('; '))
         :lastAttempt?'Previous paid attempt: '+esc(lastAttempt.status||'running'):'';
+      if(lastAttempt&&(lastAttempt.warnings||[]).length)attemptNote+=' · '+esc(lastAttempt.warnings.join('; '));
       var head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
         '<div style="display:flex;align-items:center;gap:10px"><input type="checkbox" data-selectproduct="'+i+'" aria-label="Select '+esc(np.designName||np.designCode||'product')+' for generation"'+(studio.selected[np.key]?' checked':'')+'>'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span>'+
@@ -2273,7 +2275,7 @@
       var fitOpts=cat==='upper'?FIT_UPPER:(cat==='lower'?FIT_LOWER:null);
       var fitRow=fitOpts?('<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
         sel('fit','Fit / length',fitOpts,s.fit)+
-        '<span class="muted" style="font-size:11px">Used for paid model photos. Fitted keeps shoulder seams at the natural shoulder; Auto follows the saved product fit and reference.</span></div>'):'';
+        '<span class="muted" style="font-size:11px">Used for paid model photos only when the original supports it. Auto follows the photographed garment.</span></div>'):'';
       var pair='<div class="studio-controls"><div class="studio-controls-title">Outfit &amp; setting · applies to model photos</div><div class="studio-controls-row">'+
         (cat!=='other'?sel('pair','Pair with',pairOpts,s.pair):'')+
         sel('aesthetic','Look',AESTHETIC,s.aesthetic)+
@@ -2310,7 +2312,7 @@
         else if(t[0].indexOf('model-')===0 || t[0]==='detail') empty='<div class="muted" style="padding:20px 0">Ready for image generation</div>';
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
-          (im&&t[0]!=='original'?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
+          (im&&t[0]!=='original'?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:'+(t[0].indexOf('model-')===0||t[0]==='female'||t[0]==='male'?'190':'160')+'px;object-fit:contain;background:var(--ivory2);border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
               '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
               '<button class="btn sm" data-approveimg="'+i+'" data-type="'+t[0]+'" title="'+(im.qa&&!['pass','manual-reviewed'].includes(im.qa.status)?'Visual check did not pass — regenerate this view':im.approved?'Approved — click to UNDO':'Approve this photo')+'"'+(im.qa&&!['pass','manual-reviewed'].includes(im.qa.status)?' disabled':'')+' style="'+(im.approved?'background:#059669;color:#fff;border-color:#059669':'')+'">'+(im.approved?'✓ Approved · undo':'Approve')+'</button>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
@@ -2321,7 +2323,7 @@
       });
       grid+='</div>';
       var rejected=studio.rejected[np.key]||[];
-      if(rejected.length) grid+='<div class="banner warn" style="margin-top:8px"><b>Images held by visual check — not approved or posted</b><div style="display:flex;gap:8px;overflow-x:auto;margin-top:6px">'+rejected.slice(-6).reverse().map(function(item){return '<div style="min-width:150px;max-width:190px;font-size:11px"><img data-zoom src="'+esc(item.url)+'" title="Held draft — click to inspect at full size" style="width:120px;height:120px;object-fit:cover;cursor:zoom-in"><div><b>'+esc(item.type)+'</b>: '+esc(((item.qa||{}).issues||[]).join('; ')||'Visual check unavailable')+'</div>'+(canReviewHeldImage()?'<button class="btn ghost sm" data-accept-held="'+i+'" data-held-type="'+esc(item.type)+'" data-held-url="'+esc(item.url)+'" style="margin-top:5px">Owner review · accept</button>':'')+'</div>';}).join('')+'</div></div>';
+      if(rejected.length) grid+='<div class="banner warn" style="margin-top:8px"><b>Images held by visual check — not approved or posted</b><div style="display:flex;gap:8px;overflow-x:auto;margin-top:6px">'+rejected.slice(-6).reverse().map(function(item){return '<div style="min-width:150px;max-width:190px;font-size:11px"><img data-zoom src="'+esc(item.url)+'" title="Held draft — click to inspect at full size" style="width:120px;height:160px;object-fit:contain;cursor:zoom-in"><div><b>'+esc(item.type)+'</b>: '+esc(((item.qa||{}).issues||[]).join('; ')||'Visual check unavailable')+'</div>'+(canReviewHeldImage()?'<button class="btn ghost sm" data-accept-held="'+i+'" data-held-type="'+esc(item.type)+'" data-held-url="'+esc(item.url)+'" style="margin-top:5px">Owner review · accept</button>':'')+'</div>';}).join('')+'</div></div>';
       var seo=studio.seo[np.key];
       var seoBlock;
       if(!seo){

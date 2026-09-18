@@ -109,6 +109,21 @@ test('fit preflight checks the original before paid image edits and never guesse
   assert.equal((await pilot.preflightFit({key:'test-only',group,source,styling:{fit:'Auto'},fetchImpl:()=>{throw new Error('No call expected');}})).status,'not-required');
 });
 
+test('a conflicting selected fit uses the photographed cut without stopping all three views',()=>{
+  const selected={fit:'Slim fit',pair:'Straight trousers',chain:'Gold chain'};
+  const effective=pilot.stylingForPhoto(selected,{status:'conflict',reason:'Dropped shoulders in original'});
+  assert.deepEqual(effective,{...selected,fit:'Auto'});
+  assert.equal(selected.fit,'Slim fit');
+  assert.strictEqual(pilot.stylingForPhoto(selected,{status:'compatible'}),selected);
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  assert.match(server,/photoStyling=openaiPilot\.stylingForPhoto\(styling,fitPreflight\)/);
+  assert.match(server,/generateImage\(\{[^\n]*styling:photoStyling/);
+  assert.match(server,/verifyImage\(\{[^\n]*styling:photoStyling/);
+  assert.match(html,/object-fit:contain;background:var\(--ivory2\)/);
+  assert.match(html,/Object\.assign\(queuedAttempt,result\.pilot\)/);
+});
+
 test('corrective retry only follows a clear mismatch and uses fixed guidance',async()=>{
   assert.equal(pilot.shouldRetryImageCheck({status:'needs-review',failed:['pairMatch'],uncertain:[]},1,2),true);
   assert.equal(pilot.shouldRetryImageCheck({status:'needs-review',failed:['pairMatch'],uncertain:[]},2,2),false);
