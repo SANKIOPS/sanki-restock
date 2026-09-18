@@ -583,18 +583,17 @@
       '</div>'+
       '<div id="salaryEntryFields" style="display:none"><div class="grid">'+
         '<div class="fld"><label>Salary entity</label><select id="seEntity"><option value="SANKI">SANKI</option>'+(cfg.isOwner?'<option value="SAMAST">SAMAST</option>':'')+'</select></div>'+
-        '<div class="fld" id="seMonthWrap"><label>Salary month</label><input id="seMonth" type="month"></div>'+
+        '<div class="fld" id="seMonthWrap" style="display:none"><label>Salary for which month?</label><input id="seMonth" type="month"><div class="hint">Choose the month in which this salary was earned. This does not change the payment date.</div></div>'+
         '<div class="fld"><label>Employee</label><select id="seEmployee"><option value="">Choose employee</option></select></div>'+
         '<div class="fld"><label>Category / type</label><input id="seClassification" readonly value="Employee payment · salary / recoverable advance"></div>'+
-        '<div class="fld"><label>Amount paid ₹</label><input id="seAmount" type="number" min="0.01" step="0.01"></div>'+
-        '<div class="fld"><label>Apply to salary ₹</label><input id="seSalaryAmount" type="number" min="0" step="0.01" value="0"></div>'+
-        '<div class="fld"><label>Treat as advance ₹</label><input id="seAdvanceAmount" type="number" min="0" step="0.01" value="0"></div>'+
+        '<div class="fld"><label>Total paid ₹</label><input id="seAmount" type="number" min="0.01" step="0.01"><div class="hint">Enter the amount once. We suggest how to record it below.</div></div>'+
+        '<div class="fld full"><details id="seBreakdown"><summary>Change the suggested salary / advance split</summary><div class="grid" style="margin-top:12px"><div class="fld"><label>For unpaid salary ₹</label><input id="seSalaryAmount" type="number" min="0" step="0.01" value="0"></div><div class="fld"><label>New advance ₹</label><input id="seAdvanceAmount" type="number" min="0" step="0.01" value="0"></div></div><div class="hint">Only change this if the suggested split is wrong. An advance is money to recover later, not salary.</div></details></div>'+
         '<div class="fld"><label>Payment date</label><input id="seDate" type="date" value="'+today()+'"></div>'+
         '<div class="fld"><label>Paying account / cash</label><select id="seAccount"></select></div>'+
         '<div class="fld"><label>Bank / payment reference</label><input id="seReference"></div>'+
         '<div class="fld full hint" id="seBalance"></div>'+
         '<div class="fld full hint" id="seAllocationHint">The two allocations must add up to the amount paid. An advance remains recoverable; it is not a salary expense.</div>'+
-        '<div class="fld full" id="seReasonWrap"><label>Reason for partial payment</label><input id="seReason" placeholder="Why only part of the outstanding salary is being paid"></div>'+
+        '<div class="fld full" id="seReasonWrap" style="display:none"><label>Why is only part of the salary being paid?</label><input id="seReason" placeholder="Short reason for partial salary payment"></div>'+
         '<div class="fld full"><label>Note</label><input id="seNote" placeholder="Optional details"></div>'+
         '<div class="fld full" id="seProofWrap"><label>Payment screenshot / proof (required)</label><input id="seProof" type="file" accept="image/*,.pdf" multiple></div>'+
         '<div class="fld full hint" id="seAdvanceHint"></div>'+
@@ -613,7 +612,7 @@
       document.removeEventListener('click',closeVendorSuggestions,true);
       document.addEventListener('click',closeVendorSuggestions,true);
       el('saveExp').addEventListener('click', saveExpense);
-      if(el('entryKind')){el('entryKind').addEventListener('change',toggleSalaryEntry);el('seEntity').addEventListener('change',loadSalaryEntryEmployees);el('seMonth').addEventListener('change',loadSalaryEntryMonth);el('seEmployee').addEventListener('change',updateSalaryEntryBalance);el('seAmount').addEventListener('input',suggestSalaryAllocation);el('seSalaryAmount').addEventListener('input',updateSalaryAllocationHint);el('seAdvanceAmount').addEventListener('input',updateSalaryAllocationHint);el('seSave').addEventListener('click',saveSalaryEntry);var now=new Date(),prior=new Date(now.getFullYear(),now.getMonth()-1,1);el('seMonth').value=prior.getFullYear()+'-'+String(prior.getMonth()+1).padStart(2,'0');toggleSalaryEntry();}
+      if(el('entryKind')){el('entryKind').addEventListener('change',toggleSalaryEntry);el('seEntity').addEventListener('change',loadSalaryEntryEmployees);el('seMonth').addEventListener('change',function(){this.dataset.manual='true';loadSalaryEntryMonth();});el('seDate').addEventListener('change',suggestSalaryMonth);el('seEmployee').addEventListener('change',updateSalaryEntryBalance);el('seAmount').addEventListener('input',suggestSalaryAllocation);el('seSalaryAmount').addEventListener('input',updateSalaryAllocationHint);el('seAdvanceAmount').addEventListener('input',updateSalaryAllocationHint);el('seSave').addEventListener('click',saveSalaryEntry);suggestSalaryMonth();toggleSalaryEntry();}
       if(el('addCardFromExpense'))el('addCardFromExpense').addEventListener('click',function(){tab='creditcards';Array.prototype.forEach.call(el('tabs').children,function(b){b.classList.toggle('on',b.dataset.t===tab);});render();});
       if(el('linkTelegram')){el('linkTelegram').addEventListener('click',linkTelegram);loadTelegramUsers();}
       if(el('setupTelegram'))el('setupTelegram').addEventListener('click',setupTelegram);
@@ -653,6 +652,12 @@
         salaryEntryRows=d.success?d.rows||[]:[];if(!d.success){el('seBalance').textContent=d.error||'Could not load payroll.';return;}updateSalaryEntryBalance();
       });
     }
+    function suggestSalaryMonth(){
+      var input=el('seMonth'),date=el('seDate')&&el('seDate').value;
+      if(!input||input.dataset.manual==='true'||!/^\d{4}-\d{2}-\d{2}$/.test(date))return;
+      var parts=date.split('-'),prior=new Date(Number(parts[0]),Number(parts[1])-2,1),ym=prior.getFullYear()+'-'+String(prior.getMonth()+1).padStart(2,'0');
+      if(input.value!==ym){input.value=ym;loadSalaryEntryMonth();}
+    }
     function updateSalaryEntryBalance(){
       var row=salaryEntryRows.find(function(r){return r.id===el('seEmployee').value;});
       el('seBalance').textContent=!el('seEmployee').value?'Choose an employee to see the amount due.':!row?'No payable salary in this month. A payment can still be recorded as an advance.':'Salary due now: '+fmt(Math.max(0,Number(row.balance)||0))+' · Paid so far: '+fmt(row.paid||0);
@@ -663,8 +668,10 @@
       el('seSalaryAmount').value=salary.toFixed(2);el('seAdvanceAmount').value=Math.max(0,total-salary).toFixed(2);updateSalaryAllocationHint();
     }
     function updateSalaryAllocationHint(){
-      var total=Number(el('seAmount').value)||0,salary=Number(el('seSalaryAmount').value)||0,advance=Number(el('seAdvanceAmount').value)||0,difference=Math.round((total-salary-advance)*100)/100;
-      el('seAllocationHint').textContent=Math.abs(difference)>.001?'Allocations must equal the amount paid. Difference: '+fmt(Math.abs(difference))+'.':'This payment will apply '+fmt(salary)+' to salary and '+fmt(advance)+' to a recoverable advance.';
+      var total=Number(el('seAmount').value)||0,salary=Number(el('seSalaryAmount').value)||0,advance=Number(el('seAdvanceAmount').value)||0,difference=Math.round((total-salary-advance)*100)/100,row=salaryEntryRows.find(function(r){return r.id===el('seEmployee').value;}),due=Math.max(0,Number(row&&row.balance)||0);
+      el('seMonthWrap').style.display=salary>0?'':'none';
+      el('seReasonWrap').style.display=salary>0&&salary<due-.001?'':'none';
+      el('seAllocationHint').textContent=Math.abs(difference)>.001?'The breakdown does not add up to the total paid. Difference: '+fmt(Math.abs(difference))+'.':!total?'Enter the amount paid to see the suggested breakdown.':salary>0&&advance>0?'Suggested: '+fmt(salary)+' pays salary for '+el('seMonth').value+'; '+fmt(advance)+' is a new advance. Open “Change the suggested split” only if this is wrong.':salary>0?'Suggested: '+fmt(salary)+' pays salary for '+el('seMonth').value+'.':fmt(advance)+' is a new advance to recover later. No salary is cleared.';
     }
     function saveSalaryEntry(){
       var empId=el('seEmployee').value,amount=Number(el('seAmount').value),salary=Number(el('seSalaryAmount').value),advance=Number(el('seAdvanceAmount').value),date=el('seDate').value,account=el('seAccount').value,reason=el('seReason').value.trim(),row=salaryEntryRows.find(function(r){return r.id===empId;}),due=Math.max(0,Number(row&&row.balance)||0),files=el('seProof').files||[],btn=el('seSave');

@@ -412,6 +412,7 @@ test('Prashant Axis 3645 is available for advances and full or partial salary pa
 test('expense entry routes salary and advances into employee records without duplicate expenses',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/Pay employee/);assert.match(html,/id="seSalaryAmount"/);assert.match(html,/id="seAdvanceAmount"/);
+  assert.match(html,/Change the suggested salary \/ advance split/);assert.match(html,/function suggestSalaryMonth/);assert.match(html,/Salary for which month\?/);
   assert.match(html,/\/api\/salary\/pay-employee/);assert.doesNotMatch(html,/<option value="advance">Salary advance<\/option>/);
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Quick Salary Employee',salary:10000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-04'},body:{empId:emp.id,paidDays:30}});
