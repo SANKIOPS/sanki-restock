@@ -2528,6 +2528,25 @@ router.post('/api/procurement/combined-invoices/:id/finalize', (req, res) => {
   saveStore(s);
   res.json({ success: true, invoice });
 });
+router.post('/api/procurement/combined-invoices/:id/reopen', (req, res) => {
+  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
+  const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id];
+  if (!invoice) return res.status(404).json({ success: false, error: 'LG bill not found.' });
+  if (!invoice.finalized) return res.status(409).json({ success: false, error: 'This LG bill is not finalized.' });
+  if (String((req.body || {}).lgBillNumber || '').trim() !== invoice.lgBillNumber)
+    return res.status(400).json({ success: false, error: 'LG bill number does not match.' });
+  let accounting;
+  try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); }
+  catch { return res.status(503).json({ success: false, error: 'Accounting payment history is unavailable; LG bill was not reopened.' }); }
+  const paymentsByPo = ((accounting.procurementAccounting || {}).paymentsByPo || {});
+  if (invoice.poIds.some(id => ((paymentsByPo[id] || {}).payments || []).length))
+    return res.status(409).json({ success: false, error: 'This LG bill has recorded payments and cannot be reopened.' });
+  invoice.finalizationHistory = Array.isArray(invoice.finalizationHistory) ? invoice.finalizationHistory : [];
+  invoice.finalizationHistory.push({ ...invoice.finalized, reopenedAt: new Date().toISOString(), reopenedBy: (req.user || {}).username || 'system' });
+  delete invoice.finalized;
+  saveStore(s);
+  res.json({ success: true, invoice });
+});
 router.get('/api/procurement/history', (req, res) => {
   const s = loadStore();
   const finalized = finalizedByPo(s);

@@ -7,12 +7,12 @@ const source = fs.readFileSync(path.join(__dirname, '../modules/procurement.js')
 const html = fs.readFileSync(path.join(__dirname, '../public/procurement.html'), 'utf8');
 const { invoiceAmounts, allocateAmount, finalizedByPo } = require('../modules/lg-invoices');
 
-function handlers(store) {
+function handlers(store, accounting = { procurementAccounting: { paymentsByPo: {} } }) {
   const routes = {}, context = {
     router: { post: (route, fn) => routes[route] = fn, patch: (route, fn) => routes[route] = fn },
     canReconcileVendorBill: () => true, loadStore: () => store, saveStore: () => {},
     invoiceAmounts, allocateAmount, finalizedByPo, DATA_DIR: '/tmp', path,
-    fs: { readFileSync: () => JSON.stringify({ procurementAccounting: { paymentsByPo: {} } }) },
+    fs: { readFileSync: () => JSON.stringify(accounting) },
     Date, Math, Number, String, Object, Array, Set
   };
   const start = source.indexOf("router.post('/api/procurement/combined-invoices'");
@@ -161,4 +161,34 @@ test('manual INR freight is included once in vendor total and converted for comp
   assert.equal(amounts.vendorBillYuan, 5840);
   assert.equal(amounts.vendorTotalYuan, 5965 + 28350 / 15.33);
   assert.equal(amounts.vendorAmountInr, Math.round(5965 * 15.33 + 28350));
+});
+
+test('finalized LG bill can be reopened without losing vendor data, then finalized on the other basis', () => {
+  const store = { settings: { exRate: 10 }, pos: {
+    'PO-A': { id: 'PO-A', vendor: 'A', origin: 'china', exRate: 10, lines: [{ qty: 1, perPcsYuan: 100 }] }
+  }, combinedVendorInvoices: { 'CVI-1': { id: 'CVI-1', poIds: ['PO-A'], lgBillNumber: 'LG-001', lgDate: '2026-09-18',
+    childBills: { 'PO-A': { billNumber: 'SNK-3', totalQuantity: 1, billValueYuan: 110 } },
+    combined: { totalWeightGrams: 0, combinedFreightInr: 100, localTransportationYuan: 0,
+      fixedTransportationYuan: 0, extraChargesYuan: 0, exchangeRate: 10 },
+    finalized: { basis: 'purchase', amountInr: 1000, allocations: { 'PO-A': 1000 } } } } };
+  const routes = handlers(store), reopen = routes['/api/procurement/combined-invoices/:id/reopen'];
+  assert.equal(call(reopen, { lgBillNumber: 'LG-OTHER' }, 'CVI-1').status, 400);
+  const reopened = call(reopen, { lgBillNumber: 'LG-001' }, 'CVI-1');
+  assert.equal(reopened.result.success, true);
+  assert.equal(store.combinedVendorInvoices['CVI-1'].finalized, undefined);
+  assert.equal(store.combinedVendorInvoices['CVI-1'].childBills['PO-A'].billValueYuan, 110);
+  assert.equal(store.combinedVendorInvoices['CVI-1'].finalizationHistory[0].basis, 'purchase');
+  assert.equal(call(reopen, { lgBillNumber: 'LG-001' }, 'CVI-1').status, 409);
+  const refinalized = call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'vendor' }, 'CVI-1');
+  assert.equal(refinalized.result.invoice.finalized.basis, 'vendor');
+  assert.equal(refinalized.result.invoice.finalized.amountInr, 1200);
+});
+
+test('LG bill with an allocated payment cannot be reopened', () => {
+  const store = { pos: {}, combinedVendorInvoices: { 'CVI-1': { id: 'CVI-1', poIds: ['PO-A'], lgBillNumber: 'LG-001',
+    finalized: { basis: 'purchase', amountInr: 1000, allocations: { 'PO-A': 1000 } } } } };
+  const accounting = { procurementAccounting: { paymentsByPo: { 'PO-A': { payments: [{ amount: 100 }] } } } };
+  const result = call(handlers(store, accounting)['/api/procurement/combined-invoices/:id/reopen'], { lgBillNumber: 'LG-001' }, 'CVI-1');
+  assert.equal(result.status, 409);
+  assert.ok(store.combinedVendorInvoices['CVI-1'].finalized);
 });
