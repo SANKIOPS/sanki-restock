@@ -2485,7 +2485,7 @@ router.patch('/api/procurement/combined-invoices/:id', (req, res) => {
     childBills[id] = { billNumber: String(child.billNumber || '').trim().slice(0, 160), totalQuantity: quantity, billValueYuan: value };
   }
   const combined = {};
-  for (const key of ['totalWeightGrams', 'localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan', 'combinedFreightYuan', 'exchangeRate']) {
+  for (const key of ['totalWeightGrams', 'localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan', 'combinedFreightYuan', 'combinedFreightInr', 'exchangeRate']) {
     const value = numeric(body.combined[key], false);
     if (value === undefined) return res.status(400).json({ success: false, error: 'Combined costs, weight and rate must be non-negative numbers.' });
     combined[key] = value;

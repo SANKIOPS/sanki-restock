@@ -87,7 +87,7 @@ test('one selected bill creates an invoice calculation and can be reconciled', (
   assert.match(rendered, /data-combined-child="PO-SINGLE"/);
   assert.match(rendered, /LG date.*LG bill number/);
   assert.match(rendered, /Total LG bill value/);
-  assert.match(rendered, /Combined freight in INR/);
+  assert.match(rendered, /Combined freight ₹ \(enter manually\)/);
   assert.match(rendered, /Finalize LG bill/);
   assert.doesNotMatch(rendered, /Combined invoice calculation:/);
 });
@@ -148,4 +148,17 @@ test('finalized LG bill snapshots the chosen amount and allocates it to original
   assert.equal(call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'purchase' }, id).status, 409);
   assert.equal(call(routes['/api/procurement/combined-invoices/:id'], { childBills: {}, combined: {} }, id).status, 409);
   assert.equal(store.pos['PO-A'].lines[0].qty, 1);
+});
+
+test('manual INR freight is included once in vendor total and converted for comparison', () => {
+  const invoice = { poIds: ['PO-A', 'PO-B'], childBills: {
+    'PO-A': { totalQuantity: 10, billValueYuan: 2015 },
+    'PO-B': { totalQuantity: 20, billValueYuan: 3825 }
+  }, combined: { combinedFreightInr: 28350, localTransportationYuan: 75,
+    fixedTransportationYuan: 50, extraChargesYuan: 0, exchangeRate: 15.33 } };
+  const pos = { 'PO-A': { id: 'PO-A', lines: [] }, 'PO-B': { id: 'PO-B', lines: [] } };
+  const amounts = invoiceAmounts(invoice, pos);
+  assert.equal(amounts.vendorBillYuan, 5840);
+  assert.equal(amounts.vendorTotalYuan, 5965 + 28350 / 15.33);
+  assert.equal(amounts.vendorAmountInr, Math.round(5965 * 15.33 + 28350));
 });

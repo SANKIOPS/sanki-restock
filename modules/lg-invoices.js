@@ -8,11 +8,14 @@ function invoiceAmounts(invoice, pos, settings = {}) {
   const bills = children.map(po => (invoice.childBills || {})[po.id] || {});
   const charges = invoice.combined || {};
   const rate = Number(charges.exchangeRate);
-  const chargeKeys = ['combinedFreightYuan', 'localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan'];
+  const chargeKeys = ['localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan'];
+  const freightInr = charges.combinedFreightInr == null ? null : Number(charges.combinedFreightInr);
+  const freightYuan = freightInr == null ? Number(charges.combinedFreightYuan) : freightInr / rate;
   const complete = bills.every(b => b.totalQuantity != null && b.billValueYuan != null) &&
-    chargeKeys.every(key => charges[key] != null) && Number.isFinite(rate) && rate > 0;
+    chargeKeys.every(key => charges[key] != null) && (freightInr != null || charges.combinedFreightYuan != null) &&
+    Number.isFinite(freightYuan) && Number.isFinite(rate) && rate > 0;
   const vendorBillYuan = complete ? bills.reduce((sum, bill) => sum + Number(bill.billValueYuan), 0) : null;
-  const vendorTotalYuan = complete ? vendorBillYuan + chargeKeys.reduce((sum, key) => sum + Number(charges[key]), 0) : null;
+  const vendorTotalYuan = complete ? vendorBillYuan + freightYuan + chargeKeys.reduce((sum, key) => sum + Number(charges[key]), 0) : null;
   return { purchaseAmounts, purchaseAmountInr, vendorBillYuan, vendorTotalYuan,
     vendorAmountInr: complete ? Math.round(vendorTotalYuan * rate) : null, rate };
 }
