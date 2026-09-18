@@ -409,6 +409,25 @@ test('Prashant Axis 3645 is available for advances and full or partial salary pa
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(html,/ed\.salaryPayingAccounts/);
 });
 
+test('expense entry routes salary and advances into employee records without duplicate expenses',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/Salary payment — full or part/);assert.match(html,/Salary advance/);
+  assert.match(html,/\/api\/salary\/payments\/batch/);assert.match(html,/\/api\/salary\/advances/);
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Quick Salary Employee',salary:10000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-04'},body:{empId:emp.id,paidDays:30}});
+  const body={ym:'2099-04',date:'2099-05-10',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-salary.jpg',items:[{empId:emp.id,amount:4000,modificationReason:'Part salary',expectedRemaining:10000}]};
+  const paid=invoke('POST','/api/salary/payments/batch',{body,role:'owner'});assert.equal(paid.status,200);
+  assert.equal(invoke('POST','/api/salary/payments/batch',{body,role:'owner'}).status,409,'stale form cannot post the same payment twice');
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-04'}}).body.rows.find(x=>x.id===emp.id).balance,6000);
+  const advanceBody={empId:emp.id,amount:500,date:'2099-05-11',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-advance.jpg'};
+  const request=invoke('POST','/api/salary/advances',{body:advanceBody,role:'admin',username:'prashant'});
+  assert.equal(request.status,200);assert.ok(request.body.request.proofs.length);
+  assert.equal(invoke('POST','/api/salary/advances',{body:advanceBody,role:'admin',username:'prashant'}).status,409,'repeat submission does not create a second advance');
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.body.request.id},role:'owner'}).status,200);
+  const posted=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.body.request.id},body:{payoutDate:'2099-05-11'},role:'admin',username:'prashant'});
+  assert.equal(posted.status,200);assert.equal(posted.body.advance.proof,'/api/expenses/photo/quick-advance.jpg');
+});
+
 test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Partial Pay Employee',salary:30000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-10'},body:{empId:emp.id,paidDays:30}});
