@@ -1325,4 +1325,19 @@ function seedIfEmpty() {
 }
 seedIfEmpty();
 
-module.exports = { router, summaryForPL, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows, _advanceSourceSheet:advanceSourceSheet, _finalAugustPlan:finalAugustPlan, _applyFinalAugustPlan:applyFinalAugustPlan, _repairFinalAugustImportedRoster:repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows:linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement:applyGuardAugustIncrement, _computeMonth:computeMonth };
+// Invoke the same synchronous salary routes from the linked Owner's Telegram
+// chat, preserving entity isolation, validation, duplicate checks and audit.
+function telegramApi(method,routePath,target,input){
+  const roles=target&&target.roles||[];
+  if(!roles.includes('owner'))return{success:false,status:403,error:'Only the Owner can use salary advances in Telegram.'};
+  const layer=router.stack.find(item=>item.route&&item.route.path===routePath&&item.route.methods[String(method||'GET').toLowerCase()]);
+  if(!layer)return{success:false,status:404,error:'Salary action is unavailable.'};
+  const o=input||{},entity=salaryEntity(o.entity),req={body:o.body||{},params:o.params||{},query:{entity},headers:{'user-agent':'Telegram'},ip:'Telegram',user:{username:String(target.username||''),roles,role:'owner'},get(name){return this.headers[String(name).toLowerCase()]||'';}};
+  let status=200,result={success:false,error:'Salary action did not return a result.'};
+  const res={status(code){status=code;return this;},json(value){result=value;return this;},end(){return this;}};
+  try{salaryContext.run({entity},()=>{let index=0;const next=()=>{const step=layer.route.stack[index++];if(step)step.handle(req,res,next);};next();});}
+  catch(error){return{success:false,status:500,error:String(error.message||error)};}
+  return Object.assign({status},result||{});
+}
+
+module.exports = { router, summaryForPL, telegramApi, _july2026Import:JULY_2026_IMPORT, _providedAdvanceImport:PROVIDED_ADVANCE_IMPORT, _finalJuly2026Payroll:FINAL_JULY_2026_PAYROLL, _finalAugust2026Advances:FINAL_AUGUST_2026_ADVANCES, _julyImportedMarks:julyImportedMarks, _findImportedEmployee:findImportedEmployee, _ensureHistoricalGuard:ensureHistoricalGuard, _repairGuardSunnyCollision:repairGuardSunnyCollision, _applySunnyGuardAndSurajRepair:applySunnyGuardAndSurajRepair, _removeHistoricalAdvancesV16:removeHistoricalAdvancesV16, _closeHistoricalPayrollCarryV17:closeHistoricalPayrollCarryV17, _salarySheetChanges:salarySheetChanges, _applySalarySheetChanges:applySalarySheetChanges, _advanceSheetRows:advanceSheetRows, _applyAdvanceSheetRows:applyAdvanceSheetRows, _advanceSourceSheet:advanceSourceSheet, _finalAugustPlan:finalAugustPlan, _applyFinalAugustPlan:applyFinalAugustPlan, _repairFinalAugustImportedRoster:repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows:linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement:applyGuardAugustIncrement, _computeMonth:computeMonth };

@@ -8,7 +8,7 @@ const XLSX = require('xlsx');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement, _computeMonth } = require('../modules/salary');
+const { router, telegramApi, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement, _computeMonth } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
 function invoke(method, routePath, { body={}, params={}, query={}, role='admin',username='tester' }={}) {
@@ -425,6 +425,22 @@ test('expense entry records only dated advances, leaving salary payments on payr
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:request.body.request.id},role:'owner'}).status,200);
   const posted=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:request.body.request.id},body:{payoutDate:'2099-05-11'},role:'admin',username:'prashant'});
   assert.equal(posted.status,200);assert.equal(posted.body.advance.proof,'/api/expenses/photo/quick-advance.jpg');
+});
+
+test('Owner Telegram salary advance uses the existing dated advance route, not payroll',()=>{
+  const owner={username:'gaganlambasanki',roles:['owner']},outsider={username:'employee',roles:['accounting']};
+  const employee=invoke('POST','/api/salary/employees',{body:{name:'Telegram Advance Employee',salary:9000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-06'},body:{empId:employee.id,paidDays:30}});
+  const list=telegramApi('GET','/api/salary/employees',owner,{entity:'SANKI'});
+  assert.equal(list.status,200);assert.ok(list.employees.some(e=>e.id===employee.id));
+  assert.equal(telegramApi('GET','/api/salary/employees',outsider,{entity:'SANKI'}).status,403);
+  const body={empId:employee.id,amount:1250,date:'2099-07-03',account:'Prashant Axis 3645',proofs:['/api/expenses/photo/telegram-advance.jpg']};
+  const paid=telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body});
+  assert.equal(paid.status,200);assert.equal(paid.advance.date,'2099-07-03');assert.equal(paid.advance.recoveryStartMonth,'2099-07');
+  assert.equal(telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body}).status,409,'Telegram confirmation cannot duplicate an advance');
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-06'}}).body.rows.find(e=>e.id===employee.id).balance,9000);
+  const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  assert.match(source,/callback_data:'am:advance'/);assert.match(source,/callback_data:'am:adv:confirm'/);assert.match(source,/telegramApi\('POST','\/api\/salary\/advances'/);
 });
 
 test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
