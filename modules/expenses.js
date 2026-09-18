@@ -1043,8 +1043,9 @@ function procurementPayables(s, includePaid) {
     }).filter(x => includePaid || x.balanceDue > 0).sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 function procurementLedgerPayables(s, includePaid) {
-  const children = procurementPayables(s, true), proc = loadProcurementStore(), finalized = finalizedByPo(proc);
-  const standalone = children.filter(item => !finalized[item.id]);
+  const children = procurementPayables(s, true), proc = loadProcurementStore();
+  // Draft and unlinked POs are not debts in the Logistics Mediator ledger.
+  // Only an explicitly finalized LG bill creates a payable here.
   const grouped = Object.values(proc.combinedVendorInvoices || {}).filter(invoice => invoice.finalized).map(invoice => {
     const bills = (invoice.poIds || []).map(id => children.find(item => item.id === id)).filter(Boolean);
     const amount = Number(invoice.finalized.amountInr) || 0;
@@ -1060,10 +1061,20 @@ function procurementLedgerPayables(s, includePaid) {
       particulars: 'LG bill ' + invoice.lgBillNumber + ' · ' + bills.length + ' purchase bill' + (bills.length === 1 ? '' : 's'),
       amount, paidAmount, balanceDue: Math.max(0, amount - paidAmount),
       status: paidAmount >= amount ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'approved'),
-      poIds: invoice.poIds || [], purchaseBills: bills, finalized: invoice.finalized,
+      poIds: invoice.poIds || [], purchaseBills: bills.map(bill => {
+        const po = proc.pos[bill.id] || {}, defaults = proc.settings || {};
+        const rate = num(po.exRate || defaults.exRate), gramsRate = num(po.freightPerGram || defaults.freightPerGram);
+        const lines = po.lines || [];
+        const quantity = lines.reduce((sum, line) => sum + num(line.qty), 0);
+        const weightGrams = lines.reduce((sum, line) => sum + num(line.qty) * num(line.weightGrams), 0);
+        const billValueYuan = lines.reduce((sum, line) => sum + num(line.qty) * num(line.perPcsYuan) / (po.origin === 'india' ? (rate || 1) : 1), 0);
+        const freightInr = po.origin === 'india' ? num(po.transportTotal) : weightGrams * gramsRate;
+        return { ...bill, comparison: { quantity, weightGrams, billValueYuan, freightYuan: rate ? freightInr / rate : 0,
+          localTransportationYuan: num(po.localTransportYuan), extraChargesYuan: num(po.otherCostsYuan) } };
+      }), childBills: invoice.childBills || {}, combined: invoice.combined || {}, finalized: invoice.finalized,
       payments: Array.from(paymentsByReference.values()) };
   });
-  return standalone.concat(grouped).filter(item => includePaid || item.balanceDue > 0)
+  return grouped.filter(item => includePaid || item.balanceDue > 0)
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 function ledgerMeta(s, name) {

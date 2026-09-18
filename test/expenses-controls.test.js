@@ -1265,7 +1265,7 @@ test('approved self-paid expenses appear once in spending, vendor and personal a
   assert.equal(vendors.vendors[0].outstanding,0);
 });
 
-test('posted advanced purchases stay out of expense Payables without changing procurement', () => {
+test('unfinalized purchases stay out of sourcing ledger without changing procurement', () => {
   const procurementFile = path.join(tempDir, 'procurement.json');
   const original = { pos: {
     'PO-0001': { id:'PO-0001', status:'posted', postedAt:'2026-08-24T08:00:00.000Z', dateReceive:'2026-08-24', vendor:'LEGACY SUPPLIER', billNo:'OLD-1', newProducts:[{variants:[{qty:1,landed:2320}]}], existingAdds:[] },
@@ -1282,7 +1282,7 @@ test('posted advanced purchases stay out of expense Payables without changing pr
   assert.ok(ledger.entries.some(x => x.kind === 'purchase' && x.debit === 500));
   const sourcing=invoke('GET','/api/expenses/vendors',{query:{nature:'SANKI',source:'sourcing',from:'2026-08-01',to:'2026-08-31'},role:'owner'}).body;
   assert.ok(sourcing.vendors.every(v=>v.notes==='Advanced Purchases mediator'&&v.ledgerRows.every(x=>String(x.reference).startsWith('PO-'))),'ordinary expense vendors never enter the sourcing view');
-  assert.equal(sourcing.vendors.some(v=>v.ledgerRows.some(x=>x.reference==='PO-0001')),true,'every posted in-app PO remains payable until its payment is recorded');
+  assert.equal(sourcing.vendors.some(v=>v.ledgerRows.some(x=>x.reference==='PO-0001')),false,'unfinalized POs are not LG payables');
   assert.deepEqual(JSON.parse(fs.readFileSync(procurementFile, 'utf8')), original);
 });
 

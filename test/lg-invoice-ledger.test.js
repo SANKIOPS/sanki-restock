@@ -25,7 +25,7 @@ test('finalized LG bill appears once in sourcing ledger projection with its LG d
     finalizedByPo, purchaseBillingAmount, round0: Math.round, num: x => Number(x) || 0, poCostBreakdown: () => ({ lines: [] }) };
   const project = vm.runInNewContext(source.slice(start, end) + '\nprocurementLedgerPayables;', context);
   const rows = project(accounting, true);
-  assert.equal(rows.length, 2);
+  assert.equal(rows.length, 1);
   const lg = rows.find(row => row.id === 'CVI-1');
   assert.equal(lg.date, '2026-09-18');
   assert.equal(lg.billNo, 'LG-501');
@@ -36,7 +36,10 @@ test('finalized LG bill appears once in sourcing ledger projection with its LG d
   assert.equal(lg.payments[0].amount, 100);
   assert.deepEqual(Array.from(lg.poIds), ['PO-A', 'PO-B']);
   assert.equal(lg.purchaseBills.length, 2);
-  assert.equal(rows.find(row => row.id === 'PO-C').amount, 50);
+  assert.equal(rows.find(row => row.id === 'PO-C'), undefined);
+  assert.equal(lg.purchaseBills[0].comparison.quantity, 1);
+  assert.equal(lg.purchaseBills[0].comparison.billValueYuan, 100);
+  assert.deepEqual(Object.keys(lg.childBills), []);
   assert.equal(purchasePaymentStatus(proc.pos['PO-A'], accounting, true, {}, 110).amount, 110);
 });
 
@@ -58,4 +61,27 @@ test('pending payments contains only finalized LG bill rows, filtered by LG date
   handler({ query: { nature: 'SANKI', from: '2026-09-18', to: '2026-09-18' } }, { json: value => { response = value; } });
   assert.deepEqual(Array.from(response.purchases, item => item.id), ['CVI-1']);
   assert.equal(response.totalOutstanding, 2200);
+});
+
+test('sourcing ledger LG bill expands to show purchase and vendor calculation differences', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../public/expenses.html'), 'utf8');
+  const start = html.indexOf('    function procurementCostHtml(raw)');
+  const end = html.indexOf('    function vendorLedgerTable(v)', start);
+  const render = vm.runInNewContext(html.slice(start, end) + '\nprocurementCostHtml;', {
+    esc: String, fmt: n => '₹' + n
+  });
+  const output = render({ source: 'procurement_lg', id: 'CVI-1', billNo: 'LG-001', date: '2026-09-18', amount: 90000,
+    poIds: ['PO-A', 'PO-B'], finalized: { basis: 'vendor' }, combined: {
+      combinedFreightInr: 100, localTransportationYuan: 5, fixedTransportationYuan: 0,
+      extraChargesYuan: 0, exchangeRate: 10, totalWeightGrams: 30
+    }, childBills: { 'PO-A': { totalQuantity: 1, billValueYuan: 2015 },
+      'PO-B': { totalQuantity: 1, billValueYuan: 3825 } }, purchaseBills: [
+      { id: 'PO-A', billNo: 'SBGB174', amount: 50000, comparison: { quantity: 1, billValueYuan: 2000 }, costBreakdown: { lines: [] } },
+      { id: 'PO-B', billNo: 'SBGB171', amount: 40000, comparison: { quantity: 1, billValueYuan: 3800 }, costBreakdown: { lines: [] } }
+    ] });
+  assert.match(output, /View LG bill · LG-001/);
+  assert.match(output, /Vendor bill subtotal <b>¥5,840<\/b>/);
+  assert.match(output, /Our data vs vendor invoice/);
+  assert.match(output, /Final total \(INR\)/);
+  assert.match(output, /SBGB174 bill value \(Yuan\)/);
 });
