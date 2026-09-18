@@ -1,9 +1,10 @@
 const crypto = require('crypto');
 const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
+const { CLEARING, BANK, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
 
 function registerPaytmReports(router, deps) {
-  const { loadStore, saveStore, audit, canAccess, upload, view, today } = deps;
+  const { loadStore, saveStore, audit, canAccess, upload, view, today, orders, saleRows } = deps;
   const deny = (req, res) => !canAccess(req) ? (res.status(403).json({ success: false, error: 'You cannot access Paytm reconciliation.' }), true) : false;
   router.get('/api/expenses/paytm-reports', (req, res) => {
     if (deny(req, res)) return;
@@ -59,6 +60,39 @@ function registerPaytmReports(router, deps) {
     audit(store, req, 'PAYTM_REPORT_IMPORTED', 'paytm_report', draftId, { nature: 'SANKI', account: 'Paytm Settlement Clearing', after: { count: added, sources: draft.sources.map(source => source.name) }, note: 'Evidence imported only; no ledger or bank posting changed.' });
     saveStore(store);
     res.json({ success: true, added, duplicates: draft.duplicates, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/link-order', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || ''), orderId = String(body.orderId || '');
+    try {
+      const tx = (store.paytmReportTransactions || {})[transactionId];
+      if ((store.paytmPayoutPostings || []).some(x => x.transactionIds.includes(transactionId))) throw new Error('A posted payout link cannot be changed.');
+      const link = validateOrderLink(store, tx, orderId, orders(), saleRows(store), body.reason);
+      store.paytmOrderLinks = store.paytmOrderLinks || {};
+      const before = store.paytmOrderLinks[transactionId] || null;
+      store.paytmOrderLinks[transactionId] = { ...link, by: req.user.username, at: new Date().toISOString() };
+      audit(store, req, 'PAYTM_ORDER_LINKED', 'paytm_transaction', transactionId, { nature: 'SANKI', account: CLEARING, before, after: store.paytmOrderLinks[transactionId] });
+      saveStore(store);
+      res.json({ success: true, view: view(store) });
+    } catch (error) { res.status(400).json({ success: false, error: error.message }); }
+  });
+  router.post('/api/expenses/paytm-reports/post-payout', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), body = req.body || {}, payoutId = String(body.payoutId || ''), bankTransactionId = String(body.bankTransactionId || '');
+    try {
+      const { payout, bank, linked } = validatePayoutPosting(store, payoutId, bankTransactionId, saleRows(store));
+      const postedAt = new Date().toISOString();
+      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId), orderNumbers: linked.map(x => x.orderNumber), bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, gross: payout.gross, commission: payout.commission, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
+      store.paytmPayoutPostings = store.paytmPayoutPostings || [];
+      store.paytmPayoutPostings.push(posting);
+      store.reconciliationExpenses = store.reconciliationExpenses || [];
+      if (payout.commission + payout.gst > 0) store.reconciliationExpenses.push({ id: `BRE-${posting.id}`, nature: 'SANKI', date: bank.date, amount: Math.round((payout.commission + payout.gst) * 100) / 100, account: CLEARING, category: 'PAYTM CHARGES', type: 'running', vendor: 'Paytm', particulars: `Paytm charges for payout ${payoutId}; commission ${payout.commission}, GST ${payout.gst}`, paytmPostingId: posting.id, bankTransactionId, createdBy: req.user.username, createdAt: postedAt });
+      store.bankDateOverrides = store.bankDateOverrides || {};
+      store.bankDateOverrides[posting.id] = { bankDate: bank.date, originalDate: payout.payoutDate, bankTransactionId, bankReference: payout.utr, remark: 'Paytm payout posted from detailed transaction report', by: req.user.username, at: postedAt, reconciliationDraft: posting.id };
+      audit(store, req, 'PAYTM_PAYOUT_POSTED', 'paytm_payout', payoutId, { nature: 'SANKI', account: BANK, after: posting });
+      saveStore(store);
+      res.json({ success: true, posting, view: view(store) });
+    } catch (error) { res.status(400).json({ success: false, error: error.message }); }
   });
 }
 function differs(a, b) {
