@@ -634,6 +634,7 @@ function indiaBusinessDate(value=new Date()){
   if(Number.isNaN(date.getTime()))return'';
   return date.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'});
 }
+function paytmSalesInScope(date){return date>=PAYTM_START_DATE&&date<=indiaBusinessDate();}
 function applySep11PrashantReimbursementDateCorrection(s){
   const key='correct-ex-00300-ex-00301-payment-date-to-2026-09-11-v1',from='2026-09-10',to='2026-09-11',now=new Date().toISOString();
   s.oneTimeMigrations=s.oneTimeMigrations||{};
@@ -972,7 +973,7 @@ function salesLedgerEntries(accountingStore) {
       if(storeCredit&&!paytm&&!cash)return; // no fresh money entered a bank/gateway
       const date=String(x.processedAt||x.createdAt||'').slice(0,10);
       const bankLinked=!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId]||!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId+'/NONCASH'];
-      const paytmBound=postedPaytmOrders.has(String(x.id))||(!bankLinked&&(paytm||String(x.channel||'').toLowerCase()==='pos'));
+      const paytmBound=postedPaytmOrders.has(String(x.id))||(!bankLinked&&paytmSalesInScope(date)&&(paytm||String(x.channel||'').toLowerCase()==='pos'));
       const nonCashDefault=paytmBound?PAYTM_CLEARING_ACCOUNT:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT);
       const correctedCash=override?num(override.cashAmount):explicitCash;
       if(correctedCash!=null){
@@ -981,7 +982,7 @@ function salesLedgerEntries(accountingStore) {
         if(nonCashAmount>0)rows.push(Object.assign({id:baseId+'/NONCASH',account:nonCashAccount,amount:nonCashAmount,originalAmount:nonCashAmount,allocationPart:'non_cash'},common));
         return;
       }
-      const freshPaytm=num(x.paytmAmount||x.paytmPaidAmount||x.freshPaymentAmount)||(paytmBound||date>=SHOPIFY_DIRECT_TO_AXIS_FROM?gross:0);
+      const freshPaytm=num(x.paytmAmount||x.paytmPaidAmount||x.freshPaymentAmount)||(paytm||paytmBound||date>=SHOPIFY_DIRECT_TO_AXIS_FROM?gross:0);
       const amount=cash?roundCashSale(gross):freshPaytm;
       if(!(amount>0))return;
       rows.push({ id:baseId, orderId:String(x.id), orderNumber:orderNo||String(x.name||x.id), date, account:cash?DEFAULT_COUNTER_CASH:nonCashDefault, amount, gross, storeCreditUsed:Math.max(0,gross-amount), paymentGateways:x.paymentGateways||[], description:'Shopify sale · '+(x.name||x.id)+' · '+(x.channel||'') });
@@ -2558,7 +2559,7 @@ function shopifySaleForAllocation(saleId){
   try{const shop=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')),order=(shop.orders||{})[id.slice(8)];if(!order)return null;return{id,order,gross:roundMoney(num(order.total)-num(order.refundAmount)),date:String(order.processedAt||order.createdAt||'').slice(0,10)};}catch{return null;}
 }
 function applySaleAllocation(s,req,sale,cashAmount,reason,requestedBy){
-  const before=(s.saleAllocationOverrides||{})[sale.id]||null,now=new Date().toISOString(),paytmBound=/paytm/i.test((sale.order.paymentGateways||[]).join(' '))||String(sale.order.channel||'').toLowerCase()==='pos',nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(sale.date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT),record={saleId:sale.id,orderId:String(sale.order.id),orderNumber:String(sale.order.orderNumber||sale.order.name||sale.order.id),gross:sale.gross,cashAmount:roundMoney(cashAmount),nonCashAmount:roundMoney(sale.gross-cashAmount),cashAccount:DEFAULT_COUNTER_CASH,nonCashAccount,reason,requestedBy:requestedBy||req.user.username,approvedBy:req.user.username,approvedAt:now};
+  const before=(s.saleAllocationOverrides||{})[sale.id]||null,now=new Date().toISOString(),paytmBound=paytmSalesInScope(sale.date)&&(/paytm/i.test((sale.order.paymentGateways||[]).join(' '))||String(sale.order.channel||'').toLowerCase()==='pos'),nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(sale.date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT),record={saleId:sale.id,orderId:String(sale.order.id),orderNumber:String(sale.order.orderNumber||sale.order.name||sale.order.id),gross:sale.gross,cashAmount:roundMoney(cashAmount),nonCashAmount:roundMoney(sale.gross-cashAmount),cashAccount:DEFAULT_COUNTER_CASH,nonCashAccount,reason,requestedBy:requestedBy||req.user.username,approvedBy:req.user.username,approvedAt:now};
   s.saleAllocationOverrides=s.saleAllocationOverrides||{};s.saleAllocationOverrides[sale.id]=record;
   audit(s,req,'SALE_ALLOCATION_CORRECTED','sale',sale.id,{nature:'SANKI',account:DEFAULT_COUNTER_CASH,before,after:record,note:reason});
   return record;
