@@ -209,6 +209,22 @@
     <div class="proof-tools"><button type="button" id="proofZoomOut" aria-label="Zoom out">−</button><button type="button" id="proofReset" aria-label="Reset zoom">↺</button><button type="button" id="proofZoomIn" aria-label="Zoom in">＋</button><button type="button" id="proofClose" aria-label="Close">×</button></div>
   </div>
 
+  <dialog id="lgPayDlg"><div class="dlg">
+    <h3>Record Sourcing Vendor Payment</h3>
+    <p class="sub">Record a payment already made against a finalized LG bill. Partial payments remain due on the same bill.</p>
+    <div class="grid">
+      <div class="fld full"><label>LG bill</label><select id="lgPayBill"></select></div>
+      <div class="fld"><label>Paying SANKI account</label><select id="lgPayAccount"></select></div>
+      <div class="fld"><label>Amount paid ₹</label><input id="lgPayAmount" type="number" min="1" step="1"><button type="button" class="btn mini ghost" id="lgPayFull">Use full outstanding</button></div>
+      <div class="fld"><label>Payment date</label><input id="lgPayDate" type="date"></div>
+      <div class="fld"><label>Method</label><select id="lgPayType"><option>UPI</option><option>Bank Transfer</option><option>NEFT</option><option>IMPS</option><option>Cash</option></select></div>
+      <div class="fld"><label>Payment reference / ID</label><input id="lgPayReference"></div>
+      <div class="fld full"><label>Payment proof (required)</label><input id="lgPayProof" type="file" accept="image/*" multiple></div>
+      <div class="fld full"><label>Note (optional)</label><input id="lgPayNote"></div>
+    </div>
+    <div id="lgPayDue" class="hint"></div><div id="lgPayMessage" class="msg"></div>
+    <div class="row-actions"><button type="button" class="btn green" id="lgPaySave">Record payment</button><button type="button" class="btn ghost" id="lgPayCancel">Cancel</button></div>
+  </div></dialog>
   <!-- payment dialog -->
   <dialog id="payDlg"><div class="dlg">
     <h3 id="payTitle">Record payment</h3>
@@ -559,7 +575,7 @@
     function renderLog(){
       el('panel').innerHTML =
       '<div class="card">'+
-      ((cfg.isOwner||String(cfg.me||'').trim().toLowerCase()==='prashant')?'<div class="fld" style="margin-bottom:16px"><label>What are you recording?</label><select id="entryKind"><option value="expense">Vendor / other expense</option><option value="advance">Salary advance</option></select><div class="hint">Salary payments are recorded on the Salary page. This option records only an advance.</div></div>':'')+
+      ((cfg.isOwner||cfg.isAdmin||String(cfg.me||'').trim().toLowerCase()==='prashant')?'<div class="fld" style="margin-bottom:16px"><label>What are you recording?</label><select id="entryKind"><option value="expense">Vendor / other expense</option><option value="advance">Salary advance</option>'+(cfg.isAdmin?'<option value="sourcing">Sourcing Vendor Payment</option>':'')+'</select><div class="hint">Salary payments are recorded on the Salary page. This option records only an advance.</div></div>':'')+
       '<div id="normalExpenseFields" class="grid">'+
         '<div class="fld"><label>Date</label><input type="date" id="f_date" value="'+today()+'"></div>'+
         '<div class="fld" id="normalAmountWrap"><label>Amount ₹</label><input type="number" id="f_amount" min="0" step="1" placeholder="0"></div>'+
@@ -595,6 +611,7 @@
         '<div class="fld full" id="seProofWrap"><label>Payment screenshot / proof (required)</label><input id="seProof" type="file" accept="image/*,.pdf" multiple></div>'+
         '<div class="fld full hint" id="seAdvanceHint">The advance is dated when it was paid and remains recoverable. It does not pay salary or change the payroll sheet.</div>'+
       '</div><div class="row-actions"><button class="btn primary" id="seSave">Record advance</button><span class="muted" id="seState"></span></div></div>'+
+      '<div id="lgEntryFields" style="display:none"><h3>Sourcing Vendor Payment</h3><p class="sub">Select a finalized LG bill to record a full or partial payment.</p><div id="lgEntryList" class="muted">Loading pending LG bills...</div></div>'+
       '<div class="row-actions" id="normalExpenseActions"><button class="btn primary" id="saveExp">Log expense (pending)</button><span class="muted" id="upState"></span></div>'+
       '</div>'+(cfg.isOwner?'<div class="card"><b>Telegram notifications (Owner only)</b><div class="hint">A user can link more than one Telegram account. Generate a 15-minute link, open it in the additional Telegram account and tap Start. Existing links remain active.</div><div id="telegramBotStatus" class="hint">Checking bot connection…</div><div class="row-actions"><select id="telegramUser"><option value="">Loading users…</option></select><button class="btn ghost mini" id="linkTelegram">Add another Telegram</button><button class="btn ghost mini" id="testTelegram">Test all linked accounts</button><button class="btn ghost mini" id="unlinkTelegram">Disconnect all</button><button class="btn ghost mini" id="setupTelegram">Connect existing bot</button></div><div id="telegramUserStatus" class="hint"></div><div id="telegramConnections" class="hint"></div><div id="telegramLinkResult" class="hint"></div></div>':'');
 
@@ -620,8 +637,9 @@
     }
     var salaryEntryAccounts=[];
     function toggleSalaryEntry(){
-      var advance=el('entryKind')&&el('entryKind').value==='advance';
-      el('normalExpenseFields').style.display=advance?'none':'';el('normalExpenseActions').style.display=advance?'none':'';el('salaryEntryFields').style.display=advance?'':'none';
+      var kind=el('entryKind')?el('entryKind').value:'expense',advance=kind==='advance',sourcing=kind==='sourcing';
+      el('normalExpenseFields').style.display=advance||sourcing?'none':'';el('normalExpenseActions').style.display=advance||sourcing?'none':'';el('salaryEntryFields').style.display=advance?'':'none';el('lgEntryFields').style.display=sourcing?'':'none';
+      if(sourcing)loadLgPayables().catch(function(){});
       if(!advance)return;
       el('seAdvanceHint').textContent=cfg.isOwner?'The advance is recorded on its payment date and remains recoverable. It does not change salary.':'The advance is sent to the Owner for approval. After approval and posting, it is recorded on the payment date. It does not change salary.';
       el('seSave').textContent=cfg.isOwner?'Record advance':'Request advance approval';
@@ -859,6 +877,39 @@
       var audits=(e.auditHistory||[]).length?'<div class="expense-section"><b>Edit history</b>'+(e.auditHistory||[]).slice().reverse().map(function(a){return '<div class="payment-entry"><span>'+esc((a.editedAt||'').replace('T',' ').slice(0,16))+' · '+esc(a.editedBy||'')+' · '+esc(a.reason||'')+'<br><span class="muted">'+(a.changes||[]).map(function(c){return esc(c.field+': '+String(c.before)+' → '+String(c.after));}).join(' · ')+'</span></span><b>'+((a.changes||[]).length)+' field(s)</b></div>';}).join('')+'</div>':'';
       return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+(latestReference?' │ Ref '+esc(latestReference):'')+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Transaction ref: '+esc(latestReference||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
     }
+    var lgPayablesById={};
+    function loadLgPayables(){
+      return api('/api/expenses/pending-payments?nature=SANKI').then(function(d){
+        if(!d.success)throw new Error(d.error||'Could not load LG bills.');
+        lgPayablesById={};(d.purchases||[]).forEach(function(p){lgPayablesById[p.id]=p;});
+        if(el('lgEntryList')){
+          el('lgEntryList').innerHTML=(d.purchases||[]).length?(d.purchases||[]).map(function(p){return '<div class="payment-entry"><span><b>'+esc(p.billNo)+'</b> · '+esc(p.date)+' · '+(p.poIds||[]).length+' purchase bill(s)<br><span class="muted">Paid '+fmt(p.paidAmount)+' of '+fmt(p.amount)+'</span></span><span><b>'+fmt(p.balanceDue)+' due</b> <button type="button" class="btn mini green" data-pay-lg="'+esc(p.id)+'">Record payment</button></span></div>';}).join(''):'<span class="muted">No finalized LG bills have an outstanding balance.</span>';
+          Array.prototype.forEach.call(el('lgEntryList').querySelectorAll('[data-pay-lg]'),function(button){button.onclick=function(){openLgPayment(button.getAttribute('data-pay-lg'));};});
+        }
+        return d.purchases||[];
+      }).catch(function(error){if(el('lgEntryList'))el('lgEntryList').textContent=error.message;throw error;});
+    }
+    function chooseLgPayment(){var p=lgPayablesById[el('lgPayBill').value];if(!p)return;el('lgPayAmount').value=p.balanceDue;el('lgPayAmount').max=p.balanceDue;el('lgPayDue').textContent='LG bill '+p.billNo+' · Outstanding '+fmt(p.balanceDue)+' · '+(p.poIds||[]).length+' linked purchase bill(s).';}
+    window.openLgPayment=function(id){
+      var dialog=el('lgPayDlg');el('lgPayMessage').textContent='Loading finalized LG bills…';
+      el('lgPayAccount').innerHTML='<option value="">Choose SANKI paying account</option>'+opts(payingAccountsForNature('SANKI'));
+      el('lgPayDate').value=today();el('lgPayType').value='UPI';el('lgPayProof').value='';el('lgPayReference').value='';el('lgPayNote').value='';
+      if(!dialog.open)dialog.showModal();
+      loadLgPayables().then(function(items){el('lgPayBill').innerHTML=items.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.billNo)+' · '+fmt(p.balanceDue)+' due</option>';}).join('');if(id&&items.some(function(p){return p.id===id;}))el('lgPayBill').value=id;chooseLgPayment();el('lgPayMessage').textContent=items.length?'':'No finalized LG bills are pending.';}).catch(function(error){el('lgPayMessage').textContent=error.message;});
+    };
+    el('lgPayBill').addEventListener('change',chooseLgPayment);
+    el('lgPayFull').addEventListener('click',chooseLgPayment);
+    el('lgPayCancel').addEventListener('click',function(){el('lgPayDlg').close();});
+    el('lgPaySave').addEventListener('click',function(){
+      var p=lgPayablesById[el('lgPayBill').value],amount=Number(el('lgPayAmount').value),account=el('lgPayAccount').value,files=el('lgPayProof').files,button=el('lgPaySave');
+      if(!p||!Number.isInteger(amount)||amount<1||amount>p.balanceDue||!account||!el('lgPayDate').value||!files.length){el('lgPayMessage').textContent='Choose an LG bill, account, payment date, proof and whole-rupee amount up to the outstanding balance.';return;}
+      button.disabled=true;el('lgPayMessage').textContent='Uploading payment proof…';
+      uploadFiles(files,'SANKI').then(function(proofs){return api('/api/expenses/procurement-lg/'+encodeURIComponent(p.id)+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:amount,account:account,date:el('lgPayDate').value,paymentType:el('lgPayType').value,reference:el('lgPayReference').value,note:el('lgPayNote').value,paymentProofs:proofs})});}).then(function(d){
+        button.disabled=false;if(!d.success){el('lgPayMessage').textContent=d.error||'Could not record payment.';return;}
+        el('lgPayDlg').close();setMsg('Payment '+d.batchPaymentId+' recorded against '+p.billNo+'. Remaining '+fmt(d.payable.balanceDue)+'.',true);
+        if(tab==='vendors')loadVendors();else if(tab==='pending')loadPendingPayments();else if(tab==='log')loadLgPayables();
+      }).catch(function(error){button.disabled=false;el('lgPayMessage').textContent=error.message||'Could not record LG payment.';});
+    });
     function renderPendingPayments(){
       el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-pdays="7">Last 7 days</button><button class="btn mini ghost" data-pdays="30">Last 30 days</button><button class="btn mini ghost" data-pdays="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="pf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="pf_from"></div><div class="fld"><label>To</label><input type="date" id="pf_to" value="'+today()+'"></div><div class="fld"><label>Payables</label><select id="pf_bucket"><option value="">All</option><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option></select></div><div class="fld"><label>Vendor</label><input id="pf_vendor" placeholder="Search vendor"></div><button class="btn ghost mini" id="pf_go">Filter</button></div><div class="filters"><div class="fld"><label>Outstanding total</label><select id="pf_total_bucket"><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option><option value="">All</option></select></div></div><div class="stats" id="pstats"></div><div id="ptable" class="muted">Loading…</div></div>';
       Array.prototype.forEach.call(el('panel').querySelectorAll('[data-pdays]'),function(b){b.onclick=function(){el('pf_from').value=this.dataset.pdays==='month'?today().slice(0,8)+'01':dateDaysAgo(Number(this.dataset.pdays));loadPendingPayments();};});
@@ -891,7 +942,7 @@
     }
     function vendorPayableGroups(expenses){var groups={};(expenses||[]).forEach(function(e){var key=String(e.vendor||'Unspecified vendor').trim().toLocaleLowerCase('en-IN'),g=groups[key]||(groups[key]={vendor:e.vendor||'Unspecified vendor',items:[],due:0});g.items.push(e);g.due+=Number(e.balanceDue||0);});return Object.values(groups).sort(function(a,b){return a.vendor.localeCompare(b.vendor,'en',{sensitivity:'base',numeric:true});}).map(function(g){if(g.items.length===1)return expenseCard(g.items[0]);return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(g.vendor)+'<div class="claim-vendor">'+g.items.length+' approved bills grouped under this vendor</div></div><div class="claim-amount">'+fmt(g.due)+' due</div></div></summary><div class="claim-detail"><div class="claim-list">'+g.items.sort(function(a,b){return String(a.date+a.id).localeCompare(String(b.date+b.id));}).map(expenseCard).join('')+'</div></div></details>';}).join('');}
     function procurementPayableCard(e){
-      if(e.source==='procurement_lg')return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">LG date '+esc(e.date)+' · LG bill '+esc(e.billNo)+' · <span class="tag">LOGISTICS</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor)+'<div class="claim-vendor">'+(e.poIds||[]).length+' purchase invoice'+((e.poIds||[]).length===1?'':'s')+' · '+(e.finalized&&e.finalized.basis==='vendor'?'Vendor invoice amount':'Purchase Summary amount')+'</div></div><div class="claim-amount">'+fmt(e.balanceDue)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Finalized amount: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Balance: '+fmt(e.balanceDue)+'</span></div>'+procurementCostHtml(e)+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div><div class="expense-actions"><a class="btn mini green" href="/procurement.html">Record LG payment in Purchases</a></div></div></details>';
+      if(e.source==='procurement_lg')return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">LG date '+esc(e.date)+' · LG bill '+esc(e.billNo)+' · <span class="tag">LOGISTICS</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor)+'<div class="claim-vendor">'+(e.poIds||[]).length+' purchase invoice'+((e.poIds||[]).length===1?'':'s')+' · '+(e.finalized&&e.finalized.basis==='vendor'?'Vendor invoice amount':'Purchase Summary amount')+'</div></div><div class="claim-amount">'+fmt(e.balanceDue)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Finalized amount: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Balance: '+fmt(e.balanceDue)+'</span></div>'+procurementCostHtml(e)+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div><div class="expense-actions"><button class="btn mini green" onclick="openLgPayment(\''+e.id+'\')">Record LG payment</button></div></div></details>';
       return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date">'+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">ADVANCED PURCHASE</span></div><span class="badge b-'+esc(e.status)+'">'+esc(e.status)+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor)+'<div class="claim-vendor">China supplier: '+esc(e.supplier||'—')+(e.billNo?' · Bill '+esc(e.billNo):'')+'</div></div><div class="claim-amount">'+fmt(e.balanceDue)+' due</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Total landed cost: '+fmt(e.amount)+'</span><span>Paid: '+fmt(e.paidAmount)+'</span><span>Balance: '+fmt(e.balanceDue)+'</span><span>Includes goods + China-to-store transport</span></div><div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div><div class="expense-actions"><button class="btn mini green" onclick="openPurchasePay(\''+e.id+'\')">Record mediator payment</button></div></div></details>';
     }
     window.setMediator=function(current){var name=prompt('Logistics mediator / payee name:',current||'');if(!name||!name.trim())return;api('/api/expenses/procurement-payables/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediator:name.trim()})}).then(function(d){if(d.success){setMsg('Purchase mediator updated.',true);loadPendingPayments();}else setMsg(d.error||'Could not update mediator.',false);});};
@@ -1184,7 +1235,7 @@
       var body='<tr class="ledger-opening"><td>'+esc(el('vf_from').value||'—')+'</td><td>Opening balance</td><td>Opening</td><td>—</td><td class="ledger-money">—</td><td class="ledger-money">—</td><td class="ledger-money">'+vendorBalanceHtml(opening)+'</td></tr>';
       body+=rows.map(function(x){
         var raw=expensesById[x.entryId],due=raw?Math.max(0,Number(raw.amount||0)-Number(raw.paidAmount||0)):0;
-        var action=raw&&x.kind==='expense'&&due>0&&!raw.paidAlready?(raw.source==='procurement_lg'?'<div><a class="btn mini green" href="/procurement.html">Record LG payment in Purchases</a></div>':raw.source==='procurement'?'<div><button class="btn mini green" onclick="openPurchasePay(\''+raw.id+'\')">Record payment</button></div>':'<div><button class="btn mini green" onclick="openPay(\''+raw.id+'\')">Record payment</button></div>'):' ';
+        var action=raw&&x.kind==='expense'&&due>0&&!raw.paidAlready?(raw.source==='procurement_lg'?'<div><button class="btn mini green" onclick="openLgPayment(\''+raw.id+'\')">Record LG payment</button></div>':raw.source==='procurement'?'<div><button class="btn mini green" onclick="openPurchasePay(\''+raw.id+'\')">Record payment</button></div>':'<div><button class="btn mini green" onclick="openPay(\''+raw.id+'\')">Record payment</button></div>'):' ';
         return '<tr><td>'+esc(x.date||'—')+'</td><td>'+esc(x.particulars||'—')+procurementCostHtml(raw)+action+'</td><td>'+esc(x.type||'—')+'</td><td>'+esc(x.reference||'—')+'</td><td class="ledger-money pos">'+(Number(x.in||0)>0?fmt(x.in):'—')+'</td><td class="ledger-money neg">'+(Number(x.out||0)>0?fmt(x.out):'—')+'</td><td class="ledger-money">'+vendorBalanceHtml(x.balance)+'</td></tr>';
       }).join('');
       if(!rows.length)body+='<tr><td colspan="7" class="muted">No vendor transactions in this period.</td></tr>';

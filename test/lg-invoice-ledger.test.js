@@ -85,3 +85,53 @@ test('sourcing ledger LG bill expands to show purchase and vendor calculation di
   assert.match(output, /Final total \(INR\)/);
   assert.match(output, /SBGB174 bill value \(Yuan\)/);
 });
+
+test('LG payment records partial and final allocations under one reference per payment', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../modules/expenses.js'), 'utf8');
+  const start = source.indexOf("router.post('/api/expenses/procurement-lg/:id/pay'");
+  const end = source.indexOf("router.post('/api/expenses/procurement-payables/:id/pay'", start);
+  let handler, saved = 0, nonce = 0;
+  const store = { procurementAccounting: { mediator: 'LG', paymentsByPo: {} } };
+  const project = () => {
+    const paid = id => ((store.procurementAccounting.paymentsByPo[id] || {}).payments || []).reduce((n, p) => n + p.amount, 0);
+    const children = [{ id: 'PO-A', billNo: '101', supplier: 'A', balanceDue: 600 - paid('PO-A') },
+      { id: 'PO-B', billNo: '102', supplier: 'B', balanceDue: 400 - paid('PO-B') }];
+    return [{ id: 'CVI-1', source: 'procurement_lg', finalized: { basis: 'vendor' }, poIds: ['PO-A', 'PO-B'],
+      billNo: 'LG-001', purchaseBills: children, balanceDue: children.reduce((n, p) => n + p.balanceDue, 0),
+      paidAmount: paid('PO-A') + paid('PO-B') }];
+  };
+  const context = { router: { post: (_, fn) => { handler = fn; } }, canApprove: () => true,
+    loadStore: () => store, procurementLedgerPayables: project, round0: Math.round,
+    allowedPayingAccount: (_req, _nature, account) => account === 'Bank 1234' ? account : undefined,
+    proofList: (many, one) => many || (one ? [one] : []), PAYMENT_TYPES: ['UPI','Bank Transfer'],
+    crypto: { randomBytes: () => Buffer.from(String(++nonce).padStart(3, '0')) }, procurementAccounting: s => s.procurementAccounting,
+    audit: () => {}, saveStore: () => { saved++; }, Date, Math, Number, String, Array, Set, Buffer };
+  vm.runInNewContext(source.slice(start, end), context);
+  const pay = (amount, method = 'UPI') => { let status = 200, body;
+    handler({ params: { id: 'CVI-1' }, body: { amount, account: 'Bank 1234', date: '2026-09-18',
+      reference: 'UTR-123', paymentProofs: ['/proof.jpg'], paymentType: method }, user: { username: 'owner' } },
+    { status(n) { status = n; return this; }, json(x) { body = x; } }); return { status, body }; };
+  assert.equal(pay(1001).status, 400);
+  const first = pay(250);assert.equal(first.body.success, true);assert.equal(first.body.payable.balanceDue, 750);
+  assert.equal(first.body.allocations.reduce((n, a) => n + a.amount, 0), 250);
+  assert.equal(new Set(first.body.allocations.map(a => a.poId)).size, 2);
+  const second = pay(750, 'NEFT');assert.equal(second.body.success, true);assert.equal(second.body.payable.balanceDue, 0);
+  assert.equal(pay(1).status, 400);
+  assert.equal(saved, 2);
+  const payments = Object.values(store.procurementAccounting.paymentsByPo).flatMap(x => x.payments);
+  assert.equal(new Set(payments.map(x => x.batchPaymentId)).size, 2);
+  assert.ok(payments.every(x => x.combinedInvoiceId === 'CVI-1' && x.bankReference === 'UTR-123'));
+  assert.ok(payments.some(x => x.paymentType === 'NEFT'));
+});
+
+test('legacy Logistics Mediator label appears as LG without changing payment history', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../modules/expenses.js'), 'utf8');
+  const start = source.indexOf('function procurementAccounting(s)');
+  const end = source.indexOf('function loadProcurementStore()', start);
+  const migrate = vm.runInNewContext(source.slice(start, end) + '\nprocurementAccounting;');
+  const history = { 'PO-A': { payments: [{ amount: 250 }] } };
+  const store = { procurementAccounting: { mediator: 'Logistics Mediator', paymentsByPo: history } };
+  assert.equal(migrate(store).mediator, 'LG');
+  assert.equal(store.procurementAccounting.paymentsByPo, history);
+  assert.equal(migrate({}).mediator, 'LG');
+});

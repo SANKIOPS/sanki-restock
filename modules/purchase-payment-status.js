@@ -26,6 +26,6 @@ function purchasePaymentStatus(po, accounting, includeDetails, defaults, finaliz
   const paidAmount = Math.round(payments.reduce((n, p) => n + num(p.amount), 0));
   return { status: amount > 0 && paidAmount >= amount ? 'paid' : paidAmount > 0 ? 'partially_paid' : 'unpaid',
     amount, paidAmount, balanceDue: Math.max(0, amount - paidAmount),
-    ...(includeDetails ? { mediator: state && state.mediator || cfg.mediator || 'Logistics Mediator', payments } : {}) };
+    ...(includeDetails ? { mediator: state && state.mediator || cfg.mediator || 'LG', payments } : {}) };
 }
 module.exports = { purchasePaymentStatus, purchaseBillingAmount };
