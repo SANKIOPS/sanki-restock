@@ -411,14 +411,18 @@ test('Prashant Axis 3645 is available for advances and full or partial salary pa
 
 test('expense entry routes salary and advances into employee records without duplicate expenses',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
-  assert.match(html,/Salary payment — full or part/);assert.match(html,/Salary advance/);
-  assert.match(html,/\/api\/salary\/payments\/batch/);assert.match(html,/\/api\/salary\/advances/);
+  assert.match(html,/Pay employee/);assert.match(html,/id="seSalaryAmount"/);assert.match(html,/id="seAdvanceAmount"/);
+  assert.match(html,/\/api\/salary\/pay-employee/);assert.doesNotMatch(html,/<option value="advance">Salary advance<\/option>/);
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Quick Salary Employee',salary:10000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-04'},body:{empId:emp.id,paidDays:30}});
-  const body={ym:'2099-04',date:'2099-05-10',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-salary.jpg',items:[{empId:emp.id,amount:4000,modificationReason:'Part salary',expectedRemaining:10000}]};
-  const paid=invoke('POST','/api/salary/payments/batch',{body,role:'owner'});assert.equal(paid.status,200);
-  assert.equal(invoke('POST','/api/salary/payments/batch',{body,role:'owner'}).status,409,'stale form cannot post the same payment twice');
-  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-04'}}).body.rows.find(x=>x.id===emp.id).balance,6000);
+  const body={empId:emp.id,ym:'2099-04',date:'2099-05-10',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-salary.jpg',amount:12000,salaryAmount:10000,advanceAmount:2000,expectedRemaining:10000};
+  const paid=invoke('POST','/api/salary/pay-employee',{body,role:'owner'});assert.equal(paid.status,200);
+  assert.equal(paid.body.salaryAmount,10000);assert.equal(paid.body.advanceAmount,2000);assert.ok(paid.body.salaryBatchId);assert.ok(paid.body.advanceId);
+  assert.equal(invoke('POST','/api/salary/pay-employee',{body,role:'owner'}).status,409,'stale form cannot post the same payment twice');
+  assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-04'}}).body.rows.find(x=>x.id===emp.id).balance,0);
+  const staffPayment=invoke('POST','/api/salary/pay-employee',{body:{...body,date:'2099-05-12',amount:500,salaryAmount:0,advanceAmount:500,expectedRemaining:0,proof:'/api/expenses/photo/staff-advance.jpg'},role:'admin',username:'prashant'});
+  assert.equal(staffPayment.status,200);assert.equal(staffPayment.body.advancePendingApproval,true);assert.ok(staffPayment.body.requestId);
+  assert.equal(invoke('POST','/api/salary/pay-employee',{body:{...body,date:'2099-05-13',amount:100,salaryAmount:0,advanceAmount:100,expectedRemaining:0},role:'admin',username:'unrelated'}).status,403);
   const advanceBody={empId:emp.id,amount:500,date:'2099-05-11',account:'Prashant Axis 3645',proof:'/api/expenses/photo/quick-advance.jpg'};
   const request=invoke('POST','/api/salary/advances',{body:advanceBody,role:'admin',username:'prashant'});
   assert.equal(request.status,200);assert.ok(request.body.request.proofs.length);
