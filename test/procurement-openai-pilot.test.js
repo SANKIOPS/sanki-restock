@@ -52,13 +52,25 @@ test('selected model origin, fit and bag colour reach the paid image prompt',()=
   const chosen={modelOrigin:'International',femaleComplexion:'Fair',fit:'Fitted',bagStyle:'Structured handbag',bagColour:'Beige'};
   const prompt=pilot.imagePrompt({...group,line:'casuals'},'model-front',chosen);
   assert.match(prompt,/international non-Indian woman with fair, light complexion/);
-  assert.match(prompt,/fitted at the natural shoulder with set-in sleeves/);
+  assert.match(prompt,/fitted silhouette ONLY if the original garment visibly has that construction/);
   assert.match(prompt,/beige structured handbag/);
   assert.doesNotMatch(prompt,/black structured handbag/);
-  assert.match(pilot.imagePrompt({...group,line:'casuals',fit:'Muscle Fit'},'model-front',{bagStyle:'Structured handbag'}),/no dropped shoulder seam/);
+  assert.match(pilot.imagePrompt({...group,line:'casuals',fit:'Muscle Fit'},'model-front',{bagStyle:'Structured handbag'}),/do not infer a fit from purchase labels/);
   assert.match(html,/sel\('modelOrigin','Model origin',MODEL_ORIGINS,s\.modelOrigin\)/);
   assert.match(html,/sel\('bagColour','Bag colour',BAG_COLOURS,s\.bagColour\)/);
   assert.match(html,/bagColour:s\.bagColour\|\|'Auto',modelOrigin:s\.modelOrigin\|\|'Indian'/);
+});
+
+test('wrong purchase labels never tell the image model to turn a knit into a T-shirt',()=>{
+  const mislabeled={...group,productType:'T-Shirt',fit:'Muscle Fit',colour:'White',audience:'Women'};
+  for(const type of ['front','model-front','model-side']) {
+    const prompt=pilot.imagePrompt(mislabeled,type,{fit:'Slim fit'});
+    assert.match(prompt,/long-sleeve V-neck knit must remain a long-sleeve V-neck knit/);
+    assert.match(prompt,/Ignore any contradictory purchase title, product type or fit setting/);
+    assert.doesNotMatch(prompt,/actual White T-Shirt|actual .*Muscle Fit/);
+  }
+  assert.match(pilot.imagePrompt(mislabeled,'front'),/do not add bust shaping or make a loose garment fitted/);
+  assert.match(pilot.imagePrompt(mislabeled,'model-side',{fit:'Slim fit'},true),/ORIGINAL PRODUCT PHOTO and overrides the first/);
 });
 
 test('image request sends one referenced edit, medium quality and no retry',async()=>{
@@ -207,6 +219,7 @@ test('independent visual check sends original, candidate and matching model fron
     assert.equal(body.store,false);
     assert.equal(body.text.format.type,'json_schema');
     assert.equal(body.input[0].content.filter(x=>x.type==='input_image').length,3);
+    assert.doesNotMatch(body.input[0].content[0].text,/"productType":"T-Shirt"|"originalFit":"Muscle Fit"/);
     assert.match(body.input[0].content[0].text,/Off-white, beige or other neutral trouser COLOUR is not evidence/);
     assert.match(body.input[0].content[0].text,/black loafers do NOT fail/);
     assert.match(body.input[0].content[0].text,/a tuck, changed pose, drape, lighting or camera angle alone does not prove a different fit/);
