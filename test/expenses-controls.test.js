@@ -2112,7 +2112,7 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   assert.equal(axis.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000);
   assert.equal(axis.find(x=>x.id==='SHOPIFY/afterToday').credit,10000);
   const receipt=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-08-23');assert.equal(receipt.credit,50000);assert.deepEqual(receipt.connectedSales.map(x=>x.id),['SHOPIFY/paytm']);
-  const september=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-09-10');assert.equal(september.credit,20500);assert.deepEqual(september.connectedSales.map(x=>x.id),['SHOPIFY/direct','SHOPIFY/manualPos']);
+  const september=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-09-10');assert.equal(september.credit,12500);assert.deepEqual(september.connectedSales.map(x=>x.id),['SHOPIFY/direct']);
   assert.equal(clearing.some(x=>(x.connectedSales||[]).some(y=>['SHOPIFY/beforeStart','SHOPIFY/afterToday'].includes(y.id))),false);
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
@@ -2303,14 +2303,14 @@ test('IndusInd statement screenshots ignore reference digits and infer blank deb
 
 test('split Shopify sales credit only the cash portion and Admin corrections require Owner approval',()=>{
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{
-    split:{id:'split',name:'#SPLIT',orderNumber:9901,createdAt:'2026-09-12T10:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Cash','Paytm'],total:50000,refundAmount:0}
+    split:{id:'split',name:'#SPLIT',orderNumber:9901,createdAt:'2026-09-12T10:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Cash','Paytm'],total:50000,paytmAmount:25000,refundAmount:0}
   }}));
   let cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash',from:'2026-09-12',to:'2026-09-12'},role:'owner'}).body.entries;
-  assert.equal(cash.find(x=>x.id==='SHOPIFY/split').credit,50000,'ambiguous source data remains visible until reviewed');
+  assert.equal(cash.some(x=>x.id==='SHOPIFY/split'),false,'unknown cash amount is not guessed');
   const requested=invoke('POST','/api/expenses/sale-allocation',{role:'admin',body:{saleId:'SHOPIFY/split',cashAmount:25000,reason:'Customer paid half cash and half UPI'}});
   assert.equal(requested.status,200);assert.equal(requested.body.approved,false);
   cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash',from:'2026-09-12',to:'2026-09-12'},role:'owner'}).body.entries;
-  assert.equal(cash.find(x=>x.id==='SHOPIFY/split').credit,50000,'Admin request cannot change the ledger before Owner approval');
+  assert.equal(cash.some(x=>x.id==='SHOPIFY/split'),false,'Admin request cannot change the ledger before Owner approval');
   const adminBlocked=invoke('POST','/api/expenses/requests/:id/decide',{role:'admin',params:{id:requested.body.request.id},body:{approve:true}});assert.equal(adminBlocked.status,403);
   const approved=invoke('POST','/api/expenses/requests/:id/decide',{role:'owner',params:{id:requested.body.request.id},body:{approve:true}});assert.equal(approved.status,200);
   cash=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash',from:'2026-09-12',to:'2026-09-12'},role:'owner'}).body.entries;
