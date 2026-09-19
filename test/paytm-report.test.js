@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { parsePaytmReport, summarizePayouts } = require('../modules/paytm-report');
 const { registerPaytmReports } = require('../modules/paytm-reports-routes');
-const { validateOrderLink, validatePayoutPosting } = require('../modules/paytm-accounting');
+const { summarizeShopifyPayments, validateOrderLink, validatePayoutPosting } = require('../modules/paytm-accounting');
 
 const header = 'Transaction_ID,Transaction_Date,Status,Amount,Commission,GST,Settled_Amount,Payout_ID,Payout_Date,UTR_No.,Payment_Mode\n';
 const row = (id, date, amount, fee, gst, net, payout = 'P1') => `'${id}','${date}',SUCCESS,${amount},${fee},${gst},${net},'${payout}','18-09-2026',U123,UPI\n`;
@@ -46,9 +46,9 @@ test('Paytm report preview and confirmation import evidence without touching acc
 });
 
 test('reviewed Shopify links and exact UTR bank credit are required before payout posting', () => {
-  const tx = { transactionId: 'T1', date: '2026-09-17', amount: 100, commission: 1, gst: 0.18, settledAmount: 98.82, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123', posId: 'POS1' };
+  const tx = { transactionId: 'T1', rrn: '123456', date: '2026-09-17', amount: 100, commission: 1, gst: 0.18, settledAmount: 98.82, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123', posId: 'POS1' };
   const store = { paytmReportTransactions: { T1: tx }, paytmOrderLinks: {}, bankStatements: { 'Axis Bank 3448': { transactions: { b: { id: 'BTX-1', date: '2026-09-18', credit: 98.82, debit: 0, reference: 'PAYTM UTR123' } } } } };
-  const orders = [{ id: 'O1', orderNumber: 2801, financialStatus: 'paid', note: 'Paytm T1' }];
+  const orders = [{ id: 'O1', orderNumber: 2801, financialStatus: 'paid', note: 'Paytm 123456' }];
   const sales = [{ id: 'SHOPIFY/O1', orderId: 'O1', orderNumber: '2801', date: '2026-09-17', account: 'Axis Bank 3448', amount: 100 }];
   assert.throws(() => validatePayoutPosting(store, 'P1', 'BTX-1', sales), /Every Paytm payment/);
   const link = validateOrderLink(store, tx, '#2801', orders, sales, '');
@@ -71,6 +71,85 @@ test('manual amount-only link requires a reason and one-to-one order', () => {
   const link = validateOrderLink({}, tx, '2801', orders, sales, 'Reviewed Paytm receipt against Shopify sale');
   assert.equal(link.matchBasis, 'owner_reviewed');
   assert.throws(() => validateOrderLink({ paytmOrderLinks: { T2: link } }, tx, '2801', orders, sales, 'Reviewed Paytm receipt against Shopify sale'), /already linked/);
+});
+
+test('links the Shopify number field used by imported orders', () => {
+  const tx = { transactionId: 'T2728', date: '2026-08-25', amount: 15094, posId: 'POS1' };
+  const orders = [{ id: 'shopify-order-2728', number: 2728, financialStatus: 'paid', note: '' }];
+  const sales = [{ id: 'SHOPIFY/shopify-order-2728', orderId: 'shopify-order-2728', orderNumber: '2728', date: '2026-08-25', account: 'Paytm Settlement Clearing', amount: 15094 }];
+  const link = validateOrderLink({}, tx, '2728', orders, sales, 'Matched the Paytm receipt to order 2728');
+  assert.equal(link.orderId, 'shopify-order-2728');
+});
+
+test('split order links only the Paytm component and excludes store credit', () => {
+  const order = { id: 'split', number: 2845, financialStatus: 'paid', createdAt: '2026-09-19T12:00:00Z', total: 2498, storeCreditAmount: 1499, note: 'Paytm 123456' };
+  const tx = { transactionId: '123456', date: '2026-09-19', amount: 999, posId: 'POS1' };
+  const link = validateOrderLink({}, tx, '2845', [order], [], '');
+  assert.equal(link.amount, 999);
+  assert.equal(link.partial, true);
+  assert.equal(link.matchBasis, 'transaction_id_in_shopify_note');
+  assert.throws(() => validateOrderLink({}, { ...tx, amount: 1000 }, '2845', [order], [], ''), /store credit/);
+});
+
+test('Shopify sale/capture components never count authorization or store credit as Paytm', () => {
+  const summary = summarizeShopifyPayments([
+    { id: 1, kind: 'authorization', status: 'success', gateway: 'paytm', amount: '999.00' },
+    { id: 2, kind: 'capture', status: 'success', gateway: 'paytm', amount: '999.00' },
+    { id: 3, kind: 'sale', status: 'success', gateway: 'shopify_store_credit', amount: '1499.00' },
+    { id: 4, kind: 'sale', status: 'failure', gateway: 'paytm', amount: '100.00' }
+  ]);
+  assert.deepEqual([summary.paytmAmount, summary.storeCreditAmount, summary.cashAmount, summary.otherAmount], [999, 1499, 0, 0]);
+  assert.equal(summary.transactions.length, 2);
+});
+
+test('Shopify payment split sync caches exact successful components for review', async () => {
+  const store = {}, routes = {}, router = { get: (url, handler) => { routes[url] = handler; }, post: (url, ...handlers) => { routes[url] = handlers.at(-1); } };
+  registerPaytmReports(router, { loadStore: () => store, saveStore: () => {}, audit: () => {}, canAccess: () => true, upload: { array: () => () => {} }, view: () => ({}), today: () => '2026-09-19', orders: () => [{ id: '12345', number: 2845 }], shopifyStore: 'example.myshopify.com', shopifyClient: { request: async () => ({ ok: true, json: async () => ({ transactions: [{ id: 1, kind: 'sale', status: 'success', gateway: 'paytm', amount: '999.00' }, { id: 2, kind: 'sale', status: 'success', gateway: 'shopify_store_credit', amount: '1499.00' }] }) }) } });
+  const res = { status() { return this; }, json(body) { this.body = body; return this; } };
+  await routes['/api/expenses/paytm-reports/sync-shopify-payments']({ user: { username: 'owner' }, body: { orderId: '2845' } }, res);
+  assert.equal(res.body.success, true);
+  assert.equal(store.paytmShopifyPayments['12345'].paytmAmount, 999);
+  assert.equal(store.paytmShopifyPayments['12345'].storeCreditAmount, 1499);
+});
+
+test('exclusion is audited and reversible but cannot silently post a mixed payout', () => {
+  const tx = { transactionId: 'T1', date: '2026-09-17', amount: 100, commission: 0, gst: 0, settledAmount: 100, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123' };
+  const store = { paytmReportTransactions: { T1: tx }, paytmOrderLinks: {}, bankStatements: { 'Axis Bank 3448': { transactions: {} } } };
+  const routes = {}, audits = [];
+  const router = { get: (url, handler) => { routes[url] = handler; }, post: (url, ...handlers) => { routes[url] = handlers.at(-1); } };
+  registerPaytmReports(router, { loadStore: () => store, saveStore: () => {}, audit: (_store, _req, action) => audits.push(action), canAccess: () => true, upload: { array: () => () => {} }, view: () => ({}), today: () => '2026-09-18', orders: () => [], saleRows: () => [] });
+  const reply = () => ({ code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const first = reply();
+  routes['/api/expenses/paytm-reports/exclude']({ user: { username: 'owner' }, body: { transactionId: 'T1', reason: 'Not a Shopify customer sale' } }, first);
+  assert.equal(first.body.success, true);
+  assert.match(store.paytmExcludedTransactions.T1.reason, /Not a Shopify/);
+  assert.throws(() => validatePayoutPosting(store, 'P1', 'bank-id', []), /excluded payment/);
+  const restored = reply();
+  routes['/api/expenses/paytm-reports/restore']({ user: { username: 'owner' }, body: { transactionId: 'T1', reason: 'Confirmed against Shopify order' } }, restored);
+  assert.equal(restored.body.success, true);
+  assert.equal(store.paytmExcludedTransactions.T1, undefined);
+  assert.deepEqual(audits, ['PAYTM_TRANSACTION_EXCLUDED', 'PAYTM_TRANSACTION_RESTORED']);
+});
+
+test('manual Paytm sale and third-party cash transfer remain distinct from Shopify revenue', () => {
+  const transactions = {
+    SALE: { transactionId: 'SALE', date: '2026-09-17', amount: 999, commission: 0, gst: 0, settledAmount: 999, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123' },
+    CASH: { transactionId: 'CASH', date: '2026-09-17', amount: 50000, commission: 0, gst: 0, settledAmount: 50000, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123' }
+  };
+  const store = { paytmReportTransactions: transactions, receipts: [], transfers: [], bankStatements: { 'Axis Bank 3448': { transactions: { b: { id: 'BTX-1', date: '2026-09-18', credit: 50999, debit: 0, reference: 'UTR123' } } } } };
+  const routes = {}, router = { get: (url, handler) => { routes[url] = handler; }, post: (url, ...handlers) => { routes[url] = handlers.at(-1); } };
+  registerPaytmReports(router, { loadStore: () => store, saveStore: () => {}, audit: () => {}, canAccess: () => true, canClassify: () => true, upload: { array: () => () => {} }, view: () => ({}), today: () => '2026-09-18', orders: () => [], saleRows: () => [] });
+  const reply = () => ({ status() { return this; }, json(body) { this.body = body; return this; } });
+  const proof = '/api/expenses/photo/evidence.jpg';
+  const sale = reply(); routes['/api/expenses/paytm-reports/classify']({ user: { username: 'owner' }, body: { transactionId: 'SALE', type: 'manual_sale', party: 'Customer', details: 'Shirt sold at counter', reason: 'Shopify unavailable at counter', proof } }, sale);
+  const cash = reply(); routes['/api/expenses/paytm-reports/classify']({ user: { username: 'owner' }, body: { transactionId: 'CASH', type: 'cash_transfer', party: 'Agent', details: 'Cash handed to agent', reason: 'Agent transferred cash via Paytm', proof } }, cash);
+  assert.equal(sale.body.success, true); assert.equal(cash.body.success, true);
+  assert.equal(store.receipts.length, 1); assert.equal(store.receipts[0].amount, 999);
+  assert.equal(store.transfers.length, 1); assert.deepEqual([store.transfers[0].fromAccount, store.transfers[0].toAccount, store.transfers[0].amount], ['Counter Cash', 'Paytm Settlement Clearing', 50000]);
+  assert.equal(validatePayoutPosting(store, 'P1', 'BTX-1', []).payout.net, 50999);
+  const corrected = reply(); routes['/api/expenses/paytm-reports/unclassify']({ user: { username: 'owner' }, body: { transactionId: 'CASH', reason: 'Correcting wrong third-party name' } }, corrected);
+  assert.equal(corrected.body.success, true); assert.equal(store.transfers.length, 0); assert.equal(store.receipts.length, 1);
+  assert.throws(() => validatePayoutPosting(store, 'P1', 'BTX-1', []), /classified/);
 });
 
 test('posting a reviewed payout records exact fee and bank evidence once', () => {

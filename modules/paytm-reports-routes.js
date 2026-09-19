@@ -1,14 +1,35 @@
 const crypto = require('crypto');
 const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
-const { CLEARING, BANK, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
+const { CLEARING, BANK, summarizeShopifyPayments, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
 
 function registerPaytmReports(router, deps) {
-  const { loadStore, saveStore, audit, canAccess, upload, view, today, orders, saleRows } = deps;
+  const { loadStore, saveStore, audit, canAccess, canClassify, upload, view, today, orders, saleRows, shopifyClient, shopifyStore } = deps;
   const deny = (req, res) => !canAccess(req) ? (res.status(403).json({ success: false, error: 'You cannot access Paytm reconciliation.' }), true) : false;
   router.get('/api/expenses/paytm-reports', (req, res) => {
     if (deny(req, res)) return;
     res.json({ success: true, ...view(loadStore()) });
+  });
+  router.post('/api/expenses/paytm-reports/sync-shopify-payments', async (req, res) => {
+    if (deny(req, res)) return;
+    const orderId = String(req.body && req.body.orderId || '').trim();
+    const order = (orders ? orders() : []).find(x => String(x.id) === orderId || String(x.orderNumber || x.number || '').replace(/\D/g, '') === orderId);
+    if (!order || !/^\d+$/.test(String(order.id))) return res.status(404).json({ success: false, error: 'Choose a synced Shopify order with a numeric order ID.' });
+    if (!shopifyClient || !shopifyStore) return res.status(503).json({ success: false, error: 'Shopify connection is not configured.' });
+    const store = loadStore();
+    if ((store.paytmPayoutPostings || []).some(x => (x.orderIds || []).includes(String(order.id)))) return res.status(409).json({ success: false, error: 'This order is in a posted payout. Correct the posting before changing its payment split.' });
+    try {
+      const response = await shopifyClient.request(`https://${shopifyStore}/admin/api/2024-01/orders/${order.id}/transactions.json`);
+      if (!response.ok) throw new Error(`Shopify payment lookup failed (${response.status}).`);
+      const body = await response.json(), summary = summarizeShopifyPayments(body.transactions);
+      if (!summary.transactions.length) throw new Error('Shopify returned no successful sale/capture payment components. Keep this order under manual review.');
+      store.paytmShopifyPayments = store.paytmShopifyPayments || {};
+      const before = store.paytmShopifyPayments[order.id] || null;
+      store.paytmShopifyPayments[order.id] = { ...summary, by: req.user.username, at: new Date().toISOString() };
+      audit(store, req, 'PAYTM_SHOPIFY_PAYMENTS_SYNCED', 'shopify_order', String(order.id), { nature: 'SANKI', account: CLEARING, before, after: store.paytmShopifyPayments[order.id] });
+      saveStore(store);
+      res.json({ success: true, summary: store.paytmShopifyPayments[order.id], view: view(store) });
+    } catch (error) { res.status(502).json({ success: false, error: error.message || 'Could not verify Shopify payment components.' }); }
   });
   router.post('/api/expenses/paytm-reports/preview', upload.array('reports', 20), (req, res) => {
     if (deny(req, res)) return;
@@ -67,6 +88,8 @@ function registerPaytmReports(router, deps) {
     try {
       const tx = (store.paytmReportTransactions || {})[transactionId];
       if ((store.paytmPayoutPostings || []).some(x => x.transactionIds.includes(transactionId))) throw new Error('A posted payout link cannot be changed.');
+      if ((store.paytmExcludedTransactions || {})[transactionId]) throw new Error('Restore this excluded transaction before linking it to a Shopify order.');
+      if ((store.paytmManualResolutions || {})[transactionId]) throw new Error('Correct the manual sale/cash classification before linking this payment to Shopify.');
       const link = validateOrderLink(store, tx, orderId, orders(), saleRows(store), body.reason);
       store.paytmOrderLinks = store.paytmOrderLinks || {};
       const before = store.paytmOrderLinks[transactionId] || null;
@@ -76,13 +99,82 @@ function registerPaytmReports(router, deps) {
       res.json({ success: true, view: view(store) });
     } catch (error) { res.status(400).json({ success: false, error: error.message }); }
   });
+  router.post('/api/expenses/paytm-reports/classify', (req, res) => {
+    if (deny(req, res)) return;
+    if (!canClassify || !canClassify(req)) return res.status(403).json({ success: false, error: 'Only the Owner may approve a manual Paytm sale or cash transfer.' });
+    const store = loadStore(), body = req.body || {}, id = String(body.transactionId || '').trim();
+    const tx = (store.paytmReportTransactions || {})[id], type = String(body.type || ''), party = String(body.party || '').trim(), details = String(body.details || '').trim(), reason = String(body.reason || '').trim(), proof = String(body.proof || '').trim();
+    if (!tx) return res.status(404).json({ success: false, error: 'Paytm transaction not found.' });
+    if (!['manual_sale', 'cash_transfer'].includes(type)) return res.status(400).json({ success: false, error: 'Choose manual sale or cash-to-bank transfer.' });
+    if (!party || details.length < 5 || reason.length < 10 || !/^\/api\/expenses\/photo\/[a-zA-Z0-9._-]+$/.test(proof)) return res.status(400).json({ success: false, error: 'Enter the customer/third party, sale or transfer details, a reason of at least 10 characters, and upload proof.' });
+    if ((store.paytmOrderLinks || {})[id] || (store.paytmManualResolutions || {})[id] || (store.paytmExcludedTransactions || {})[id] || (store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(id))) return res.status(409).json({ success: false, error: 'This Paytm payment is already linked, classified, excluded, or posted.' });
+    const at = new Date().toISOString(), note = `Paytm ${id} · ${details} · ${reason}`;
+    let record;
+    if (type === 'manual_sale') {
+      store.receiptSeq = Number(store.receiptSeq || 0) + 1;
+      record = { id: 'REC-' + String(store.receiptSeq).padStart(5, '0'), nature: 'SANKI', account: CLEARING, amount: tx.amount, receiptType: 'product_sale', source: party, date: tx.date, note, proof, proofs: [proof], paytmTransactionId: id, createdBy: req.user.username, createdAt: at };
+      store.receipts = store.receipts || []; store.receipts.push(record);
+    } else {
+      store.transferSeq = Number(store.transferSeq || 0) + 1;
+      record = { id: 'TR-' + String(store.transferSeq).padStart(5, '0'), nature: 'SANKI', fromNature: 'SANKI', toNature: 'SANKI', classification: 'internal_transfer', fromAccount: 'Counter Cash', toAccount: CLEARING, amount: tx.amount, date: tx.date, proof, proofs: [proof], note, intermediary: party, routedThroughIntermediary: true, paytmTransactionId: id, createdBy: req.user.username, createdAt: at };
+      store.transfers = store.transfers || []; store.transfers.push(record);
+    }
+    store.paytmManualResolutions = store.paytmManualResolutions || {};
+    store.paytmManualResolutions[id] = { transactionId: id, type, amount: tx.amount, party, details, reason, proof, recordId: record.id, by: req.user.username, at };
+    audit(store, req, 'PAYTM_TRANSACTION_CLASSIFIED', 'paytm_transaction', id, { nature: 'SANKI', account: CLEARING, after: store.paytmManualResolutions[id] });
+    saveStore(store);
+    res.json({ success: true, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/unclassify', (req, res) => {
+    if (deny(req, res)) return;
+    if (!canClassify || !canClassify(req)) return res.status(403).json({ success: false, error: 'Only the Owner may correct a manual Paytm classification.' });
+    const store = loadStore(), id = String(req.body && req.body.transactionId || '').trim(), reason = String(req.body && req.body.reason || '').trim();
+    const classification = (store.paytmManualResolutions || {})[id];
+    if (!classification) return res.status(404).json({ success: false, error: 'Manual classification not found.' });
+    if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a correction reason of at least 10 characters.' });
+    if ((store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(id))) return res.status(409).json({ success: false, error: 'This payment is in a posted payout. Reopen the payout before correcting it.' });
+    const key = classification.type === 'manual_sale' ? 'receipts' : 'transfers';
+    if (!(store[key] || []).some(x => x.id === classification.recordId && x.paytmTransactionId === id)) return res.status(409).json({ success: false, error: 'The linked accounting record changed. Review it before correcting this classification.' });
+    store[key] = store[key].filter(x => x.id !== classification.recordId);
+    delete store.paytmManualResolutions[id];
+    audit(store, req, 'PAYTM_TRANSACTION_CLASSIFICATION_REVERSED', 'paytm_transaction', id, { nature: 'SANKI', account: CLEARING, before: classification, note: reason });
+    saveStore(store);
+    res.json({ success: true, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/exclude', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || '').trim(), reason = String(body.reason || '').trim(), tx = (store.paytmReportTransactions || {})[transactionId];
+    if (!tx) return res.status(404).json({ success: false, error: 'Paytm transaction not found.' });
+    if ((store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(transactionId))) return res.status(400).json({ success: false, error: 'A posted payout transaction cannot be excluded.' });
+    if ((store.paytmManualResolutions || {})[transactionId]) return res.status(409).json({ success: false, error: 'Correct the manual sale/cash classification before excluding this payment.' });
+    if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a reason of at least 10 characters for excluding this payment.' });
+    store.paytmExcludedTransactions = store.paytmExcludedTransactions || {};
+    store.paytmOrderLinks = store.paytmOrderLinks || {};
+    const before = { exclusion: store.paytmExcludedTransactions[transactionId] || null, link: store.paytmOrderLinks[transactionId] || null };
+    store.paytmExcludedTransactions[transactionId] = { reason, by: req.user.username, at: new Date().toISOString() };
+    delete store.paytmOrderLinks[transactionId];
+    audit(store, req, 'PAYTM_TRANSACTION_EXCLUDED', 'paytm_transaction', transactionId, { nature: 'SANKI', account: CLEARING, before, after: store.paytmExcludedTransactions[transactionId] });
+    saveStore(store);
+    res.json({ success: true, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/restore', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || '').trim(), reason = String(body.reason || '').trim();
+    const before = (store.paytmExcludedTransactions || {})[transactionId];
+    if (!before) return res.status(404).json({ success: false, error: 'This transaction is not excluded.' });
+    if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a reason of at least 10 characters for restoring this payment.' });
+    delete store.paytmExcludedTransactions[transactionId];
+    audit(store, req, 'PAYTM_TRANSACTION_RESTORED', 'paytm_transaction', transactionId, { nature: 'SANKI', account: CLEARING, before, after: { restoredBy: req.user.username, reason } });
+    saveStore(store);
+    res.json({ success: true, view: view(store) });
+  });
   router.post('/api/expenses/paytm-reports/post-payout', (req, res) => {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {}, payoutId = String(body.payoutId || ''), bankTransactionId = String(body.bankTransactionId || '');
     try {
       const { payout, bank, linked } = validatePayoutPosting(store, payoutId, bankTransactionId, saleRows(store));
       const postedAt = new Date().toISOString();
-      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId), orderNumbers: linked.map(x => x.orderNumber), bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, gross: payout.gross, commission: payout.commission, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
+      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, gross: payout.gross, commission: payout.commission, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
       store.paytmPayoutPostings = store.paytmPayoutPostings || [];
       store.paytmPayoutPostings.push(posting);
       store.reconciliationExpenses = store.reconciliationExpenses || [];
