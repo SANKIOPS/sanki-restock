@@ -13,7 +13,7 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   if (!tx) throw new Error('Paytm transaction not found. Import its detailed report first.');
   if (tx.posId === 'DEFAULT') throw new Error('This payment is not marked as a POS transaction. Review its channel separately.');
   const orderKey = String(orderId).replace(/^#/, '').trim();
-  const matches = orders.filter(x => String(x.id) === orderKey || String(x.orderNumber || x.name || '').replace(/\D/g, '').replace(/^0+/, '') === orderKey);
+  const matches = orders.filter(x => String(x.id) === orderKey || String(x.orderNumber || x.number || x.name || '').replace(/\D/g, '').replace(/^0+/, '') === orderKey);
   if (matches.length !== 1) throw new Error(matches.length ? 'Order number is ambiguous; use the Shopify order ID.' : 'Shopify order not found.');
   const order = matches[0];
   if (!order || order.cancelledAt || String(order.financialStatus || '').toLowerCase() !== 'paid') throw new Error('Choose a paid, non-cancelled Shopify order.');
@@ -30,6 +30,7 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
 function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   const payout = getPayout(store, payoutId);
   if (!payout) throw new Error('Payout not found. Import the Paytm report first.');
+  if (payout.transactionIds.some(id => (store.paytmExcludedTransactions || {})[id])) throw new Error('This payout contains an excluded payment. Restore or separately resolve that payment before posting the payout.');
   if (!payout.utr || !payout.payoutDate) throw new Error('Payout UTR and date are required for an exact bank link.');
   if ((store.paytmPayoutPostings || []).some(x => x.payoutId === payoutId)) throw new Error('This Paytm payout was already posted.');
   if ((store.paytmSettlements || []).some(x => x.payoutId === payoutId || x.bankTransactionId === bankTransactionId)) throw new Error('An existing Paytm settlement already uses this payout or bank transaction.');

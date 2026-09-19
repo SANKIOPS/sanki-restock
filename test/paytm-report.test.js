@@ -73,6 +73,33 @@ test('manual amount-only link requires a reason and one-to-one order', () => {
   assert.throws(() => validateOrderLink({ paytmOrderLinks: { T2: link } }, tx, '2801', orders, sales, 'Reviewed Paytm receipt against Shopify sale'), /already linked/);
 });
 
+test('links the Shopify number field used by imported orders', () => {
+  const tx = { transactionId: 'T2728', date: '2026-08-25', amount: 15094, posId: 'POS1' };
+  const orders = [{ id: 'shopify-order-2728', number: 2728, financialStatus: 'paid', note: '' }];
+  const sales = [{ id: 'SHOPIFY/shopify-order-2728', orderId: 'shopify-order-2728', orderNumber: '2728', date: '2026-08-25', account: 'Paytm Settlement Clearing', amount: 15094 }];
+  const link = validateOrderLink({}, tx, '2728', orders, sales, 'Matched the Paytm receipt to order 2728');
+  assert.equal(link.orderId, 'shopify-order-2728');
+});
+
+test('exclusion is audited and reversible but cannot silently post a mixed payout', () => {
+  const tx = { transactionId: 'T1', date: '2026-09-17', amount: 100, commission: 0, gst: 0, settledAmount: 100, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123' };
+  const store = { paytmReportTransactions: { T1: tx }, paytmOrderLinks: {}, bankStatements: { 'Axis Bank 3448': { transactions: {} } } };
+  const routes = {}, audits = [];
+  const router = { get: (url, handler) => { routes[url] = handler; }, post: (url, ...handlers) => { routes[url] = handlers.at(-1); } };
+  registerPaytmReports(router, { loadStore: () => store, saveStore: () => {}, audit: (_store, _req, action) => audits.push(action), canAccess: () => true, upload: { array: () => () => {} }, view: () => ({}), today: () => '2026-09-18', orders: () => [], saleRows: () => [] });
+  const reply = () => ({ code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } });
+  const first = reply();
+  routes['/api/expenses/paytm-reports/exclude']({ user: { username: 'owner' }, body: { transactionId: 'T1', reason: 'Not a Shopify customer sale' } }, first);
+  assert.equal(first.body.success, true);
+  assert.match(store.paytmExcludedTransactions.T1.reason, /Not a Shopify/);
+  assert.throws(() => validatePayoutPosting(store, 'P1', 'bank-id', []), /excluded payment/);
+  const restored = reply();
+  routes['/api/expenses/paytm-reports/restore']({ user: { username: 'owner' }, body: { transactionId: 'T1', reason: 'Confirmed against Shopify order' } }, restored);
+  assert.equal(restored.body.success, true);
+  assert.equal(store.paytmExcludedTransactions.T1, undefined);
+  assert.deepEqual(audits, ['PAYTM_TRANSACTION_EXCLUDED', 'PAYTM_TRANSACTION_RESTORED']);
+});
+
 test('posting a reviewed payout records exact fee and bank evidence once', () => {
   const tx = { transactionId: 'T1', date: '2026-09-17', amount: 100, commission: 1, gst: 0.18, settledAmount: 98.82, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123', posId: 'POS1' };
   const store = { paytmReportTransactions: { T1: tx }, paytmOrderLinks: { T1: { transactionId: 'T1', orderId: 'O1', orderNumber: '2801', amount: 100 } }, bankStatements: { 'Axis Bank 3448': { transactions: { b: { id: 'BTX-1', date: '2026-09-18', credit: 98.82, debit: 0, reference: 'PAYTM UTR123' } } } } };

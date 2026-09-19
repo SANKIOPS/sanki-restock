@@ -67,6 +67,7 @@ function registerPaytmReports(router, deps) {
     try {
       const tx = (store.paytmReportTransactions || {})[transactionId];
       if ((store.paytmPayoutPostings || []).some(x => x.transactionIds.includes(transactionId))) throw new Error('A posted payout link cannot be changed.');
+      if ((store.paytmExcludedTransactions || {})[transactionId]) throw new Error('Restore this excluded transaction before linking it to a Shopify order.');
       const link = validateOrderLink(store, tx, orderId, orders(), saleRows(store), body.reason);
       store.paytmOrderLinks = store.paytmOrderLinks || {};
       const before = store.paytmOrderLinks[transactionId] || null;
@@ -75,6 +76,32 @@ function registerPaytmReports(router, deps) {
       saveStore(store);
       res.json({ success: true, view: view(store) });
     } catch (error) { res.status(400).json({ success: false, error: error.message }); }
+  });
+  router.post('/api/expenses/paytm-reports/exclude', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || '').trim(), reason = String(body.reason || '').trim(), tx = (store.paytmReportTransactions || {})[transactionId];
+    if (!tx) return res.status(404).json({ success: false, error: 'Paytm transaction not found.' });
+    if ((store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(transactionId))) return res.status(400).json({ success: false, error: 'A posted payout transaction cannot be excluded.' });
+    if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a reason of at least 10 characters for excluding this payment.' });
+    store.paytmExcludedTransactions = store.paytmExcludedTransactions || {};
+    store.paytmOrderLinks = store.paytmOrderLinks || {};
+    const before = { exclusion: store.paytmExcludedTransactions[transactionId] || null, link: store.paytmOrderLinks[transactionId] || null };
+    store.paytmExcludedTransactions[transactionId] = { reason, by: req.user.username, at: new Date().toISOString() };
+    delete store.paytmOrderLinks[transactionId];
+    audit(store, req, 'PAYTM_TRANSACTION_EXCLUDED', 'paytm_transaction', transactionId, { nature: 'SANKI', account: CLEARING, before, after: store.paytmExcludedTransactions[transactionId] });
+    saveStore(store);
+    res.json({ success: true, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/restore', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || '').trim(), reason = String(body.reason || '').trim();
+    const before = (store.paytmExcludedTransactions || {})[transactionId];
+    if (!before) return res.status(404).json({ success: false, error: 'This transaction is not excluded.' });
+    if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a reason of at least 10 characters for restoring this payment.' });
+    delete store.paytmExcludedTransactions[transactionId];
+    audit(store, req, 'PAYTM_TRANSACTION_RESTORED', 'paytm_transaction', transactionId, { nature: 'SANKI', account: CLEARING, before, after: { restoredBy: req.user.username, reason } });
+    saveStore(store);
+    res.json({ success: true, view: view(store) });
   });
   router.post('/api/expenses/paytm-reports/post-payout', (req, res) => {
     if (deny(req, res)) return;

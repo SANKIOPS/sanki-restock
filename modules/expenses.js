@@ -1215,8 +1215,9 @@ function paytmReportView(s) {
   const suggestedCounts={};orderMatches.filter(match=>match.orderMatch==='amount/date candidate').forEach(match=>{const id=match.orderCandidates[0].id;suggestedCounts[id]=(suggestedCounts[id]||0)+1;});
   orderMatches.forEach(match=>{if(match.orderMatch==='amount/date candidate'&&suggestedCounts[match.orderCandidates[0].id]>1)match.orderMatch='ambiguous';});
   const links=s.paytmOrderLinks||{},posted=new Map((s.paytmPayoutPostings||[]).map(x=>[x.payoutId,x]));
-  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.linkedCount=x.transactionIds.filter(id=>links[id]).length;x.readyToPost=!x.posted&&x.linkedCount===x.count&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
-  orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;});
+  const excluded=s.paytmExcludedTransactions||{};
+  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.linkedCount=x.transactionIds.filter(id=>links[id]).length;x.excludedCount=x.transactionIds.filter(id=>excluded[id]).length;x.readyToPost=!x.posted&&!x.excludedCount&&x.linkedCount===x.count&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
+  orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;});
   return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
 function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&!/cash/i.test(name);}
