@@ -557,7 +557,7 @@ function normalizeLine(raw, body) {
     sizeLabel:   (raw.sizeLabel || '').trim(),   // Indian size — used for the SKU
     chinaSize:   (raw.chinaSize || '').trim(),   // China size — recorded only
     fit:         (raw.fit || '').trim(),
-    audience:    (raw.audience || 'Men').trim(),
+    audience:    (raw.audience || '').trim(),
     vendor:      (raw.vendor || (body && body.vendor) || '').trim(),  // vendor comes from the bill
     designCode:  (raw.designCode || '').trim(),
     photoUrl:    (raw.photoUrl || '').trim(),        // mandatory raw image → AI pipeline
@@ -1548,7 +1548,19 @@ router.post('/api/procurement/pos/:id/receipt-add', async (req, res) => {
 // A direct SKU correction remains possible, but changing product type, colour
 // or size automatically rebuilds the SKU while retaining its article serial.
 const LINE_EDIT_FIELDS = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'chinaSize', 'fit', 'audience', 'sku'];
-router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
+const MODEL_IMAGE_TYPES = new Set(['female','male','model-front','model-side','model-side-female','model-side-male']);
+function retireAudienceModelImages(po, key, previousAudience, nextAudience) {
+  const images = (po.aiImages || {})[key] || [];
+  const rejected = (po.qaRejected || {})[key] || [];
+  const retiring = images.filter(image => MODEL_IMAGE_TYPES.has(image.type));
+  if (retiring.length || rejected.length) {
+    po.audienceImageHistory = Array.isArray(po.audienceImageHistory) ? po.audienceImageHistory : [];
+    po.audienceImageHistory.push({groupKey:key,previousAudience,nextAudience,at:new Date().toISOString(),images:retiring,rejected});
+    po.aiImages[key] = images.filter(image => !MODEL_IMAGE_TYPES.has(image.type));
+    if (po.qaRejected) po.qaRejected[key] = [];
+  }
+}
+router.post('/api/procurement/pos/:id/line-edits', async (req, res) => {
   const s = loadStore();
   const po = s.pos[req.params.id];
   if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
@@ -1560,6 +1572,7 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
   const now = new Date().toISOString();
   let touched = 0;
   const copyChanged = new Set();
+  const audienceChanged = new Map();
   (po.lines || []).forEach((l, i) => {
     const e = edits[i];
     const hasQty = qtys[i] != null && qtys[i] !== '';
@@ -1569,6 +1582,7 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
     if (!l.ordered || typeof l.ordered !== 'object') l.ordered = orderedSnapshot(l);
     let changed = false;
     const oldGroup = groupKey(l);
+    const priorAudience = l.audience;
     const oldCopy = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'fit', 'audience'].map(k => String(l[k] || ''));
     const priorSku = l.sku;
     const priorIdentity = [l.productType, l.colour, l.sizeLabel].map(v => String(v == null ? '' : v));
@@ -1593,8 +1607,19 @@ router.post('/api/procurement/pos/:id/line-edits', (req, res) => {
       copyChanged.add(oldGroup);
       copyChanged.add(groupKey(l));
     }
+    if (priorAudience !== l.audience) audienceChanged.set(oldGroup, {previous:priorAudience,next:l.audience});
     if (changed) { l.editedAt = now; l.editedBy = who; touched++; }
   });
+  for (const [key, audiences] of audienceChanged) retireAudienceModelImages(po,key,audiences.previous,audiences.next);
+  if(audienceChanged.size){
+    try {
+      const groups=await newGroupsOf(s,po);
+      for(const key of audienceChanged.keys()){
+        const group=groups.find(g=>g.key===key);
+        if(group)for(const image of ((po.aiImages||{})[key]||[]))if(['front','back'].includes(image.type))image.sourceFingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[key]);
+      }
+    }catch(e){return res.status(500).json({success:false,error:e.message});}
+  }
   // Keep a fresh, editable SEO/AEO/GEO draft aligned with corrected product
   // facts. Corrections invalidate prior copy approval; quantity-only edits do not.
   if (copyChanged.size || (po.seoDraft || []).some(d => seoNeedsReview(d.seo))) {
@@ -1737,8 +1762,10 @@ async function newGroupsOf(s, po) {
   return (preview.newProducts || []).map(np => {
     const line = (po.lines || []).find(l => groupKey(l) === np.key && (l.photoUrl || '').trim());
     const details = (po.lines || []).find(l => groupKey(l) === np.key) || {};
+    const audiences = [...new Set((po.lines || []).filter(l => groupKey(l) === np.key).map(l => String(l.audience || '').trim()))];
+    const audience = audiences.length === 1 && ['Men','Women','Unisex'].includes(audiences[0]) ? audiences[0] : '';
     return { key: np.key, colour: np.colour, productType: np.productType, designName: np.designName,
-             designCode: np.designCode, audience: details.audience || '', line: po.line || '', season: details.season || po.season || '',
+             designCode: np.designCode, audience, line: po.line || '', season: details.season || po.season || '',
              fit: details.fit || '', sizeLabels: np.variants.map(v => v.sizeLabel),
              photoUrl: line ? line.photoUrl : '' };
   });
@@ -1759,6 +1786,43 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     res.json({ success: true, newProducts: (preview.newProducts || []).map(np => ({...np,
       audience: byKey.get(np.key)?.audience || '', fit: byKey.get(np.key)?.fit || '', line: po.line || '', season:byKey.get(np.key)?.season||''})), po: publicPo(po, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// The listing audience is a product-level decision. Save it to every size
+// line, and retain any earlier model drafts in audit history, never in the
+// active set that can be approved or posted under the new audience.
+router.post('/api/procurement/pos/:id/group-audience', async (req,res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+    const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
+    const audience=String((req.body||{}).audience||'');
+    if (!po || isLockedPo(po)) return res.status(409).json({success:false,error:'Editable PO required.'});
+    if (!['Men','Women','Unisex'].includes(audience)) return res.status(400).json({success:false,error:'Select Men, Women or Unisex.'});
+    const lines=(po.lines||[]).filter(l=>groupKey(l)===key);
+    if (!lines.length) return res.status(404).json({success:false,error:'Product group not found.'});
+    if (((po.openaiPilot||{}).attempts||[]).some(a=>a.status==='running')) return res.status(409).json({success:false,error:'Wait for the PO’s current image generation to finish before changing a product audience.'});
+    const oldAudiences=[...new Set(lines.map(l=>String(l.audience||'').trim()))];
+    const sameAudience=oldAudiences.length===1&&oldAudiences[0]===audience;
+    if(sameAudience&&(req.body||{}).resetModels!==true) return res.json({success:true,audience,changed:false});
+    const now=new Date().toISOString(),who=(req.user||{}).username||'system';
+    if(!sameAudience)for(const line of lines){
+      if(!line.ordered||typeof line.ordered!=='object')line.ordered=orderedSnapshot(line);
+      line.audience=audience;line.editedAt=now;line.editedBy=who;
+    }
+    retireAudienceModelImages(po,key,oldAudiences.join(' / '),audience);
+    if(!sameAudience){
+      const updatedGroup=(await newGroupsOf(s,po)).find(g=>g.key===key);
+      if(updatedGroup)for(const image of ((po.aiImages||{})[key]||[]))if(['front','back'].includes(image.type))image.sourceFingerprint=codexBatch.fingerprint(updatedGroup,(po.backRefs||{})[key]);
+      const first=lines[0];
+      const seo=genSeo({designName:stripSizeSuffix(first.designName),designCode:first.designCode,productType:first.productType,
+        colour:first.colour,fit:first.fit,audience,sizeLabels:lines.map(l=>l.sizeLabel),sizeCodeOf:label=>s.sizes[label]||label});
+      po.seoDraft=Array.isArray(po.seoDraft)?po.seoDraft:[];
+      const idx=po.seoDraft.findIndex(d=>d.key===key),draft={key,seo,seoApproved:false,source:'product-details'};
+      if(idx>=0)po.seoDraft[idx]=draft;else po.seoDraft.push(draft);
+    }
+    saveStore(s);
+    res.json({success:true,audience,changed:true,retiredViews:'Previous model photos were kept in audit history and removed from active posting.'});
+  }catch(e){res.status(500).json({success:false,error:e.message});}
 });
 
 // Included-usage generation happens in a user-started Codex session, not Railway.
@@ -2675,4 +2739,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText };
+module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, retireAudienceModelImages };
