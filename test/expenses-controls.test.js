@@ -2117,7 +2117,9 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   assert.equal(config.ledgerAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),true);
+  assert.equal(config.bankAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),false,'virtual Paytm clearing is not a bank-statement account');
   assert.equal(config.accountsByNature.SANKI.includes('Paytm Settlement Clearing'),false);
+  assert.equal(invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing'}}).status,403);
   assert.equal(fs.readFileSync(path.join(tempDir,'orders.json'),'utf8').includes('store credit'),true);
   const expenseFile=path.join(tempDir,'expenses.json'),before=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(before);
   stored.bankDateOverrides=stored.bankDateOverrides||{};stored.bankDateOverrides['SHOPIFY/direct']={bankDate:'2026-09-10',bankTransactionId:'BTX-ALREADY-LINKED'};

@@ -489,7 +489,7 @@
     // ── LOG form ──
     function opts(arr, sel){ return (arr||[]).map(function(o){ return '<option'+(o===sel?' selected':'')+'>'+esc(o)+'</option>'; }).join(''); }
     function accountsForNature(nature){ return (cfg.accountsByNature&&cfg.accountsByNature[nature])||[]; }
-    function bankAccountsForNature(nature){return ((cfg.bankAccountsByNature&&cfg.bankAccountsByNature[nature])||accountsForNature(nature)).filter(function(name){return !/cash/i.test(name);});}
+    function bankAccountsForNature(nature){return ((cfg.bankAccountsByNature&&cfg.bankAccountsByNature[nature])||accountsForNature(nature)).filter(function(name){return !/cash/i.test(name)&&name!=='Paytm Settlement Clearing';});}
     function ledgerAccountsForNature(nature){ return (cfg.ledgerAccountsByNature&&cfg.ledgerAccountsByNature[nature])||accountsForNature(nature); }
     function transferAccountsForNature(nature){ return (cfg.transferAccountsByNature&&cfg.transferAccountsByNature[nature])||accountsForNature(nature); }
     function payingAccountsForNature(nature){

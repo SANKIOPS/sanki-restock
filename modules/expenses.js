@@ -1233,7 +1233,7 @@ function paytmReportView(s) {
   orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.manualResolution=manual[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;});
   return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
-function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&!/cash/i.test(name);}
+function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&isBankLedgerName(name);}
 function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&String(name||'')!==PAYTM_CLEARING_ACCOUNT;}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
@@ -1429,7 +1429,7 @@ router.get('/api/expenses/config', (req, res) => {
     vendorsByNature,
     accounts: Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n])))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : [])])),
-    bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? ledgerAccountsForNature(s,n).filter(name => !/cash/i.test(name)) : []])),
+    bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? ledgerAccountsForNature(s,n).filter(isBankLedgerName) : []])),
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name)))).sort((a,b)=>a.localeCompare(b)) : []])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645']:[]) : (approvalNatures(req).includes(n) ? transferAccountsForNature(n) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
