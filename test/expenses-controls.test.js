@@ -2096,7 +2096,7 @@ test('Counter Cash resets on 22 August and cash sales round upward to the next â
 
 test('Shopify Paytm and non-cash POS sales enter clearing before payout, while other sales keep their route', () => {
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{
-    paytm:{id:'paytm',name:'#2718',orderNumber:2718,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:50000,refundAmount:0},
+    paytm:{id:'paytm',name:'#2718',orderNumber:2718,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:50000,refundAmount:0,note:'Paytm transaction 123456'},
     direct:{id:'direct',name:'#2800',orderNumber:2800,createdAt:'2026-09-10T10:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Paytm'],total:12500,refundAmount:0},
     unlabeled:{id:'unlabeled',name:'#2801',orderNumber:2801,createdAt:'2026-09-10T11:00:00Z',channel:'Website',financialStatus:'paid',paymentGateways:['manual'],total:7000,refundAmount:0},
     manualPos:{id:'manualPos',name:'#2802',orderNumber:2802,createdAt:'2026-09-10T12:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['manual'],total:8000,refundAmount:0},
@@ -2112,6 +2112,7 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   assert.equal(axis.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000);
   assert.equal(axis.find(x=>x.id==='SHOPIFY/afterToday').credit,10000);
   const receipt=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-08-23');assert.equal(receipt.credit,50000);assert.deepEqual(receipt.connectedSales.map(x=>x.id),['SHOPIFY/paytm']);
+  assert.equal(clearing.find(x=>x.id==='PAYTM-SALE/SHOPIFY/paytm').noteSuffixes[0],'123456');
   const september=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-09-10');assert.equal(september.credit,12500);assert.deepEqual(september.connectedSales.map(x=>x.id),['SHOPIFY/direct']);
   assert.equal(clearing.some(x=>(x.connectedSales||[]).some(y=>['SHOPIFY/beforeStart','SHOPIFY/afterToday'].includes(y.id))),false);
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);

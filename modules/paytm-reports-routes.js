@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
-const { CLEARING, BANK, summarizeShopifyPayments, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
+const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
 
 function registerPaytmReports(router, deps) {
   const { loadStore, saveStore, audit, canAccess, canClassify, upload, view, today, orders, saleRows, shopifyClient, shopifyStore } = deps;
@@ -77,10 +77,19 @@ function registerPaytmReports(router, deps) {
     }
     store.paytmReportImports = store.paytmReportImports || [];
     store.paytmReportImports.push({ id: draftId, at: new Date().toISOString(), by: req.user.username, sources: draft.sources, count: added, duplicates: draft.duplicates, warnings: draft.warnings });
+    const autoMatched = autoMatchShopifyNotes(store,store.paytmReportTransactions,orders ? orders() : [],saleRows ? saleRows(store) : []);
+    autoMatched.forEach(link=>audit(store,req,'PAYTM_ORDER_AUTO_MATCHED','paytm_transaction',link.transactionId,{nature:'SANKI',account:CLEARING,after:link}));
     delete store.paytmReportDrafts[draftId];
     audit(store, req, 'PAYTM_REPORT_IMPORTED', 'paytm_report', draftId, { nature: 'SANKI', account: 'Paytm Settlement Clearing', after: { count: added, sources: draft.sources.map(source => source.name) }, note: 'Evidence imported only; no ledger or bank posting changed.' });
     saveStore(store);
-    res.json({ success: true, added, duplicates: draft.duplicates, view: view(store) });
+    res.json({ success: true, added, duplicates: draft.duplicates, autoMatched: autoMatched.length, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/auto-match', (req, res) => {
+    if (deny(req, res)) return;
+    const store=loadStore(),matched=autoMatchShopifyNotes(store,store.paytmReportTransactions||{},orders ? orders() : [],saleRows ? saleRows(store) : []);
+    matched.forEach(link=>audit(store,req,'PAYTM_ORDER_AUTO_MATCHED','paytm_transaction',link.transactionId,{nature:'SANKI',account:CLEARING,after:link}));
+    if(matched.length)saveStore(store);
+    res.json({success:true,autoMatched:matched.length,view:view(store)});
   });
   router.post('/api/expenses/paytm-reports/link-order', (req, res) => {
     if (deny(req, res)) return;
