@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, genSeo } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, genSeo, retireAudienceModelImages } = require('../modules/procurement');
 
 test('listing copy does not repeat the product type and includes a display name', () => {
   const seo = genSeo({ designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'Pink', fit: 'Oversized', audience: 'Unisex', sizeLabels: ['FS'] });
@@ -185,6 +185,29 @@ test('audience and fit can be corrected during purchase audit', () => {
   assert.match(html, /edSelect\(l,'fit'/);
   assert.match(js, /ORDERED_FIELDS = \[[^\]]*'audience'/);
   assert.match(js, /LINE_EDIT_FIELDS = \[[^\]]*'audience'/);
+});
+
+test('product audience control retires old model views but preserves product photos',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','procurement.html'),'utf8');
+  const js=fs.readFileSync(path.join(__dirname,'..','modules','procurement.js'),'utf8');
+  const po={aiImages:{'shirt|white':[
+    {type:'front',url:'product.png',approved:true},
+    {type:'model-front',url:'wrong-model.png',approved:true},
+    {type:'model-side',url:'wrong-side.png',approved:true}
+  ]},qaRejected:{'shirt|white':[{type:'model-front',url:'held.png'}]}};
+  retireAudienceModelImages(po,'shirt|white','Men','Women');
+  assert.deepEqual(po.aiImages['shirt|white'].map(image=>image.type),['front']);
+  assert.deepEqual(po.qaRejected['shirt|white'],[]);
+  assert.deepEqual(po.audienceImageHistory[0].images.map(image=>image.type),['model-front','model-side']);
+  assert.match(html,/data-audience=/);
+  assert.match(html,/data-reset-models=/);
+  assert.match(html,/Only the selected model audience is generated/);
+  assert.match(js,/router\.post\('\/api\/procurement\/pos\/:id\/group-audience'/);
+  assert.match(js,/const audience = audiences\.length === 1/);
+  assert.match(js,/retireAudienceModelImages\(po,key,oldAudiences\.join/);
+  assert.match(html,/required\.indexOf\(x\.type\)>=0/);
+  assert.match(html,/id="f_audience"><option value="">Select audience/);
+  assert.match(js,/audience:\s*\(raw\.audience \|\| ''\)\.trim\(\)/);
 });
 
 test('receipt can record missing and extra products without deleting the billed line', () => {

@@ -202,7 +202,7 @@
           <div class="fld"><label>Fit</label><select id="f_fit"></select></div>
           <div class="fld"><label id="sizeLabelTxt">Size</label><select id="f_sizeLabel"></select></div>
           <div class="fld" id="chinaWrap" style="display:none"><label>China size <span class="muted" style="font-weight:400;text-transform:none">(record only)</span></label><select id="f_chinaSize"></select></div>
-          <div class="fld"><label>Audience</label><select id="f_audience"><option>Men</option><option>Women</option><option>Unisex</option></select></div>
+          <div class="fld"><label>Audience</label><select id="f_audience"><option value="">Select audience</option><option>Men</option><option>Women</option><option>Unisex</option></select></div>
           <div class="fld"><label>Qty</label><input id="f_qty" type="number" min="0" value="1" /></div>
           <div class="fld"><label id="perPcsLabel">¥/pc</label><input id="f_perPcsYuan" type="number" step="0.01" /></div>
           <div class="fld"><label>Explicit SKU <span class="muted" style="font-weight:400;text-transform:none">(restock only)</span></label><input id="f_sku" class="mono" placeholder="auto" /></div>
@@ -1115,7 +1115,7 @@
           '<div class="fld"><label>Fit</label><select data-e="fit">'+optList(fitsFor(p),l.fit)+'</select></div>'+
           '<div class="fld"><label>Size</label><select data-e="sizeLabel">'+optList(sizesFor(p),l.sizeLabel)+'</select></div>'+
           '<div class="fld"><label>China size</label><select data-e="chinaSize">'+optList(CHINA_SIZES,l.chinaSize)+'</select></div>'+
-          '<div class="fld"><label>Audience</label><select data-e="audience">'+optList(['Men','Women','Unisex'],l.audience||'Men')+'</select></div>'+
+          '<div class="fld"><label>Audience</label><select data-e="audience"><option value="">Select audience</option>'+optList(['Men','Women','Unisex'],l.audience)+'</select></div>'+
           '<div class="fld"><label>Qty</label><input data-e="qty" type="number" min="0" value="'+esc(l.qty)+'"></div>'+
           '<div class="fld"><label>'+(isIndia()?'₹/pc':'¥/pc')+'</label><input data-e="perPcsYuan" type="number" step="0.01" value="'+esc(l.perPcsYuan)+'"></div>'+
           '<div class="fld wide"><label>Product photo <span style="color:var(--err)">*</span></label>'+
@@ -1782,7 +1782,7 @@
         '<div class="fld wide"><label>Design name</label><input data-ra="designName" placeholder="Product name"></div><div class="fld"><label>Vendor product code</label><input data-ra="designCode"></div>'+
         '<div class="fld"><label>Product</label><select data-ra="productType" id="receiptAddType">'+objOpts(lookups.products,'')+'</select></div><div class="fld"><label>Colour</label><select data-ra="colour">'+objOpts(lookups.colours,'')+'</select></div>'+
         '<div class="fld"><label>Fit</label><select data-ra="fit" id="receiptAddFit"><option value="">— choose product first —</option></select></div><div class="fld"><label>Size</label><select data-ra="sizeLabel" id="receiptAddSize"><option value="">— choose product first —</option></select></div>'+
-        '<div class="fld"><label>China size (if used)</label><select data-ra="chinaSize"><option value="">—</option>'+optList(CHINA_SIZES,'')+'</select></div><div class="fld"><label>Gender</label><select data-ra="audience">'+optList(['Men','Women','Unisex'],'Men')+'</select></div>'+
+        '<div class="fld"><label>China size (if used)</label><select data-ra="chinaSize"><option value="">—</option>'+optList(CHINA_SIZES,'')+'</select></div><div class="fld"><label>Audience</label><select data-ra="audience"><option value="">Select audience</option>'+optList(['Men','Women','Unisex'],'')+'</select></div>'+
         '<div class="fld"><label>Actual pieces</label><input data-ra="qty" type="number" min="1" step="1" value="1"></div><div class="fld"><label>'+(india?'₹':'¥')+' per piece</label><input data-ra="perPcsYuan" type="number" min="0.01" step="0.01"></div>'+
         '<div class="fld"><label>Weight g/piece</label><input data-ra="weightGrams" type="number" min="0" step="1"></div><div class="fld"><label>SKU (optional)</label><input data-ra="sku" placeholder="Auto if blank"></div>'+
         '<div class="fld wide"><label>Original product photo</label><input id="receiptAddPhoto" type="file" accept="image/*"><span class="muted" id="receiptAddPhotoStatus">Required for new products</span></div></div>'+
@@ -2319,6 +2319,13 @@
           '<input type="checkbox" data-styck="'+kind+'" data-i="'+i+'"'+(on?' checked':'')+'>'+label+'</label>';
       }
       var fitOpts=cat==='upper'?FIT_UPPER:(cat==='lower'?FIT_LOWER:null);
+      var audienceRow='<div style="margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap">'+
+        '<label for="studioAudience'+i+'" style="font-size:12px;font-weight:700">Product audience</label>'+
+        '<select id="studioAudience'+i+'" data-audience="'+i+'" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:12px">'+
+        '<option value=""'+(!np.audience?' selected':'')+'>Select Women, Men or Unisex</option>'+
+        ['Women','Men','Unisex'].map(function(value){return '<option value="'+value+'"'+(np.audience===value?' selected':'')+'>'+value+'</option>';}).join('')+
+        '</select>'+(imgs.some(function(image){return ['female','male','model-front','model-side','model-side-female','model-side-male'].indexOf(image.type)>=0;})?'<button class="btn ghost sm" data-reset-models="'+i+'">Archive old model drafts</button>':'')+
+        '<span class="muted" style="font-size:11px">Saved for every size. A change archives old model photos and keeps the product-only photo.</span></div>';
       var fitRow=fitOpts?('<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
         sel('fit','Fit / length',fitOpts,s.fit)+
         '<span class="muted" style="font-size:11px">Used for paid model photos only when the original supports it. Auto follows the photographed garment.</span></div>'):'';
@@ -2328,9 +2335,9 @@
         sel('tuck','Tuck',TUCK,s.tuck)+
         sel('shoes','Shoes',SHOES,s.shoes)+'</div><div class="studio-controls-title" style="margin-top:12px">Model casting</div><div class="studio-controls-row">'+
         sel('modelOrigin','Model origin',MODEL_ORIGINS,s.modelOrigin)+
-        sel('maleComplexion','Male model',COMPLEXION,s.maleComplexion)+
-        sel('femaleComplexion','Female model',COMPLEXION,s.femaleComplexion)+
-        '</div><div class="muted" style="font-size:11px;margin-top:5px">Only the complexion for the generated model is used; unisex uses both.</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
+        (np.audience==='Men'||np.audience==='Unisex'?sel('maleComplexion','Male model',COMPLEXION,s.maleComplexion):'')+
+        (np.audience==='Women'||np.audience==='Unisex'?sel('femaleComplexion','Female model',COMPLEXION,s.femaleComplexion):'')+
+        '</div><div class="muted" style="font-size:11px;margin-top:5px">'+(np.audience==='Unisex'?'Unisex creates both female and male views.':np.audience?'Only the selected model audience is generated.':'Select the product audience above before paid generation.')+'</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
         sel('chain','Chain',CHAIN,s.chain)+sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+sel('bagColour','Bag colour',BAG_COLOURS,s.bagColour)+
         chk('sunglasses','Elegant shades',s.sunglasses)+chk('watch','Watch',s.watch)+
         '</div><div class="muted" style="font-size:11px;margin-top:8px">'+(np.line==='casuals'?'Casuals defaults to a limestone-estate setting and understated old-money styling. ':'')+'With light neutral outfits, Auto chooses a beige or tan bag. Accessories must not hide the garment.</div><div data-style-message role="status" class="muted" style="font-size:11px;margin-top:5px">Each change is saved for this product. Existing images do not change until you regenerate them.</div></div>';
@@ -2399,7 +2406,7 @@
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs required approved views + approved SEO</span>';
-      return head+conflictNotice+retailNotice+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
+      return head+conflictNotice+retailNotice+audienceRow+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
     }
     function rerenderCard(i){
       var np=lastReceive.newProducts[i], c=el('scard'+i);
@@ -2474,6 +2481,23 @@
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ if(confirm('This calls the separately billed Anthropic API. Continue?'))genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
+      var audienceSelect=host.querySelector('[data-audience]');
+      function setProductAudience(selected,resetModels){
+        if(!selected){if(audienceSelect)audienceSelect.value=np.audience||'';return;}
+        if(audienceSelect)audienceSelect.disabled=true;
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/group-audience',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,audience:selected,resetModels:!!resetModels})})
+          .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not save product audience.');initStudioFor(receiveId);})
+          .catch(function(error){if(audienceSelect)audienceSelect.value=np.audience||'';alert('Product audience was not changed: '+error.message);})
+          .finally(function(){if(audienceSelect&&audienceSelect.isConnected)audienceSelect.disabled=false;});
+      }
+      if(audienceSelect)audienceSelect.onchange=function(){
+        var selected=audienceSelect.value;
+        setProductAudience(selected,false);
+      };
+      var resetModels=host.querySelector('[data-reset-models]');
+      if(resetModels)resetModels.onclick=function(){
+        if(confirm('Archive this product’s existing model photos, including any approved ones? The product-only photo stays. New paid model photos will be needed before Shopify posting.'))setProductAudience(np.audience,true);
+      };
       Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ var field=sel.getAttribute('data-sty');stylingOf(np)[field]=sel.value;saveStudioStyling(np).then(function(){rerenderCard(i);}).catch(function(e){alert(e.message);}); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-styck]'),function(cb){ cb.onchange=function(){ stylingOf(np)[cb.getAttribute('data-styck')]=cb.checked;saveStudioStyling(np).then(function(){rerenderCard(i);}).catch(function(e){alert(e.message);}); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-backup]'),function(inp){ inp.onchange=function(){ uploadBackPhoto(np,i,inp.files&&inp.files[0]); }; });
@@ -2571,7 +2595,8 @@
       var d=lastReceive;
       var nps=(d.newProducts||[]).map(function(np){
         var seo=(studio.seo[np.key]&&studio.seo[np.key].seo)||np.seo;
-        var imgs=(studio.images[np.key]||[]).filter(function(x){return x.approved&&x.type!=='original'&&x.url!==np.photoUrl;}).map(function(x){return { url:x.url, alt:seo.imageAlt }; });
+        var required=paidTypesFor(np);
+        var imgs=(studio.images[np.key]||[]).filter(function(x){return x.approved&&required.indexOf(x.type)>=0&&x.url!==np.photoUrl;}).map(function(x){return { url:x.url, alt:seo.imageAlt }; });
         return { key:np.key, colour:np.colour, productType:np.productType, vendor:np.vendor, designCode:np.designCode, variants:np.variants, seo:seo, images:imgs };
       });
       return { newProducts:nps, existingAdds:d.existingAdds||[] };

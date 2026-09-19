@@ -8,6 +8,7 @@ test('pilot limits views to supported front and audience model without a fabrica
   assert.deepEqual(pilot.pilotTypes(group),['front','model-front','model-side']);
   assert.deepEqual(pilot.pilotTypes({...group,audience:'Unisex'}),['front','female','model-side-female','male','model-side-male']);
   assert.deepEqual(pilot.pilotTypes(group,true),['front','back','model-front','model-side']);
+  assert.deepEqual(pilot.pilotTypes({...group,audience:''}),[]);
   assert.match(pilot.imagePrompt(group,'front'),/Do not invent/);
   assert.match(pilot.imagePrompt(group,'back'),/real photo of the back/);
 });
@@ -248,6 +249,7 @@ test('independent visual check sends original, candidate and matching model fron
     assert.match(body.input[0].content[0].text,/Off-white, beige or other neutral trouser COLOUR is not evidence/);
     assert.match(body.input[0].content[0].text,/black loafers do NOT fail/);
     assert.match(body.input[0].content[0].text,/a tuck, changed pose, drape, lighting or camera angle alone does not prove a different fit/);
+    assert.match(body.input[0].content[0].text,/clearly depicts a man when a woman was requested/);
     return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(allTrue)}]}]})};
   }});
   assert.equal(calls,1);assert.equal(out.status,'pass');
