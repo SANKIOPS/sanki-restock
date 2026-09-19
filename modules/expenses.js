@@ -1232,7 +1232,8 @@ function paytmReportView(s) {
   const excluded=s.paytmExcludedTransactions||{};
   bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.linkedCount=x.transactionIds.filter(id=>links[id]||manual[id]).length;x.excludedCount=x.transactionIds.filter(id=>excluded[id]).length;x.readyToPost=!x.posted&&!x.excludedCount&&x.linkedCount===x.count&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
   orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.manualResolution=manual[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;});
-  return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),from:PAYTM_START_DATE,through:indiaBusinessDate()};
+  const legacyDrafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===PAYTM_CLEARING_ACCOUNT).map(d=>({id:d.id,name:d.originalName||'Legacy bank statement preview',createdAt:d.createdAt,from:d.summary?.from,to:d.summary?.to,rows:(d.transactions||[]).length}));
+  return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
 function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&isBankLedgerName(name);}
 function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&String(name||'')!==PAYTM_CLEARING_ACCOUNT;}

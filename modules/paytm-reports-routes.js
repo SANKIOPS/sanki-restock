@@ -44,7 +44,7 @@ function registerPaytmReports(router, deps) {
         warnings.push(...parsed.warnings.map(warning => `${file.originalname}: ${warning}`));
         for (const tx of parsed.transactions) {
           const previous = all.get(tx.transactionId);
-          if (previous && differs(previous, tx)) throw new Error(`Conflicting duplicate Paytm transaction ${tx.transactionId}.`);
+          if (previous && differs(previous, tx)) { warnings.push(`Transaction ${tx.transactionId} differs between selected files; kept the first row for review.`); continue; }
           if (!previous) all.set(tx.transactionId, tx);
         }
       }
@@ -52,7 +52,7 @@ function registerPaytmReports(router, deps) {
       let duplicates = 0;
       for (const tx of all.values()) {
         if (existing[tx.transactionId]) {
-          if (differs(existing[tx.transactionId], tx)) throw new Error(`Previously imported transaction ${tx.transactionId} has changed. Review the source report.`);
+          if (differs(existing[tx.transactionId], tx)) { warnings.push(`Previously imported transaction ${tx.transactionId} differs from this report. Saved evidence was not changed; review this ID separately.`); duplicates++; continue; }
           duplicates++;
         } else fresh.push(tx);
       }
