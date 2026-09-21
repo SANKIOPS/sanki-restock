@@ -122,6 +122,7 @@ test('inventory can start paid image generation, without granting it to other st
 
 test('Purchases Summary has a category-first PO explorer plus the complete history', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
   assert.match(html, /Purchase history/);
   assert.match(html, /fetch\('\/api\/procurement\/history'\)/);
   assert.match(html, /data-history-po/);
@@ -149,6 +150,10 @@ test('Purchases Summary has a category-first PO explorer plus the complete histo
   assert.match(html, /Filters above apply to this one list/);
   assert.match(html, /data-hx-po/);
   assert.match(html, /data-hx-design/);
+  assert.doesNotMatch(js, /p\.id !== 'PO-0001'/);
+  assert.doesNotMatch(js, /p\.id !== 'PO-0002'/);
+  assert.doesNotMatch(js, /po\.id === 'PO-0001'/);
+  assert.doesNotMatch(js, /po\.id === 'PO-0002'/);
   assert.match(html, /Click to enlarge/);
   assert.match(html, /Category<\/th><th>Colour<\/th><th>Size/);
   assert.match(html, /historyStatus\(po\)/);
