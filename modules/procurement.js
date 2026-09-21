@@ -2512,7 +2512,7 @@ router.post('/api/procurement/combined-invoices', (req, res) => {
   if (!Array.isArray(ids) || ids.length < 1 || ids.length !== new Set(ids).size || ids.some(id => typeof id !== 'string'))
     return res.status(400).json({ success: false, error: 'Select one or more distinct purchase bills.' });
   const pos = ids.map(id => s.pos[id]);
-  if (pos.some(po => !po || po.historical || po.id === 'PO-0001' || po.id === 'PO-0002'))
+  if (pos.some(po => !po || po.historical))
     return res.status(400).json({ success: false, error: 'Every selected bill must be a visible purchase PO.' });
   const vendors = [...new Map(pos.map(po => {
     const name = String(po.vendor || 'Not recorded').trim() || 'Not recorded';
@@ -2620,10 +2620,11 @@ router.get('/api/procurement/history', (req, res) => {
   const finalized = finalizedByPo(s);
   let accounting = null;
   try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); } catch { /* Unavailable history must not imply unpaid. */ }
-  // Owner removed the two old POs and every Shopify-recovered placeholder
-  // from this list. Preserve their stored records and Shopify inventory.
+  // Stored POs are the purchase record, including early posted purchases.
+  // Shopify-recovered placeholders remain excluded because they do not retain
+  // the original bill, quantity, weights, or landed-cost calculation.
   const history = Object.values(s.pos)
-    .filter(p => !p.historical && p.id !== 'PO-0001' && p.id !== 'PO-0002')
+    .filter(p => !p.historical)
     .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canReconcileVendorBill(req), s.settings, finalized[p.id] && finalized[p.id].amount) }))
     .sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
   res.json({ success: true, history, combinedInvoices: Object.values(s.combinedVendorInvoices), completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
