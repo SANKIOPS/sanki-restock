@@ -132,6 +132,9 @@ function imagePrompt(group, type, styling, hasContinuityReference=false) {
   if (type === 'back') return `Create a clean, photorealistic product-only BACK catalogue photo on a white studio background. The reference is a real photo of the back of this garment. Preserve only details actually visible in that back reference; do not copy front artwork onto the back or invent unseen details. ${common}`;
   if (type === 'detail') return `Create a photorealistic close-up detail photo of the garment's FRONT, showing only details clearly visible in the reference. No model or invented stitching, labels or fabric composition. ${common}`;
   const gender=type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':String(group.audience).toLowerCase()==='women'?'female':'male';
+  const genderGuard=gender==='female'
+    ?'The single model MUST be an adult woman. Never depict a man or masculine-presenting model.'
+    :'The single model MUST be an adult man. Never depict a woman or feminine-presenting model.';
   const cast=castDescription(group,gender,styling);
   const setting=String(group.line||group.collection||'').toLowerCase().includes('casual')?'pale limestone colonnade of a refined heritage estate, natural daylight, understated global old-money mood':'restrained neutral editorial setting';
   const isThreeQuarter=type==='model-side'||type.startsWith('model-side-');
@@ -141,7 +144,7 @@ function imagePrompt(group, type, styling, hasContinuityReference=false) {
   if(resolvedStyle.bagStyle==='Gender-matched bag')resolvedStyle.bagStyle=gender==='female'?'Structured handbag':'Minimal sling bag';
   const continuity=isThreeQuarter?(hasContinuityReference?'The FIRST reference image shows the matching front model photograph: use that exact person, outfit, trouser colour, trouser cut, shoes, accessories and location as a visual continuity anchor. The SECOND reference is the ORIGINAL PRODUCT PHOTO and overrides the first if the featured garment was altered in that model photo. Rotate the same model to a 45-degree pose; do not change the trousers or add another outfit. Neither reference image should appear as a separate panel in the output.':'Maintain the same model identity, trouser colour, outfit and location as the separate matching front photo. Do not include that front photo in this output.'):'One model only, in one pose; do not create a before-and-after layout.';
   const artDirection=String(group.line||group.collection||'').toLowerCase().includes('casual')?'understated international old-money fashion editorial, natural daylight, refined stone architecture, quiet ivory and beige supporting palette, no loud props':'restrained editorial fashion photography that keeps the real product as the hero';
-  return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. Art direction: ${artDirection}. ${poseInstruction} The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. Follow the saved outfit styling only where it does not contradict the actual featured garment in the original photo: ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
+  return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. ${genderGuard} Art direction: ${artDirection}. ${poseInstruction} The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. Follow the saved outfit styling only where it does not contradict the actual featured garment in the original photo: ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
 }
 
 function seoSchema() {
@@ -233,13 +236,18 @@ function stylingForPhoto(styling,fitPreflight) {
 function imageCheckSchema() {
   const fields=['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'];
   const finding={type:'object',additionalProperties:false,required:['status','evidence'],properties:{status:{type:'string',enum:['pass','fail','uncertain']},evidence:{type:'string'}}};
-  return {type:'object',additionalProperties:false,required:fields,properties:Object.fromEntries(fields.map(field=>[field,finding]))};
+  return {type:'object',additionalProperties:false,required:['detectedModelGender',...fields],properties:{detectedModelGender:{type:'string',enum:['woman','man','unclear','not-applicable']},...Object.fromEntries(fields.map(field=>[field,finding]))}};
 }
 
 function evaluateImageCheck(check,type,styling={},group={}) {
   const modelView=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
   const side=type==='model-side'||type.startsWith('model-side-');
   const style=normalizeStyling(styling,group);
+  const expectedGender=type==='female'||type==='model-side-female'?'woman':type==='male'||type==='model-side-male'?'man':String(group.audience||'').toLowerCase()==='women'?'woman':String(group.audience||'').toLowerCase()==='men'?'man':null;
+  if(modelView&&expectedGender&&check?.detectedModelGender!==expectedGender){
+    const detected=check?.detectedModelGender;
+    check={...(check||{}),modelMatch:{status:detected==='woman'||detected==='man'?'fail':'uncertain',evidence:detected==='woman'||detected==='man'?`Detected ${detected}; this product requires an adult ${expectedGender}.`:`Could not clearly verify that the model is an adult ${expectedGender}.`}};
+  }
   const required=['garmentMatch','singleFrame'];
   if(modelView) required.push('angleMatch','fitMatch','pairMatch','modelMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch');
   if(modelView&&style.shoes!=='Auto')required.push('shoeMatch');
@@ -256,7 +264,7 @@ function evaluateImageCheck(check,type,styling={},group={}) {
   const uncertain=blocking.filter(field=>check?.[field]?.status==='uncertain').concat(missing);
   const issues=failed.concat(uncertain).map(field=>`${field}: ${String(check?.[field]?.evidence||'Cannot verify from this image').slice(0,180)}`);
   const warnings=advisory.map(field=>`${field}: ${String(check?.[field]?.evidence||'Accessory not clearly visible').slice(0,180)}`);
-  return {status:failed.length||uncertain.length?'needs-review':'pass',failed,uncertain,issues,warnings};
+  return {status:failed.length||uncertain.length?'needs-review':'pass',failed,uncertain,issues,warnings,expectedModelGender:expectedGender,detectedModelGender:check?.detectedModelGender};
 }
 function shouldRetryImageCheck(check,attempt,maxAttempts) {
   return check?.status==='needs-review'&&Array.isArray(check.failed)&&check.failed.length>0&&!(check.uncertain||[]).length&&attempt<maxAttempts;
@@ -265,7 +273,7 @@ function shouldRetryImageCheck(check,attempt,maxAttempts) {
 async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
   const style=normalizeStyling(styling,group),side=type==='model-side'||type.startsWith('model-side-');
   const isModel=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
-  const checks={type,productColour:group.colour,
+  const checks={type,productColour:group.colour,genderOutputInstruction:'Return detectedModelGender as woman, man, unclear, or not-applicable (product-only images only).',
     chosenFit:style.fit,pair:style.pair,shoes:style.shoes,tuck:style.tuck,chain:style.chain,bag:style.bagStyle,bagColour:style.bagColour,
     sunglasses:style.sunglasses,cap:style.capStyle,watch:style.watch,modelOrigin:style.modelOrigin,modelGender:type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':group.audience,
     femaleComplexion:style.femaleComplexion,maleComplexion:style.maleComplexion};

@@ -116,7 +116,7 @@ test('inventory can start paid image generation, without granting it to other st
   assert.equal(canStartPaidPilot({ user: { role: 'sales', roles: ['sales'] } }), false);
   assert.match(html, /function canStartPaidImages\(\)/);
   assert.match(html, /role==='owner'\|\|role==='admin'\|\|role==='inventory'/);
-  assert.match(html, /canStartPaidImages\(\)\?'<button class="btn sm" data-openai-pilot=/);
+  assert.match(html, /canStartPaidImages\(\)\?'<button type="button" class="btn sm" data-openai-pilot=/);
   assert.match(html, /canStartPaidImages\(\)\?'<button class="btn ghost sm" data-paid-regen=/);
 });
 
