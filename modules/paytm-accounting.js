@@ -4,6 +4,8 @@ const CLEARING = 'Paytm Settlement Clearing';
 const BANK = 'Axis Bank 3448';
 const cents = value => Math.round(Number(value || 0) * 100);
 const dayGap = (a, b) => Math.abs((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
+function transactionSuffix(id) { const digits = String(id || '').replace(/\D/g, ''); return digits.length >= 6 ? digits.slice(-6) : ''; }
+function noteHasTransactionSuffix(note, suffix) { return !!suffix && (String(note || '').match(/\d{6,}/g) || []).some(token => token.endsWith(suffix)); }
 
 function summarizeShopifyPayments(transactions) {
   const result = { paytmAmount: 0, cashAmount: 0, storeCreditAmount: 0, otherAmount: 0, transactions: [] };
@@ -41,13 +43,37 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   const available = Math.min(total - cash - storeCredit, verified.paytmAmount > 0 ? cents(verified.paytmAmount) : total);
   const otherLinked = Object.entries(links).filter(([id, link]) => id !== tx.transactionId && String(link.orderId) === String(order.id)).reduce((sum, [, link]) => sum + cents(link.amount), 0);
   if (cents(tx.amount) <= 0 || cents(tx.amount) + otherLinked > available) throw new Error('Shopify order is already linked or Paytm receipts exceed the amount after cash and store credit. Review the split first.');
-  const note = String(order.note || '');
-  const identifiers = [tx.transactionId, tx.rrn].filter(Boolean);
-  const containsId = text => identifiers.some(id => String(id).length >= 6 && new RegExp(`(^|\\D)${String(id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\D|$)`).test(String(text || '')));
+  const note = String(order.note || ''), suffix = transactionSuffix(tx.transactionId) || transactionSuffix(tx.rrn);
+  const containsId = text => noteHasTransactionSuffix(text, suffix);
   const hasId = containsId(note), uniqueId = hasId && orders.filter(candidate => containsId(candidate.note)).length === 1;
   if (verified.transactions && !verified.paytmAmount && String(reason || '').trim().length < 10) throw new Error('Shopify does not identify a Paytm payment component for this order. Enter a review reason explaining the external Paytm collection.');
   if (!uniqueId && String(reason || '').trim().length < 10) throw new Error('The Paytm ID is missing or repeated in Shopify notes. Enter a review reason of at least 10 characters.');
-  return { transactionId: tx.transactionId, orderId: String(order.id), orderNumber: String(order.orderNumber || order.number || order.name || row && row.orderNumber || '').replace(/^#/, ''), amount: tx.amount, orderTotal: total / 100, partial: cents(tx.amount) < total, storeCreditExcluded: storeCredit / 100, matchBasis: verified.transactions&&!verified.paytmAmount?'external_paytm_reviewed':uniqueId ? 'transaction_id_in_shopify_note' : 'owner_reviewed', reason: uniqueId&&!(verified.transactions&&!verified.paytmAmount) ? '' : String(reason).trim() };
+  return { transactionId: tx.transactionId, transactionSuffix: suffix, orderId: String(order.id), orderNumber: String(order.orderNumber || order.number || order.name || row && row.orderNumber || '').replace(/^#/, ''), amount: tx.amount, orderTotal: total / 100, partial: cents(tx.amount) < total, storeCreditExcluded: storeCredit / 100, matchBasis: verified.transactions&&!verified.paytmAmount?'external_paytm_reviewed':uniqueId ? ((note.match(/\d{6,}/g)||[]).includes(String(tx.transactionId))||((note.match(/\d{6,}/g)||[]).includes(String(tx.rrn||'')))?'transaction_id_in_shopify_note':'transaction_id_suffix_in_shopify_note') : 'owner_reviewed', reason: uniqueId&&!(verified.transactions&&!verified.paytmAmount) ? '' : String(reason).trim() };
+}
+
+function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
+  store.paytmOrderLinks = store.paytmOrderLinks || {};
+  const all = Object.values(transactions || {}), candidates = new Map(), suffixCounts = new Map();
+  all.forEach(tx => { const suffix = transactionSuffix(tx.transactionId)||transactionSuffix(tx.rrn); if(suffix)suffixCounts.set(suffix,(suffixCounts.get(suffix)||0)+1); });
+  for (const tx of all) {
+    if (store.paytmOrderLinks[tx.transactionId] || (store.paytmManualResolutions||{})[tx.transactionId] || (store.paytmExcludedTransactions||{})[tx.transactionId]) continue;
+    const suffix = transactionSuffix(tx.transactionId)||transactionSuffix(tx.rrn);
+    if (!suffix || suffixCounts.get(suffix) !== 1) continue;
+    const matches = orders.filter(order => noteHasTransactionSuffix(order.note,suffix));
+    if (matches.length === 1) candidates.set(tx.transactionId,matches[0]);
+  }
+  const matched = [];
+  for (const tx of all) {
+    const order = candidates.get(tx.transactionId);
+    if (!order) continue;
+    try {
+      const link = validateOrderLink(store,tx,String(order.id),orders,saleRows,'');
+      if (!['transaction_id_suffix_in_shopify_note','transaction_id_in_shopify_note'].includes(link.matchBasis)) continue;
+      store.paytmOrderLinks[tx.transactionId] = { ...link, by:'automatic', at:new Date().toISOString() };
+      matched.push(link);
+    } catch { /* Amount, date, split or duplicate is not safe: leave for review. */ }
+  }
+  return matched;
 }
 
 function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
@@ -85,4 +111,4 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked };
 }
 
-module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, validateOrderLink, validatePayoutPosting };
+module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting };

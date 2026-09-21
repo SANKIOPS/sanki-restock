@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
-const { CLEARING, BANK, summarizeShopifyPayments, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
+const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
 
 function registerPaytmReports(router, deps) {
   const { loadStore, saveStore, audit, canAccess, canClassify, upload, view, today, orders, saleRows, shopifyClient, shopifyStore } = deps;
@@ -44,7 +44,7 @@ function registerPaytmReports(router, deps) {
         warnings.push(...parsed.warnings.map(warning => `${file.originalname}: ${warning}`));
         for (const tx of parsed.transactions) {
           const previous = all.get(tx.transactionId);
-          if (previous && differs(previous, tx)) throw new Error(`Conflicting duplicate Paytm transaction ${tx.transactionId}.`);
+          if (previous && differs(previous, tx)) { warnings.push(`Transaction ${tx.transactionId} differs between selected files; kept the first row for review.`); continue; }
           if (!previous) all.set(tx.transactionId, tx);
         }
       }
@@ -52,7 +52,7 @@ function registerPaytmReports(router, deps) {
       let duplicates = 0;
       for (const tx of all.values()) {
         if (existing[tx.transactionId]) {
-          if (differs(existing[tx.transactionId], tx)) throw new Error(`Previously imported transaction ${tx.transactionId} has changed. Review the source report.`);
+          if (differs(existing[tx.transactionId], tx)) { warnings.push(`Previously imported transaction ${tx.transactionId} differs from this report. Saved evidence was not changed; review this ID separately.`); duplicates++; continue; }
           duplicates++;
         } else fresh.push(tx);
       }
@@ -77,10 +77,19 @@ function registerPaytmReports(router, deps) {
     }
     store.paytmReportImports = store.paytmReportImports || [];
     store.paytmReportImports.push({ id: draftId, at: new Date().toISOString(), by: req.user.username, sources: draft.sources, count: added, duplicates: draft.duplicates, warnings: draft.warnings });
+    const autoMatched = autoMatchShopifyNotes(store,store.paytmReportTransactions,orders ? orders() : [],saleRows ? saleRows(store) : []);
+    autoMatched.forEach(link=>audit(store,req,'PAYTM_ORDER_AUTO_MATCHED','paytm_transaction',link.transactionId,{nature:'SANKI',account:CLEARING,after:link}));
     delete store.paytmReportDrafts[draftId];
     audit(store, req, 'PAYTM_REPORT_IMPORTED', 'paytm_report', draftId, { nature: 'SANKI', account: 'Paytm Settlement Clearing', after: { count: added, sources: draft.sources.map(source => source.name) }, note: 'Evidence imported only; no ledger or bank posting changed.' });
     saveStore(store);
-    res.json({ success: true, added, duplicates: draft.duplicates, view: view(store) });
+    res.json({ success: true, added, duplicates: draft.duplicates, autoMatched: autoMatched.length, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/auto-match', (req, res) => {
+    if (deny(req, res)) return;
+    const store=loadStore(),matched=autoMatchShopifyNotes(store,store.paytmReportTransactions||{},orders ? orders() : [],saleRows ? saleRows(store) : []);
+    matched.forEach(link=>audit(store,req,'PAYTM_ORDER_AUTO_MATCHED','paytm_transaction',link.transactionId,{nature:'SANKI',account:CLEARING,after:link}));
+    if(matched.length)saveStore(store);
+    res.json({success:true,autoMatched:matched.length,view:view(store)});
   });
   router.post('/api/expenses/paytm-reports/link-order', (req, res) => {
     if (deny(req, res)) return;

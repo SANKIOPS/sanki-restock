@@ -2,7 +2,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { parsePaytmReport, summarizePayouts } = require('../modules/paytm-report');
 const { registerPaytmReports } = require('../modules/paytm-reports-routes');
-const { summarizeShopifyPayments, validateOrderLink, validatePayoutPosting } = require('../modules/paytm-accounting');
+const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting } = require('../modules/paytm-accounting');
+
+test('automatically matches a unique six-digit Shopify note suffix but never a collision or wrong amount', () => {
+  const orders=[
+    {id:'O1',number:2845,createdAt:'2026-09-19T10:00:00Z',financialStatus:'paid',total:15000,note:'Paytm 123456'},
+    {id:'O2',number:2846,createdAt:'2026-09-19T10:00:00Z',financialStatus:'paid',total:1000,note:'Paytm 654321'}
+  ];
+  const tx={transactionId:'202609190000123456',date:'2026-09-19',amount:5000};
+  const store={};
+  assert.equal(autoMatchShopifyNotes(store,{[tx.transactionId]:tx},orders,[]).length,1);
+  assert.equal(store.paytmOrderLinks[tx.transactionId].orderId,'O1');
+  assert.equal(store.paytmOrderLinks[tx.transactionId].transactionSuffix,'123456');
+  assert.equal(autoMatchShopifyNotes({}, {[tx.transactionId]:tx},[...orders,{...orders[1],id:'O3',note:'another 123456'}],[]).length,0);
+  assert.equal(autoMatchShopifyNotes({}, {[tx.transactionId]:{...tx,amount:16000}},orders,[]).length,0);
+  assert.equal(autoMatchShopifyNotes({}, {[tx.transactionId]:{...tx,date:'2026-09-15'}},orders,[]).length,0);
+});
 
 const header = 'Transaction_ID,Transaction_Date,Status,Amount,Commission,GST,Settled_Amount,Payout_ID,Payout_Date,UTR_No.,Payment_Mode\n';
 const row = (id, date, amount, fee, gst, net, payout = 'P1') => `'${id}','${date}',SUCCESS,${amount},${fee},${gst},${net},'${payout}','18-09-2026',U123,UPI\n`;
@@ -43,6 +58,19 @@ test('Paytm report preview and confirmation import evidence without touching acc
   const repeated = response(); routes['/api/expenses/paytm-reports/preview'](req, repeated);
   assert.equal(repeated.body.newTransactions, 0);
   assert.equal(repeated.body.duplicates, 1);
+});
+
+test('saving a detailed Paytm report automatically links a unique Shopify note suffix', () => {
+  const routes={},store={paytmReportTransactions:{},paytmReportDrafts:{}};
+  const router={get:(url,handler)=>{routes[url]=handler;},post:(url,...handlers)=>{routes[url]=handlers.at(-1);}};
+  const txId='202609170001123456';
+  registerPaytmReports(router,{loadStore:()=>store,saveStore:()=>{},audit:()=>{},canAccess:()=>true,upload:{array:()=>()=>{}},view:()=>({}),today:()=> '2026-09-19',orders:()=>[{id:'O1',number:2801,financialStatus:'paid',createdAt:'2026-09-17T12:00:00Z',total:999,note:'Paytm 123456'}],saleRows:()=>[]});
+  const reply=()=>({status(){return this;},json(body){this.body=body;return this;}});
+  const preview=reply();routes['/api/expenses/paytm-reports/preview']({user:{username:'owner'},files:[{originalname:'paytm.csv',buffer:Buffer.from(header+row(txId,'2026-09-17',999,0,0,999))}]},preview);
+  const saved=reply();routes['/api/expenses/paytm-reports/confirm']({user:{username:'owner'},body:{draftId:preview.body.draftId}},saved);
+  assert.equal(saved.body.autoMatched,1);
+  assert.equal(store.paytmOrderLinks[txId].orderId,'O1');
+  assert.equal(store.paytmPayoutPostings,undefined,'matching a receipt does not post a payout');
 });
 
 test('reviewed Shopify links and exact UTR bank credit are required before payout posting', () => {
