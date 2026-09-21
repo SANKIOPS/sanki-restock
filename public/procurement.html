@@ -2176,6 +2176,9 @@
       var copy=studio.seo[np.key];
       return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(copy&&copy.seo&&(copy.approved||copy.source==='openai-pilot'))};
     }
+    function productNeedsSavedWeight(np){
+      return (np.variants||[]).some(function(variant){return Number(variant.qty)>0&&!(Number(variant.weightGrams)>0);});
+    }
     async function generatePaidGroups(mode,singleKey){
       var btn=mode==='single'?null:el(mode==='all'?'generatePoBtn':'generateSelectedBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
       function report(message,item){
@@ -2192,7 +2195,8 @@
       catch(e){ report('Styling was not saved: '+e.message+'. No paid call was made.',selected[0]);return; }
       var pending=selected.filter(function(x){var missing=missingPaidDrafts(x.np);return missing.images.length||missing.seo;});
       if(po.status!=='received'){report('Receive and weigh this PO, then Save corrections before generating.',selected[0]);return;}
-      if((po.lines||[]).some(function(l){return !(Number(l.weightGrams)>0);})){report('Every line needs its saved weight before generation.',selected[0]);return;}
+      var missingWeight=pending.find(function(item){return productNeedsSavedWeight(item.np);});
+      if(missingWeight){report('Save the received weight for '+(missingWeight.np.designName||missingWeight.np.colour||'the selected product')+' before generation.',missingWeight);return;}
       if(pending.some(function(x){return !x.np.photoUrl;})){report('Upload an original photo for every selected product first.',selected[0]);return;}
       if(pending.some(function(x){return !paidTypesFor(x.np).length;})){report('Set Men, Women or Unisex for every selected product before generation.',selected[0]);return;}
       var max=(openaiPilotConfig||{}).maxGroups||30;
@@ -2245,7 +2249,7 @@
       var po=(lastReceive&&lastReceive.po)||{}, current=studio.images[np.key]||[];
       var allowed=paidTypesFor(np), chosen=types.filter(function(type){return allowed.indexOf(type)>=0&&current.some(function(image){return image.type===type&&image.url;});});
       if(!chosen.length){alert('No existing image was found for the selected view.');return;}
-      if(po.status!=='received'||(po.lines||[]).some(function(line){return !(Number(line.weightGrams)>0);})){alert('Receive and weigh this PO, then Save corrections before regeneration.');return;}
+      if(po.status!=='received'||productNeedsSavedWeight(np)){alert('Receive and save the weight for this product before regeneration.');return;}
       if(!np.photoUrl){alert('Upload the original front reference first.');return;}
       if(!confirm('Regenerate '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(garmentCat(np.productType)==='upper'&&paidStylingOf(np).fit!=='Auto'?1:0)+' original-fit check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
       var label=button.textContent;
