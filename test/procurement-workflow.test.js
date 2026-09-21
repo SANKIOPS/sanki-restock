@@ -211,6 +211,11 @@ test('product audience control retires old model views but preserves product pho
   assert.match(js,/audience:\s*\(raw\.audience \|\| ''\)\.trim\(\)/);
 });
 
+test('image-studio product variants include saved weight for product-scoped generation checks',()=>{
+  const js=fs.readFileSync(path.join(__dirname,'..','modules','procurement.js'),'utf8');
+  assert.match(js,/qty: l\.qty, weightGrams:l\.weightGrams, landed:/);
+});
+
 test('receipt can record missing and extra products without deleting the billed line', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');

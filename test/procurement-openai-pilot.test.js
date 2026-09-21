@@ -188,6 +188,9 @@ test('one-click generation has a confirmed two-attempt cap and requests only mis
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
   assert.match(html,/function missingPaidDrafts\(np\)/);
+  assert.match(html,/function productNeedsSavedWeight\(np\)/);
+  assert.match(html,/var missingWeight=pending\.find/);
+  assert.doesNotMatch(html,/Every line needs its saved weight before generation/);
   assert.match(html,/Generate missing drafts \(paid\)/);
   assert.match(html,/retry:!!used\[item\.np\.key\]/);
   assert.match(html,/Hard limit: up to .* billed image calls and .* billed visual checks/);

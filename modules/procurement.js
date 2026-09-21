@@ -675,7 +675,7 @@ async function computePreview(store, body) {
       seo,
       variants: g.lines.map(l => ({
         sku: l.sku, sizeLabel: l.sizeLabel, sizeCode: sizeCodeOf(l.sizeLabel), chinaSize: l.chinaSize,
-        qty: l.qty, landed: l.landed, price: l.suggestedMrp, skuError: l.skuError
+        qty: l.qty, weightGrams:l.weightGrams, landed: l.landed, price: l.suggestedMrp, skuError: l.skuError
       }))
     };
   });
