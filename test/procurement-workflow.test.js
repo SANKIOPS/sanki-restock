@@ -205,6 +205,7 @@ test('product audience control retires old model views but preserves product pho
   assert.match(js,/router\.post\('\/api\/procurement\/pos\/:id\/group-audience'/);
   assert.match(js,/const audience = audiences\.length === 1/);
   assert.match(js,/retireAudienceModelImages\(po,key,oldAudiences\.join/);
+  assert.match(js,/expireStalePaidAttempts\(po\);\s*if \(\(\(po\.openaiPilot/);
   assert.match(html,/required\.indexOf\(x\.type\)>=0/);
   assert.match(html,/id="f_audience"><option value="">Select audience/);
   assert.match(js,/audience:\s*\(raw\.audience \|\| ''\)\.trim\(\)/);

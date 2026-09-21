@@ -1800,6 +1800,10 @@ router.post('/api/procurement/pos/:id/group-audience', async (req,res) => {
     if (!['Men','Women','Unisex'].includes(audience)) return res.status(400).json({success:false,error:'Select Men, Women or Unisex.'});
     const lines=(po.lines||[]).filter(l=>groupKey(l)===key);
     if (!lines.length) return res.status(404).json({success:false,error:'Product group not found.'});
+    // A browser or deployment interruption can leave an old paid attempt saved
+    // as "running". Expire it here too, so it cannot permanently block the
+    // user from retiring an incorrect model draft.
+    expireStalePaidAttempts(po);
     if (((po.openaiPilot||{}).attempts||[]).some(a=>a.status==='running')) return res.status(409).json({success:false,error:'Wait for the PO’s current image generation to finish before changing a product audience.'});
     const oldAudiences=[...new Set(lines.map(l=>String(l.audience||'').trim()))];
     const sameAudience=oldAudiences.length===1&&oldAudiences[0]===audience;
