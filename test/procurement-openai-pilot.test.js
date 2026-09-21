@@ -179,6 +179,8 @@ test('purchase studio offers whole-PO, selected and single-product paid generati
   assert.match(html,/5 · Styled three-quarter view/);
   assert.match(html,/Model casting/);
   assert.match(html,/Original references · never posted/);
+  assert.match(html,/<b>SKU:<\/b>/);
+  assert.match(html,/<button type="button" class="btn sm" data-openai-pilot=/);
   assert.match(html,/await Promise\.all\(selected\.map/);
 });
 
@@ -215,7 +217,7 @@ test('existing image views can be regenerated separately or together without rew
 
 test('visual checks reject mismatched outfit, accessories, angle or continuity',()=>{
   const fields=['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'];
-  const pass=Object.fromEntries(fields.map(field=>[field,{status:'pass',evidence:'Visible match'}]));
+  const pass={detectedModelGender:'woman',...Object.fromEntries(fields.map(field=>[field,{status:'pass',evidence:'Visible match'}]))};
   const styling={shoes:'Leather loafers',tuck:'Tucked in'};
   assert.equal(pilot.evaluateImageCheck(pass,'model-side',styling,group).status,'pass');
   for(const field of fields) {
@@ -233,12 +235,14 @@ test('visual checks reject mismatched outfit, accessories, angle or continuity',
   assert.equal(pilot.evaluateImageCheck({...pass,shoeMatch:{status:'fail',evidence:'shoes'}},'model-front',{},group).status,'pass');
   assert.deepEqual(pilot.evaluateImageCheck({...pass,tuckMatch:{status:'uncertain',evidence:'Hem hidden'}},'model-front',styling,group).uncertain,['tuckMatch']);
   assert.equal(pilot.evaluateImageCheck({garmentMatch:{status:'pass',evidence:'match'}},'model-front',styling,group).status,'needs-review');
+  assert.deepEqual(pilot.evaluateImageCheck({...pass,detectedModelGender:'man'},'model-front',styling,group).failed,['modelMatch']);
+  assert.deepEqual(pilot.evaluateImageCheck({...pass,detectedModelGender:'unclear'},'model-front',styling,group).uncertain,['modelMatch']);
 });
 
 test('independent visual check sends original, candidate and matching model front without retry',async()=>{
   let calls=0;
   const continuitySource={buf:Buffer.from('matching-front'),mime:'image/png'};
-  const allTrue=Object.fromEntries(['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'].map(field=>[field,{status:'pass',evidence:'Visible match'}]));
+  const allTrue={detectedModelGender:'woman',...Object.fromEntries(['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'].map(field=>[field,{status:'pass',evidence:'Visible match'}]))};
   const out=await pilot.verifyImage({key:'test-only',group,source,generated:Buffer.from('candidate'),continuitySource,type:'model-side',styling:{pair:'Baggy trousers',bagStyle:'None',sunglasses:false},fetchImpl:async(url,options)=>{
     calls++;assert.equal(url,'https://api.openai.com/v1/responses');
     const body=JSON.parse(options.body);
@@ -255,12 +259,11 @@ test('independent visual check sends original, candidate and matching model fron
   assert.equal(calls,1);assert.equal(out.status,'pass');
 });
 
-test('purchase image approval and posting are gated by visual check, with rejected drafts retained',()=>{
+test('purchase image approval remains gated while rejected draft clutter stays hidden',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
-  assert.match(html,/Images held by visual check/);
+  assert.doesNotMatch(html,/Images held by visual check/);
   assert.match(html,/x\.qa\.status==='pass'/);
-  assert.match(html,/Owner review · accept/);
   assert.match(server,/function imageCheckAccepted/);
   assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/qa-review'/);
   assert.match(server,/invalidateDependentSides\(images,type\)/);
