@@ -2111,9 +2111,9 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   assert.equal(axis.some(x=>x.id==='SHOPIFY/direct'||x.id==='SHOPIFY/manualPos'),false);
   assert.equal(axis.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000);
   assert.equal(axis.find(x=>x.id==='SHOPIFY/afterToday').credit,10000);
-  const receipt=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-08-23');assert.equal(receipt.credit,50000);assert.deepEqual(receipt.connectedSales.map(x=>x.id),['SHOPIFY/paytm']);
-  assert.equal(clearing.find(x=>x.id==='PAYTM-SALE/SHOPIFY/paytm').noteSuffixes[0],'123456');
-  const september=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-09-10');assert.equal(september.credit,12500);assert.deepEqual(september.connectedSales.map(x=>x.id),['SHOPIFY/direct']);
+  const receipt=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-08-23');assert.equal(receipt.credit,0);assert.deepEqual(receipt.connectedSales.map(x=>x.id),['SHOPIFY/paytm']);
+  const paytmSale=clearing.find(x=>x.id==='PAYTM-SALE/SHOPIFY/paytm');assert.equal(paytmSale.credit,50000);assert.equal(paytmSale.noteSuffixes[0],'123456');
+  const september=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-09-10');assert.equal(september.credit,0);assert.deepEqual(september.connectedSales.map(x=>x.id),['SHOPIFY/direct']);assert.equal(clearing.find(x=>x.id==='PAYTM-SALE/SHOPIFY/direct').credit,12500);
   assert.equal(clearing.some(x=>(x.connectedSales||[]).some(y=>['SHOPIFY/beforeStart','SHOPIFY/afterToday'].includes(y.id))),false);
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
@@ -2155,8 +2155,8 @@ test('Paytm clearing shows customer receipt date, bank settlement and charges as
   const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{sale:{id:'sale-15295',name:'#SALE15295',orderNumber:'SALE15295',createdAt:'2026-08-21T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:15295,refundAmount:0}}}));
   stored.paytmSettlements=[{id:'PTM-DISPLAY',date:'2026-08-22',bankAccount:'Axis Bank 3448',bankTransactionId:'BTX-PAYTM-DISPLAY',netAmount:14755.36,grossAmount:15295,chargeAmount:539.64,orderIds:['SALE15295'],reason:'Daily Paytm settlement'}];stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']={transactions:{paytm:{id:'BTX-PAYTM-DISPLAY',date:'2026-08-22',credit:14755.36,debit:0,reference:'PAYTM-REF-22'}},imports:[]};fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
-  const entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,receipt=entries.find(x=>x.kind==='paytm_customer_receipts'),settlement=entries.find(x=>x.kind==='paytm_settlement'),charge=entries.find(x=>x.kind==='paytm_charge');
-  assert.equal(receipt.date,'2026-08-21');assert.equal(receipt.credit,15295);assert.equal(receipt.paytmSummary.knownCharges,539.64);assert.equal(receipt.paytmSummary.unknownCharges,0);assert.deepEqual(receipt.connectedSales.map(x=>x.orderNumber),['15295']);
+  const entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,receipt=entries.find(x=>x.kind==='paytm_customer_receipts'),sale=entries.find(x=>x.id==='PAYTM-SALE/SHOPIFY/sale-15295'),settlement=entries.find(x=>x.kind==='paytm_settlement'),charge=entries.find(x=>x.kind==='paytm_charge');
+  assert.equal(receipt.date,'2026-08-21');assert.equal(receipt.credit,0);assert.equal(sale.credit,15295);assert.equal(receipt.paytmSummary.knownCharges,539.64);assert.equal(receipt.paytmSummary.unknownCharges,0);assert.deepEqual(receipt.connectedSales.map(x=>x.orderNumber),['15295']);
   assert.equal(settlement.date,'2026-08-22');assert.equal(settlement.debit,14755.36);assert.equal(settlement.reference,'PAYTM-REF-22');assert.equal(charge.debit,539.64);assert.equal(charge.reference,'PAYTM-REF-22');assert.equal(charge.balance,0);
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{}}));
   const legacyEntries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,legacyReceipt=legacyEntries.find(x=>x.kind==='paytm_customer_receipts');
