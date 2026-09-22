@@ -305,7 +305,7 @@ async function loadShopifyPurchaseHistory(force) {
         sku: String(v.sku || '').toUpperCase(),
         inventoryItemId: String(v.inventory_item_id || ''),
         sellingPrice: v.price == null || v.price === '' ? null : Number(v.price),
-        inventoryQuantity: v.inventory_quantity == null || v.inventory_quantity === '' ? null : Number(v.inventory_quantity),
+        historicalReceivedQuantity: null,
         grams: Number(v.grams) || 0,
         weight: Number(v.weight) || 0,
         weightUnit: String(v.weight_unit || '')
@@ -338,25 +338,44 @@ async function loadShopifyPurchaseHistory(force) {
       });
     } catch { /* Cost recovery is optional; never hide the product history. */ }
   }
-  const stockByInventoryId = {};
-  for (let offset = 0; offset < inventoryIds.length; offset += 50) {
-    const ids = inventoryIds.slice(offset, offset + 50);
+  // Recover the initial quantity that arrived, rather than today's remaining
+  // stock. Shopify's inventory history is the only reliable audit trail for
+  // this: use the first positive available adjustment made around the product
+  // creation date. Leave the quantity unknown when that historical event is
+  // absent instead of deriving it from current stock or later sales.
+  const receivedByInventoryId = {};
+  for (let offset = 0; offset < inventoryIds.length; offset += 15) {
+    const ids = inventoryIds.slice(offset, offset + 15);
+    const aliases = ids.map((id, index) =>
+      `i${index}: inventoryHistory(first: 20, inventoryItemId: "gid://shopify/InventoryItem/${id}") { nodes { createdAt changes(quantityNames: ["available"]) { name delta } } }`
+    ).join('\n');
     try {
-      const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/inventory_levels.json?inventory_item_ids=${ids.join(',')}`);
+      const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/unstable/graphql.json`, {
+        method: 'POST', body: JSON.stringify({ query: `query HistoricalReceived { ${aliases} }` })
+      });
       if (!r.ok) continue;
       const d = await r.json();
-      (d.inventory_levels || []).forEach(level => {
-        if (!level || level.inventory_item_id == null || level.available == null) return;
-        const id = String(level.inventory_item_id);
-        stockByInventoryId[id] = (stockByInventoryId[id] || 0) + Number(level.available || 0);
+      ids.forEach((id, index) => {
+        const nodes = (d.data && d.data[`i${index}`] && d.data[`i${index}`].nodes) || [];
+        const product = products.find(p => p.variantDetails.some(v => v.inventoryItemId === id));
+        const createdAt = product ? Date.parse(product.createdAt) : NaN;
+        const initial = nodes.find(node => {
+          const eventAt = Date.parse(node.createdAt);
+          return Number.isFinite(createdAt) && Number.isFinite(eventAt) &&
+            Math.abs(eventAt - createdAt) <= 72 * 60 * 60 * 1000 &&
+            (node.changes || []).some(change => change.name === 'available' && Number(change.delta) > 0);
+        });
+        if (initial) receivedByInventoryId[id] = (initial.changes || [])
+          .filter(change => change.name === 'available' && Number(change.delta) > 0)
+          .reduce((sum, change) => sum + Number(change.delta), 0);
       });
-    } catch { /* Stock recovery is optional; never hide the product history. */ }
+    } catch { /* Historical quantity recovery is optional; never hide product history. */ }
   }
   products.forEach(product => product.variantDetails.forEach(variant => {
     variant.recordedCost = Object.prototype.hasOwnProperty.call(costByInventoryId, variant.inventoryItemId)
       ? costByInventoryId[variant.inventoryItemId] : null;
-    if (Object.prototype.hasOwnProperty.call(stockByInventoryId, variant.inventoryItemId)) {
-      variant.inventoryQuantity = stockByInventoryId[variant.inventoryItemId];
+    if (Object.prototype.hasOwnProperty.call(receivedByInventoryId, variant.inventoryItemId)) {
+      variant.historicalReceivedQuantity = receivedByInventoryId[variant.inventoryItemId];
     }
   }));
   // A single Shopify creation date can contain products from several sourcing
@@ -380,9 +399,9 @@ async function loadShopifyPurchaseHistory(force) {
         vendor: group.vendor, vendorNames: [group.vendor], billNo: '', products: group.products,
         productCount: group.products.length,
         skuCount: group.products.reduce((n, p) => n + p.skus.length, 0),
-        currentStock: group.products.reduce((total, p) => total + p.variantDetails.reduce((n, v) =>
-          n + (Number.isFinite(v.inventoryQuantity) ? v.inventoryQuantity : 0), 0), 0),
-        currentStockKnown: group.products.some(p => p.variantDetails.some(v => Number.isFinite(v.inventoryQuantity))),
+        historicalPieces: group.products.reduce((total, p) => total + p.variantDetails.reduce((n, v) =>
+          n + (Number.isFinite(v.historicalReceivedQuantity) ? v.historicalReceivedQuantity : 0), 0), 0),
+        historicalPiecesKnown: group.products.every(p => p.variantDetails.every(v => Number.isFinite(v.historicalReceivedQuantity))),
         quantityKnown: false, valueKnown: false
       };
     });

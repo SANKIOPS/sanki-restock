@@ -934,18 +934,19 @@
         var photo=p.imageUrl?'<img class="thumb" data-zoom src="'+esc(p.imageUrl)+'" alt="'+esc(p.title||'Recovered Shopify product')+'" title="Click to enlarge" style="width:52px;height:62px;object-fit:cover;border-radius:6px;cursor:zoom-in">':'<span class="muted">No photo</span>';
         var variants=p.variantDetails||[],unique=function(field){var seen={};return variants.map(function(v){return v[field];}).filter(function(v){return v!=null&&v!==''&&!seen[String(v)]&&(seen[String(v)]=1);});};
         var costs=unique('recordedCost'),prices=unique('sellingPrice'),grams=unique('grams').filter(function(v){return Number(v)>0;});
-        var stock=variants.reduce(function(n,v){return n+(Number.isFinite(Number(v.inventoryQuantity))?Number(v.inventoryQuantity):0);},0);
+        var receivedKnown=variants.length&&variants.every(function(v){return Number.isFinite(v.historicalReceivedQuantity);});
+        var received=variants.reduce(function(n,v){return n+(Number.isFinite(v.historicalReceivedQuantity)?v.historicalReceivedQuantity:0);},0);
         var costText=costs.length?costs.map(function(v){return money(v);}).join(' / '):'<span class="muted">Not saved</span>';
         var priceText=prices.length?prices.map(function(v){return money(v);}).join(' / '):'<span class="muted">Not saved</span>';
         var weightText=grams.length?grams.map(function(v){return Number(v).toLocaleString('en-IN')+' g';}).join(' / '):'<span class="muted">Not saved</span>';
-        return '<tr><td>'+photo+'</td><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td class="money">'+stock+' pcs</td><td class="money"><b>'+costText+'</b></td><td class="money">'+priceText+'</td><td class="money">'+weightText+'</td><td>'+esc(p.status||'—')+'</td></tr>';
+        return '<tr><td>'+photo+'</td><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td class="money">'+(receivedKnown?received+' pcs':'<span class="muted">Unavailable</span>')+'</td><td class="money"><b>'+costText+'</b></td><td class="money">'+priceText+'</td><td class="money">'+weightText+'</td><td>'+esc(p.status||'—')+'</td></tr>';
       }).join('');
       var vendors=(po.vendorNames||[]).join(', ')||'Shopify recovered';
-      var quantity=po.currentStockKnown?(Number(po.currentStock||0).toLocaleString('en-IN')+' current pcs'):(Number(po.productCount||0)+' products');
+      var quantity=Number(po.productCount||0)+' products · '+(po.historicalPiecesKnown?(Number(po.historicalPieces||0).toLocaleString('en-IN')+' pcs came'):'pieces unavailable');
       var head=purchaseHistoryHead(po,'Shopify record',po.datePurchase||'Date unavailable','Shopify recovery',vendors,quantity,'Unavailable');
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
-        '<div class="banner" style="margin-bottom:9px"><b>Recovered from Shopify.</b> Product created '+esc(po.datePurchase||'date unavailable')+' · '+Number(po.productCount||0)+' products · '+Number(po.skuCount||0)+' SKUs. Current pieces are today\'s Shopify stock, not the original purchased quantity. Cost/pc is Shopify\'s saved inventory-item cost; selling price is shown separately. Missing supplier bills are not guessed.</div>'+
-        '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Product</th><th>Type</th><th>SKUs</th><th>Current stock</th><th>Recorded cost/pc</th><th>Selling price</th><th>Weight/pc</th><th>Shopify status</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+        '<div class="banner" style="margin-bottom:9px"><b>Recovered from Shopify.</b> Product created '+esc(po.datePurchase||'date unavailable')+' · '+Number(po.productCount||0)+' products · '+Number(po.skuCount||0)+' SKUs. Pieces came is recovered from the initial Shopify inventory adjustment near product creation; unavailable history is not guessed. Cost/pc is Shopify\'s saved inventory-item cost; selling price is shown separately.</div>'+
+        '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Product</th><th>Type</th><th>SKUs</th><th>Pieces came</th><th>Recorded cost/pc</th><th>Selling price</th><th>Weight/pc</th><th>Shopify status</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
       return head+detail;
     }
 
