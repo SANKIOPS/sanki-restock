@@ -94,8 +94,8 @@ test('LG payment records partial and final allocations under one reference per p
   const store = { procurementAccounting: { mediator: 'LG', paymentsByPo: {} } };
   const project = () => {
     const paid = id => ((store.procurementAccounting.paymentsByPo[id] || {}).payments || []).reduce((n, p) => n + p.amount, 0);
-    const children = [{ id: 'PO-A', billNo: '101', supplier: 'A', balanceDue: 600 - paid('PO-A') },
-      { id: 'PO-B', billNo: '102', supplier: 'B', balanceDue: 400 - paid('PO-B') }];
+    const children = [{ id: 'PO-A', billNo: '101', supplier: 'A', balanceDue: Math.max(0, 600 - paid('PO-A')) },
+      { id: 'PO-B', billNo: '102', supplier: 'B', balanceDue: Math.max(0, 400 - paid('PO-B')) }];
     return [{ id: 'CVI-1', source: 'procurement_lg', finalized: { basis: 'vendor' }, poIds: ['PO-A', 'PO-B'],
       billNo: 'LG-001', purchaseBills: children, balanceDue: children.reduce((n, p) => n + p.balanceDue, 0),
       paidAmount: paid('PO-A') + paid('PO-B') }];
@@ -112,20 +112,19 @@ test('LG payment records partial and final allocations under one reference per p
       reference: 'UTR-123', paymentProofs: ['/proof.jpg'] }, user: { username: 'owner' } },
     { status(n) { status = n; return this; }, json(x) { body = x; } }); return { status, body }; };
   assert.equal(pay(100, 'Prashant Axis 3645').status, 400);
-  assert.equal(pay(1001).status, 400);
   const first = pay(250);assert.equal(first.body.success, true);assert.equal(first.body.payable.balanceDue, 750);
   assert.equal(first.body.allocations.reduce((n, a) => n + a.amount, 0), 250);
   assert.equal(new Set(first.body.allocations.map(a => a.poId)).size, 2);
-  const second = pay(250, 'Tiana 0425');assert.equal(second.body.success, true);assert.equal(second.body.payable.balanceDue, 500);
-  const third = pay(500, 'Gagan Sir Cash');assert.equal(third.body.success, true);assert.equal(third.body.payable.balanceDue, 0);
+  const second = pay(2000, 'Tiana 0425');assert.equal(second.body.success, true);assert.equal(second.body.appliedToBill, 750);
+  assert.equal(second.body.excessCredit, 1250);assert.equal(second.body.payable.balanceDue, 0);assert.equal(second.body.payable.paidAmount, 2250);
+  assert.equal(second.body.allocations.reduce((n, a) => n + a.amount, 0), 2000);
   assert.equal(pay(1).status, 400);
-  assert.equal(saved, 3);
+  assert.equal(saved, 2);
   const payments = Object.values(store.procurementAccounting.paymentsByPo).flatMap(x => x.payments);
-  assert.equal(new Set(payments.map(x => x.batchPaymentId)).size, 3);
+  assert.equal(new Set(payments.map(x => x.batchPaymentId)).size, 2);
   assert.ok(payments.every(x => x.combinedInvoiceId === 'CVI-1' && x.bankReference === 'UTR-123'));
   assert.ok(payments.some(x => x.account === 'Axis Bank 3448' && x.paymentType === 'Bank Transfer'));
   assert.ok(payments.some(x => x.account === 'Tiana 0425' && x.paymentType === 'Bank Transfer'));
-  assert.ok(payments.some(x => x.account === 'Gagan Sir Cash' && x.paymentType === 'Cash'));
 });
 
 test('legacy Logistics Mediator label appears as LG without changing payment history', () => {

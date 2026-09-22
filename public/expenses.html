@@ -211,7 +211,7 @@
 
   <dialog id="lgPayDlg"><div class="dlg">
     <h3>Record Sourcing Vendor Payment</h3>
-    <p class="sub">Record a payment already made against a finalized LG bill. Partial payments remain due on the same bill.</p>
+    <p class="sub">Record a payment already made against a finalized LG bill. Partial payments remain due; any amount above the bill becomes an LG advance/credit in the sourcing ledger.</p>
     <div class="grid">
       <div class="fld full"><label>LG bill</label><select id="lgPayBill"></select></div>
       <div class="fld"><label>Amount paid ₹</label><input id="lgPayAmount" type="number" min="1" step="1"><button type="button" class="btn mini ghost" id="lgPayFull">Use full outstanding</button></div>
@@ -888,7 +888,7 @@
         return d.purchases||[];
       }).catch(function(error){if(el('lgEntryList'))el('lgEntryList').textContent=error.message;throw error;});
     }
-    function chooseLgPayment(){var p=lgPayablesById[el('lgPayBill').value];if(!p)return;el('lgPayAmount').value=p.balanceDue;el('lgPayAmount').max=p.balanceDue;el('lgPayDue').textContent='LG bill '+p.billNo+' · Outstanding '+fmt(p.balanceDue)+' · '+(p.poIds||[]).length+' linked purchase bill(s).';}
+    function chooseLgPayment(){var p=lgPayablesById[el('lgPayBill').value];if(!p)return;el('lgPayAmount').value=p.balanceDue;el('lgPayAmount').removeAttribute('max');el('lgPayDue').textContent='LG bill '+p.billNo+' · Outstanding '+fmt(p.balanceDue)+' · '+(p.poIds||[]).length+' linked purchase bill(s). You may enter more than the outstanding amount; the excess will remain as LG advance/credit in the sourcing ledger.';}
     window.openLgPayment=function(id){
       var dialog=el('lgPayDlg');el('lgPayMessage').textContent='Loading finalized LG bills…';
       el('lgPayAccount').value='';
@@ -901,11 +901,11 @@
     el('lgPayCancel').addEventListener('click',function(){el('lgPayDlg').close();});
     el('lgPaySave').addEventListener('click',function(){
       var p=lgPayablesById[el('lgPayBill').value],amount=Number(el('lgPayAmount').value),account=el('lgPayAccount').value,files=el('lgPayProof').files,button=el('lgPaySave');
-      if(!p||!Number.isInteger(amount)||amount<1||amount>p.balanceDue||!account||!el('lgPayDate').value||!files.length){el('lgPayMessage').textContent='Choose an LG bill, account, payment date, proof and whole-rupee amount up to the outstanding balance.';return;}
+      if(!p||!Number.isInteger(amount)||amount<1||!account||!el('lgPayDate').value||!files.length){el('lgPayMessage').textContent='Choose an LG bill, account, payment date, proof and a positive whole-rupee amount.';return;}
       button.disabled=true;el('lgPayMessage').textContent='Uploading payment proof…';
       uploadFiles(files,'SANKI').then(function(proofs){return api('/api/expenses/procurement-lg/'+encodeURIComponent(p.id)+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:amount,account:account,date:el('lgPayDate').value,reference:el('lgPayReference').value,note:el('lgPayNote').value,paymentProofs:proofs})});}).then(function(d){
         button.disabled=false;if(!d.success){el('lgPayMessage').textContent=d.error||'Could not record payment.';return;}
-        el('lgPayDlg').close();setMsg('Payment '+d.batchPaymentId+' recorded against '+p.billNo+'. Remaining '+fmt(d.payable.balanceDue)+'.',true);
+        el('lgPayDlg').close();setMsg('Payment '+d.batchPaymentId+' recorded against '+p.billNo+'. Remaining '+fmt(d.payable.balanceDue)+(d.excessCredit?' · LG advance/credit '+fmt(d.excessCredit):'')+'.',true);
         if(tab==='vendors')loadVendors();else if(tab==='pending')loadPendingPayments();else if(tab==='log')loadLgPayables();
       }).catch(function(error){button.disabled=false;el('lgPayMessage').textContent=error.message||'Could not record LG payment.';});
     });

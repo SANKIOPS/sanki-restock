@@ -2233,8 +2233,8 @@ router.post('/api/expenses/procurement-lg/:id/pay', (req, res) => {
   const s = loadStore(), b = req.body || {}, payable = procurementLedgerPayables(s, true).find(x => x.id === req.params.id);
   if (!payable || !payable.finalized) return res.status(404).json({ success: false, error: 'Finalized LG bill not found.' });
   const amount = Number(b.amount), due = round0(payable.balanceDue);
-  if (!Number.isInteger(amount) || amount <= 0 || amount > due)
-    return res.status(400).json({ success: false, error: 'Enter a whole-rupee payment from ₹1 to ₹' + due + '.' });
+  if (!Number.isInteger(amount) || amount <= 0 || due <= 0)
+    return res.status(400).json({ success: false, error: due <= 0 ? 'This LG bill is already fully paid.' : 'Enter a positive whole-rupee payment.' });
   const lgAccounts = ['Axis Bank 3448', 'Gagan Sir Cash', 'Tiana 0425'];
   const account = lgAccounts.find(name => name === String(b.account || '').trim());
   if (!account) return res.status(400).json({ success: false, error: 'Select Axis Bank 3448, Gagan Sir Cash, or Tiana 0425 for this LG payment.' });
@@ -2245,12 +2245,14 @@ router.post('/api/expenses/procurement-lg/:id/pay', (req, res) => {
   const balances = payable.purchaseBills.map(item => round0(item.balanceDue));
   const total = balances.reduce((sum, value) => sum + value, 0);
   if (total !== due || total <= 0) return res.status(409).json({ success: false, error: 'LG bill allocations do not match the outstanding balance.' });
-  const allocations = balances.map(value => Math.floor(amount * value / total));
-  let left = amount - allocations.reduce((sum, value) => sum + value, 0);
-  const ranked = balances.map((value, index) => ({ index, fraction: amount * value / total - allocations[index] }))
+  const appliedToBill = Math.min(amount, due), excessCredit = amount - appliedToBill;
+  const allocations = balances.map(value => Math.floor(appliedToBill * value / total));
+  let left = appliedToBill - allocations.reduce((sum, value) => sum + value, 0);
+  const ranked = balances.map((value, index) => ({ index, fraction: appliedToBill * value / total - allocations[index] }))
     .sort((a, c) => c.fraction - a.fraction || a.index - c.index);
   for (const entry of ranked) { if (!left) break; if (allocations[entry.index] < balances[entry.index]) { allocations[entry.index]++; left--; } }
   if (left) return res.status(409).json({ success: false, error: 'Could not allocate the LG payment.' });
+  if (excessCredit) allocations[0] += excessCredit;
   const batchPaymentId = 'PPB-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
   const cfg = procurementAccounting(s), linkedPoIds = payable.poIds, reference = String(b.reference || '').trim().slice(0, 120);
   const paymentType = account === 'Gagan Sir Cash' ? 'Cash' : 'Bank Transfer';
@@ -2269,7 +2271,7 @@ router.post('/api/expenses/procurement-lg/:id/pay', (req, res) => {
       { nature: 'SANKI', account, batchPaymentId, paymentId: payment.id, after: payment });
   });
   saveStore(s);
-  res.json({ success: true, batchPaymentId, amount, allocations: recorded,
+  res.json({ success: true, batchPaymentId, amount, appliedToBill, excessCredit, allocations: recorded,
     payable: procurementLedgerPayables(s, true).find(x => x.id === payable.id) });
 });
 router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
