@@ -174,8 +174,6 @@ test('purchase history recovers unmatched Shopify products from August 2026 with
   assert.match(js, /historyWarning: 'Shopify recovery is temporarily unavailable:/);
   assert.match(html, /Shopify recovery/);
   assert.match(js, /inventory_items\.json\?ids=/);
-  assert.match(js, /inventoryHistory\(first: 20, inventoryItemId:/);
-  assert.match(js, /receivedByInventoryId\[id\]/);
   assert.match(js, /variant\.recordedCost =/);
   assert.match(js, /const byDateAndVendor = \{\}/);
   assert.match(js, /vendorNames: \[group\.vendor\]/);

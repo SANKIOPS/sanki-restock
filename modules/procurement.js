@@ -338,47 +338,9 @@ async function loadShopifyPurchaseHistory(force) {
       });
     } catch { /* Cost recovery is optional; never hide the product history. */ }
   }
-  // Recover the initial quantity that arrived, rather than today's remaining
-  // stock. Shopify's inventory history is the only reliable audit trail for
-  // this: use the first positive available adjustment made around the product
-  // creation date. Leave the quantity unknown when that historical event is
-  // absent instead of deriving it from current stock or later sales.
-  const receivedByInventoryId = {};
-  // Forty aliases keep the GraphQL query below Shopify's cost ceiling while
-  // avoiding enough sequential requests to exceed the app request timeout.
-  for (let offset = 0; offset < inventoryIds.length; offset += 40) {
-    const ids = inventoryIds.slice(offset, offset + 40);
-    const aliases = ids.map((id, index) =>
-      `i${index}: inventoryHistory(first: 20, inventoryItemId: "gid://shopify/InventoryItem/${id}") { nodes { createdAt changes(quantityNames: ["available"]) { name delta } } }`
-    ).join('\n');
-    try {
-      const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/unstable/graphql.json`, {
-        method: 'POST', body: JSON.stringify({ query: `query HistoricalReceived { ${aliases} }` })
-      });
-      if (!r.ok) continue;
-      const d = await r.json();
-      ids.forEach((id, index) => {
-        const nodes = (d.data && d.data[`i${index}`] && d.data[`i${index}`].nodes) || [];
-        const product = products.find(p => p.variantDetails.some(v => v.inventoryItemId === id));
-        const createdAt = product ? Date.parse(product.createdAt) : NaN;
-        const initial = nodes.find(node => {
-          const eventAt = Date.parse(node.createdAt);
-          return Number.isFinite(createdAt) && Number.isFinite(eventAt) &&
-            Math.abs(eventAt - createdAt) <= 72 * 60 * 60 * 1000 &&
-            (node.changes || []).some(change => change.name === 'available' && Number(change.delta) > 0);
-        });
-        if (initial) receivedByInventoryId[id] = (initial.changes || [])
-          .filter(change => change.name === 'available' && Number(change.delta) > 0)
-          .reduce((sum, change) => sum + Number(change.delta), 0);
-      });
-    } catch { /* Historical quantity recovery is optional; never hide product history. */ }
-  }
   products.forEach(product => product.variantDetails.forEach(variant => {
     variant.recordedCost = Object.prototype.hasOwnProperty.call(costByInventoryId, variant.inventoryItemId)
       ? costByInventoryId[variant.inventoryItemId] : null;
-    if (Object.prototype.hasOwnProperty.call(receivedByInventoryId, variant.inventoryItemId)) {
-      variant.historicalReceivedQuantity = receivedByInventoryId[variant.inventoryItemId];
-    }
   }));
   // A single Shopify creation date can contain products from several sourcing
   // vendors. Keep those as separate historical purchase rows so the vendor
