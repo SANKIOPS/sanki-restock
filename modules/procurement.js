@@ -305,6 +305,7 @@ async function loadShopifyPurchaseHistory(force) {
         sku: String(v.sku || '').toUpperCase(),
         inventoryItemId: String(v.inventory_item_id || ''),
         sellingPrice: v.price == null || v.price === '' ? null : Number(v.price),
+        inventoryQuantity: v.inventory_quantity == null || v.inventory_quantity === '' ? null : Number(v.inventory_quantity),
         grams: Number(v.grams) || 0,
         weight: Number(v.weight) || 0,
         weightUnit: String(v.weight_unit || '')
@@ -362,6 +363,9 @@ async function loadShopifyPurchaseHistory(force) {
         vendor: group.vendor, vendorNames: [group.vendor], billNo: '', products: group.products,
         productCount: group.products.length,
         skuCount: group.products.reduce((n, p) => n + p.skus.length, 0),
+        currentStock: group.products.reduce((total, p) => total + p.variantDetails.reduce((n, v) =>
+          n + (Number.isFinite(v.inventoryQuantity) ? v.inventoryQuantity : 0), 0), 0),
+        currentStockKnown: group.products.some(p => p.variantDetails.some(v => Number.isFinite(v.inventoryQuantity))),
         quantityKnown: false, valueKnown: false
       };
     });

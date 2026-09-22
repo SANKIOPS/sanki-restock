@@ -177,6 +177,9 @@ test('purchase history recovers unmatched Shopify products from August 2026 with
   assert.match(js, /variant\.recordedCost =/);
   assert.match(js, /const byDateAndVendor = \{\}/);
   assert.match(js, /vendorNames: \[group\.vendor\]/);
+  assert.match(js, /currentStockKnown:/);
+  assert.match(html, /current pcs/);
+  assert.match(html, /Current stock<\/th><th>Recorded cost\/pc/);
   assert.match(js, /b\.date\.localeCompare\(a\.date\) \|\| a\.vendor\.localeCompare\(b\.vendor\)/);
   assert.match(html, /Cost\/pc is Shopify\\'s saved inventory-item cost/);
   assert.match(html, /Recorded cost\/pc<\/th><th>Selling price<\/th><th>Weight\/pc/);
