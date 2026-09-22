@@ -341,19 +341,30 @@ async function loadShopifyPurchaseHistory(force) {
     variant.recordedCost = Object.prototype.hasOwnProperty.call(costByInventoryId, variant.inventoryItemId)
       ? costByInventoryId[variant.inventoryItemId] : null;
   }));
-  const byDate = {};
+  // A single Shopify creation date can contain products from several sourcing
+  // vendors. Keep those as separate historical purchase rows so the vendor
+  // column represents one supplier instead of an amalgamated batch.
+  const byDateAndVendor = {};
   products.forEach(p => {
     const date = String(p.createdAt).slice(0, 10);
-    if (date) (byDate[date] || (byDate[date] = [])).push(p);
+    const vendor = String(p.vendor || '').trim() || 'Vendor not recorded';
+    const key = date + '\u0000' + vendor;
+    if (date) (byDateAndVendor[key] || (byDateAndVendor[key] = { date, vendor, products: [] })).products.push(p);
   });
-  const rows = Object.keys(byDate).sort().reverse().map(date => ({
-    id: 'HIST-' + date.replace(/-/g, ''), historical: true, source: 'shopify-recovery',
-    status: 'posted', datePurchase: date, createdAt: date + 'T00:00:00.000Z',
-    vendor: 'Recovered from Shopify', billNo: '', products: byDate[date],
-    productCount: byDate[date].length,
-    skuCount: byDate[date].reduce((n, p) => n + p.skus.length, 0),
-    quantityKnown: false, valueKnown: false
-  }));
+  const rows = Object.values(byDateAndVendor)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.vendor.localeCompare(b.vendor))
+    .map(group => {
+      const vendorKey = encodeURIComponent(group.vendor.toUpperCase()) || 'UNKNOWN';
+      return {
+        id: 'HIST-' + group.date.replace(/-/g, '') + '-' + vendorKey,
+        historical: true, source: 'shopify-recovery', status: 'posted',
+        datePurchase: group.date, createdAt: group.date + 'T00:00:00.000Z',
+        vendor: group.vendor, vendorNames: [group.vendor], billNo: '', products: group.products,
+        productCount: group.products.length,
+        skuCount: group.products.reduce((n, p) => n + p.skus.length, 0),
+        quantityKnown: false, valueKnown: false
+      };
+    });
   _shopifyPurchaseHistory = { rows, fetchedAt: Date.now() };
   return rows;
 }
