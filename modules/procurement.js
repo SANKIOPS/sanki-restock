@@ -344,8 +344,10 @@ async function loadShopifyPurchaseHistory(force) {
   // creation date. Leave the quantity unknown when that historical event is
   // absent instead of deriving it from current stock or later sales.
   const receivedByInventoryId = {};
-  for (let offset = 0; offset < inventoryIds.length; offset += 15) {
-    const ids = inventoryIds.slice(offset, offset + 15);
+  // Forty aliases keep the GraphQL query below Shopify's cost ceiling while
+  // avoiding enough sequential requests to exceed the app request timeout.
+  for (let offset = 0; offset < inventoryIds.length; offset += 40) {
+    const ids = inventoryIds.slice(offset, offset + 40);
     const aliases = ids.map((id, index) =>
       `i${index}: inventoryHistory(first: 20, inventoryItemId: "gid://shopify/InventoryItem/${id}") { nodes { createdAt changes(quantityNames: ["available"]) { name delta } } }`
     ).join('\n');
