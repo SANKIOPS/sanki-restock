@@ -305,6 +305,7 @@ async function loadShopifyPurchaseHistory(force) {
         sku: String(v.sku || '').toUpperCase(),
         inventoryItemId: String(v.inventory_item_id || ''),
         sellingPrice: v.price == null || v.price === '' ? null : Number(v.price),
+        historicalReceivedQuantity: null,
         grams: Number(v.grams) || 0,
         weight: Number(v.weight) || 0,
         weightUnit: String(v.weight_unit || '')
@@ -341,19 +342,34 @@ async function loadShopifyPurchaseHistory(force) {
     variant.recordedCost = Object.prototype.hasOwnProperty.call(costByInventoryId, variant.inventoryItemId)
       ? costByInventoryId[variant.inventoryItemId] : null;
   }));
-  const byDate = {};
+  // A single Shopify creation date can contain products from several sourcing
+  // vendors. Keep those as separate historical purchase rows so the vendor
+  // column represents one supplier instead of an amalgamated batch.
+  const byDateAndVendor = {};
   products.forEach(p => {
     const date = String(p.createdAt).slice(0, 10);
-    if (date) (byDate[date] || (byDate[date] = [])).push(p);
+    const vendor = String(p.vendor || '').trim() || 'Vendor not recorded';
+    const key = date + '\u0000' + vendor;
+    if (date) (byDateAndVendor[key] || (byDateAndVendor[key] = { date, vendor, products: [] })).products.push(p);
   });
-  const rows = Object.keys(byDate).sort().reverse().map(date => ({
-    id: 'HIST-' + date.replace(/-/g, ''), historical: true, source: 'shopify-recovery',
-    status: 'posted', datePurchase: date, createdAt: date + 'T00:00:00.000Z',
-    vendor: 'Recovered from Shopify', billNo: '', products: byDate[date],
-    productCount: byDate[date].length,
-    skuCount: byDate[date].reduce((n, p) => n + p.skus.length, 0),
-    quantityKnown: false, valueKnown: false
-  }));
+  const rows = Object.values(byDateAndVendor)
+    .sort((a, b) => b.date.localeCompare(a.date) || a.vendor.localeCompare(b.vendor))
+    .map(group => {
+      const vendorKey = encodeURIComponent(group.vendor.toUpperCase()) || 'UNKNOWN';
+      return {
+        id: 'HIST-' + group.date.replace(/-/g, '') + '-' + vendorKey,
+        historical: true, source: 'shopify-recovery', status: 'posted',
+        manualVendorBill: group.date.startsWith('2026-08-'),
+        datePurchase: group.date, createdAt: group.date + 'T00:00:00.000Z',
+        vendor: group.vendor, vendorNames: [group.vendor], billNo: '', products: group.products,
+        productCount: group.products.length,
+        skuCount: group.products.reduce((n, p) => n + p.skus.length, 0),
+        historicalPieces: group.products.reduce((total, p) => total + p.variantDetails.reduce((n, v) =>
+          n + (Number.isFinite(v.historicalReceivedQuantity) ? v.historicalReceivedQuantity : 0), 0), 0),
+        historicalPiecesKnown: group.products.every(p => p.variantDetails.every(v => Number.isFinite(v.historicalReceivedQuantity))),
+        quantityKnown: false, valueKnown: false
+      };
+    });
   _shopifyPurchaseHistory = { rows, fetchedAt: Date.now() };
   return rows;
 }
@@ -2541,11 +2557,15 @@ router.patch('/api/procurement/pos/:id/summary-calculation', (req, res) => {
 // untouched, including their accounting balances and individual payment trail.
 router.post('/api/procurement/combined-invoices', (req, res) => {
   if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
-  const s = loadStore(), ids = (req.body || {}).poIds;
+  const s = loadStore(), body = req.body || {}, ids = body.poIds, historicalBills = Array.isArray(body.historicalBills) ? body.historicalBills : [];
   if (!Array.isArray(ids) || ids.length < 1 || ids.length !== new Set(ids).size || ids.some(id => typeof id !== 'string'))
     return res.status(400).json({ success: false, error: 'Select one or more distinct purchase bills.' });
-  const pos = ids.map(id => s.pos[id]);
-  if (pos.some(po => !po || po.historical))
+  const historicalById = new Map(historicalBills.map(item => [String(item.id || ''), item]));
+  const manualHistorical = ids.every(id => historicalById.has(id));
+  if (manualHistorical && ids.some(id => !/^HIST-202608\d{2}-/.test(id) || historicalById.get(id).manualVendorBill !== true))
+    return res.status(400).json({ success: false, error: 'Manual vendor calculations are available only for the nine recovered August bills.' });
+  const pos = manualHistorical ? ids.map(id => historicalById.get(id)) : ids.map(id => s.pos[id]);
+  if (pos.some(po => !po || (!manualHistorical && po.historical)) || (!manualHistorical && historicalBills.length))
     return res.status(400).json({ success: false, error: 'Every selected bill must be a visible purchase PO.' });
   const vendors = [...new Map(pos.map(po => {
     const name = String(po.vendor || 'Not recorded').trim() || 'Not recorded';
@@ -2556,7 +2576,11 @@ router.post('/api/procurement/combined-invoices', (req, res) => {
     return res.status(409).json({ success: false, error: 'One or more bills already belong to a combined invoice.' });
   const id = 'CVI-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
   const invoice = { id, vendor: vendors.length === 1 ? vendors[0] : 'Multiple vendors', vendors,
-    origin: pos.every(po => po.origin === pos[0].origin) ? pos[0].origin : 'mixed',
+    origin: manualHistorical ? 'historical' : (pos.every(po => po.origin === pos[0].origin) ? pos[0].origin : 'mixed'),
+    manualHistorical, historicalBills: manualHistorical ? Object.fromEntries(ids.map(id => [id, {
+      id, vendor: String(historicalById.get(id).vendor || 'Not recorded'), datePurchase: String(historicalById.get(id).datePurchase || ''),
+      productCount: Math.max(0, Number(historicalById.get(id).productCount) || 0)
+    }])) : undefined,
     poIds: ids, childBills: {}, combined: {},
     createdAt: new Date().toISOString(), createdBy: (req.user || {}).username || 'system' };
   s.combinedVendorInvoices[id] = invoice;
@@ -2586,7 +2610,7 @@ router.patch('/api/procurement/combined-invoices/:id', (req, res) => {
     childBills[id] = { billNumber: String(child.billNumber || '').trim().slice(0, 160), totalQuantity: quantity, billValueYuan: value };
   }
   const combined = {};
-  for (const key of ['totalWeightGrams', 'localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan', 'combinedFreightYuan', 'combinedFreightInr', 'exchangeRate']) {
+  for (const key of (invoice.manualHistorical ? ['localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan', 'combinedFreightInr', 'exchangeRate'] : ['totalWeightGrams', 'localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan', 'combinedFreightYuan', 'combinedFreightInr', 'exchangeRate'])) {
     const value = numeric(body.combined[key], false);
     if (value === undefined) return res.status(400).json({ success: false, error: 'Combined costs, weight and rate must be non-negative numbers.' });
     combined[key] = value;
@@ -2601,12 +2625,21 @@ router.patch('/api/procurement/combined-invoices/:id', (req, res) => {
   saveStore(s);
   res.json({ success: true, invoice });
 });
+router.delete('/api/procurement/combined-invoices/:id', (req, res) => {
+  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
+  const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id];
+  if (!invoice) return res.status(404).json({ success: false, error: 'Invoice calculation not found.' });
+  if (invoice.finalized) return res.status(409).json({ success: false, error: 'Reopen the finalized LG bill before cancelling its calculation.' });
+  delete s.combinedVendorInvoices[req.params.id];
+  saveStore(s);
+  res.json({ success: true, cancelledId: req.params.id, poIds: invoice.poIds || [] });
+});
 router.post('/api/procurement/combined-invoices/:id/finalize', (req, res) => {
   if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
   const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id], basis = String((req.body || {}).basis || '');
   if (!invoice) return res.status(404).json({ success: false, error: 'Invoice calculation not found.' });
   if (invoice.finalized) return res.status(409).json({ success: false, error: 'This LG bill is already finalized.' });
-  if (!['purchase', 'vendor'].includes(basis)) return res.status(400).json({ success: false, error: 'Choose Purchase Summary or vendor invoice as the payable amount.' });
+  if (!['purchase', 'vendor'].includes(basis) || (invoice.manualHistorical && basis !== 'vendor')) return res.status(400).json({ success: false, error: invoice.manualHistorical ? 'Historical bills must use the manually entered vendor invoice calculation.' : 'Choose Purchase Summary or vendor invoice as the payable amount.' });
   if (!invoice.lgBillNumber || !validLgDate(invoice.lgDate))
     return res.status(400).json({ success: false, error: 'Save the LG bill number and LG date before finalizing.' });
   if (Object.values(s.combinedVendorInvoices).some(other => other.id !== invoice.id && other.finalized && String(other.lgBillNumber).toLowerCase() === invoice.lgBillNumber.toLowerCase()))

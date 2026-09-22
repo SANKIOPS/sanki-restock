@@ -9,7 +9,7 @@ const { invoiceAmounts, allocateAmount, finalizedByPo } = require('../modules/lg
 
 function handlers(store, accounting = { procurementAccounting: { paymentsByPo: {} } }) {
   const routes = {}, context = {
-    router: { post: (route, fn) => routes[route] = fn, patch: (route, fn) => routes[route] = fn },
+    router: { post: (route, fn) => routes[route] = fn, patch: (route, fn) => routes[route] = fn, delete: (route, fn) => routes['DELETE ' + route] = fn },
     canReconcileVendorBill: () => true, loadStore: () => store, saveStore: () => {},
     invoiceAmounts, allocateAmount, finalizedByPo, DATA_DIR: '/tmp', path,
     fs: { readFileSync: () => JSON.stringify(accounting) },
@@ -90,6 +90,68 @@ test('one selected bill creates an invoice calculation and can be reconciled', (
   assert.match(rendered, /Combined freight ₹ \(enter manually\)/);
   assert.match(rendered, /Finalize LG bill/);
   assert.doesNotMatch(rendered, /Combined invoice calculation:/);
+});
+
+test('the nine August recovery rows accept manual vendor calculations without weight', () => {
+  const id = 'HIST-20260818-GEE';
+  const store = { settings: {}, pos: {}, combinedVendorInvoices: {} };
+  const routes = handlers(store);
+  const made = call(routes['/api/procurement/combined-invoices'], {
+    poIds: [id], historicalBills: [{ id, vendor: 'GEE', datePurchase: '2026-08-18',
+      productCount: 5, manualVendorBill: true }]
+  });
+  assert.equal(made.status, 201);
+  assert.equal(made.result.invoice.manualHistorical, true);
+  assert.equal(made.result.invoice.historicalBills[id].vendor, 'GEE');
+  const saved = call(routes['/api/procurement/combined-invoices/:id'], {
+    lgDate: '2026-08-18', lgBillNumber: 'LG-HIST-1',
+    childBills: { [id]: { billNumber: 'GEE-1', totalQuantity: 20, billValueYuan: 100 } },
+    combined: { localTransportationYuan: 5, fixedTransportationYuan: 2,
+      extraChargesYuan: 3, combinedFreightInr: 900, exchangeRate: 10 }
+  }, made.result.invoice.id);
+  assert.equal(saved.result.success, true);
+  assert.equal(saved.result.invoice.combined.totalWeightGrams, undefined);
+  assert.equal(call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'purchase' }, made.result.invoice.id).status, 400);
+  const finalized = call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'vendor' }, made.result.invoice.id);
+  assert.equal(finalized.result.invoice.finalized.amountInr, 2000);
+  const start = html.indexOf('    function combinedInvoiceComparison(inv)');
+  const end = html.indexOf('    var selectedPaymentBills=', start);
+  const detail = vm.runInNewContext(html.slice(start, end) + '\ncombinedInvoiceDetail;', {
+    purchaseHistory: [], settings: {}, esc: String, yuan: n => '¥' + n, money: n => '₹' + n
+  });
+  const rendered = detail(saved.result.invoice);
+  assert.match(rendered, /Manual historical vendor bill/);
+  assert.match(rendered, /Combined freight ₹ \(enter manually\)/);
+  assert.doesNotMatch(rendered, /Total weight/);
+  assert.doesNotMatch(rendered, /data-compare-combined/);
+});
+
+test('manual vendor calculation rejects recovered rows outside August', () => {
+  const id = 'HIST-20260901-SANKI';
+  const result = call(handlers({ pos: {}, combinedVendorInvoices: {} })['/api/procurement/combined-invoices'], {
+    poIds: [id], historicalBills: [{ id, vendor: 'SANKI', datePurchase: '2026-09-01',
+      productCount: 1, manualVendorBill: true }]
+  });
+  assert.equal(result.status, 400);
+});
+
+test('unfinalized calculation can be undone so its bills can be selected again', () => {
+  const store = { pos: { 'PO-A': { id: 'PO-A', vendor: 'A' } }, combinedVendorInvoices: {} };
+  const routes = handlers(store);
+  const made = call(routes['/api/procurement/combined-invoices'], { poIds: ['PO-A'] });
+  const id = made.result.invoice.id;
+  const cancel = call(routes['DELETE /api/procurement/combined-invoices/:id'], {}, id);
+  assert.equal(cancel.result.success, true);
+  assert.deepEqual(Array.from(cancel.result.poIds), ['PO-A']);
+  assert.equal(store.combinedVendorInvoices[id], undefined);
+  assert.equal(call(routes['/api/procurement/combined-invoices'], { poIds: ['PO-A'] }).status, 201);
+});
+
+test('finalized calculation must be reopened before it can be undone', () => {
+  const store = { pos: {}, combinedVendorInvoices: { X: { id: 'X', finalized: { amountInr: 1 } } } };
+  const result = call(handlers(store)['DELETE /api/procurement/combined-invoices/:id'], {}, 'X');
+  assert.equal(result.status, 409);
+  assert.ok(store.combinedVendorInvoices.X);
 });
 
 test('combined invoice accepts bills with different purchase currencies', () => {
