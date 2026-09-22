@@ -115,7 +115,7 @@ test('LG payment records partial and final allocations under one reference per p
   const first = pay(250);assert.equal(first.body.success, true);assert.equal(first.body.payable.balanceDue, 750);
   assert.equal(first.body.allocations.reduce((n, a) => n + a.amount, 0), 250);
   assert.equal(new Set(first.body.allocations.map(a => a.poId)).size, 2);
-  const second = pay(2000, 'Tiana 0425');assert.equal(second.body.success, true);assert.equal(second.body.appliedToBill, 750);
+  const second = pay(2000, 'Tiana 0425');assert.equal(second.body.success, true);assert.equal(second.body.appliedToBills, 750);
   assert.equal(second.body.excessCredit, 1250);assert.equal(second.body.payable.balanceDue, 0);assert.equal(second.body.payable.paidAmount, 2250);
   assert.equal(second.body.allocations.reduce((n, a) => n + a.amount, 0), 2000);
   assert.equal(pay(1).status, 400);
@@ -125,6 +125,38 @@ test('LG payment records partial and final allocations under one reference per p
   assert.ok(payments.every(x => x.combinedInvoiceId === 'CVI-1' && x.bankReference === 'UTR-123'));
   assert.ok(payments.some(x => x.account === 'Axis Bank 3448' && x.paymentType === 'Bank Transfer'));
   assert.ok(payments.some(x => x.account === 'Tiana 0425' && x.paymentType === 'Bank Transfer'));
+});
+
+test('LG payment UI supports selecting multiple bills and explains oldest-first allocation', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../public/expenses.html'), 'utf8');
+  assert.match(html, /LG bills covered by this payment/);
+  assert.match(html, /data-lg-pay-bill/);
+  assert.match(html, /Payment is applied oldest first/);
+  assert.match(html, /lgBillIds:bills\.map/);
+});
+
+test('one LG payment settles selected bills oldest first before creating credit', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../modules/expenses.js'), 'utf8');
+  const start = source.indexOf("router.post('/api/expenses/procurement-lg/:id/pay'");
+  const end = source.indexOf("router.post('/api/expenses/procurement-payables/:id/pay'", start);
+  let handler; const store = { procurementAccounting: { mediator: 'LG', paymentsByPo: {} } };
+  const definitions = [
+    { id: 'OLD', billNo: 'LG-OLD', date: '2026-08-01', poId: 'PO-OLD', amount: 100 },
+    { id: 'NEW', billNo: 'LG-NEW', date: '2026-09-01', poId: 'PO-NEW', amount: 200 }
+  ];
+  const payables = () => definitions.map(d => { const payments = ((store.procurementAccounting.paymentsByPo[d.poId] || {}).payments || []), paid = payments.reduce((n,p) => n + p.amount, 0), due = Math.max(0, d.amount - paid); return {
+    id:d.id,billNo:d.billNo,date:d.date,finalized:{},poIds:[d.poId],balanceDue:due,paidAmount:paid,
+    purchaseBills:[{id:d.poId,billNo:d.billNo,supplier:'LG',balanceDue:due}]
+  }; });
+  vm.runInNewContext(source.slice(start,end), { router:{post:(_r,fn)=>{handler=fn;}}, canApprove:()=>true,
+    loadStore:()=>store, procurementLedgerPayables:payables, round0:Math.round,
+    proofList:x=>x||[], crypto:{randomBytes:()=>Buffer.from('abc')}, procurementAccounting:s=>s.procurementAccounting,
+    audit:()=>{}, saveStore:()=>{}, Date, Math, Number, String, Array, Set, Buffer });
+  let status=200,body; handler({params:{id:'NEW'},body:{lgBillIds:['NEW','OLD'],amount:250,account:'Axis Bank 3448',date:'2026-09-22',paymentProofs:['/proof.jpg']},user:{username:'owner'}},{status(n){status=n;return this;},json(x){body=x;}});
+  assert.equal(status,200); assert.equal(body.excessCredit,0);
+  assert.deepEqual(Array.from(body.billAllocations, x => [x.id,x.amount]), [['OLD',100],['NEW',150]]);
+  assert.equal(payables().find(x=>x.id==='OLD').balanceDue,0);
+  assert.equal(payables().find(x=>x.id==='NEW').balanceDue,50);
 });
 
 test('legacy Logistics Mediator label appears as LG without changing payment history', () => {

@@ -213,7 +213,7 @@
     <h3>Record Sourcing Vendor Payment</h3>
     <p class="sub">Record a payment already made against a finalized LG bill. Partial payments remain due; any amount above the bill becomes an LG advance/credit in the sourcing ledger.</p>
     <div class="grid">
-      <div class="fld full"><label>LG bill</label><select id="lgPayBill"></select></div>
+      <div class="fld full"><label>LG bills covered by this payment</label><div id="lgPayBillList" class="payment-history"></div></div>
       <div class="fld"><label>Amount paid ₹</label><input id="lgPayAmount" type="number" min="1" step="1"><button type="button" class="btn mini ghost" id="lgPayFull">Use full outstanding</button></div>
       <div class="fld"><label>Payment date</label><input id="lgPayDate" type="date"></div>
       <div class="fld"><label>Payment method / paying account</label><select id="lgPayAccount"><option value="">Choose paying account</option><option value="Axis Bank 3448">Axis Bank 3448</option><option value="Gagan Sir Cash">Gagan Sir Cash</option><option value="Tiana 0425">Tiana 0425</option></select></div>
@@ -888,24 +888,24 @@
         return d.purchases||[];
       }).catch(function(error){if(el('lgEntryList'))el('lgEntryList').textContent=error.message;throw error;});
     }
-    function chooseLgPayment(){var p=lgPayablesById[el('lgPayBill').value];if(!p)return;el('lgPayAmount').value=p.balanceDue;el('lgPayAmount').removeAttribute('max');el('lgPayDue').textContent='LG bill '+p.billNo+' · Outstanding '+fmt(p.balanceDue)+' · '+(p.poIds||[]).length+' linked purchase bill(s). You may enter more than the outstanding amount; the excess will remain as LG advance/credit in the sourcing ledger.';}
+    function selectedLgBills(){return Array.prototype.map.call(el('lgPayBillList').querySelectorAll('[data-lg-pay-bill]:checked'),function(input){return lgPayablesById[input.value];}).filter(Boolean).sort(function(a,b){return String(a.date).localeCompare(String(b.date));});}
+    function chooseLgPayment(){var bills=selectedLgBills(),due=bills.reduce(function(n,p){return n+Number(p.balanceDue||0);},0);el('lgPayAmount').value=due||'';el('lgPayAmount').removeAttribute('max');el('lgPayDue').textContent=!bills.length?'Select at least one LG bill.':bills.length+' LG bill(s) selected · Total outstanding '+fmt(due)+'. Payment is applied oldest first. Only an amount above all selected bills becomes LG advance/credit.';}
     window.openLgPayment=function(id){
       var dialog=el('lgPayDlg');el('lgPayMessage').textContent='Loading finalized LG bills…';
       el('lgPayAccount').value='';
       el('lgPayDate').value=today();el('lgPayProof').value='';el('lgPayReference').value='';el('lgPayNote').value='';
       if(!dialog.open)dialog.showModal();
-      loadLgPayables().then(function(items){el('lgPayBill').innerHTML=items.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.billNo)+' · '+fmt(p.balanceDue)+' due</option>';}).join('');if(id&&items.some(function(p){return p.id===id;}))el('lgPayBill').value=id;chooseLgPayment();el('lgPayMessage').textContent=items.length?'':'No finalized LG bills are pending.';}).catch(function(error){el('lgPayMessage').textContent=error.message;});
+      loadLgPayables().then(function(items){el('lgPayBillList').innerHTML=items.map(function(p){return '<label class="payment-entry"><span><input type="checkbox" data-lg-pay-bill value="'+esc(p.id)+'"'+(p.id===id?' checked':'')+'> <b>'+esc(p.billNo)+'</b> · '+esc(p.date)+'</span><b>'+fmt(p.balanceDue)+' due</b></label>';}).join('');Array.prototype.forEach.call(el('lgPayBillList').querySelectorAll('[data-lg-pay-bill]'),function(input){input.onchange=chooseLgPayment;});chooseLgPayment();el('lgPayMessage').textContent=items.length?'':'No finalized LG bills are pending.';}).catch(function(error){el('lgPayMessage').textContent=error.message;});
     };
-    el('lgPayBill').addEventListener('change',chooseLgPayment);
     el('lgPayFull').addEventListener('click',chooseLgPayment);
     el('lgPayCancel').addEventListener('click',function(){el('lgPayDlg').close();});
     el('lgPaySave').addEventListener('click',function(){
-      var p=lgPayablesById[el('lgPayBill').value],amount=Number(el('lgPayAmount').value),account=el('lgPayAccount').value,files=el('lgPayProof').files,button=el('lgPaySave');
-      if(!p||!Number.isInteger(amount)||amount<1||!account||!el('lgPayDate').value||!files.length){el('lgPayMessage').textContent='Choose an LG bill, account, payment date, proof and a positive whole-rupee amount.';return;}
+      var bills=selectedLgBills(),p=bills[0],amount=Number(el('lgPayAmount').value),account=el('lgPayAccount').value,files=el('lgPayProof').files,button=el('lgPaySave');
+      if(!p||!Number.isInteger(amount)||amount<1||!account||!el('lgPayDate').value||!files.length){el('lgPayMessage').textContent='Choose one or more LG bills, account, payment date, proof and a positive whole-rupee amount.';return;}
       button.disabled=true;el('lgPayMessage').textContent='Uploading payment proof…';
-      uploadFiles(files,'SANKI').then(function(proofs){return api('/api/expenses/procurement-lg/'+encodeURIComponent(p.id)+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:amount,account:account,date:el('lgPayDate').value,reference:el('lgPayReference').value,note:el('lgPayNote').value,paymentProofs:proofs})});}).then(function(d){
+      uploadFiles(files,'SANKI').then(function(proofs){return api('/api/expenses/procurement-lg/'+encodeURIComponent(p.id)+'/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lgBillIds:bills.map(function(x){return x.id;}),amount:amount,account:account,date:el('lgPayDate').value,reference:el('lgPayReference').value,note:el('lgPayNote').value,paymentProofs:proofs})});}).then(function(d){
         button.disabled=false;if(!d.success){el('lgPayMessage').textContent=d.error||'Could not record payment.';return;}
-        el('lgPayDlg').close();setMsg('Payment '+d.batchPaymentId+' recorded against '+p.billNo+'. Remaining '+fmt(d.payable.balanceDue)+(d.excessCredit?' · LG advance/credit '+fmt(d.excessCredit):'')+'.',true);
+        el('lgPayDlg').close();setMsg('Payment '+d.batchPaymentId+' allocated across '+d.billAllocations.length+' LG bill(s)'+(d.excessCredit?' · LG advance/credit '+fmt(d.excessCredit):'')+'.',true);
         if(tab==='vendors')loadVendors();else if(tab==='pending')loadPendingPayments();else if(tab==='log')loadLgPayables();
       }).catch(function(error){button.disabled=false;el('lgPayMessage').textContent=error.message||'Could not record LG payment.';});
     });

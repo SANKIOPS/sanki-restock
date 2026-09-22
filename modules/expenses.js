@@ -2226,15 +2226,19 @@ router.post('/api/expenses/procurement-payables/batch', (req, res) => {
   res.json({ success: true, batchPaymentId, vendor: mixedSuppliers ? 'Multiple vendors' : items[0].supplier,
     totalAmount: expected, allocations });
 });
-// Record a full or partial payment against one finalized LG bill. The single
-// transaction reference is allocated to the linked POs without merging them.
+// Record one payment against one or more finalized LG bills. Selected bills
+// are settled oldest first; only a remainder after all selections is credit.
 router.post('/api/expenses/procurement-lg/:id/pay', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can record an LG payment.' });
-  const s = loadStore(), b = req.body || {}, payable = procurementLedgerPayables(s, true).find(x => x.id === req.params.id);
-  if (!payable || !payable.finalized) return res.status(404).json({ success: false, error: 'Finalized LG bill not found.' });
-  const amount = Number(b.amount), due = round0(payable.balanceDue);
-  if (!Number.isInteger(amount) || amount <= 0 || due <= 0)
-    return res.status(400).json({ success: false, error: due <= 0 ? 'This LG bill is already fully paid.' : 'Enter a positive whole-rupee payment.' });
+  const s = loadStore(), b = req.body || {}, allPayables = procurementLedgerPayables(s, true);
+  const requestedIds = Array.from(new Set((Array.isArray(b.lgBillIds) && b.lgBillIds.length ? b.lgBillIds : [req.params.id]).map(String)));
+  if (!requestedIds.includes(req.params.id)) return res.status(400).json({ success: false, error: 'The payment must include the selected LG bill.' });
+  const payables = requestedIds.map(id => allPayables.find(x => x.id === id)).filter(Boolean)
+    .sort((a, c) => String(a.date || '').localeCompare(String(c.date || '')) || String(a.billNo || '').localeCompare(String(c.billNo || '')));
+  if (payables.length !== requestedIds.length || payables.some(x => !x.finalized)) return res.status(404).json({ success: false, error: 'One or more finalized LG bills were not found.' });
+  const amount = Number(b.amount), totalDue = round0(payables.reduce((sum, item) => sum + round0(item.balanceDue), 0));
+  if (!Number.isInteger(amount) || amount <= 0 || totalDue <= 0)
+    return res.status(400).json({ success: false, error: totalDue <= 0 ? 'The selected LG bills are already fully paid.' : 'Enter a positive whole-rupee payment.' });
   const lgAccounts = ['Axis Bank 3448', 'Gagan Sir Cash', 'Tiana 0425'];
   const account = lgAccounts.find(name => name === String(b.account || '').trim());
   if (!account) return res.status(400).json({ success: false, error: 'Select Axis Bank 3448, Gagan Sir Cash, or Tiana 0425 for this LG payment.' });
@@ -2242,37 +2246,42 @@ router.post('/api/expenses/procurement-lg/:id/pay', (req, res) => {
   if (!proofs.length) return res.status(400).json({ success: false, error: 'Payment proof is required.' });
   const date = String(b.date || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ success: false, error: 'Payment date is required.' });
-  const balances = payable.purchaseBills.map(item => round0(item.balanceDue));
-  const total = balances.reduce((sum, value) => sum + value, 0);
-  if (total !== due || total <= 0) return res.status(409).json({ success: false, error: 'LG bill allocations do not match the outstanding balance.' });
-  const appliedToBill = Math.min(amount, due), excessCredit = amount - appliedToBill;
-  const allocations = balances.map(value => Math.floor(appliedToBill * value / total));
-  let left = appliedToBill - allocations.reduce((sum, value) => sum + value, 0);
-  const ranked = balances.map((value, index) => ({ index, fraction: appliedToBill * value / total - allocations[index] }))
-    .sort((a, c) => c.fraction - a.fraction || a.index - c.index);
-  for (const entry of ranked) { if (!left) break; if (allocations[entry.index] < balances[entry.index]) { allocations[entry.index]++; left--; } }
-  if (left) return res.status(409).json({ success: false, error: 'Could not allocate the LG payment.' });
-  if (excessCredit) allocations[0] += excessCredit;
+  if (payables.some(payable => payable.purchaseBills.reduce((sum, item) => sum + round0(item.balanceDue), 0) !== round0(payable.balanceDue)))
+    return res.status(409).json({ success: false, error: 'One or more LG bill allocations do not match their outstanding balance.' });
+  const appliedToBills = Math.min(amount, totalDue), excessCredit = amount - appliedToBills;
   const batchPaymentId = 'PPB-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
-  const cfg = procurementAccounting(s), linkedPoIds = payable.poIds, reference = String(b.reference || '').trim().slice(0, 120);
+  const cfg = procurementAccounting(s), reference = String(b.reference || '').trim().slice(0, 120);
   const paymentType = account === 'Gagan Sir Cash' ? 'Cash' : 'Bank Transfer';
-  const recorded = [];
-  payable.purchaseBills.forEach((item, index) => {
-    if (!allocations[index]) return;
-    const state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
-    state.payments = Array.isArray(state.payments) ? state.payments : [];
-    const payment = { id: 'PPAY-' + String(state.payments.length + 1).padStart(3, '0'), batchPaymentId,
-      combinedInvoiceId: payable.id, linkedPoIds, supplier: item.supplier, amount: allocations[index], account,
-      date, reference, bankReference: reference, paymentType, proof: proofs[0], proofs, note: String(b.note || '').trim().slice(0, 500),
-      paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString() };
-    state.payments.push(payment);
-    recorded.push({ poId: item.id, billNo: item.billNo, amount: payment.amount, paymentId: payment.id });
-    audit(s, req, 'PROCUREMENT_PAYMENT_ALLOCATED', 'procurement', item.id,
-      { nature: 'SANKI', account, batchPaymentId, paymentId: payment.id, after: payment });
+  const recorded = [], billAllocations = []; let paymentLeft = amount;
+  payables.forEach((payable, payableIndex) => {
+    const billAmount = Math.min(paymentLeft, round0(payable.balanceDue)); paymentLeft -= billAmount;
+    const balances = payable.purchaseBills.map(item => round0(item.balanceDue)), total = balances.reduce((sum, value) => sum + value, 0);
+    if (total <= 0) return;
+    const allocations = balances.map(value => Math.floor(billAmount * value / total));
+    let left = billAmount - allocations.reduce((sum, value) => sum + value, 0);
+    const ranked = balances.map((value, index) => ({ index, fraction: billAmount * value / total - allocations[index] }))
+      .sort((a, c) => c.fraction - a.fraction || a.index - c.index);
+    for (const entry of ranked) { if (!left) break; if (allocations[entry.index] < balances[entry.index]) { allocations[entry.index]++; left--; } }
+    if (payableIndex === 0 && excessCredit) allocations[0] += excessCredit;
+    const linkedPoIds = payable.poIds || [];
+    payable.purchaseBills.forEach((item, index) => {
+      if (!allocations[index]) return;
+      const state = cfg.paymentsByPo[item.id] || (cfg.paymentsByPo[item.id] = { payments: [] });
+      state.payments = Array.isArray(state.payments) ? state.payments : [];
+      const payment = { id: 'PPAY-' + String(state.payments.length + 1).padStart(3, '0'), batchPaymentId,
+        combinedInvoiceId: payable.id, linkedPoIds, linkedLgBillIds: requestedIds, supplier: item.supplier, amount: allocations[index], account,
+        date, reference, bankReference: reference, paymentType, proof: proofs[0], proofs, note: String(b.note || '').trim().slice(0, 500),
+        paidBy: (req.user && req.user.username) || 'admin', paidAt: new Date().toISOString() };
+      state.payments.push(payment); recorded.push({ lgBillId: payable.id, lgBillNumber: payable.billNo, poId: item.id, billNo: item.billNo, amount: payment.amount, paymentId: payment.id });
+      audit(s, req, 'PROCUREMENT_PAYMENT_ALLOCATED', 'procurement', item.id,
+        { nature: 'SANKI', account, batchPaymentId, paymentId: payment.id, after: payment });
+    });
+    billAllocations.push({ id: payable.id, billNo: payable.billNo, amount: billAmount });
   });
   saveStore(s);
-  res.json({ success: true, batchPaymentId, amount, appliedToBill, excessCredit, allocations: recorded,
-    payable: procurementLedgerPayables(s, true).find(x => x.id === payable.id) });
+  const refreshed = procurementLedgerPayables(s, true);
+  res.json({ success: true, batchPaymentId, amount, appliedToBills, excessCredit, billAllocations, allocations: recorded,
+    payables: requestedIds.map(id => refreshed.find(x => x.id === id)).filter(Boolean), payable: refreshed.find(x => x.id === req.params.id) });
 });
 router.post('/api/expenses/procurement-payables/:id/pay', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can pay.' });
