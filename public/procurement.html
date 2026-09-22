@@ -931,12 +931,14 @@
     function historicalPurchaseRow(po,idx){
       var products=po.products||[];
       var rows=products.map(function(p){
-        return '<tr><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td>'+esc(p.status||'—')+'</td></tr>';
+        var photo=p.imageUrl?'<img class="thumb" data-zoom src="'+esc(p.imageUrl)+'" alt="'+esc(p.title||'Recovered Shopify product')+'" title="Click to enlarge" style="width:52px;height:62px;object-fit:cover;border-radius:6px;cursor:zoom-in">':'<span class="muted">No photo</span>';
+        return '<tr><td>'+photo+'</td><td><b>'+esc(p.title||'—')+'</b></td><td>'+esc(p.type||'—')+'</td><td>'+esc((p.skus||[]).join(', ')||'—')+'</td><td>'+esc(p.status||'—')+'</td></tr>';
       }).join('');
-      var head=purchaseHistoryHead(po,'Not recorded','Not recorded','Not recorded','Not recorded','Not recorded','Not recorded');
+      var vendors=(po.vendorNames||[]).join(', ')||'Shopify recovered';
+      var head=purchaseHistoryHead(po,'Shopify record',po.datePurchase||'Date unavailable','Shopify recovery',vendors,Number(po.productCount||0)+' products','Unavailable');
       var detail='<div id="historyBody'+esc(po.id)+'" class="hidden" style="margin:-2px 5px 10px;padding:12px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+
-        '<div class="banner" style="margin-bottom:9px">Recovered from Shopify. Posted '+esc(po.datePurchase||'Not recorded')+' · '+Number(po.productCount||0)+' products · '+Number(po.skuCount||0)+' SKUs. Product names, SKUs and posting date are verified. The old bill, vendor, quantity and landed cost are not present in Railway, so they are intentionally not guessed.</div>'+
-        '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Product</th><th>Type</th><th>SKUs</th><th>Shopify status</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+        '<div class="banner" style="margin-bottom:9px"><b>Recovered from Shopify.</b> Product created '+esc(po.datePurchase||'date unavailable')+' · '+Number(po.productCount||0)+' products · '+Number(po.skuCount||0)+' SKUs. Product names, Shopify vendor labels, SKUs and creation date are verified. The supplier bill, purchased quantity, weight and landed cost are unavailable, so they are intentionally not guessed.</div>'+
+        '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Product</th><th>Type</th><th>SKUs</th><th>Shopify status</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
       return head+detail;
     }
 
