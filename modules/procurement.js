@@ -292,7 +292,7 @@ async function loadShopifyPurchaseHistory(force) {
   // The owner requested recovery of the Shopify-backed purchase trail from
   // August 2026 onward. Shopify can prove the product, SKU, vendor label and
   // creation date, but it cannot recreate the supplier bill or landed cost.
-  let url = `https://${SHOPIFY_STORE}/admin/api/${API}/products.json?limit=250&created_at_min=2026-08-01T00:00:00%2B05:30&fields=id,title,created_at,vendor,product_type,status,variants`;
+  let url = `https://${SHOPIFY_STORE}/admin/api/${API}/products.json?limit=250&created_at_min=2026-08-01T00:00:00%2B05:30&fields=id,title,created_at,vendor,product_type,status,variants,images,image`;
   const products = [];
   while (url) {
     const r = await shopifyClient.request(url);
@@ -304,7 +304,8 @@ async function loadShopifyPurchaseHistory(force) {
       const skus = (p.variants || []).map(v => String(v.sku || '').toUpperCase()).filter(Boolean);
       products.push({
         productId: String(p.id), title: p.title || '(untitled)', type: p.product_type || '',
-        vendor: p.vendor || '', status: p.status || '', createdAt: p.created_at || '', skus
+        vendor: p.vendor || '', status: p.status || '', createdAt: p.created_at || '', skus,
+        imageUrl: String((p.image && p.image.src) || (p.images && p.images[0] && p.images[0].src) || '')
       });
     });
     const link = r.headers.get('Link') || '';

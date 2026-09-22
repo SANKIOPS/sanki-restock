@@ -167,11 +167,15 @@ test('purchase history recovers unmatched Shopify products from August 2026 with
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
   assert.match(js, /created_at_min=2026-08-01T00:00:00/);
+  assert.match(js, /fields=id,title,created_at,vendor,product_type,status,variants,images,image/);
+  assert.match(js, /imageUrl: String\(\(p\.image && p\.image\.src\)/);
   assert.match(js, /await loadShopifyPurchaseHistory\(req\.query\.refresh === '1'\)/);
   assert.match(js, /linkedProducts\.get\(String\(product\.productId\)\) !== batch\.datePurchase/);
   assert.match(js, /historyWarning: 'Shopify recovery is temporarily unavailable:/);
   assert.match(html, /Shopify recovery/);
   assert.match(html, /purchased quantity, weight and landed cost are unavailable/);
+  assert.match(html, /p\.imageUrl\?'<img class="thumb" data-zoom/);
+  assert.match(html, /<th>Photo<\/th><th>Product<\/th>/);
   assert.doesNotMatch(html, /purchaseHistoryHead\(po,'Not recorded','Not recorded','Not recorded','Not recorded','Not recorded','Not recorded'\)/);
 });
 
