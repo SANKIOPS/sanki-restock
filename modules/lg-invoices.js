@@ -1,6 +1,19 @@
 const { purchaseBillingAmount } = require('./purchase-payment-status');
 
 function invoiceAmounts(invoice, pos, settings = {}) {
+  if (invoice.manualHistorical) {
+    const bills = (invoice.poIds || []).map(id => (invoice.childBills || {})[id] || {});
+    const charges = invoice.combined || {}, rate = Number(charges.exchangeRate);
+    const freightInr = charges.combinedFreightInr == null ? null : Number(charges.combinedFreightInr);
+    const freightYuan = freightInr == null || !(rate > 0) ? null : freightInr / rate;
+    const chargeKeys = ['localTransportationYuan', 'fixedTransportationYuan', 'extraChargesYuan'];
+    const complete = bills.length > 0 && bills.every(b => b.totalQuantity != null && b.billValueYuan != null) &&
+      chargeKeys.every(key => charges[key] != null) && freightInr != null && Number.isFinite(freightYuan) && rate > 0;
+    const vendorBillYuan = complete ? bills.reduce((sum, bill) => sum + Number(bill.billValueYuan), 0) : null;
+    const vendorTotalYuan = complete ? vendorBillYuan + freightYuan + chargeKeys.reduce((sum, key) => sum + Number(charges[key]), 0) : null;
+    return { purchaseAmounts: bills.map(() => 1), purchaseAmountInr: 0, vendorBillYuan, vendorTotalYuan,
+      vendorAmountInr: complete ? Math.round(vendorTotalYuan * rate) : null, rate };
+  }
   const children = (invoice.poIds || []).map(id => pos[id]);
   if (!children.length || children.some(po => !po)) return null;
   const purchaseAmounts = children.map(po => purchaseBillingAmount(po, settings));

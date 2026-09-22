@@ -92,6 +92,49 @@ test('one selected bill creates an invoice calculation and can be reconciled', (
   assert.doesNotMatch(rendered, /Combined invoice calculation:/);
 });
 
+test('the nine August recovery rows accept manual vendor calculations without weight', () => {
+  const id = 'HIST-20260818-GEE';
+  const store = { settings: {}, pos: {}, combinedVendorInvoices: {} };
+  const routes = handlers(store);
+  const made = call(routes['/api/procurement/combined-invoices'], {
+    poIds: [id], historicalBills: [{ id, vendor: 'GEE', datePurchase: '2026-08-18',
+      productCount: 5, manualVendorBill: true }]
+  });
+  assert.equal(made.status, 201);
+  assert.equal(made.result.invoice.manualHistorical, true);
+  assert.equal(made.result.invoice.historicalBills[id].vendor, 'GEE');
+  const saved = call(routes['/api/procurement/combined-invoices/:id'], {
+    lgDate: '2026-08-18', lgBillNumber: 'LG-HIST-1',
+    childBills: { [id]: { billNumber: 'GEE-1', totalQuantity: 20, billValueYuan: 100 } },
+    combined: { localTransportationYuan: 5, fixedTransportationYuan: 2,
+      extraChargesYuan: 3, combinedFreightInr: 900, exchangeRate: 10 }
+  }, made.result.invoice.id);
+  assert.equal(saved.result.success, true);
+  assert.equal(saved.result.invoice.combined.totalWeightGrams, undefined);
+  assert.equal(call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'purchase' }, made.result.invoice.id).status, 400);
+  const finalized = call(routes['/api/procurement/combined-invoices/:id/finalize'], { basis: 'vendor' }, made.result.invoice.id);
+  assert.equal(finalized.result.invoice.finalized.amountInr, 2000);
+  const start = html.indexOf('    function combinedInvoiceComparison(inv)');
+  const end = html.indexOf('    var selectedPaymentBills=', start);
+  const detail = vm.runInNewContext(html.slice(start, end) + '\ncombinedInvoiceDetail;', {
+    purchaseHistory: [], settings: {}, esc: String, yuan: n => '¥' + n, money: n => '₹' + n
+  });
+  const rendered = detail(saved.result.invoice);
+  assert.match(rendered, /Manual historical vendor bill/);
+  assert.match(rendered, /Combined freight ₹ \(enter manually\)/);
+  assert.doesNotMatch(rendered, /Total weight/);
+  assert.doesNotMatch(rendered, /data-compare-combined/);
+});
+
+test('manual vendor calculation rejects recovered rows outside August', () => {
+  const id = 'HIST-20260901-SANKI';
+  const result = call(handlers({ pos: {}, combinedVendorInvoices: {} })['/api/procurement/combined-invoices'], {
+    poIds: [id], historicalBills: [{ id, vendor: 'SANKI', datePurchase: '2026-09-01',
+      productCount: 1, manualVendorBill: true }]
+  });
+  assert.equal(result.status, 400);
+});
+
 test('combined invoice accepts bills with different purchase currencies', () => {
   const store = { pos: {
     'PO-CNY': { id: 'PO-CNY', vendor: 'China vendor', origin: 'china' },
