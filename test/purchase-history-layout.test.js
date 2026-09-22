@@ -23,7 +23,7 @@ test('all purchase headers use the same seven-column layout',()=>{
   const head=vm.runInNewContext(html.slice(start,end)+'\npurchaseHistoryHead;',context)({id:'PO-1'},'Not received','2026-09-02','PO-1','Vendor','48 pcs','₹100');
   assert.match(head,/purchase-table-row purchase-table-record/);
   assert.match(head,/Not received.*2026-09-02.*PO-1.*Vendor.*48 pcs.*₹100/);
-  assert.match(html,/purchaseHistoryHead\(po,'Not recorded','Not recorded'/);
+  assert.match(html,/purchaseHistoryHead\(po,'Shopify record',po\.datePurchase\|\|'Date unavailable','Shopify recovery'/);
 });
 
 test('filtered purchase redraw keeps combine actions outside the list and rebinds bill checkboxes',()=>{

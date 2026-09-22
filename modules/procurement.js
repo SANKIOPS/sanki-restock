@@ -289,7 +289,10 @@ async function loadShopifyPurchaseHistory(force) {
   if (_shopifyPurchaseHistory && !force && (Date.now() - _shopifyPurchaseHistory.fetchedAt) < 5 * 60 * 1000) {
     return _shopifyPurchaseHistory.rows;
   }
-  let url = `https://${SHOPIFY_STORE}/admin/api/${API}/products.json?limit=250&created_at_min=2026-07-19T00:00:00%2B05:30&fields=id,title,created_at,vendor,product_type,status,variants`;
+  // The owner requested recovery of the Shopify-backed purchase trail from
+  // August 2026 onward. Shopify can prove the product, SKU, vendor label and
+  // creation date, but it cannot recreate the supplier bill or landed cost.
+  let url = `https://${SHOPIFY_STORE}/admin/api/${API}/products.json?limit=250&created_at_min=2026-08-01T00:00:00%2B05:30&fields=id,title,created_at,vendor,product_type,status,variants`;
   const products = [];
   while (url) {
     const r = await shopifyClient.request(url);
@@ -2615,19 +2618,44 @@ router.post('/api/procurement/combined-invoices/:id/reopen', (req, res) => {
   saveStore(s);
   res.json({ success: true, invoice });
 });
-router.get('/api/procurement/history', (req, res) => {
+router.get('/api/procurement/history', async (req, res) => {
   const s = loadStore();
   const finalized = finalizedByPo(s);
   let accounting = null;
   try { accounting = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'expenses.json'), 'utf8')); } catch { /* Unavailable history must not imply unpaid. */ }
-  // Stored POs are the purchase record, including early posted purchases.
-  // Shopify-recovered placeholders remain excluded because they do not retain
-  // the original bill, quantity, weights, or landed-cost calculation.
-  const history = Object.values(s.pos)
+  // Stored POs remain authoritative. Add only Shopify products that are not
+  // already linked to a stored PO on the same purchase/posting date.
+  const pos = Object.values(s.pos)
     .filter(p => !p.historical)
-    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canReconcileVendorBill(req), s.settings, finalized[p.id] && finalized[p.id].amount) }))
-    .sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
-  res.json({ success: true, history, combinedInvoices: Object.values(s.combinedVendorInvoices), completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0 });
+    .map(p => ({ ...publicPo(p, req), paymentSummary: purchasePaymentStatus(p, accounting, canReconcileVendorBill(req), s.settings, finalized[p.id] && finalized[p.id].amount) }));
+  try {
+    const recovered = await loadShopifyPurchaseHistory(req.query.refresh === '1');
+    const linkedProducts = new Map();
+    Object.values(s.pos).forEach(po => {
+      const poDate = String(po.postedAt || po.datePurchase || po.createdAt || '').slice(0, 10);
+      ((po.results && po.results.created) || []).forEach(product => {
+        if (product && product.productId) linkedProducts.set(String(product.productId), poDate);
+      });
+    });
+    const historical = recovered.map(batch => {
+      const products = (batch.products || []).filter(product => linkedProducts.get(String(product.productId)) !== batch.datePurchase);
+      const vendorNames = Array.from(new Set(products.map(product => String(product.vendor || '').trim()).filter(Boolean)));
+      return { ...batch, products, vendorNames,
+        productCount: products.length,
+        skuCount: products.reduce((n, product) => n + (product.skus || []).length, 0) };
+    }).filter(batch => batch.productCount > 0);
+    const history = pos.concat(historical).sort((a, b) =>
+      String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id))
+    );
+    res.json({ success: true, history, combinedInvoices: Object.values(s.combinedVendorInvoices),
+      completePurchases: pos.length, recoveredBatches: historical.length,
+      recoveredProducts: historical.reduce((n, batch) => n + batch.productCount, 0) });
+  } catch (error) {
+    const history = pos.sort((a, b) => String(b.datePurchase || b.createdAt || '').localeCompare(String(a.datePurchase || a.createdAt || '')) || String(b.id).localeCompare(String(a.id)));
+    res.json({ success: true, history, combinedInvoices: Object.values(s.combinedVendorInvoices),
+      completePurchases: history.length, recoveredBatches: 0, recoveredProducts: 0,
+      historyWarning: 'Shopify recovery is temporarily unavailable: ' + error.message });
+  }
 });
 router.get('/api/procurement/pos/:id', (req, res) => {
   const s = loadStore();

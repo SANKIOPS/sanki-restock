@@ -163,6 +163,18 @@ test('Purchases Summary has a category-first PO explorer plus the complete histo
   assert.doesNotMatch(html.match(/function historyDesignKey[\s\S]*?\n    \}/)[0], /colour/);
 });
 
+test('purchase history recovers unmatched Shopify products from August 2026 without inventing bill costs', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(js, /created_at_min=2026-08-01T00:00:00/);
+  assert.match(js, /await loadShopifyPurchaseHistory\(req\.query\.refresh === '1'\)/);
+  assert.match(js, /linkedProducts\.get\(String\(product\.productId\)\) !== batch\.datePurchase/);
+  assert.match(js, /historyWarning: 'Shopify recovery is temporarily unavailable:/);
+  assert.match(html, /Shopify recovery/);
+  assert.match(html, /purchased quantity, weight and landed cost are unavailable/);
+  assert.doesNotMatch(html, /purchaseHistoryHead\(po,'Not recorded','Not recorded','Not recorded','Not recorded','Not recorded','Not recorded'\)/);
+});
+
 test('Audit Purchases has a strict on-the-way category and vendor explorer', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   assert.match(html, /What is on the way\?/);
