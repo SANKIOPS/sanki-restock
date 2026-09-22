@@ -419,7 +419,7 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   const samastApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'samast_accounting' });
   assert.equal(samastApproval.status, 200);
   const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
-  assert.deepEqual(adminConfig.body.payingAccountsByNature.SAMAST, ['Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Prashant Cash','IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
+  assert.deepEqual(adminConfig.body.payingAccountsByNature.SAMAST, ['Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Prashant Cash','IndusInd Bank 7883','ICICI Bank 0993','Kirti Nagar Cash']);
   const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, role: 'admin', body: { account:'Prashant Axis 3645',paymentProof:'/api/expenses/photo/samast-payment.jpg' } });
   assert.equal(paid.status, 200, JSON.stringify(paid.body));
   assert.equal(paid.body.expense.payments.at(-1).account, 'Prashant Axis 3645');
@@ -986,7 +986,7 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   const claimantConfig = invoke('GET', '/api/expenses/config').body;
   assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
   assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash']);
-  assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash']);
+  assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','Kirti Nagar Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
   const blocked = invoke('POST', '/api/expenses', { body:{vendor:'Scoped Vendor',amount:100,billPhoto:'/api/expenses/photo/scoped.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Shivam 4807',personalPaymentProof:'/api/expenses/photo/scoped-pay.jpg'} });
@@ -994,6 +994,10 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;assert.ok(ownerConfig.payingAccountsByNature.PERSONAL.includes('Prashant Axis 3645'),'Owner can record a PERSONAL expense actually paid by SANKI');
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;assert.equal(adminConfig.payingAccountsByNature.PERSONAL.includes('Prashant Axis 3645'),false,'Admin cannot see or post owner-private expenses');
   assert.ok(adminConfig.payingAccountsByNature.SANKI.includes('IndusInd Bank 8181'));
+  assert.equal(adminConfig.payingAccountsByNature.SAMAST.includes('ICICI Bank 0992'),false);
+  assert.equal(adminConfig.ledgerAccountsByNature.SAMAST.includes('ICICI Bank 0992'),false);
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'SAMAST',account:'ICICI Bank 0992'}}).status,403);
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'ICICI Bank 0992'}}).status,200);
   assert.deepEqual(adminConfig.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919']);
   assert.deepEqual(claimantConfig.claimantPaymentAccountsByUser,{});
 });

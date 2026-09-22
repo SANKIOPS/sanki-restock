@@ -176,9 +176,10 @@ const CLAIMANT_ACCOUNTS = {
 const USER_PAYMENT_ACCOUNTS = {
   prashant: [
     'Prashant Axis 3645', 'Prashant Cash', 'Counter Cash',
-    'IndusInd Bank 7883', 'ICICI Bank 0993', 'ICICI Bank 0992', 'IndusInd Bank 8181', 'Kirti Nagar Cash'
+    'IndusInd Bank 7883', 'ICICI Bank 0993', 'IndusInd Bank 8181', 'Kirti Nagar Cash'
   ]
 };
+const OWNER_ONLY_ACCOUNTS = ['ICICI Bank 0992'];
 const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash', 'prashant Cash':'Prashant Cash' };
 
 function canonicalAccountName(value) {
@@ -187,6 +188,8 @@ function canonicalAccountName(value) {
   const match=Object.entries(ACCOUNT_RENAMES).find(([oldName])=>oldName.toLowerCase()===raw.toLowerCase());
   return match?match[1]:raw;
 }
+function accountVisibleToReq(req,account){return isOwner(req)||!OWNER_ONLY_ACCOUNTS.some(name=>name.toLowerCase()===canonicalAccountName(account).toLowerCase());}
+function visibleAccountsForReq(req,accounts){return (accounts||[]).filter(account=>accountVisibleToReq(req,account));}
 function searchRank(fields, query) {
   const q=String(query||'').trim().toLowerCase().replace(/\s+/g,' ');if(!q)return 0;
   const values=fields.map(x=>String(x||'').trim().toLowerCase()).filter(Boolean),words=q.split(' ');
@@ -1136,13 +1139,13 @@ function personalAccountsForReq(req) {
   const username = String((req.user && req.user.username) || '').trim().toLowerCase();
   const roles = rolesOfReq(req);
   if (roles.includes('owner')) return Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS), ...Object.values(CLAIMANT_ACCOUNTS))));
-  if (roles.includes('admin')) return (USER_PAYMENT_ACCOUNTS[username] || []).slice();
+  if (roles.includes('admin')) return visibleAccountsForReq(req,USER_PAYMENT_ACCOUNTS[username] || []);
   return (CLAIMANT_ACCOUNTS[username] || []).slice();
 }
 function payingAccountsForReq(req, nature) {
   const username = String((req.user && req.user.username) || '').trim().toLowerCase();
   if (isOwner(req)) return normalizedNature(nature)==='PERSONAL'?Array.from(new Set(companyAccountsForNature('PERSONAL').concat(companyAccountsForNature('SANKI')))):companyAccountsForNature(nature);
-  const assigned = USER_PAYMENT_ACCOUNTS[username] || [];
+  const assigned = visibleAccountsForReq(req,USER_PAYMENT_ACCOUNTS[username] || []);
   const assignedTo = entity => companyAccountsForNature(entity).filter(account => assigned.some(name => name.toLowerCase() === account.toLowerCase()));
   const nativeAccounts = assignedTo(nature);
   // A SAMAST expense can be funded from an account actually controlled in
@@ -1237,7 +1240,7 @@ function paytmReportView(s) {
   const legacyDrafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===PAYTM_CLEARING_ACCOUNT).map(d=>({id:d.id,name:d.originalName||'Legacy bank statement preview',createdAt:d.createdAt,from:d.summary?.from,to:d.summary?.to,rows:(d.transactions||[]).length}));
   return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
-function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&isBankLedgerName(name);}
+function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||'');if(!isAdmin(req)||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!isOwner(req))return false;return ledgerAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase())&&isBankLedgerName(name);}
 function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&String(name||'')!==PAYTM_CLEARING_ACCOUNT;}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
@@ -1431,11 +1434,11 @@ router.get('/api/expenses/config', (req, res) => {
     ledgers: pickableLedgers(s),
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
-    accounts: Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n])))),
-    accountsByNature: Object.fromEntries(NATURES.map(n => [n, n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : [])])),
-    bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? ledgerAccountsForNature(s,n).filter(isBankLedgerName) : []])),
-    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name)))).sort((a,b)=>a.localeCompare(b)) : []])),
-    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645']:[]) : (approvalNatures(req).includes(n) ? transferAccountsForNature(n) : [])])),
+    accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
+    accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
+    bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
+    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : []])),
+    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645']:[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     claimantPaymentAccountsByUser: (isPrashant(req)||ownerView) ? {arshpreet:CLAIMANT_ACCOUNTS.arshpreet.slice()} : {},
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
@@ -2321,7 +2324,7 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
   const searchable=p=>[p.vendor,p.particulars,p.category,p.id,p.paymentId,p.reference,p.claimant,p.account,p.paymentType,p.kind,p.entity];
   const visiblePayments=search?payments.filter(p=>searchRank(searchable(p),search)<99):payments;
   visiblePayments.sort((a,b)=>search?(searchRank(searchable(a),search)-searchRank(searchable(b),search)||String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId))):String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId)));
-  res.json({ success:true, range:{from,to}, totalPaid:round0(visiblePayments.reduce((n,p)=>n+num(p.amount),0)), count:visiblePayments.length, payments:visiblePayments, accounts:storedAccountNames(s) });
+  res.json({ success:true, range:{from,to}, totalPaid:round0(visiblePayments.reduce((n,p)=>n+num(p.amount),0)), count:visiblePayments.length, payments:visiblePayments, accounts:visibleAccountsForReq(req,storedAccountNames(s)) });
 });
 
 router.get('/api/expenses/reimbursements', (req, res) => {
@@ -2580,7 +2583,7 @@ router.get('/api/expenses/balances', (req, res) => {
   // the selected period still exists. It is calculated cumulatively as of To.
   const closing=totalsFor(d=>!to||String(d||'')<=to);
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  const accounts = ledgerAccountsForNature(s, nature).map(name => {
+  const accounts = visibleAccountsForReq(req,ledgerAccountsForNature(s, nature)).map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(period.paidOut[name] || 0),topups=round0(period.adj[name]||0),transferredIn=round0(period.transferIn[name]||0),transferredOut=round0(period.transferOut[name]||0),received=round0(period.collected[name]||0),excludedBankIn=roundMoney(period.bankTruthIn[name]||0),excludedBankOut=roundMoney(period.bankTruthOut[name]||0);
     const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),closingBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0);
@@ -2686,6 +2689,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
   if (!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
   const fromAccount = allowedTransferAccount(fromNature, b.fromAccount), toAccount = allowedTransferAccount(toNature, b.toAccount);
+  if(!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))return res.status(403).json({success:false,error:'ICICI Bank 0992 is restricted to the Owner.'});
   const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',routedThroughIntermediary=b.routedThroughIntermediary===true||b.routedThroughIntermediary==='true',intermediary=String(b.intermediary||'').trim();
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
@@ -2755,6 +2759,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const s = loadStore(), nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim();
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
+  if (!accountVisibleToReq(req,account)) return res.status(403).json({success:false,error:'This ledger is restricted to the Owner.'});
   const creditCard=resolveCreditCard(req,account);
   if (!creditCard&&!ledgerAccountsForNature(s, nature).some(a => a.toLowerCase() === account.toLowerCase())) return res.status(403).json({ success:false, error:'This account does not belong to the selected entity.' });
   const from = String(req.query.from || ''), to = String(req.query.to || ''), expenseNature = req.query.expenseNature ? normalizedNature(req.query.expenseNature) : '', entries = [];
