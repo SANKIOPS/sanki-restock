@@ -2100,6 +2100,9 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
     direct:{id:'direct',name:'#2800',orderNumber:2800,createdAt:'2026-09-10T10:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Paytm'],total:12500,refundAmount:0},
     unlabeled:{id:'unlabeled',name:'#2801',orderNumber:2801,createdAt:'2026-09-10T11:00:00Z',channel:'Website',financialStatus:'paid',paymentGateways:['manual'],total:7000,refundAmount:0},
     manualPos:{id:'manualPos',name:'#2802',orderNumber:2802,createdAt:'2026-09-10T12:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['manual'],total:8000,refundAmount:0},
+    cashPos:{id:'cashPos',name:'#2803',orderNumber:2803,createdAt:'2026-09-10T12:30:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Cash'],total:6000,refundAmount:0},
+    creditPos:{id:'creditPos',name:'#2804',orderNumber:2804,createdAt:'2026-09-10T13:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Shopify Store Credit'],total:5000,refundAmount:0},
+    mixedNoPaytm:{id:'mixedNoPaytm',name:'#2805',orderNumber:2805,createdAt:'2026-09-10T13:30:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Cash','Shopify Store Credit'],total:9000,refundAmount:0},
     beforeStart:{id:'beforeStart',name:'#2700',orderNumber:2700,createdAt:'2026-08-21T12:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['manual'],total:9000,refundAmount:0},
     afterToday:{id:'afterToday',name:'#9990',orderNumber:9990,createdAt:'2099-09-20T12:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['manual'],total:10000,refundAmount:0},
     credit:{id:'credit',name:'#2717',orderNumber:2717,createdAt:'2026-08-23T10:00:00Z',financialStatus:'paid',paymentGateways:['store credit'],total:20000,refundAmount:0},
@@ -2116,6 +2119,7 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   const september=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-09-10');assert.equal(september.credit,0);assert.deepEqual(september.connectedSales.map(x=>x.id),['SHOPIFY/direct']);assert.equal(clearing.find(x=>x.id==='PAYTM-SALE/SHOPIFY/direct').credit,12500);
   assert.equal(clearing.some(x=>(x.connectedSales||[]).some(y=>['SHOPIFY/beforeStart','SHOPIFY/afterToday'].includes(y.id))),false);
   assert.equal(clearing.some(x=>['SHOPIFY/credit','SHOPIFY/test'].includes(x.id)),false);
+  assert.equal(clearing.some(x=>['cashPos','creditPos','mixedNoPaytm','manualPos'].includes(String(x.orderId))),false,'cash, store-credit and unverified POS orders never enter Paytm Clearing');
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   assert.equal(config.ledgerAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),true);
   assert.equal(config.bankAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),false,'virtual Paytm clearing is not a bank-statement account');
