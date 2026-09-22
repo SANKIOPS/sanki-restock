@@ -2842,8 +2842,17 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // Bank-statement rows stay in reconciliation reports only; Excluded / PSNL rows never become operational ledger entries.
   if(account===DEFAULT_COUNTER_CASH)for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&!cashEntryIsVisible(account,entries[i].date))entries.splice(i,1);
   entries.forEach(x=>{const override=(s.bankDateOverrides||{})[x.id];if(override){x.originalDate=x.date;x.date=override.bankDate;x.bankDateOverride=override;}});
-  const ordered = entries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
-  const preciseBalance=account===PAYTM_CLEARING_ACCOUNT;let running = 0; ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
+  // An opening balance is the balance brought forward before the first ledger
+  // movement; its effective date is audit metadata, not another receipt on that
+  // date.  Treating it as a dated credit made earlier rows omit the opening and
+  // caused the running balance to appear to increase immediately before same-day
+  // salary debits.
+  const openingEntry=entries.find(x=>x.kind==='opening'),movementEntries=entries.filter(x=>x.kind!=='opening');
+  const ordered = movementEntries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
+  const preciseBalance=account===PAYTM_CLEARING_ACCOUNT;let running = openingEntry?num(openingEntry.credit)-num(openingEntry.debit):0;
+  if(openingEntry)openingEntry.balance=preciseBalance?Math.round(running*100)/100:round0(running);
+  ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
+  if(openingEntry)ordered.unshift(openingEntry);
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
   const issues = creditCard?[]:reconciliationIssues(s, nature, account),reconciliation=ledgerReconciliationStatus(s,nature,account);visible.forEach(x=>{const status=reconciliation.index.get(x.id);if(status){x.reconciliation=status;x.rawReference=x.reference||x.id;x.reference=x.rawReference+' · ✓ Reconciled '+(status.bankDate||'')+' · '+status.reconciliationId;}});

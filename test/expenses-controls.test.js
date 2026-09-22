@@ -2361,6 +2361,24 @@ test('only the Owner can set a dated custom opening balance with an audit reason
   assert.match(html,/cfg\.isOwner\?'<button class="btn mini ghost" onclick="openOpeningBalance/);
 });
 
+test('opening balance is brought forward before every dated ledger movement',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='Opening Balance Test Cash';
+  stored.accounts=Array.from(new Set([].concat(stored.accounts||[],account)));
+  stored.openingBalances=stored.openingBalances||{};stored.openingBalanceDates=stored.openingBalanceDates||{};
+  stored.openingBalances[account]=29000;stored.openingBalanceDates[account]='2026-09-11';
+  stored.adjustments=stored.adjustments||[];
+  stored.adjustments.push({id:'ADJ-OPENING-RECEIPT',nature:'SANKI',account,date:'2026-09-08',amount:71500,note:'Earlier receipt'});
+  stored.adjustments.push({id:'ADJ-OPENING-TRANSFER',nature:'SANKI',account,date:'2026-09-10',amount:300000,note:'Earlier transfer'});
+  stored.adjustments.push({id:'ADJ-OPENING-SALARY',nature:'SANKI',account,date:'2026-09-11',amount:-15000,note:'Salary debit'});
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account}}).body;
+  assert.equal(ledger.entries.find(x=>x.id==='OPENING').balance,29000);
+  assert.equal(ledger.entries.find(x=>x.id==='ADJ-OPENING-RECEIPT').balance,100500);
+  assert.equal(ledger.entries.find(x=>x.id==='ADJ-OPENING-TRANSFER').balance,400500);
+  assert.equal(ledger.entries.find(x=>x.id==='ADJ-OPENING-SALARY').balance,385500);
+  assert.equal(ledger.balance,385500);
+});
+
 test('later reconciliation periods use the finalized cutoff and do not re-reconcile overlap',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='Axis Bank 3448',id='BRD-CONTINUOUS';
   stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-09-03',transactions:{old:{id:'BTX-OLD',date:'2026-09-03',debit:100,credit:0,reference:'OLD'}},imports:[]};
