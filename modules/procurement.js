@@ -301,17 +301,46 @@ async function loadShopifyPurchaseHistory(force) {
     (d.products || []).forEach(p => {
       // Historical SKUs include formats that pre-date today's strict parser;
       // requiring parseSerial() here would silently erase legitimate old buys.
-      const skus = (p.variants || []).map(v => String(v.sku || '').toUpperCase()).filter(Boolean);
+      const variantDetails = (p.variants || []).map(v => ({
+        sku: String(v.sku || '').toUpperCase(),
+        inventoryItemId: String(v.inventory_item_id || ''),
+        sellingPrice: v.price == null || v.price === '' ? null : Number(v.price),
+        grams: Number(v.grams) || 0,
+        weight: Number(v.weight) || 0,
+        weightUnit: String(v.weight_unit || '')
+      })).filter(v => v.sku);
+      const skus = variantDetails.map(v => v.sku);
       products.push({
         productId: String(p.id), title: p.title || '(untitled)', type: p.product_type || '',
         vendor: p.vendor || '', status: p.status || '', createdAt: p.created_at || '', skus,
-        imageUrl: String((p.image && p.image.src) || (p.images && p.images[0] && p.images[0].src) || '')
+        imageUrl: String((p.image && p.image.src) || (p.images && p.images[0] && p.images[0].src) || ''),
+        variantDetails
       });
     });
     const link = r.headers.get('Link') || '';
     const next = link.match(/<([^>]+)>;\s*rel="next"/);
     url = next ? next[1] : null;
   }
+  // Shopify stores the merchant-entered per-item cost on InventoryItem, not
+  // ProductVariant. Fetch it separately and keep failures non-fatal: selling
+  // price and weight are still useful recovery evidence without this scope.
+  const inventoryIds = Array.from(new Set(products.flatMap(p => p.variantDetails.map(v => v.inventoryItemId)).filter(Boolean)));
+  const costByInventoryId = {};
+  for (let offset = 0; offset < inventoryIds.length; offset += 100) {
+    const ids = inventoryIds.slice(offset, offset + 100);
+    try {
+      const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/inventory_items.json?ids=${ids.join(',')}`);
+      if (!r.ok) continue;
+      const d = await r.json();
+      (d.inventory_items || []).forEach(item => {
+        if (item && item.id != null && item.cost != null && item.cost !== '') costByInventoryId[String(item.id)] = Number(item.cost);
+      });
+    } catch { /* Cost recovery is optional; never hide the product history. */ }
+  }
+  products.forEach(product => product.variantDetails.forEach(variant => {
+    variant.recordedCost = Object.prototype.hasOwnProperty.call(costByInventoryId, variant.inventoryItemId)
+      ? costByInventoryId[variant.inventoryItemId] : null;
+  }));
   const byDate = {};
   products.forEach(p => {
     const date = String(p.createdAt).slice(0, 10);
