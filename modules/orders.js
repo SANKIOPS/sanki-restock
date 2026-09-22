@@ -114,6 +114,23 @@ function refundTotal(o) {
   o.refunds.forEach(rf => (rf.transactions || []).forEach(t => { if (t.kind === 'refund') sum += num(t.amount); }));
   return sum;
 }
+function refundComponents(o) {
+  const rows = [];
+  (Array.isArray(o.refunds) ? o.refunds : []).forEach(refund => {
+    (refund.transactions || []).forEach(tx => {
+      if (String(tx.kind || '').toLowerCase() !== 'refund' || String(tx.status || 'success').toLowerCase() !== 'success') return;
+      const amount = num(tx.amount), gateway = String(tx.gateway || tx.payment_gateway || '');
+      if (!(amount > 0)) return;
+      rows.push({ id:String(tx.id || ''), refundId:String(refund.id || ''), amount, gateway, processedAt:tx.processed_at || refund.processed_at || refund.created_at || '' });
+    });
+  });
+  const isStoreCredit = row => /store.?credit|gift.?card/i.test(row.gateway);
+  return {
+    transactions: rows,
+    storeCreditIssued: rows.filter(isStoreCredit).reduce((sum, row) => sum + row.amount, 0),
+    moneyRefunded: rows.filter(row => !isStoreCredit(row)).reduce((sum, row) => sum + row.amount, 0)
+  };
+}
 function addressObj(a) {
   a = a || {};
   return {
@@ -134,6 +151,7 @@ function normalizeOrder(o) {
     sku: li.sku || '', title: li.title || '', variantTitle: li.variant_title || '',
     qty: li.quantity || 0, price: num(li.price)
   }));
+  const refunds = refundComponents(o);
   return {
     id: String(o.id),
     name: o.name || ('#' + (o.order_number || '')),
@@ -158,6 +176,9 @@ function normalizeOrder(o) {
     shipping: shippingTotal(o),
     total: num(o.total_price),
     refundAmount: refundTotal(o),
+    refundTransactions: refunds.transactions,
+    storeCreditIssued: refunds.storeCreditIssued,
+    moneyRefunded: refunds.moneyRefunded,
     financialStatus: o.financial_status || '',
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
     paymentGateways: o.payment_gateway_names || [],

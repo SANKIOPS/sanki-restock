@@ -109,11 +109,12 @@ test('links the Shopify number field used by imported orders', () => {
   assert.equal(link.orderId, 'shopify-order-2728');
 });
 
-test('split order links only the Paytm component and excludes store credit', () => {
-  const order = { id: 'split', number: 2845, financialStatus: 'paid', createdAt: '2026-09-19T12:00:00Z', total: 2498, storeCreditAmount: 1499, note: 'Paytm 123456' };
+test('split order links only the Paytm component and excludes store credit used as tender', () => {
+  const order = { id: 'split', number: 2845, financialStatus: 'paid', createdAt: '2026-09-19T12:00:00Z', total: 2498, refundAmount: 500, storeCreditAmount: 1499, note: 'Paytm 123456' };
   const tx = { transactionId: '123456', date: '2026-09-19', amount: 999, posId: 'POS1' };
   const link = validateOrderLink({}, tx, '2845', [order], [], '');
   assert.equal(link.amount, 999);
+  assert.equal(link.orderTotal, 2498, 'later refunds do not rewrite the original collected amount');
   assert.equal(link.partial, true);
   assert.equal(link.matchBasis, 'transaction_id_in_shopify_note');
   assert.throws(() => validateOrderLink({}, { ...tx, amount: 1000 }, '2845', [order], [], ''), /store credit/);

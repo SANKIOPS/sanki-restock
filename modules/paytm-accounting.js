@@ -36,7 +36,11 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   const row = saleRows.find(x => String(x.orderId) === String(order.id) && x.account !== 'Counter Cash');
   const orderDate = String(order.processedAt || order.createdAt || row && row.date || '').slice(0, 10);
   if (!orderDate || dayGap(orderDate, tx.date) > 1) throw new Error('Shopify and Paytm dates differ by more than one day. Review the source records.');
-  const total = cents(Number(order.total || 0) - Number(order.refundAmount || 0)) || cents(row && row.gross || row && row.amount);
+  // A later Shopify refund to store credit is a customer liability, not a
+  // reversal of the Paytm money originally collected. Match against the
+  // original order/payment components; actual Paytm refunds are separate
+  // Paytm transactions and must be reconciled separately.
+  const total = cents(Number(order.total || 0)) || cents(row && row.gross || row && row.amount);
   const verified = (store.paytmShopifyPayments || {})[order.id] || {};
   const cash = cents((store.saleAllocationOverrides || {})['SHOPIFY/' + order.id]?.cashAmount ?? verified.cashAmount ?? order.cashAmount ?? 0);
   const storeCredit = cents(verified.storeCreditAmount ?? order.storeCreditAmount ?? order.storeCreditUsed ?? 0);
