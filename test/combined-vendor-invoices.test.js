@@ -9,7 +9,7 @@ const { invoiceAmounts, allocateAmount, finalizedByPo } = require('../modules/lg
 
 function handlers(store, accounting = { procurementAccounting: { paymentsByPo: {} } }) {
   const routes = {}, context = {
-    router: { post: (route, fn) => routes[route] = fn, patch: (route, fn) => routes[route] = fn },
+    router: { post: (route, fn) => routes[route] = fn, patch: (route, fn) => routes[route] = fn, delete: (route, fn) => routes['DELETE ' + route] = fn },
     canReconcileVendorBill: () => true, loadStore: () => store, saveStore: () => {},
     invoiceAmounts, allocateAmount, finalizedByPo, DATA_DIR: '/tmp', path,
     fs: { readFileSync: () => JSON.stringify(accounting) },
@@ -133,6 +133,25 @@ test('manual vendor calculation rejects recovered rows outside August', () => {
       productCount: 1, manualVendorBill: true }]
   });
   assert.equal(result.status, 400);
+});
+
+test('unfinalized calculation can be undone so its bills can be selected again', () => {
+  const store = { pos: { 'PO-A': { id: 'PO-A', vendor: 'A' } }, combinedVendorInvoices: {} };
+  const routes = handlers(store);
+  const made = call(routes['/api/procurement/combined-invoices'], { poIds: ['PO-A'] });
+  const id = made.result.invoice.id;
+  const cancel = call(routes['DELETE /api/procurement/combined-invoices/:id'], {}, id);
+  assert.equal(cancel.result.success, true);
+  assert.deepEqual(Array.from(cancel.result.poIds), ['PO-A']);
+  assert.equal(store.combinedVendorInvoices[id], undefined);
+  assert.equal(call(routes['/api/procurement/combined-invoices'], { poIds: ['PO-A'] }).status, 201);
+});
+
+test('finalized calculation must be reopened before it can be undone', () => {
+  const store = { pos: {}, combinedVendorInvoices: { X: { id: 'X', finalized: { amountInr: 1 } } } };
+  const result = call(handlers(store)['DELETE /api/procurement/combined-invoices/:id'], {}, 'X');
+  assert.equal(result.status, 409);
+  assert.ok(store.combinedVendorInvoices.X);
 });
 
 test('combined invoice accepts bills with different purchase currencies', () => {

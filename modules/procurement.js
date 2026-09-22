@@ -2625,6 +2625,15 @@ router.patch('/api/procurement/combined-invoices/:id', (req, res) => {
   saveStore(s);
   res.json({ success: true, invoice });
 });
+router.delete('/api/procurement/combined-invoices/:id', (req, res) => {
+  if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
+  const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id];
+  if (!invoice) return res.status(404).json({ success: false, error: 'Invoice calculation not found.' });
+  if (invoice.finalized) return res.status(409).json({ success: false, error: 'Reopen the finalized LG bill before cancelling its calculation.' });
+  delete s.combinedVendorInvoices[req.params.id];
+  saveStore(s);
+  res.json({ success: true, cancelledId: req.params.id, poIds: invoice.poIds || [] });
+});
 router.post('/api/procurement/combined-invoices/:id/finalize', (req, res) => {
   if (!canReconcileVendorBill(req)) return res.status(403).json({ success: false, error: 'Purchases or accounting access required.' });
   const s = loadStore(), invoice = s.combinedVendorInvoices[req.params.id], basis = String((req.body || {}).basis || '');
