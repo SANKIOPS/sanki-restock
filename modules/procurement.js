@@ -338,9 +338,26 @@ async function loadShopifyPurchaseHistory(force) {
       });
     } catch { /* Cost recovery is optional; never hide the product history. */ }
   }
+  const stockByInventoryId = {};
+  for (let offset = 0; offset < inventoryIds.length; offset += 50) {
+    const ids = inventoryIds.slice(offset, offset + 50);
+    try {
+      const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/inventory_levels.json?inventory_item_ids=${ids.join(',')}`);
+      if (!r.ok) continue;
+      const d = await r.json();
+      (d.inventory_levels || []).forEach(level => {
+        if (!level || level.inventory_item_id == null || level.available == null) return;
+        const id = String(level.inventory_item_id);
+        stockByInventoryId[id] = (stockByInventoryId[id] || 0) + Number(level.available || 0);
+      });
+    } catch { /* Stock recovery is optional; never hide the product history. */ }
+  }
   products.forEach(product => product.variantDetails.forEach(variant => {
     variant.recordedCost = Object.prototype.hasOwnProperty.call(costByInventoryId, variant.inventoryItemId)
       ? costByInventoryId[variant.inventoryItemId] : null;
+    if (Object.prototype.hasOwnProperty.call(stockByInventoryId, variant.inventoryItemId)) {
+      variant.inventoryQuantity = stockByInventoryId[variant.inventoryItemId];
+    }
   }));
   // A single Shopify creation date can contain products from several sourcing
   // vendors. Keep those as separate historical purchase rows so the vendor
