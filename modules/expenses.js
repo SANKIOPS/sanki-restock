@@ -2799,10 +2799,21 @@ router.get('/api/expenses/account-ledger', (req, res) => {
       // Keep Shopify POS sales visible while their actual Paytm component is
       // awaiting verification. These are review rows, never clearing credits.
       const creditedOrders=new Set(automaticSales.map(x=>String(x.orderId||'')));
-      // Do not put speculative POS orders into Paytm Clearing. A POS channel is
-      // not a payment method: it may be cash, store credit, another gateway, or
-      // a mixture. salesLedgerEntries above contributes only a verified Paytm
-      // component (Shopify Paytm gateway, synced split, or confirmed report link).
+      // Keep Shopify's live feed separate from Paytm's accounting amount. A
+      // six-digit Paytm ID in the order note is enough to show the sale for
+      // operational follow-up, but it is not enough to value a cash/store-credit
+      // split. Such rows therefore remain visible with zero movement until the
+      // detailed Paytm report confirms the actual Paytm component.
+      Object.values(shopOrders).filter(order=>!order.cancelledAt&&String(order.financialStatus||'').toLowerCase()==='paid').forEach(order=>{
+        const orderId=String(order.id||''),orderNumber=String(order.orderNumber||order.number||order.name||order.id||'').replace(/\D/g,'').replace(/^0+/,''),date=String(order.processedAt||order.createdAt||'').slice(0,10),suffixes=noteSuffixes(order),gateways=(order.paymentGateways||[]).join(' ').toLowerCase();
+        if(!paytmSalesInScope(date)||creditedOrders.has(orderId)||['2717','2720'].includes(orderNumber)||!suffixes.length)return;
+        // An explicit cash/store-credit-only order is not Paytm merely because a
+        // number appears in free-form notes. Mixed/unknown orders stay pending.
+        const explicitNonPaytm=!/paytm/.test(gateways)&&gateways&&gateways.split(/[,|]/).every(g=>/cash|store\s*credit|gift\s*card/.test(g.trim()));
+        if(explicitNonPaytm)return;
+        const gross=roundMoney(num(order.total)-num(order.refundAmount));
+        entries.push({id:'PAYTM-PENDING/'+orderId,date,kind:'paytm_pending_sale',description:'Shopify sale #'+orderNumber+' · Paytm amount pending report verification',reference:'#'+orderNumber,credit:0,debit:0,orderId,orderNumber,orderTotal:gross,noteSuffixes:suffixes});
+      });
       (s.paytmSettlements||[]).forEach(st=>{const keys=(st.orderIds||[]).map(id=>String(id||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')),alreadyShown=Object.values(daily).some(day=>{const saleKeys=new Set(day.sales.flatMap(sale=>[sale.orderNumber,sale.orderId,sale.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')));return keys.some(id=>saleKeys.has(id))||Math.abs(num(st.grossAmount)-day.total)<.01;});if(alreadyShown)return;const fallback=new Date(String(st.date||'')+'T00:00:00Z');fallback.setUTCDate(fallback.getUTCDate()-1);const receiptDate=st.customerReceiptDate||fallback.toISOString().slice(0,10),gross=num(st.grossAmount||num(st.netAmount)+num(st.chargeAmount)),day=daily[receiptDate]||(daily[receiptDate]={date:receiptDate,total:0,sales:[],forcedSettlements:[]});day.total+=gross;day.forcedSettlements.push(st.id);keys.forEach(id=>day.sales.push({id:'SETTLEMENT/'+st.id+'/'+id,orderNumber:id,amount:keys.length===1?gross:null,description:'Connected sale'}));});
       Object.values(daily).forEach(x=>{const saleKeys=new Set(x.sales.flatMap(s=>[s.orderNumber,s.orderId,s.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,''))),linkedSettlements=(s.paytmSettlements||[]).filter(st=>(x.forcedSettlements||[]).includes(st.id)||(st.orderIds||[]).some(id=>saleKeys.has(String(id).replace(/^#/,'').replace(/^SHOPIFY\//,'')))||Math.abs(num(st.grossAmount)-x.total)<.01),knownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+num(st.chargeAmount),0)*100)/100,unknownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+Math.max(0,num(st.grossAmount)-num(st.netAmount)-num(st.chargeAmount)),0)*100)/100,hasIndividualSales=x.sales.some(sale=>!String(sale.id||'').startsWith('SETTLEMENT/'));entries.push({id:'PAYTM-RECEIPTS/'+x.date,date:x.date,kind:'paytm_customer_receipts',description:'Daily Paytm sales summary',credit:hasIndividualSales?0:roundMoney(x.total),debit:0,connectedSales:x.sales,paytmSummary:{gross:roundMoney(x.total),knownCharges,unknownCharges,settlementIds:linkedSettlements.map(st=>st.id)}});});
     }else automaticSales.forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0,orderId:x.orderId||'',orderNumber:x.orderNumber||'',gross:num(x.gross||x.amount),cashAmount:x.cashAmount,nonCashAmount:x.nonCashAmount,allocationPart:x.allocationPart||'',saleAllocation:x.saleAllocation||null,editableSale:String(x.id||'').startsWith('SHOPIFY/')}));
