@@ -1115,7 +1115,10 @@ function storedAccountNames(s) {
     (e.payments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
     (e.reimbursementPayments || []).forEach(p => { if (p.account) names.add(String(p.account)); });
   });
-  salaryAdvanceEntries().filter(x=>x.payingNature===n).forEach(x => { if (x.account) names.add(x.account); });
+  // This is the cross-entity master account list, so include every posted
+  // salary-advance account. The previous filter referenced an undefined `n`
+  // and crashed the spending dashboard whenever live advance rows existed.
+  salaryAdvanceEntries().forEach(x => { if (x.account) names.add(x.account); });
   return Array.from(new Set(Array.from(names).map(canonicalAccountName))).map(x => String(x).trim()).filter(x => x && x !== '(unspecified)').sort((a, b) => a.localeCompare(b));
 }
 function salaryAdvanceEntries() {

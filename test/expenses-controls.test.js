@@ -503,6 +503,33 @@ test('all expenses and spending dashboard support broad closest-match search', (
   assert.match(html,/spending-dashboard\?from=.*&search=/);
 });
 
+test('spending dashboard still loads when posted salary advances add paying accounts', () => {
+  const salaryFile = path.join(tempDir, 'salary.json');
+  const previous = fs.existsSync(salaryFile) ? fs.readFileSync(salaryFile) : null;
+  try {
+    fs.writeFileSync(salaryFile, JSON.stringify({
+      advances: {
+        'ADV-DASHBOARD': {
+          id: 'ADV-DASHBOARD',
+          empId: 'EMP-1',
+          employeeName: 'Test Employee',
+          date: '2026-09-23',
+          amount: 500,
+          account: 'IndusInd Bank 8181',
+          payingNature: 'SANKI',
+          active: true
+        }
+      }
+    }));
+    const result = invoke('GET', '/api/expenses/spending-dashboard', { role: 'owner', query: {} });
+    assert.equal(result.status, 200);
+    assert.ok(result.body.accounts.includes('IndusInd Bank 8181'));
+  } finally {
+    if (previous) fs.writeFileSync(salaryFile, previous);
+    else fs.rmSync(salaryFile, { force: true });
+  }
+});
+
 test('All Expenses ignores stale responses after the date range changes', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/listRequestSeq=0/);
