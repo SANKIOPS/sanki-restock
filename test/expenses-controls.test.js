@@ -1343,9 +1343,9 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="payOverrideReason"/);
   assert.match(html, /id="editPersonalAccount"/);
   assert.match(html, /id="editBillFile"/);
-  assert.match(html, /Upload bank statement for reconciliation/);
-  assert.match(html, /Upload or reconcile bank statement/);
-  assert.match(html, /if\(recon\).*if\(bankEligible\)loadBankStatement\(\)/);
+  assert.match(html, /Upload statement or register for reconciliation/);
+  assert.match(html, /Upload or reconcile statement/);
+  assert.match(html, /if\(recon\).*if\(reconcileEligible\)loadBankStatement\(\)/);
   assert.match(html, /id="ledgerRecon" style="display:none/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
@@ -1497,7 +1497,7 @@ test('reconciliation search includes nearby posted salary and incoming account m
 
 test('unmatched reconciliation rows are grouped into chronological date blocks',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/dateLabel\+' — unmatched entries'/);assert.match(html,/x\.status==='missing_in_app'\|\|x\.status==='missing_in_bank'/);assert.match(source,/if\(gx===2\)return rowDate\(x\)\.localeCompare\(rowDate\(y\)\)/);assert.match(source,/rowSequence\(x\)-rowSequence\(y\)/);assert.match(source,/missing_in_app:2,missing_in_bank:2/);});
 
-test('expanding account trails cannot destroy or hide the bank reconciliation panel',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),trail=html.slice(html.indexOf('window.loadMoneyTrail='),html.indexOf('window.deleteTransfer='));assert.doesNotMatch(trail,/appendChild\(recon\)/);assert.match(trail,/Upload or reconcile bank statement/);assert.match(html,/if\(recon\).*recon\.style\.display=bankEligible\?'block':'none'/);assert.ok(html.indexOf('id="ledgerRecon"')<html.indexOf('id="ledgerTable"'));assert.match(html,/\(el\('ledgerRecon'\)\|\|el\('lg_account'\)\)\.scrollIntoView/);});
+test('expanding account trails cannot destroy or hide the universal reconciliation panel',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),trail=html.slice(html.indexOf('window.loadMoneyTrail='),html.indexOf('window.deleteTransfer='));assert.doesNotMatch(trail,/appendChild\(recon\)/);assert.match(trail,/Upload or reconcile statement/);assert.match(html,/if\(recon\).*recon\.style\.display=reconcileEligible\?'block':'none'/);assert.ok(html.indexOf('id="ledgerRecon"')<html.indexOf('id="ledgerTable"'));assert.match(html,/\(el\('ledgerRecon'\)\|\|el\('lg_account'\)\)\.scrollIntoView/);});
 
 test('balanced policy auto-matches unique exact date amount and direction despite different narration',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993',date='2098-03-01';
@@ -2160,8 +2160,9 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   assert.equal(config.ledgerAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),true);
   assert.equal(config.bankAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),false,'virtual Paytm clearing is not a bank-statement account');
+  assert.equal(config.reconciliationAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),true,'the universal reconciliation workflow also covers clearing ledgers');
   assert.equal(config.accountsByNature.SANKI.includes('Paytm Settlement Clearing'),false);
-  assert.equal(invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing'}}).status,403);
+  assert.equal(invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing'}}).status,200);
   assert.equal(fs.readFileSync(path.join(tempDir,'orders.json'),'utf8').includes('store credit'),true);
   const expenseFile=path.join(tempDir,'expenses.json'),before=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(before);
   stored.bankDateOverrides=stored.bankDateOverrides||{};stored.bankDateOverrides['SHOPIFY/direct']={bankDate:'2026-09-10',bankTransactionId:'BTX-ALREADY-LINKED'};
