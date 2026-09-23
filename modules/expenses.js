@@ -2895,6 +2895,7 @@ function parseBankStatementFile(filePath){
 }
 function parseBankStatementText(raw){
   const text=String(raw||'').replace(/\r/g,'');
+  const indusMobile=parseIndusIndMobileStatementText(text);if(indusMobile.length)return indusMobile;
   const indusIndRows=parseIndusIndScreenshotText(text);if(indusIndRows.length)return indusIndRows;
   if(/Detailed\s*Statement/i.test(text)&&/ICICI\s*BANK/i.test(text)&&/Withdra\s*wal\s*\(Dr\)/i.test(text)){
     const section=(text.split(/Balance\s*\n/i)[1]||'').split(/Page Total/i)[0]||'',opening=statementNum((text.match(/Opening\s*Bal:\s*(-?[0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),closing=statementNum((text.match(/Closing\s*Bal:\s*(-?[0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),withdrawals=statementNum((text.match(/Withdraw(?:al|l)s:\s*([0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),deposits=statementNum((text.match(/Deposits:\s*([0-9,]+(?:\.\d{1,2})?)/i)||[])[1]),chunks=section.split(/(?=\n\d+[A-Z][A-Z0-9]*\s*\n)/).filter(x=>/^\s*\d+[A-Z]/.test(x)),out=[];
@@ -2940,6 +2941,22 @@ function parseBankStatementText(raw){
     else{const token=amountTokens[0][0],amount=Math.abs(amounts[0]),context=(rest+' '+token).toLowerCase();if(/\bcr\b|credit|deposit|received/.test(context))credit=amount;else debit=amount;}
     if(!debit&&!credit)return;const firstAmount=amountTokens[0],description=rest.slice(0,firstAmount.index).trim().replace(/[|:-]+$/,'').trim(),reference=((description.match(/\b(?:utr|ref|txn|chq)[\s:#-]*([a-z0-9-]+)/i)||[])[1]||'');out.push({date,description,reference,debit,credit,balance:Math.abs(balance),row:index+1});
   });return out;
+}
+function parseIndusIndMobileStatementText(raw){
+  const text=String(raw||'').replace(/\r/g,''),isFormat=/Account Statement\s*\n\d{10,}/i.test(text)&&/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/i.test(text)&&/INDUS PRIVILEGE/i.test(text);
+  if(!isFormat)return[];
+  const month={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12},dateValue=value=>{const m=String(value||'').match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);return m&&month[m[2].toLowerCase()]?m[3]+'-'+String(month[m[2].toLowerCase()]).padStart(2,'0')+'-'+m[1].padStart(2,'0'):'';},section=(text.split(/Transaction History/i)[1]||'').split(/This is a computer generated statement/i)[0]||'',tailPattern=/([SM])(\d{6,8})((?:\d+\.\d{2}){3})/g,rows=[];let priorEnd=0,match;
+  while((match=tailPattern.exec(section))){
+    const block=section.slice(priorEnd,match.index),dateMatch=Array.from(block.matchAll(/\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g)).at(-1),date=dateValue(dateMatch&&dateMatch[0]);priorEnd=tailPattern.lastIndex;if(!date)continue;
+    const description=block.replace(/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/gi,'').replace(/\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g,'').replace(/\s+/g,' ').trim(),referenceDigits=match[2],candidates=[];
+    for(let length=6;length<=referenceDigits.length;length++){const money=(referenceDigits.slice(length)+match[3]).match(/\d+\.\d{2}/g)||[];if(money.length!==3)continue;const debit=statementNum(money[0]),credit=statementNum(money[1]),balance=statementNum(money[2]);if((debit>0||credit>0)&&!(debit>0&&credit>0))candidates.push({bankReference:match[1]+referenceDigits.slice(0,length),debit,credit,balance});}
+    if(!candidates.length)continue;const transactionReference=((description.match(/\b(?:UPI|IMPS\/P2A)\/(\d{10,})/i)||[])[1]||'');rows.push({date,description:description||'IndusInd transaction',reference:transactionReference,transactionReference,candidates,row:rows.length+1});
+  }
+  if(!rows.length)return rows;
+  for(let index=rows.length-1;index>=0;index--){const row=rows[index],older=rows[index+1],side=row.description.match(/\/(DR|CR)\//i),rank=candidate=>{let score=0;if(older)score+=Math.abs(candidate.balance-(older.balance+candidate.credit-candidate.debit))*1000;if(side&&side[1].toUpperCase()==='DR'&&!candidate.debit)score+=100000000;if(side&&side[1].toUpperCase()==='CR'&&!candidate.credit)score+=100000000;score+=(8-String(candidate.bankReference).replace(/\D/g,'').length)*.001;return score;},chosen=row.candidates.slice().sort((a,b)=>rank(a)-rank(b))[0];Object.assign(row,chosen);row.reference=row.transactionReference||row.bankReference;delete row.transactionReference;delete row.candidates;}
+  const account=(text.match(/Account Statement\s*\n(\d{10,})/i)||[])[1]||'',period=text.match(/Statement Period:\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s*-\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})/i),debits=roundMoney(rows.reduce((sum,row)=>sum+row.debit,0)),credits=roundMoney(rows.reduce((sum,row)=>sum+row.credit,0)),oldest=rows.at(-1),opening=roundMoney(oldest.balance+oldest.debit-oldest.credit),closing=rows[0].balance,calculated=roundMoney(opening+credits-debits),valid=Math.abs(calculated-closing)<=.01;
+  if(!valid)throw new Error('IndusInd statement validation failed: parsed transactions do not reproduce the declared closing balance. No preview was created.');
+  rows.statementSummary={format:'IndusInd mobile PDF',accountLast4:account.slice(-4),from:period?dateValue(period[1]):oldest.date,to:period?dateValue(period[2]):rows[0].date,openingBalance:opening,closingBalance:closing,totalDebits:debits,totalCredits:credits,validated:true};return rows;
 }
 function parseIndusIndScreenshotText(raw){
   const lines=String(raw||'').replace(/\r/g,'').split('\n'),rows=[];

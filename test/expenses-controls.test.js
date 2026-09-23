@@ -1363,6 +1363,23 @@ test('bank statement rows are normalized from cumulative Excel exports', () => {
   ]);
 });
 
+test('IndusInd mobile PDF text separates compressed reference and money columns',()=>{
+  const text=`Account Statement
+159355468181
+INDUS PRIVILEGE MAX
+Transaction History
+Statement Period: 15 Sep 2026 - 16 Sep 2026 Branch IFSC Code: INDB0000275
+DateParticularsChq No/Ref NoWithdrawalDepositBalance
+16 Sep 2026UPI/662588423738/DR/MEEN
+M341926591.890.003139.12
+15 Sep 2026UPI/662484075136/DR/OM
+S47863674500.000.003731.01
+15 Sep 2026UPI/625823976141/CR/BHARAT
+S478092750.003000.004231.01`;
+  const rows=parseBankStatementText(text);
+  assert.equal(rows.length,3);assert.deepEqual(rows.map(x=>[x.reference,x.debit,x.credit,x.balance]),[['662588423738',591.89,0,3139.12],['662484075136',500,0,3731.01],['625823976141',0,3000,4231.01]]);assert.equal(rows.statementSummary.accountLast4,'8181');assert.equal(rows.statementSummary.validated,true);
+});
+
 test('password-protected PDF statements unlock without retaining the password', async()=>{
   const encoded='JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgPGRiODkwODYwZWY+Cj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9UeXBlIC9QYWdlcwovQ291bnQgMQovS2lkcyBbIDQgMCBSIF0KPj4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL0NhdGFsb2cKL1BhZ2VzIDIgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9Db250ZW50cyA1IDAgUgovTWVkaWFCb3ggWyAwIDAgNTk1LjI3NTYgODQxLjg4OTggXQovUmVzb3VyY2VzIDw8Ci9Gb250IDYgMCBSCi9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+Ci9Sb3RhdGUgMAovVHJhbnMgPDwKPj4KL1R5cGUgL1BhZ2UKL1BhcmVudCAyIDAgUgo+PgplbmRvYmoKNSAwIG9iago8PAovRmlsdGVyIFsgL0FTQ0lJODVEZWNvZGUgL0ZsYXRlRGVjb2RlIF0KL0xlbmd0aCAxMjQKPj4Kc3RyZWFtCtOaiZfHeo26mU0bv/Ncs9Z34Y3yuDxgoeAlqWTnialMAUwE2maqGS9xshp3eW6Xo+nFzYSyUEerBCDe4Xnp9CamonGfEzQ/Et6N3G62+lubDhCMvYmYzmzvxWWiZ08w4VDQ50vtq/l+1yCsv9xuPA0Y3HZPQ2VpSo9SrCAKZW5kc3RyZWFtCmVuZG9iago2IDAgb2JqCjw8Ci9GMSA3IDAgUgo+PgplbmRvYmoKNyAwIG9iago8PAovQmFzZUZvbnQgL0hlbHZldGljYQovRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGluZwovTmFtZSAvRjEKL1N1YnR5cGUgL1R5cGUxCi9UeXBlIC9Gb250Cj4+CmVuZG9iago4IDAgb2JqCjw8Ci9WIDIKL1IgMwovTGVuZ3RoIDEyOAovUCA0Mjk0OTY3MjkyCi9GaWx0ZXIgL1N0YW5kYXJkCi9PIDw2YWM0N2Q5NDkwZGM2MGM3NzViZGU1YzQwNDc5ZTQ0MTI4NmYzNjQwOWQ5MzVlM2UwYzhjY2U0NjBlOTU3NmE0PgovVSA8MTg1NTViM2IxZGM5NjY1ODFjNWFlN2ZjMTgyZjhlM2EyOGJmNGU1ZTRlNzU4YTQxNjQwMDRlNTZmZmZhMDEwOD4KPj4KZW5kb2JqCnhyZWYKMCA5CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxNSAwMDAwMCBuIAowMDAwMDAwMDU5IDAwMDAwIG4gCjAwMDAwMDAxMTggMDAwMDAgbiAKMDAwMDAwMDE2NyAwMDAwMCBuIAowMDAwMDAwMzY2IDAwMDAwIG4gCjAwMDAwMDA1ODEgMDAwMDAgbiAKMDAwMDAwMDYxMiAwMDAwMCBuIAowMDAwMDAwNzE5IDAwMDAwIG4gCnRyYWlsZXIKPDwKL1NpemUgOQovUm9vdCAzIDAgUgovSW5mbyAxIDAgUgovSUQgWyA8MzA2NjM0MzAzMzM3NjMzNzYyMzIzMjYzMzE2MjM3NjQ2MzM3NjUzOTY1MzQ2NDM0NjI2NDMwMzkzMDY1MzUzMD4gPDMwNjYzNDMwMzMzNzYzMzc2MjMyMzI2MzMxNjIzNzY0NjMzNzY1Mzk2NTM0NjQzNDYyNjQzMDM5MzA2NTM1MzA+IF0KL0VuY3J5cHQgOCAwIFIKPj4Kc3RhcnR4cmVmCjkzNAolJUVPRgo=',file=path.join(tempDir,'encrypted-statement.pdf');
   fs.writeFileSync(file,Buffer.from(encoded,'base64'));
