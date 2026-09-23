@@ -2920,7 +2920,12 @@ function parseBankStatementText(raw){
       out.forEach(x=>delete x.amount);out.statementSummary={format:'ICICI Bank PDF',accountLast4:account.replace(/\D/g,'').slice(-4),from:period?longDate(period[1]):out[0].date,to:period?longDate(period[2]):out.at(-1).date,openingBalance:opening,closingBalance:closing,totalDebits:Math.round(debits*100)/100,totalCredits:Math.round(credits*100)/100,validated:Math.abs(calculated-closing)<=.01};return out;}
   }
   if(/Axis Bank Account No/i.test(text)&&/ParticularsAmount\(INR\)Debit\/CreditBalance\(INR\)/i.test(text)){
-    const section=(text.split(/S\.NOTransaction/i)[1]||'').split(/TRANSACTION TOTAL DR\/CR/i)[0]||'',out=[];
+    // Axis repeats the table heading on every PDF page. Splitting on the
+    // heading and taking element 1 used to discard every transaction after
+    // the first page. Keep the complete span between the first table heading
+    // and the final transaction total; repeated headings inside that span are
+    // harmless because rows are anchored by serial number + two dates.
+    const tableStart=text.search(/S\.NOTransaction/i),tableEnd=text.search(/TRANSACTION TOTAL DR\/CR/i),section=tableStart>=0?text.slice(tableStart,tableEnd>tableStart?tableEnd:text.length):'',out=[];
     // Axis inserts spaces/newlines between the amount, DR/CR marker and balance
     // on some pages. Parse each serial-numbered transaction as its own block so
     // one differently-formatted row cannot make the following row disappear.
@@ -2930,7 +2935,8 @@ function parseBankStatementText(raw){
     const closing=statementNum((text.match(/Closing Balance:\s*(?:INR|₹)?\s*([0-9,]+(?:\.\d{1,2})?)/i)||[])[1]);
     const period=text.match(/From\s*:\s*(\d{2}\/\d{2}\/\d{4})\s+To\s*:\s*(\d{2}\/\d{2}\/\d{4})/i),debits=out.reduce((n,x)=>n+x.debit,0),credits=out.reduce((n,x)=>n+x.credit,0),calculated=Math.round((opening+credits-debits)*100)/100;
     if(out.length&&Math.abs(calculated-closing)>0.01)throw new Error('Statement validation failed: '+out.length+' transaction(s) produced closing '+calculated+' instead of '+closing+'.');
-    out.statementSummary={format:'Axis Bank PDF',from:period?statementDate(period[1]):out[0]&&out[0].date,to:period?statementDate(period[2]):out.at(-1)&&out.at(-1).date,openingBalance:opening,closingBalance:closing,totalDebits:Math.round(debits*100)/100,totalCredits:Math.round(credits*100)/100,validated:!!out.length&&Math.abs(calculated-closing)<=0.01};
+    const account=(text.match(/Statement of Axis Bank Account No\s*:\s*([0-9Xx*-]+)/i)||[])[1]||'';
+    out.statementSummary={format:'Axis Bank PDF',accountLast4:account.replace(/\D/g,'').slice(-4),from:period?statementDate(period[1]):out[0]&&out[0].date,to:period?statementDate(period[2]):out.at(-1)&&out.at(-1).date,openingBalance:opening,closingBalance:closing,totalDebits:Math.round(debits*100)/100,totalCredits:Math.round(credits*100)/100,validated:!!out.length&&Math.abs(calculated-closing)<=0.01};
     if(out.length)return out;
   }
   const out=[];String(raw||'').replace(/\r/g,'').split('\n').map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean).forEach((line,index)=>{

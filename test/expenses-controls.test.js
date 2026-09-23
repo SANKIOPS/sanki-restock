@@ -1859,6 +1859,47 @@ Closing Balance: INR 83,962.40`;
   assert.equal(rows.statementSummary.validated,true);
 });
 
+test('Axis Bank PDF reads transactions after repeated headers on later pages', () => {
+  const text=`Account Statement Report
+Statement of Axis Bank Account No : 926020000243448 for the period ( From : 22/08/2026 To : 02/09/2026 )
+Opening Balance: INR 47,844.86
+S.NOTransaction
+Date
+(dd/mm/yyyy)
+Value Date
+(dd/mm/yyyy)
+ParticularsAmount(INR)Debit/CreditBalance(INR)Cheque
+Number
+Branch Name(SOL)
+122/08/202622/08/2026
+PAYTM PAYMENTS
+14,755.36CR62,600.22 (100)
+222/08/202622/08/2026BNA Convenience Chrgs
+250.00DR62,350.22 (4820)
+S.NOTransaction
+Date
+(dd/mm/yyyy)
+Value Date
+(dd/mm/yyyy)
+ParticularsAmount(INR)Debit/CreditBalance(INR)Cheque
+Number
+Branch Name(SOL)
+302/09/202602/09/2026
+SELF CASH DEP/BNA/DPRH304601/4409/020926/WEST DE
+21,612.18CR83,962.40 (4820)
+4TRANSACTION TOTAL DR/CR
+250.00/36,367.54
+Closing Balance: INR 83,962.40`;
+  const rows=parseBankStatementText(text);
+  assert.equal(rows.length,3);
+  assert.deepEqual(rows.map(x=>[x.row,x.date,x.debit,x.credit,x.balance]),[
+    [1,'2026-08-22',0,14755.36,62600.22],
+    [2,'2026-08-22',250,0,62350.22],
+    [3,'2026-09-02',0,21612.18,83962.4]
+  ]);
+  assert.deepEqual(rows.statementSummary,{format:'Axis Bank PDF',accountLast4:'3448',from:'2026-08-22',to:'2026-09-02',openingBalance:47844.86,closingBalance:83962.4,totalDebits:250,totalCredits:36367.54,validated:true});
+});
+
 test('Axis salary-account PDF reads the declared period and every debit and credit column',()=>{
   const text=`Statement of Axis Account No: 925010025223645 for the period (From: 22-08-2026 To: 28-08-2026)
 Tran DateChq NoParticularsDebitCreditBalanceInit.
