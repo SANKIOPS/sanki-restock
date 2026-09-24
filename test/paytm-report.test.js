@@ -47,6 +47,8 @@ test('Paytm clearing shows its dedicated report uploader instead of the debit-cr
   const html = fs.readFileSync(require.resolve('../public/expenses.html'), 'utf8');
   assert.match(html, /Default Paytm transaction report CSV/);
   assert.match(html, /reconcileEligible&&!isPaytmClearing/);
+  assert.match(html, /Finalize Paytm reconciliation/);
+  assert.match(html, /finalize-settlement/);
 });
 
 test('shows old summary-only rows as not importable without transaction IDs', () => {

@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
-const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting } = require('./paytm-accounting');
+const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, validatePayoutPosting } = require('./paytm-accounting');
 
 function registerPaytmReports(router, deps) {
   const { loadStore, saveStore, audit, canAccess, canClassify, upload, view, today, orders, saleRows, shopifyClient, shopifyStore } = deps;
@@ -184,6 +184,20 @@ function registerPaytmReports(router, deps) {
     audit(store, req, 'PAYTM_TRANSACTION_RESTORED', 'paytm_transaction', transactionId, { nature: 'SANKI', account: CLEARING, before, after: { restoredBy: req.user.username, reason } });
     saveStore(store);
     res.json({ success: true, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/finalize-settlement', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), payoutId = String(req.body && req.body.payoutId || '');
+    try {
+      const { payout, linked } = validateSettlementReview(store, payoutId, saleRows(store));
+      store.paytmVerifiedSettlements = store.paytmVerifiedSettlements || [];
+      if (store.paytmVerifiedSettlements.some(x => x.settlementId === payout.settlementId)) throw new Error('This Paytm settlement is already finalized.');
+      const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
+      store.paytmVerifiedSettlements.push(verified);
+      audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified });
+      saveStore(store);
+      res.json({ success: true, verified, view: view(store) });
+    } catch (error) { res.status(400).json({ success: false, error: error.message }); }
   });
   router.post('/api/expenses/paytm-reports/post-payout', (req, res) => {
     if (deny(req, res)) return;

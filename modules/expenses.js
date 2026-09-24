@@ -240,6 +240,7 @@ function blankStore() {
     paytmReportImports: [],
     paytmReportDrafts: {},               // upload previews awaiting explicit confirmation
     paytmOrderLinks: {},                 // individually reviewed Paytm-to-Shopify links
+    paytmVerifiedSettlements: [],        // finalized Paytm report batches awaiting/linked to Axis 3448
     paytmPayoutPostings: [],             // exact, reviewed Paytm-to-Axis postings
     reconciliationExpenses: [],          // P&L/category postings backed by official bank rows
     vendorOpeningPayables: [],           // pre-system vendor dues paid after books started; never enter the P&L
@@ -1242,9 +1243,9 @@ function paytmReportView(s) {
   });
   const suggestedCounts={};orderMatches.filter(match=>match.orderMatch==='Possible match — amount/date only').forEach(match=>{const id=match.orderCandidates[0].id;suggestedCounts[id]=(suggestedCounts[id]||0)+1;});
   orderMatches.forEach(match=>{if(match.orderMatch==='Possible match — amount/date only'&&suggestedCounts[match.orderCandidates[0].id]>1)match.orderMatch='Possible matches — amount/date only';});
-  const links=s.paytmOrderLinks||{},manual=s.paytmManualResolutions||{},posted=new Map((s.paytmPayoutPostings||[]).map(x=>[x.payoutId,x]));
+  const links=s.paytmOrderLinks||{},manual=s.paytmManualResolutions||{},posted=new Map((s.paytmPayoutPostings||[]).map(x=>[x.payoutId,x])),verified=new Map((s.paytmVerifiedSettlements||[]).map(x=>[x.settlementId,x]));
   const excluded=s.paytmExcludedTransactions||{};
-  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.linkedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&(links[id]||manual[id])).length;x.excludedCount=x.transactionIds.filter(id=>excluded[id]).length;x.readyToPost=!x.posted&&!x.excludedCount&&x.linkedCount===x.customerPaymentCount&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
+  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.verified=verified.has(x.settlementId);x.verificationId=verified.get(x.settlementId)&&verified.get(x.settlementId).id||'';x.linkedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&(links[id]||manual[id])).length;x.excludedCount=x.transactionIds.filter(id=>excluded[id]).length;x.readyToFinalize=!x.posted&&!x.verified&&!x.excludedCount&&x.linkedCount===x.customerPaymentCount;x.readyToPost=x.verified&&!x.posted&&!x.excludedCount&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
   orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.manualResolution=manual[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;});
   const legacyDrafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===PAYTM_CLEARING_ACCOUNT).map(d=>({id:d.id,name:d.originalName||'Legacy bank statement preview',createdAt:d.createdAt,from:d.summary?.from,to:d.summary?.to,rows:(d.transactions||[]).length}));
   return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,from:PAYTM_START_DATE,through:indiaBusinessDate()};
