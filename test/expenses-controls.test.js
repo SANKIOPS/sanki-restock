@@ -1503,7 +1503,16 @@ test('one ledger payment can reconcile against multiple bank transactions and un
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('bank review offers one-ledger-to-multiple-bank matching',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Match with multiple bank transactions/);assert.match(html,/action:'link_multiple_bank_entries'/);assert.match(html,/selectedOptions/);});
+test('one incoming ledger transfer reconciles against mixed bank credits and debits by net amount',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='IndusInd Bank 8181',id='BRD-MIXED-BANK',date='2098-04-02';
+  stored.transfers.push({id:'TR-MIXED-2129',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Prashant Axis 3645',toAccount:account,amount:2129,date,proof:'/uploads/transfer.jpg',classification:'internal_transfer',createdAt:date+'T10:00:00Z'});
+  stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date,description:'Credit part one',reference:'CR-1131',debit:0,credit:1131,balance:1131},{date,description:'Bank deduction',reference:'DR-2',debit:2,credit:0,balance:1129},{date,description:'Credit part two',reference:'CR-1000',debit:0,credit:1000,balance:2129}],summary:{from:date,to:date,openingBalance:0,closingBalance:2129,totalDebits:2,totalCredits:2131,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
+  fs.writeFileSync(expenseFile,JSON.stringify(stored));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:id,account}}).body,appRow=view.rows.find(x=>x.app&&x.app.id==='TR-MIXED-2129');assert.equal(appRow.status,'missing_in_bank');
+  const out=invoke('POST','/api/expenses/bank-statements/resolve',{role:'owner',body:{draftId:id,rowId:appRow.id,action:'link_multiple_bank_entries',appId:'TR-MIXED-2129',bankRowIds:['bank-0','bank-1','bank-2'],reason:'₹1,131 + ₹1,000 − ₹2 equals the ₹2,129 transfer'}});assert.equal(out.status,200,JSON.stringify(out.body));assert.equal(out.body.rows.filter(x=>x.resolution&&x.resolution.action==='link_multiple_bank_entries').length,3);assert.equal(out.body.unresolved,0);
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
+test('bank review offers one-ledger-to-multiple-bank matching',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Match with multiple bank transactions/);assert.match(html,/action:'link_multiple_bank_entries'/);assert.match(html,/selectedOptions/);assert.match(html,/function bankReconNet/);assert.match(html,/Net = money in minus money out/);});
 
 test('posted salary advances remain searchable and reconcilable across a nearby statement boundary',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),salaryFile=path.join(tempDir,'salary.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),salaryBaseline=fs.existsSync(salaryFile)?fs.readFileSync(salaryFile):null,account='Axis Bank 3448',id='BRD-SALARY-ADVANCE';
