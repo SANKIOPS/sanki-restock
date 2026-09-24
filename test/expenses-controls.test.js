@@ -980,6 +980,10 @@ test('multiple pending expenses can be reimbursed together and debit the paying 
   const batchRow=ledger.entries.find(x=>x.id===paid.body.batchId);
   assert.equal(batchRow.debit,1000);assert.equal(batchRow.items.length,2);assert.deepEqual(batchRow.items.map(x=>x.expenseId).sort(),ids.slice().sort());
   assert.equal(ledger.entries.filter(x=>ids.some(id=>x.id.startsWith(id+'/REIM-'))).length,0);
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),draftId='BRD-REIMBURSEMENT-BATCH';
+  stored.bankReconciliationDrafts[draftId]={id:draftId,account:'Counter Cash',nature:'SANKI',transactions:[{date:'2026-08-24',description:'Claim reimbursement batch',reference:'BANK-REIM-1000',debit:1000,credit:0,balance:0}],summary:{from:'2026-08-24',to:'2026-08-24',openingBalance:1000,closingBalance:0,totalDebits:1000,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const reconciliation=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account:'Counter Cash'}}).body,reimbursementRows=reconciliation.rows.filter(x=>x.app&&(x.app.id===paid.body.batchId||(x.app.sourceIds||[]).some(id=>ids.some(expenseId=>id.startsWith(expenseId+'/REIM-')))));
+  assert.equal(reimbursementRows.length,1);assert.equal(reimbursementRows[0].app.id,paid.body.batchId);assert.equal(reimbursementRows[0].app.debit,1000);assert.equal(reimbursementRows[0].app.batchItems.length,2);
 });
 
 test('reimbursements UI groups transactions by person before showing expense details',()=>{
