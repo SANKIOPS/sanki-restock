@@ -1447,6 +1447,8 @@ test('unmatching a suggested pair separates both entries and remembers the requi
 
 test('suggested match review exposes an Unmatch action with a reason form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/\['possible_match','amount_mismatch'\]\.includes\(row\.status\).*?>Unmatch<\/button>/);assert.match(html,/Unmatch suggested pair/);assert.match(html,/Neither entry will be deleted or excluded/);});
 
+test('small reimbursement differences can be matched while recording the excess as bank charges',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/smallCharge>0&&smallCharge<=5/);assert.match(html,/Match \+ record.*bank charge/);assert.match(html,/action:'split_allocation'.*chargeCategory:'BANK CHARGES'/);assert.match(html,/difference recorded as bank charge/);});
+
 test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),render=html.slice(html.indexOf('function renderBankReconciliation'),html.indexOf('function bankDecisionLabel'));assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
 
 test('reviewed bank transactions can finalize while the closing balance remains pending',()=>{
