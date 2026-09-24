@@ -43,6 +43,16 @@ test('uses actual Paytm platform fee, settled date and UTR as the bank batch', (
   assert.deepEqual([batch.utr, batch.settledDate, batch.gross, batch.platformFee, batch.net, batch.customerPaymentCount], ['UTR-24', '2026-09-25', 1000, 5, 983.2, 1]);
 });
 
+test('VAS deduction reduces the UTR bank net and never inflates customer sales', () => {
+  const payments = [
+    { transactionId: 'sale-1', utr: 'PB0309232845', settledDate: '2026-08-26', payoutId: 'P1', amount: 15094, commission: 451.31, platformFee: 0, gst: 81.24, settledAmount: 14561.45, isCustomerPayment: true },
+    { transactionId: 'sale-2', utr: 'PB0309232845', settledDate: '2026-08-26', payoutId: 'P1', amount: 1999, commission: 59.77, platformFee: 0, gst: 0, settledAmount: 1939.23, isCustomerPayment: true },
+    { transactionId: 'vas', utr: 'PB0309232845', settledDate: '2026-08-26', payoutId: 'P1', amount: 352, commission: 0, platformFee: 0, gst: 0, settledAmount: 352, isCustomerPayment: false, transactionType: 'VAS Deductions' }
+  ];
+  const [batch] = summarizePayouts(payments);
+  assert.deepEqual([batch.gross, batch.customerGross, batch.nonCustomerAmount, batch.commission, batch.gst, batch.net], [17093, 17093, 352, 511.08, 81.24, 16148.68]);
+});
+
 test('Paytm clearing shows its dedicated report uploader instead of the debit-credit bank reader', () => {
   const html = fs.readFileSync(require.resolve('../public/expenses.html'), 'utf8');
   assert.match(html, /Default Paytm transaction report CSV/);

@@ -87,11 +87,11 @@ function summarizePayouts(transactions) {
     payout.count++;
     if (tx.isCustomerPayment === false) { payout.nonCustomerCount++; payout.nonCustomerAmount = Math.round((payout.nonCustomerAmount + tx.amount) * 100) / 100; }
     else { payout.customerPaymentCount++; payout.customerGross = Math.round((payout.customerGross + tx.amount) * 100) / 100; }
-    payout.gross = Math.round((payout.gross + tx.amount) * 100) / 100;
+    if (tx.isCustomerPayment !== false) payout.gross = Math.round((payout.gross + tx.amount) * 100) / 100;
     payout.commission = Math.round((payout.commission + tx.commission) * 100) / 100;
     payout.platformFee = Math.round((payout.platformFee + Number(tx.platformFee || 0)) * 100) / 100;
     payout.gst = Math.round((payout.gst + tx.gst) * 100) / 100;
-    payout.net = Math.round((payout.net + tx.settledAmount) * 100) / 100;
+    payout.net = Math.round((payout.net + (tx.isCustomerPayment === false ? -tx.amount : tx.settledAmount)) * 100) / 100;
     payout.transactionIds.push(tx.transactionId);
     payouts.set(key, payout);
   }

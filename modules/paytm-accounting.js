@@ -88,7 +88,7 @@ function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
 function validateSettlementReview(store, payoutId, saleRows) {
   const payout = getPayout(store, payoutId);
   if (!payout) throw new Error('Payout not found. Import the Paytm report first.');
-  if (payout.transactionIds.some(id => (store.paytmExcludedTransactions || {})[id])) throw new Error('This payout contains an excluded payment. Restore or separately resolve that payment before posting the payout.');
+  if (payout.transactionIds.some(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && (store.paytmExcludedTransactions || {})[id])) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before posting the payout.');
   if (!payout.utr || !payout.settledDate) throw new Error('Settlement UTR and settled date are required for an exact bank link.');
   const links = store.paytmOrderLinks || {}, manual = store.paytmManualResolutions || {};
   const customerIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false);
@@ -106,7 +106,7 @@ function validateSettlementReview(store, payoutId, saleRows) {
     if (!row || cents(row.amount) < cents(link.amount)) throw new Error(`Shopify order ${link.orderNumber} changed since it was linked. Review it again.`);
     if ((store.bankDateOverrides || {})[row.id]) throw new Error(`Shopify order ${link.orderNumber} is already linked to a bank transaction. Correct that existing link before posting its Paytm payout.`);
   }
-  if (cents(payout.gross) - cents(payout.commission) - cents(payout.platformFee) - cents(payout.gst) !== cents(payout.net)) throw new Error('Paytm gross, commission, platform fee, GST and net do not balance.');
+  if (cents(payout.gross) - cents(payout.commission) - cents(payout.platformFee) - cents(payout.gst) - cents(payout.nonCustomerAmount) !== cents(payout.net)) throw new Error('Paytm customer gross, commission, platform fee, GST, VAS deductions and bank net do not balance.');
   return { payout, linked };
 }
 
