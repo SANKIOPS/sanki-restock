@@ -199,6 +199,23 @@ function registerPaytmReports(router, deps) {
       res.json({ success: true, verified, view: view(store) });
     } catch (error) { res.status(400).json({ success: false, error: error.message }); }
   });
+  router.post('/api/expenses/paytm-reports/finalize-all', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), payouts = summarizePayouts(Object.values(store.paytmReportTransactions || {}));
+    store.paytmVerifiedSettlements = store.paytmVerifiedSettlements || [];
+    const finalized = [], skipped = [];
+    for (const candidate of payouts) {
+      if (store.paytmVerifiedSettlements.some(x => x.settlementId === candidate.settlementId) || (store.paytmPayoutPostings || []).some(x => x.settlementId === candidate.settlementId || x.payoutId === candidate.payoutId)) continue;
+      try {
+        const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows(store));
+        const verified = { id: `PTMV-${Date.now()}-${finalized.length + 1}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
+        store.paytmVerifiedSettlements.push(verified); finalized.push(verified);
+        audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified, note: 'Bulk finalization of all fully matched Paytm settlements' });
+      } catch (error) { skipped.push({ settlementId: candidate.settlementId, reason: error.message }); }
+    }
+    if (finalized.length) saveStore(store);
+    res.json({ success: true, finalized: finalized.length, skipped: skipped.length, skippedSettlements: skipped, view: view(store) });
+  });
   router.post('/api/expenses/paytm-reports/post-payout', (req, res) => {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {}, payoutId = String(body.payoutId || ''), bankTransactionId = String(body.bankTransactionId || '');
