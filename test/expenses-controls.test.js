@@ -1353,7 +1353,7 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="editBillFile"/);
   assert.match(html, /Upload statement or register for reconciliation/);
   assert.match(html, /Upload or reconcile statement/);
-  assert.match(html, /if\(recon\).*if\(reconcileEligible\)loadBankStatement\(\)/);
+  assert.match(html, /if\(recon\).*if\(reconcileEligible&&!isPaytmClearing\)loadBankStatement\(\)/);
   assert.match(html, /id="ledgerRecon" style="display:none/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
@@ -1531,7 +1531,7 @@ test('reconciliation search includes nearby posted salary and incoming account m
 
 test('unmatched reconciliation rows are grouped into chronological date blocks',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/dateLabel\+' — unmatched entries'/);assert.match(html,/x\.status==='missing_in_app'\|\|x\.status==='missing_in_bank'/);assert.match(source,/if\(gx===2\)return rowDate\(x\)\.localeCompare\(rowDate\(y\)\)/);assert.match(source,/rowSequence\(x\)-rowSequence\(y\)/);assert.match(source,/missing_in_app:2,missing_in_bank:2/);});
 
-test('expanding account trails cannot destroy or hide the universal reconciliation panel',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),trail=html.slice(html.indexOf('window.loadMoneyTrail='),html.indexOf('window.deleteTransfer='));assert.doesNotMatch(trail,/appendChild\(recon\)/);assert.match(trail,/Upload or reconcile statement/);assert.match(html,/if\(recon\).*recon\.style\.display=reconcileEligible\?'block':'none'/);assert.ok(html.indexOf('id="ledgerRecon"')<html.indexOf('id="ledgerTable"'));assert.match(html,/\(el\('ledgerRecon'\)\|\|el\('lg_account'\)\)\.scrollIntoView/);});
+test('expanding account trails cannot destroy or hide the universal reconciliation panel',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),trail=html.slice(html.indexOf('window.loadMoneyTrail='),html.indexOf('window.deleteTransfer='));assert.doesNotMatch(trail,/appendChild\(recon\)/);assert.match(trail,/Upload or reconcile statement/);assert.match(html,/if\(recon\).*recon\.style\.display=reconcileEligible&&!isPaytmClearing\?'block':'none'/);assert.ok(html.indexOf('id="ledgerRecon"')<html.indexOf('id="ledgerTable"'));assert.match(html,/\(el\('ledgerRecon'\)\|\|el\('lg_account'\)\)\.scrollIntoView/);});
 
 test('balanced policy auto-matches unique exact date amount and direction despite different narration',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993',date='2098-03-01';
