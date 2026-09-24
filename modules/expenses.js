@@ -1,3 +1,4 @@
+const sankiCategories = require('./sanki-categories');
 const { purchaseBillingAmount } = require('./purchase-payment-status');
 const { finalizedByPo } = require('./lg-invoices');
 // ═══════════════════════════════════════════════════════════════
@@ -842,11 +843,13 @@ function loadStore() {
     // A new container or restored data volume must not be able to erase saved
     // statement drafts, finalized periods, or their decisions.
     if(bankChargeRepairAdded)saveStore(s);if(applyOwnerRequestedKaluPaymentRemovals(s))saveStore(s);
+    if(sankiCategories.applyWithBackup(s,EXP_PATH))saveStore(s);
     return s;
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
 }
 function saveStore(s) {
+  sankiCategories.attachGroups(s);
   // Failed atomic writes must not leave partial files behind and make every
   // later accounting save fail.
   const dir=path.dirname(EXP_PATH),prefix=path.basename(EXP_PATH)+'.tmp-';
@@ -937,7 +940,7 @@ function telegramResolveAccount(nature,requested){const q=String(requested||'').
 function telegramResolveTransferAccount(requested,preferredNature){const raw=String(requested||'').trim(),tag=raw.match(/^(SANKI|SAMAST|PERSONAL)\s+(.+)$/i),explicit=tag&&normalizedNature(tag[1]),q=String(tag?tag[2]:raw).trim().toLowerCase(),digits=q.replace(/\D/g,''),matches=[];NATURES.forEach(nature=>transferAccountsForNature(nature).forEach(account=>{if(account.toLowerCase()===q||(digits&&account.replace(/\D/g,'').endsWith(digits)))matches.push({nature,account});}));const wanted=explicit||preferredNature&&normalizedNature(preferredNature),scoped=wanted?matches.filter(x=>x.nature===wanted):matches;return scoped.length===1?scoped[0]:null;}
 function telegramRecordTransfer(actor,body){const b=body||{},s=loadStore();let from=telegramResolveTransferAccount(b.fromAccount),to=telegramResolveTransferAccount(b.toAccount);if(from&&!to)to=telegramResolveTransferAccount(b.toAccount,from.nature);if(to&&!from)from=telegramResolveTransferAccount(b.fromAccount,to.nature);const amount=num(b.amount),proof=String(b.proof||'').trim();if(!from||!to)return{success:false,error:'One account was not recognized or is ambiguous. Add SANKI, SAMAST or PERSONAL before a shared account when needed.'};if(from.nature===to.nature&&from.account.toLowerCase()===to.account.toLowerCase())return{success:false,error:'Source and destination accounts must be different.'};if(!(amount>0))return{success:false,error:'Transfer amount must be greater than 0.'};if(!proof)return{success:false,error:'Transfer proof is required.'};const classification=String(b.classification||(from.nature===to.nature?'internal_transfer':'inter_entity_loan'));s.transferSeq=(s.transferSeq||0)+1;const now=new Date().toISOString(),transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:from.nature,fromNature:from.nature,toNature:to.nature,classification,fromAccount:from.account,toAccount:to.account,amount,date:String(b.date||now.slice(0,10)).slice(0,10),proof,note:String(b.note||'').trim(),createdBy:String(actor||'admin'),createdAt:now,device:'Telegram'};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,null,'TRANSFER_RECORDED','transfer',transfer.id,{user:transfer.createdBy,device:'Telegram',nature:from.nature,account:from.account,after:transfer});saveStore(s);return{success:true,transfer};}
 function telegramRecordNamitaTransfer(actor,body){const b=body||{},s=loadStore(),q=String(b.fromAccount||''),digits=q.replace(/\D/g,''),personal=companyAccountsForNature('PERSONAL'),personalMatches=personal.filter(a=>digits&&a.replace(/\D/g,'').endsWith(digits)),fromPersonal=personal.find(a=>a.toLowerCase()===q.toLowerCase())||(personalMatches.length===1?personalMatches[0]:''),fallback=telegramResolveTransferAccount(q),from=fromPersonal?{nature:'PERSONAL',account:fromPersonal}:fallback,toAccount=/cash/i.test(String(b.toAccount||''))?'Namita Cash':'Namita 5464',amount=num(b.amount),proof=String(b.proof||'').trim();if(!from)return{success:false,error:'The source account was not recognized.'};if(!(amount>0))return{success:false,error:'Transfer amount must be greater than 0.'};if(!proof)return{success:false,error:'Transfer proof is required.'};s.transferSeq=(s.transferSeq||0)+1;const now=new Date().toISOString(),classification=from.nature==='PERSONAL'?'internal_transfer':'owner_withdrawal',transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:from.nature,fromNature:from.nature,toNature:'PERSONAL',classification,fromAccount:from.account,toAccount,amount,date:String(b.date||now.slice(0,10)).slice(0,10),proof,note:String(b.note||'Namita funds').trim(),createdBy:String(actor||'owner'),createdAt:now,device:'Telegram'};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,null,'TRANSFER_RECORDED','transfer',transfer.id,{user:transfer.createdBy,device:'Telegram',nature:from.nature,account:from.account,after:transfer});saveStore(s);return{success:true,transfer};}
-function telegramApproveExpense(id,actor,changes){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};const before=JSON.parse(JSON.stringify(e)),c=changes||{};['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}if(c.nature)e.nature=normalizedNature(c.nature);if(e.ledger&&!pickableLedgers(s).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase())){s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};}const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};const n=normalizedNature(e.nature);s.vendors=s.vendors||{};s.vendorsByNature=s.vendorsByNature||{};if(n==='SANKI'){s.vendors[e.vendor.toLowerCase()]=s.vendors[e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}else{s.vendorsByNature[n]=s.vendorsByNature[n]||{};s.vendorsByNature[n][e.vendor.toLowerCase()]=s.vendorsByNature[n][e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';if(e.paidAlready)e.reimbursementStatus='pending';e.approvedAt=new Date().toISOString();e.approvedBy=actor;audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};}
+function telegramApproveExpense(id,actor,changes){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};const before=JSON.parse(JSON.stringify(e)),c=changes||{};['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}if(c.nature)e.nature=normalizedNature(c.nature);if(e.ledger&&sankiCategories.active(s)&&normalizedNature(e.nature)==='SANKI'&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase()))return{success:false,error:'Select an active SANKI subcategory.',needsCategory:true,expense:e};if(e.ledger&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase())){s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};}const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};const n=normalizedNature(e.nature);s.vendors=s.vendors||{};s.vendorsByNature=s.vendorsByNature||{};if(n==='SANKI'){s.vendors[e.vendor.toLowerCase()]=s.vendors[e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}else{s.vendorsByNature[n]=s.vendorsByNature[n]||{};s.vendorsByNature[n][e.vendor.toLowerCase()]=s.vendorsByNature[n][e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';if(e.paidAlready)e.reimbursementStatus='pending';e.approvedAt=new Date().toISOString();e.approvedBy=actor;audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};}
 function telegramRejectExpense(id,actor,reason){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'Only a pending expense can be rejected.'};e.status='rejected';e.rejectReason=String(reason||'Rejected from Telegram');e.rejectedAt=new Date().toISOString();e.rejectedBy=actor;audit(s,null,'REJECTED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,reason:e.rejectReason}});saveStore(s);notifyExpenseUser(e,'rejected');return{success:true,expense:e};}
 function telegramRecordPayment(id,actor,b){const s=loadStore(),e=s.expenses[id],body=b||{};if(!e)return{success:false,error:'Expense not found.'};if(!['approved','partially_paid'].includes(e.status)||e.paidAlready)return{success:false,error:'This expense is not awaiting a vendor payment.'};const proof=String(body.proof||'');if(!proof)return{success:false,error:'Payment screenshot is required.'};const account=telegramResolveAccount(e.nature,body.account);if(!account)return{success:false,error:'Paying account was not recognized.',needsAccount:true};const issues=reconciliationIssues(s,normalizedNature(e.nature),account);if(issues.length)return{success:false,error:'This account has a reconciliation warning. Complete this payment in the app.',appRequired:true};const outstanding=Math.max(0,num(e.amount)-num(e.paidAmount)),amount=body.amount!=null?num(body.amount):outstanding;if(!(amount>0)||amount>outstanding)return{success:false,error:'Payment must be between ₹0 and '+outstanding+'.'};e.account=account;e.paidAmount=num(e.paidAmount)+amount;e.paymentProof=proof;e.payments=Array.isArray(e.payments)?e.payments:[];e.payments.push({id:'PAY-'+String(e.payments.length+1).padStart(3,'0'),amount,date:String(body.date||indiaBusinessDate()).slice(0,10),account,paymentType:'UPI',proof,note:'Recorded through Telegram',paidBy:actor,paidAt:new Date().toISOString()});e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid';e.paidAt=new Date().toISOString();e.paidBy=actor;audit(s,null,'PAYMENT_RECORDED','expense',id,{user:actor,device:'Telegram',nature:e.nature,account,paymentId:e.payments.at(-1).id,after:e.payments.at(-1)});saveStore(s);notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',amount);return{success:true,expense:e,payment:e.payments.at(-1)};}
 // Runs an existing synchronous accounting route for a linked Telegram user.
@@ -1096,10 +1099,12 @@ function procurementLedgerPayables(s, includePaid) {
 function ledgerMeta(s, name) {
   const ov = (s.ledgerOverrides || {})[name] || {};
   const custom = (s.customLedgers || {})[name] || {};
-  return { name, nature: 'SANKI', type: ov.type || custom.type || defaultType(name) };
+  const category=sankiCategories.metadata(s,name);
+  return { name, nature: 'SANKI', group:category&&category.group||custom.group||'', type: ov.type || custom.type || defaultType(name) };
 }
 // The category picker = built-in BUSINESS ledgers ∪ admin-approved custom ones.
-function pickableLedgers(s) {
+function pickableLedgers(s, nature) {
+  if(normalizedNature(nature||'SANKI')==='SANKI' && sankiCategories.active(s))return sankiCategories.catalog(s).map(x=>ledgerMeta(s,x.name)).sort((a,b)=>a.group.localeCompare(b.group)||a.name.localeCompare(b.name));
   const names = LEDGERS.filter(isBusinessLedger).concat(PERSONAL_CATEGORIES,Object.keys(s.customLedgers || {}));
   const seen = {};
   return names.filter(n => (seen[n] ? false : (seen[n] = true)))
@@ -1441,6 +1446,8 @@ router.get('/api/expenses/config', (req, res) => {
   res.json({
     success: true,
     ledgers: pickableLedgers(s),
+    ledgersByNature: Object.fromEntries(allowed.map(n=>[n,pickableLedgers(s,n)])),
+    categoryGroups: [...new Set(sankiCategories.catalog(s).map(x=>x.group))],
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
     accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
@@ -1475,7 +1482,7 @@ router.post('/api/expenses', (req, res) => {
   const ledger = isAdmin(req) ? String(b.ledger || '').trim() : '';
   const amount = num(b.amount);
   if (isAdmin(req) && !ledger) return res.status(400).json({ success: false, error: 'Pick a category (ledger).' });
-  if (ledger && !pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
+  if (ledger && !pickableLedgers(s,b.nature).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
     return res.status(400).json({ success: false, error: 'Select an approved category.' });
   }
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Amount must be greater than 0.' });
@@ -1624,7 +1631,8 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (b.ledger != null && String(b.ledger).trim()) {
     if (!isAdmin(req)) return res.status(403).json({ success: false, error: 'Only Admin or Owner can assign or change the category.' });
     const ledger = String(b.ledger).trim();
-    if (!pickableLedgers(s).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
+    if (!pickableLedgers(s,e.nature).some(l => l.name.toLowerCase() === ledger.toLowerCase())) {
+      if(sankiCategories.active(s)&&normalizedNature(e.nature)==='SANKI')return res.status(400).json({success:false,error:'Select an active SANKI subcategory. Manage categories to add a new one.'});
       if (!isOwner(req)) return res.status(403).json({ success: false, error: 'Only the Owner can create a new category. Choose an existing category.' });
       s.customLedgers = s.customLedgers || {};
       s.customLedgers[ledger] = { name: ledger, type: TYPES.includes(b.type) ? b.type : (e.type || 'variable') };
@@ -3351,7 +3359,7 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     draft.resolutions[linked.id]={action:'linked_opening_payable',reason:'Linked as current-period component of '+b.rowId,appId,linkedRowId:b.rowId,by:req.user.username,at:new Date().toISOString()};
   }
   const category=String(b.category||'').trim();
-  if(['create_adjustment','create_split_adjustment'].includes(b.action)&&category&&!pickableLedgers(s).some(x=>x.name.toLowerCase()===category.toLowerCase()))return res.status(400).json({success:false,error:'Choose a valid expense category.'});
+  if(['create_adjustment','create_split_adjustment'].includes(b.action)&&category&&!pickableLedgers(s,draft.nature).some(x=>x.name.toLowerCase()===category.toLowerCase()))return res.status(400).json({success:false,error:'Choose a valid expense category.'});
   if(b.action==='create_split_adjustment'){
     const total=num(row.bank&&row.bank.debit),principal=num(b.principalAmount),charge=num(b.chargeAmount);
     if(!row.bank||!(total>0)||!(principal>0)||!(charge>0)||Math.abs(principal+charge-total)>.01)return res.status(400).json({success:false,error:'Main ledger amount plus charges must exactly equal the bank debit.'});
@@ -3368,7 +3376,7 @@ router.post('/api/expenses/bank-statements/create-expense',(req,res)=>{
   const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId),bank=row&&row.bank,ledger=String(b.ledger||'').trim(),vendor=String(b.vendor||'').trim(),particulars=String(b.particulars||'').trim(),billPhoto=String(b.billPhoto||'').trim(),remark=String(b.remark||'').trim();
   if(!row||row.status!=='missing_in_app'||!bank||!(num(bank.debit)>0))return res.status(400).json({success:false,error:'Choose an outgoing bank transaction that is missing in the app.'});
   if((draft.resolutions||{})[b.rowId]||Object.values(s.expenses||{}).some(e=>e.reconciliationSource&&e.reconciliationSource.draftId===draft.id&&e.reconciliationSource.rowId===b.rowId))return res.status(409).json({success:false,error:'This bank transaction has already been used to create an expense.'});
-  if(!ledger||!pickableLedgers(s).some(x=>x.name.toLowerCase()===ledger.toLowerCase()))return res.status(400).json({success:false,error:'Choose a valid expense category.'});
+  if(!ledger||!pickableLedgers(s,draft.nature).some(x=>x.name.toLowerCase()===ledger.toLowerCase()))return res.status(400).json({success:false,error:'Choose a valid expense category.'});
   if(!vendor||!particulars||!billPhoto||!remark)return res.status(400).json({success:false,error:'Vendor, particulars, bill photo and reconciliation remark are required.'});
   const now=new Date().toISOString(),amount=num(bank.debit),user=req.user&&req.user.username||'system';s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0'),paymentId='PAY-001';
   const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:'UPI';s.expenses[id]={id,date:bank.date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:normalizedNature(draft.nature),type:defaultType(ledger),ledger,vendor,claimant:user,account:draft.account,channel:'Shared',bill:['printed','handwritten'].includes(b.bill)?b.bill:'printed',fundedBy:'company',paymentType,qrPhoto:'',billPhoto,purchasePaymentProof:'',exceptionEvidence:'',exceptionReason:'',billNote:'Created directly from bank reconciliation',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:'',status:'paid',paidAmount:amount,payments:[{id:paymentId,amount,date:bank.date,account:draft.account,paymentType,proof:'',note:'Verified against bank statement · '+(bank.reference||bank.description||draft.id),paidBy:user,paidAt:now,personalFunds:false,bankReconciliationDraft:draft.id,bankReconciliationRow:b.rowId}],createdAt:now,createdBy:user,approvedAt:now,approvedBy:user,paidAt:now,paidBy:user,reconciliationSource:{draftId:draft.id,rowId:b.rowId,bankReference:String(bank.reference||''),bankDescription:String(bank.description||''),remark}};
@@ -3836,7 +3844,10 @@ router.post('/api/expenses/custom-ledgers', (req, res) => {
   if(!TYPES.includes(b.type)) return res.status(400).json({success:false,error:'Choose a valid category type.'});
   const existing=pickableLedgers(s).find(l=>l.name.toLowerCase()===name.toLowerCase());
   if(existing) return res.json({success:true,already:true,ledger:existing});
-  const ledger={name,type:b.type};
+  const group=String(b.group||'').trim();
+  if(sankiCategories.active(s)&&!sankiCategories.catalog(s).some(x=>x.group===group))return res.status(400).json({success:false,error:'Select an existing SANKI group.'});
+  const ledger={name,type:b.type,group};
+  if(sankiCategories.active(s))s.sankiCategoryCatalog.categories.push({name,group});
   s.customLedgers=s.customLedgers||{};s.customLedgers[name]=ledger;
   audit(s,req,'CATEGORY_CREATED','category',name,{after:ledger});saveStore(s);
   res.json({success:true,ledger});
@@ -3850,7 +3861,7 @@ router.post('/api/expenses/custom-ledgers/remove', (req, res) => {
   if (!isOwner(req)) return res.status(403).json({ success: false, error: 'Owner only.' });
   const s = loadStore();
   const name = String((req.body || {}).name || '').trim();
-  if (s.customLedgers && s.customLedgers[name]) delete s.customLedgers[name];
+  if (s.customLedgers && s.customLedgers[name]) {delete s.customLedgers[name];if(sankiCategories.active(s))s.sankiCategoryCatalog.categories=s.sankiCategoryCatalog.categories.filter(c=>c.name!==name);}
   audit(s,req,'CATEGORY_REMOVED','category',name,{before:{name}});saveStore(s);
   res.json({ success: true });
 });
