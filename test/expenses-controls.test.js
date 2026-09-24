@@ -2594,3 +2594,11 @@ test('Owner can replace a deleted expense link in finalized reconciliation with 
     const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Correct link/);assert.match(html,/correct-finalized-link/);assert.match(html,/View correction history/);assert.match(html,/Previous link:/);assert.match(html,/Corrected link:/);assert.match(html,/Changed by/);
   }finally{fs.writeFileSync(expenseFile,baseline);}
 });
+
+test('bank reconciliation displays narration from the actual transaction marker',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/function bankNarrationForDisplay\(value\)/);
+  assert.match(html,/UPI\|IMPS\|NEFT\|RTGS\|IFT\|INB\|ACH\|NACH\|ATM\|POS\|BIL\|INF\|VMT/);
+  assert.match(html,/<b>BANK<\/b> · '\+esc\(bp\.particulars\)/);
+  assert.doesNotMatch(html,/<b>BANK<\/b> · '\+esc\(bp\.entity\)\+' \| '\+esc\(bp\.vendor\)/);
+});
