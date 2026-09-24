@@ -48,20 +48,22 @@ function registerPaytmReports(router, deps) {
           if (!previous) all.set(tx.transactionId, tx);
         }
       }
-      const existing = store.paytmReportTransactions || {}, fresh = [];
+      const existing = store.paytmReportTransactions || {}, fresh = [], enrichments = [];
       let duplicates = 0;
       for (const tx of all.values()) {
         if (existing[tx.transactionId]) {
-          if (differs(existing[tx.transactionId], tx)) { warnings.push(`Previously imported transaction ${tx.transactionId} differs from this report. Saved evidence was not changed; review this ID separately.`); duplicates++; continue; }
+          if (differs(existing[tx.transactionId], tx)) { warnings.push(`Previously imported transaction ${tx.transactionId} has a genuine financial or identifier conflict. Saved evidence was not changed; review this ID separately.`); duplicates++; continue; }
+          const enriched = mergeEvidence(existing[tx.transactionId], tx);
+          if (JSON.stringify(enriched) !== JSON.stringify(existing[tx.transactionId])) enrichments.push(tx);
           duplicates++;
         } else fresh.push(tx);
       }
       if (fresh.length > 5000) throw new Error('Too many transactions in one preview. Upload a shorter period.');
       const draftId = `PTMR-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
       store.paytmReportDrafts = store.paytmReportDrafts || {};
-      store.paytmReportDrafts[draftId] = { id: draftId, at: new Date().toISOString(), by: req.user.username, sources, warnings, duplicates, transactions: fresh };
+      store.paytmReportDrafts[draftId] = { id: draftId, at: new Date().toISOString(), by: req.user.username, sources, warnings, duplicates, transactions: fresh, enrichments };
       saveStore(store);
-      res.json({ success: true, draftId, sources, warnings, duplicates, newTransactions: fresh.length, payouts: summarizePayouts(fresh) });
+      res.json({ success: true, draftId, sources, warnings, duplicates, enrichedTransactions: enrichments.length, newTransactions: fresh.length, payouts: summarizePayouts([...all.values()]) });
     } catch (error) { res.status(400).json({ success: false, error: error.message || 'Could not read Paytm reports.' }); }
   });
   router.post('/api/expenses/paytm-reports/confirm', (req, res) => {
@@ -69,20 +71,26 @@ function registerPaytmReports(router, deps) {
     const store = loadStore(), draftId = String(req.body && req.body.draftId || ''), draft = (store.paytmReportDrafts || {})[draftId];
     if (!draft) return res.status(404).json({ success: false, error: 'Preview not found. Upload the report again.' });
     store.paytmReportTransactions = store.paytmReportTransactions || {};
-    let added = 0;
+    let added = 0, enriched = 0;
     for (const tx of draft.transactions) {
       const old = store.paytmReportTransactions[tx.transactionId];
       if (old && differs(old, tx)) return res.status(409).json({ success: false, error: `Transaction ${tx.transactionId} changed after preview. Upload again.` });
       if (!old) { store.paytmReportTransactions[tx.transactionId] = { ...tx, importedAt: new Date().toISOString(), importedBy: req.user.username }; added++; }
     }
+    for (const tx of draft.enrichments || []) {
+      const old = store.paytmReportTransactions[tx.transactionId];
+      if (!old || differs(old, tx)) return res.status(409).json({ success: false, error: `Transaction ${tx.transactionId} changed after preview. Upload again.` });
+      const next = mergeEvidence(old, tx);
+      if (JSON.stringify(next) !== JSON.stringify(old)) { store.paytmReportTransactions[tx.transactionId] = { ...next, enrichedAt: new Date().toISOString(), enrichedBy: req.user.username }; enriched++; }
+    }
     store.paytmReportImports = store.paytmReportImports || [];
-    store.paytmReportImports.push({ id: draftId, at: new Date().toISOString(), by: req.user.username, sources: draft.sources, count: added, duplicates: draft.duplicates, warnings: draft.warnings });
+    store.paytmReportImports.push({ id: draftId, at: new Date().toISOString(), by: req.user.username, sources: draft.sources, count: added, enriched, duplicates: draft.duplicates, warnings: draft.warnings });
     const autoMatched = autoMatchShopifyNotes(store,store.paytmReportTransactions,orders ? orders() : [],saleRows ? saleRows(store) : []);
     autoMatched.forEach(link=>audit(store,req,'PAYTM_ORDER_AUTO_MATCHED','paytm_transaction',link.transactionId,{nature:'SANKI',account:CLEARING,after:link}));
     delete store.paytmReportDrafts[draftId];
     audit(store, req, 'PAYTM_REPORT_IMPORTED', 'paytm_report', draftId, { nature: 'SANKI', account: 'Paytm Settlement Clearing', after: { count: added, sources: draft.sources.map(source => source.name) }, note: 'Evidence imported only; no ledger or bank posting changed.' });
     saveStore(store);
-    res.json({ success: true, added, duplicates: draft.duplicates, autoMatched: autoMatched.length, view: view(store) });
+    res.json({ success: true, added, enriched, duplicates: draft.duplicates, autoMatched: autoMatched.length, view: view(store) });
   });
   router.post('/api/expenses/paytm-reports/auto-match', (req, res) => {
     if (deny(req, res)) return;
@@ -198,6 +206,14 @@ function registerPaytmReports(router, deps) {
   });
 }
 function differs(a, b) {
-  return ['date', 'amount', 'commission', 'platformFee', 'gst', 'settledAmount', 'payoutId', 'utr', 'settledDate', 'transactionType'].some(key => String(a[key] ?? '') !== String(b[key] ?? ''));
+  const financial = ['date', 'amount', 'commission', 'gst', 'settledAmount'];
+  if (financial.some(key => String(a[key] ?? '') !== String(b[key] ?? ''))) return true;
+  return ['platformFee', 'payoutId', 'utr', 'settledDate', 'transactionType'].some(key => valuePresent(a[key]) && valuePresent(b[key]) && String(a[key]) !== String(b[key]));
+}
+function valuePresent(value) { return value !== undefined && value !== null && String(value) !== ''; }
+function mergeEvidence(old, current) {
+  const next = { ...old };
+  for (const key of ['platformFee', 'payoutId', 'payoutDate', 'utr', 'settledDate', 'transactionType', 'comments', 'paymentMode', 'posId', 'merchantOrderId', 'rrn', 'isCustomerPayment']) if (!valuePresent(next[key]) && valuePresent(current[key])) next[key] = current[key];
+  return next;
 }
 module.exports = { registerPaytmReports };

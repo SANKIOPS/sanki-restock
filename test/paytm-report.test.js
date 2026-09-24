@@ -75,6 +75,22 @@ test('Paytm report preview and confirmation import evidence without touching acc
   assert.equal(repeated.body.duplicates, 1);
 });
 
+test('re-upload enriches legacy transactions instead of reporting false conflicts', () => {
+  const id = '202609240000123456';
+  const store = { paytmReportTransactions: { [id]: { transactionId: id, date: '2026-09-24', time: '24-09-2026 11:00:00', amount: 1000, commission: 10, gst: 1.8, settledAmount: 988.2, source: 'older.csv' } }, paytmReportDrafts: {} };
+  const routes = {}, router = { get: (url, handler) => { routes[url] = handler; }, post: (url, ...handlers) => { routes[url] = handlers.at(-1); } };
+  registerPaytmReports(router, { loadStore: () => store, saveStore: () => {}, audit: () => {}, canAccess: () => true, upload: { array: () => () => {} }, view: () => ({}), today: () => '2026-09-24', orders: () => [], saleRows: () => [] });
+  const csv = 'transaction_id,transaction_type,transaction_date,status,amount,commission,gst,utr_no,settled_date,settled_amount,platform_fee,comments\n' +
+    `${id},ACQUIRING,24-09-2026 11:00:00,SUCCESS,1000,10,1.8,UTR-24,25-09-2026,988.2,0,Customer payment\n`;
+  const reply = () => ({ status() { return this; }, json(body) { this.body = body; return this; } });
+  const preview = reply(); routes['/api/expenses/paytm-reports/preview']({ user: { username: 'owner' }, files: [{ originalname: 'paytm.csv', buffer: Buffer.from(csv) }] }, preview);
+  assert.equal(preview.body.warnings.length, 0);
+  assert.equal(preview.body.enrichedTransactions, 1);
+  const confirmed = reply(); routes['/api/expenses/paytm-reports/confirm']({ user: { username: 'owner' }, body: { draftId: preview.body.draftId } }, confirmed);
+  assert.equal(confirmed.body.enriched, 1);
+  assert.deepEqual([store.paytmReportTransactions[id].utr, store.paytmReportTransactions[id].settledDate, store.paytmReportTransactions[id].transactionType, store.paytmReportTransactions[id].platformFee], ['UTR-24', '2026-09-25', 'ACQUIRING', 0]);
+});
+
 test('saving a detailed Paytm report automatically links a unique Shopify note suffix', () => {
   const routes={},store={paytmReportTransactions:{},paytmReportDrafts:{}};
   const router={get:(url,handler)=>{routes[url]=handler;},post:(url,...handlers)=>{routes[url]=handlers.at(-1);}};
