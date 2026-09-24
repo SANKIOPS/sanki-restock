@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { parsePaytmReport, summarizePayouts } = require('../modules/paytm-report');
 const { registerPaytmReports } = require('../modules/paytm-reports-routes');
 const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting } = require('../modules/paytm-accounting');
@@ -40,6 +41,12 @@ test('uses actual Paytm platform fee, settled date and UTR as the bank batch', (
   const parsed = parsePaytmReport(Buffer.from(csv), 'actual.csv', '2026-09-24');
   const [batch] = summarizePayouts(parsed.transactions);
   assert.deepEqual([batch.utr, batch.settledDate, batch.gross, batch.platformFee, batch.net, batch.customerPaymentCount], ['UTR-24', '2026-09-25', 1000, 5, 983.2, 1]);
+});
+
+test('Paytm clearing shows its dedicated report uploader instead of the debit-credit bank reader', () => {
+  const html = fs.readFileSync(require.resolve('../public/expenses.html'), 'utf8');
+  assert.match(html, /Default Paytm transaction report CSV/);
+  assert.match(html, /reconcileEligible&&!isPaytmClearing/);
 });
 
 test('shows old summary-only rows as not importable without transaction IDs', () => {
