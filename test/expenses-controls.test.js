@@ -977,7 +977,9 @@ test('multiple pending expenses can be reimbursed together and debit the paying 
   assert.equal(paid.status,200);assert.equal(paid.body.total,1000);assert.match(paid.body.batchId,/^RB-/);assert.equal(paid.body.expenses.length,2);
   assert.ok(paid.body.expenses.every(e=>e.reimbursementStatus==='reimbursed'&&e.reimbursementPayments.at(-1).batchId===paid.body.batchId));
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash',from:'2026-08-22',to:'2026-08-31'}}).body;
-  assert.equal(ids.reduce((n,id)=>n+ledger.entries.filter(x=>x.id.startsWith(id+'/REIM-')).reduce((m,x)=>m+x.debit,0),0),1000);
+  const batchRow=ledger.entries.find(x=>x.id===paid.body.batchId);
+  assert.equal(batchRow.debit,1000);assert.equal(batchRow.items.length,2);assert.deepEqual(batchRow.items.map(x=>x.expenseId).sort(),ids.slice().sort());
+  assert.equal(ledger.entries.filter(x=>ids.some(id=>x.id.startsWith(id+'/REIM-'))).length,0);
 });
 
 test('reimbursements UI groups transactions by person before showing expense details',()=>{
@@ -988,6 +990,8 @@ test('reimbursements UI groups transactions by person before showing expense det
   assert.match(html,/Select all pending for /);
   assert.match(html,/Closing balance '\+fmt\(group\.due\)/);
   assert.match(html,/Transaction reference/);
+  assert.match(html,/View '\+items\.length\+' reimbursement details/);
+  assert.match(html,/item\.transactionReference/);
   assert.match(html,/Reimbursed<\/th><th>Closing balance/);
 });
 

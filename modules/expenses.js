@@ -2795,14 +2795,21 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // A bank ledger follows the account that moved, even when that account paid
   // an expense belonging to another entity (for example SANKI 3645 paying a
   // SAMAST bill). The entity remains visible on the ledger description.
+  const reimbursementBatches=new Map();
+  const addReimbursementBatchItem=(direction,e,p,entryNature)=>{
+    const key=direction+'/'+p.batchId,existing=reimbursementBatches.get(key),claimant=e.claimant||e.createdBy||'claimant',item={expenseId:e.id,paymentId:p.id,transactionReference:e.id+'/'+p.id,vendor:e.vendor||'',particulars:e.particulars||'',claimant,entity:entryNature,amount:num(p.amount),proof:p.proof||'',proofs:proofList(p.proofs,p.proof),note:p.note||''};
+    if(existing){existing[direction==='paid'?'debit':'credit']+=num(p.amount);existing.items.push(item);if(!existing.claimants.includes(claimant))existing.claimants.push(claimant);if(!existing.entities.includes(entryNature))existing.entities.push(entryNature);return;}
+    reimbursementBatches.set(key,{id:p.batchId,date:p.date,createdAt:p.paidAt||e.createdAt||'',kind:direction==='paid'?'reimbursement_batch':'reimbursement_received_batch',entity:entryNature,description:'Reimbursement batch',reference:p.batchId,credit:direction==='received'?num(p.amount):0,debit:direction==='paid'?num(p.amount):0,proof:p.proof||'',proofs:proofList(p.proofs,p.proof),note:p.note||'',by:p.paidBy,editable:false,batchId:p.batchId,direction,claimants:[claimant],entities:[entryNature],items:[item]});
+  };
   Object.values(s.expenses || {}).forEach(e => {
     const entryNature=normalizedNature(e.nature),entityLabel=' ['+entryNature+']';
     if (!approvalNatures(req).includes(entryNature)) return;
     const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
     (e.payments || []).filter(p => !p.accountingExcluded&&paymentIsPosted(e) && (p.account || e.account) === account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,creditCardStatementId:p.creditCardStatementId||'',editable:!p.batchPaymentId&&!p.creditCardStatementId}));
-    (e.reimbursementPayments || []).filter(p => !p.accountingExcluded&&p.account === account).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,editable:true}));
-    (e.reimbursementPayments || []).filter(p => personalAccount === account).forEach(p => entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
+    (e.reimbursementPayments || []).filter(p => !p.accountingExcluded&&p.account === account).forEach(p => p.batchId?addReimbursementBatchItem('paid',e,p,entryNature):entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,editable:true}));
+    (e.reimbursementPayments || []).filter(p => personalAccount === account).forEach(p => p.batchId?addReimbursementBatchItem('received',e,p,entryNature):entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
   });
+  reimbursementBatches.forEach(row=>{row.debit=roundMoney(row.debit);row.credit=roundMoney(row.credit);row.entity=row.entities.length===1?row.entities[0]:'Multiple';row.description=(row.direction==='paid'?'Reimbursement to ':'Reimbursement received · ')+(row.claimants.length===1?row.claimants[0]:row.claimants.length+' people')+' · '+row.items.length+' expenses';row.linkedEntryIds=row.items.map(item=>item.transactionReference+(row.direction==='received'?'/RECEIVED':''));entries.push(row);});
   if (nature === 'SANKI') {
     const combinedPurchases = new Map();
     procurementPayables(s, true).forEach(p => (p.payments || []).filter(x => x.account === account).forEach(x => {
@@ -2869,7 +2876,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   if(openingEntry)ordered.unshift(openingEntry);
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
-  const issues = creditCard?[]:reconciliationIssues(s, nature, account),reconciliation=ledgerReconciliationStatus(s,nature,account);visible.forEach(x=>{const status=reconciliation.index.get(x.id);if(status){x.reconciliation=status;x.rawReference=x.reference||x.id;x.reference=x.rawReference+' · ✓ Reconciled '+(status.bankDate||'')+' · '+status.reconciliationId;}});
+  const issues = creditCard?[]:reconciliationIssues(s, nature, account),reconciliation=ledgerReconciliationStatus(s,nature,account);visible.forEach(x=>{let status=reconciliation.index.get(x.id);if(!status&&x.linkedEntryIds&&x.linkedEntryIds.length){const childStatuses=x.linkedEntryIds.map(id=>reconciliation.index.get(id));if(childStatuses.every(Boolean)&&new Set(childStatuses.map(item=>item.reconciliationId)).size===1)status=childStatuses[0];}if(status){x.reconciliation=status;x.rawReference=x.reference||x.id;x.reference=x.rawReference+' · ✓ Reconciled '+(status.bankDate||'')+' · '+status.reconciliationId;}});
   const finalBalance=preciseBalance?Math.round(running*100)/100:round0(running);res.json({ success:true, account, nature, expenseNature, entries:visible, balance:Math.abs(finalBalance)<.005?0:finalBalance, reconciled:issues.length===0, reconciliationIssues:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
 });
 
