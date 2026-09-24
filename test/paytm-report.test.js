@@ -34,6 +34,14 @@ test('rejects an unbalanced successful transaction instead of estimating fees', 
   assert.throws(() => parsePaytmReport(Buffer.from(header + row('T1', '2026-09-17', 100, 1, 0, 100)), 'test.csv', '2026-09-18'), /does not balance/);
 });
 
+test('uses actual Paytm platform fee, settled date and UTR as the bank batch', () => {
+  const csv = 'transaction_id,transaction_type,transaction_date,status,amount,commission,gst,utr_no,settled_date,settled_amount,platform_fee,comments\n' +
+    '202609240000123456,ACQUIRING,24-09-2026 11:00:00,SUCCESS,1000,10,1.8,UTR-24,25-09-2026,983.2,5,Customer payment\n';
+  const parsed = parsePaytmReport(Buffer.from(csv), 'actual.csv', '2026-09-24');
+  const [batch] = summarizePayouts(parsed.transactions);
+  assert.deepEqual([batch.utr, batch.settledDate, batch.gross, batch.platformFee, batch.net, batch.customerPaymentCount], ['UTR-24', '2026-09-25', 1000, 5, 983.2, 1]);
+});
+
 test('shows old summary-only rows as not importable without transaction IDs', () => {
   const csv = 'Updated_Date,Status,Amount,Commission,GST,Settled_Amount\n2026-08-25,SUCCESS,5000,0,0,5000\n';
   const result = parsePaytmReport(Buffer.from(csv), 'old.csv', '2026-09-18');

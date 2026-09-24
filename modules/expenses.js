@@ -1210,18 +1210,19 @@ function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') ||
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
 function paytmReportView(s) {
-  const transactions=Object.values(s.paytmReportTransactions||{}).sort((a,b)=>String(a.date+a.transactionId).localeCompare(String(b.date+b.transactionId)));
+  const transactions=Object.values(s.paytmReportTransactions||{}).map(tx=>Object.assign({platformFee:0,isCustomerPayment:true},tx)).sort((a,b)=>String(a.date+a.transactionId).localeCompare(String(b.date+b.transactionId)));
   const payouts=summarizePayouts(transactions);
   const bankBook=(s.bankStatements||{})[DEFAULT_SALES_BANK]||{};
   const bankRows=Object.values(bankBook.transactions||{}).filter(row=>Number(row.credit)>0);
   const bankMatches=payouts.map(payout=>{
     const exact=bankRows.filter(row=>payout.utr&&Math.abs(num(row.credit)-payout.net)<.01&&(String(row.reference||'')+' '+String(row.description||'')).includes(payout.utr));
-    const amount=bankRows.filter(row=>Math.abs(num(row.credit)-payout.net)<.01&&Math.abs((Date.parse(String(row.date||'')+'T00:00:00Z')-Date.parse(payout.payoutDate+'T00:00:00Z'))/86400000)<=3);
+    const amount=bankRows.filter(row=>Math.abs(num(row.credit)-payout.net)<.01&&Math.abs((Date.parse(String(row.date||'')+'T00:00:00Z')-Date.parse(payout.settledDate+'T00:00:00Z'))/86400000)<=3);
     const candidates=exact.length?exact:amount;
     return Object.assign({},payout,{bankMatch:exact.length===1?'reference candidate':amount.length===1?'amount/date candidate':candidates.length?'ambiguous':'not found',bankCandidates:candidates.map(row=>({id:row.id,date:row.date,credit:num(row.credit),reference:row.reference||row.description||''}))});
   });
   const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(order=>!order.cancelledAt&&String(order.financialStatus||'').toLowerCase()==='paid');
   const orderMatches=transactions.map(tx=>{
+    if(tx.isCustomerPayment===false)return {transactionId:tx.transactionId,orderMatch:'Paytm adjustment — not a Shopify sale',orderCandidates:[]};
     if(tx.posId==='DEFAULT')return {transactionId:tx.transactionId,orderMatch:'non-POS channel — review',orderCandidates:[]};
     const suffix=transactionSuffix(tx.transactionId),byId=orders.filter(order=>suffix&&(String(order.note||'').match(/\d{6,}/g)||[]).some(token=>token.endsWith(suffix)));
     const candidates=byId.length?byId:orders.filter(order=>{
@@ -1239,7 +1240,7 @@ function paytmReportView(s) {
   orderMatches.forEach(match=>{if(match.orderMatch==='Possible match — amount/date only'&&suggestedCounts[match.orderCandidates[0].id]>1)match.orderMatch='Possible matches — amount/date only';});
   const links=s.paytmOrderLinks||{},manual=s.paytmManualResolutions||{},posted=new Map((s.paytmPayoutPostings||[]).map(x=>[x.payoutId,x]));
   const excluded=s.paytmExcludedTransactions||{};
-  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.linkedCount=x.transactionIds.filter(id=>links[id]||manual[id]).length;x.excludedCount=x.transactionIds.filter(id=>excluded[id]).length;x.readyToPost=!x.posted&&!x.excludedCount&&x.linkedCount===x.count&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
+  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.linkedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&(links[id]||manual[id])).length;x.excludedCount=x.transactionIds.filter(id=>excluded[id]).length;x.readyToPost=!x.posted&&!x.excludedCount&&x.linkedCount===x.customerPaymentCount&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
   orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.manualResolution=manual[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;});
   const legacyDrafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===PAYTM_CLEARING_ACCOUNT).map(d=>({id:d.id,name:d.originalName||'Legacy bank statement preview',createdAt:d.createdAt,from:d.summary?.from,to:d.summary?.to,rows:(d.transactions||[]).length}));
   return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,from:PAYTM_START_DATE,through:indiaBusinessDate()};
@@ -2858,7 +2859,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   });
   if(nature==='SANKI'&&(account===PAYTM_CLEARING_ACCOUNT||account===DEFAULT_SALES_BANK))(s.paytmPayoutPostings||[]).forEach(x=>{
     if(account===DEFAULT_SALES_BANK)entries.push({id:x.id,date:x.date,kind:'paytm_payout',description:'Paytm payout '+x.payoutId+' · '+x.orderNumbers.map(n=>'#'+n).join(', '),reference:x.utr,credit:num(x.net),debit:0,by:x.postedBy});
-    else{entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Paytm payout to Axis 3448 · '+x.payoutId,reference:x.utr,credit:0,debit:num(x.net),by:x.postedBy});if(num(x.commission)+num(x.gst)>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm commission ₹'+num(x.commission).toFixed(2)+' + GST ₹'+num(x.gst).toFixed(2),reference:x.payoutId,credit:0,debit:roundMoney(num(x.commission)+num(x.gst)),by:x.postedBy});}
+    else{entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Paytm payout to Axis 3448 · '+x.payoutId,reference:x.utr,credit:0,debit:num(x.net),by:x.postedBy});if(num(x.commission)+num(x.platformFee)+num(x.gst)>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm commission ₹'+num(x.commission).toFixed(2)+' + platform fee ₹'+num(x.platformFee).toFixed(2)+' + GST ₹'+num(x.gst).toFixed(2),reference:x.utr,credit:0,debit:roundMoney(num(x.commission)+num(x.platformFee)+num(x.gst)),by:x.postedBy});if(num(x.nonCustomerAmount)>0)entries.push({id:x.id+'/NON-CUSTOMER-ADJUSTMENT',date:x.date,kind:'paytm_adjustment',description:'Paytm non-customer adjustment — not Shopify revenue',reference:x.utr,credit:num(x.nonCustomerAmount),debit:0,by:x.postedBy});}
   });
   // Bank-statement rows stay in reconciliation reports only; Excluded / PSNL rows never become operational ledger entries.
   if(account===DEFAULT_COUNTER_CASH)for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&!cashEntryIsVisible(account,entries[i].date))entries.splice(i,1);

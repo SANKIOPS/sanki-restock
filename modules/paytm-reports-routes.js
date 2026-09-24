@@ -183,13 +183,14 @@ function registerPaytmReports(router, deps) {
     try {
       const { payout, bank, linked } = validatePayoutPosting(store, payoutId, bankTransactionId, saleRows(store));
       const postedAt = new Date().toISOString();
-      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, gross: payout.gross, commission: payout.commission, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
+      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId: payout.payoutId, settlementId: payout.settlementId, sourcePayoutIds: payout.sourcePayoutIds, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, settledDate: payout.settledDate, gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
       store.paytmPayoutPostings = store.paytmPayoutPostings || [];
       store.paytmPayoutPostings.push(posting);
       store.reconciliationExpenses = store.reconciliationExpenses || [];
-      if (payout.commission + payout.gst > 0) store.reconciliationExpenses.push({ id: `BRE-${posting.id}`, nature: 'SANKI', date: bank.date, amount: Math.round((payout.commission + payout.gst) * 100) / 100, account: CLEARING, category: 'PAYTM CHARGES', type: 'running', vendor: 'Paytm', particulars: `Paytm charges for payout ${payoutId}; commission ${payout.commission}, GST ${payout.gst}`, paytmPostingId: posting.id, bankTransactionId, createdBy: req.user.username, createdAt: postedAt });
+      if (payout.commission + payout.platformFee + payout.gst > 0) store.reconciliationExpenses.push({ id: `BRE-${posting.id}`, nature: 'SANKI', date: bank.date, amount: Math.round((payout.commission + payout.platformFee + payout.gst) * 100) / 100, account: CLEARING, category: 'PAYTM CHARGES', type: 'running', vendor: 'Paytm', particulars: `Paytm charges for UTR ${payout.utr}; commission ${payout.commission}, platform fee ${payout.platformFee}, GST ${payout.gst}`, paytmPostingId: posting.id, bankTransactionId, createdBy: req.user.username, createdAt: postedAt });
+      if (payout.nonCustomerAmount > 0) store.reconciliationExpenses.push({ id: `BRE-${posting.id}-ADJUSTMENT`, nature: 'SANKI', date: bank.date, amount: -payout.nonCustomerAmount, account: CLEARING, category: 'PAYTM CHARGES', type: 'running', vendor: 'Paytm', particulars: `Paytm non-customer adjustment credit for UTR ${payout.utr}; preserved from the report and not treated as Shopify revenue`, paytmPostingId: posting.id, bankTransactionId, createdBy: req.user.username, createdAt: postedAt });
       store.bankDateOverrides = store.bankDateOverrides || {};
-      store.bankDateOverrides[posting.id] = { bankDate: bank.date, originalDate: payout.payoutDate, bankTransactionId, bankReference: payout.utr, remark: 'Paytm payout posted from detailed transaction report', by: req.user.username, at: postedAt, reconciliationDraft: posting.id };
+      store.bankDateOverrides[posting.id] = { bankDate: bank.date, originalDate: payout.settledDate, bankTransactionId, bankReference: payout.utr, remark: 'Paytm settlement posted from verified detailed transaction report', by: req.user.username, at: postedAt, reconciliationDraft: posting.id };
       audit(store, req, 'PAYTM_PAYOUT_POSTED', 'paytm_payout', payoutId, { nature: 'SANKI', account: BANK, after: posting });
       saveStore(store);
       res.json({ success: true, posting, view: view(store) });
@@ -197,6 +198,6 @@ function registerPaytmReports(router, deps) {
   });
 }
 function differs(a, b) {
-  return ['date', 'amount', 'commission', 'gst', 'settledAmount', 'payoutId', 'utr'].some(key => String(a[key]) !== String(b[key]));
+  return ['date', 'amount', 'commission', 'platformFee', 'gst', 'settledAmount', 'payoutId', 'utr', 'settledDate', 'transactionType'].some(key => String(a[key] ?? '') !== String(b[key] ?? ''));
 }
 module.exports = { registerPaytmReports };

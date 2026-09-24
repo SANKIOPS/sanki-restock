@@ -39,24 +39,29 @@ function parsePaytmReport(buffer, fileName, throughDate) {
     const amount = money(column(row, 'Amount', 'amount'));
     const commission = money(column(row, 'Commission', 'commission'));
     const gst = money(column(row, 'GST', 'gst'));
+    const platformFee = money(column(row, 'Platform_Fee', 'platform_fee')) || 0;
     const settledAmount = money(column(row, 'Settled_Amount', 'settled_amount'));
-    if (!transactionDate || [amount, commission, gst, settledAmount].some(n => !Number.isFinite(n)) || amount <= 0 || commission < 0 || gst < 0 || settledAmount < 0) throw new Error(`Row ${index + 2} has an invalid successful payment date or amount.`);
+    if (!transactionDate || [amount, commission, gst, platformFee, settledAmount].some(n => !Number.isFinite(n)) || amount <= 0 || commission < 0 || gst < 0 || platformFee < 0 || settledAmount < 0) throw new Error(`Row ${index + 2} has an invalid successful payment date or amount.`);
     if (transactionDate < START_DATE || transactionDate > throughDate) { outsidePeriod++; return; }
-    if (Math.abs(amount - commission - gst - settledAmount) > 0.02) throw new Error(`Row ${index + 2} does not balance: gross minus fees/GST differs from settled amount.`);
+    if (Math.abs(amount - commission - gst - platformFee - settledAmount) > 0.02) throw new Error(`Row ${index + 2} does not balance: gross minus commission, platform fee and GST differs from settled amount.`);
     if (!transactionId) { missingId++; return; }
     const tx = {
       transactionId, date: transactionDate,
       time: clean(column(row, 'Transaction_Date', 'transaction_date', 'Updated_Date', 'updated_date')),
-      amount, commission, gst, settledAmount,
+      amount, commission, gst, platformFee, settledAmount,
       payoutId: clean(column(row, 'Payout_ID', 'payout_id')),
       payoutDate: date(column(row, 'Payout_Date', 'payout_date')),
       utr: clean(column(row, 'UTR_No.', 'utr_no')),
+      settledDate: date(column(row, 'Settled_Date', 'settled_date')),
+      transactionType: clean(column(row, 'Transaction_Type', 'transaction_type')),
+      comments: clean(column(row, 'Comments', 'comments')),
       paymentMode: clean(column(row, 'Payment_Mode', 'payment_mode')),
       posId: clean(column(row, 'POS_ID', 'pos_id')),
       merchantOrderId: clean(column(row, 'Merchant_Order_ID', 'merchant_order_id')),
       rrn: clean(column(row, 'RRN', 'rrncode')),
       source: fileName
     };
+    tx.isCustomerPayment = !tx.transactionType || tx.transactionType.toUpperCase() === 'ACQUIRING';
     const previous = seen.get(transactionId);
     if (previous) {
       if (JSON.stringify({ ...previous, source: '' }) !== JSON.stringify({ ...tx, source: '' })) throw new Error(`Transaction ${transactionId} has conflicting values within this report.`);
@@ -73,17 +78,22 @@ function parsePaytmReport(buffer, fileName, throughDate) {
 function summarizePayouts(transactions) {
   const payouts = new Map();
   for (const tx of transactions) {
-    if (!tx.payoutId) continue;
-    const payout = payouts.get(tx.payoutId) || { payoutId: tx.payoutId, payoutDate: tx.payoutDate, utr: tx.utr, count: 0, gross: 0, commission: 0, gst: 0, net: 0, transactionIds: [] };
-    if (payout.utr && tx.utr && payout.utr !== tx.utr) throw new Error(`Payout ${tx.payoutId} has conflicting UTR numbers.`);
-    if (payout.payoutDate && tx.payoutDate && payout.payoutDate !== tx.payoutDate) throw new Error(`Payout ${tx.payoutId} has conflicting payout dates.`);
+    const key = tx.utr || tx.payoutId;
+    if (!key) continue;
+    const settlementDate = tx.settledDate || tx.payoutDate;
+    const payout = payouts.get(key) || { payoutId: key, settlementId: key, payoutDate: settlementDate, settledDate: settlementDate, utr: tx.utr, sourcePayoutIds: [], count: 0, customerPaymentCount: 0, nonCustomerCount: 0, gross: 0, customerGross: 0, nonCustomerAmount: 0, commission: 0, platformFee: 0, gst: 0, net: 0, transactionIds: [] };
+    if (payout.payoutDate && settlementDate && payout.payoutDate !== settlementDate) throw new Error(`Settlement ${key} has conflicting settled dates.`);
+    if (tx.payoutId && !payout.sourcePayoutIds.includes(tx.payoutId)) payout.sourcePayoutIds.push(tx.payoutId);
     payout.count++;
+    if (tx.isCustomerPayment === false) { payout.nonCustomerCount++; payout.nonCustomerAmount = Math.round((payout.nonCustomerAmount + tx.amount) * 100) / 100; }
+    else { payout.customerPaymentCount++; payout.customerGross = Math.round((payout.customerGross + tx.amount) * 100) / 100; }
     payout.gross = Math.round((payout.gross + tx.amount) * 100) / 100;
     payout.commission = Math.round((payout.commission + tx.commission) * 100) / 100;
+    payout.platformFee = Math.round((payout.platformFee + Number(tx.platformFee || 0)) * 100) / 100;
     payout.gst = Math.round((payout.gst + tx.gst) * 100) / 100;
     payout.net = Math.round((payout.net + tx.settledAmount) * 100) / 100;
     payout.transactionIds.push(tx.transactionId);
-    payouts.set(tx.payoutId, payout);
+    payouts.set(key, payout);
   }
   return [...payouts.values()].sort((a, b) => a.payoutDate.localeCompare(b.payoutDate) || a.payoutId.localeCompare(b.payoutId));
 }
