@@ -30,7 +30,7 @@ const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
 const { START_DATE: PAYTM_START_DATE, parsePaytmReport, summarizePayouts } = require('./paytm-report');
 const { registerPaytmReports } = require('./paytm-reports-routes');
-const { transactionSuffix } = require('./paytm-accounting');
+const { transactionSuffix, isOriginalPaymentOrder } = require('./paytm-accounting');
 const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
@@ -974,7 +974,7 @@ function salesLedgerEntries(accountingStore) {
   } catch { /* no local-sales store yet */ }
   try {
     const shop = JSON.parse(fs.readFileSync(ORDERS_PATH, 'utf8'));
-    Object.values(shop.orders || {}).filter(x => !x.cancelledAt && String(x.financialStatus||'').toLowerCase()==='paid').forEach(x => {
+    Object.values(shop.orders || {}).filter(isOriginalPaymentOrder).forEach(x => {
       const gateways=(x.paymentGateways||[]).join(' ').toLowerCase(),cash=gateways.includes('cash'),storeCredit=/store\s*credit|gift\s*card/.test(gateways)||num((accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]?.storeCreditAmount)>0,paytm=/paytm/.test(gateways),orderNo=String(x.orderNumber||x.name||x.id||'').replace(/\D/g,'').replace(/^0+/,''),gross=num(x.total),baseId='SHOPIFY/'+x.id,override=allocationOverrides[baseId],explicitCash=x.cashAmount!=null?num(x.cashAmount):(x.cashPaidAmount!=null?num(x.cashPaidAmount):null);
       // These are accounting exclusions only. This module only reads the cached
       // Shopify order and never changes the customer's Shopify store-credit balance.
@@ -1225,7 +1225,7 @@ function paytmReportView(s) {
     const candidates=exact.length?exact:amount;
     return Object.assign({},payout,{bankMatch:exact.length===1?'reference candidate':amount.length===1?'amount/date candidate':candidates.length?'ambiguous':'not found',bankCandidates:candidates.map(row=>({id:row.id,date:row.date,credit:num(row.credit),reference:row.reference||row.description||''}))});
   });
-  const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(order=>!order.cancelledAt&&String(order.financialStatus||'').toLowerCase()==='paid');
+  const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(isOriginalPaymentOrder);
   const orderMatches=transactions.map(tx=>{
     if(tx.isCustomerPayment===false)return {transactionId:tx.transactionId,orderMatch:'Paytm adjustment — not a Shopify sale',orderCandidates:[]};
     if(tx.posId==='DEFAULT')return {transactionId:tx.transactionId,orderMatch:'non-POS channel — review',orderCandidates:[]};
@@ -2845,14 +2845,14 @@ router.get('/api/expenses/account-ledger', (req, res) => {
       // operational follow-up, but it is not enough to value a cash/store-credit
       // split. Such rows therefore remain visible with zero movement until the
       // detailed Paytm report confirms the actual Paytm component.
-      Object.values(shopOrders).filter(order=>!order.cancelledAt&&String(order.financialStatus||'').toLowerCase()==='paid').forEach(order=>{
+      Object.values(shopOrders).filter(isOriginalPaymentOrder).forEach(order=>{
         const orderId=String(order.id||''),orderNumber=String(order.orderNumber||order.number||order.name||order.id||'').replace(/\D/g,'').replace(/^0+/,''),date=String(order.processedAt||order.createdAt||'').slice(0,10),suffixes=noteSuffixes(order),gateways=(order.paymentGateways||[]).join(' ').toLowerCase();
         if(!paytmSalesInScope(date)||creditedOrders.has(orderId)||['2717','2720'].includes(orderNumber)||!suffixes.length)return;
         // An explicit cash/store-credit-only order is not Paytm merely because a
         // number appears in free-form notes. Mixed/unknown orders stay pending.
         const explicitNonPaytm=!/paytm/.test(gateways)&&gateways&&gateways.split(/[,|]/).every(g=>/cash|store\s*credit|gift\s*card/.test(g.trim()));
         if(explicitNonPaytm)return;
-        const gross=roundMoney(num(order.total)-num(order.refundAmount));
+        const gross=roundMoney(num(order.total));
         entries.push({id:'PAYTM-PENDING/'+orderId,date,kind:'paytm_pending_sale',description:'Shopify sale #'+orderNumber+' · Paytm amount pending report verification',reference:'#'+orderNumber,credit:0,debit:0,orderId,orderNumber,orderTotal:gross,noteSuffixes:suffixes});
       });
       (s.paytmSettlements||[]).forEach(st=>{const keys=(st.orderIds||[]).map(id=>String(id||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')),alreadyShown=Object.values(daily).some(day=>{const saleKeys=new Set(day.sales.flatMap(sale=>[sale.orderNumber,sale.orderId,sale.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')));return keys.some(id=>saleKeys.has(id))||Math.abs(num(st.grossAmount)-day.total)<.01;});if(alreadyShown)return;const fallback=new Date(String(st.date||'')+'T00:00:00Z');fallback.setUTCDate(fallback.getUTCDate()-1);const receiptDate=st.customerReceiptDate||fallback.toISOString().slice(0,10),gross=num(st.grossAmount||num(st.netAmount)+num(st.chargeAmount)),day=daily[receiptDate]||(daily[receiptDate]={date:receiptDate,total:0,sales:[],forcedSettlements:[]});day.total+=gross;day.forcedSettlements.push(st.id);keys.forEach(id=>day.sales.push({id:'SETTLEMENT/'+st.id+'/'+id,orderNumber:id,amount:keys.length===1?gross:null,description:'Connected sale'}));});

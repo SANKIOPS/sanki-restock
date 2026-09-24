@@ -151,6 +151,21 @@ test('split order links only the Paytm component and excludes store credit used 
   assert.throws(() => validateOrderLink({}, { ...tx, amount: 1000 }, '2845', [order], [], ''), /store credit/);
 });
 
+test('original Paytm receipt remains linkable after partial or full Shopify refund', () => {
+  const tx = { transactionId: '202609040000169675', date: '2026-09-04', amount: 4998, posId: 'POS1' };
+  const base = { id: 'refunded-order', number: 2776, createdAt: '2026-09-04T12:00:00Z', total: 4998, note: 'Paytm 169675' };
+  for (const order of [
+    { ...base, financialStatus: 'partially_refunded', refundAmount: 2000 },
+    { ...base, financialStatus: 'refunded', refundAmount: 4998 }
+  ]) {
+    const store = {};
+    assert.equal(autoMatchShopifyNotes(store, { [tx.transactionId]: tx }, [order], []).length, 1);
+    assert.equal(store.paytmOrderLinks[tx.transactionId].amount, 4998);
+    assert.equal(store.paytmOrderLinks[tx.transactionId].subsequentlyRefunded, order.refundAmount);
+  }
+  assert.throws(() => validateOrderLink({}, tx, '2776', [{ ...base, financialStatus: 'refunded', cancelledAt: '2026-09-05' }], [], ''), /non-cancelled/);
+});
+
 test('Shopify sale/capture components never count authorization or store credit as Paytm', () => {
   const summary = summarizeShopifyPayments([
     { id: 1, kind: 'authorization', status: 'success', gateway: 'paytm', amount: '999.00' },

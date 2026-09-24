@@ -6,6 +6,9 @@ const cents = value => Math.round(Number(value || 0) * 100);
 const dayGap = (a, b) => Math.abs((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
 function transactionSuffix(id) { const digits = String(id || '').replace(/\D/g, ''); return digits.length >= 6 ? digits.slice(-6) : ''; }
 function noteHasTransactionSuffix(note, suffix) { return !!suffix && (String(note || '').match(/\d{6,}/g) || []).some(token => token.endsWith(suffix)); }
+function isOriginalPaymentOrder(order) {
+  return !!order && !order.cancelledAt && ['paid', 'partially_refunded', 'refunded'].includes(String(order.financialStatus || '').toLowerCase());
+}
 
 function summarizeShopifyPayments(transactions) {
   const result = { paytmAmount: 0, cashAmount: 0, storeCreditAmount: 0, otherAmount: 0, transactions: [] };
@@ -32,7 +35,7 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   const matches = orders.filter(x => String(x.id) === orderKey || String(x.orderNumber || x.number || x.name || '').replace(/\D/g, '').replace(/^0+/, '') === orderKey);
   if (matches.length !== 1) throw new Error(matches.length ? 'Order number is ambiguous; use the Shopify order ID.' : 'Shopify order not found.');
   const order = matches[0];
-  if (!order || order.cancelledAt || String(order.financialStatus || '').toLowerCase() !== 'paid') throw new Error('Choose a paid, non-cancelled Shopify order.');
+  if (!isOriginalPaymentOrder(order)) throw new Error('Choose a non-cancelled Shopify order with an original successful payment. Paid, partially refunded and refunded orders are supported.');
   const links = store.paytmOrderLinks || {};
   const row = saleRows.find(x => String(x.orderId) === String(order.id) && x.account !== 'Counter Cash');
   const orderDate = String(order.processedAt || order.createdAt || row && row.date || '').slice(0, 10);
@@ -53,7 +56,8 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   const hasId = containsId(note), uniqueId = hasId && orders.filter(candidate => containsId(candidate.note)).length === 1;
   if (verified.transactions && !verified.paytmAmount && String(reason || '').trim().length < 10) throw new Error('Shopify does not identify a Paytm payment component for this order. Enter a review reason explaining the external Paytm collection.');
   if (!uniqueId && String(reason || '').trim().length < 10) throw new Error('The Paytm ID is missing or repeated in Shopify notes. Enter a review reason of at least 10 characters.');
-  return { transactionId: tx.transactionId, transactionSuffix: suffix, orderId: String(order.id), orderNumber: String(order.orderNumber || order.number || order.name || row && row.orderNumber || '').replace(/^#/, ''), amount: tx.amount, orderTotal: total / 100, partial: cents(tx.amount) < total, storeCreditExcluded: storeCredit / 100, matchBasis: verified.transactions&&!verified.paytmAmount?'external_paytm_reviewed':uniqueId ? ((note.match(/\d{6,}/g)||[]).includes(String(tx.transactionId))||((note.match(/\d{6,}/g)||[]).includes(String(tx.rrn||'')))?'transaction_id_in_shopify_note':'transaction_id_suffix_in_shopify_note') : 'owner_reviewed', reason: uniqueId&&!(verified.transactions&&!verified.paytmAmount) ? '' : String(reason).trim() };
+  const refundedAmount = Math.max(Number(order.refundAmount || 0), Number(order.moneyRefunded || 0));
+  return { transactionId: tx.transactionId, transactionSuffix: suffix, orderId: String(order.id), orderNumber: String(order.orderNumber || order.number || order.name || row && row.orderNumber || '').replace(/^#/, ''), amount: tx.amount, orderTotal: total / 100, partial: cents(tx.amount) < total, storeCreditExcluded: storeCredit / 100, subsequentlyRefunded: refundedAmount, refundStatus: String(order.financialStatus || '').toLowerCase(), matchBasis: verified.transactions&&!verified.paytmAmount?'external_paytm_reviewed':uniqueId ? ((note.match(/\d{6,}/g)||[]).includes(String(tx.transactionId))||((note.match(/\d{6,}/g)||[]).includes(String(tx.rrn||'')))?'transaction_id_in_shopify_note':'transaction_id_suffix_in_shopify_note') : 'owner_reviewed', reason: uniqueId&&!(verified.transactions&&!verified.paytmAmount) ? '' : String(reason).trim() };
 }
 
 function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
@@ -118,4 +122,4 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked };
 }
 
-module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting };
+module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting };
