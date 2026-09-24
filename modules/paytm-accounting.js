@@ -30,7 +30,6 @@ function getPayout(store, payoutId) {
 function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   if (!tx) throw new Error('Paytm transaction not found. Import its detailed report first.');
   if (tx.isCustomerPayment === false) throw new Error('This is a Paytm adjustment, not a customer payment, and must not be linked to Shopify.');
-  if (tx.posId === 'DEFAULT') throw new Error('This payment is not marked as a POS transaction. Review its channel separately.');
   const orderKey = String(orderId).replace(/^#/, '').trim();
   const matches = orders.filter(x => String(x.id) === orderKey || String(x.orderNumber || x.number || x.name || '').replace(/\D/g, '').replace(/^0+/, '') === orderKey);
   if (matches.length !== 1) throw new Error(matches.length ? 'Order number is ambiguous; use the Shopify order ID.' : 'Shopify order not found.');

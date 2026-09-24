@@ -1228,7 +1228,6 @@ function paytmReportView(s) {
   const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(isOriginalPaymentOrder);
   const orderMatches=transactions.map(tx=>{
     if(tx.isCustomerPayment===false)return {transactionId:tx.transactionId,orderMatch:'Paytm adjustment — not a Shopify sale',orderCandidates:[]};
-    if(tx.posId==='DEFAULT')return {transactionId:tx.transactionId,orderMatch:'non-POS channel — review',orderCandidates:[]};
     const suffix=transactionSuffix(tx.transactionId),byId=orders.filter(order=>suffix&&(String(order.note||'').match(/\d{6,}/g)||[]).some(token=>token.endsWith(suffix)));
     const candidates=byId.length?byId:orders.filter(order=>{
       const when=String(order.processedAt||order.createdAt||'').slice(0,10),delta=Math.abs((Date.parse(when+'T00:00:00Z')-Date.parse(tx.date+'T00:00:00Z'))/86400000);

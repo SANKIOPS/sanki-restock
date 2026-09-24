@@ -166,6 +166,14 @@ test('original Paytm receipt remains linkable after partial or full Shopify refu
   assert.throws(() => validateOrderLink({}, tx, '2776', [{ ...base, financialStatus: 'refunded', cancelledAt: '2026-09-05' }], [], ''), /non-cancelled/);
 });
 
+test('Paytm pos_id DEFAULT does not wrongly classify a QR/UPI customer receipt as non-POS', () => {
+  const tx = { transactionId: '20260902110870000301991517820518327', date: '2026-09-02', amount: 5100, transactionType: 'ACQUIRING', paymentMode: 'UPI', posId: 'DEFAULT' };
+  const order = { id: 'order-2760', number: 2760, createdAt: '2026-09-02T19:29:00Z', financialStatus: 'paid', total: 5100, note: 'Paytm 518327' };
+  const store = {};
+  assert.equal(autoMatchShopifyNotes(store, { [tx.transactionId]: tx }, [order], []).length, 1);
+  assert.equal(store.paytmOrderLinks[tx.transactionId].orderNumber, '2760');
+});
+
 test('Shopify sale/capture components never count authorization or store credit as Paytm', () => {
   const summary = summarizeShopifyPayments([
     { id: 1, kind: 'authorization', status: 'success', gateway: 'paytm', amount: '999.00' },
