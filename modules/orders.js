@@ -121,7 +121,7 @@ function refundComponents(o) {
       if (String(tx.kind || '').toLowerCase() !== 'refund' || String(tx.status || 'success').toLowerCase() !== 'success') return;
       const amount = num(tx.amount), gateway = String(tx.gateway || tx.payment_gateway || '');
       if (!(amount > 0)) return;
-      rows.push({ id:String(tx.id || ''), refundId:String(refund.id || ''), amount, gateway, processedAt:tx.processed_at || refund.processed_at || refund.created_at || '' });
+      rows.push({ id:String(tx.id || ''), parentId:String(tx.parent_id || ''), refundId:String(refund.id || ''), amount, gateway, processedAt:tx.processed_at || refund.processed_at || refund.created_at || '' });
     });
   });
   const isStoreCredit = row => /store.?credit|gift.?card/i.test(row.gateway);
@@ -130,6 +130,13 @@ function refundComponents(o) {
     storeCreditIssued: rows.filter(isStoreCredit).reduce((sum, row) => sum + row.amount, 0),
     moneyRefunded: rows.filter(row => !isStoreCredit(row)).reduce((sum, row) => sum + row.amount, 0)
   };
+}
+function normalizePaymentTransactions(rows) {
+  return (rows || []).map(tx => ({
+    id:String(tx.id || ''), parentId:String(tx.parent_id || tx.parentId || ''), kind:String(tx.kind || ''),
+    status:String(tx.status || ''), gateway:String(tx.gateway || tx.payment_gateway || ''),
+    amount:num(tx.amount), processedAt:tx.processed_at || tx.processedAt || tx.created_at || ''
+  }));
 }
 function addressObj(a) {
   a = a || {};
@@ -182,6 +189,7 @@ function normalizeOrder(o) {
     financialStatus: o.financial_status || '',
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
     paymentGateways: o.payment_gateway_names || [],
+    paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
     couponCodes: (o.discount_codes || []).map(d => d.code).filter(Boolean)
   };
 }
@@ -216,8 +224,19 @@ async function runSync(opts = {}) {
       url += `&updated_at_min=${encodeURIComponent(min)}`;
     }
     const raw = await shopifyFetchAll(url);
+    // Orders expose only gateway names. The transaction endpoint is the source
+    // of truth for split tenders and gateway-specific refunds, so cache those
+    // components with every imported/updated order.
+    await Promise.all(raw.map(async order => {
+      order._paymentTransactions = await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
+    }));
     let imported = 0;
     raw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o); imported++; });
+    const boundary=accountingStartAt(),missingPaymentDetails=Object.values(store.orders).filter(order=>String(order.createdAt||'')>=boundary&&!Array.isArray(order.paymentTransactions));
+    await Promise.all(missingPaymentDetails.map(async order => {
+      const transactions=await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
+      order.paymentTransactions=normalizePaymentTransactions(transactions);
+    }));
 
     // Recompute meta.
     const ids = Object.keys(store.orders);
@@ -228,6 +247,7 @@ async function runSync(opts = {}) {
       count: ids.length,
       oldestAt: oldest,
       lastImported: imported,
+      paymentDetailsBackfilled: missingPaymentDetails.length,
       mode: isBackfill ? 'backfill' : 'incremental'
     };
     saveStore(store);

@@ -996,6 +996,7 @@ function salesLedgerEntries(accountingStore) {
       const date=String(x.processedAt||x.createdAt||'').slice(0,10);
       const linkedPaytm=Object.values((accountingStore&&accountingStore.paytmOrderLinks)||{}).filter(link=>String(link.orderId)===String(x.id)).reduce((sum,link)=>sum+num(link.amount),0);
       const shopifyPayment=(accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]||{};
+      const verifiedTransactions=(Array.isArray(x.paymentTransactions)&&x.paymentTransactions.length?x.paymentTransactions:shopifyPayment.transactions)||[];
       const explicitPaytm=shopifyPayment.paytmAmount!=null?num(shopifyPayment.paytmAmount):(x.paytmAmount!=null?num(x.paytmAmount):(x.paytmPaidAmount!=null?num(x.paytmPaidAmount):null));
       // A POS order or its non-cash remainder is not evidence that Paytm collected it.
       const verifiedPaytm=roundMoney(Math.min(gross,Math.max(0,linkedPaytm,explicitPaytm==null?0:explicitPaytm)));
@@ -1003,11 +1004,23 @@ function salesLedgerEntries(accountingStore) {
       const bankLinked=!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId]||!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId+'/NONCASH'];
       const paytmBound=postedPaytmOrders.has(String(x.id))||(!bankLinked&&paytmSalesInScope(date)&&(paytm||verifiedPaytm>0||String(x.channel||'').toLowerCase()==='pos'));
       const websiteSale=/website|online/.test(String(x.channel||'').toLowerCase()),nonCashDefault=cod?VELOCITY_CLEARING_ACCOUNT:(paytmBound?PAYTM_CLEARING_ACCOUNT:(websiteSale?WEBSITE_SALES_ACCOUNT:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT)));
-      const gatewayParts=(x.paymentGateways||[]).map(value=>String(value||'').trim().toLowerCase()).filter(Boolean),pureCash=cash&&gatewayParts.length>0&&gatewayParts.every(value=>/^cash$/.test(value)),hasVerifiedShopifyPayments=Array.isArray(shopifyPayment.transactions)&&shopifyPayment.transactions.length>0;
+      const gatewayParts=(x.paymentGateways||[]).map(value=>String(value||'').trim().toLowerCase()).filter(Boolean),pureCash=cash&&gatewayParts.length>0&&gatewayParts.every(value=>/^cash$/.test(value)),hasVerifiedShopifyPayments=verifiedTransactions.length>0;
+      if(hasVerifiedShopifyPayments&&!override){
+        const successful=verifiedTransactions.filter(tx=>['sale','capture'].includes(String(tx.kind||'').toLowerCase())&&(!tx.status||String(tx.status).toLowerCase()==='success')&&num(tx.amount)>0),byId=new Map(successful.map(tx=>[String(tx.id||''),tx]));
+        const bucket=tx=>{const gateway=String(tx.gateway||tx.payment_gateway||'').toLowerCase();return /store.?credit|gift.?card/.test(gateway)?'store_credit':(/cash\s*on\s*delivery|\bcod\b/.test(gateway)?'cod':(/paytm|\bupi\b/.test(gateway)?'paytm':(/cash/.test(gateway)?'cash':'other')));};
+        const components=new Map();successful.forEach(tx=>{const key=bucket(tx),row=components.get(key)||{amount:0,gateway:String(tx.gateway||tx.payment_gateway||key),transactionIds:[]};row.amount=roundMoney(row.amount+num(tx.amount));row.transactionIds.push(String(tx.id||''));components.set(key,row);});
+        const embeddedRefunds=verifiedTransactions.filter(tx=>String(tx.kind||'').toLowerCase()==='refund'&&(!tx.status||String(tx.status).toLowerCase()==='success'));
+        const refundKeys=new Set(),allRefunds=[...embeddedRefunds,...(x.refundTransactions||[])].filter(tx=>{if(!(num(tx.amount)>0))return false;const key=String(tx.id||'')||[tx.parentId||tx.parent_id||'',tx.gateway||tx.payment_gateway||'',tx.amount,tx.processedAt||tx.processed_at||''].join('|');if(refundKeys.has(key))return false;refundKeys.add(key);return true;});
+        allRefunds.forEach(tx=>{const parent=byId.get(String(tx.parentId||tx.parent_id||'')),key=parent?bucket(parent):bucket(tx);if(key==='store_credit')return;const row=components.get(key);if(row)row.amount=roundMoney(Math.max(0,row.amount-num(tx.amount)));});
+        const common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify payment component · '+(x.name||x.id)+' · '+(x.channel||''),cashAmount:num(components.get('cash')&&components.get('cash').amount),nonCashAmount:roundMoney(Array.from(components.entries()).filter(([key])=>!['cash','store_credit'].includes(key)).reduce((sum,[,row])=>sum+num(row.amount),0)),refundAmount:x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)};
+        const routes={cash:DEFAULT_COUNTER_CASH,paytm:PAYTM_CLEARING_ACCOUNT,cod:VELOCITY_CLEARING_ACCOUNT,other:nonCashDefault};let sequence=0;
+        components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence));rows.push(Object.assign({id,account:routes[key]||nonCashDefault,amount:component.amount,originalAmount:component.amount,allocationPart:key,gateway:component.gateway,shopifyTransactionIds:component.transactionIds},common));});
+        return;
+      }
       // A pure Shopify Cash order is itself sufficient evidence for the whole
       // receipt. Mixed tenders use Shopify's verified transaction components;
       // never guess the cash portion from the order total.
-      const correctedCash=override?num(override.cashAmount):(hasVerifiedShopifyPayments?num(shopifyPayment.cashAmount):(explicitCash!=null?explicitCash:(pureCash?gross:null)));
+      const correctedCash=override?num(override.cashAmount):(explicitCash!=null?explicitCash:(pureCash?Math.max(0,roundMoney(gross-(x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)))):null));
       if(correctedCash!=null){
         const cashAmount=Math.max(0,Math.min(gross,correctedCash)),remaining=roundMoney(gross-cashAmount),nonCashAmount=paytmBound?Math.min(remaining,verifiedPaytm):remaining,nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(override&&override.nonCashAccount||x.nonCashAccount||nonCashDefault),common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify split sale · '+(x.name||x.id)+' · '+(x.channel||''),saleAllocation:override||null,cashAmount,nonCashAmount,unallocatedAmount:roundMoney(remaining-nonCashAmount)};
         if(cashAmount>0)rows.push(Object.assign({id:baseId,account:DEFAULT_COUNTER_CASH,amount:cashAmount,originalAmount:cashAmount,allocationPart:'cash'},common));
