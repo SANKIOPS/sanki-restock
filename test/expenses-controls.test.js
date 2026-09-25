@@ -1020,7 +1020,7 @@ test('personally paid non-cash expense requires the account used and cash is nam
 test('payment accounts are scoped by claimant and accounting entity', () => {
   const claimantConfig = invoke('GET', '/api/expenses/config').body;
   assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
-  assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash']);
+  assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','Kirti Nagar Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
@@ -1496,6 +1496,10 @@ test('a missing internal transfer can be created from an official bank row witho
 });
 
 test('bank review offers a bank-confirmed internal transfer action',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);});
+
+test('Velocity is a clearing ledger and White Wizard credits offer the COD settlement transfer',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.ok(config.ledgerAccountsByNature.SANKI.includes('Velocity'));assert.equal(config.bankAccountsByNature.SANKI.includes('Velocity'),false);assert.match(html,/White Wizard Technologies receipt/);assert.match(html,/Record Velocity COD settlement/);assert.match(html,/brOtherAccount'\)\.value='Velocity'/);});
+
+test('Velocity COD settlement creates one linked transfer into Axis 3448',()=>{const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Velocity',toAccount:'Axis Bank 3448',amount:12345,date:'2098-04-01',proof:'/api/expenses/photo/velocity.jpg',note:'White Wizard Technologies COD settlement'}});assert.equal(made.status,200,JSON.stringify(made.body));const velocity=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Velocity',from:'2098-04-01',to:'2098-04-01'}}).body.entries.find(x=>x.id===made.body.transfer.id),axis=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2098-04-01',to:'2098-04-01'}}).body.entries.find(x=>x.id===made.body.transfer.id);assert.equal(velocity.debit,12345);assert.equal(axis.credit,12345);assert.equal(velocity.id,axis.id);});
 
 test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple (?:existing )?entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
 
@@ -2208,6 +2212,7 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
     paytmStoreCreditRefund:{id:'paytmStoreCreditRefund',name:'#2719',orderNumber:2719,createdAt:'2026-08-24T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:5000,refundAmount:2000,storeCreditIssued:2000,note:'Paytm transaction 654322'},
     direct:{id:'direct',name:'#2800',orderNumber:2800,createdAt:'2026-09-10T10:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Paytm'],total:12500,refundAmount:0},
     unlabeled:{id:'unlabeled',name:'#2801',orderNumber:2801,createdAt:'2026-09-10T11:00:00Z',channel:'Website',financialStatus:'paid',paymentGateways:['manual'],total:7000,refundAmount:0},
+    codWebsite:{id:'codWebsite',name:'#2801-COD',orderNumber:28011,createdAt:'2026-09-10T11:30:00Z',channel:'Website',financialStatus:'paid',paymentGateways:['Cash on Delivery (COD)'],total:11000,refundAmount:0},
     manualPos:{id:'manualPos',name:'#2802',orderNumber:2802,createdAt:'2026-09-10T12:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['manual'],total:8000,refundAmount:0},
     cashPos:{id:'cashPos',name:'#2803',orderNumber:2803,createdAt:'2026-09-10T12:30:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Cash'],total:6000,refundAmount:0},
     creditPos:{id:'creditPos',name:'#2804',orderNumber:2804,createdAt:'2026-09-10T13:00:00Z',channel:'POS',financialStatus:'paid',paymentGateways:['Shopify Store Credit'],total:5000,refundAmount:0},
@@ -2224,9 +2229,11 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   const axis=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448'},role:'owner'}).body.entries;
   const clearing=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Paytm Settlement Clearing'},role:'owner'}).body.entries;
   const cashLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash'},role:'owner'}).body.entries;
+  const websiteLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Tiana Traders IndusInd 0437'},role:'owner'}).body.entries;
+  const velocityLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Velocity'},role:'owner'}).body.entries;
   assert.equal(axis.some(x=>x.id==='SHOPIFY/paytm'),false);
   assert.equal(axis.some(x=>x.id==='SHOPIFY/direct'||x.id==='SHOPIFY/manualPos'),false);
-  assert.equal(axis.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000);
+  assert.equal(axis.some(x=>x.id==='SHOPIFY/unlabeled'),false);
   assert.equal(axis.find(x=>x.id==='SHOPIFY/afterToday').credit,10000);
   const receipt=clearing.find(x=>x.id==='PAYTM-RECEIPTS/2026-08-23');assert.equal(receipt.credit,0);assert.deepEqual(receipt.connectedSales.map(x=>x.id),['SHOPIFY/paytm']);
   const paytmSale=clearing.find(x=>x.id==='PAYTM-SALE/SHOPIFY/paytm');assert.equal(paytmSale.credit,50000);assert.equal(paytmSale.noteSuffixes[0],'123456');
@@ -2241,6 +2248,9 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   assert.equal(cashLedger.find(x=>x.id==='SHOPIFY/cashWithNote').credit,9200,'a cash order remains cash even when its note contains digits');
   assert.equal(cashLedger.find(x=>x.id==='SHOPIFY/splitCashPaytm').credit,4000,'the verified cash component of a split sale credits Counter Cash');
   assert.equal(clearing.find(x=>x.id==='PAYTM-SALE/SHOPIFY/splitCashPaytm/NONCASH').credit,6000,'the verified Paytm component remains in clearing');
+  assert.equal(websiteLedger.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000,'website receipts route to Tiana Traders IndusInd 0437');
+  assert.equal(velocityLedger.find(x=>x.id==='SHOPIFY/codWebsite').credit,11000,'COD sales accrue in Velocity instead of Counter Cash or a bank account');
+  assert.equal(cashLedger.some(x=>x.id==='SHOPIFY/codWebsite'),false,'Cash on Delivery is not counter cash');
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   assert.equal(config.ledgerAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),true);
   assert.equal(config.bankAccountsByNature.SANKI.includes('Paytm Settlement Clearing'),false,'virtual Paytm clearing is not a bank-statement account');

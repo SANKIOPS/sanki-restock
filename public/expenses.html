@@ -1498,10 +1498,14 @@
       if(row&&row.status==='missing_in_app'&&bank&&(Number(bank.debit)>0||Number(bank.credit)>0)){
         el('bankReviewActions').insertAdjacentHTML('beforeend',' <button class="btn mini primary" onclick="closeBankReview();openBankAssignment(\''+esc(row.id)+'\',\'internal_transfer\')">Record transfer</button>');
       }
+      if(row&&row.status==='missing_in_app'&&Number(bank&&bank.credit)>0&&/white\s*wizard\s*technologies/i.test(String(bank.description||''))){
+        el('bankReviewActions').insertAdjacentHTML('afterbegin','<button class="btn mini green" onclick="recordVelocitySettlement(\''+esc(row.id)+'\')">Record Velocity COD settlement</button> ');
+      }
       if(row&&row.status==='amount_mismatch'&&app&&bankDebit>0&&appDebit>0&&smallCharge>0&&smallCharge<=5){
         el('bankReviewActions').insertAdjacentHTML('afterbegin','<button class="btn mini green" onclick="matchSmallBankDifference(\''+esc(row.id)+'\')">Match + record '+fmt(smallCharge)+' bank charge</button> ');
       }
     };
+    window.recordVelocitySettlement=function(rowId){closeBankReview();openBankAssignment(rowId,'internal_transfer');el('brOtherAccount').value='Velocity';el('brRemark').value='White Wizard Technologies receipt — Velocity COD settlement into Axis 3448';saveBankReconForm();};
     window.matchSmallBankDifference=function(rowId){var row=bankReconRow(rowId),bank=row&&row.bank||{},app=row&&row.app||{},principal=Number(app.debit||0),charge=Number((Number(bank.debit||0)-principal).toFixed(2));if(!row||row.status!=='amount_mismatch'||!app.id||!(principal>0)||!(charge>0)||charge>5){setMsg('This quick match is only available when an outgoing bank transaction exceeds its suggested ledger entry by no more than ₹5.',false);return;}if(!confirm('Match '+app.id+' and record '+fmt(charge)+' as BANK CHARGES?'))return;api('/api/expenses/bank-statements/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({draftId:bankDraftId,rowId:rowId,action:'split_allocation',appId:app.id,principalAmount:principal,chargeAmount:charge,chargeCategory:'BANK CHARGES',reason:'Bank debit exceeds linked ledger entry by '+fmt(charge)+'; difference recorded as bank charge',remark:'Matched reimbursement with '+fmt(charge)+' bank charge'})}).then(function(d){if(!d.success){setMsg(d.error||'Could not match this transaction.',false);return;}closeBankReview();renderBankReconciliation(d);setMsg('Matched '+app.id+' and recorded '+fmt(charge)+' as BANK CHARGES.',true);});};
     function bankReconRow(rowId){return(bankReconView&&bankReconView.rows||[]).find(function(x){return x.id===rowId;});}
     function bankReconAmount(row){var b=row&&row.bank||{},a=row&&row.app||{};return Number(b.debit||b.credit||a.debit||a.credit||0);}

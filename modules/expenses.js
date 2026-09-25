@@ -55,6 +55,8 @@ const paytmUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:15*102
 const DEFAULT_SALES_BANK = 'Axis Bank 3448';
 const DEFAULT_COUNTER_CASH = 'Counter Cash';
 const PAYTM_CLEARING_ACCOUNT = 'Paytm Settlement Clearing';
+const VELOCITY_CLEARING_ACCOUNT = 'Velocity';
+const WEBSITE_SALES_ACCOUNT = 'Tiana Traders IndusInd 0437';
 const SHOPIFY_DIRECT_TO_AXIS_FROM = '2026-09-10';
 const SALES_LEDGER_FROM = '2026-08-21';
 const COUNTER_CASH_RESET_DATE = '2026-08-22';
@@ -165,7 +167,7 @@ const PAID_BY = ['company', 'claimant'];
 const PAYMENT_TYPES = ['UPI', 'Cash', 'Credit'];
 const PERSONAL_CATEGORIES = ['Food & Dining','Household Staff','Children & Education','Medical & Healthcare','Travel & Transport','Home & Utilities','Shopping','Subscriptions','Personal Care','Gifts & Charity','Entertainment','Financial Charges','Miscellaneous Personal'];
 const ENTITY_ACCOUNTS = {
-  SANKI: ['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash'],
+  SANKI: ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash'],
   SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
   PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']
 };
@@ -280,6 +282,15 @@ function applyEx00122CashPaymentCorrection(s) {
   }
   s.oneTimeMigrations[key]={appliedAt:new Date().toISOString(),expenseId:'EX-00122',paymentId:'PAY-001',account:'Counter Cash',from:34,to:60,expenseAmount:58,cashRoundingAmount:2,result};
   return true;
+}
+function applyAxis3448SeptemberCorrections(s){
+  const key='axis-3448-september-2-transfer-22700-and-order-2794-route-v1';s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
+  const now=new Date().toISOString(),transferCandidates=(s.transfers||[]).filter(x=>String(x.date||'').slice(0,10)==='2026-09-02'&&Math.abs(num(x.amount)-24700)<.01&&(x.fromAccount===DEFAULT_SALES_BANK||x.toAccount===DEFAULT_SALES_BANK)),correctedTransfers=[];
+  if(transferCandidates.length===1){const transfer=transferCandidates[0],before=Object.assign({},transfer);transfer.amount=22700;transfer.note=(String(transfer.note||'').trim()+(transfer.note?' · ':'')+'Owner-corrected actual transfer amount ₹22,700').trim();correctedTransfers.push(transfer.id);audit(s,null,'TRANSFER_AMOUNT_CORRECTED','transfer',transfer.id,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:transfer.nature||'SANKI',account:DEFAULT_SALES_BANK,before,after:Object.assign({},transfer),note:'Corrected the 2 September Axis 3448 transfer from ₹24,700 to the actual ₹22,700.'});}
+  let orderId='';try{const orders=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{},order=Object.values(orders).find(x=>String(x.orderNumber||x.number||x.name||'').replace(/\D/g,'').replace(/^0+/,'')==='2794');if(order)orderId=String(order.id);}catch{}
+  const removedOverrides=[];if(orderId){['SHOPIFY/'+orderId,'SHOPIFY/'+orderId+'/NONCASH'].forEach(id=>{if(s.bankDateOverrides&&s.bankDateOverrides[id]){removedOverrides.push({id,override:s.bankDateOverrides[id]});delete s.bankDateOverrides[id];}});Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===DEFAULT_SALES_BANK).forEach(d=>{Object.entries(d.resolutions||{}).forEach(([rowId,resolution])=>{if(resolution.appId==='SHOPIFY/'+orderId||resolution.appId==='SHOPIFY/'+orderId+'/NONCASH')delete d.resolutions[rowId];});});}
+  if(removedOverrides.length)audit(s,null,'SALE_RECEIPT_ROUTE_CORRECTED','shopify_order','2794',{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:WEBSITE_SALES_ACCOUNT,before:{axisOverrides:removedOverrides},after:{route:'Website Sale → Tiana Traders → '+WEBSITE_SALES_ACCOUNT},note:'Order #2794 for ₹2,923.19 is not a direct Axis 3448 receipt.'});
+  s.oneTimeMigrations[key]={appliedAt:now,transferCandidates:transferCandidates.map(x=>x.id),correctedTransfers,transferAmount:{from:24700,to:22700,date:'2026-09-02'},orderNumber:'2794',orderId,removedOverrides,websiteSalesAccount:WEBSITE_SALES_ACCOUNT};return true;
 }
 function applyMissingPerfumeSale(s) {
   const key='record-2026-08-26-perfume-sale-counter-cash-1000-paytm-799';
@@ -837,6 +848,7 @@ function loadStore() {
       s.oneTimeMigrations[fnpConsolidatedPaymentKey]={appliedAt:new Date().toISOString(),account,reference:bankReference,appIds,updated,preservedOtherResolutions:true};saveStore(s);
     }
     if(applyOwnerConfirmedAxis3645Cases(s))saveStore(s);
+    if(applyAxis3448SeptemberCorrections(s))saveStore(s);
     if(applyStrictReconciliationIdentityPolicy(s))saveStore(s);
     if(applyBalancedDateAmountReconciliationPolicy(s))saveStore(s);
     if(repairPrashantSalaryAdvanceReconciliationDraft(s))saveStore(s);
@@ -976,7 +988,7 @@ function salesLedgerEntries(accountingStore) {
   try {
     const shop = JSON.parse(fs.readFileSync(ORDERS_PATH, 'utf8'));
     Object.values(shop.orders || {}).filter(isOriginalPaymentOrder).forEach(x => {
-      const gateways=(x.paymentGateways||[]).join(' ').toLowerCase(),cash=gateways.includes('cash'),storeCredit=/store\s*credit|gift\s*card/.test(gateways)||num((accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]?.storeCreditAmount)>0,paytm=/paytm/.test(gateways),orderNo=String(x.orderNumber||x.name||x.id||'').replace(/\D/g,'').replace(/^0+/,''),gross=num(x.total),baseId='SHOPIFY/'+x.id,override=allocationOverrides[baseId],explicitCash=x.cashAmount!=null?num(x.cashAmount):(x.cashPaidAmount!=null?num(x.cashPaidAmount):null);
+      const gateways=(x.paymentGateways||[]).join(' ').toLowerCase(),cod=/cash\s*on\s*delivery|\bcod\b/.test(gateways),cash=!cod&&gateways.includes('cash'),storeCredit=/store\s*credit|gift\s*card/.test(gateways)||num((accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]?.storeCreditAmount)>0,paytm=/paytm/.test(gateways),orderNo=String(x.orderNumber||x.name||x.id||'').replace(/\D/g,'').replace(/^0+/,''),gross=num(x.total),baseId='SHOPIFY/'+x.id,override=allocationOverrides[baseId],explicitCash=x.cashAmount!=null?num(x.cashAmount):(x.cashPaidAmount!=null?num(x.cashPaidAmount):null);
       // These are accounting exclusions only. This module only reads the cached
       // Shopify order and never changes the customer's Shopify store-credit balance.
       if(orderNo==='2720')return; // owner-confirmed test order: not genuine revenue
@@ -990,7 +1002,7 @@ function salesLedgerEntries(accountingStore) {
       if(storeCredit&&!paytm&&!cash&&!verifiedPaytm)return; // store credit alone is not a new receipt
       const bankLinked=!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId]||!!((accountingStore&&accountingStore.bankDateOverrides)||{})[baseId+'/NONCASH'];
       const paytmBound=postedPaytmOrders.has(String(x.id))||(!bankLinked&&paytmSalesInScope(date)&&(paytm||verifiedPaytm>0||String(x.channel||'').toLowerCase()==='pos'));
-      const nonCashDefault=paytmBound?PAYTM_CLEARING_ACCOUNT:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT);
+      const websiteSale=/website|online/.test(String(x.channel||'').toLowerCase()),nonCashDefault=cod?VELOCITY_CLEARING_ACCOUNT:(paytmBound?PAYTM_CLEARING_ACCOUNT:(websiteSale?WEBSITE_SALES_ACCOUNT:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT)));
       const gatewayParts=(x.paymentGateways||[]).map(value=>String(value||'').trim().toLowerCase()).filter(Boolean),pureCash=cash&&gatewayParts.length>0&&gatewayParts.every(value=>/^cash$/.test(value)),hasVerifiedShopifyPayments=Array.isArray(shopifyPayment.transactions)&&shopifyPayment.transactions.length>0;
       // A pure Shopify Cash order is itself sufficient evidence for the whole
       // receipt. Mixed tenders use Shopify's verified transaction components;
@@ -1145,7 +1157,7 @@ function companyAccountsForNature(nature) {
 }
 function transferAccountsForNature(nature) {
   const n=normalizedNature(nature),accounts=companyAccountsForNature(n);
-  if(n==='SANKI')accounts.push(PAYTM_CLEARING_ACCOUNT);
+  if(n==='SANKI')accounts.push(PAYTM_CLEARING_ACCOUNT,VELOCITY_CLEARING_ACCOUNT);
   if(n==='SANKI'||n==='SAMAST') ['arshpreet','shivam','pradeep'].forEach(username=>accounts.push(...(CLAIMANT_ACCOUNTS[username]||[])));
   return Array.from(new Set(accounts));
 }
@@ -1177,7 +1189,7 @@ function allowedPayingAccount(req, nature, account) {
 }
 function ledgerAccountsForNature(s, nature) {
   const n = normalizedNature(nature), names = new Set(companyAccountsForNature(n));
-  if(n==='SANKI')names.add(PAYTM_CLEARING_ACCOUNT);
+  if(n==='SANKI'){names.add(PAYTM_CLEARING_ACCOUNT);names.add(VELOCITY_CLEARING_ACCOUNT);}
   // Keep claimant sub-ledgers visible for both operating entities even when
   // they currently have no movement or a prior entry has been removed.
   if (n === 'SANKI' || n === 'SAMAST') {
@@ -1259,7 +1271,7 @@ function reconciliationAccountsForNature(s,nature){
   return Array.from(new Set(ledgerAccountsForNature(s,n).concat(cards))).filter(Boolean).sort((a,b)=>a.localeCompare(b));
 }
 function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||''),card=creditCardByAccount(name);if(!isAdmin(req)||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!isOwner(req))return false;if(card&&card.ownerOnly&&!isOwner(req))return false;return reconciliationAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase());}
-function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&String(name||'')!==PAYTM_CLEARING_ACCOUNT;}
+function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&![PAYTM_CLEARING_ACCOUNT,VELOCITY_CLEARING_ACCOUNT].includes(String(name||''));}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
 function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting') || r.includes('samast_accounting') || r.includes('owner'); }
