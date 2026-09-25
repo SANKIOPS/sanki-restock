@@ -7,7 +7,9 @@ const dayGap = (a, b) => Math.abs((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${
 function transactionSuffix(id) { const digits = String(id || '').replace(/\D/g, ''); return digits.length >= 6 ? digits.slice(-6) : ''; }
 function noteHasTransactionSuffix(note, suffix) { return !!suffix && (String(note || '').match(/\d{6,}/g) || []).some(token => token.endsWith(suffix)); }
 function isOriginalPaymentOrder(order) {
-  return !!order && !order.cancelledAt && ['paid', 'partially_paid', 'partially_refunded', 'refunded'].includes(String(order.financialStatus || '').toLowerCase());
+  if(!order||order.cancelledAt)return false;
+  if(['paid','partially_paid','partially_refunded','refunded'].includes(String(order.financialStatus||'').toLowerCase()))return true;
+  return (order.paymentTransactions||[]).some(tx=>['sale','capture'].includes(String(tx.kind||'').toLowerCase())&&String(tx.status||'').toLowerCase()==='success'&&Number(tx.amount||0)>0);
 }
 
 function summarizeShopifyPayments(transactions) {

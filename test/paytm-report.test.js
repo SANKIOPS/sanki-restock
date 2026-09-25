@@ -3,7 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { parsePaytmReport, summarizePayouts } = require('../modules/paytm-report');
 const { registerPaytmReports } = require('../modules/paytm-reports-routes');
-const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting } = require('../modules/paytm-accounting');
+const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting, isOriginalPaymentOrder } = require('../modules/paytm-accounting');
+
+test('successful payment evidence includes a partially paid order even when its cached status is stale',()=>{
+  const order={id:'2801',financialStatus:'pending',paymentTransactions:[{id:'cash-1100',kind:'sale',status:'success',gateway:'Cash',amount:1100}]};
+  assert.equal(isOriginalPaymentOrder(order),true);
+  assert.equal(isOriginalPaymentOrder({...order,cancelledAt:'2026-09-15'}),false);
+});
 
 test('automatically matches a unique six-digit Shopify note suffix but never a collision or wrong amount', () => {
   const orders=[
