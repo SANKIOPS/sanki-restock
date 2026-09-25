@@ -135,7 +135,10 @@ function normalizePaymentTransactions(rows) {
   return (rows || []).map(tx => ({
     id:String(tx.id || ''), parentId:String(tx.parent_id || tx.parentId || ''), kind:String(tx.kind || ''),
     status:String(tx.status || ''), gateway:String(tx.gateway || tx.payment_gateway || ''),
-    amount:num(tx.amount), processedAt:tx.processed_at || tx.processedAt || tx.created_at || ''
+    amount:num(tx.amount), processedAt:tx.processed_at || tx.processedAt || tx.created_at || '',
+    manualPaymentGateway:tx.manual_payment_gateway===true||tx.manualPaymentGateway===true,
+    message:String(tx.message || ''), authorization:String(tx.authorization || ''),
+    userId:String(tx.user_id || tx.userId || ''), sourceName:String(tx.source_name || tx.sourceName || '')
   }));
 }
 function addressObj(a) {
@@ -190,6 +193,7 @@ function normalizeOrder(o) {
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
     paymentGateways: o.payment_gateway_names || [],
     paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
+    paymentTransactionSchemaVersion: 2,
     couponCodes: (o.discount_codes || []).map(d => d.code).filter(Boolean)
   };
 }
@@ -232,10 +236,11 @@ async function runSync(opts = {}) {
     }));
     let imported = 0;
     raw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o); imported++; });
-    const boundary=accountingStartAt(),missingPaymentDetails=Object.values(store.orders).filter(order=>String(order.createdAt||'')>=boundary&&!Array.isArray(order.paymentTransactions));
+    const boundary=accountingStartAt(),missingPaymentDetails=Object.values(store.orders).filter(order=>String(order.createdAt||'')>=boundary&&order.paymentTransactionSchemaVersion!==2);
     await Promise.all(missingPaymentDetails.map(async order => {
       const transactions=await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
       order.paymentTransactions=normalizePaymentTransactions(transactions);
+      order.paymentTransactionSchemaVersion=2;
     }));
 
     // Recompute meta.

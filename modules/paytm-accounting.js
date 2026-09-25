@@ -7,7 +7,7 @@ const dayGap = (a, b) => Math.abs((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${
 function transactionSuffix(id) { const digits = String(id || '').replace(/\D/g, ''); return digits.length >= 6 ? digits.slice(-6) : ''; }
 function noteHasTransactionSuffix(note, suffix) { return !!suffix && (String(note || '').match(/\d{6,}/g) || []).some(token => token.endsWith(suffix)); }
 function isOriginalPaymentOrder(order) {
-  return !!order && !order.cancelledAt && ['paid', 'partially_refunded', 'refunded'].includes(String(order.financialStatus || '').toLowerCase());
+  return !!order && !order.cancelledAt && ['paid', 'partially_paid', 'partially_refunded', 'refunded'].includes(String(order.financialStatus || '').toLowerCase());
 }
 
 function summarizeShopifyPayments(transactions) {
@@ -34,7 +34,7 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   const matches = orders.filter(x => String(x.id) === orderKey || String(x.orderNumber || x.number || x.name || '').replace(/\D/g, '').replace(/^0+/, '') === orderKey);
   if (matches.length !== 1) throw new Error(matches.length ? 'Order number is ambiguous; use the Shopify order ID.' : 'Shopify order not found.');
   const order = matches[0];
-  if (!isOriginalPaymentOrder(order)) throw new Error('Choose a non-cancelled Shopify order with an original successful payment. Paid, partially refunded and refunded orders are supported.');
+  if (!isOriginalPaymentOrder(order)) throw new Error('Choose a non-cancelled Shopify order with an original successful payment. Paid, partially paid, partially refunded and refunded orders are supported.');
   const links = store.paytmOrderLinks || {};
   const row = saleRows.find(x => String(x.orderId) === String(order.id) && x.account !== 'Counter Cash');
   const orderDate = String(order.processedAt || order.createdAt || row && row.date || '').slice(0, 10);
