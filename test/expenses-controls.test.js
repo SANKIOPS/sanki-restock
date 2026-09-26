@@ -2546,6 +2546,15 @@ test('consecutive statement uploads merge into one workspace without duplicate o
   const merged=mergeActiveBankReconciliationDrafts(store,account,'SANKI');assert.equal(merged.id,'BRD-EARLY');assert.equal(Object.keys(store.bankReconciliationDrafts).length,1);assert.equal(merged.summary.from,'2026-08-22');assert.equal(merged.summary.to,'2026-09-06');assert.equal(merged.transactions.length,3,'overlapping bank row is stored once');assert.equal(merged.resolutions['bank-0'].reason,'Personal');assert.equal(merged.resolutions['bank-1'].appId,'EX-3');assert.equal(merged.resolutions['bank-2'].reason,'Recorded next day');assert.equal(merged.sourceStatements.length,2);assert.equal(store.bankReconciliationApprovals.OLD,undefined);
 });
 
+test('merged statement closing is recomputed from the deduplicated validated rows',()=>{
+  const account='IndusInd Bank 8181',row={date:'2026-09-24',description:'Period movement',reference:'A',debit:52462.72,credit:53369,balance:906.29},store={bankReconciliationDrafts:{
+    first:{id:'first',account,nature:'SANKI',createdAt:'2026-09-24T10:00:00Z',transactions:[row],resolutions:{},summary:{from:'2026-09-01',to:'2026-09-24',openingBalance:.01,closingBalance:906.29,totalDebits:52462.72,totalCredits:53369,validated:true}},
+    second:{id:'second',account,nature:'SANKI',createdAt:'2026-09-24T11:00:00Z',transactions:[row],resolutions:{},summary:{from:'2026-09-01',to:'2026-09-24',openingBalance:.01,closingBalance:3973.29,totalDebits:52462.72,totalCredits:53369,validated:true}}
+  }};
+  const merged=mergeActiveBankReconciliationDrafts(store,account,'SANKI');
+  assert.equal(merged.summary.closingBalance,906.29);assert.equal(merged.summary.reportedClosingBalance,3973.29);assert.equal(merged.summary.validated,true);
+});
+
 test('an older pending workspace absorbs an already-finalized later period as locked coverage',()=>{
   const account='Prashant Axis 3645',draft={id:'BRD-OLD',nature:'SANKI',account,transactions:[{date:'2026-09-03',description:'Overlap',reference:'REF-3',debit:100,credit:0,balance:900}],resolutions:{'bank-0':{action:'accept_match',appId:'EX-3'}},summary:{from:'2026-08-22',to:'2026-09-03',openingBalance:1000,closingBalance:900,totalDebits:100,totalCredits:0,validated:true}},later={id:'BTX-LATER',date:'2026-09-04',description:'Later finalized row',reference:'REF-4',debit:25,credit:0,balance:875,firstSeenImport:'BST-LATER'},store={bankReconciliationDrafts:{'BRD-OLD':draft},bankStatements:{[account]:{reconciledThrough:'2026-09-06',transactions:{later},imports:[{id:'BST-LATER',from:'2026-09-04',to:'2026-09-06',closingBalance:875,finalizedAt:'2026-09-06T10:00:00Z'}]}}};
   assert.equal(extendPendingDraftThroughFinalizedCoverage(store,draft),true);assert.equal(draft.summary.from,'2026-08-22');assert.equal(draft.summary.to,'2026-09-06');assert.equal(draft.summary.closingBalance,875);assert.equal(draft.transactions.length,2);assert.equal(draft.resolutions['bank-0'].appId,'EX-3');assert.deepEqual(draft.reconstructedFromFinalized.importIds,['BST-LATER']);
