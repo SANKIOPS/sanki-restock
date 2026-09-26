@@ -1,4 +1,5 @@
 const sankiCategories = require('./sanki-categories');
+const categoryFinalization = require('./sanki-category-finalization');
 const { purchaseBillingAmount } = require('./purchase-payment-status');
 const { finalizedByPo } = require('./lg-invoices');
 // ═══════════════════════════════════════════════════════════════
@@ -857,6 +858,7 @@ function loadStore() {
     // statement drafts, finalized periods, or their decisions.
     if(bankChargeRepairAdded)saveStore(s);if(applyOwnerRequestedKaluPaymentRemovals(s))saveStore(s);
     if(sankiCategories.applyWithBackup(s,EXP_PATH))saveStore(s);
+    if(categoryFinalization.applyWithBackup(s,EXP_PATH))saveStore(s);
     return s;
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
@@ -1468,6 +1470,13 @@ router.get('/api/expenses/photo/:file', (req, res) => {
 });
 
 // ── Config for the entry form ────────────────────────────────────
+router.get('/api/expenses/category-review-finalization', (req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Owner only.'});
+  const s=loadStore(),report=s.oneTimeMigrations?.[categoryFinalization.KEY];
+  if(!report)return res.status(409).json({success:false,error:'Finalization has not applied; reviewed records require validation.'});
+  if(req.query.download==='backup')return res.download(report.backupFile,'SANKI_Before_Final_Category_Review_2026-09-26.json');
+  res.json({success:true,report,categories:s.sankiCategoryCatalog.categories.length,groups:new Set(s.sankiCategoryCatalog.categories.map(x=>x.group)).size,expenses:categoryFinalization.rows.map(([id])=>({id,nature:s.expenses[id].nature,ledger:s.expenses[id].ledger,group:s.expenses[id].categoryGroup||null,amount:s.expenses[id].amount,status:s.expenses[id].status}))});
+});
 router.get('/api/expenses/config', (req, res) => {
   const s = loadStore();
   const allowed = submissionNatures(req);
