@@ -14,6 +14,16 @@
 (function () {
   if (document.getElementById('sanki-shared-sidebar')) return;
 
+  // Every standalone reporting page receives the same inclusive Till Date
+  // control, including reports whose filters are rendered after navigation.
+  if(!document.querySelector('script[data-sanki-till-date]')){
+    var tillDateScript=document.createElement('script');
+    tillDateScript.src='/till-date-filter.js';
+    tillDateScript.defer=true;
+    tillDateScript.dataset.sankiTillDate='1';
+    document.head.appendChild(tillDateScript);
+  }
+
   // The menu is now driven by the module registry (GET /api/modules) so it
   // always matches the launcher dashboard — no more hard-coded, drifting
   // list. The only fixed item is the Dashboard home link. As modules are
