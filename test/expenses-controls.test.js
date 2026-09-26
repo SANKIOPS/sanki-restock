@@ -2610,7 +2610,7 @@ test('full-volume recovery compresses only oversized historical JPEG proofs in p
 
 test('all date-range reports receive one inclusive Till Date filter',()=>{
   const helper=fs.readFileSync(path.join(__dirname,'..','public','till-date-filter.js'),'utf8'),sidebar=fs.readFileSync(path.join(__dirname,'..','public','sidebar.js'),'utf8'),dashboard=fs.readFileSync(path.join(__dirname,'..','public','index.html'),'utf8');
-  assert.match(helper,/button\.textContent='Till Date'/);assert.match(helper,/from\.value=''/);assert.match(helper,/to\.dispatchEvent\(new Event\('change'/);assert.match(helper,/MutationObserver/);assert.match(sidebar,/till-date-filter\.js/);assert.match(dashboard,/src="\/till-date-filter\.js"/);
+  assert.match(helper,/till\.textContent='Till date'/);assert.match(helper,/range\.textContent='Date range'/);assert.match(helper,/from\.disabled=isTill/);assert.match(helper,/from\.value=''/);assert.match(helper,/to\.dispatchEvent\(new Event\('change'/);assert.match(helper,/MutationObserver/);assert.match(sidebar,/till-date-filter\.js/);assert.match(dashboard,/src="\/till-date-filter\.js"/);
 });
 
 test('Owner restores an omitted finalized incoming transfer once and recalculates balance',()=>{
