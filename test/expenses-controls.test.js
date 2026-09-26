@@ -2427,6 +2427,16 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
   assert.equal(paid.body.expense.payments.at(-1).reconciliationOverrideReason, 'Urgent approved vendor payment');
 });
 
+test('finalized Paytm report shows outgoing settlement before the Axis bank link',()=>{
+  const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
+  stored.paytmVerifiedSettlements=[{id:'PTMV-PENDING',settlementId:'SET-PENDING',payoutId:'PAYOUT-PENDING',utr:'UTR-PENDING',settledDate:'2026-09-25',net:983.2,commission:10,platformFee:5,gst:1.8,nonCustomerAmount:0,finalizedAt:'2026-09-25T12:00:00Z'}];stored.paytmPayoutPostings=[];fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
+  let entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-25',to:'2026-09-25'}}).body.entries;
+  const settlement=entries.find(x=>x.id==='PTMV-PENDING'),charges=entries.find(x=>x.id==='PTMV-PENDING/CHARGES');assert.equal(settlement.debit,983.2);assert.equal(settlement.reference,'UTR-PENDING');assert.equal(settlement.pendingBankLink,true);assert.equal(charges.debit,16.8);
+  stored.paytmPayoutPostings=[{id:'PTMR-POST-PENDING',settlementId:'SET-PENDING',payoutId:'PAYOUT-PENDING',date:'2026-09-25',utr:'UTR-PENDING',net:983.2,commission:10,platformFee:5,gst:1.8,nonCustomerAmount:0,orderNumbers:[]}];fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
+  entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-25',to:'2026-09-25'}}).body.entries;assert.equal(entries.some(x=>x.id==='PTMV-PENDING'),false,'verified preview is replaced, not duplicated, after bank posting');assert.equal(entries.find(x=>x.id==='PTMR-POST-PENDING').debit,983.2);
+  fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
+});
+
 test('screenshot reconciliation rejects OCR-created years and account-sized amounts row by row',()=>{
   const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
   assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:1500,credit:0,balance:75010.5}),true);

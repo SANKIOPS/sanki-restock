@@ -2894,6 +2894,19 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     if(charge>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm charges',reference,credit:0,debit:charge,settlement});
     if(unknown>0)entries.push({id:x.id+'/UNKNOWN-CHARGES',date:x.date,kind:'paytm_unknown_charge',description:'Hidden / unknown Paytm charges',reference,credit:0,debit:unknown,settlement});
   });
+  // Finalizing the Paytm report establishes that Paytm has settled the money,
+  // even when the corresponding Axis statement has not been uploaded yet.
+  // Show that outgoing movement now; the later bank-link step replaces these
+  // pending-bank rows with the posted payout and credits Axis exactly once.
+  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT){
+    const posted=new Set((s.paytmPayoutPostings||[]).flatMap(x=>[String(x.settlementId||''),String(x.payoutId||'')]));
+    (s.paytmVerifiedSettlements||[]).filter(x=>!posted.has(String(x.settlementId||''))&&!posted.has(String(x.payoutId||''))).forEach(x=>{
+      const date=x.settledDate||String(x.finalizedAt||'').slice(0,10),reference=x.utr||x.payoutId||x.settlementId,fees=roundMoney(num(x.commission)+num(x.platformFee)+num(x.gst)),other=roundMoney(num(x.nonCustomerAmount));
+      entries.push({id:x.id,date,kind:'paytm_settlement',description:'Paytm settlement · awaiting Axis 3448 bank link',reference,credit:0,debit:num(x.net),settlement:x,pendingBankLink:true});
+      if(fees>0)entries.push({id:x.id+'/CHARGES',date,kind:'paytm_charge',description:'Paytm commission, platform fee and GST',reference,credit:0,debit:fees,settlement:x,pendingBankLink:true});
+      if(other>0)entries.push({id:x.id+'/OTHER-DEDUCTIONS',date,kind:'paytm_charge',description:'Paytm VAS / other settlement deduction',reference,credit:0,debit:other,settlement:x,pendingBankLink:true});
+    });
+  }
   if(nature==='SANKI'&&(account===PAYTM_CLEARING_ACCOUNT||account===DEFAULT_SALES_BANK))(s.paytmPayoutPostings||[]).forEach(x=>{
     if(account===DEFAULT_SALES_BANK)entries.push({id:x.id,date:x.date,kind:'paytm_payout',description:'Paytm payout '+x.payoutId+' · '+x.orderNumbers.map(n=>'#'+n).join(', '),reference:x.utr,credit:num(x.net),debit:0,by:x.postedBy});
     else{entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Paytm payout to Axis 3448 · '+x.payoutId,reference:x.utr,credit:0,debit:num(x.net),by:x.postedBy});if(num(x.commission)+num(x.platformFee)+num(x.gst)>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm commission ₹'+num(x.commission).toFixed(2)+' + platform fee ₹'+num(x.platformFee).toFixed(2)+' + GST ₹'+num(x.gst).toFixed(2),reference:x.utr,credit:0,debit:roundMoney(num(x.commission)+num(x.platformFee)+num(x.gst)),by:x.postedBy});if(num(x.nonCustomerAmount)>0)entries.push({id:x.id+'/VAS-DEDUCTION',date:x.date,kind:'paytm_charge',description:'Paytm VAS deduction — not Shopify revenue',reference:x.utr,credit:0,debit:num(x.nonCustomerAmount),by:x.postedBy});}
