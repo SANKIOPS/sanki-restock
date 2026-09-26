@@ -124,7 +124,7 @@ function reviewedUnpostedSettlements(store, saleRows) {
     if (verified.has(String(candidate.settlementId || '')) || verified.has(String(candidate.payoutId || '')) || posted.has(String(candidate.settlementId || '')) || posted.has(String(candidate.payoutId || ''))) continue;
     try {
       const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows);
-      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, reviewedNotFinalized: true });
+      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, reviewedNotFinalized: true });
     } catch { /* Incomplete or unsafe batches stay out of the ledger. */ }
   }
   return rows;
