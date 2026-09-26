@@ -1249,6 +1249,7 @@ function rolesOfReq(req) {
 function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
+function canLogCreditCardExpense(req){return isAdmin(req)||isPrashant(req);}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
 function paytmReportView(s) {
   const transactions=Object.values(s.paytmReportTransactions||{}).map(tx=>Object.assign({platformFee:0,isCustomerPayment:true},tx)).sort((a,b)=>String(a.date+a.transactionId).localeCompare(String(b.date+b.transactionId)));
@@ -1477,7 +1478,7 @@ router.get('/api/expenses/config', (req, res) => {
   // Only approved master vendors are reusable. A name typed by a claimant is
   // promoted into this list only when the related expense is approved.
   Object.keys(vendorsByNature).forEach(n => vendorsByNature[n].sort((a, b) => a.localeCompare(b)));
-  const creditCards=isAdmin(req)?visibleCreditCards(req).map(card=>({id:card.id,name:creditCardName(card)})):[];
+  const creditCards=canLogCreditCardExpense(req)?visibleCreditCards(req).map(card=>({id:card.id,name:creditCardName(card)})):[];
   res.json({
     success: true,
     ledgers: pickableLedgers(s),
@@ -1499,6 +1500,7 @@ router.get('/api/expenses/config', (req, res) => {
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
     isOwner: rolesOfReq(req).includes('owner'),
+    canLogCreditCardExpense: canLogCreditCardExpense(req),
     canApprove: canApprove(req),
     me: (req.user && req.user.username) || '',
     pendingCount: visiblePendingReqs.length
@@ -1552,7 +1554,7 @@ router.post('/api/expenses', (req, res) => {
   if (paidAlready && paymentType !== 'Cash' && !personalAccount) {
     return res.status(400).json({ success: false, error: 'Enter the account used for your personal payment.' });
   }
-  if (paidAlready && paymentType !== 'Cash' && !isAdmin(req) && !personalAccountsForReq(req).some(a => a.toLowerCase() === personalAccount.toLowerCase())) {
+  if (paidAlready && paymentType !== 'Cash' && !isAdmin(req) && !(paymentType==='Credit'&&canLogCreditCardExpense(req)) && !personalAccountsForReq(req).some(a => a.toLowerCase() === personalAccount.toLowerCase())) {
     return res.status(400).json({ success:false, error:'Select your assigned personal payment account.' });
   }
 

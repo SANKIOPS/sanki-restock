@@ -10,7 +10,7 @@ const {router,merchantKey,inferClassification}=require('../modules/credit-cards'
 const expenseRouter=require('../modules/expenses').router;
 test.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
 function invoke(method,routePath,{body={},params={},query={},role='owner'}={}){const layer=router.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username:'tester',role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
-function invokeExpense(method,routePath,{body={},params={},query={},role='owner'}={}){const layer=expenseRouter.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'expense route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username:'tester',role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
+function invokeExpense(method,routePath,{body={},params={},query={},role='owner',username='tester'}={}){const layer=expenseRouter.stack.find(x=>x.route&&x.route.path===routePath&&x.route.methods[method.toLowerCase()]);assert.ok(layer,'expense route exists '+method+' '+routePath);let status=200,result;const req={body,params,query,user:{username,role,roles:[role]}};const res={status(n){status=n;return this;},json(x){result=x;return this;},end(){return this;}};let i=0;const next=()=>{const h=layer.route.stack[i++];if(h)h.handle(req,res,next);};next();return{status,body:result};}
 test('credit cards are entity-neutral liabilities with permanent statement review logs',()=>{
   const made=invoke('POST','/api/expenses/credit-cards',{body:{name:'HDFC Regalia',last4:'1234',cardholder:'Owner',issuingBank:'HDFC',cycleDay:5,dueDay:25,creditLimit:200000,openingOutstanding:1000}});
   assert.equal(made.status,200);assert.equal(made.body.card.displayName,'HDFC Regalia 1234');assert.equal(made.body.card.outstanding,1000);assert.equal(made.body.card.nature,undefined);
@@ -45,6 +45,13 @@ test('expense form can post an approved purchase directly to a selected credit c
   const stored=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));stored.expenses[made.body.expense.id].status='approved';stored.expenses[made.body.expense.id].approvedAt='2026-09-11T00:00:00.000Z';fs.writeFileSync(path.join(temp,'expenses.json'),JSON.stringify(stored));
   const after=invoke('GET','/api/expenses/credit-cards').body.cards.find(x=>x.id===card.id);assert.equal(after.outstanding,before+321);
   const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.ok(ledger.entries.some(x=>x.id===made.body.expense.id+'/PAY-001'&&x.debit===321));
+});
+test('Prashant can select an accessible card and log a credit-card expense without broad admin access',()=>{
+  const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
+  const config=invokeExpense('GET','/api/expenses/config',{role:'claimant',username:'prashant'});
+  assert.equal(config.status,200);assert.equal(config.body.isAdmin,false);assert.equal(config.body.canLogCreditCardExpense,true);assert.ok(config.body.creditCards.some(x=>x.id===card.id));
+  const made=invokeExpense('POST','/api/expenses',{role:'claimant',username:'prashant',body:{date:'2026-09-26',amount:275,particulars:'Admin card purchase',nature:'SANKI',vendor:'Office supplier',paymentType:'Credit',paidAlready:true,creditCardId:card.id,personalAccount:card.id,personalPaymentProof:'/card-proof-prashant.jpg',billPhoto:'/bill-prashant.jpg'}});
+  assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.payments[0].account,card.displayName);assert.equal(made.body.expense.payments[0].personalFunds,false);assert.equal(made.body.expense.status,'pending');
 });
 test('an unpaid credit expense retains the selected card for its later payment',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];

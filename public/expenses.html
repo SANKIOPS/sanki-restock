@@ -717,7 +717,7 @@
         el('f_personalaccount').innerHTML=(type==='Credit'?'<option value="">Select credit card used</option>':'')+options;
         if(Array.prototype.some.call(el('f_personalaccount').options,function(o){return o.value===current;}))el('f_personalaccount').value=current;
         el('personalAccountLabel').textContent=type==='Credit'?(paid?'Credit card used':'Credit card to use'):'Account used';
-        el('personalAccountHint').textContent=type==='Credit'?(cards.length?'The expense will post to this card’s outstanding liability.':'No credit card exists yet. Use Add or manage credit cards.'):'Only accounts assigned to you are available. Cash is recorded automatically as '+cfg.me+' Cash.';
+        el('personalAccountHint').textContent=type==='Credit'?(cards.length?'The expense will post to this card’s outstanding liability.':'No accessible credit card is available. Ask the Owner to add or share the card.'):'Only accounts assigned to you are available. Cash is recorded automatically as '+cfg.me+' Cash.';
         if(el('addCardFromExpense'))el('addCardFromExpense').style.display=type==='Credit'?'':'none';
       }
     }
