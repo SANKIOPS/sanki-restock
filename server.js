@@ -116,7 +116,7 @@ async function recoverExpenseProofStorage(){
   let compressed=0,freedBytes=0;
   for(const name of names){
     const fp=path.join(dir,name);let before=0;
-    try{before=fs.statSync(fp).size;if(before<350*1024)continue;const image=await Jimp.read(fp);if(image.bitmap.width>1800||image.bitmap.height>1800)image.scaleToFit(1800,1800);const replacement=await image.quality(80).getBufferAsync(Jimp.MIME_JPEG);if(replacement.length>=before*.95)continue;fs.writeFileSync(fp,replacement);compressed++;freedBytes+=before-replacement.length;}catch(error){console.warn('[storage] skipped proof '+name+': '+String(error&&error.code||error&&error.message||error));}
+    try{before=fs.statSync(fp).size;if(before<180*1024)continue;const image=await Jimp.read(fp);if(image.bitmap.width>1400||image.bitmap.height>1400)image.scaleToFit(1400,1400);const replacement=await image.quality(72).getBufferAsync(Jimp.MIME_JPEG);if(replacement.length>=before*.92)continue;fs.writeFileSync(fp,replacement);compressed++;freedBytes+=before-replacement.length;}catch(error){console.warn('[storage] skipped proof '+name+': '+String(error&&error.code||error&&error.message||error));}
   }
   if(compressed)console.log('[storage] compressed '+compressed+' historical proof(s), freed '+(freedBytes/1048576).toFixed(2)+' MB');
 }
@@ -2618,14 +2618,16 @@ app.get('*', (req, res) => {
 // ════════════════════════════════════════════════════════════════
 //  START SERVER
 // ════════════════════════════════════════════════════════════════
-app.listen(PORT, async () => {
+// Finish reclaiming the persistent volume before accepting uploads. Previously
+// the server started first, allowing a user to hit ENOSPC while recovery was
+// still running in the background.
+recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)).then(()=>app.listen(PORT, async () => {
   const hasVelocity = VELOCITY_API_KEY || (VELOCITY_USERNAME && VELOCITY_PASSWORD);
   console.log(`🚀 SANKI Business OS v4.0 — port ${PORT}`);
   console.log(`   Shopify:   ${SHOPIFY_STORE ? '✅ ' + SHOPIFY_STORE : '❌ not configured'}`);
   console.log(`   Velocity:  ${hasVelocity ? '✅ configured' : '⚠️  set VELOCITY_USERNAME + VELOCITY_PASSWORD in Render'}`);
   console.log(`   Bitespeed: ${BITESPEED_API_KEY ? '✅ configured' : '⚠️  key missing'}`);
   console.log(`   Velocity Webhook URL: ${SELF_URL}/api/webhooks/velocity`);
-  setImmediate(()=>recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)));
 
   // Phase 0 — seed the first admin from DASH_USER/DASH_PASS if no users exist
   // yet (no-lockout migration: the shared login you already use keeps working,
@@ -2727,4 +2729,4 @@ app.listen(PORT, async () => {
     setInterval(notificationTick, 5 * 60 * 1000);
     console.log(`[showroom] notifications → ${NOTIFY_EMAIL_TO} ${RESEND_API_KEY ? '(Resend live)' : '(log-only, set RESEND_API_KEY)'}`);
   }
-});
+}));

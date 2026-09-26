@@ -1443,7 +1443,7 @@ router.post('/api/expenses/upload', proofUpload.single('photo'), async (req, res
   try{
     fs.mkdirSync(PROOF_DIR,{recursive:true});
     let stored=req.file.buffer,ext=(path.extname(req.file.originalname||'')||'.jpg').toLowerCase().replace(/[^.a-z0-9]/g,'')||'.jpg';
-    try{const image=await Jimp.read(req.file.buffer),max=2000;if(image.bitmap.width>max||image.bitmap.height>max)image.scaleToFit(max,max);stored=await image.quality(82).getBufferAsync(Jimp.MIME_JPEG);ext='.jpg';}catch{/* Preserve valid formats Jimp cannot decode, such as HEIC. */}
+    try{const image=await Jimp.read(req.file.buffer),max=1600;if(image.bitmap.width>max||image.bitmap.height>max)image.scaleToFit(max,max);stored=await image.quality(75).getBufferAsync(Jimp.MIME_JPEG);ext='.jpg';}catch{/* Preserve valid formats Jimp cannot decode, such as HEIC. */}
     const privacy=normalizedNature(req.body&&req.body.nature)==='PERSONAL'?'personal-':'',filename=privacy+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,finalPath=path.join(PROOF_DIR,filename),temporary=finalPath+'.tmp-'+process.pid;
     fs.writeFileSync(temporary,stored);try{fs.renameSync(temporary,finalPath);}catch(renameError){try{fs.writeFileSync(finalPath,stored);fs.unlinkSync(temporary);}catch{throw renameError;}}
     res.json({success:true,url:'/api/expenses/photo/'+filename});
