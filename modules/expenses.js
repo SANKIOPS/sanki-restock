@@ -30,7 +30,7 @@ const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
 const { START_DATE: PAYTM_START_DATE, parsePaytmReport, summarizePayouts } = require('./paytm-report');
 const { registerPaytmReports } = require('./paytm-reports-routes');
-const { transactionSuffix, isOriginalPaymentOrder } = require('./paytm-accounting');
+const { transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements } = require('./paytm-accounting');
 const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
@@ -1221,6 +1221,12 @@ function ledgerAccountsForNature(s, nature) {
     if (x.classification!=='credit_card_payment'&&normalizedNature(x.toNature || x.nature) === n) names.add(String(x.toAccount));
   });
   return Array.from(new Set(Array.from(names).map(canonicalAccountName))).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+}
+function paytmClearingSettlementOutflows(s) {
+  const postedKeys=new Set((s.paytmPayoutPostings||[]).flatMap(x=>[String(x.settlementId||''),String(x.payoutId||'')]));
+  const detailed=(s.paytmVerifiedSettlements||[]).filter(x=>!postedKeys.has(String(x.settlementId||''))&&!postedKeys.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,salesLedgerEntries(s)),s.paytmPayoutPostings||[]).map(x=>({date:x.date||x.settledDate||String(x.finalizedAt||'').slice(0,10),net:num(x.net),fees:num(x.commission)+num(x.platformFee)+num(x.gst)+num(x.nonCustomerAmount)}));
+  const legacy=(s.paytmSettlements||[]).map(x=>{const net=num(x.netAmount),charge=num(x.chargeAmount),gross=num(x.grossAmount||net+charge);return{date:x.date,net,fees:Math.max(0,gross-net)};});
+  return legacy.concat(detailed);
 }
 function allowedCompanyAccount(s, nature, account) {
   const candidate = canonicalAccountName(account);
@@ -2615,6 +2621,7 @@ router.get('/api/expenses/balances', (req, res) => {
     });
     (s.salesRefunds||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.refundAccount,x.date)).forEach(x=>{paidOut[x.refundAccount]=(paidOut[x.refundAccount]||0)+num(x.amount);});
     if(nature==='SANKI') salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+    if(nature==='SANKI') paytmClearingSettlementOutflows(s).forEach(x=>{if(!posted(PAYTM_CLEARING_ACCOUNT,x.date))return;transferOut[PAYTM_CLEARING_ACCOUNT]=(transferOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.net);paidOut[PAYTM_CLEARING_ACCOUNT]=(paidOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.fees);});
     (s.transfers || []).filter(x => inRange(x.date)).forEach(x => {
       if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + transferDebitAmount(x);
       if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)&&transferCreditsCompanyFunds(x,nature,x.toAccount)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + transferCreditAmount(x);
@@ -2900,9 +2907,10 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // pending-bank rows with the posted payout and credits Axis exactly once.
   if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT){
     const posted=new Set((s.paytmPayoutPostings||[]).flatMap(x=>[String(x.settlementId||''),String(x.payoutId||'')]));
-    (s.paytmVerifiedSettlements||[]).filter(x=>!posted.has(String(x.settlementId||''))&&!posted.has(String(x.payoutId||''))).forEach(x=>{
+    const pending=(s.paytmVerifiedSettlements||[]).filter(x=>!posted.has(String(x.settlementId||''))&&!posted.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,salesLedgerEntries(s)));
+    pending.forEach(x=>{
       const date=x.settledDate||String(x.finalizedAt||'').slice(0,10),reference=x.utr||x.payoutId||x.settlementId,fees=roundMoney(num(x.commission)+num(x.platformFee)+num(x.gst)),other=roundMoney(num(x.nonCustomerAmount));
-      entries.push({id:x.id,date,kind:'paytm_settlement',description:'Paytm settlement · awaiting Axis 3448 bank link',reference,credit:0,debit:num(x.net),settlement:x,pendingBankLink:true});
+      entries.push({id:x.id,date,kind:'paytm_settlement',description:(x.reviewedNotFinalized?'Paytm settlement · reconciled report · awaiting Axis 3448 bank link':'Paytm settlement · awaiting Axis 3448 bank link'),reference,credit:0,debit:num(x.net),settlement:x,pendingBankLink:true,reviewedNotFinalized:!!x.reviewedNotFinalized});
       if(fees>0)entries.push({id:x.id+'/CHARGES',date,kind:'paytm_charge',description:'Paytm commission, platform fee and GST',reference,credit:0,debit:fees,settlement:x,pendingBankLink:true});
       if(other>0)entries.push({id:x.id+'/OTHER-DEDUCTIONS',date,kind:'paytm_charge',description:'Paytm VAS / other settlement deduction',reference,credit:0,debit:other,settlement:x,pendingBankLink:true});
     });
@@ -3606,6 +3614,7 @@ function recordedAccountBalance(s,nature,account,asOf){
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)&&!usesCompanyAdjustedBankTruth(nature,account)).forEach(x=>total+=num(x.credit)-num(x.debit));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
   if(nature==='SANKI'){salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account&&on(x.date)).forEach(x=>total+=num(x.amount));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount)));salaryPaymentEntries().filter(x=>x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));}
+  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)paytmClearingSettlementOutflows(s).filter(x=>on(x.date)).forEach(x=>total-=num(x.net)+num(x.fees));
   salaryAdvanceEntries().filter(x=>x.payingNature===nature&&!x.fundingTransferId&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.amount));
   return round0(total);
 }

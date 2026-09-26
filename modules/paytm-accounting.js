@@ -112,6 +112,24 @@ function validateSettlementReview(store, payoutId, saleRows) {
   return { payout, linked };
 }
 
+// A settlement whose customer rows have all been reviewed is already a real
+// Paytm outflow.  Keep the explicit Finalize action as the audit checkpoint,
+// but do not hide that movement from the operational ledger while the user is
+// waiting to link the matching Axis statement credit.
+function reviewedUnpostedSettlements(store, saleRows) {
+  const verified = new Set((store.paytmVerifiedSettlements || []).flatMap(x => [String(x.settlementId || ''), String(x.payoutId || '')]));
+  const posted = new Set((store.paytmPayoutPostings || []).flatMap(x => [String(x.settlementId || ''), String(x.payoutId || '')]));
+  const rows = [];
+  for (const candidate of summarizePayouts(Object.values(store.paytmReportTransactions || {}))) {
+    if (verified.has(String(candidate.settlementId || '')) || verified.has(String(candidate.payoutId || '')) || posted.has(String(candidate.settlementId || '')) || posted.has(String(candidate.payoutId || ''))) continue;
+    try {
+      const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows);
+      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, reviewedNotFinalized: true });
+    } catch { /* Incomplete or unsafe batches stay out of the ledger. */ }
+  }
+  return rows;
+}
+
 function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   const { payout, linked } = validateSettlementReview(store, payoutId, saleRows);
   if ((store.paytmPayoutPostings || []).some(x => x.payoutId === payout.payoutId || payout.sourcePayoutIds.includes(x.payoutId) || x.settlementId === payout.settlementId || (x.transactionIds || []).some(id => payout.transactionIds.includes(id)))) throw new Error('This Paytm settlement was already posted.');
@@ -128,4 +146,4 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked };
 }
 
-module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, validatePayoutPosting };
+module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { parsePaytmReport, summarizePayouts } = require('../modules/paytm-report');
 const { registerPaytmReports } = require('../modules/paytm-reports-routes');
-const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting, isOriginalPaymentOrder } = require('../modules/paytm-accounting');
+const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting, reviewedUnpostedSettlements, isOriginalPaymentOrder } = require('../modules/paytm-accounting');
 
 test('successful payment evidence includes a partially paid order even when its cached status is stale',()=>{
   const order={id:'2801',financialStatus:'pending',paymentTransactions:[{id:'cash-1100',kind:'sale',status:'success',gateway:'Cash',amount:1100}]};
@@ -140,6 +140,17 @@ test('reviewed Shopify links and exact UTR bank credit are required before payou
   delete store.bankDateOverrides;
   store.paytmPayoutPostings = [{ payoutId: 'P1', bankTransactionId: 'BTX-1' }];
   assert.throws(() => validatePayoutPosting(store, 'P1', 'BTX-1', sales), /already posted/);
+});
+
+test('fully reviewed report batches become pending Paytm outflows before finalization', () => {
+  const tx={transactionId:'T1',rrn:'123456',date:'2026-09-17',amount:100,commission:1,gst:.18,platformFee:0,settledAmount:98.82,payoutId:'P1',settledDate:'2026-09-18',utr:'UTR123'};
+  const link={transactionId:'T1',orderId:'O1',orderNumber:'2801',amount:100};
+  const store={paytmReportTransactions:{T1:tx},paytmOrderLinks:{T1:link}};
+  const sales=[{id:'SHOPIFY/O1',orderId:'O1',orderNumber:'2801',date:'2026-09-17',account:'Paytm Settlement Clearing',amount:100}];
+  const [pending]=reviewedUnpostedSettlements(store,sales);
+  assert.deepEqual([pending.net,pending.commission,pending.utr,pending.reviewedNotFinalized],[98.82,1,'UTR123',true]);
+  store.paytmVerifiedSettlements=[{settlementId:pending.settlementId,payoutId:'P1'}];
+  assert.equal(reviewedUnpostedSettlements(store,sales).length,0,'an explicit finalized record replaces the derived pending row');
 });
 
 test('manual amount-only link requires a reason and one-to-one order', () => {
