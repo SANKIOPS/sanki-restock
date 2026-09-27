@@ -9,7 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, indiaDisplayTimestamp } = require('../modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
@@ -2576,6 +2576,16 @@ test('the ₹2,400 Om K IndusInd outflow displays on the five linked bank debits
   assert.deepEqual(store.bankDateOverrides['TR-SEP15-2400'].bankReferences,['662484075136','662484073430','662484063719','662484059823','662484042975']);
   assert.equal(store.auditLog.at(-1).action,'BANK_DATE_OVERRIDE_CORRECTED');
   assert.equal(applyIndus8181Sep15OmDateCorrection(store),false);
+});
+
+test('the ₹2,900 IndusInd outflow displays on the five linked 16 September bank debits',()=>{
+  const store={transfers:[{id:'TR-SEP16-2900',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'IndusInd Bank 8181',toAccount:'Prashant Axis 3645',amount:2900,date:'2026-09-19'}],oneTimeMigrations:{},bankDateOverrides:{},auditLog:[],auditSeq:0};
+  assert.equal(applyIndus8181Sep16DebitDateCorrection(store),true);
+  assert.equal(store.bankDateOverrides['TR-SEP16-2900'].bankDate,'2026-09-16');
+  assert.equal(store.bankDateOverrides['TR-SEP16-2900'].originalDate,'2026-09-19');
+  assert.deepEqual(store.bankDateOverrides['TR-SEP16-2900'].bankReferences,['662591394104','662591391729','662591333621','662591330777','662591287581']);
+  assert.equal(store.auditLog.at(-1).action,'BANK_DATE_OVERRIDE_CORRECTED');
+  assert.equal(applyIndus8181Sep16DebitDateCorrection(store),false);
 });
 
 test('an older pending workspace absorbs an already-finalized later period as locked coverage',()=>{
