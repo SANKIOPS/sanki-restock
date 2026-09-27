@@ -9,7 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, indiaDisplayTimestamp } = require('../modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
@@ -2596,6 +2596,14 @@ test('the ₹2,000 Sanvi IndusInd outflow displays on the four linked 16 Septemb
   assert.deepEqual(store.bankDateOverrides['TR-SEP16-2000'].bankReferences,['662591526414','662591524447','662591522262','662591520307']);
   assert.equal(store.auditLog.at(-1).action,'BANK_DATE_OVERRIDE_CORRECTED');
   assert.equal(applyIndus8181Sep16SanviDateCorrection(store),false);
+});
+
+test('the ₹720 personal expense is routed through the IndusInd 8181 ledger',()=>{
+  const store={expenses:{'EX-PERSONAL-720':{id:'EX-PERSONAL-720',nature:'PERSONAL',date:'2026-09-19',status:'paid',amount:720,paidAmount:720,paidAlready:true,account:'Personal Cash',payments:[{id:'PAY-001',amount:720,date:'2026-09-19',account:'Personal Cash',personalFunds:true}]}},oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyIndus8181Sep16PersonalExpenseCorrection(store),true);
+  const expense=store.expenses['EX-PERSONAL-720'],payment=expense.payments[0];
+  assert.equal(payment.account,'IndusInd Bank 8181');assert.equal(payment.date,'2026-09-16');assert.equal(payment.bankReference,'662595723427');assert.equal(payment.personalFunds,false);assert.equal(payment.crossEntityCompanyPayment,true);assert.equal(expense.fundedBy,'company');
+  assert.equal(store.auditLog.at(-1).action,'PERSONAL_EXPENSE_COMPANY_PAYMENT_CORRECTED');assert.equal(applyIndus8181Sep16PersonalExpenseCorrection(store),false);
 });
 
 test('an older pending workspace absorbs an already-finalized later period as locked coverage',()=>{
