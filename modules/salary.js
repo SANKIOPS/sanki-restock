@@ -41,6 +41,7 @@ function salaryForMonth(e, ym) {
 
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash'];
+const ADVANCE_PAYING_ACCOUNTS = [...SALARY_PAYING_ACCOUNTS, 'Axis Bank 3448'];
 const PERSONAL_ADVANCE_PAYING_ACCOUNTS = ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'];
 const SOURCE_SHEET_POSTING_ACCOUNTS = [...SALARY_PAYING_ACCOUNTS,'Axis Bank 3448','IndusInd Bank 7883','ICICI Bank 0992','ICICI Bank 0993','Gagan Personal Cash'];
 const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -670,7 +671,7 @@ router.use('/api/salary',(req,res,next)=>salaryContext.run({entity:salaryEntity(
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
   const currentMonth=new Date().toISOString().slice(0,7),employees=Object.values(s.employees).sort(byEmployeeName).map(e=>Object.assign({},e,{salaryHistory:salaryHistoryOf(e),effectiveSalary:salaryForMonth(e,currentMonth)}));
-  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS, advancePayingAccounts:SALARY_PAYING_ACCOUNTS.map(name=>({name,nature:'SANKI'})).concat(isOwner(req)?PERSONAL_ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'PERSONAL'})):[]) });
+  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS, advancePayingAccounts:ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'SANKI'})).concat(isOwner(req)?PERSONAL_ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'PERSONAL'})):[]) });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -952,7 +953,7 @@ router.post('/api/salary/advances', guard, (req, res) => {
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Enter a valid advance amount.' });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date || ''))) return res.status(400).json({ success: false, error: 'Select the payment date.' });
   if (!String(b.account || '').trim()) return res.status(400).json({ success: false, error: 'Select the paying account.' });
-  if(!['SANKI','PERSONAL'].includes(payingNature)||payingNature==='PERSONAL'&&(!isOwner(req)||!PERSONAL_ADVANCE_PAYING_ACCOUNTS.includes(payingAccount)))return res.status(400).json({success:false,error:'Choose an authorised paying account and entity.'});
+  if(!['SANKI','PERSONAL'].includes(payingNature)||payingNature==='SANKI'&&!ADVANCE_PAYING_ACCOUNTS.includes(payingAccount)||payingNature==='PERSONAL'&&(!isOwner(req)||!PERSONAL_ADVANCE_PAYING_ACCOUNTS.includes(payingAccount)))return res.status(400).json({success:false,error:'Choose an authorised paying account and entity.'});
   const recoveryStartMonth = String(b.recoveryStartMonth || b.date.slice(0, 7));
   if (!/^\d{4}-\d{2}$/.test(recoveryStartMonth)) return res.status(400).json({ success: false, error: 'Select a recovery start month.' });
   const duplicate=[...Object.values(s.advanceRequests||{}).filter(x=>!['Rejected','Posted'].includes(x.status)),...Object.values(s.advances||{}).filter(x=>x.active!==false)].find(x=>x.empId===emp.id&&String(x.account||'').trim()===String(b.account).trim()&&(String(b.reference||'').trim()&&String(x.reference||'').trim()?String(x.reference).trim()===String(b.reference).trim():String(x.date||'')===String(b.date)&&round2(num(x.amount))===round2(amount)));

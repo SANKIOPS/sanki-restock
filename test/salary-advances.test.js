@@ -433,11 +433,15 @@ test('Owner Telegram salary advance uses the existing dated advance route, not p
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-06'},body:{empId:employee.id,paidDays:30}});
   const list=telegramApi('GET','/api/salary/employees',owner,{entity:'SANKI'});
   assert.equal(list.status,200);assert.ok(list.employees.some(e=>e.id===employee.id));
+  assert.ok(list.advancePayingAccounts.some(x=>x.name==='Axis Bank 3448'&&x.nature==='SANKI'));
+  assert.ok(!list.salaryPayingAccounts.includes('Axis Bank 3448'),'3448 is available for advances without changing salary-payment accounts');
   assert.equal(telegramApi('GET','/api/salary/employees',outsider,{entity:'SANKI'}).status,403);
   const body={empId:employee.id,amount:1250,date:'2099-07-03',account:'Prashant Axis 3645',proofs:['/api/expenses/photo/telegram-advance.jpg']};
   const paid=telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body});
   assert.equal(paid.status,200);assert.equal(paid.advance.date,'2099-07-03');assert.equal(paid.advance.recoveryStartMonth,'2099-07');
   assert.equal(telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body}).status,409,'Telegram confirmation cannot duplicate an advance');
+  const axis3448=telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body:{empId:employee.id,amount:500,date:'2099-07-04',account:'Axis Bank 3448',payingNature:'SANKI',proofs:['/api/expenses/photo/telegram-advance-3448.jpg']}});
+  assert.equal(axis3448.status,200);assert.equal(axis3448.advance.account,'Axis Bank 3448');
   assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2099-06'}}).body.rows.find(e=>e.id===employee.id).balance,9000);
   const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
   assert.match(source,/callback_data:'am:advance'/);assert.match(source,/callback_data:prefix\+'confirm'/);assert.match(source,/telegramApi\('POST','\/api\/salary\/advances'/);
