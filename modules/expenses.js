@@ -3203,6 +3203,12 @@ function repairBankDraftSummaryArithmetic(draft){
   draft.summary.validated=Math.abs(roundMoney(num(draft.summary.openingBalance)+totalCredits-totalDebits)-num(draft.summary.closingBalance))<=.01;
   return totalsChanged||closingChanged;
 }
+function applyIndus8181TransferDateCorrection(s){
+  const key='owner-correct-tr-00074-to-bank-date-2026-09-15-v1';s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
+  const transfer=(s.transfers||[]).find(x=>x.id==='TR-00074')||(s.transfers||[]).find(x=>Math.abs(num(x.amount)-2129)<.01&&String(x.fromAccount||'')==='Prashant Axis 3645'&&String(x.toAccount||'')==='IndusInd Bank 8181');
+  if(!transfer)return false;
+  const originalDate=String(transfer.date||''),bankDate='2026-09-15',now=new Date().toISOString();s.bankDateOverrides=s.bankDateOverrides||{};s.bankDateOverrides[transfer.id]={bankDate,originalDate,bankReferences:['625882785214','662475617460','625882081951'],remark:'Owner confirmed the combined ₹2,129 transfer must use the three linked IndusInd bank entries dated 15 September 2026',by:'gaganlambasanki',at:now};s.oneTimeMigrations[key]={appliedAt:now,transferId:transfer.id,originalDate,bankDate,amount:num(transfer.amount)};audit(s,null,'BANK_DATE_OVERRIDE_CORRECTED','transfer',transfer.id,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:transfer.nature||'SANKI',account:'IndusInd Bank 8181',before:{date:originalDate},after:{date:bankDate},note:s.bankDateOverrides[transfer.id].remark});return true;
+}
 function mergeActiveBankReconciliationDrafts(s,account,nature){
   const drafts=Object.values(s.bankReconciliationDrafts||{}).filter(x=>x.account===account&&normalizedNature(x.nature)===normalizedNature(nature));if(drafts.length<2)return drafts[0]||null;
   drafts.sort((a,b)=>String(a.summary&&a.summary.from||'').localeCompare(String(b.summary&&b.summary.from||''))||String(a.createdAt||'').localeCompare(String(b.createdAt||'')));const target=drafts[0],groups=new Map(),decisions=[];
@@ -3966,7 +3972,7 @@ function summaryForPL(from, to) {
 
 // Run idempotent store repairs/corrections when the service starts, rather
 // than waiting for the first user to open an Expenses screen.
-const startupExpenseStore=loadStore(),startupDraftAccounts=new Set(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).map(x=>normalizedNature(x.nature)+'|'+x.account));let startupReconciliationRepaired=false;startupDraftAccounts.forEach(key=>{const separator=key.indexOf('|'),nature=key.slice(0,separator),account=key.slice(separator+1),count=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).length;if(count>1){mergeActiveBankReconciliationDrafts(startupExpenseStore,account,nature);startupReconciliationRepaired=true;}const draft=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).find(x=>normalizedNature(x.nature)===nature&&x.account===account);if(draft&&extendPendingDraftThroughFinalizedCoverage(startupExpenseStore,draft))startupReconciliationRepaired=true;if(draft&&repairBankDraftSummaryArithmetic(draft))startupReconciliationRepaired=true;});if(startupReconciliationRepaired)saveStore(startupExpenseStore);
+const startupExpenseStore=loadStore(),startupDraftAccounts=new Set(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).map(x=>normalizedNature(x.nature)+'|'+x.account));let startupReconciliationRepaired=applyIndus8181TransferDateCorrection(startupExpenseStore);startupDraftAccounts.forEach(key=>{const separator=key.indexOf('|'),nature=key.slice(0,separator),account=key.slice(separator+1),count=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).length;if(count>1){mergeActiveBankReconciliationDrafts(startupExpenseStore,account,nature);startupReconciliationRepaired=true;}const draft=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).find(x=>normalizedNature(x.nature)===nature&&x.account===account);if(draft&&extendPendingDraftThroughFinalizedCoverage(startupExpenseStore,draft))startupReconciliationRepaired=true;if(draft&&repairBankDraftSummaryArithmetic(draft))startupReconciliationRepaired=true;});if(startupReconciliationRepaired)saveStore(startupExpenseStore);
 
 router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 
@@ -3990,3 +3996,4 @@ module.exports.statementScreenshotRowIsPlausible = statementScreenshotRowIsPlaus
 module.exports.indiaDisplayTimestamp = indiaDisplayTimestamp;
 module.exports.indiaBusinessDate = indiaBusinessDate;
 module.exports.applySep11PrashantReimbursementDateCorrection = applySep11PrashantReimbursementDateCorrection;
+module.exports.applyIndus8181TransferDateCorrection = applyIndus8181TransferDateCorrection;

@@ -9,7 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, indiaDisplayTimestamp } = require('../modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
@@ -2553,6 +2553,11 @@ test('merged statement closing is recomputed from the deduplicated validated row
   }};
   const merged=mergeActiveBankReconciliationDrafts(store,account,'SANKI');
   assert.equal(merged.summary.closingBalance,906.29);assert.equal(merged.summary.reportedClosingBalance,3973.29);assert.equal(merged.summary.validated,true);
+});
+
+test('the combined IndusInd 8181 transfer displays on its bank date',()=>{
+  const store={transfers:[{id:'TR-00074',nature:'SANKI',fromAccount:'Prashant Axis 3645',toAccount:'IndusInd Bank 8181',amount:2129,date:'2026-09-24'}],oneTimeMigrations:{},bankDateOverrides:{},auditLog:[],auditSeq:0};
+  assert.equal(applyIndus8181TransferDateCorrection(store),true);assert.equal(store.bankDateOverrides['TR-00074'].bankDate,'2026-09-15');assert.equal(store.bankDateOverrides['TR-00074'].originalDate,'2026-09-24');assert.deepEqual(store.bankDateOverrides['TR-00074'].bankReferences,['625882785214','662475617460','625882081951']);assert.equal(store.auditLog.at(-1).action,'BANK_DATE_OVERRIDE_CORRECTED');assert.equal(applyIndus8181TransferDateCorrection(store),false);
 });
 
 test('an older pending workspace absorbs an already-finalized later period as locked coverage',()=>{
