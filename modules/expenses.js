@@ -3036,6 +3036,14 @@ function parseBankStatementText(raw){
     if(!debit&&!credit)return;const firstAmount=amountTokens[0],description=rest.slice(0,firstAmount.index).trim().replace(/[|:-]+$/,'').trim(),reference=((description.match(/\b(?:utr|ref|txn|chq)[\s:#-]*([a-z0-9-]+)/i)||[])[1]||'');out.push({date,description,reference,debit,credit,balance:Math.abs(balance),row:index+1});
   });return out;
 }
+function selectIndusIndMobileCandidates(rows){
+  if(!rows.length)return false;
+  const penalty=(row,candidate)=>{const side=row.description.match(/\/(DR|CR)\//i),digits=String(candidate.bankReference||'').replace(/\D/g,'').length;let score=Math.max(0,8-digits);if(side&&side[1].toUpperCase()==='DR'&&!candidate.debit)score+=1e12;if(side&&side[1].toUpperCase()==='CR'&&!candidate.credit)score+=1e12;return score;};
+  const oldestIndex=rows.length-1;let states=rows[oldestIndex].candidates.map(candidate=>{const choices=[];choices[oldestIndex]=candidate;return{cost:penalty(rows[oldestIndex],candidate),choices};});
+  for(let index=oldestIndex-1;index>=0;index--){const row=rows[index],olderIndex=index+1,next=[];for(const candidate of row.candidates){let best;for(const state of states){const older=state.choices[olderIndex],differenceCents=Math.round(Math.abs(candidate.balance-(older.balance+candidate.credit-candidate.debit))*100),cost=state.cost+penalty(row,candidate)+differenceCents*1e6;if(!best||cost<best.cost){const choices=state.choices.slice();choices[index]=candidate;best={cost,choices};}}if(best)next.push(best);}states=next;if(!states.length)return false;}
+  const best=states.sort((a,b)=>a.cost-b.cost)[0];if(!best)return false;
+  rows.forEach((row,index)=>Object.assign(row,best.choices[index]));return true;
+}
 function parseIndusIndMobileStatementText(raw){
   const text=String(raw||'').replace(/\r/g,''),isFormat=/Account Statement\s*\n\d{10,}/i.test(text)&&/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/i.test(text)&&/INDUS PRIVILEGE/i.test(text);
   if(!isFormat)return[];
@@ -3047,7 +3055,7 @@ function parseIndusIndMobileStatementText(raw){
     if(!candidates.length)continue;const transactionReference=((description.match(/\b(?:UPI|IMPS\/P2A)\/(\d{10,})/i)||[])[1]||'');rows.push({date,description:description||'IndusInd transaction',reference:transactionReference,transactionReference,candidates,row:rows.length+1});
   }
   if(!rows.length)return rows;
-  for(let index=rows.length-1;index>=0;index--){const row=rows[index],older=rows[index+1],side=row.description.match(/\/(DR|CR)\//i),rank=candidate=>{let score=0;if(older)score+=Math.abs(candidate.balance-(older.balance+candidate.credit-candidate.debit))*1000;if(side&&side[1].toUpperCase()==='DR'&&!candidate.debit)score+=100000000;if(side&&side[1].toUpperCase()==='CR'&&!candidate.credit)score+=100000000;score+=(8-String(candidate.bankReference).replace(/\D/g,'').length)*.001;return score;},chosen=row.candidates.slice().sort((a,b)=>rank(a)-rank(b))[0];Object.assign(row,chosen);row.reference=row.transactionReference||row.bankReference;delete row.transactionReference;delete row.candidates;}
+  selectIndusIndMobileCandidates(rows);rows.forEach(row=>{row.reference=row.transactionReference||row.bankReference;delete row.transactionReference;delete row.candidates;});
   const account=(text.match(/Account Statement\s*\n(\d{10,})/i)||[])[1]||'',period=text.match(/Statement Period:\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s*-\s*(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})/i),debits=roundMoney(rows.reduce((sum,row)=>sum+row.debit,0)),credits=roundMoney(rows.reduce((sum,row)=>sum+row.credit,0)),oldest=rows.at(-1),opening=roundMoney(oldest.balance+oldest.debit-oldest.credit),closing=rows[0].balance,calculated=roundMoney(opening+credits-debits),valid=Math.abs(calculated-closing)<=.01;
   if(!valid)throw new Error('IndusInd statement validation failed: parsed transactions do not reproduce the declared closing balance. No preview was created.');
   rows.statementSummary={format:'IndusInd mobile PDF',accountLast4:account.slice(-4),from:period?dateValue(period[1]):oldest.date,to:period?dateValue(period[2]):rows[0].date,openingBalance:opening,closingBalance:closing,totalDebits:debits,totalCredits:credits,validated:true};return rows;
@@ -4049,3 +4057,4 @@ module.exports.applyIndus8181Sep16SanviDateCorrection = applyIndus8181Sep16Sanvi
 module.exports.applyIndus8181Sep16PersonalExpenseCorrection = applyIndus8181Sep16PersonalExpenseCorrection;
 module.exports.applyIndus8181Sep18DebitDateCorrection = applyIndus8181Sep18DebitDateCorrection;
 module.exports.applyReviewedBankDates = applyReviewedBankDates;
+module.exports.selectIndusIndMobileCandidates = selectIndusIndMobileCandidates;

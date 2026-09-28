@@ -1388,6 +1388,16 @@ S478092750.003000.004231.01`;
   assert.equal(rows.length,3);assert.deepEqual(rows.map(x=>[x.reference,x.debit,x.credit,x.balance]),[['662588423738',591.89,0,3139.12],['662484075136',500,0,3731.01],['625823976141',0,3000,4231.01]]);assert.equal(rows.statementSummary.accountLast4,'8181');assert.equal(rows.statementSummary.validated,true);
 });
 
+test('IndusInd mobile PDF resolves ambiguous columns using the whole balance chain',()=>{
+  const {selectIndusIndMobileCandidates}=require('../modules/expenses'),rows=[
+    {description:'UPI/NEWER/DR/PAYEE',candidates:[{bankReference:'S87654321',debit:50,credit:0,balance:850}]},
+    {description:'UPI/OLDER/DR/PAYEE',candidates:[{bankReference:'S12345678',debit:100,credit:0,balance:1000},{bankReference:'S1234567',debit:100,credit:0,balance:900}]}
+  ];
+  assert.equal(selectIndusIndMobileCandidates(rows),true);
+  assert.equal(rows[1].bankReference,'S1234567');
+  assert.equal(rows[0].balance,rows[1].balance+rows[0].credit-rows[0].debit);
+});
+
 test('password-protected PDF statements unlock without retaining the password', async()=>{
   const encoded='JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgPGRiODkwODYwZWY+Cj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9UeXBlIC9QYWdlcwovQ291bnQgMQovS2lkcyBbIDQgMCBSIF0KPj4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL0NhdGFsb2cKL1BhZ2VzIDIgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9Db250ZW50cyA1IDAgUgovTWVkaWFCb3ggWyAwIDAgNTk1LjI3NTYgODQxLjg4OTggXQovUmVzb3VyY2VzIDw8Ci9Gb250IDYgMCBSCi9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+Ci9Sb3RhdGUgMAovVHJhbnMgPDwKPj4KL1R5cGUgL1BhZ2UKL1BhcmVudCAyIDAgUgo+PgplbmRvYmoKNSAwIG9iago8PAovRmlsdGVyIFsgL0FTQ0lJODVEZWNvZGUgL0ZsYXRlRGVjb2RlIF0KL0xlbmd0aCAxMjQKPj4Kc3RyZWFtCtOaiZfHeo26mU0bv/Ncs9Z34Y3yuDxgoeAlqWTnialMAUwE2maqGS9xshp3eW6Xo+nFzYSyUEerBCDe4Xnp9CamonGfEzQ/Et6N3G62+lubDhCMvYmYzmzvxWWiZ08w4VDQ50vtq/l+1yCsv9xuPA0Y3HZPQ2VpSo9SrCAKZW5kc3RyZWFtCmVuZG9iago2IDAgb2JqCjw8Ci9GMSA3IDAgUgo+PgplbmRvYmoKNyAwIG9iago8PAovQmFzZUZvbnQgL0hlbHZldGljYQovRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGluZwovTmFtZSAvRjEKL1N1YnR5cGUgL1R5cGUxCi9UeXBlIC9Gb250Cj4+CmVuZG9iago4IDAgb2JqCjw8Ci9WIDIKL1IgMwovTGVuZ3RoIDEyOAovUCA0Mjk0OTY3MjkyCi9GaWx0ZXIgL1N0YW5kYXJkCi9PIDw2YWM0N2Q5NDkwZGM2MGM3NzViZGU1YzQwNDc5ZTQ0MTI4NmYzNjQwOWQ5MzVlM2UwYzhjY2U0NjBlOTU3NmE0PgovVSA8MTg1NTViM2IxZGM5NjY1ODFjNWFlN2ZjMTgyZjhlM2EyOGJmNGU1ZTRlNzU4YTQxNjQwMDRlNTZmZmZhMDEwOD4KPj4KZW5kb2JqCnhyZWYKMCA5CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxNSAwMDAwMCBuIAowMDAwMDAwMDU5IDAwMDAwIG4gCjAwMDAwMDAxMTggMDAwMDAgbiAKMDAwMDAwMDE2NyAwMDAwMCBuIAowMDAwMDAwMzY2IDAwMDAwIG4gCjAwMDAwMDA1ODEgMDAwMDAgbiAKMDAwMDAwMDYxMiAwMDAwMCBuIAowMDAwMDAwNzE5IDAwMDAwIG4gCnRyYWlsZXIKPDwKL1NpemUgOQovUm9vdCAzIDAgUgovSW5mbyAxIDAgUgovSUQgWyA8MzA2NjM0MzAzMzM3NjMzNzYyMzIzMjYzMzE2MjM3NjQ2MzM3NjUzOTY1MzQ2NDM0NjI2NDMwMzkzMDY1MzUzMD4gPDMwNjYzNDMwMzMzNzYzMzc2MjMyMzI2MzMxNjIzNzY0NjMzNzY1Mzk2NTM0NjQzNDYyNjQzMDM5MzA2NTM1MzA+IF0KL0VuY3J5cHQgOCAwIFIKPj4Kc3RhcnR4cmVmCjkzNAolJUVPRgo=',file=path.join(tempDir,'encrypted-statement.pdf');
   fs.writeFileSync(file,Buffer.from(encoded,'base64'));
