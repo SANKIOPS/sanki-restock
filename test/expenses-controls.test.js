@@ -1442,6 +1442,7 @@ test('any manual ledger movement can be linked to a bank row, remarked and undon
   fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const linked=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-LINK-ALL',rowId:'bank-0',action:'link_existing',appId:'TR-LINK-ALL',reason:'Bank date is final',remark:'Verified transfer'}});
   assert.equal(linked.status,200,JSON.stringify(linked.body));assert.ok(linked.body.rows.some(x=>x.status==='resolved'&&x.bank&&x.app&&x.app.id==='TR-LINK-ALL'));
+  let immediatelySaved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(immediatelySaved.bankDateOverrides['TR-LINK-ALL'].bankDate,'2026-08-24');assert.equal(immediatelySaved.bankDateOverrides['TR-LINK-ALL'].originalDate,'2026-08-25');
   const remarked=invoke('POST','/api/expenses/bank-statements/remark',{role:'admin',body:{draftId:'BRD-LINK-ALL',remark:'August continuation statement'}});assert.equal(remarked.body.periodRemark,'August continuation statement');
   const undone=invoke('POST','/api/expenses/bank-statements/undo',{role:'admin',body:{draftId:'BRD-LINK-ALL',rowId:'bank-0'}});assert.equal(undone.status,200);assert.ok(undone.body.rows.some(x=>x.id==='bank-0'&&x.status!=='resolved'));
   assert.equal(invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:'BRD-LINK-ALL',rowId:'bank-0',action:'link_existing',appId:'TR-LINK-ALL',reason:'Bank date is final'}}).status,200);
@@ -2815,6 +2816,15 @@ test('undoing a draft bank match clears its temporary lock so the payment can be
  const undone=invoke('POST','/api/expenses/bank-statements/undo',{role:'owner',body:{draftId,rowId:'bank-0'}});assert.equal(undone.status,200,JSON.stringify(undone.body));
  const afterUndo=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(afterUndo.bankDateOverrides[ref],undefined);
  const unpaid=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'owner',params:{id,paymentId:'PAY-001'},body:{reason:'Payment was linked incorrectly'}});assert.equal(unpaid.status,200,JSON.stringify(unpaid.body));assert.equal(unpaid.body.expense.status,'approved');
+});
+
+test('a stale temporary bank-date marker from an already-undone active draft does not disable Unpay',()=>{
+ const file=path.join(tempDir,'expenses.json'),s=JSON.parse(fs.readFileSync(file,'utf8')),id='EX-UNPAY-STALE',ref=id+'/PAY-001',draftId='BRD-UNPAY-STALE';
+ s.expenses[id]={id,date:'2026-09-25',nature:'SANKI',amount:50,paidAmount:50,status:'paid',approvedAt:'2026-09-25',payments:[{id:'PAY-001',date:'2026-09-26',amount:50,account:'IndusInd Bank 8181'}]};
+ s.bankDateOverrides={[ref]:{bankDate:'2026-09-25',reconciliationDraft:draftId}};s.bankStatements={};
+ s.bankReconciliationDrafts={[draftId]:{id:draftId,nature:'SANKI',account:'IndusInd Bank 8181',transactions:[],summary:{from:'2026-09-25',to:'2026-09-25'},resolutions:{}}};fs.writeFileSync(file,JSON.stringify(s));
+ const listed=invoke('GET','/api/expenses/list',{role:'owner',query:{search:id}}).body.expenses.find(e=>e.id===id);assert.equal(listed.payments[0].unpayBlockedReason,'');
+ const unpaid=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'owner',params:{id,paymentId:'PAY-001'},body:{reason:'Remove incorrectly recorded payment'}});assert.equal(unpaid.status,200,JSON.stringify(unpaid.body));
 });
 
 test('bank reconciliation displays narration from the actual transaction marker',()=>{

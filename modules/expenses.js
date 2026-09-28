@@ -865,6 +865,16 @@ function loadStore() {
 }
 function saveStore(s) {
   sankiCategories.attachGroups(s);
+  // Once a reconciliation records the ledger's original date, later views may
+  // expose the authoritative bank date as the row date. Never let a subsequent
+  // save replace the audit/undo date with that displayed bank date.
+  try {
+    const persisted=JSON.parse(fs.readFileSync(EXP_PATH,'utf8'));
+    Object.entries(s.bankDateOverrides||{}).forEach(([id,current])=>{
+      const previous=persisted.bankDateOverrides&&persisted.bankDateOverrides[id];
+      if(current&&previous&&current.reconciliationDraft===previous.reconciliationDraft&&previous.originalDate)current.originalDate=previous.originalDate;
+    });
+  } catch {}
   // Failed atomic writes must not leave partial files behind and make every
   // later accounting save fail.
   const dir=path.dirname(EXP_PATH),prefix=path.basename(EXP_PATH)+'.tmp-';
@@ -2006,15 +2016,22 @@ function nextExpensePaymentId(s,e) {
 
 // Shared by the list UI and mutation guard; never silently detach bank evidence.
 function unpayBlockedReferences(s) {
-  const refs=new Set(Object.keys(s.bankDateOverrides||{}));
+  const refs=new Set(),activeDrafts=s.bankReconciliationDrafts||{};
   Object.values(s.bankStatements||{}).forEach(book=>(book.imports||[]).forEach(record=>
     [].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(row=>{
       (row.linkedRecordIds||[]).forEach(id=>refs.add(id));
       if(row.ledger&&row.ledger.id)refs.add(row.ledger.id);
     })));
-  Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>Object.values(draft.resolutions||{}).forEach(r=>{
+  Object.values(activeDrafts).forEach(draft=>Object.values(draft.resolutions||{}).forEach(r=>{
     if(r.appId)refs.add(r.appId);(r.appIds||[]).forEach(id=>refs.add(id));
   }));
+  // Finalized/legacy overrides remain authoritative. An override belonging to
+  // an active draft is authoritative only while that draft still references
+  // the ledger entry; older undo logic could leave this temporary marker stale.
+  Object.entries(s.bankDateOverrides||{}).forEach(([id,x])=>{
+    const draftId=String(x&&x.reconciliationDraft||'');
+    if(!draftId||!activeDrafts[draftId]||refs.has(id))refs.add(id);
+  });
   return refs;
 }
 function unpayBlockedReason(e,p,refs) {
@@ -3159,7 +3176,7 @@ function appBankMovements(s,account,nature){const rows=[],n=normalizedNature(nat
   return rows.map(x=>{let row=x;if(card)row=Object.assign({},x,{debit:num(x.credit),credit:num(x.debit)});const override=(s.bankDateOverrides||{})[row.id];return override?Object.assign({},row,{originalDate:row.date,date:override.bankDate,bankDateOverride:override}):row;});}
 function applyReviewedBankDates(s,draft){
   if(!draft)return 0;s.bankDateOverrides=s.bankDateOverrides||{};s.bankReconciliationLinks=s.bankReconciliationLinks||{};const movements=appBankMovements(s,draft.account,draft.nature),movementFor=id=>movements.find(x=>x.id===id||(x.sourceIds||[]).includes(id)),now=new Date().toISOString(),groups=new Map();let changed=0;
-  Object.entries(draft.resolutions||{}).forEach(([rowId,r])=>{if(r.action==='link_multiple_bank_entries'&&r.groupId){groups.set(r.groupId,r);return;}const appIds=['link_multiple_existing','link_with_rounding','vendor_advance_split'].includes(r.action)?(r.appIds||[]):['accept_match','link_existing','opening_vendor_payable_split'].includes(r.action)&&r.appId?[r.appId]:[];if(!appIds.length)return;const index=Number(String(rowId).replace('bank-','')),bank=(draft.transactions||[])[index];if(!bank)return;appIds.forEach(appId=>{const movement=movementFor(appId),existing=s.bankDateOverrides[appId];if(existing&&existing.reconciliationDraft!==draft.id)return;s.bankDateOverrides[appId]={bankDate:bank.date,originalDate:movement&&movement.originalDate||movement&&movement.date||existing&&existing.originalDate||'',bankReference:String(bank.reference||''),reconciliationDraft:draft.id,provisional:true,remark:r.remark||r.reason||'Reviewed bank match; bank date is authoritative',by:r.by||draft.createdBy||'system',at:r.at||now};changed+=1;});});
+  Object.entries(draft.resolutions||{}).forEach(([rowId,r])=>{if(r.action==='link_multiple_bank_entries'&&r.groupId){groups.set(r.groupId,r);return;}const appIds=['link_multiple_existing','link_with_rounding','vendor_advance_split'].includes(r.action)?(r.appIds||[]):['accept_match','link_existing','opening_vendor_payable_split','split_allocation'].includes(r.action)&&r.appId?[r.appId]:[];if(!appIds.length)return;const index=Number(String(rowId).replace('bank-','')),bank=(draft.transactions||[])[index];if(!bank)return;appIds.forEach(appId=>{const movement=movementFor(appId),existing=s.bankDateOverrides[appId];if(existing&&existing.reconciliationDraft!==draft.id)return;s.bankDateOverrides[appId]={bankDate:bank.date,originalDate:movement&&movement.originalDate||movement&&movement.date||existing&&existing.originalDate||'',bankReference:String(bank.reference||''),reconciliationDraft:draft.id,provisional:true,remark:r.remark||r.reason||'Reviewed bank match; bank date is authoritative',by:r.by||draft.createdBy||'system',at:r.at||now};changed+=1;});});
   groups.forEach(r=>{const rows=(r.bankRowIds||[]).map(id=>{const index=Number(String(id).replace('bank-','')),bank=(draft.transactions||[])[index];return bank?{bankRowId:id,date:bank.date,reference:String(bank.reference||''),description:String(bank.description||''),debit:num(bank.debit),credit:num(bank.credit)}:null;}).filter(Boolean),appId=r.appId,movement=movementFor(appId),existing=s.bankDateOverrides[appId];if(!appId||!rows.length||existing&&existing.reconciliationDraft!==draft.id)return;s.bankReconciliationLinks[appId]={type:'multiple_bank_entries',reconciliationDraft:draft.id,bankTransactions:rows,provisional:true,remark:r.remark||r.reason||'',by:r.by||draft.createdBy||'system',at:r.at||now};s.bankDateOverrides[appId]={bankDate:rows.map(x=>x.date).sort().at(-1),originalDate:movement&&movement.originalDate||movement&&movement.date||existing&&existing.originalDate||'',bankReferences:rows.map(x=>x.reference).filter(Boolean),reconciliationDraft:draft.id,provisional:true,remark:r.remark||r.reason||'Reviewed grouped bank match; bank date is authoritative',by:r.by||draft.createdBy||'system',at:r.at||now};changed+=1;});return changed;
 }
 const RECONCILIATION_IDENTITY_STOP_WORDS=new Set(['bank','payment','payments','transfer','transferred','transaction','account','limited','india','indusind','federal','axis','state','yes','upi','imps','neft','rtgs','ift','inb','p2a','p2m','kumar','singh','private','services']);
@@ -3535,9 +3552,9 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     if(!row.bank||!(total>0)||!(principal>0)||!(charge>0)||Math.abs(principal+charge-total)>.01)return res.status(400).json({success:false,error:'Main ledger amount plus charges must exactly equal the bank debit.'});
   }
   if(b.action==='exclude'&&row.app&&row.app.id){if(!setLedgerMovementExcluded(s,row.app.id,true,b.reason,req.user.username))return res.status(400).json({success:false,error:'This ledger entry cannot be excluded automatically. Move it to the correct account instead.'});audit(s,req,'LEDGER_ENTRY_EXCLUDED','ledger',row.app.id,{nature:draft.nature,account:draft.account,before:{counted:true},after:{counted:false},note:String(b.reason||'')});}
-  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:b.action,reason:String(b.reason||'').trim(),category,chargeCategory,appId:['opening_vendor_payable_split','link_existing'].includes(b.action)?String(b.appId||'').trim():row.app&&row.app.id,excludedEntry:b.action==='exclude'&&row.app?Object.assign({},row.app):null,appIds:Array.isArray(b.appIds)?b.appIds:[],appNet:num(b.appNet),roundingAmount:num(b.roundingAmount),advanceAmount:num(b.advanceAmount),advanceExpenseIds:Array.isArray(b.advanceExpenseIds)?b.advanceExpenseIds:[],advanceApplications:Array.isArray(b.advanceApplications)?b.advanceApplications:[],otherAccount:String(b.otherAccount||'').trim(),grossAmount:num(b.grossAmount),chargeAmount:num(b.chargeAmount),paytmChargeAmount:num(b.paytmChargeAmount),hiddenChargeAmount:num(b.hiddenChargeAmount),orderIds:Array.isArray(b.orderIds)?b.orderIds.map(String).filter(Boolean):[],transferIds:Array.isArray(b.transferIds)?b.transferIds.map(String).filter(Boolean):[],otherReceipts:Array.isArray(b.otherReceipts)?b.otherReceipts:[],principalAmount:num(b.principalAmount),openingPayableAmount:num(b.openingPayableAmount),openingNature:normalizedNature(b.openingNature||draft.nature),vendor:String(b.vendor||'').trim(),preSystemDates:String(b.preSystemDates||'').trim(),linkedRowId:b.action==='opening_vendor_payable_split'?(view.rows.find(x=>x.app&&x.app.id===String(b.appId||'').trim())||{}).id||'':String(b.linkedRowId||''),remark:String(b.remark||''),linkedTransferAmount:(Array.isArray(b.transferIds)?b.transferIds:[]).reduce((n,id)=>{const t=(s.transfers||[]).find(x=>x.id===id);return n+num(t&&t.amount);},0),by:req.user.username,at:new Date().toISOString()};
+  draft.resolutions=draft.resolutions||{};draft.resolutions[b.rowId]={action:b.action,reason:String(b.reason||'').trim(),category,chargeCategory,appId:['opening_vendor_payable_split','link_existing','split_allocation'].includes(b.action)?String(b.appId||'').trim():row.app&&row.app.id,excludedEntry:b.action==='exclude'&&row.app?Object.assign({},row.app):null,appIds:Array.isArray(b.appIds)?b.appIds:[],appNet:num(b.appNet),roundingAmount:num(b.roundingAmount),advanceAmount:num(b.advanceAmount),advanceExpenseIds:Array.isArray(b.advanceExpenseIds)?b.advanceExpenseIds:[],advanceApplications:Array.isArray(b.advanceApplications)?b.advanceApplications:[],otherAccount:String(b.otherAccount||'').trim(),grossAmount:num(b.grossAmount),chargeAmount:num(b.chargeAmount),paytmChargeAmount:num(b.paytmChargeAmount),hiddenChargeAmount:num(b.hiddenChargeAmount),orderIds:Array.isArray(b.orderIds)?b.orderIds.map(String).filter(Boolean):[],transferIds:Array.isArray(b.transferIds)?b.transferIds.map(String).filter(Boolean):[],otherReceipts:Array.isArray(b.otherReceipts)?b.otherReceipts:[],principalAmount:num(b.principalAmount),openingPayableAmount:num(b.openingPayableAmount),openingNature:normalizedNature(b.openingNature||draft.nature),vendor:String(b.vendor||'').trim(),preSystemDates:String(b.preSystemDates||'').trim(),linkedRowId:b.action==='opening_vendor_payable_split'?(view.rows.find(x=>x.app&&x.app.id===String(b.appId||'').trim())||{}).id||'':String(b.linkedRowId||''),remark:String(b.remark||''),linkedTransferAmount:(Array.isArray(b.transferIds)?b.transferIds:[]).reduce((n,id)=>{const t=(s.transfers||[]).find(x=>x.id===id);return n+num(t&&t.amount);},0),by:req.user.username,at:new Date().toISOString()};
   draft.resolutions[b.rowId].bankTruth=b.action==='exclude'&&!!row.bank;
-  saveStore(s);res.json(draftReconciliation(s,draft));
+  applyReviewedBankDates(s,draft);saveStore(s);res.json(draftReconciliation(s,draft));
 });
 router.post('/api/expenses/bank-statements/create-expense',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];
@@ -3575,7 +3592,7 @@ function applyFinalizedOpeningVendorPayables(draft,username){
     const adjustment={id:'ADJ-'+String(s.adjSeq).padStart(4,'0'),nature:draft.nature,account:draft.account,amount:-amount,date:bank.date,note:(r.reason||'Pre-system opening vendor payable')+' [Opening vendor payable '+draft.id+']',reconciliationDraft:draft.id,bankRowId:rowId,createdBy:username,createdAt:now};s.adjustments.push(adjustment);
     const payableNature=normalizedNature(r.openingNature||draft.nature),master=vendorMasterForNature(s,payableNature),vendor=String(r.vendor||'Opening vendor').trim();master[vendor.toLowerCase()]=master[vendor.toLowerCase()]||{name:vendor,notes:''};
     s.vendorOpeningPayables=Array.isArray(s.vendorOpeningPayables)?s.vendorOpeningPayables:[];const payable={id:'VOP-'+String(s.adjSeq).padStart(5,'0'),nature:payableNature,vendor,date:bank.date,preSystemDates:r.preSystemDates||'',amount,paidAmount:amount,status:'paid',ledger:'Opening payable (pre-system)',particulars:r.reason||'Pre-system vendor dues paid after books started',account:draft.account,adjustmentId:adjustment.id,bankTransactionId:bankTx&&bankTx.id||'',bankRowId:rowId,reconciliationDraft:draft.id,source:'opening_vendor_payable',createdBy:username,createdAt:now,payments:[{id:'PAY-OPENING',date:bank.date,amount,account:draft.account,proof:'',paidBy:username,reference:bankTx&&bankTx.id||''}]};s.vendorOpeningPayables.push(payable);
-    s.bankDateOverrides=s.bankDateOverrides||{};if(r.appId){const linked=view.rows.find(x=>x.app&&x.app.id===r.appId);s.bankDateOverrides[r.appId]={bankDate:bank.date,originalDate:linked&&linked.app&&linked.app.date||'',bankTransactionId:bankTx&&bankTx.id||'',reconciliationDraft:draft.id,remark:r.remark||r.reason||'',by:username,at:now};}
+    s.bankDateOverrides=s.bankDateOverrides||{};if(r.appId){const linked=view.rows.find(x=>x.app&&x.app.id===r.appId),existing=s.bankDateOverrides[r.appId]||{};s.bankDateOverrides[r.appId]={bankDate:bank.date,originalDate:existing.originalDate||linked&&linked.app&&(linked.app.originalDate||linked.app.date)||'',bankTransactionId:bankTx&&bankTx.id||'',reconciliationDraft:draft.id,remark:r.remark||r.reason||'',by:username,at:now};}
     audit(s,null,'OPENING_VENDOR_PAYABLE_PAID','vendor',vendor,{user:username,device:'Web',nature:payableNature,account:draft.account,after:payable,note:r.reason,draftId:draft.id});
   });
   saveStore(s);
@@ -3610,7 +3627,7 @@ function applyFinalizedCompositeLinks(draft,username){
   const s=loadStore(),now=new Date().toISOString();s.bankDateOverrides=s.bankDateOverrides||{};s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];s.adjustments=Array.isArray(s.adjustments)?s.adjustments:[];
   Object.entries(draft.resolutions||{}).forEach(([bankRowId,r])=>{
     if(!actions.includes(r.action))return;const index=Number(String(bankRowId).replace('bank-','')),bank=(draft.transactions||[])[index];if(!bank)return;
-    (r.appIds||[]).forEach(appId=>{const movement=appBankMovements(s,draft.account,draft.nature).find(x=>x.id===appId);s.bankDateOverrides[appId]={bankDate:bank.date,originalDate:movement&&movement.date||'',bankReference:bank.reference||'',reconciliationDraft:draft.id,remark:r.remark||r.reason||'',by:username,at:now};});
+    (r.appIds||[]).forEach(appId=>{const movement=appBankMovements(s,draft.account,draft.nature).find(x=>x.id===appId),existing=s.bankDateOverrides[appId]||{};s.bankDateOverrides[appId]={bankDate:bank.date,originalDate:existing.originalDate||movement&&(movement.originalDate||movement.date)||'',bankReference:bank.reference||'',reconciliationDraft:draft.id,remark:r.remark||r.reason||'',by:username,at:now};});
     if(r.action==='link_with_rounding'&&!s.adjustments.some(x=>x.reconciliationDraft===draft.id&&x.bankRowId===bankRowId&&x.roundingDifference)){
       s.adjSeq=num(s.adjSeq)+1;const adjustment={id:'ADJ-'+String(s.adjSeq).padStart(4,'0'),nature:draft.nature,account:draft.account,amount:num(r.roundingAmount),date:bank.date,note:(r.reason||'Rounding difference')+' [Rounding reconciliation '+draft.id+']',reconciliationDraft:draft.id,bankRowId,bankReference:bank.reference||'',roundingDifference:true,createdBy:username,createdAt:now};s.adjustments.push(adjustment);audit(s,null,'BANK_ROUNDING_DIFFERENCE_RECORDED','adjustment',adjustment.id,{user:username,device:'Web',nature:draft.nature,account:draft.account,after:adjustment,note:r.reason});
     }
@@ -3625,7 +3642,7 @@ router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{const b=req
 function applyFinalizedMultiBankLinks(draft,username){
   if(!draft)return;const groups=new Map();Object.values(draft.resolutions||{}).filter(r=>r.action==='link_multiple_bank_entries'&&r.groupId).forEach(r=>groups.set(r.groupId,r));if(!groups.size)return;
   const s=loadStore(),now=new Date().toISOString();s.bankReconciliationLinks=s.bankReconciliationLinks||{};s.bankDateOverrides=s.bankDateOverrides||{};
-  groups.forEach(r=>{const rows=(r.bankRowIds||[]).map(id=>{const index=Number(String(id).replace('bank-','')),bank=(draft.transactions||[])[index];return bank?{bankRowId:id,date:bank.date,reference:String(bank.reference||''),description:String(bank.description||''),debit:num(bank.debit),credit:num(bank.credit)}:null;}).filter(Boolean);if(!r.appId||!rows.length)return;const movement=appBankMovements(s,draft.account,draft.nature).find(x=>x.id===r.appId);s.bankReconciliationLinks[r.appId]={type:'multiple_bank_entries',reconciliationDraft:draft.id,bankTransactions:rows,remark:r.remark||r.reason||'',by:username,at:now};s.bankDateOverrides[r.appId]={bankDate:rows.map(x=>x.date).sort().at(-1),originalDate:movement&&movement.date||'',bankReferences:rows.map(x=>x.reference).filter(Boolean),reconciliationDraft:draft.id,remark:r.remark||r.reason||'',by:username,at:now};});saveStore(s);
+  groups.forEach(r=>{const rows=(r.bankRowIds||[]).map(id=>{const index=Number(String(id).replace('bank-','')),bank=(draft.transactions||[])[index];return bank?{bankRowId:id,date:bank.date,reference:String(bank.reference||''),description:String(bank.description||''),debit:num(bank.debit),credit:num(bank.credit)}:null;}).filter(Boolean);if(!r.appId||!rows.length)return;const movement=appBankMovements(s,draft.account,draft.nature).find(x=>x.id===r.appId),existing=s.bankDateOverrides[r.appId]||{};s.bankReconciliationLinks[r.appId]={type:'multiple_bank_entries',reconciliationDraft:draft.id,bankTransactions:rows,remark:r.remark||r.reason||'',by:username,at:now};s.bankDateOverrides[r.appId]={bankDate:rows.map(x=>x.date).sort().at(-1),originalDate:existing.originalDate||movement&&(movement.originalDate||movement.date)||'',bankReferences:rows.map(x=>x.reference).filter(Boolean),reconciliationDraft:draft.id,remark:r.remark||r.reason||'',by:username,at:now};});saveStore(s);
 }
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];if(!draft)return next();const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success)applyFinalizedMultiBankLinks(draft,req.user.username);return original(payload);};next();});
 function applyFinalizedBankTruth(draft,username){
@@ -3638,8 +3655,31 @@ function applyFinalizedBankTruth(draft,username){
 function applyFinalizedConfirmedMatches(draft,username){
   if(!draft||!Object.values(draft.resolutions||{}).some(r=>r.action==='accept_match'&&r.appId))return;
   const s=loadStore(),book=(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{transactions:{}};s.bankDateOverrides=s.bankDateOverrides||{};
-  Object.entries(draft.resolutions||{}).forEach(([rowId,r])=>{if(r.action!=='accept_match'||!r.appId)return;const index=Number(String(rowId).replace('bank-','')),bank=(draft.transactions||[])[index];if(!bank)return;const movement=appBankMovements(s,draft.account,draft.nature).find(x=>x.id===r.appId),bankTx=Object.values(book.transactions||{}).find(x=>x.date===bank.date&&Math.abs(num(x.debit)-num(bank.debit))<.01&&Math.abs(num(x.credit)-num(bank.credit))<.01&&(x.reference||x.description)===(bank.reference||bank.description));s.bankDateOverrides[r.appId]={bankDate:bank.date,originalDate:movement&&movement.originalDate||movement&&movement.date||'',bankTransactionId:bankTx&&bankTx.id||'',reconciliationDraft:draft.id,remark:r.remark||r.reason||'Confirmed displayed match',by:username,at:new Date().toISOString()};});saveStore(s);
+  Object.entries(draft.resolutions||{}).forEach(([rowId,r])=>{if(r.action!=='accept_match'||!r.appId)return;const index=Number(String(rowId).replace('bank-','')),bank=(draft.transactions||[])[index];if(!bank)return;const movement=appBankMovements(s,draft.account,draft.nature).find(x=>x.id===r.appId),existing=s.bankDateOverrides[r.appId]||{},bankTx=Object.values(book.transactions||{}).find(x=>x.date===bank.date&&Math.abs(num(x.debit)-num(bank.debit))<.01&&Math.abs(num(x.credit)-num(bank.credit))<.01&&(x.reference||x.description)===(bank.reference||bank.description));s.bankDateOverrides[r.appId]={bankDate:bank.date,originalDate:existing.originalDate||movement&&movement.originalDate||movement&&movement.date||'',bankTransactionId:bankTx&&bankTx.id||'',reconciliationDraft:draft.id,remark:r.remark||r.reason||'Confirmed displayed match',by:username,at:new Date().toISOString()};});saveStore(s);
 }
+// A reviewed bank row may already be displaying its statement date before the
+// draft is finalized. Preserve the ledger's pre-reconciliation date so the
+// audit trail and a later undo can always restore the true original value.
+router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{
+  const before=loadStore(),draft=(before.bankReconciliationDrafts||{})[String(req.body&&req.body.draftId||'')];
+  if(!draft)return next();
+  const originalDates={};
+  Object.entries(before.bankDateOverrides||{}).forEach(([id,value])=>{
+    if(value&&value.reconciliationDraft===draft.id&&value.originalDate)originalDates[id]=value.originalDate;
+  });
+  const original=res.json.bind(res);
+  res.json=payload=>{
+    if(payload&&payload.success&&Object.keys(originalDates).length){
+      const after=loadStore();
+      Object.entries(originalDates).forEach(([id,date])=>{
+        if(after.bankDateOverrides&&after.bankDateOverrides[id])after.bankDateOverrides[id].originalDate=date;
+      });
+      saveStore(after);
+    }
+    return original(payload);
+  };
+  next();
+});
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];if(!draft)return next();const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success){applyFinalizedConfirmedMatches(draft,req.user.username);applyFinalizedBankTruth(draft,req.user.username);}return original(payload);};next();});
 // Preserve the furthest verified cutoff when an older gap is completed after a
 // later period. Merged-source metadata keeps the final history understandable.
