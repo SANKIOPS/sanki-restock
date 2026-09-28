@@ -2402,6 +2402,7 @@ test('Paytm clearing shows customer receipt date, bank settlement and charges as
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{}}));
   const legacyEntries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,legacyReceipt=legacyEntries.find(x=>x.kind==='paytm_customer_receipts');
   assert.equal(legacyReceipt.date,'2026-08-21');assert.equal(legacyReceipt.credit,15295);assert.equal(legacyReceipt.connectedSales[0].orderNumber,'SALE15295');assert.equal(legacyEntries.find(x=>x.kind==='paytm_charge').balance,0);
+  assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/paytmWorkspace\.parentNode\.appendChild\(paytmWorkspace\)/,'the ledger table stays above the long Paytm review workspace');
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
