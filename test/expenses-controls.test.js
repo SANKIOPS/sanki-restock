@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
@@ -162,6 +162,17 @@ test('Prashant personal funding is linked to repayments without creating income 
   assert.equal(invoke('GET','/api/expenses/prashant-funding',{role:'admin'}).body.rows.find(x=>x.id===id).due,1500);
   const outgoing=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-09-16',to:'2026-09-17'}}).body;
   assert.equal(outgoing.entries.find(x=>x.id===id+'/'+repaid.body.repayment.id).debit,3000);
+});
+
+test('owner Paytm summary restores every missing settlement without duplicating an existing bank payout',()=>{
+  const store={paytmSettlements:[{id:'PTM-EXISTING',date:'2026-08-22',bankAccount:'Axis Bank 3448',netAmount:14755.36,grossAmount:15295,chargeAmount:539.64}],paytmPayoutPostings:[],paytmVerifiedSettlements:[],oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyHistoricalPaytmSettlementSummary(store),true);
+  assert.equal(store.paytmSettlements.length,6);
+  const restored=store.paytmSettlements.find(x=>x.id==='PTM-HIST-20260905');
+  assert.deepEqual([restored.customerReceiptDate,restored.date,restored.grossAmount,restored.chargeAmount,restored.netAmount],['2026-09-04','2026-09-05',28639,105.31,28533.69]);
+  assert.equal(store.paytmSettlements.filter(x=>x.date==='2026-08-22'&&x.netAmount===14755.36).length,1);
+  assert.equal(store.auditLog.filter(x=>x.action==='PAYTM_SETTLEMENT_IMPORTED').length,5);
+  assert.equal(applyHistoricalPaytmSettlementSummary(store),false);
 });
 
 test('claimant cannot submit an expense without a bill photo', async () => {
