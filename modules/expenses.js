@@ -1928,6 +1928,24 @@ router.post('/api/expenses/:id/pay', (req, res) => {
   res.json({ success: true, expense: e });
 });
 
+// Shared by the list UI and mutation guard; never silently detach bank evidence.
+function unpayBlockedReferences(s) {
+  const refs=new Set(Object.keys(s.bankDateOverrides||{}));
+  Object.values(s.bankStatements||{}).forEach(book=>(book.imports||[]).forEach(record=>
+    [].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(row=>{
+      (row.linkedRecordIds||[]).forEach(id=>refs.add(id));
+      if(row.ledger&&row.ledger.id)refs.add(row.ledger.id);
+    })));
+  Object.values(s.bankReconciliationDrafts||{}).forEach(draft=>Object.values(draft.resolutions||{}).forEach(r=>{
+    if(r.appId)refs.add(r.appId);(r.appIds||[]).forEach(id=>refs.add(id));
+  }));
+  return refs;
+}
+function unpayBlockedReason(e,p,refs) {
+  return p.bankReconciliationDraft||refs.has(e.id+'/'+p.id)
+    ? 'This payment is linked to bank reconciliation. Correct or undo its reconciliation link before removing the payment.' : '';
+}
+
 // Remove one incorrectly recorded vendor payment without deleting the expense.
 // The payment snapshot remains in the audit log so the correction is traceable.
 router.delete('/api/expenses/:id/payments/:paymentId', (req, res) => {
@@ -1941,6 +1959,8 @@ router.delete('/api/expenses/:id/payments/:paymentId', (req, res) => {
   const index=e.payments.findIndex(p=>String(p.id)===String(req.params.paymentId));
   if(index<0)return res.status(404).json({success:false,error:'Payment not found.'});
   const removed=JSON.parse(JSON.stringify(e.payments[index])),appId=e.id+'/'+removed.id;
+  const blockedReason=unpayBlockedReason(e,removed,unpayBlockedReferences(s));
+  if(blockedReason)return res.status(409).json({success:false,error:blockedReason});
   e.payments.splice(index,1);
 
   // A consolidated payment stores cross-links on every allocation. Remove the
@@ -2124,6 +2144,8 @@ router.get('/api/expenses/list', (req, res) => {
   const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(200, Math.floor(requestedLimit)) : 0;
   const totalCount = list.length;
   if (limit) list = list.slice(0, limit);
+  const blockedRefs=unpayBlockedReferences(s);
+  list=list.map(e=>Object.assign({},e,{payments:(e.payments||[]).map(p=>Object.assign({},p,{unpayBlockedReason:unpayBlockedReason(e,p,blockedRefs)}))}));
   res.json({ success: true, expenses: list, totals, totalCount, hasMore: totalCount > list.length });
 });
 

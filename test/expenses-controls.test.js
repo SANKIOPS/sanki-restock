@@ -2471,3 +2471,32 @@ test('Owner can replace a deleted expense link in finalized reconciliation with 
     const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Correct link/);assert.match(html,/correct-finalized-link/);assert.match(html,/View correction history/);assert.match(html,/Previous link:/);assert.match(html,/Corrected link:/);assert.match(html,/Changed by/);
   }finally{fs.writeFileSync(expenseFile,baseline);}
 });
+
+test('unpay preserves other payments, advances, bill and archived payment proofs',()=>{
+  const file=path.join(tempDir,'expenses.json'),s=JSON.parse(fs.readFileSync(file,'utf8')),id='EX-UNPAY-PARTIAL';
+  const first={id:'PAY-001',amount:40,account:'Counter Cash',proof:'/api/expenses/photo/keep.jpg',proofs:['/api/expenses/photo/keep.jpg'],paidAt:'2026-09-01T10:00:00Z'},second={id:'PAY-002',amount:60,account:'Counter Cash',proof:'/api/expenses/photo/remove.jpg',proofs:['/api/expenses/photo/remove.jpg'],paidAt:'2026-09-02T10:00:00Z'};
+  s.expenses[id]={id,date:'2026-09-01',nature:'SANKI',amount:120,paidAmount:120,status:'paid',approvedAt:'2026-09-01',billPhoto:'/api/expenses/photo/bill.jpg',payments:[first,second],vendorAdvanceApplications:[{vendorAdvanceId:'ADV-KEEP',amount:20}]};fs.writeFileSync(file,JSON.stringify(s));
+  const out=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'admin',params:{id,paymentId:'PAY-002'},body:{reason:'Wrong payment'}});assert.equal(out.status,200);
+  assert.deepEqual(out.body.expense.payments,[first]);assert.equal(out.body.expense.paidAmount,60);assert.equal(out.body.expense.status,'partially_paid');assert.equal(out.body.expense.billPhoto,'/api/expenses/photo/bill.jpg');assert.equal(out.body.expense.paymentProof,first.proof);assert.equal(out.body.expense.vendorAdvanceApplications[0].amount,20);
+  const saved=JSON.parse(fs.readFileSync(file,'utf8')),event=saved.auditLog.find(x=>x.subjectId===id&&x.action==='PAYMENT_REMOVED');assert.deepEqual(event.before,second);assert.equal(event.note,'Wrong payment');
+});
+
+test('unpay rejects reconciled and draft-linked payments without changing records or audit',()=>{
+ const file=path.join(tempDir,'expenses.json'),id='EX-UNPAY-LOCK',ref=id+'/PAY-001';
+ for(const mode of ['override','finalized','carried','draft','draftMultiple','origin']){
+  const s=JSON.parse(fs.readFileSync(file,'utf8'));s.expenses[id]={id,date:'2026-09-01',nature:'SANKI',amount:40,paidAmount:40,status:'paid',approvedAt:'2026-09-01',payments:[{id:'PAY-001',amount:40,account:'Counter Cash',...(mode==='origin'?{bankReconciliationDraft:'D-LOCK'}:{})}]};
+  s.bankDateOverrides={};s.bankStatements={};s.bankReconciliationDrafts={};
+  if(mode==='override')s.bankDateOverrides[ref]={bankDate:'2026-09-01'};
+  if(mode==='finalized'||mode==='carried')s.bankStatements.LOCK={imports:[{id:'BST-LOCK',[mode==='carried'?'carriedReconciliationRows':'reconciliationRows']:[{linkedRecordIds:[ref]}]}]};
+  if(mode.startsWith('draft'))s.bankReconciliationDrafts.LOCK={resolutions:{row:mode==='draft'?{appId:ref}:{appIds:[ref,'OTHER']}}};
+  fs.writeFileSync(file,JSON.stringify(s));
+  const listed=invoke('GET','/api/expenses/list',{role:'owner',query:{search:id}}).body.expenses.find(e=>e.id===id);assert.match(listed.payments[0].unpayBlockedReason,/reconciliation/);
+  const before=fs.readFileSync(file,'utf8');const out=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'owner',params:{id,paymentId:'PAY-001'},body:{reason:'Correction'}});assert.equal(out.status,409,mode);assert.equal(fs.readFileSync(file,'utf8'),before,mode);
+ }
+});
+
+test('unpay enforces role and entity permissions even with a valid payment id',()=>{
+ const params={id:'EX-UNPAY-LOCK',paymentId:'PAY-001'},body={reason:'Correction'};
+ assert.equal(invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'claimant',params,body}).status,403);
+ assert.equal(invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'samast_accounting',params,body}).status,403);
+});
