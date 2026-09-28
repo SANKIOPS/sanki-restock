@@ -369,6 +369,37 @@ function applyCashCounterMissingEntries(s) {
   s.oneTimeMigrations[key]={appliedAt:now,source:'Cash Counter Missing Entries.xlsx',added,existing,rows:rows.length};
   return true;
 }
+function applyAxis3448PaytmBankTruthSettlements(s) {
+  const key='axis-3448-paytm-bank-truth-2026-08-26-to-2026-09-02-v1';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return false;
+  s.paytmSettlements=Array.isArray(s.paytmSettlements)?s.paytmSettlements:[];
+  const now=new Date().toISOString(),corrected=[],added=[],existing=[];
+  const aug26=s.paytmSettlements.find(x=>x.id==='PTM-HIST-20260826'||(String(x.date||'')==='2026-08-26'&&Math.abs(num(x.netAmount)-16852.68)<.01));
+  if(aug26){
+    const before={netAmount:aug26.netAmount,grossAmount:aug26.grossAmount,chargeAmount:aug26.chargeAmount,bankReference:aug26.bankReference||''};
+    Object.assign(aug26,{date:'2026-08-26',customerReceiptDate:'2026-08-25',netAmount:16148.68,grossAmount:17093,chargeAmount:944.32,paytmChargeAmount:944.32,bankReference:'PB0309232845',reason:'Owner-verified Axis 3448 Paytm settlement'});
+    corrected.push(aug26.id);
+    audit(s,null,'PAYTM_SETTLEMENT_BANK_TRUTH_CORRECTED','account',PAYTM_CLEARING_ACCOUNT,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:PAYTM_CLEARING_ACCOUNT,before,after:aug26,note:'Axis 3448 statement confirms ₹16,148.68 on 26 August under PB0309232845; ₹944.32 was deducted from ₹17,093.'});
+  }
+  const rows=[
+    ['2026-08-28',7343.38,'PB0310004852'],
+    ['2026-08-29',1750,'PB0310361017'],
+    ['2026-08-30',9307.83,'PB0310731873'],
+    ['2026-08-31',9836.26,'PB0311085285'],
+    ['2026-09-01',10706,'PB0311463599'],
+    ['2026-09-02',3998,'PB0311837377']
+  ];
+  rows.forEach(([date,netAmount,bankReference])=>{
+    const duplicate=s.paytmSettlements.find(x=>String(x.date||'')===date&&Math.abs(num(x.netAmount)-netAmount)<.01);
+    if(duplicate){if(!duplicate.bankReference)duplicate.bankReference=bankReference;existing.push(duplicate.id);return;}
+    const settlement={id:'PTM-BANK-'+date.replace(/-/g,''),date,bankAccount:DEFAULT_SALES_BANK,netAmount,grossAmount:netAmount,chargeAmount:0,paytmChargeAmount:0,bankReference,orderIds:[],transferIds:[],otherReceipts:[],reason:'Axis 3448 bank-confirmed Paytm settlement; gross and fee detail pending',source:'owner_axis_3448_reconciliation_screenshot',bankTruthOnly:true,createdBy:'gaganlambasanki',createdAt:now};
+    s.paytmSettlements.push(settlement);added.push(settlement.id);
+    audit(s,null,'PAYTM_SETTLEMENT_RESTORED_FROM_BANK','account',PAYTM_CLEARING_ACCOUNT,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:PAYTM_CLEARING_ACCOUNT,after:settlement,note:'Restored the missing Paytm-to-Axis clearing movement from the Axis 3448 statement; no gross receipt or fee was invented.'});
+  });
+  s.oneTimeMigrations[key]={appliedAt:now,account:DEFAULT_SALES_BANK,corrected,added,existing,bankTruthDates:['2026-08-26','2026-08-28','2026-08-29','2026-08-30','2026-08-31','2026-09-01','2026-09-02']};
+  return true;
+}
 function applyOwnerConfirmedAxis3645Cases(s) {
   const migrationKey='owner-confirmed-axis-3645-cases-2026-08-22-to-2026-08-27-v1',account='Prashant Axis 3645',now=new Date().toISOString();
   s.oneTimeMigrations=s.oneTimeMigrations||{};s.vendorAdvances=Array.isArray(s.vendorAdvances)?s.vendorAdvances:[];s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.adjustments=Array.isArray(s.adjustments)?s.adjustments:[];s.salesRefunds=Array.isArray(s.salesRefunds)?s.salesRefunds:[];s.bankDateOverrides=s.bankDateOverrides||{};
@@ -3009,7 +3040,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
         const gross=roundMoney(num(order.total));
         entries.push({id:'PAYTM-PENDING/'+orderId,date,kind:'paytm_pending_sale',description:'Shopify sale #'+orderNumber+' · Paytm amount pending report verification',reference:'#'+orderNumber,credit:0,debit:0,orderId,orderNumber,orderTotal:gross,noteSuffixes:suffixes});
       });
-      (s.paytmSettlements||[]).forEach(st=>{const keys=(st.orderIds||[]).map(id=>String(id||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')),alreadyShown=Object.values(daily).some(day=>{const saleKeys=new Set(day.sales.flatMap(sale=>[sale.orderNumber,sale.orderId,sale.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')));return keys.some(id=>saleKeys.has(id))||Math.abs(num(st.grossAmount)-day.total)<.01;});if(alreadyShown)return;const fallback=new Date(String(st.date||'')+'T00:00:00Z');fallback.setUTCDate(fallback.getUTCDate()-1);const receiptDate=st.customerReceiptDate||fallback.toISOString().slice(0,10),gross=num(st.grossAmount||num(st.netAmount)+num(st.chargeAmount)),day=daily[receiptDate]||(daily[receiptDate]={date:receiptDate,total:0,sales:[],forcedSettlements:[]});day.total+=gross;day.forcedSettlements.push(st.id);keys.forEach(id=>day.sales.push({id:'SETTLEMENT/'+st.id+'/'+id,orderNumber:id,amount:keys.length===1?gross:null,description:'Connected sale'}));});
+      (s.paytmSettlements||[]).forEach(st=>{if(st.bankTruthOnly)return;const keys=(st.orderIds||[]).map(id=>String(id||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')),alreadyShown=Object.values(daily).some(day=>{const saleKeys=new Set(day.sales.flatMap(sale=>[sale.orderNumber,sale.orderId,sale.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,'')));return keys.some(id=>saleKeys.has(id))||Math.abs(num(st.grossAmount)-day.total)<.01;});if(alreadyShown)return;const fallback=new Date(String(st.date||'')+'T00:00:00Z');fallback.setUTCDate(fallback.getUTCDate()-1);const receiptDate=st.customerReceiptDate||fallback.toISOString().slice(0,10),gross=num(st.grossAmount||num(st.netAmount)+num(st.chargeAmount)),day=daily[receiptDate]||(daily[receiptDate]={date:receiptDate,total:0,sales:[],forcedSettlements:[]});day.total+=gross;day.forcedSettlements.push(st.id);keys.forEach(id=>day.sales.push({id:'SETTLEMENT/'+st.id+'/'+id,orderNumber:id,amount:keys.length===1?gross:null,description:'Connected sale'}));});
       Object.values(daily).forEach(x=>{const saleKeys=new Set(x.sales.flatMap(s=>[s.orderNumber,s.orderId,s.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,''))),linkedSettlements=(s.paytmSettlements||[]).filter(st=>(x.forcedSettlements||[]).includes(st.id)||(st.orderIds||[]).some(id=>saleKeys.has(String(id).replace(/^#/,'').replace(/^SHOPIFY\//,'')))||Math.abs(num(st.grossAmount)-x.total)<.01),knownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+num(st.chargeAmount),0)*100)/100,unknownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+Math.max(0,num(st.grossAmount)-num(st.netAmount)-num(st.chargeAmount)),0)*100)/100,hasIndividualSales=x.sales.some(sale=>!String(sale.id||'').startsWith('SETTLEMENT/'));entries.push({id:'PAYTM-RECEIPTS/'+x.date,date:x.date,kind:'paytm_customer_receipts',description:'Daily Paytm sales summary',credit:hasIndividualSales?0:roundMoney(x.total),debit:0,connectedSales:x.sales,paytmSummary:{gross:roundMoney(x.total),knownCharges,unknownCharges,settlementIds:linkedSettlements.map(st=>st.id)}});});
     }else automaticSales.forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0,orderId:x.orderId||'',orderNumber:x.orderNumber||'',gross:num(x.gross||x.amount),cashAmount:x.cashAmount,nonCashAmount:x.nonCashAmount,allocationPart:x.allocationPart||'',saleAllocation:x.saleAllocation||null,editableSale:String(x.id||'').startsWith('SHOPIFY/')}));
   }
@@ -4164,6 +4195,7 @@ function summaryForPL(from, to) {
 // than waiting for the first user to open an Expenses screen.
 const startupExpenseFileExists=fs.existsSync(EXP_PATH),startupExpenseStore=loadStore(),startupDraftAccounts=new Set(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).map(x=>normalizedNature(x.nature)+'|'+x.account));let startupReconciliationRepaired=startupExpenseFileExists&&applyHistoricalPaytmSettlementSummary(startupExpenseStore);if(applyIndus8181TransferDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep15DebitDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep15OmDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep16DebitDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep16SanviDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep16PersonalExpenseCorrection(startupExpenseStore))startupReconciliationRepaired=true;if(applyIndus8181Sep18DebitDateCorrection(startupExpenseStore))startupReconciliationRepaired=true;startupDraftAccounts.forEach(key=>{const separator=key.indexOf('|'),nature=key.slice(0,separator),account=key.slice(separator+1),count=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).length;if(count>1){mergeActiveBankReconciliationDrafts(startupExpenseStore,account,nature);startupReconciliationRepaired=true;}const draft=Object.values(startupExpenseStore.bankReconciliationDrafts||{}).find(x=>normalizedNature(x.nature)===nature&&x.account===account);if(draft&&extendPendingDraftThroughFinalizedCoverage(startupExpenseStore,draft))startupReconciliationRepaired=true;if(draft&&repairBankDraftSummaryArithmetic(draft))startupReconciliationRepaired=true;});if(startupReconciliationRepaired)saveStore(startupExpenseStore);
 if(startupExpenseFileExists&&applyCashCounterMissingEntries(startupExpenseStore))saveStore(startupExpenseStore);
+if(startupExpenseFileExists&&applyAxis3448PaytmBankTruthSettlements(startupExpenseStore))saveStore(startupExpenseStore);
 if(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).reduce((count,draft)=>count+applyReviewedBankDates(startupExpenseStore,draft),0)>0)saveStore(startupExpenseStore);
 
 router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
@@ -4181,6 +4213,7 @@ router.use((error,req,res,next)=>{
 module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyOwnerConfirmedEx00132GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
 require('./rental-register').register(router,{loadStore,saveStore,isOwner,audit});
 module.exports.applyCashCounterMissingEntries = applyCashCounterMissingEntries;
+module.exports.applyAxis3448PaytmBankTruthSettlements = applyAxis3448PaytmBankTruthSettlements;
 module.exports.applyFinalizedConfirmedMatches = applyFinalizedConfirmedMatches;
 module.exports.applyFinalizedBankTruth = applyFinalizedBankTruth;
 module.exports.mergeActiveBankReconciliationDrafts = mergeActiveBankReconciliationDrafts;

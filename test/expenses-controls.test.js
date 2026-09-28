@@ -12,6 +12,7 @@ const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPerso
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const { applyCashCounterMissingEntries } = require('../modules/expenses');
+const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -180,6 +181,19 @@ test('owner workbook restores the six missing Cash Counter transfers exactly onc
   assert.equal(store.auditLog.filter(x=>x.action==='HISTORICAL_TRANSFER_RESTORED').length,6);
   assert.equal(applyCashCounterMissingEntries(store),false);
   assert.equal(store.transfers.length,6);
+});
+
+test('Axis 3448 bank truth corrects and restores missing Paytm clearing settlements',()=>{
+  const store={paytmSettlements:[{id:'PTM-HIST-20260826',date:'2026-08-26',bankAccount:'Axis Bank 3448',netAmount:16852.68,grossAmount:17445,chargeAmount:592.32}],oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyAxis3448PaytmBankTruthSettlements(store),true);
+  const corrected=store.paytmSettlements.find(x=>x.id==='PTM-HIST-20260826');
+  assert.deepEqual([corrected.date,corrected.netAmount,corrected.grossAmount,corrected.chargeAmount,corrected.bankReference],['2026-08-26',16148.68,17093,944.32,'PB0309232845']);
+  assert.deepEqual(store.paytmSettlements.filter(x=>x.bankTruthOnly).map(x=>[x.date,x.netAmount,x.bankReference]),[
+    ['2026-08-28',7343.38,'PB0310004852'],['2026-08-29',1750,'PB0310361017'],['2026-08-30',9307.83,'PB0310731873'],['2026-08-31',9836.26,'PB0311085285'],['2026-09-01',10706,'PB0311463599'],['2026-09-02',3998,'PB0311837377']
+  ]);
+  assert.equal(store.paytmSettlements.filter(x=>x.bankTruthOnly).every(x=>x.grossAmount===x.netAmount&&x.chargeAmount===0),true,'unknown gross receipts and fees are not invented');
+  assert.equal(applyAxis3448PaytmBankTruthSettlements(store),false);
+  assert.equal(store.paytmSettlements.length,7);
 });
 
 test('owner Paytm summary restores every missing settlement without duplicating an existing bank payout',()=>{
