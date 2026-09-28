@@ -2390,18 +2390,18 @@ test('bank-charge reconciliation adjustments become visible spending without dou
   assert.match(source,/Hidden \/ unknown charges/);
 });
 
-test('Paytm clearing shows customer receipt date, bank settlement and charges as separate rows',()=>{
+test('Paytm clearing starts on 22 August and shows settlement and charges separately',()=>{
   const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{sale:{id:'sale-15295',name:'#SALE15295',orderNumber:'SALE15295',createdAt:'2026-08-21T10:00:00Z',financialStatus:'paid',paymentGateways:['Paytm'],total:15295,refundAmount:0}}}));
   stored.paytmSettlements=[{id:'PTM-DISPLAY',date:'2026-08-22',bankAccount:'Axis Bank 3448',bankTransactionId:'BTX-PAYTM-DISPLAY',netAmount:14755.36,grossAmount:15295,chargeAmount:539.64,orderIds:['SALE15295'],reason:'Daily Paytm settlement'}];stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']={transactions:{paytm:{id:'BTX-PAYTM-DISPLAY',date:'2026-08-22',credit:14755.36,debit:0,reference:'PAYTM-REF-22'}},imports:[]};fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
   const entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,receipt=entries.find(x=>x.kind==='paytm_customer_receipts'),sale=entries.find(x=>x.id==='PAYTM-SALE/SHOPIFY/sale-15295'),settlement=entries.find(x=>x.kind==='paytm_settlement'),charge=entries.find(x=>x.kind==='paytm_charge');
   const axisEntries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2026-08-21',to:'2026-08-22'}}).body.entries,axisSettlement=axisEntries.find(x=>x.id==='PTM-DISPLAY');
-  assert.equal(receipt.date,'2026-08-21');assert.equal(receipt.credit,0);assert.equal(sale.credit,15295);assert.equal(receipt.paytmSummary.knownCharges,539.64);assert.equal(receipt.paytmSummary.unknownCharges,0);assert.deepEqual(receipt.connectedSales.map(x=>x.orderNumber),['15295']);
+  assert.equal(receipt,undefined);assert.equal(sale,undefined);assert.equal(entries.some(x=>x.kind!=='opening'&&x.date<'2026-08-22'),false);
   assert.equal(settlement.date,'2026-08-22');assert.equal(settlement.debit,14755.36);assert.equal(settlement.reference,'PAYTM-REF-22');assert.equal(charge.debit,539.64);assert.equal(charge.reference,'PAYTM-REF-22');assert.equal(charge.balance,0);
   assert.equal(axisSettlement.credit,14755.36);assert.equal(axisSettlement.reference,'PAYTM-REF-22');assert.equal(axisSettlement.description,'Paytm settlement from Paytm Settlement Clearing');
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{}}));
   const legacyEntries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,legacyReceipt=legacyEntries.find(x=>x.kind==='paytm_customer_receipts');
-  assert.equal(legacyReceipt.date,'2026-08-21');assert.equal(legacyReceipt.credit,15295);assert.equal(legacyReceipt.connectedSales[0].orderNumber,'SALE15295');assert.equal(legacyEntries.find(x=>x.kind==='paytm_charge').balance,0);
+  assert.equal(legacyReceipt,undefined);assert.equal(legacyEntries.some(x=>x.kind!=='opening'&&x.date<'2026-08-22'),false);
   assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/paytmWorkspace\.parentNode\.appendChild\(paytmWorkspace\)/,'the ledger table stays above the long Paytm review workspace');
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });

@@ -3030,7 +3030,10 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   if(openingEntry)openingEntry.balance=preciseBalance?Math.round(running*100)/100:round0(running);
   ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
   if(openingEntry)ordered.unshift(openingEntry);
-  const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (!expenseNature || !x.entity || x.entity===expenseNature))
+  // Paytm Settlement Clearing begins on 22 August 2026. Earlier activity is
+  // retained only to calculate the brought-forward running balance and is
+  // never exposed as a transaction row in this ledger.
+  const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (account!==PAYTM_CLEARING_ACCOUNT||x.kind==='opening'||String(x.date||'')>=PAYTM_START_DATE) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
   const issues = creditCard?[]:reconciliationIssues(s, nature, account),reconciliation=ledgerReconciliationStatus(s,nature,account);visible.forEach(x=>{let status=reconciliation.index.get(x.id);if(!status&&x.linkedEntryIds&&x.linkedEntryIds.length){const childStatuses=x.linkedEntryIds.map(id=>reconciliation.index.get(id));if(childStatuses.every(Boolean)&&new Set(childStatuses.map(item=>item.reconciliationId)).size===1)status=childStatuses[0];}if(status){x.reconciliation=status;x.rawReference=x.reference||x.id;x.reference=x.rawReference+' · ✓ Reconciled '+(status.bankDate||'')+' · '+status.reconciliationId;}});
   const finalBalance=preciseBalance?Math.round(running*100)/100:round0(running);res.json({ success:true, account, nature, expenseNature, entries:visible, balance:Math.abs(finalBalance)<.005?0:finalBalance, reconciled:issues.length===0, reconciliationIssues:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
