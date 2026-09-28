@@ -2859,7 +2859,14 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   };
   Object.values(s.expenses || {}).forEach(e => {
     const entryNature=normalizedNature(e.nature),entityLabel=' ['+entryNature+']';
-    if (!approvalNatures(req).includes(entryNature)) return;
+    if (!approvalNatures(req).includes(entryNature)) {
+      // A private PERSONAL expense paid from a business bank must still show
+      // its money movement to business-bank operators. Keep the amount,
+      // account date and bank reference visible, but never disclose the
+      // private vendor, particulars, proof or claimant.
+      if(entryNature==='PERSONAL'&&nature==='SANKI')(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p=>entries.push({id:e.id+'/'+p.id,date:p.date,kind:'personal_expense_redacted',entity:'PERSONAL',description:'Owner personal expense · private details restricted [PERSONAL]',reference:p.bankReference||'',credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:'',note:'',by:'',editable:false,privacyRedacted:true}));
+      return;
+    }
     const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
     (e.payments || []).filter(p => !p.accountingExcluded&&paymentIsPosted(e) && (p.account || e.account) === account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,creditCardStatementId:p.creditCardStatementId||'',editable:!p.batchPaymentId&&!p.creditCardStatementId}));
     (e.reimbursementPayments || []).filter(p => !p.accountingExcluded&&p.account === account).forEach(p => p.batchId?addReimbursementBatchItem('paid',e,p,entryNature):entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,editable:true}));
