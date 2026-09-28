@@ -13,6 +13,7 @@ const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPend
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const { applyCashCounterMissingEntries } = require('../modules/expenses');
 const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
+const { stagePaytmSettlementsFromAxisDraft } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -194,6 +195,20 @@ test('Axis 3448 bank truth corrects and restores missing Paytm clearing settleme
   assert.equal(store.paytmSettlements.filter(x=>x.bankTruthOnly).every(x=>x.grossAmount===x.netAmount&&x.chargeAmount===0),true,'unknown gross receipts and fees are not invented');
   assert.equal(applyAxis3448PaytmBankTruthSettlements(store),false);
   assert.equal(store.paytmSettlements.length,7);
+});
+
+test('every Axis Paytm credit automatically stages one exact clearing counterpart',()=>{
+  const store={paytmSettlements:[],auditLog:[],auditSeq:0},draft={id:'BRD-FUTURE',nature:'SANKI',account:'Axis Bank 3448',createdBy:'prashant',transactions:[
+    {date:'2026-09-04',description:'IFT/PB0312600074/PAYTM PAYMENTS SERVICES LIMITED/0/',reference:'PB0312600074',credit:16808.51,debit:0},
+    {date:'2026-09-07',description:'IFT/PB0313706482/PAYTM PAYMENTS SERVICES LIMITED/0/',reference:'PB0313706482',credit:10995,debit:0},
+    {date:'2026-09-07',description:'NEFT/WHITE WIZARD TECHNOLOGIES',reference:'IN22625011513083',credit:2447,debit:0}
+  ]};
+  assert.equal(stagePaytmSettlementsFromAxisDraft(store,draft),2);
+  assert.deepEqual(store.paytmSettlements.map(x=>[x.date,x.netAmount,x.bankReference,x.bankTruthOnly,x.provisional]),[
+    ['2026-09-04',16808.51,'PB0312600074',true,true],['2026-09-07',10995,'PB0313706482',true,true]
+  ]);
+  assert.equal(stagePaytmSettlementsFromAxisDraft(store,draft),0,'reloading the same statement cannot duplicate settlements');
+  assert.equal(store.paytmSettlements.some(x=>x.bankReference==='IN22625011513083'),false,'Velocity receipts remain separate from Paytm');
 });
 
 test('owner Paytm summary restores every missing settlement without duplicating an existing bank payout',()=>{
