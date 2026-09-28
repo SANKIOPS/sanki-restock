@@ -925,6 +925,24 @@ test('Prashant Telegram menu records a screenshot-first paid expense only after 
   assert.match(telegramSource,/Best matching categories/);
 });
 
+test('all entities use the approved catalog without changing historical records',()=>{
+  const file=path.join(tempDir,'expenses.json'),raw=fs.readFileSync(file),s=JSON.parse(raw),plan=require('../modules/sanki-category-plan.json'),final=require('../modules/sanki-category-finalization');
+  s.sankiCategoryCatalog={version:plan.version,categories:[...plan.catalog,...final.additions]};
+  s.oneTimeMigrations[final.KEY]={appliedAt:'test'};
+  fs.writeFileSync(file,JSON.stringify(s));
+  try{
+    const before=JSON.stringify(s.expenses),config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+    for(const nature of ['SANKI','PERSONAL','SAMAST']){
+      assert.equal(config.ledgersByNature[nature].length,73);
+      assert.deepEqual(config.ledgersByNature[nature],config.ledgersByNature.SANKI);
+      assert.ok(!config.ledgersByNature[nature].some(x=>x.name==='Flex Board Expense-A3'||x.name==='Food & Dining'));
+      const rejected=invoke('POST','/api/expenses',{role:'owner',body:{nature,ledger:'Food & Dining',amount:10,vendor:'Test'}});
+      assert.equal(rejected.status,400);assert.match(rejected.body.error,/approved category/);
+    }
+    assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(file)).expenses),before);
+  }finally{fs.writeFileSync(file,raw);}
+});
+
 test('only Admin or Owner can add a missing category during review', () => {
   const created = invoke('POST', '/api/expenses', { body: {
     ledger: 'FOOD EXPENSE', vendor: 'Vendor Corrected', amount: 90,
