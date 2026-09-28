@@ -2782,6 +2782,9 @@ test('unpay preserves other payments, advances, bill and archived payment proofs
   const out=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'admin',params:{id,paymentId:'PAY-002'},body:{reason:'Wrong payment'}});assert.equal(out.status,200);
   assert.deepEqual(out.body.expense.payments,[first]);assert.equal(out.body.expense.paidAmount,60);assert.equal(out.body.expense.status,'partially_paid');assert.equal(out.body.expense.billPhoto,'/api/expenses/photo/bill.jpg');assert.equal(out.body.expense.paymentProof,first.proof);assert.equal(out.body.expense.vendorAdvanceApplications[0].amount,20);
   const saved=JSON.parse(fs.readFileSync(file,'utf8')),event=saved.auditLog.find(x=>x.subjectId===id&&x.action==='PAYMENT_REMOVED');assert.deepEqual(event.before,second);assert.equal(event.note,'Wrong payment');
+  const missingProof=invoke('POST','/api/expenses/:id/pay',{role:'admin',params:{id},body:{amount:60,account:'Counter Cash',paymentType:'Cash',paymentProof:''}});assert.equal(missingProof.status,400);
+  const replacement=invoke('POST','/api/expenses/:id/pay',{role:'admin',params:{id},body:{amount:60,account:'Counter Cash',paymentType:'Cash',paymentProof:'/api/expenses/photo/new-payment.jpg',reconciliationOverrideReason:'Isolated test replacement'}});
+  assert.equal(replacement.status,200);assert.equal(replacement.body.expense.payments.at(-1).id,'PAY-003');assert.equal(replacement.body.expense.status,'paid');
 });
 
 test('unpay rejects reconciled and draft-linked payments without changing records or audit',()=>{
