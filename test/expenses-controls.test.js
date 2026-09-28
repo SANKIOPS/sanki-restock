@@ -522,6 +522,8 @@ test('an audited payment correction removes only the selected payment and reopen
   const event=auditResult.body.records.find(x=>x.id===created.id).timeline.find(x=>x.action==='PAYMENT_REMOVED');
   assert.equal(event.paymentId,'PAY-001');assert.equal(event.before.amount,200);assert.deepEqual(event.after,{paidAmount:0,status:'approved'});assert.equal(event.note,'Payment needs to be modified');
   assert.equal(invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'admin',params:{id:created.id,paymentId:'PAY-001'},body:{reason:'Duplicate request'}}).status,404);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/>Unpay</);assert.match(html,/window\.unpayExpense/);assert.match(html,/An unpay reason is required for the audit trail/);
 });
 
 test('deleted expenses remain visible in audit logs with snapshot, actor and required reason', () => {
