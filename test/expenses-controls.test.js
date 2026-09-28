@@ -11,6 +11,7 @@ process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
+const { applyCashCounterMissingEntries } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
 test.after(() => {
@@ -162,6 +163,23 @@ test('Prashant personal funding is linked to repayments without creating income 
   assert.equal(invoke('GET','/api/expenses/prashant-funding',{role:'admin'}).body.rows.find(x=>x.id===id).due,1500);
   const outgoing=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-09-16',to:'2026-09-17'}}).body;
   assert.equal(outgoing.entries.find(x=>x.id===id+'/'+repaid.body.repayment.id).debit,3000);
+});
+
+test('owner workbook restores the six missing Cash Counter transfers exactly once',()=>{
+  const store={transfers:[],transferSeq:10,oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  assert.equal(applyCashCounterMissingEntries(store),true);
+  assert.deepEqual(store.transfers.map(x=>[x.date,x.fromAccount,x.toAccount,x.amount]),[
+    ['2026-09-12','Counter Cash','Gagan Sir Cash',1000],
+    ['2026-09-13','Counter Cash','Gagan Sir Cash',35000],
+    ['2026-09-15','Counter Cash','Gagan Sir Cash',8000],
+    ['2026-09-16','Gagan Sir Cash','Counter Cash',43000],
+    ['2026-09-16','Counter Cash','Axis Bank 3448',43000],
+    ['2026-09-19','Counter Cash','Axis Bank 3448',29000]
+  ]);
+  assert.equal(store.transfers.reduce((n,x)=>n+(x.toAccount==='Counter Cash'?x.amount:0)-(x.fromAccount==='Counter Cash'?x.amount:0),0),-73000);
+  assert.equal(store.auditLog.filter(x=>x.action==='HISTORICAL_TRANSFER_RESTORED').length,6);
+  assert.equal(applyCashCounterMissingEntries(store),false);
+  assert.equal(store.transfers.length,6);
 });
 
 test('owner Paytm summary restores every missing settlement without duplicating an existing bank payout',()=>{
