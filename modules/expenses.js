@@ -1344,6 +1344,8 @@ function rolesOfReq(req) {
 function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
+const PRASHANT_3448_TRANSFER_DESTINATIONS=new Set(['Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919']);
+function isPrashant3448Transfer(fromNature,toNature,fromAccount,toAccount,classification){return fromNature==='SANKI'&&toNature==='SANKI'&&fromAccount==='Axis Bank 3448'&&PRASHANT_3448_TRANSFER_DESTINATIONS.has(toAccount)&&classification==='internal_transfer';}
 function canLogCreditCardExpense(req){return isAdmin(req)||isPrashant(req);}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
 function paytmReportView(s) {
@@ -1594,7 +1596,7 @@ router.get('/api/expenses/config', (req, res) => {
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
     reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : []])),
-    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645']:[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
+    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919']:[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     claimantPaymentAccountsByUser: (isPrashant(req)||ownerView) ? {arshpreet:CLAIMANT_ACCOUNTS.arshpreet.slice()} : {},
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
@@ -2891,8 +2893,8 @@ router.post('/api/expenses/transfers', (req, res) => {
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
-  const prashantAllowed=isPrashant(req)&&fromNature==='SANKI'&&toNature==='SANKI'&&fromAccount==='Axis Bank 3448'&&toAccount==='Prashant Axis 3645'&&classification==='internal_transfer';
-  if(!isOwner(req)&&!prashantAllowed)return res.status(403).json({success:false,error:'Prashant can record transfers only from Axis Bank 3448 to Prashant Axis 3645.'});
+  const prashantAllowed=isPrashant(req)&&isPrashant3448Transfer(fromNature,toNature,fromAccount,toAccount,classification);
+  if(!isOwner(req)&&!prashantAllowed)return res.status(403).json({success:false,error:'Prashant can record internal transfers from Axis Bank 3448 only to Prashant Axis 3645, IndusInd Bank 8181, or Arshpreet 1919.'});
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
   if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
   if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });

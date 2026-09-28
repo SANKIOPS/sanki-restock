@@ -1262,11 +1262,13 @@ test('Owner can record a transfer through an intermediary without creating an in
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Paid through an intermediary/);assert.match(html,/View intermediary details/);assert.match(html,/Final recipient account/);
 });
 
-test('Prashant can record only the approved Axis 3448 to Axis 3645 transfer route',()=>{
+test('Prashant can record only the approved Axis 3448 transfer routes',()=>{
   const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
-  assert.deepEqual(config.transferAccountsByNature.SANKI,['Axis Bank 3448','Prashant Axis 3645']);assert.deepEqual(config.transferAccountsByNature.SAMAST,[]);
+  assert.deepEqual(config.transferAccountsByNature.SANKI,['Axis Bank 3448','Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919']);assert.deepEqual(config.transferAccountsByNature.SAMAST,[]);
   const allowed=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Prashant Axis 3645',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/prashant-transfer.jpg'}});
   assert.equal(allowed.status,200,JSON.stringify(allowed.body));assert.equal(allowed.body.transfer.createdBy,'prashant');
+  const arshpreet=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Arshpreet 1919',classification:'internal_transfer',amount:613,date:'2026-09-18',proof:'/api/expenses/photo/arshpreet-transfer.jpg'}});assert.equal(arshpreet.status,200,JSON.stringify(arshpreet.body));
+  const indus=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'IndusInd Bank 8181',classification:'internal_transfer',amount:720,date:'2026-09-18',proof:'/api/expenses/photo/8181-transfer.jpg'}});assert.equal(indus.status,200,JSON.stringify(indus.body));
   const reverse=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Prashant Axis 3645',toAccount:'Axis Bank 3448',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/reverse.jpg'}});assert.equal(reverse.status,403);
   const other=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Counter Cash',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/other.jpg'}});assert.equal(other.status,403);
 });
