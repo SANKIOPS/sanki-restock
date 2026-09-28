@@ -194,6 +194,16 @@ test('Paytm link accepts sub-₹5 paise rounding but still blocks duplicate rece
   assert.throws(() => validateOrderLink({}, { transactionId: 'too-large', date: '2026-09-20', amount: 3204.98 }, '2825', orders, [], 'Variance reaches five rupees'), /receipts exceed/);
 });
 
+test('unique Paytm transaction ID links even when Shopify labels its component as another gateway', () => {
+  const transactionId='2026092011000000308475013137266628',tx={ transactionId, date:'2026-09-20', amount:3199 };
+  const order={ id:'2824', number:2824, financialStatus:'paid', createdAt:'2026-09-20T12:00:00Z', total:3198.99, note:'Paytm receipt 266628' };
+  const store={ paytmShopifyPayments:{'2824':{paytmAmount:0,otherAmount:3198.99,transactions:[{id:'card',kind:'sale',gateway:'manual',amount:3198.99}]}} };
+  const matched=autoMatchShopifyNotes(store,{[transactionId]:tx},[order],[]);
+  assert.equal(matched.length,1);
+  assert.equal(store.paytmOrderLinks[transactionId].matchBasis,'transaction_id_suffix_in_shopify_note');
+  assert.equal(store.paytmOrderLinks[transactionId].reason,'');
+});
+
 test('original Paytm receipt remains linkable after partial or full Shopify refund', () => {
   const tx = { transactionId: '202609040000169675', date: '2026-09-04', amount: 4998, posId: 'POS1' };
   const base = { id: 'refunded-order', number: 2776, createdAt: '2026-09-04T12:00:00Z', total: 4998, note: 'Paytm 169675' };
