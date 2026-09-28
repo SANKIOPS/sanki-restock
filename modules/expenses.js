@@ -3058,7 +3058,7 @@ function parseIndusIndMobileStatementText(raw){
   while((match=tailPattern.exec(section))){
     const block=section.slice(priorEnd,match.index),dateMatch=Array.from(block.matchAll(/\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g)).at(-1),date=dateValue(dateMatch&&dateMatch[0]);priorEnd=tailPattern.lastIndex;if(!date)continue;
     const description=block.replace(/DateParticularsChq No\/Ref NoWithdrawalDepositBalance/gi,'').replace(/\d{1,2}\s+[A-Za-z]{3}\s+\d{4}/g,'').replace(/\s+/g,' ').trim(),referenceDigits=match[2],candidates=[];
-    for(let length=6;length<=referenceDigits.length;length++){const money=(referenceDigits.slice(length)+match[3]).match(/\d+\.\d{2}/g)||[];if(money.length!==3)continue;const debit=statementNum(money[0]),credit=statementNum(money[1]),balance=statementNum(money[2]);if((debit>0||credit>0)&&!(debit>0&&credit>0))candidates.push({bankReference:match[1]+referenceDigits.slice(0,length),debit,credit,balance});}
+    for(let length=5;length<=referenceDigits.length;length++){const money=(referenceDigits.slice(length)+match[3]).match(/\d+\.\d{2}/g)||[];if(money.length!==3)continue;const debit=statementNum(money[0]),credit=statementNum(money[1]),balance=statementNum(money[2]);if((debit>0||credit>0)&&!(debit>0&&credit>0))candidates.push({bankReference:match[1]+referenceDigits.slice(0,length),debit,credit,balance});}
     if(!candidates.length)continue;const transactionReference=((description.match(/\b(?:UPI|IMPS\/P2A)\/(\d{10,})/i)||[])[1]||'');rows.push({date,description:description||'IndusInd transaction',reference:transactionReference,transactionReference,candidates,row:rows.length+1});
   }
   if(!rows.length)return rows;
