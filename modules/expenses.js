@@ -47,6 +47,7 @@ const SALES_PATH = process.env.SALES_PATH || path.join(DATA_DIR, 'sales.json');
 const SALARY_PATH = path.join(DATA_DIR, 'salary.json');
 const SAMAST_SALARY_PATH = path.join(DATA_DIR, 'salary-samast.json');
 const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json');
+const VELOCITY_REMITTANCE_PATH = process.env.VELOCITY_REMITTANCE_PATH || path.join(DATA_DIR, 'velocity_remittance.json');
 const STATEMENT_DIR = path.join(DATA_DIR, 'bank-statements');
 const STATEMENT_DRAFT_DIR = path.join(DATA_DIR, 'bank-statement-drafts');
 try { fs.mkdirSync(STATEMENT_DIR, { recursive:true }); } catch {}
@@ -1138,6 +1139,20 @@ function salesLedgerEntries(accountingStore) {
     if (seen.has(key)) return false;
     seen.add(key); return true;
   });
+}
+function velocitySettlementDate(value){
+  if(value instanceof Date&&!isNaN(value))return value.toISOString().slice(0,10);
+  const raw=String(value||'').trim();if(!raw)return'';
+  const iso=raw.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);if(iso)return iso[1]+'-'+iso[2].padStart(2,'0')+'-'+iso[3].padStart(2,'0');
+  const indian=raw.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})/);if(indian){const year=indian[3].length===2?'20'+indian[3]:indian[3];return year+'-'+indian[2].padStart(2,'0')+'-'+indian[1].padStart(2,'0');}
+  const parsed=new Date(raw);return isNaN(parsed)?'':parsed.toISOString().slice(0,10);
+}
+function velocitySettlementBatches(accountingStore){
+  let source={},orders={};try{source=JSON.parse(fs.readFileSync(VELOCITY_REMITTANCE_PATH,'utf8'));}catch{return[];}try{orders=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{}
+  const orderList=Object.values(orders),sales=salesLedgerEntries(accountingStore).filter(x=>x.account===VELOCITY_CLEARING_ACCOUNT),salesByOrder=new Map();sales.forEach(x=>{const key=String(x.orderId||'');if(!key)return;const row=salesByOrder.get(key)||{amount:0,sales:[]};row.amount=roundMoney(row.amount+num(x.amount));row.sales.push(x);salesByOrder.set(key,row);});
+  const clean=value=>String(value||'').toLowerCase().replace(/[^a-z0-9]/g,''),findOrder=entry=>{if(entry.orderId&&orders[String(entry.orderId)])return orders[String(entry.orderId)];const ref=clean(entry.ordRef),awb=clean(entry.awb);return orderList.find(order=>{const refs=[order.id,order.orderNumber,order.number,order.name].map(clean);return(ref&&refs.includes(ref))||(awb&&(order.fulfillments||[]).some(f=>clean(f.tracking_number||f.trackingNumber)===awb));});},groups=new Map();
+  (source.entries||[]).forEach((entry,index)=>{const amount=roundMoney(entry.amount),date=velocitySettlementDate(entry.date),reference=String(entry.utr||entry.reference||'').trim(),status=String(entry.status||'settled').toLowerCase();if(!(amount>0)||!date||!reference||/cancel|fail|reverse/.test(status))return;const order=findOrder(entry),orderId=String(entry.orderId||order&&order.id||''),key='UTR:'+clean(reference),group=groups.get(key)||{id:'VELOCITY-'+crypto.createHash('sha1').update(key).digest('hex').slice(0,12),date,reference,netAmount:0,entries:[],orderIds:[]};group.netAmount=roundMoney(group.netAmount+amount);group.entries.push(Object.assign({sourceIndex:index},entry,{orderId}));if(orderId&&!group.orderIds.includes(orderId))group.orderIds.push(orderId);if(date>group.date)group.date=date;groups.set(key,group);});
+  return Array.from(groups.values()).map(group=>{const linked=group.orderIds.map(id=>({id,sale:salesByOrder.get(id)})).filter(x=>x.sale),grossAmount=roundMoney(linked.reduce((sum,x)=>sum+x.sale.amount,0)),complete=group.entries.length>0&&group.entries.every(entry=>entry.orderId)&&linked.length===group.orderIds.length&&grossAmount>=group.netAmount,chargeAmount=complete?roundMoney(grossAmount-group.netAmount):0,manual=(accountingStore.transfers||[]).find(x=>!x.accountingExcluded&&x.fromAccount===VELOCITY_CLEARING_ACCOUNT&&x.toAccount===DEFAULT_SALES_BANK&&(group.reference&&String(x.bankReference||x.reference||'').includes(group.reference)||String(x.date||'')===group.date&&Math.abs(num(x.amount)-group.netAmount)<.01));return Object.assign(group,{grossAmount,chargeAmount,complete,linkedSales:linked.flatMap(x=>x.sale.sales),manualTransferId:manual&&manual.id||''});}).filter(x=>x.complete);
 }
 function includeAutomaticSale(x) {
   return x.account !== DEFAULT_SALES_BANK || String(x.date || '') >= SALES_LEDGER_FROM;
@@ -3021,6 +3036,9 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>entries.push({id:x.id+'/'+c.id,date:c.date,kind:'receivable',description:'Received from '+x.party+' · '+x.reason,credit:num(c.amount),debit:0,proof:c.proof,by:c.receivedBy})));
   if(nature==='SANKI'){
     const automaticSales=salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account);
+    const velocityBatches=velocitySettlementBatches(s);
+    if(account===DEFAULT_SALES_BANK)velocityBatches.filter(x=>!x.manualTransferId).forEach(x=>entries.push({id:x.id,date:x.date,kind:'velocity_payout',description:'Velocity COD payout · '+x.orderIds.length+' Shopify order(s)',reference:x.reference,credit:x.netAmount,debit:0,velocitySettlement:x}));
+    if(account===VELOCITY_CLEARING_ACCOUNT)velocityBatches.forEach(x=>{if(!x.manualTransferId)entries.push({id:x.id,date:x.date,kind:'velocity_settlement',description:'Velocity COD payout to Axis Bank 3448',reference:x.reference,credit:0,debit:x.netAmount,velocitySettlement:x});if(x.chargeAmount>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'velocity_charge',description:'Velocity COD/remittance charges',reference:x.reference,credit:0,debit:x.chargeAmount,velocitySettlement:x});});
     if(account===PAYTM_CLEARING_ACCOUNT){
       const shopOrders=(()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return{};}})();
       const noteSuffixes=order=>(String(order&&order.note||'').match(/\d{6,}/g)||[]).map(transactionSuffix);
@@ -3241,6 +3259,7 @@ async function parseBankStatementUpload(filePath,originalName,password){
 }
 function bankRowKey(account,row,occurrence){return crypto.createHash('sha256').update([account,row.date,row.debit,row.credit,row.reference||row.description,row.balance,occurrence].join('|')).digest('hex').slice(0,24);}
 function appBankMovements(s,account,nature){const rows=[],n=normalizedNature(nature),grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.account===account&&normalizedNature(x.nature)===n&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
+  if(n==='SANKI')velocitySettlementBatches(s).forEach(x=>{if(account===DEFAULT_SALES_BANK&&!x.manualTransferId)rows.push({id:x.id,date:x.date,description:'Velocity COD payout · '+x.orderIds.length+' Shopify order(s)',reference:x.reference,credit:x.netAmount,debit:0});if(account===VELOCITY_CLEARING_ACCOUNT){if(!x.manualTransferId)rows.push({id:x.id,date:x.date,description:'Velocity COD payout to Axis Bank 3448',reference:x.reference,credit:0,debit:x.netAmount});if(x.chargeAmount>0)rows.push({id:x.id+'/CHARGES',date:x.date,description:'Velocity COD/remittance charges',reference:x.reference,credit:0,debit:x.chargeAmount,category:'COD COURIER CHARGES'});}});
   if(n==='SANKI'&&account===DEFAULT_SALES_BANK)(s.paytmPayoutPostings||[]).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.postedAt,description:'Paytm payout '+x.payoutId,reference:x.utr,credit:num(x.net),debit:0}));
   if(n==='SANKI')(s.paytmSettlements||[]).filter(x=>x.bankAccount===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Paytm settlement from '+PAYTM_CLEARING_ACCOUNT,reference:x.bankReference||x.bankTransactionId||'',credit:num(x.netAmount),debit:0}));
   (s.bankTruthMovements||[]).filter(x=>x.account===account&&normalizedNature(x.nature)===n).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Bank truth · '+(x.description||x.reason||'excluded from business books'),reference:x.reference||'',proof:'',debit:num(x.debit),credit:num(x.credit),bankTruth:true}));
@@ -3293,7 +3312,7 @@ function reconciliationCandidate(bank,app,policy,account){
   if(!sameDirection||amountDifference>10)return null;
   const days=Math.abs((Date.parse(app.date)-Date.parse(bank.date))/86400000);if(!Number.isFinite(days)||days>3)return null;
   const exactAmount=amountDifference<=.01,axisTransferCharge=account===DEFAULT_SALES_BANK&&bankDebit>0&&appDebit>0&&bankDebit>appDebit&&[2.95,5.90].some(charge=>Math.abs(amountDifference-charge)<.01),bankRef=reconciliationReference(bank.reference),appRef=reconciliationReference(app.reference||app.bankDateOverride&&app.bankDateOverride.bankReference),referenceMatch=bankRef.length>=5&&appRef.length>=5&&(bankRef===appRef||bankRef.includes(appRef)||appRef.includes(bankRef)),bankText=String(bank.reference||'')+' '+String(bank.description||''),appText=String(app.id||'')+' '+String(app.description||''),bankDigits=(bankText.match(/\d{4,}/g)||[]),appDigits=(appText.match(/\d{4,}/g)||[]),maskedSuffixMatch=bankDigits.some(x=>appDigits.some(y=>x.slice(-4)===y.slice(-4))),identityMatch=reconciliationIdentityMatches(bank,app)||maskedSuffixMatch;
-  if(/^strict_identity_v/.test(String(policy||''))&&(days!==0||!identityMatch))return null;
+  if(/^strict_identity_v/.test(String(policy||''))&&(days!==0||!(identityMatch||referenceMatch)))return null;
   let score=exactAmount?50:10;score+=Math.max(0,18-days*6);if(referenceMatch)score+=80;if(identityMatch)score+=28;if(app.bankDateOverride)score+=20;
   const evidence=[];if(exactAmount)evidence.push('same amount');else if(axisTransferCharge)evidence.push('Axis 3448 transfer charge ₹'+amountDifference.toFixed(2)+' recognized automatically');else evidence.push('amount differs by ₹'+amountDifference.toFixed(2));evidence.push(days===0?'same date':days+' day timing difference');if(referenceMatch)evidence.push('same bank reference');else if(identityMatch)evidence.push('matching party');
   return{score,exactAmount,axisTransferCharge,chargeAmount:axisTransferCharge?roundMoney(amountDifference):0,referenceMatch,identityMatch,days,evidence,explanation:evidence.join(', ')};

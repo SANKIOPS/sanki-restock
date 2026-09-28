@@ -1030,6 +1030,13 @@ app.get('/api/velocity/remittance', async (req, res) => {
 // Auto-matches AWB/Order ID to your COD orders and marks them settled
 const REMITTANCE_PATH = path.join(RUNTIME_DATA_DIR, 'velocity_remittance.json');
 let remittanceData = { entries: [], lastImport: null };
+function normalizeVelocitySettlementDate(value) {
+  if (value instanceof Date && !isNaN(value)) return value.toISOString().slice(0, 10);
+  const raw=String(value||'').trim(),indian=raw.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})/),iso=raw.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+  if(iso)return iso[1]+'-'+iso[2].padStart(2,'0')+'-'+iso[3].padStart(2,'0');
+  if(indian)return(indian[3].length===2?'20'+indian[3]:indian[3])+'-'+indian[2].padStart(2,'0')+'-'+indian[1].padStart(2,'0');
+  const parsed=new Date(raw);return isNaN(parsed)?'':parsed.toISOString().slice(0,10);
+}
 function loadRemittance() {
   try { if (fs.existsSync(REMITTANCE_PATH)) remittanceData = JSON.parse(fs.readFileSync(REMITTANCE_PATH, 'utf8')); }
   catch(e) { console.error('[remittance] Load error:', e.message); }
@@ -1077,21 +1084,24 @@ app.post('/api/velocity/remittance/upload', upload.single('file'), (req, res) =>
     rows.forEach(row => {
       const awb    = awbCol    ? String(row[awbCol]   || '').trim() : '';
       const amount = amtCol    ? parseFloat(row[amtCol]) || 0       : 0;
-      const date   = dateCol   ? String(row[dateCol]  || '').trim() : '';
+      const date   = dateCol   ? normalizeVelocitySettlementDate(row[dateCol]) : '';
       const utr    = utrCol    ? String(row[utrCol]   || '').trim() : '';
       const ordRef = orderCol  ? String(row[orderCol] || '').trim() : '';
       const status = statusCol ? String(row[statusCol]|| '').trim() : 'settled';
 
       if (!awb && !ordRef) return; // skip blank rows
 
-      entries.push({ awb, amount, date, utr, ordRef, status: status || 'settled', raw: row });
+      // Preserve the matched Shopify order in the remittance evidence. The
+      // accounting ledger consumes this exact link to clear COD receivables.
+      const clean=value=>String(value||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+      const order = ordersCache.orders.find(o =>
+        (awb&&(o.fulfillments || []).some(f => (f.tracking_number || '').trim() === awb)) ||
+        (ordRef&&[o.id,o.order_number,o.orderNumber,o.name].map(clean).includes(clean(ordRef)))
+      );
+      entries.push({ awb, amount, date, utr, ordRef, status: status || 'settled', orderId:order&&String(order.id)||'', orderNumber:order&&String(order.order_number||order.orderNumber||order.name||'')||'', raw: row });
 
-      // Auto-match to order meta by AWB
-      if (awb) {
-        const order = ordersCache.orders.find(o =>
-          (o.fulfillments || []).some(f => (f.tracking_number || '').trim() === awb)
-        );
-        if (order) {
+      // Auto-match to order meta by AWB or the report's order reference.
+      if (order) {
           if (!diskMeta[order.id]) diskMeta[order.id] = {};
           const m = diskMeta[order.id];
           m.settlementStatus = 'settled';
@@ -1100,7 +1110,6 @@ app.post('/api/velocity/remittance/upload', upload.single('file'), (req, res) =>
           m.settlementUTR    = utr    || m.settlementUTR;
           m.customerPayment  = 'paid';
           matched++;
-        }
       }
     });
 
@@ -2688,19 +2697,23 @@ recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recover
             let matched = 0;
             let diskMeta = {};
             try { if (fs.existsSync(META_PATH)) diskMeta = JSON.parse(fs.readFileSync(META_PATH,'utf8')); } catch(e) {}
+            const accountingEntries=[];
             list.forEach(row => {
               const awb = String(row.awb_code||row.awb||row.tracking_number||row.waybill||'').trim();
               const amt = parseFloat(row.amount||row.cod_amount||row.remittance_amount||0);
-              const dt  = String(row.date||row.credit_date||row.remittance_date||'').trim();
+              const dt  = normalizeVelocitySettlementDate(row.date||row.credit_date||row.remittance_date);
               const utr = String(row.utr||row.transaction_id||row.reference||'').trim();
               if (!awb) return;
               const order = ordersCache.orders.find(o => (o.fulfillments||[]).some(f=>(f.tracking_number||'').trim()===awb));
+              accountingEntries.push({awb,amount:amt,date:dt,utr,ordRef:String(row.order_id||row.order||row.reference||'').trim(),status:String(row.status||'settled'),orderId:order&&String(order.id)||'',orderNumber:order&&String(order.order_number||order.orderNumber||order.name||'')||'',raw:row});
               if (order) {
                 if (!diskMeta[order.id]) diskMeta[order.id]={};
                 Object.assign(diskMeta[order.id], { settlementStatus:'settled', settlementAmount:amt||diskMeta[order.id].settlementAmount, settlementDate:dt||diskMeta[order.id].settlementDate, settlementUTR:utr||diskMeta[order.id].settlementUTR, customerPayment:'paid' });
                 matched++;
               }
             });
+            remittanceData.entries=accountingEntries;
+            remittanceData.lastImport=new Date().toISOString();
             if (matched) { atomicWrite(META_PATH, JSON.stringify(diskMeta,null,2)); console.log(`[remittance] Auto-settled ${matched} orders`); }
             saveRemittance();
             return; // found working endpoint, stop trying
