@@ -2,6 +2,7 @@ const { summarizePayouts } = require('./paytm-report');
 
 const CLEARING = 'Paytm Settlement Clearing';
 const BANK = 'Axis Bank 3448';
+const LINK_TOLERANCE_CENTS = 499;
 const cents = value => Math.round(Number(value || 0) * 100);
 const dayGap = (a, b) => Math.abs((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
 function transactionSuffix(id) { const digits = String(id || '').replace(/\D/g, ''); return digits.length >= 6 ? digits.slice(-6) : ''; }
@@ -51,7 +52,11 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   const storeCredit = cents(verified.storeCreditAmount ?? order.storeCreditAmount ?? order.storeCreditUsed ?? 0);
   const available = Math.min(total - cash - storeCredit, verified.paytmAmount > 0 ? cents(verified.paytmAmount) : total);
   const otherLinked = Object.entries(links).filter(([id, link]) => id !== tx.transactionId && String(link.orderId) === String(order.id)).reduce((sum, [, link]) => sum + cents(link.amount), 0);
-  if (cents(tx.amount) <= 0 || cents(tx.amount) + otherLinked > available) throw new Error('Shopify order is already linked or Paytm receipts exceed the amount after cash and store credit. Review the split first.');
+  const remaining = available - otherLinked, receipt = cents(tx.amount);
+  // Paytm may round the collected amount to whole rupees while Shopify keeps
+  // paise. Permit a variance below ₹5 only while an unallocated component
+  // remains; this must never turn a fully linked order into a duplicate link.
+  if (receipt <= 0 || remaining <= 0 || receipt > remaining + LINK_TOLERANCE_CENTS) throw new Error('Shopify order is already linked or Paytm receipts exceed the amount after cash and store credit. Review the split first.');
   const note = String(order.note || ''), suffix = transactionSuffix(tx.transactionId) || transactionSuffix(tx.rrn);
   const containsId = text => noteHasTransactionSuffix(text, suffix);
   const hasId = containsId(note), uniqueId = hasId && orders.filter(candidate => containsId(candidate.note)).length === 1;
@@ -146,4 +151,4 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked };
 }
 
-module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };
+module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };

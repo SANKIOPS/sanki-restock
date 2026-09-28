@@ -179,7 +179,19 @@ test('split order links only the Paytm component and excludes store credit used 
   assert.equal(link.orderTotal, 2498, 'later refunds do not rewrite the original collected amount');
   assert.equal(link.partial, true);
   assert.equal(link.matchBasis, 'transaction_id_in_shopify_note');
-  assert.throws(() => validateOrderLink({}, { ...tx, amount: 1000 }, '2845', [order], [], ''), /store credit/);
+  assert.throws(() => validateOrderLink({}, { ...tx, amount: 1004 }, '2845', [order], [], ''), /store credit/);
+});
+
+test('Paytm link accepts sub-₹5 paise rounding but still blocks duplicate receipts', () => {
+  const orders = [
+    { id: 'O2825', number: 2825, financialStatus: 'paid', createdAt: '2026-09-20T12:00:00Z', total: 3199.98, note: 'Paytm 30082' },
+    { id: 'O2824', number: 2824, financialStatus: 'paid', createdAt: '2026-09-20T12:00:00Z', total: 3198.99, note: 'Paytm 26628' }
+  ];
+  const first = validateOrderLink({}, { transactionId: '2026092010950000308512431865630082', date: '2026-09-20', amount: 3200 }, '2825', orders, [], 'Verified rounded Paytm receipt');
+  const second = validateOrderLink({}, { transactionId: '2026092011000000308475013137266628', date: '2026-09-20', amount: 3199 }, '2824', orders, [], 'Verified rounded Paytm receipt');
+  assert.deepEqual([first.amount, second.amount], [3200, 3199]);
+  assert.throws(() => validateOrderLink({ paytmOrderLinks: { existing: first } }, { transactionId: 'another', date: '2026-09-20', amount: 1 }, '2825', orders, [], 'Attempted duplicate receipt'), /already linked/);
+  assert.throws(() => validateOrderLink({}, { transactionId: 'too-large', date: '2026-09-20', amount: 3204.98 }, '2825', orders, [], 'Variance reaches five rupees'), /receipts exceed/);
 });
 
 test('original Paytm receipt remains linkable after partial or full Shopify refund', () => {

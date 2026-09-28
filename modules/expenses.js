@@ -31,7 +31,7 @@ const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
 const { START_DATE: PAYTM_START_DATE, parsePaytmReport, summarizePayouts } = require('./paytm-report');
 const { registerPaytmReports } = require('./paytm-reports-routes');
-const { transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements } = require('./paytm-accounting');
+const { LINK_TOLERANCE_CENTS, transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements } = require('./paytm-accounting');
 const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
@@ -1310,7 +1310,7 @@ function paytmReportView(s) {
       const component=num((s.paytmShopifyPayments||{})[order.id]?.paytmAmount||order.paytmAmount||order.paytmPaidAmount);
       return delta<=1&&Math.abs((component||num(order.total))-tx.amount)<.01;
     });
-    const verifiedById=byId.filter(order=>{const when=String(order.processedAt||order.createdAt||'').slice(0,10),delta=Math.abs((Date.parse(when+'T00:00:00Z')-Date.parse(tx.date+'T00:00:00Z'))/86400000),total=num(order.total),payments=(s.paytmShopifyPayments||{})[order.id]||{},cash=num((s.saleAllocationOverrides||{})['SHOPIFY/'+order.id]?.cashAmount??payments.cashAmount??order.cashAmount),storeCredit=num(payments.storeCreditAmount??order.storeCreditAmount??order.storeCreditUsed),limit=payments.paytmAmount>0?Math.min(payments.paytmAmount,total-cash-storeCredit):total-cash-storeCredit;return delta<=1&&tx.amount<=limit+.01;});
+    const verifiedById=byId.filter(order=>{const when=String(order.processedAt||order.createdAt||'').slice(0,10),delta=Math.abs((Date.parse(when+'T00:00:00Z')-Date.parse(tx.date+'T00:00:00Z'))/86400000),total=num(order.total),payments=(s.paytmShopifyPayments||{})[order.id]||{},cash=num((s.saleAllocationOverrides||{})['SHOPIFY/'+order.id]?.cashAmount??payments.cashAmount??order.cashAmount),storeCredit=num(payments.storeCreditAmount??order.storeCreditAmount??order.storeCreditUsed),limit=payments.paytmAmount>0?Math.min(payments.paytmAmount,total-cash-storeCredit):total-cash-storeCredit;return delta<=1&&tx.amount<=limit+(LINK_TOLERANCE_CENTS/100);});
     // A Paytm ID in Shopify notes is the identity rule. Amount/date are only
     // validation. Never replace an ID match with several amount-only guesses.
     const shown=byId.length?byId:candidates;
