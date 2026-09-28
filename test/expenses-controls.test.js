@@ -2289,6 +2289,38 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   fs.writeFileSync(expenseFile,originalExpenseStore);
 });
 
+test('ICICI savings statement ignores only balance-neutral UPI reversal display rows',()=>{
+  const text=`Statement of Transactions in Saving Account no. XXXXXXXX0992 for the period September 1, 2026 - September 28, 2026
+Withdrawal
+Amount (INR)
+Deposit
+Amount (INR)
+Balance
+10306.09.2026
+CUSTOMER
+UPI/CUSTOMER/7054165648@pty/UPI/BANK/661526913611/ICIabc
+660.0010203.51
+10406.09.2026
+RVSLLUVKUS
+UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak/661570700247/ICIdef
+300.0010203.51
+10506.09.2026
+LUVKUSH
+UPI/LUVKUSH/7982361268@axl/UPI/Kotak/661570700247/ICIdef
+300.009903.51
+10606.09.2026
+LUVKUSH
+UPI/LUVKUSH/7982361268@axl/UPI/Kotak/661596115981/ICIghi
+300.009903.51
+10706.09.2026
+RVSLLUVKUS
+UPI/RVSLLUVKUS/7982361268@axl/UPI/Kotak/661596115981/ICIghi
+300.0010203.51`;
+  const rows=parseBankStatementText(text);
+  assert.deepEqual(rows.map(x=>[x.row,x.debit,x.credit,x.balance]),[[103,660,0,10203.51],[105,300,0,9903.51],[107,0,300,10203.51]]);
+  assert.equal(rows.statementSummary.accountLast4,'0992');assert.equal(rows.statementSummary.validated,true);
+});
+
 test('bank-charge reconciliation adjustments become visible spending without double-posting the bank', () => {
   invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',adjust:{account:'Axis Bank 3448',direction:'deduct',amount:250,date:'2026-08-22',note:'Bank charges'}}});
   invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',adjust:{account:'Axis Bank 3448',direction:'deduct',amount:45,date:'2026-08-22',note:'Bank charges'}}});
