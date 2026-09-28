@@ -2807,6 +2807,16 @@ test('unpay enforces role and entity permissions even with a valid payment id',(
  assert.equal(invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'samast_accounting',params,body}).status,403);
 });
 
+test('undoing a draft bank match clears its temporary lock so the payment can be unpaid',()=>{
+ const file=path.join(tempDir,'expenses.json'),s=JSON.parse(fs.readFileSync(file,'utf8')),id='EX-UNPAY-AFTER-UNDO',ref=id+'/PAY-001',draftId='BRD-UNPAY-AFTER-UNDO';
+ s.expenses[id]={id,date:'2026-09-25',nature:'SANKI',amount:50,paidAmount:50,status:'paid',approvedAt:'2026-09-25',payments:[{id:'PAY-001',date:'2026-09-26',amount:50,account:'IndusInd Bank 8181'}]};
+ s.bankDateOverrides=s.bankDateOverrides||{};s.bankDateOverrides[ref]={bankDate:'2026-09-25',reconciliationDraft:draftId};
+ s.bankReconciliationDrafts=s.bankReconciliationDrafts||{};s.bankReconciliationDrafts[draftId]={id:draftId,nature:'SANKI',account:'IndusInd Bank 8181',transactions:[{date:'2026-09-25',description:'UPI test',reference:'TEST50',debit:50,credit:0,balance:0}],summary:{from:'2026-09-25',to:'2026-09-25',openingBalance:50,closingBalance:0,totalDebits:50,totalCredits:0,validated:true},resolutions:{'bank-0':{action:'accept_match',appId:ref}},createdBy:'owner-user'};fs.writeFileSync(file,JSON.stringify(s));
+ const undone=invoke('POST','/api/expenses/bank-statements/undo',{role:'owner',body:{draftId,rowId:'bank-0'}});assert.equal(undone.status,200,JSON.stringify(undone.body));
+ const afterUndo=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(afterUndo.bankDateOverrides[ref],undefined);
+ const unpaid=invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'owner',params:{id,paymentId:'PAY-001'},body:{reason:'Payment was linked incorrectly'}});assert.equal(unpaid.status,200,JSON.stringify(unpaid.body));assert.equal(unpaid.body.expense.status,'approved');
+});
+
 test('bank reconciliation displays narration from the actual transaction marker',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/function bankNarrationForDisplay\(value\)/);
