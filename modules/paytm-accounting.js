@@ -6,6 +6,11 @@ const cents = value => Math.round(Number(value || 0) * 100);
 const dayGap = (a, b) => Math.abs((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
 function transactionSuffix(id) { const digits = String(id || '').replace(/\D/g, ''); return digits.length >= 6 ? digits.slice(-6) : ''; }
 function noteHasTransactionSuffix(note, suffix) { return !!suffix && (String(note || '').match(/\d{6,}/g) || []).some(token => token.endsWith(suffix)); }
+function isOriginalPaymentOrder(order) {
+  if(!order||order.cancelledAt)return false;
+  if(['paid','partially_paid','partially_refunded','refunded'].includes(String(order.financialStatus||'').toLowerCase()))return true;
+  return (order.paymentTransactions||[]).some(tx=>['sale','capture'].includes(String(tx.kind||'').toLowerCase())&&String(tx.status||'').toLowerCase()==='success'&&Number(tx.amount||0)>0);
+}
 
 function summarizeShopifyPayments(transactions) {
   const result = { paytmAmount: 0, cashAmount: 0, storeCreditAmount: 0, otherAmount: 0, transactions: [] };
@@ -21,17 +26,17 @@ function summarizeShopifyPayments(transactions) {
 }
 
 function getPayout(store, payoutId) {
-  return summarizePayouts(Object.values(store.paytmReportTransactions || {})).find(p => p.payoutId === payoutId);
+  return summarizePayouts(Object.values(store.paytmReportTransactions || {})).find(p => p.payoutId === payoutId || p.utr === payoutId || p.sourcePayoutIds.includes(payoutId));
 }
 
 function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   if (!tx) throw new Error('Paytm transaction not found. Import its detailed report first.');
-  if (tx.posId === 'DEFAULT') throw new Error('This payment is not marked as a POS transaction. Review its channel separately.');
+  if (tx.isCustomerPayment === false) throw new Error('This is a Paytm adjustment, not a customer payment, and must not be linked to Shopify.');
   const orderKey = String(orderId).replace(/^#/, '').trim();
   const matches = orders.filter(x => String(x.id) === orderKey || String(x.orderNumber || x.number || x.name || '').replace(/\D/g, '').replace(/^0+/, '') === orderKey);
   if (matches.length !== 1) throw new Error(matches.length ? 'Order number is ambiguous; use the Shopify order ID.' : 'Shopify order not found.');
   const order = matches[0];
-  if (!order || order.cancelledAt || String(order.financialStatus || '').toLowerCase() !== 'paid') throw new Error('Choose a paid, non-cancelled Shopify order.');
+  if (!isOriginalPaymentOrder(order)) throw new Error('Choose a non-cancelled Shopify order with an original successful payment. Paid, partially paid, partially refunded and refunded orders are supported.');
   const links = store.paytmOrderLinks || {};
   const row = saleRows.find(x => String(x.orderId) === String(order.id) && x.account !== 'Counter Cash');
   const orderDate = String(order.processedAt || order.createdAt || row && row.date || '').slice(0, 10);
@@ -52,7 +57,8 @@ function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   const hasId = containsId(note), uniqueId = hasId && orders.filter(candidate => containsId(candidate.note)).length === 1;
   if (verified.transactions && !verified.paytmAmount && String(reason || '').trim().length < 10) throw new Error('Shopify does not identify a Paytm payment component for this order. Enter a review reason explaining the external Paytm collection.');
   if (!uniqueId && String(reason || '').trim().length < 10) throw new Error('The Paytm ID is missing or repeated in Shopify notes. Enter a review reason of at least 10 characters.');
-  return { transactionId: tx.transactionId, transactionSuffix: suffix, orderId: String(order.id), orderNumber: String(order.orderNumber || order.number || order.name || row && row.orderNumber || '').replace(/^#/, ''), amount: tx.amount, orderTotal: total / 100, partial: cents(tx.amount) < total, storeCreditExcluded: storeCredit / 100, matchBasis: verified.transactions&&!verified.paytmAmount?'external_paytm_reviewed':uniqueId ? ((note.match(/\d{6,}/g)||[]).includes(String(tx.transactionId))||((note.match(/\d{6,}/g)||[]).includes(String(tx.rrn||'')))?'transaction_id_in_shopify_note':'transaction_id_suffix_in_shopify_note') : 'owner_reviewed', reason: uniqueId&&!(verified.transactions&&!verified.paytmAmount) ? '' : String(reason).trim() };
+  const refundedAmount = Math.max(Number(order.refundAmount || 0), Number(order.moneyRefunded || 0));
+  return { transactionId: tx.transactionId, transactionSuffix: suffix, orderId: String(order.id), orderNumber: String(order.orderNumber || order.number || order.name || row && row.orderNumber || '').replace(/^#/, ''), amount: tx.amount, orderTotal: total / 100, partial: cents(tx.amount) < total, storeCreditExcluded: storeCredit / 100, subsequentlyRefunded: refundedAmount, refundStatus: String(order.financialStatus || '').toLowerCase(), matchBasis: verified.transactions&&!verified.paytmAmount?'external_paytm_reviewed':uniqueId ? ((note.match(/\d{6,}/g)||[]).includes(String(tx.transactionId))||((note.match(/\d{6,}/g)||[]).includes(String(tx.rrn||'')))?'transaction_id_in_shopify_note':'transaction_id_suffix_in_shopify_note') : 'owner_reviewed', reason: uniqueId&&!(verified.transactions&&!verified.paytmAmount) ? '' : String(reason).trim() };
 }
 
 function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
@@ -60,6 +66,7 @@ function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
   const all = Object.values(transactions || {}), candidates = new Map(), suffixCounts = new Map();
   all.forEach(tx => { const suffix = transactionSuffix(tx.transactionId)||transactionSuffix(tx.rrn); if(suffix)suffixCounts.set(suffix,(suffixCounts.get(suffix)||0)+1); });
   for (const tx of all) {
+    if (tx.isCustomerPayment === false) continue;
     if (store.paytmOrderLinks[tx.transactionId] || (store.paytmManualResolutions||{})[tx.transactionId] || (store.paytmExcludedTransactions||{})[tx.transactionId]) continue;
     const suffix = transactionSuffix(tx.transactionId)||transactionSuffix(tx.rrn);
     if (!suffix || suffixCounts.get(suffix) !== 1) continue;
@@ -80,17 +87,16 @@ function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
   return matched;
 }
 
-function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
+function validateSettlementReview(store, payoutId, saleRows) {
   const payout = getPayout(store, payoutId);
   if (!payout) throw new Error('Payout not found. Import the Paytm report first.');
-  if (payout.transactionIds.some(id => (store.paytmExcludedTransactions || {})[id])) throw new Error('This payout contains an excluded payment. Restore or separately resolve that payment before posting the payout.');
-  if (!payout.utr || !payout.payoutDate) throw new Error('Payout UTR and date are required for an exact bank link.');
-  if ((store.paytmPayoutPostings || []).some(x => x.payoutId === payoutId)) throw new Error('This Paytm payout was already posted.');
-  if ((store.paytmSettlements || []).some(x => x.payoutId === payoutId || x.bankTransactionId === bankTransactionId)) throw new Error('An existing Paytm settlement already uses this payout or bank transaction.');
+  if (payout.transactionIds.some(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && (store.paytmExcludedTransactions || {})[id])) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before posting the payout.');
+  if (!payout.utr || !payout.settledDate) throw new Error('Settlement UTR and settled date are required for an exact bank link.');
   const links = store.paytmOrderLinks || {}, manual = store.paytmManualResolutions || {};
-  const linked = payout.transactionIds.map(id => links[id] || manual[id]);
+  const customerIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false);
+  const linked = customerIds.map(id => links[id] || manual[id]);
   if (linked.some(x => !x)) throw new Error('Every Paytm payment in this payout must be linked to Shopify or classified as a verified manual sale/cash transfer before posting.');
-  if (linked.reduce((sum, x) => sum + cents(x.amount), 0) !== cents(payout.gross)) throw new Error('Reviewed Paytm receipt components do not equal the payout gross.');
+  if (linked.reduce((sum, x) => sum + cents(x.amount), 0) !== cents(payout.customerGross)) throw new Error('Reviewed customer receipts do not equal the customer-payment gross for this settlement.');
   for (const link of linked) {
     if (link.type === 'manual_sale' || link.type === 'cash_transfer') {
       const source = link.type === 'manual_sale' ? store.receipts : store.transfers;
@@ -102,11 +108,36 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
     if (!row || cents(row.amount) < cents(link.amount)) throw new Error(`Shopify order ${link.orderNumber} changed since it was linked. Review it again.`);
     if ((store.bankDateOverrides || {})[row.id]) throw new Error(`Shopify order ${link.orderNumber} is already linked to a bank transaction. Correct that existing link before posting its Paytm payout.`);
   }
-  if (cents(payout.gross) - cents(payout.commission) - cents(payout.gst) !== cents(payout.net)) throw new Error('Paytm gross, commission, GST and net do not balance.');
+  if (cents(payout.gross) - cents(payout.commission) - cents(payout.platformFee) - cents(payout.gst) - cents(payout.nonCustomerAmount) !== cents(payout.net)) throw new Error('Paytm customer gross, commission, platform fee, GST, VAS deductions and bank net do not balance.');
+  return { payout, linked };
+}
+
+// A settlement whose customer rows have all been reviewed is already a real
+// Paytm outflow.  Keep the explicit Finalize action as the audit checkpoint,
+// but do not hide that movement from the operational ledger while the user is
+// waiting to link the matching Axis statement credit.
+function reviewedUnpostedSettlements(store, saleRows) {
+  const verified = new Set((store.paytmVerifiedSettlements || []).flatMap(x => [String(x.settlementId || ''), String(x.payoutId || '')]));
+  const posted = new Set((store.paytmPayoutPostings || []).flatMap(x => [String(x.settlementId || ''), String(x.payoutId || '')]));
+  const rows = [];
+  for (const candidate of summarizePayouts(Object.values(store.paytmReportTransactions || {}))) {
+    if (verified.has(String(candidate.settlementId || '')) || verified.has(String(candidate.payoutId || '')) || posted.has(String(candidate.settlementId || '')) || posted.has(String(candidate.payoutId || ''))) continue;
+    try {
+      const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows);
+      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, reviewedNotFinalized: true });
+    } catch { /* Incomplete or unsafe batches stay out of the ledger. */ }
+  }
+  return rows;
+}
+
+function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
+  const { payout, linked } = validateSettlementReview(store, payoutId, saleRows);
+  if ((store.paytmPayoutPostings || []).some(x => x.payoutId === payout.payoutId || payout.sourcePayoutIds.includes(x.payoutId) || x.settlementId === payout.settlementId || (x.transactionIds || []).some(id => payout.transactionIds.includes(id)))) throw new Error('This Paytm settlement was already posted.');
+  if ((store.paytmSettlements || []).some(x => x.payoutId === payoutId || x.bankTransactionId === bankTransactionId)) throw new Error('An existing Paytm settlement already uses this payout or bank transaction.');
   const bank = Object.values(((store.bankStatements || {})[BANK] || {}).transactions || {}).find(x => x.id === bankTransactionId);
   if (!bank || cents(bank.credit) !== cents(payout.net) || cents(bank.debit) !== 0) throw new Error('Choose an Axis 3448 credit equal to the exact Paytm payout net.');
   if (!String(bank.reference || bank.description || '').includes(payout.utr)) throw new Error('The Axis bank reference must contain the Paytm payout UTR.');
-  if (dayGap(bank.date, payout.payoutDate) > 3) throw new Error('Axis credit and Paytm payout dates differ by more than three days.');
+  if (dayGap(bank.date, payout.settledDate) > 3) throw new Error('Axis credit and Paytm settled dates differ by more than three days.');
   if ((store.paytmPayoutPostings || []).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis bank credit is already used by a Paytm payout.');
   if (Object.values(store.bankDateOverrides || {}).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis credit is already linked to another ledger entry. Correct that link first.');
   const book = (store.bankStatements || {})[BANK] || {};
@@ -115,4 +146,4 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked };
 }
 
-module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting };
+module.exports = { CLEARING, BANK, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };

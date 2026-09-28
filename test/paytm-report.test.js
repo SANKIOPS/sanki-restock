@@ -1,8 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { parsePaytmReport, summarizePayouts } = require('../modules/paytm-report');
 const { registerPaytmReports } = require('../modules/paytm-reports-routes');
-const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting } = require('../modules/paytm-accounting');
+const { summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validatePayoutPosting, reviewedUnpostedSettlements, isOriginalPaymentOrder } = require('../modules/paytm-accounting');
+
+test('successful payment evidence includes a partially paid order even when its cached status is stale',()=>{
+  const order={id:'2801',financialStatus:'pending',paymentTransactions:[{id:'cash-1100',kind:'sale',status:'success',gateway:'Cash',amount:1100}]};
+  assert.equal(isOriginalPaymentOrder(order),true);
+  assert.equal(isOriginalPaymentOrder({...order,cancelledAt:'2026-09-15'}),false);
+});
 
 test('automatically matches a unique six-digit Shopify note suffix but never a collision or wrong amount', () => {
   const orders=[
@@ -34,6 +41,34 @@ test('rejects an unbalanced successful transaction instead of estimating fees', 
   assert.throws(() => parsePaytmReport(Buffer.from(header + row('T1', '2026-09-17', 100, 1, 0, 100)), 'test.csv', '2026-09-18'), /does not balance/);
 });
 
+test('uses actual Paytm platform fee, settled date and UTR as the bank batch', () => {
+  const csv = 'transaction_id,transaction_type,transaction_date,status,amount,commission,gst,utr_no,settled_date,settled_amount,platform_fee,comments\n' +
+    '202609240000123456,ACQUIRING,24-09-2026 11:00:00,SUCCESS,1000,10,1.8,UTR-24,25-09-2026,983.2,5,Customer payment\n';
+  const parsed = parsePaytmReport(Buffer.from(csv), 'actual.csv', '2026-09-24');
+  const [batch] = summarizePayouts(parsed.transactions);
+  assert.deepEqual([batch.utr, batch.settledDate, batch.gross, batch.platformFee, batch.net, batch.customerPaymentCount], ['UTR-24', '2026-09-25', 1000, 5, 983.2, 1]);
+});
+
+test('VAS deduction reduces the UTR bank net and never inflates customer sales', () => {
+  const payments = [
+    { transactionId: 'sale-1', utr: 'PB0309232845', settledDate: '2026-08-26', payoutId: 'P1', amount: 15094, commission: 451.31, platformFee: 0, gst: 81.24, settledAmount: 14561.45, isCustomerPayment: true },
+    { transactionId: 'sale-2', utr: 'PB0309232845', settledDate: '2026-08-26', payoutId: 'P1', amount: 1999, commission: 59.77, platformFee: 0, gst: 0, settledAmount: 1939.23, isCustomerPayment: true },
+    { transactionId: 'vas', utr: 'PB0309232845', settledDate: '2026-08-26', payoutId: 'P1', amount: 352, commission: 0, platformFee: 0, gst: 0, settledAmount: 352, isCustomerPayment: false, transactionType: 'VAS Deductions' }
+  ];
+  const [batch] = summarizePayouts(payments);
+  assert.deepEqual([batch.gross, batch.customerGross, batch.nonCustomerAmount, batch.commission, batch.gst, batch.net], [17093, 17093, 352, 511.08, 81.24, 16148.68]);
+});
+
+test('Paytm clearing shows its dedicated report uploader instead of the debit-credit bank reader', () => {
+  const html = fs.readFileSync(require.resolve('../public/expenses.html'), 'utf8');
+  assert.match(html, /Default Paytm transaction report CSV/);
+  assert.match(html, /reconcileEligible&&!isPaytmClearing/);
+  assert.match(html, /Finalize Paytm reconciliation/);
+  assert.match(html, /finalize-settlement/);
+  assert.match(html, /Finalize all matched Paytm reconciliations/);
+  assert.match(html, /finalize-all/);
+});
+
 test('shows old summary-only rows as not importable without transaction IDs', () => {
   const csv = 'Updated_Date,Status,Amount,Commission,GST,Settled_Amount\n2026-08-25,SUCCESS,5000,0,0,5000\n';
   const result = parsePaytmReport(Buffer.from(csv), 'old.csv', '2026-09-18');
@@ -58,6 +93,22 @@ test('Paytm report preview and confirmation import evidence without touching acc
   const repeated = response(); routes['/api/expenses/paytm-reports/preview'](req, repeated);
   assert.equal(repeated.body.newTransactions, 0);
   assert.equal(repeated.body.duplicates, 1);
+});
+
+test('re-upload enriches legacy transactions instead of reporting false conflicts', () => {
+  const id = '202609240000123456';
+  const store = { paytmReportTransactions: { [id]: { transactionId: id, date: '2026-09-24', time: '24-09-2026 11:00:00', amount: 1000, commission: 10, gst: 1.8, settledAmount: 988.2, source: 'older.csv' } }, paytmReportDrafts: {} };
+  const routes = {}, router = { get: (url, handler) => { routes[url] = handler; }, post: (url, ...handlers) => { routes[url] = handlers.at(-1); } };
+  registerPaytmReports(router, { loadStore: () => store, saveStore: () => {}, audit: () => {}, canAccess: () => true, upload: { array: () => () => {} }, view: () => ({}), today: () => '2026-09-24', orders: () => [], saleRows: () => [] });
+  const csv = 'transaction_id,transaction_type,transaction_date,status,amount,commission,gst,utr_no,settled_date,settled_amount,platform_fee,comments\n' +
+    `${id},ACQUIRING,24-09-2026 11:00:00,SUCCESS,1000,10,1.8,UTR-24,25-09-2026,988.2,0,Customer payment\n`;
+  const reply = () => ({ status() { return this; }, json(body) { this.body = body; return this; } });
+  const preview = reply(); routes['/api/expenses/paytm-reports/preview']({ user: { username: 'owner' }, files: [{ originalname: 'paytm.csv', buffer: Buffer.from(csv) }] }, preview);
+  assert.equal(preview.body.warnings.length, 0);
+  assert.equal(preview.body.enrichedTransactions, 1);
+  const confirmed = reply(); routes['/api/expenses/paytm-reports/confirm']({ user: { username: 'owner' }, body: { draftId: preview.body.draftId } }, confirmed);
+  assert.equal(confirmed.body.enriched, 1);
+  assert.deepEqual([store.paytmReportTransactions[id].utr, store.paytmReportTransactions[id].settledDate, store.paytmReportTransactions[id].transactionType, store.paytmReportTransactions[id].platformFee], ['UTR-24', '2026-09-25', 'ACQUIRING', 0]);
 });
 
 test('saving a detailed Paytm report automatically links a unique Shopify note suffix', () => {
@@ -91,6 +142,17 @@ test('reviewed Shopify links and exact UTR bank credit are required before payou
   assert.throws(() => validatePayoutPosting(store, 'P1', 'BTX-1', sales), /already posted/);
 });
 
+test('fully reviewed report batches become pending Paytm outflows before finalization', () => {
+  const tx={transactionId:'T1',rrn:'123456',date:'2026-09-17',amount:100,commission:1,gst:.18,platformFee:0,settledAmount:98.82,payoutId:'P1',settledDate:'2026-09-18',utr:'UTR123'};
+  const link={transactionId:'T1',orderId:'O1',orderNumber:'2801',amount:100};
+  const store={paytmReportTransactions:{T1:tx},paytmOrderLinks:{T1:link}};
+  const sales=[{id:'SHOPIFY/O1',orderId:'O1',orderNumber:'2801',date:'2026-09-17',account:'Paytm Settlement Clearing',amount:100}];
+  const [pending]=reviewedUnpostedSettlements(store,sales);
+  assert.deepEqual([pending.net,pending.commission,pending.utr,pending.reviewedNotFinalized],[98.82,1,'UTR123',true]);
+  store.paytmVerifiedSettlements=[{settlementId:pending.settlementId,payoutId:'P1'}];
+  assert.equal(reviewedUnpostedSettlements(store,sales).length,0,'an explicit finalized record replaces the derived pending row');
+});
+
 test('manual amount-only link requires a reason and one-to-one order', () => {
   const tx = { transactionId: 'T1', date: '2026-09-17', amount: 100, posId: 'POS1' };
   const orders = [{ id: 'O1', orderNumber: 2801, financialStatus: 'paid', note: '' }];
@@ -118,6 +180,29 @@ test('split order links only the Paytm component and excludes store credit used 
   assert.equal(link.partial, true);
   assert.equal(link.matchBasis, 'transaction_id_in_shopify_note');
   assert.throws(() => validateOrderLink({}, { ...tx, amount: 1000 }, '2845', [order], [], ''), /store credit/);
+});
+
+test('original Paytm receipt remains linkable after partial or full Shopify refund', () => {
+  const tx = { transactionId: '202609040000169675', date: '2026-09-04', amount: 4998, posId: 'POS1' };
+  const base = { id: 'refunded-order', number: 2776, createdAt: '2026-09-04T12:00:00Z', total: 4998, note: 'Paytm 169675' };
+  for (const order of [
+    { ...base, financialStatus: 'partially_refunded', refundAmount: 2000 },
+    { ...base, financialStatus: 'refunded', refundAmount: 4998 }
+  ]) {
+    const store = {};
+    assert.equal(autoMatchShopifyNotes(store, { [tx.transactionId]: tx }, [order], []).length, 1);
+    assert.equal(store.paytmOrderLinks[tx.transactionId].amount, 4998);
+    assert.equal(store.paytmOrderLinks[tx.transactionId].subsequentlyRefunded, order.refundAmount);
+  }
+  assert.throws(() => validateOrderLink({}, tx, '2776', [{ ...base, financialStatus: 'refunded', cancelledAt: '2026-09-05' }], [], ''), /non-cancelled/);
+});
+
+test('Paytm pos_id DEFAULT does not wrongly classify a QR/UPI customer receipt as non-POS', () => {
+  const tx = { transactionId: '20260902110870000301991517820518327', date: '2026-09-02', amount: 5100, transactionType: 'ACQUIRING', paymentMode: 'UPI', posId: 'DEFAULT' };
+  const order = { id: 'order-2760', number: 2760, createdAt: '2026-09-02T19:29:00Z', financialStatus: 'paid', total: 5100, note: 'Paytm 518327' };
+  const store = {};
+  assert.equal(autoMatchShopifyNotes(store, { [tx.transactionId]: tx }, [order], []).length, 1);
+  assert.equal(store.paytmOrderLinks[tx.transactionId].orderNumber, '2760');
 });
 
 test('Shopify sale/capture components never count authorization or store credit as Paytm', () => {

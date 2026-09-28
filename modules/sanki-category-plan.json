@@ -1,0 +1,456 @@
+{
+  "version": "sanki-categories-2026-09-24-v1",
+  "catalog": [
+    {
+      "name": "Bank Charges",
+      "group": "Banking & Finance"
+    },
+    {
+      "name": "Bank Interest Paid",
+      "group": "Banking & Finance"
+    },
+    {
+      "name": "GST Fee",
+      "group": "Legal Charges"
+    },
+    {
+      "name": "Govt. fee",
+      "group": "Legal Charges"
+    },
+    {
+      "name": "CA Charges",
+      "group": "Legal Charges"
+    },
+    {
+      "name": "Lawyer Charges",
+      "group": "Legal Charges"
+    },
+    {
+      "name": "Salary Expense",
+      "group": "Staff & Labour"
+    },
+    {
+      "name": "Incentive Expense",
+      "group": "Staff & Labour"
+    },
+    {
+      "name": "Staff Welfare",
+      "group": "Staff & Labour"
+    },
+    {
+      "name": "Staff Uniform & Badges Expense",
+      "group": "Staff & Labour"
+    },
+    {
+      "name": "Staff Water Expense",
+      "group": "Staff & Labour"
+    },
+    {
+      "name": "Website Meta",
+      "group": "Marketing & Promotion"
+    },
+    {
+      "name": "Website Others",
+      "group": "Marketing & Promotion"
+    },
+    {
+      "name": "IG Meta",
+      "group": "Marketing & Promotion"
+    },
+    {
+      "name": "IG Others",
+      "group": "Marketing & Promotion"
+    },
+    {
+      "name": "Influencer Marketing",
+      "group": "Marketing & Promotion"
+    },
+    {
+      "name": "Miscellaneous Marketing",
+      "group": "Marketing & Promotion"
+    },
+    {
+      "name": "Subscriptions Expense",
+      "group": "Subscriptions"
+    },
+    {
+      "name": "Conveyance Charges",
+      "group": "Travel, Transport & Logistics"
+    },
+    {
+      "name": "Freight Charges",
+      "group": "Travel, Transport & Logistics"
+    },
+    {
+      "name": "Fuel Expenses",
+      "group": "Travel, Transport & Logistics"
+    },
+    {
+      "name": "Parking Expense",
+      "group": "Travel, Transport & Logistics"
+    },
+    {
+      "name": "Logistics Charges",
+      "group": "Travel, Transport & Logistics"
+    },
+    {
+      "name": "Travelling Expense",
+      "group": "Travel, Transport & Logistics"
+    },
+    {
+      "name": "Housekeeping Expense",
+      "group": "Housekeeping"
+    },
+    {
+      "name": "Store Rent Expense",
+      "group": "Rent, Utilities & Communication"
+    },
+    {
+      "name": "Electricity Expense",
+      "group": "Rent, Utilities & Communication"
+    },
+    {
+      "name": "Internet & Wifi Expense",
+      "group": "Rent, Utilities & Communication"
+    },
+    {
+      "name": "Telephone Expense",
+      "group": "Rent, Utilities & Communication"
+    },
+    {
+      "name": "Other Utilities",
+      "group": "Rent, Utilities & Communication"
+    },
+    {
+      "name": "Furniture",
+      "group": "Furniture & Fittings"
+    },
+    {
+      "name": "Electronics",
+      "group": "Furniture & Fittings"
+    },
+    {
+      "name": "Electricals",
+      "group": "Furniture & Fittings"
+    },
+    {
+      "name": "Technology",
+      "group": "Furniture & Fittings"
+    },
+    {
+      "name": "Plumbing",
+      "group": "Furniture & Fittings"
+    },
+    {
+      "name": "Fittings",
+      "group": "Furniture & Fittings"
+    },
+    {
+      "name": "Furniture Repairs & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Electronics Repairs & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Electrical Repairs & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Vehicles Repair & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Technology Repairs & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Plumbing Repairs & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Fittings Repairs & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Civil Work",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Other Repairs & Maintenance",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Labor Charges",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Paintwork",
+      "group": "Repairs & Maintenance"
+    },
+    {
+      "name": "Printing & Stationery Expense",
+      "group": "Office & Administration"
+    },
+    {
+      "name": "Office Consumables & Disposables Expense",
+      "group": "Office & Administration"
+    },
+    {
+      "name": "Miscellaneous Office Expenses",
+      "group": "Office & Administration"
+    },
+    {
+      "name": "Alteration Expense",
+      "group": "Garment Care & Supplies"
+    },
+    {
+      "name": "Tailoring Expense",
+      "group": "Garment Care & Supplies"
+    },
+    {
+      "name": "Dry Cleaning Expense",
+      "group": "Garment Care & Supplies"
+    },
+    {
+      "name": "Tags Expense",
+      "group": "Garment Care & Supplies"
+    },
+    {
+      "name": "Labels Expense",
+      "group": "Garment Care & Supplies"
+    },
+    {
+      "name": "Printing Rolls Expense",
+      "group": "Garment Care & Supplies"
+    },
+    {
+      "name": "Food & Drinks Expense",
+      "group": "Food & Refreshments"
+    },
+    {
+      "name": "Refreshment Expenses",
+      "group": "Food & Refreshments"
+    },
+    {
+      "name": "Store Security Deposit",
+      "group": "Deposits"
+    },
+    {
+      "name": "Flowers Expense",
+      "group": "Devotional & Religious"
+    },
+    {
+      "name": "Other Pooja & Mandir Expense",
+      "group": "Devotional & Religious"
+    },
+    {
+      "name": "Props Expenses",
+      "group": "Social Media Expenses"
+    },
+    {
+      "name": "Accessories Expense",
+      "group": "Social Media Expenses"
+    },
+    {
+      "name": "Other Expense",
+      "group": "Social Media Expenses"
+    },
+    {
+      "name": "Zipper Bags Expense",
+      "group": "Packing Materials"
+    },
+    {
+      "name": "Courier Bags Expense",
+      "group": "Packing Materials"
+    },
+    {
+      "name": "JJ",
+      "group": "JJ"
+    },
+    {
+      "name": "UM",
+      "group": "UM"
+    }
+  ],
+  "mapping": {
+    "Abdul AC": "Electrical Repairs & Maintenance",
+    "Acrylic Expense A3": "Fittings",
+    "Advertisement Expense": "Miscellaneous Marketing",
+    "AI Software Subscription Expense": "Subscriptions Expense",
+    "ALTERATION": "Alteration Expense",
+    "Aman Glass Work": "Fittings",
+    "BANK CHARGES": "Bank Charges",
+    "Bank Interest Paid": "Bank Interest Paid",
+    "Barcode & Stickers Rolls": "Printing Rolls Expense",
+    "BSES": "Electricity Expense",
+    "Business Promotion Expenses": "Miscellaneous Marketing",
+    "Camerawork Expense-A3": "Electrical Repairs & Maintenance",
+    "Carpenting Expense-A3": "Furniture Repairs & Maintenance",
+    "Cash Counter Expense-A3": "Fittings",
+    "Changing Room Expense-A3": "Fittings",
+    "Civil Work Expense-A3": "Civil Work",
+    "CLEANING EXP": "Housekeeping Expense",
+    "Cleaning Expense-A3": "Housekeeping Expense",
+    "COD COURIER CHARGES": "Logistics Charges",
+    "COMPUTER REPAIR": "Technology Repairs & Maintenance",
+    "Consumable Expense": "Office Consumables & Disposables Expense",
+    "Conveyance Expenses": "Conveyance Charges",
+    "DRY CLEAN": "Dry Cleaning Expense",
+    "Dry Cleaning Expense": "Dry Cleaning Expense",
+    "DUMMIES": "Fittings",
+    "Electrical Expense": "Electricals",
+    "Electrician Expense": "Electrical Repairs & Maintenance",
+    "Electrician Expense-A3": "Electrical Repairs & Maintenance",
+    "ELECTRICITY BILL": "Electricity Expense",
+    "ELECTRICITY EXPENSE": "Electricity Expense",
+    "Electronic Items Expense": "Electronics",
+    "Fee & Charges": "GST Fee",
+    "Flex Board Expense-A3": "Miscellaneous Marketing",
+    "Flooring Expense-A3": "Fittings",
+    "Food & Drinks-A3": "Food & Drinks Expense",
+    "FOOD EXPENSE": "Food & Drinks Expense",
+    "Freight Charges": "Freight Charges",
+    "Fuel Expenses": "Fuel Expenses",
+    "Furniture Expense-A3": "Furniture",
+    "Gagan Sir Fuel": "Fuel Expenses",
+    "Glass Work Expense-A3": "Fittings",
+    "Go Kwik": "Subscriptions Expense",
+    "Guest Refreshment Expenses": "Refreshment Expenses",
+    "Housekeeping and Consumable Expense": "Housekeeping Expense",
+    "Housekeeping Expense": "Housekeeping Expense",
+    "Incentive Expense": "Incentive Expense",
+    "Internet Expense": "Internet & Wifi Expense",
+    "Jitender Painter": "Paintwork",
+    "JJ": "JJ",
+    "Labor Charge": "Labor Charges",
+    "Labor Expense-A3": "Labor Charges",
+    "LED Rent": "Other Utilities",
+    "MARKETING EXPENSE": "Miscellaneous Marketing",
+    "MCA EXP": "Govt. fee",
+    "Meta Wallet Recharge": "IG Meta",
+    "Mirror Expense-A3": "Fittings",
+    "MIS OFFICE EXP": "Miscellaneous Office Expenses",
+    "Models Payment": "IG Others",
+    "Office Consumable Expense": "Office Consumables & Disposables Expense",
+    "Office Consumables": "Office Consumables & Disposables Expense",
+    "OFFICE EXP": "Miscellaneous Office Expenses",
+    "PACKING MATERIAL": "Courier Bags Expense",
+    "Paint Expense-A3": "Paintwork",
+    "Paint Items": "Paintwork",
+    "PARKING": "Parking Expense",
+    "Parking Expense": "Parking Expense",
+    "PETROL": "Fuel Expenses",
+    "Plumbing Expense-A3": "Plumbing",
+    "PORTER": "Freight Charges",
+    "Porter Expense A3": "Freight Charges",
+    "Printing & Stationery Expense": "Printing & Stationery Expense",
+    "Putty Expense-A3": "Paintwork",
+    "Rahul CCTV": "Electrical Repairs & Maintenance",
+    "Rapido Expense": "Conveyance Charges",
+    "Rapido-A3": "Conveyance Charges",
+    "REPAIR & MAINTANCE": "Other Repairs & Maintenance",
+    "Salary Expense": "Salary Expense",
+    "SANKI New Store Security Deposit": "Store Security Deposit",
+    "SCOTTY REPAIR": "Vehicles Repair & Maintenance",
+    "Sendvise Wallet Recharge": "Subscriptions Expense",
+    "Shoot Expense": "Miscellaneous Marketing",
+    "Shopify Payments": "Subscriptions Expense",
+    "Staff Uniform Expense": "Staff Uniform & Badges Expense",
+    "STAFF WELFARE": "Staff Welfare",
+    "STATIONERY": "Printing & Stationery Expense",
+    "Store Supplies": "Office Consumables & Disposables Expense",
+    "Subscriptions": "Subscriptions Expense",
+    "Tags and Labels": "Tags Expense",
+    "Technology Expense": "Technology",
+    "TELEPHONE EXP": "Telephone Expense",
+    "Threads": "Tailoring Expense",
+    "Tiles Expense-A3": "Civil Work",
+    "TRAVELING": "Travelling Expense",
+    "U M": "UM",
+    "Vehicle Repair & Maintenance Expense": "Vehicles Repair & Maintenance",
+    "Velocity Recharge": "Logistics Charges",
+    "Wallpaper Expense-A3": "Fittings",
+    "Warehouse Rent Expense": "Other Utilities",
+    "Water & Soda": "Staff Water Expense",
+    "Welding Work-A3": "Other Repairs & Maintenance",
+    "Wifi Expense-A3": "Internet & Wifi Expense",
+    "Workindia Payment": "Subscriptions Expense",
+    "Zipper Bags": "Zipper Bags Expense"
+  },
+  "removed": [
+    "A3 Expenses",
+    "A3 Suspense",
+    "CUSTOMER CHANGE",
+    "Customer Refund",
+    "General Expense",
+    "General Expenses-A3",
+    "Installation Expense",
+    "Interior Expense-A3",
+    "KN Expenses",
+    "Mis Exp",
+    "Miscellaneous Expense",
+    "Office Equipment Expense",
+    "Operating Expense",
+    "Pradeep IMP",
+    "Social Media Expenses",
+    "SUSPENSE",
+    "VC",
+    "Water Tank Security-A3"
+  ],
+  "historicalOnly": [
+    "Interior Expense-A3",
+    "Office Equipment Expense",
+    "Social Media Expenses"
+  ],
+  "aliases": {
+    "Flowers": "Flowers Expense",
+    "Pooja and Mandir Expense": "Other Pooja & Mandir Expense",
+    "Food": "Food & Drinks Expense",
+    "Welfare": "Staff Welfare",
+    "Garbage Collection": "Housekeeping Expense"
+  },
+  "expenseOverrides": {
+    "EX-00336": {
+      "from": "General Expense",
+      "to": "Tailoring Expense",
+      "reason": "Particulars identify a sewing-machine needle packet."
+    },
+    "EX-00297": {
+      "from": "Maintenence",
+      "to": "Paintwork",
+      "reason": "Top floor paint materials."
+    },
+    "EX-00478": {
+      "from": "Maintenence",
+      "to": "Other Repairs & Maintenance",
+      "reason": "Welding work; follows the approved welding mapping."
+    },
+    "EX-00491": {
+      "from": "Maintenence",
+      "to": "Civil Work",
+      "reason": "Cement and badarpur."
+    },
+    "EX-00502": {
+      "from": "Maintenence",
+      "to": "Labor Charges",
+      "reason": "Louver installation labour."
+    },
+    "EX-00508": {
+      "from": "Maintenence",
+      "to": "Labor Charges",
+      "reason": "Carpenter labour."
+    },
+    "EX-00510": {
+      "from": "Maintenence",
+      "to": "Electrical Repairs & Maintenance",
+      "reason": "Electrician labour; follows the approved electrician mapping."
+    },
+    "EX-00046": {
+      "from": "Mandir",
+      "to": "Flowers Expense",
+      "reason": "Particulars identify phool mala."
+    }
+  }
+}

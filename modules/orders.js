@@ -42,6 +42,10 @@ const ORDERS_PATH = process.env.ORDERS_PATH ||
   path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'),
             'orders.json');
 const ACCOUNTING_BOUNDARY_PATH = path.join(path.dirname(ORDERS_PATH), 'accounting-boundary.json');
+// Increment this whenever the accounting ledger needs a fresh historical order
+// scan. Incremental Shopify syncs only see recently updated orders, so an order
+// omitted by an older importer would otherwise remain missing forever.
+const ACCOUNTING_ORDER_BACKFILL_VERSION = 1;
 function accountingStartAt() {
   try { return String(JSON.parse(fs.readFileSync(ACCOUNTING_BOUNDARY_PATH, 'utf8')).startAt || ''); }
   catch { return ''; }
@@ -121,7 +125,7 @@ function refundComponents(o) {
       if (String(tx.kind || '').toLowerCase() !== 'refund' || String(tx.status || 'success').toLowerCase() !== 'success') return;
       const amount = num(tx.amount), gateway = String(tx.gateway || tx.payment_gateway || '');
       if (!(amount > 0)) return;
-      rows.push({ id:String(tx.id || ''), refundId:String(refund.id || ''), amount, gateway, processedAt:tx.processed_at || refund.processed_at || refund.created_at || '' });
+      rows.push({ id:String(tx.id || ''), parentId:String(tx.parent_id || ''), refundId:String(refund.id || ''), amount, gateway, processedAt:tx.processed_at || refund.processed_at || refund.created_at || '' });
     });
   });
   const isStoreCredit = row => /store.?credit|gift.?card/i.test(row.gateway);
@@ -130,6 +134,16 @@ function refundComponents(o) {
     storeCreditIssued: rows.filter(isStoreCredit).reduce((sum, row) => sum + row.amount, 0),
     moneyRefunded: rows.filter(row => !isStoreCredit(row)).reduce((sum, row) => sum + row.amount, 0)
   };
+}
+function normalizePaymentTransactions(rows) {
+  return (rows || []).map(tx => ({
+    id:String(tx.id || ''), parentId:String(tx.parent_id || tx.parentId || ''), kind:String(tx.kind || ''),
+    status:String(tx.status || ''), gateway:String(tx.gateway || tx.payment_gateway || ''),
+    amount:num(tx.amount), processedAt:tx.processed_at || tx.processedAt || tx.created_at || '',
+    manualPaymentGateway:tx.manual_payment_gateway===true||tx.manualPaymentGateway===true,
+    message:String(tx.message || ''), authorization:String(tx.authorization || ''),
+    userId:String(tx.user_id || tx.userId || ''), sourceName:String(tx.source_name || tx.sourceName || '')
+  }));
 }
 function addressObj(a) {
   a = a || {};
@@ -182,6 +196,8 @@ function normalizeOrder(o) {
     financialStatus: o.financial_status || '',
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
     paymentGateways: o.payment_gateway_names || [],
+    paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
+    paymentTransactionSchemaVersion: 2,
     couponCodes: (o.discount_codes || []).map(d => d.code).filter(Boolean)
   };
 }
@@ -203,21 +219,38 @@ async function runSync(opts = {}) {
   _syncing = true;
   try {
     const store = loadStore();
-    // Full backfill when: forced (opts.full), OR nothing stored yet. A forced full
-    // re-pulls the ENTIRE history (no updated_at_min) so orders that predate the
-    // first sync get imported — this is what "Backfill all history" triggers.
-    const isBackfill = opts.full === true || Object.keys(store.orders).length === 0;
+    // Also run a one-time accounting-boundary backfill after this importer is
+    // deployed. This recovers older missing orders (for example a cash order
+    // created on 23 August) that can never be found by the normal recent-update
+    // poller. Manual full backfill still retrieves the entire Shopify history.
+    const needsAccountingBackfill = store.sync.accountingOrderBackfillVersion !== ACCOUNTING_ORDER_BACKFILL_VERSION;
+    const isBackfill = opts.full === true || Object.keys(store.orders).length === 0 || needsAccountingBackfill;
     // Incremental syncs re-pull anything updated since a small safety margin
     // before the last sync (catches edits/refunds/fulfilment changes).
     let url = `https://${SHOPIFY_STORE}/admin/api/2024-01/orders.json?status=any&limit=250&fields=${ORDER_FIELDS}`;
-    if (!isBackfill && store.sync.lastSyncedAt) {
+    if (needsAccountingBackfill && opts.full !== true && Object.keys(store.orders).length > 0) {
+      const boundary = accountingStartAt();
+      if (boundary) url += `&created_at_min=${encodeURIComponent(boundary)}`;
+    } else if (!isBackfill && store.sync.lastSyncedAt) {
       const since = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // last 10 min margin
       const min = store.sync.lastSyncedAt < since ? store.sync.lastSyncedAt : since;
       url += `&updated_at_min=${encodeURIComponent(min)}`;
     }
     const raw = await shopifyFetchAll(url);
+    // Orders expose only gateway names. The transaction endpoint is the source
+    // of truth for split tenders and gateway-specific refunds, so cache those
+    // components with every imported/updated order.
+    await Promise.all(raw.map(async order => {
+      order._paymentTransactions = await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
+    }));
     let imported = 0;
     raw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o); imported++; });
+    const boundary=accountingStartAt(),missingPaymentDetails=Object.values(store.orders).filter(order=>String(order.createdAt||'')>=boundary&&order.paymentTransactionSchemaVersion!==2);
+    await Promise.all(missingPaymentDetails.map(async order => {
+      const transactions=await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
+      order.paymentTransactions=normalizePaymentTransactions(transactions);
+      order.paymentTransactionSchemaVersion=2;
+    }));
 
     // Recompute meta.
     const ids = Object.keys(store.orders);
@@ -228,6 +261,8 @@ async function runSync(opts = {}) {
       count: ids.length,
       oldestAt: oldest,
       lastImported: imported,
+      paymentDetailsBackfilled: missingPaymentDetails.length,
+      accountingOrderBackfillVersion: ACCOUNTING_ORDER_BACKFILL_VERSION,
       mode: isBackfill ? 'backfill' : 'incremental'
     };
     saveStore(store);
