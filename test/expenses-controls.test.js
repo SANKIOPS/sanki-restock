@@ -9,7 +9,7 @@ const path = require('node:path');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const XLSX = require('xlsx');
 
@@ -2604,6 +2604,11 @@ test('the ₹720 personal expense is routed through the IndusInd 8181 ledger',()
   const expense=store.expenses['EX-PERSONAL-720'],payment=expense.payments[0];
   assert.equal(payment.account,'IndusInd Bank 8181');assert.equal(payment.date,'2026-09-16');assert.equal(payment.bankReference,'662595723427');assert.equal(payment.personalFunds,false);assert.equal(payment.crossEntityCompanyPayment,true);assert.equal(expense.fundedBy,'company');
   assert.equal(store.auditLog.at(-1).action,'PERSONAL_EXPENSE_COMPANY_PAYMENT_CORRECTED');assert.equal(applyIndus8181Sep16PersonalExpenseCorrection(store),false);
+});
+
+test('the ₹1,350 IndusInd outflow displays on the three linked 18 September bank debits',()=>{
+  const store={transfers:[{id:'TR-SEP18-1350',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'IndusInd Bank 8181',toAccount:'Vendor',amount:1350,date:'2026-09-17'}],oneTimeMigrations:{},bankDateOverrides:{},auditLog:[],auditSeq:0};
+  assert.equal(applyIndus8181Sep18DebitDateCorrection(store),true);assert.equal(store.bankDateOverrides['TR-SEP18-1350'].bankDate,'2026-09-18');assert.equal(store.bankDateOverrides['TR-SEP18-1350'].originalDate,'2026-09-17');assert.deepEqual(store.bankDateOverrides['TR-SEP18-1350'].bankReferences,['626123634541','626123631757','626123629134']);assert.equal(store.auditLog.at(-1).action,'BANK_DATE_OVERRIDE_CORRECTED');assert.equal(applyIndus8181Sep18DebitDateCorrection(store),false);
 });
 
 test('reviewed reconciliation links immediately make bank dates authoritative for every period',()=>{
