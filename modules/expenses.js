@@ -2779,9 +2779,14 @@ router.get('/api/expenses/balances', (req, res) => {
   const nature = req.query.nature ? normalizedNature(req.query.nature) : approvalNatures(req)[0];
   const from=String(req.query.from||''),to=String(req.query.to||'');
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
+  const openingDateMap=nature==='SANKI'?(s.openingBalanceDates||{}):(((s.openingBalanceDatesByNature||{})[nature])||{});
+  const afterAuthoritativeOpening=(account,date)=>{
+    const openingDate=String(openingDateMap[account]||'');
+    return !(account===PAYTM_CLEARING_ACCOUNT&&openingDate>=PAYTM_START_DATE&&String(date||'')<openingDate);
+  };
   function totalsFor(inRange) {
     const paidOut = {}, collected = {}, adj = {}, transferIn = {}, transferOut = {}, bankTruthIn = {}, bankTruthOut = {};
-    const posted=(account,date)=>inRange(date)&&cashEntryIsVisible(account,date);
+    const posted=(account,date)=>inRange(date)&&cashEntryIsVisible(account,date)&&afterAuthoritativeOpening(account,date);
     Object.values(s.expenses).forEach(e => {
       const a = e.account || '(unspecified)';
       (e.payments || []).filter(p => !p.accountingExcluded && paymentIsPosted(e) && posted(p.account||a,p.date)).forEach(p => {
@@ -2827,8 +2832,8 @@ router.get('/api/expenses/balances', (req, res) => {
       (s.paytmPayoutPostings||[]).filter(x=>!detailedPaytmSettlementIsCoveredByLegacy(s,x)&&posted(DEFAULT_SALES_BANK,x.date)).forEach(x=>{collected[DEFAULT_SALES_BANK]=(collected[DEFAULT_SALES_BANK]||0)+num(x.net);});
     }
     (s.transfers || []).filter(x => !x.accountingExcluded&&inRange(x.date)).forEach(x => {
-      if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + transferDebitAmount(x);
-      if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)&&transferCreditsCompanyFunds(x,nature,x.toAccount)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + transferCreditAmount(x);
+      if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)&&afterAuthoritativeOpening(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + transferDebitAmount(x);
+      if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)&&afterAuthoritativeOpening(x.toAccount,x.date)&&transferCreditsCompanyFunds(x,nature,x.toAccount)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + transferCreditAmount(x);
     });
     (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{
       bankTruthIn[x.account]=(bankTruthIn[x.account]||0)+num(x.credit);
@@ -3146,15 +3151,18 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // date.  Treating it as a dated credit made earlier rows omit the opening and
   // caused the running balance to appear to increase immediately before same-day
   // salary debits.
-  const openingEntry=entries.find(x=>x.kind==='opening'),movementEntries=entries.filter(x=>x.kind!=='opening');
+  const openingEntry=entries.find(x=>x.kind==='opening'),authoritativePaytmOpening=account===PAYTM_CLEARING_ACCOUNT&&openingDate>=PAYTM_START_DATE,movementEntries=entries.filter(x=>x.kind!=='opening'&&(!authoritativePaytmOpening||!x.date||String(x.date)>=openingDate));
   const ordered = movementEntries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
   const preciseBalance=account===PAYTM_CLEARING_ACCOUNT||isBankLedgerName(account);let running = openingEntry?num(openingEntry.credit)-num(openingEntry.debit):0;
   if(openingEntry)openingEntry.balance=preciseBalance?Math.round(running*100)/100:round0(running);
   ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
   if(openingEntry&&account===PAYTM_CLEARING_ACCOUNT){
-    const broughtForward=movementEntries.filter(x=>String(x.date||'')<PAYTM_START_DATE).reduce((balance,x)=>balance+num(x.credit)-num(x.debit),num(openingEntry.credit)-num(openingEntry.debit));
-    openingEntry.balance=roundMoney(broughtForward);
-    openingEntry.description='Opening balance brought forward to '+PAYTM_START_DATE;
+    if(authoritativePaytmOpening){openingEntry.balance=roundMoney(num(openingEntry.credit)-num(openingEntry.debit));openingEntry.description='Opening balance effective '+openingDate;}
+    else{
+      const broughtForward=movementEntries.filter(x=>String(x.date||'')<PAYTM_START_DATE).reduce((balance,x)=>balance+num(x.credit)-num(x.debit),num(openingEntry.credit)-num(openingEntry.debit));
+      openingEntry.balance=roundMoney(broughtForward);
+      openingEntry.description='Opening balance brought forward to '+PAYTM_START_DATE;
+    }
   }
   if(openingEntry)ordered.unshift(openingEntry);
   // Paytm Settlement Clearing begins on 22 August 2026. Earlier activity is
