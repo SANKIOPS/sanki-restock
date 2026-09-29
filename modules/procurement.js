@@ -1864,6 +1864,28 @@ function restoreDraftsAfterGroupSplit(po, groups) {
   return changed;
 }
 
+// One-time repair for the PO-0006 87375 split. These are the exact saved URLs
+// shown in the studio before the group was split; re-linking them is free and
+// avoids a second paid generation. They belong to the first/source design only.
+function restorePo0006SavedSet(po, groups) {
+  if (po.id !== 'PO-0006') return false;
+  const target = groups.find(g => /^87375\s+a$/i.test(String(g.designCode || '').trim()) && /^white$/i.test(g.colour || ''));
+  if (!target || ((po.aiImages || {})[target.key] || []).length) return false;
+  const saved = [
+    ['front', 'Product front', '/api/procurement/photo/1788523008561-e875fe95028b.png'],
+    ['female', 'Female model', '/api/procurement/photo/1789728503256-8df8b78a4abe.png'],
+    ['model-side-female', 'Styled three-quarter view', '/api/procurement/photo/1789728530399-67289e013f9c.png']
+  ];
+  if (!saved.every(([, , url]) => readStoredPhoto(url))) return false;
+  po.aiImages = po.aiImages || {};
+  const fingerprint = codexBatch.fingerprint(target, (po.backRefs || {})[target.key]);
+  po.aiImages[target.key] = saved.map(([type, label, url]) => ({
+    type, label, url, approved: true, source: 'openai-pilot', sourceFingerprint: fingerprint,
+    qa: { status: 'manual-reviewed', issues: [] }
+  }));
+  return true;
+}
+
 // Read-only: the NEW-product groups of a PO so the AI studio can be prepared
 // at the ADVANCE stage — during the shipping lead time, before goods arrive.
 // No status change and no weights required (weights don't affect imaging/SEO).
@@ -1875,7 +1897,9 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
     const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     const groups = await newGroupsOf(s, po);
-    if (restoreDraftsAfterGroupSplit(po, groups)) saveStore(s);
+    const restoredSplit = restoreDraftsAfterGroupSplit(po, groups);
+    const restoredKnownSet = restorePo0006SavedSet(po, groups);
+    if (restoredSplit || restoredKnownSet) saveStore(s);
     const byKey = new Map(groups.map(g => [g.key, g]));
     // Return the complete saved calculation as well as the studio groups. The
     // Purchases page uses this read-only response to restore the Shopify post
