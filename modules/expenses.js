@@ -760,7 +760,7 @@ function applySep11PrashantReimbursementDateCorrection(s){
   return true;
 }
 function applySep13ShopifyCashComponentCorrections(s){
-  const key='correct-shopify-2806-2808-cash-components-2026-09-13-v1',now=new Date().toISOString();
+  const key='correct-shopify-2806-2808-payment-components-2026-09-13-v2',now=new Date().toISOString();
   s.oneTimeMigrations=s.oneTimeMigrations||{};
   const state=s.oneTimeMigrations[key]||{appliedAt:now,completed:{},corrections:[]};
   let orders={};
@@ -770,17 +770,15 @@ function applySep13ShopifyCashComponentCorrections(s){
     {orderId:'7287917150460',orderNumber:'2808',cashAmount:5000,previousDisplayedAmount:5040}
   ];
   let changed=false;
-  s.saleAllocationOverrides=s.saleAllocationOverrides||{};
+  s.saleComponentAmountOverrides=s.saleComponentAmountOverrides||{};
   targets.forEach(target=>{
     if(state.completed[target.orderId])return;
     const order=orders[target.orderId]||Object.values(orders).find(x=>String(x.id||'')===target.orderId);
     if(!order)return;
-    const saleId='SHOPIFY/'+target.orderId,gross=roundMoney(num(order.total)-num(order.refundAmount)),cashAmount=roundMoney(target.cashAmount);
-    if(!(gross>=cashAmount))return;
-    const before=s.saleAllocationOverrides[saleId]||null,paytmBound=paytmSalesInScope('2026-09-13')&&(/paytm/i.test((order.paymentGateways||[]).join(' '))||String(order.channel||'').toLowerCase()==='pos'),nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(DEFAULT_SALES_BANK),record={saleId,orderId:target.orderId,orderNumber:target.orderNumber,gross,cashAmount,nonCashAmount:roundMoney(gross-cashAmount),cashAccount:DEFAULT_COUNTER_CASH,nonCashAccount,reason:'Owner confirmed the actual 13 September POS cash component',requestedBy:'gaganlambasanki',approvedBy:'gaganlambasanki',approvedAt:now};
-    s.saleAllocationOverrides[saleId]=record;
-    state.completed[target.orderId]=true;state.corrections.push({saleId,orderNumber:target.orderNumber,beforeDisplayedAmount:target.previousDisplayedAmount,afterCashAmount:cashAmount,gross});
-    audit(s,null,'SALE_ALLOCATION_CORRECTED','sale',saleId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:DEFAULT_COUNTER_CASH,before,after:record,note:'Owner confirmed Shopify POS order #'+target.orderNumber+' cash received was ₹'+cashAmount.toLocaleString('en-IN')+', replacing the imported component amount of ₹'+target.previousDisplayedAmount.toLocaleString('en-IN')});
+    const saleId='SHOPIFY/'+target.orderId,gross=roundMoney(num(order.total)-num(order.refundAmount)),amount=roundMoney(target.cashAmount),before=s.saleComponentAmountOverrides[saleId]||null,record={saleId,orderId:target.orderId,orderNumber:target.orderNumber,allocationPart:'cash',account:DEFAULT_COUNTER_CASH,amount,importedAmount:target.previousDisplayedAmount,shopifyOrderTotal:gross,reason:'Owner confirmed the actual 13 September POS payment component',requestedBy:'gaganlambasanki',approvedBy:'gaganlambasanki',approvedAt:now};
+    s.saleComponentAmountOverrides[saleId]=record;
+    state.completed[target.orderId]=true;state.corrections.push({saleId,orderNumber:target.orderNumber,beforeDisplayedAmount:target.previousDisplayedAmount,afterAmount:amount,shopifyOrderTotal:gross});
+    audit(s,null,'SALE_COMPONENT_AMOUNT_CORRECTED','sale',saleId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:DEFAULT_COUNTER_CASH,before,after:record,note:'Owner confirmed Shopify POS order #'+target.orderNumber+' payment component was ₹'+amount.toLocaleString('en-IN')+', replacing the imported component amount of ₹'+target.previousDisplayedAmount.toLocaleString('en-IN')});
     changed=true;
   });
   if(changed){state.updatedAt=now;state.complete=targets.every(target=>state.completed[target.orderId]);s.oneTimeMigrations[key]=state;}
@@ -1131,6 +1129,7 @@ function loadProcurementStore() {
 function salesLedgerEntries(accountingStore) {
   const rows = [];
   const allocationOverrides=(accountingStore&&accountingStore.saleAllocationOverrides)||{};
+  const componentAmountOverrides=(accountingStore&&accountingStore.saleComponentAmountOverrides)||{};
   const postedPaytmOrders=new Set((accountingStore&&accountingStore.paytmPayoutPostings||[]).flatMap(x=>x.orderIds||[]).map(String));
   try {
     const local = JSON.parse(fs.readFileSync(SALES_PATH, 'utf8'));
@@ -1165,7 +1164,7 @@ function salesLedgerEntries(accountingStore) {
         allRefunds.forEach(tx=>{const parent=byId.get(String(tx.parentId||tx.parent_id||'')),key=parent?bucket(parent):bucket(tx);if(key==='store_credit')return;const row=components.get(key);if(row)row.amount=roundMoney(Math.max(0,row.amount-num(tx.amount)));});
         const common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify payment component · '+(x.name||x.id)+' · '+(x.channel||''),cashAmount:num(components.get('cash')&&components.get('cash').amount),nonCashAmount:roundMoney(Array.from(components.entries()).filter(([key])=>!['cash','store_credit'].includes(key)).reduce((sum,[,row])=>sum+num(row.amount),0)),refundAmount:x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)};
         const routes={cash:DEFAULT_COUNTER_CASH,paytm:PAYTM_CLEARING_ACCOUNT,cod:VELOCITY_CLEARING_ACCOUNT,other:nonCashDefault};let sequence=0;
-        components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence)),account=key==='cod'&&component.manualCashCollected?DEFAULT_COUNTER_CASH:(routes[key]||nonCashDefault);rows.push(Object.assign({id,account,amount:component.amount,originalAmount:component.amount,allocationPart:key,gateway:component.gateway,manualCashCollected:component.manualCashCollected,shopifyTransactionIds:component.transactionIds},common));});
+        components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence)),account=key==='cod'&&component.manualCashCollected?DEFAULT_COUNTER_CASH:(routes[key]||nonCashDefault),amount=num(componentAmountOverrides[id]&&componentAmountOverrides[id].amount)||component.amount;rows.push(Object.assign({id,account,amount,originalAmount:component.amount,componentAmountOverride:componentAmountOverrides[id]||null,allocationPart:key,gateway:component.gateway,manualCashCollected:component.manualCashCollected,shopifyTransactionIds:component.transactionIds},common));});
         return;
       }
       // A pure Shopify Cash order is itself sufficient evidence for the whole
