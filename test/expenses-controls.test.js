@@ -2663,6 +2663,16 @@ test('finalized Paytm report shows outgoing settlement before the Axis bank link
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
+test('detailed Paytm settlement supersedes the matching legacy row without double counting',()=>{
+  const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
+  stored.paytmSettlements=[{id:'PTM-LEGACY-DUP',date:'2026-09-13',bankAccount:'Axis Bank 3448',bankReference:'PB0315980809',netAmount:23329.19,grossAmount:23329.19,chargeAmount:0}];
+  stored.paytmVerifiedSettlements=[{id:'PTMV-DETAILED-DUP',settlementId:'SET-DUP',payoutId:'PAYOUT-DUP',utr:'PB0315980809',settledDate:'2026-09-13',net:23329.19,commission:100,platformFee:20,gst:21.6,nonCustomerAmount:0,finalizedAt:'2026-09-13T12:00:00Z'}];stored.paytmPayoutPostings=[];fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
+  const entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-13',to:'2026-09-13'}}).body.entries;
+  const settlementRows=entries.filter(x=>x.kind==='paytm_settlement'&&x.reference==='PB0315980809');assert.equal(settlementRows.length,1);assert.equal(settlementRows[0].id,'PTMV-DETAILED-DUP');assert.equal(settlementRows[0].debit,23329.19);
+  assert.equal(entries.filter(x=>x.kind==='paytm_charge'&&x.reference==='PB0315980809').length,1);
+  fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
+});
+
 test('screenshot reconciliation rejects OCR-created years and account-sized amounts row by row',()=>{
   const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
   assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:1500,credit:0,balance:75010.5}),true);
