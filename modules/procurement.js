@@ -1838,13 +1838,12 @@ function restoreDraftsAfterGroupSplit(po, groups) {
     const oldDesign = oldKey.slice(0, cut).trim().toLowerCase();
     const oldColour = oldKey.slice(cut + 1).trim().toLowerCase();
     const oldSeo = (po.seoDraft || []).find(d => d.key === oldKey);
-    const legacyCode = String((oldSeo || {}).designCode || '').trim().toLowerCase();
     const candidates = groups.filter(g => {
       const at = g.key.lastIndexOf('|');
       if (at < 0) return false;
       const design = g.key.slice(0, at).trim().toLowerCase();
       const colour = g.key.slice(at + 1).trim().toLowerCase();
-      return colour === oldColour && (design.startsWith(oldDesign + ' ') || (legacyCode && design.startsWith(legacyCode + ' ')));
+      return colour === oldColour && design.startsWith(oldDesign + ' ');
     });
     const target = candidates.find(g => !((po.aiImages || {})[g.key] || []).length);
     if (!target) continue;
@@ -1876,8 +1875,18 @@ function restorePo0006SavedSet(po, groups) {
     ['female', 'Female model', '/api/procurement/photo/1789728503256-8df8b78a4abe.png'],
     ['model-side-female', 'Styled three-quarter view', '/api/procurement/photo/1789728530399-67289e013f9c.png']
   ];
-  if (!saved.every(([, , url]) => readStoredPhoto(url))) return false;
   po.aiImages = po.aiImages || {};
+  const restoredUrls = new Set(saved.map(([, , url]) => url));
+  let cleaned = false;
+  // A previous over-broad recovery copied A's set onto B/C. Remove only those
+  // exact duplicate links; never remove a distinct historical file.
+  for (const group of groups.filter(g => /^87375\s+[bc]$/i.test(String(g.designCode || '').trim()))) {
+    const before = ((po.aiImages || {})[group.key] || []);
+    const after = before.filter(image => !restoredUrls.has(image.url));
+    if (after.length !== before.length) { po.aiImages[group.key] = after; cleaned = true; }
+  }
+  if (!saved.every(([, , url]) => readStoredPhoto(url))) return false;
+  if (((po.aiImages || {})[target.key] || []).length) return cleaned;
   const fingerprint = codexBatch.fingerprint(target, (po.backRefs || {})[target.key]);
   po.aiImages[target.key] = saved.map(([type, label, url]) => ({
     type, label, url, approved: true, source: 'openai-pilot', sourceFingerprint: fingerprint,
