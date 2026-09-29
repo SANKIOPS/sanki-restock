@@ -741,6 +741,17 @@ test('account transfers create equal debit and credit ledger entries', () => {
   assert.equal(personalBlocked.status, 403);
 });
 
+test('a historical transfer already included in an opening balance remains auditable without being counted twice',()=>{
+  const before=invoke('GET','/api/expenses/balances',{query:{nature:'SANKI'},role:'owner'}).body.accounts.find(a=>a.name==='Axis Bank 3448').balance;
+  const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Counter Cash',toAccount:'Axis Bank 3448',amount:21000,date:'2026-08-12',proof:'/api/expenses/photo/opening-absorbed.jpg',note:'Included in opening balance'}});
+  const storePath=path.join(tempDir,'expenses.json'),store=JSON.parse(fs.readFileSync(storePath,'utf8')),transfer=store.transfers.find(x=>x.id===made.body.transfer.id);
+  transfer.creditAbsorbedIntoOpeningAccounts=['Axis Bank 3448'];transfer.openingBalanceTreatmentNote='Already represented by the opening balance';fs.writeFileSync(storePath,JSON.stringify(store));
+  const after=invoke('GET','/api/expenses/balances',{query:{nature:'SANKI'},role:'owner'}).body.accounts.find(a=>a.name==='Axis Bank 3448').balance;
+  assert.equal(after,before,'the historical destination credit is not added again');
+  const row=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Axis Bank 3448'},role:'owner'}).body.entries.find(x=>x.id===made.body.transfer.id);
+  assert.equal(row.kind,'opening_absorbed_transfer');assert.equal(row.credit,0);assert.equal(row.actualCredit,21000);assert.match(row.description,/already included in opening balance/i);
+});
+
 test('only Owner can delete a transfer and both ledger sides disappear with an audit trail', () => {
   const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Counter Cash',toAccount:'Tiana 0425',amount:321,date:'2026-08-25',proof:'/api/expenses/photo/delete-transfer.jpg',note:'Temporary transfer'}});
   const id=made.body.transfer.id;
