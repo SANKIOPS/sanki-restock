@@ -1837,18 +1837,19 @@ function restoreDraftsAfterGroupSplit(po, groups) {
     if (cut < 0) continue;
     const oldDesign = oldKey.slice(0, cut).trim().toLowerCase();
     const oldColour = oldKey.slice(cut + 1).trim().toLowerCase();
+    const oldSeo = (po.seoDraft || []).find(d => d.key === oldKey);
+    const legacyCode = String((oldSeo || {}).designCode || '').trim().toLowerCase();
     const candidates = groups.filter(g => {
       const at = g.key.lastIndexOf('|');
       if (at < 0) return false;
       const design = g.key.slice(0, at).trim().toLowerCase();
       const colour = g.key.slice(at + 1).trim().toLowerCase();
-      return colour === oldColour && design.startsWith(oldDesign + ' ');
+      return colour === oldColour && (design.startsWith(oldDesign + ' ') || (legacyCode && design.startsWith(legacyCode + ' ')));
     });
     const target = candidates.find(g => !((po.aiImages || {})[g.key] || []).length);
     if (!target) continue;
     const fingerprint = codexBatch.fingerprint(target, (po.backRefs || {})[target.key] || (po.backRefs || {})[oldKey]);
     po.aiImages[target.key] = po.aiImages[oldKey].map(image => ({ ...image, sourceFingerprint: fingerprint }));
-    const oldSeo = (po.seoDraft || []).find(d => d.key === oldKey);
     if (oldSeo && !(po.seoDraft || []).some(d => d.key === target.key)) {
       po.seoDraft.push({ ...oldSeo, key: target.key, designCode: target.designCode, colour: target.colour, productType: target.productType });
     }
