@@ -1832,7 +1832,12 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     const groups = await newGroupsOf(s, po);
     const byKey = new Map(groups.map(g => [g.key, g]));
-    res.json({ success: true, newProducts: (preview.newProducts || []).map(np => ({...np,
+    // Return the complete saved calculation as well as the studio groups. The
+    // Purchases page uses this read-only response to restore the Shopify post
+    // panel whenever a received PO is reopened; users should not have to save
+    // the same weights again just to make the posting action appear.
+    const savedPreview = stripPreviewForRole(preview, req);
+    res.json({ success: true, ...savedPreview, newProducts: (preview.newProducts || []).map(np => ({...np,
       audience: byKey.get(np.key)?.audience || '', fit: byKey.get(np.key)?.fit || '', line: po.line || '', season:byKey.get(np.key)?.season||''})), po: publicPo(po, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });

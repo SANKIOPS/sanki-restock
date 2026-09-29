@@ -2133,10 +2133,6 @@
       receiveId=id;
       fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/studio').then(r=>r.json()).then(function(d){
         if(!d.success){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
-        if(!(d.newProducts||[]).length){
-          if(el('studioHost')) el('studioHost').innerHTML='<p class="muted">No new products on this PO — everything here is a restock of an existing Shopify product, so no images are needed.</p>';
-          return;
-        }
         lastReceive=d;                          // studio funcs read lastReceive.newProducts
         studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };
         var po=d.po||{};
@@ -2146,7 +2142,13 @@
         if(po.openaiPilot&&Array.isArray(po.openaiPilot.attempts)){po.openaiPilot.attempts.forEach(function(a){if(a.styling)studio.styling[a.groupKey]=Object.assign({fit:''},a.styling);});}
         if(po.imageStyling){Object.keys(po.imageStyling).forEach(function(k){studio.styling[k]=Object.assign({fit:''},po.imageStyling[k]);});}
         if(Array.isArray(po.seoDraft)){ po.seoDraft.forEach(function(dd){ if(dd.seo) studio.seo[dd.key]={ seo:dd.seo, approved:!!dd.seoApproved, source:dd.source||'product-details' }; }); }
-        renderStudio();
+        if(!(d.newProducts||[]).length){
+          if(el('studioHost')) el('studioHost').innerHTML='<p class="muted">No new products on this PO — everything here is a restock of an existing Shopify product, so no images are needed.</p>';
+        } else renderStudio();
+        // A received PO already has saved quantities, weights and rates. Restore
+        // its final calculation and posting control immediately on open instead
+        // of requiring another mutating “Save weights” request.
+        if(po.status==='received') renderReceive(d,id);
         fetch('/api/procurement/openai-pilot-status').then(readJson).then(function(status){
           openaiPilotConfig=status;renderStudio();
         }).catch(function(){ /* Generation endpoint will explain configuration errors. */ });

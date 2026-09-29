@@ -184,6 +184,15 @@ test('purchase studio offers whole-PO, selected and single-product paid generati
   assert.match(html,/await Promise\.all\(selected\.map/);
 });
 
+test('reopening a received PO restores its Shopify posting panel from saved data',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(server,/const savedPreview = stripPreviewForRole\(preview, req\)/);
+  assert.match(server,/success: true, \.\.\.savedPreview, newProducts:/);
+  assert.match(html,/if\(po\.status==='received'\) renderReceive\(d,id\)/);
+  assert.match(html,/No new products on this PO[^;]+[\s\S]*else renderStudio\(\);[\s\S]*renderReceive\(d,id\)/);
+});
+
 test('one-click generation has a confirmed two-attempt cap and requests only missing or invalid drafts',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
