@@ -248,6 +248,7 @@ function blankStore() {
     paytmVerifiedSettlements: [],        // finalized Paytm report batches awaiting/linked to Axis 3448
     paytmPayoutPostings: [],             // exact, reviewed Paytm-to-Axis postings
     reconciliationExpenses: [],          // P&L/category postings backed by official bank rows
+    creditCardSettlementAllocations: [], // ownership split of mixed-use card payments; no duplicate bank movement
     vendorOpeningPayables: [],           // pre-system vendor dues paid after books started; never enter the P&L
     vendorAdvances: [],                   // vendor credits created by overpayments; applied without another bank movement
     bankReconciliationDrafts: {},        // temporary previews; never part of the official ledger

@@ -38,6 +38,17 @@ test('card payment reduces liability and debits only the linked bank ledger',()=
   assert.equal(transfer.fromAccount,'Axis Bank 3448');assert.equal(transfer.toAccount,'HDFC Regalia 1234');assert.equal(transfer.classification,'credit_card_payment');
   const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.equal(ledger.outstanding,paid.body.outstanding);assert.ok(ledger.entries.some(x=>x.id===paid.body.payment.id));
 });
+test('mixed-use card payment moves one bank amount and records entity ownership separately',()=>{
+  const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
+  const paid=invoke('POST','/api/expenses/credit-cards/payments',{body:{cardId:card.id,nature:'SANKI',account:'Axis Bank 3448',paymentKind:'full',amount:1000,date:'2026-09-01',allocations:[{nature:'SANKI',amount:500},{nature:'SAMAST',amount:300},{nature:'PERSONAL',amount:200}]}});
+  assert.equal(paid.status,200);const expenses=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfers=expenses.transfers.filter(x=>x.creditCardPaymentId===paid.body.payment.id),allocations=expenses.creditCardSettlementAllocations.filter(x=>x.creditCardPaymentId===paid.body.payment.id);
+  assert.equal(transfers.length,1);assert.equal(transfers[0].amount,1000);assert.deepEqual(allocations.map(x=>[x.beneficiaryNature,x.amount,x.status]),[['SANKI',500,'self'],['SAMAST',300,'due'],['PERSONAL',200,'due']]);
+});
+test('mixed-use card payment rejects an allocation that does not equal the bank payment',()=>{
+  const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')).transfers.length;
+  const paid=invoke('POST','/api/expenses/credit-cards/payments',{body:{cardId:card.id,nature:'SANKI',account:'Axis Bank 3448',amount:1000,date:'2026-09-02',allocations:[{nature:'SANKI',amount:500},{nature:'PERSONAL',amount:200}]}});
+  assert.equal(paid.status,400);assert.equal(JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')).transfers.length,before);
+});
 test('expense form can post an approved purchase directly to a selected credit card',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding;
   const made=invokeExpense('POST','/api/expenses',{role:'admin',body:{date:'2026-09-11',amount:321,particulars:'Shoot accessory',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:true,personalAccount:card.id,personalPaymentProof:'/card-proof.jpg',billPhoto:'/bill.jpg'}});
