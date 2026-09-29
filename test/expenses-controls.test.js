@@ -2153,6 +2153,40 @@ ICICI BANK LTD`;
   assert.deepEqual(rows.statementSummary,{format:'ICICI Bank PDF',from:'2026-08-22',to:'2026-08-29',openingBalance:-2148837.66,closingBalance:-2447837.66,totalDebits:299000,totalCredits:0,validated:true});
 });
 
+test('ICICI corporate Transactions List reads amounts and the balance printed above each row',()=>{
+  const text=`DETAILED STATEMENT
+Transactions List - -TIANA TRADERS (INR) - 194405000425
+No.Transaction ID
+Value DateTxn Posted DateChequeNo.DescriptionCr/DrTransaction
+Amount(INR)
+Available
+Balance(INR)
+ -24,71,448.66
+1
+S7248706201/09/202602/09/2026 03:29:19 AM
+-
+194405000425:Int.Coll:03-08-2026 to 01-09-2026
+DR 23,611.00
+ -25,21,448.66
+2S4955605
+04/09/2026
+04/09/2026 08:19:55 PM-INF/INFT/045757592051/GAGANLAMBA
+DR 50,000.00
+ -24,21,448.66
+3
+S9123634212/09/2026
+12/09/2026 03:57:30 PM-
+UPI/SB ENTERPR/XX8052@axl/Payment fr/HDFC BANK/020368092630
+CR 1,00,000.00`;
+  const rows=parseBankStatementText(text);
+  assert.deepEqual(rows.map(x=>({date:x.date,reference:x.reference,debit:x.debit,credit:x.credit,balance:x.balance})),[
+    {date:'2026-09-01',reference:'S72487062',debit:23611,credit:0,balance:-2471448.66},
+    {date:'2026-09-04',reference:'S4955605',debit:50000,credit:0,balance:-2521448.66},
+    {date:'2026-09-12',reference:'S91236342',debit:0,credit:100000,balance:-2421448.66}
+  ]);
+  assert.deepEqual(rows.statementSummary,{format:'ICICI Bank corporate PDF',accountLast4:'0425',from:'2026-09-01',to:'2026-09-12',openingBalance:-2447837.66,closingBalance:-2421448.66,totalDebits:73611,totalCredits:100000,validated:true});
+});
+
 test('ICICI 0425 one-time opening remains exact to paise from 22 August 2026',()=>{
   const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2026-08-22',to:'2026-08-22'}}).body;
   const account=balances.accounts.find(x=>x.name==='Tiana 0425');
