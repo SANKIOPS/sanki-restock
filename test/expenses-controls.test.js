@@ -2685,6 +2685,12 @@ test('Prashant Axis 3645 top balance matches its detailed running balance',()=>{
   fs.writeFileSync(storeFile,original);
 });
 
+test('Axis Bank 3448 top balance matches its detailed running balance',()=>{
+  const query={nature:'SANKI',to:'2026-09-29'},ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{...query,account:'Axis Bank 3448'}}).body,summary=invoke('GET','/api/expenses/balances',{role:'owner',query}).body.accounts.find(x=>x.name==='Axis Bank 3448');
+  assert.equal(summary.statementBalance,ledger.statementBalance);
+  assert.equal(summary.balance,ledger.balance);
+});
+
 test('screenshot reconciliation rejects OCR-created years and account-sized amounts row by row',()=>{
   const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
   assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:1500,credit:0,balance:75010.5}),true);
