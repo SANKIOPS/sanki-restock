@@ -2704,12 +2704,14 @@ test('opening balance is brought forward before every dated ledger movement',()=
 
 test('later reconciliation periods use the finalized cutoff and do not re-reconcile overlap',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='Axis Bank 3448',id='BRD-CONTINUOUS';
-  stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-09-03',transactions:{old:{id:'BTX-OLD',date:'2026-09-03',debit:100,credit:0,reference:'OLD'}},imports:[]};
+  stored.openingBalances=stored.openingBalances||{};stored.openingBalances[account]=1000;stored.adjustments=stored.adjustments||[];stored.adjustments.push({id:'ADJ-CONTINUOUS',nature:'SANKI',account,date:'2026-09-04',amount:-50,note:'New period debit'});
+  stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-09-03',transactions:{old:{id:'BTX-OLD',date:'2026-09-03',debit:100,credit:0,reference:'OLD'}},imports:[],lastReconciliation:{through:'2026-09-03',closingBalance:900}};
   stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[{date:'2026-09-03',description:'Overlap',reference:'DIFFERENT-EXPORT-TEXT',debit:100,credit:0,balance:900},{date:'2026-09-04',description:'New row',reference:'NEW',debit:50,credit:0,balance:850}],summary:{from:'2026-09-03',to:'2026-09-04',openingBalance:1000,closingBalance:850,totalDebits:150,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString()};fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:id,account}}).body;
   assert.equal(view.continuityCutoff,'2026-09-03');assert.equal(view.effectiveFrom,'2026-09-04');
+  assert.equal(view.currentOpening,900);assert.equal(view.ledgerClosing,850);assert.equal(view.balanceDifference,0);
   assert.equal(view.rows.find(x=>x.id==='bank-0').status,'already_reconciled');
-  assert.equal(view.rows.find(x=>x.id==='bank-1').status,'missing_in_app');
+  assert.equal(view.rows.find(x=>x.id==='bank-1').status,'matched');
 });
 
 test('consecutive statement uploads merge into one workspace without duplicate overlap or lost decisions',()=>{
