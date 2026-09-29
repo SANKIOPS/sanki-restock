@@ -1820,6 +1820,49 @@ async function newGroupsOf(s, po) {
   });
 }
 
+// A design-code correction can split one product group into several groups
+// (for example `87375` -> `87375 A`, `87375 B`, `87375 C`). Paid drafts are
+// stored by group key, so keep the old group's drafts attached to the first
+// resulting group: that group contains the same representative/source line
+// the original generation used. The orphan is retained as an audit backup.
+function restoreDraftsAfterGroupSplit(po, groups) {
+  po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
+  po.imageStyling = po.imageStyling || {};
+  po.backRefs = po.backRefs || {};
+  const current = new Set(groups.map(g => g.key));
+  let changed = false;
+  for (const oldKey of Object.keys(po.aiImages || {})) {
+    if (current.has(oldKey) || !Array.isArray(po.aiImages[oldKey]) || !po.aiImages[oldKey].length) continue;
+    const cut = oldKey.lastIndexOf('|');
+    if (cut < 0) continue;
+    const oldDesign = oldKey.slice(0, cut).trim().toLowerCase();
+    const oldColour = oldKey.slice(cut + 1).trim().toLowerCase();
+    const candidates = groups.filter(g => {
+      const at = g.key.lastIndexOf('|');
+      if (at < 0) return false;
+      const design = g.key.slice(0, at).trim().toLowerCase();
+      const colour = g.key.slice(at + 1).trim().toLowerCase();
+      return colour === oldColour && design.startsWith(oldDesign + ' ');
+    });
+    const target = candidates.find(g => !((po.aiImages || {})[g.key] || []).length);
+    if (!target) continue;
+    const fingerprint = codexBatch.fingerprint(target, (po.backRefs || {})[target.key] || (po.backRefs || {})[oldKey]);
+    po.aiImages[target.key] = po.aiImages[oldKey].map(image => ({ ...image, sourceFingerprint: fingerprint }));
+    const oldSeo = (po.seoDraft || []).find(d => d.key === oldKey);
+    if (oldSeo && !(po.seoDraft || []).some(d => d.key === target.key)) {
+      po.seoDraft.push({ ...oldSeo, key: target.key, designCode: target.designCode, colour: target.colour, productType: target.productType });
+    }
+    if ((po.imageStyling || {})[oldKey] && !(po.imageStyling || {})[target.key]) {
+      po.imageStyling[target.key] = { ...po.imageStyling[oldKey] };
+    }
+    if ((po.backRefs || {})[oldKey] && !(po.backRefs || {})[target.key]) {
+      po.backRefs[target.key] = po.backRefs[oldKey];
+    }
+    changed = true;
+  }
+  return changed;
+}
+
 // Read-only: the NEW-product groups of a PO so the AI studio can be prepared
 // at the ADVANCE stage — during the shipping lead time, before goods arrive.
 // No status change and no weights required (weights don't affect imaging/SEO).
@@ -1831,6 +1874,7 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
     const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     const groups = await newGroupsOf(s, po);
+    if (restoreDraftsAfterGroupSplit(po, groups)) saveStore(s);
     const byKey = new Map(groups.map(g => [g.key, g]));
     // Return the complete saved calculation as well as the studio groups. The
     // Purchases page uses this read-only response to restore the Shopify post
