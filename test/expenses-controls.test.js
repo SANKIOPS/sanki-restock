@@ -1574,6 +1574,14 @@ test('reviewed bank transactions can finalize while the closing balance remains 
   }finally{fs.writeFileSync(expenseFile,original);}
 });
 
+test('reconciliation closing excludes ledger movements before the statement opening date',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Axis Bank 3448',draftId='BRD-PERIOD-OPENING';
+  try{
+    const store=JSON.parse(original);store.expenses={};store.receivables={};store.adjustments=[];store.receipts=[];store.vendorAdvances=[];store.paytmSettlements=[];store.reconciliationExpenses=[];store.bankTruthMovements=[];store.bankDateOverrides={};store.bankStatements={};store.openingBalances={[account]:47844.86};store.transfers=[{id:'TR-BEFORE-PERIOD',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:account,amount:21000,date:'2026-08-12'},{id:'TR-IN-PERIOD',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:account,amount:1000,date:'2026-08-22'}];store.bankReconciliationDrafts={[draftId]:{id:draftId,account,nature:'SANKI',transactions:[{date:'2026-08-22',description:'Cash deposit',reference:'DEP-1000',debit:0,credit:1000,balance:48844.86}],summary:{from:'2026-08-22',to:'2026-08-22',openingBalance:47844.86,totalDebits:0,totalCredits:1000,closingBalance:48844.86,validated:true},resolutions:{},matchingPolicy:'strict_identity_v3',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'}};fs.writeFileSync(expenseFile,JSON.stringify(store));
+    const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}});assert.equal(view.status,200,JSON.stringify(view.body));assert.equal(view.body.ledgerClosing,48844.86);assert.equal(view.body.balanceDifference,0);assert.equal(view.body.balanceResolved,true);
+  }finally{fs.writeFileSync(expenseFile,original);}
+});
+
 test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: submit transactions for finalization/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
 
 test('excluded statement rows remain bank truth without becoming expenses or P&L',()=>{
