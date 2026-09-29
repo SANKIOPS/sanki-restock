@@ -3920,7 +3920,7 @@ router.post('/api/expenses/balances', (req, res) => {
   }
   if (b.setOpening && b.setOpening.account) {
     if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can set an opening balance.' });
-    const openingAccount = allowedCompanyAccount(s, nature, b.setOpening.account);
+    const requestedOpeningAccount=String(b.setOpening.account||'').trim(),openingAccount=ledgerAccountsForNature(s,nature).find(account=>account.toLowerCase()===requestedOpeningAccount.toLowerCase())||'';
     if (!openingAccount) return res.status(400).json({ success:false, error:'Select an account assigned to this entity.' });
     const rawAmount=String(b.setOpening.amount==null?'':b.setOpening.amount).trim(),amount=Number(rawAmount),effectiveDate=String(b.setOpening.effectiveDate||'').slice(0,10),reason=String(b.setOpening.reason||'').trim();
     if(rawAmount===''||!Number.isFinite(amount))return res.status(400).json({success:false,error:'Enter a valid opening balance. Zero and negative balances are allowed.'});

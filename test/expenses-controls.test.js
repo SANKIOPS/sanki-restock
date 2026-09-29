@@ -2542,7 +2542,8 @@ test('Paytm clearing starts on 22 August and shows settlement and charges separa
 
 test('a dated Paytm opening is authoritative and does not add hidden pre-start activity',()=>{
   const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
-  stored.openingBalances['Paytm Settlement Clearing']=14755.36;stored.openingBalanceDates['Paytm Settlement Clearing']='2026-08-22';
+  const saved=invoke('POST','/api/expenses/balances',{role:'owner',query:{},body:{nature:'SANKI',setOpening:{account:'Paytm Settlement Clearing',amount:14755.36,effectiveDate:'2026-08-22',reason:'Owner-confirmed opening'}}});assert.equal(saved.status,200,JSON.stringify(saved.body));
+  const savedStore=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));stored.openingBalances=savedStore.openingBalances;stored.openingBalanceDates=savedStore.openingBalanceDates;stored.auditLog=savedStore.auditLog;
   stored.receipts.push({id:'RCPT-PRE-PAYTM-OPENING',nature:'SANKI',account:'Paytm Settlement Clearing',receiptType:'other',source:'Already included history',amount:100,date:'2026-08-21'});
   stored.paytmSettlements=[{id:'PTM-AUTHORITATIVE-OPENING',date:'2026-08-22',bankAccount:'Axis Bank 3448',netAmount:14755.36,grossAmount:14755.36,chargeAmount:0,orderIds:[]}];fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body;
