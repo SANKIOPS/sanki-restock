@@ -1624,6 +1624,14 @@ test('Velocity remittance clears linked COD orders and auto-matches the Axis pay
   if(ordersBefore===null)fs.rmSync(ordersFile,{force:true});else fs.writeFileSync(ordersFile,ordersBefore);fs.writeFileSync(expenseFile,expenseBefore);fs.rmSync(remittanceFile,{force:true});
 });
 
+test('Velocity settlement-only report creates Axis payouts without AWB or Shopify order columns',()=>{
+  const remittanceFile=path.join(tempDir,'velocity_remittance.json'),expenseFile=path.join(tempDir,'expenses.json'),expenseBefore=fs.readFileSync(expenseFile,'utf8');
+  fs.writeFileSync(remittanceFile,JSON.stringify({entries:[{settlementId:'CODPZUPF00128',amount:2447,date:'2026-09-07',utr:'IN22625011513083',status:'settled'},{settlementId:'CODFQ9RWVAW0G',amount:2447,date:'2026-09-11',utr:'IN22625415951306',status:'settled'}]}));
+  const axis=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2026-09-07',to:'2026-09-11'}}).body.entries.filter(x=>x.kind==='velocity_payout');
+  assert.deepEqual(axis.map(x=>[x.date,x.credit,x.reference,x.description]),[['2026-09-11',2447,'IN22625415951306','Velocity COD payout · 0 Shopify order(s)'],['2026-09-07',2447,'IN22625011513083','Velocity COD payout · 0 Shopify order(s)']]);
+  fs.writeFileSync(expenseFile,expenseBefore);fs.rmSync(remittanceFile,{force:true});
+});
+
 test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple (?:existing )?entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
 
 test('one ledger payment can reconcile against multiple bank transactions and undo as one group',()=>{

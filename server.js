@@ -1072,6 +1072,7 @@ app.post('/api/velocity/remittance/upload', upload.single('file'), (req, res) =>
     const dateCol   = findCol(['date', 'credit date', 'remit date', 'transfer']);
     const utrCol    = findCol(['utr', 'ref', 'transaction', 'neft', 'imps']);
     const orderCol  = findCol(['order', 'order id', 'order_id', 'reference']);
+    const settlementCol = findCol(['settlement id', 'settlement_id', 'settlement']);
     const statusCol = findCol(['status', 'remark']);
 
     // Load current order meta from disk so we can update it
@@ -1087,9 +1088,14 @@ app.post('/api/velocity/remittance/upload', upload.single('file'), (req, res) =>
       const date   = dateCol   ? normalizeVelocitySettlementDate(row[dateCol]) : '';
       const utr    = utrCol    ? String(row[utrCol]   || '').trim() : '';
       const ordRef = orderCol  ? String(row[orderCol] || '').trim() : '';
+      const settlementId = settlementCol ? String(row[settlementCol] || '').trim() : '';
       const status = statusCol ? String(row[statusCol]|| '').trim() : 'settled';
 
-      if (!awb && !ordRef) return; // skip blank rows
+      // Velocity's COD Settlement Report is payout-level and contains no AWB
+      // or Shopify order ID. A dated positive amount with a UTR is still
+      // authoritative settlement evidence and must create the clearing-to-bank
+      // movement; order-level linkage remains optional enrichment.
+      if ((!awb && !ordRef) && !(amount > 0 && date && utr)) return;
 
       // Preserve the matched Shopify order in the remittance evidence. The
       // accounting ledger consumes this exact link to clear COD receivables.
@@ -1098,7 +1104,7 @@ app.post('/api/velocity/remittance/upload', upload.single('file'), (req, res) =>
         (awb&&(o.fulfillments || []).some(f => (f.tracking_number || '').trim() === awb)) ||
         (ordRef&&[o.id,o.order_number,o.orderNumber,o.name].map(clean).includes(clean(ordRef)))
       );
-      entries.push({ awb, amount, date, utr, ordRef, status: status || 'settled', orderId:order&&String(order.id)||'', orderNumber:order&&String(order.order_number||order.orderNumber||order.name||'')||'', raw: row });
+      entries.push({ awb, amount, date, utr, ordRef, settlementId, status: status || 'settled', orderId:order&&String(order.id)||'', orderNumber:order&&String(order.order_number||order.orderNumber||order.name||'')||'', raw: row });
 
       // Auto-match to order meta by AWB or the report's order reference.
       if (order) {
@@ -1124,7 +1130,7 @@ app.post('/api/velocity/remittance/upload', upload.single('file'), (req, res) =>
       total:   entries.length,
       matched,
       lastImport: remittanceData.lastImport,
-      columns: { awbCol, amtCol, dateCol, utrCol, orderCol }
+      columns: { awbCol, amtCol, dateCol, utrCol, orderCol, settlementCol }
     });
   } catch(e) {
     console.error('[remittance] Upload error:', e.message);
