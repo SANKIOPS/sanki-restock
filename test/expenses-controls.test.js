@@ -2675,6 +2675,16 @@ test('detailed Paytm settlement supersedes the matching legacy row without doubl
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
+test('Prashant Axis 3645 top balance matches its detailed running balance',()=>{
+  const storeFile=path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),original=fs.readFileSync(storeFile,'utf8'),baseline=JSON.parse(original);
+  baseline.adjustments.push({id:'ADJ-EXCLUDED-3645',nature:'SANKI',account:'Prashant Axis 3645',amount:-18826.75,date:'2026-09-01',accountingExcluded:true});
+  fs.writeFileSync(storeFile,JSON.stringify(baseline));
+  const query={nature:'SANKI',to:'2026-09-29'},ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{...query,account:'Prashant Axis 3645'}}).body,summary=invoke('GET','/api/expenses/balances',{role:'owner',query}).body.accounts.find(x=>x.name==='Prashant Axis 3645');
+  const kinds=ledger.entries.reduce((out,x)=>(out[x.kind]=Math.round(((out[x.kind]||0)+Number(x.credit||0)-Number(x.debit||0))*100)/100,out),{});assert.equal(summary.balance,ledger.balance,'3645 summary and ledger differ '+JSON.stringify(kinds));
+  assert.equal(ledger.entries.some(x=>x.id==='ADJ-EXCLUDED-3645'),false);
+  fs.writeFileSync(storeFile,original);
+});
+
 test('screenshot reconciliation rejects OCR-created years and account-sized amounts row by row',()=>{
   const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
   assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:1500,credit:0,balance:75010.5}),true);

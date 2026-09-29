@@ -2784,12 +2784,12 @@ router.get('/api/expenses/balances', (req, res) => {
     const posted=(account,date)=>inRange(date)&&cashEntryIsVisible(account,date);
     Object.values(s.expenses).forEach(e => {
       const a = e.account || '(unspecified)';
-      (e.payments || []).filter(p => paymentIsPosted(e) && posted(p.account||a,p.date)).forEach(p => {
+      (e.payments || []).filter(p => !p.accountingExcluded && paymentIsPosted(e) && posted(p.account||a,p.date)).forEach(p => {
         const paymentAccount = p.account || a;
         if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(paymentAccount).toLowerCase()))return;
         paidOut[paymentAccount] = (paidOut[paymentAccount] || 0) + num(p.amount);
       });
-      (e.reimbursementPayments || []).filter(p=>posted(p.account,p.date)).forEach(p => {
+      (e.reimbursementPayments || []).filter(p=>!p.accountingExcluded&&posted(p.account,p.date)).forEach(p => {
         const ra = p.account || '(unspecified)';
         if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(ra).toLowerCase()))return;
         paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
@@ -2805,16 +2805,16 @@ router.get('/api/expenses/balances', (req, res) => {
         });
       }
     });
-    (s.vendorAdvances||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{paidOut[x.account]=(paidOut[x.account]||0)+num(x.amount);});
+    (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{paidOut[x.account]=(paidOut[x.account]||0)+num(x.amount);});
     if (nature === 'SANKI') procurementPayables(s, true).forEach(p => (p.payments || []).filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); }));
     // A linked advance is still outstanding against the employee, but its bank
     // movement is represented by the internal transfer. Do not debit the source
     // account a second time here.
     salaryAdvanceEntries().filter(x=>x.payingNature===nature&&!x.fundingTransferId&&posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
     if (nature === 'SANKI') salaryPaymentEntries().filter(x=>posted(x.account,x.date)).forEach(x => { paidOut[x.account] = (paidOut[x.account] || 0) + num(x.amount); });
-    (s.adjustments || []).filter(x => normalizedNature(x.nature) === nature && posted(x.account,x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
+    (s.adjustments || []).filter(x => !x.accountingExcluded&&normalizedNature(x.nature) === nature && posted(x.account,x.date)).forEach(x => { adj[x.account] = (adj[x.account] || 0) + num(x.amount); });
     Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>posted(c.account,c.date)).forEach(c=>{collected[c.account]=(collected[c.account]||0)+num(c.amount);}));
-    (s.receipts || []).filter(x=>normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
+    (s.receipts || []).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
     if(nature==='SANKI')personalFundingRows(s).forEach(f=>{
       if(posted(f.account,f.date))collected[f.account]=(collected[f.account]||0)+num(f.amount);
       (f.repayments||[]).forEach(p=>{if(posted(p.account,p.date))paidOut[p.account]=(paidOut[p.account]||0)+num(p.amount);});
@@ -2826,7 +2826,7 @@ router.get('/api/expenses/balances', (req, res) => {
       (s.paytmSettlements||[]).filter(x=>posted(x.bankAccount,x.date)).forEach(x=>{collected[x.bankAccount]=(collected[x.bankAccount]||0)+num(x.netAmount);});
       (s.paytmPayoutPostings||[]).filter(x=>!detailedPaytmSettlementIsCoveredByLegacy(s,x)&&posted(DEFAULT_SALES_BANK,x.date)).forEach(x=>{collected[DEFAULT_SALES_BANK]=(collected[DEFAULT_SALES_BANK]||0)+num(x.net);});
     }
-    (s.transfers || []).filter(x => inRange(x.date)).forEach(x => {
+    (s.transfers || []).filter(x => !x.accountingExcluded&&inRange(x.date)).forEach(x => {
       if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + transferDebitAmount(x);
       if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)&&transferCreditsCompanyFunds(x,nature,x.toAccount)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + transferCreditAmount(x);
     });
