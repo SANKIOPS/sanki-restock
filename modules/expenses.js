@@ -759,6 +759,33 @@ function applySep11PrashantReimbursementDateCorrection(s){
   s.oneTimeMigrations[key]={appliedAt:now,from,to,corrected,preservedExpenseDates:true,preservedProofsAmountsAndApprovals:true};
   return true;
 }
+function applySep13ShopifyCashComponentCorrections(s){
+  const key='correct-shopify-2806-2808-cash-components-2026-09-13-v1',now=new Date().toISOString();
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  const state=s.oneTimeMigrations[key]||{appliedAt:now,completed:{},corrections:[]};
+  let orders={};
+  try{orders=JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return false;}
+  const targets=[
+    {orderId:'7287463608572',orderNumber:'2806',cashAmount:27000,previousDisplayedAmount:26690.99},
+    {orderId:'7287917150460',orderNumber:'2808',cashAmount:5000,previousDisplayedAmount:5040}
+  ];
+  let changed=false;
+  s.saleAllocationOverrides=s.saleAllocationOverrides||{};
+  targets.forEach(target=>{
+    if(state.completed[target.orderId])return;
+    const order=orders[target.orderId]||Object.values(orders).find(x=>String(x.id||'')===target.orderId);
+    if(!order)return;
+    const saleId='SHOPIFY/'+target.orderId,gross=roundMoney(num(order.total)-num(order.refundAmount)),cashAmount=roundMoney(target.cashAmount);
+    if(!(gross>=cashAmount))return;
+    const before=s.saleAllocationOverrides[saleId]||null,paytmBound=paytmSalesInScope('2026-09-13')&&(/paytm/i.test((order.paymentGateways||[]).join(' '))||String(order.channel||'').toLowerCase()==='pos'),nonCashAccount=paytmBound?PAYTM_CLEARING_ACCOUNT:(DEFAULT_SALES_BANK),record={saleId,orderId:target.orderId,orderNumber:target.orderNumber,gross,cashAmount,nonCashAmount:roundMoney(gross-cashAmount),cashAccount:DEFAULT_COUNTER_CASH,nonCashAccount,reason:'Owner confirmed the actual 13 September POS cash component',requestedBy:'gaganlambasanki',approvedBy:'gaganlambasanki',approvedAt:now};
+    s.saleAllocationOverrides[saleId]=record;
+    state.completed[target.orderId]=true;state.corrections.push({saleId,orderNumber:target.orderNumber,beforeDisplayedAmount:target.previousDisplayedAmount,afterCashAmount:cashAmount,gross});
+    audit(s,null,'SALE_ALLOCATION_CORRECTED','sale',saleId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:DEFAULT_COUNTER_CASH,before,after:record,note:'Owner confirmed Shopify POS order #'+target.orderNumber+' cash received was ₹'+cashAmount.toLocaleString('en-IN')+', replacing the imported component amount of ₹'+target.previousDisplayedAmount.toLocaleString('en-IN')});
+    changed=true;
+  });
+  if(changed){state.updatedAt=now;state.complete=targets.every(target=>state.completed[target.orderId]);s.oneTimeMigrations[key]=state;}
+  return changed;
+}
 function loadStore() {
   let s;
   try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
@@ -810,6 +837,7 @@ function loadStore() {
     if(applyArunJiiVendorMerge(s))saveStore(s);
     if(applyShayamMondalVendorMerge(s))saveStore(s);
     if(applySep11PrashantReimbursementDateCorrection(s))saveStore(s);
+    if(applySep13ShopifyCashComponentCorrections(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
     // the official bank row remains the sole Axis balance movement.
