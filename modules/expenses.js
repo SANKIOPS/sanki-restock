@@ -3151,6 +3151,11 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const preciseBalance=account===PAYTM_CLEARING_ACCOUNT||isBankLedgerName(account);let running = openingEntry?num(openingEntry.credit)-num(openingEntry.debit):0;
   if(openingEntry)openingEntry.balance=preciseBalance?Math.round(running*100)/100:round0(running);
   ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
+  if(openingEntry&&account===PAYTM_CLEARING_ACCOUNT){
+    const broughtForward=movementEntries.filter(x=>String(x.date||'')<PAYTM_START_DATE).reduce((balance,x)=>balance+num(x.credit)-num(x.debit),num(openingEntry.credit)-num(openingEntry.debit));
+    openingEntry.balance=roundMoney(broughtForward);
+    openingEntry.description='Opening balance brought forward to '+PAYTM_START_DATE;
+  }
   if(openingEntry)ordered.unshift(openingEntry);
   // Paytm Settlement Clearing begins on 22 August 2026. Earlier activity is
   // retained only to calculate the brought-forward running balance and is
