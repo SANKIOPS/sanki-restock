@@ -2670,6 +2670,8 @@ test('detailed Paytm settlement supersedes the matching legacy row without doubl
   const entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-13',to:'2026-09-13'}}).body.entries;
   const settlementRows=entries.filter(x=>x.kind==='paytm_settlement'&&x.reference==='PB0315980809');assert.equal(settlementRows.length,1);assert.equal(settlementRows[0].id,'PTMV-DETAILED-DUP');assert.equal(settlementRows[0].debit,23329.19);
   assert.equal(entries.filter(x=>x.kind==='paytm_charge'&&x.reference==='PB0315980809').length,1);
+  const axisLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',to:'2026-09-13'}}).body,axisSummary=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',to:'2026-09-13'}}).body.accounts.find(x=>x.name==='Axis Bank 3448');
+  const kinds=axisLedger.entries.reduce((out,x)=>(out[x.kind]=Math.round(((out[x.kind]||0)+Number(x.credit||0)-Number(x.debit||0))*100)/100,out),{});assert.equal(axisSummary.balance,axisLedger.balance,'top balance and detailed ledger use the same Paytm settlement credits '+JSON.stringify(kinds));
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 

@@ -1370,6 +1370,14 @@ function legacyPaytmSettlementIsCovered(s,legacy){
     return legacyDate&&legacyDate===detailedDate&&Math.abs(legacyNet-detailedNet)<.01;
   });
 }
+function detailedPaytmSettlementIsCoveredByLegacy(s,detailed){
+  const reference=paytmSettlementReference(detailed),net=roundMoney(num(detailed.net)),date=String(detailed.date||detailed.settledDate||String(detailed.finalizedAt||'').slice(0,10)).slice(0,10);
+  return (s.paytmSettlements||[]).some(legacy=>{
+    const legacyReference=paytmSettlementReference(legacy),legacyDate=String(legacy.date||'').slice(0,10);
+    if(reference&&legacyReference)return reference===legacyReference;
+    return date&&date===legacyDate&&Math.abs(net-roundMoney(num(legacy.netAmount)))<.01;
+  });
+}
 function allowedCompanyAccount(s, nature, account) {
   const candidate = canonicalAccountName(account);
   const allowed=companyAccountsForNature(nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
@@ -2814,6 +2822,10 @@ router.get('/api/expenses/balances', (req, res) => {
     (s.salesRefunds||[]).filter(x=>normalizedNature(x.nature)===nature&&posted(x.refundAccount,x.date)).forEach(x=>{paidOut[x.refundAccount]=(paidOut[x.refundAccount]||0)+num(x.amount);});
     if(nature==='SANKI') salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>posted(x.account,x.date)).forEach(x=>{collected[x.account]=(collected[x.account]||0)+num(x.amount);});
     if(nature==='SANKI') paytmClearingSettlementOutflows(s).forEach(x=>{if(!posted(PAYTM_CLEARING_ACCOUNT,x.date))return;transferOut[PAYTM_CLEARING_ACCOUNT]=(transferOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.net);paidOut[PAYTM_CLEARING_ACCOUNT]=(paidOut[PAYTM_CLEARING_ACCOUNT]||0)+num(x.fees);});
+    if(nature==='SANKI'){
+      (s.paytmSettlements||[]).filter(x=>posted(x.bankAccount,x.date)).forEach(x=>{collected[x.bankAccount]=(collected[x.bankAccount]||0)+num(x.netAmount);});
+      (s.paytmPayoutPostings||[]).filter(x=>!detailedPaytmSettlementIsCoveredByLegacy(s,x)&&posted(DEFAULT_SALES_BANK,x.date)).forEach(x=>{collected[DEFAULT_SALES_BANK]=(collected[DEFAULT_SALES_BANK]||0)+num(x.net);});
+    }
     (s.transfers || []).filter(x => inRange(x.date)).forEach(x => {
       if(normalizedNature(x.fromNature||x.nature)===nature&&cashEntryIsVisible(x.fromAccount,x.date)) transferOut[x.fromAccount] = (transferOut[x.fromAccount] || 0) + transferDebitAmount(x);
       if(normalizedNature(x.toNature||x.nature)===nature&&cashEntryIsVisible(x.toAccount,x.date)&&transferCreditsCompanyFunds(x,nature,x.toAccount)) transferIn[x.toAccount] = (transferIn[x.toAccount] || 0) + transferCreditAmount(x);
@@ -3119,7 +3131,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     });
   }
   if(nature==='SANKI'&&(account===PAYTM_CLEARING_ACCOUNT||account===DEFAULT_SALES_BANK))(s.paytmPayoutPostings||[]).forEach(x=>{
-    if(account===DEFAULT_SALES_BANK)entries.push({id:x.id,date:x.date,kind:'paytm_payout',description:'Paytm payout '+x.payoutId+' · '+x.orderNumbers.map(n=>'#'+n).join(', '),reference:x.utr,credit:num(x.net),debit:0,by:x.postedBy});
+    if(account===DEFAULT_SALES_BANK){if(!detailedPaytmSettlementIsCoveredByLegacy(s,x))entries.push({id:x.id,date:x.date,kind:'paytm_payout',description:'Paytm payout '+x.payoutId+' · '+x.orderNumbers.map(n=>'#'+n).join(', '),reference:x.utr,credit:num(x.net),debit:0,by:x.postedBy});}
     else{entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Paytm payout to Axis 3448 · '+x.payoutId,reference:x.utr,credit:0,debit:num(x.net),by:x.postedBy});if(num(x.commission)+num(x.platformFee)+num(x.gst)>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm commission ₹'+num(x.commission).toFixed(2)+' + platform fee ₹'+num(x.platformFee).toFixed(2)+' + GST ₹'+num(x.gst).toFixed(2),reference:x.utr,credit:0,debit:roundMoney(num(x.commission)+num(x.platformFee)+num(x.gst)),by:x.postedBy});if(num(x.nonCustomerAmount)>0)entries.push({id:x.id+'/VAS-DEDUCTION',date:x.date,kind:'paytm_charge',description:'Paytm VAS deduction — not Shopify revenue',reference:x.utr,credit:0,debit:num(x.nonCustomerAmount),by:x.postedBy});}
   });
   if(nature==='SANKI'&&account!==PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).filter(x=>x.bankAccount===account).forEach(x=>{
@@ -3136,7 +3148,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // salary debits.
   const openingEntry=entries.find(x=>x.kind==='opening'),movementEntries=entries.filter(x=>x.kind!=='opening');
   const ordered = movementEntries.sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
-  const preciseBalance=account===PAYTM_CLEARING_ACCOUNT;let running = openingEntry?num(openingEntry.credit)-num(openingEntry.debit):0;
+  const preciseBalance=account===PAYTM_CLEARING_ACCOUNT||isBankLedgerName(account);let running = openingEntry?num(openingEntry.credit)-num(openingEntry.debit):0;
   if(openingEntry)openingEntry.balance=preciseBalance?Math.round(running*100)/100:round0(running);
   ordered.forEach(x => { running += num(x.credit)-num(x.debit);const rounded=preciseBalance?Math.round(running*100)/100:round0(running);x.balance=Math.abs(rounded)<.005?0:rounded; });
   if(openingEntry)ordered.unshift(openingEntry);
@@ -3146,7 +3158,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const visible = ordered.filter(x => (x.kind === 'opening' || ((!from || x.date >= from) && (!to || x.date <= to))) && (account!==PAYTM_CLEARING_ACCOUNT||x.kind==='opening'||String(x.date||'')>=PAYTM_START_DATE) && (!expenseNature || !x.entity || x.entity===expenseNature))
     .sort((a,b) => a.kind === 'opening' ? 1 : (b.kind === 'opening' ? -1 : (String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id)))));
   const issues = creditCard?[]:reconciliationIssues(s, nature, account),reconciliation=ledgerReconciliationStatus(s,nature,account);visible.forEach(x=>{let status=reconciliation.index.get(x.id);if(!status&&x.linkedEntryIds&&x.linkedEntryIds.length){const childStatuses=x.linkedEntryIds.map(id=>reconciliation.index.get(id));if(childStatuses.every(Boolean)&&new Set(childStatuses.map(item=>item.reconciliationId)).size===1)status=childStatuses[0];}if(status){x.reconciliation=status;x.rawReference=x.reference||x.id;x.reference=x.rawReference+' · ✓ Reconciled '+(status.bankDate||'')+' · '+status.reconciliationId;}});
-  const finalBalance=preciseBalance?Math.round(running*100)/100:round0(running),restrictedFunds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===account&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=roundMoney(restrictedFunds.reduce((sum,x)=>sum+num(x.amount),0)),statementBalance=roundMoney(finalBalance+restrictedAmount);res.json({ success:true, account, nature, expenseNature, entries:visible, balance:Math.abs(finalBalance)<.005?0:finalBalance, statementBalance, restrictedAmount, restrictedFunds, reconciled:issues.length===0, reconciliationIssues:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
+  const balanceRows=ordered.filter(x=>x.kind==='opening'||!to||!x.date||String(x.date)<=to),asOfRunning=balanceRows.length?num(balanceRows.at(-1).balance):(openingEntry?num(openingEntry.balance):0),finalBalance=preciseBalance?Math.round(asOfRunning*100)/100:round0(asOfRunning),restrictedFunds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===account&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=roundMoney(restrictedFunds.reduce((sum,x)=>sum+num(x.amount),0)),statementBalance=roundMoney(finalBalance+restrictedAmount);res.json({ success:true, account, nature, expenseNature, entries:visible, balance:Math.abs(finalBalance)<.005?0:finalBalance, statementBalance, restrictedAmount, restrictedFunds, reconciled:issues.length===0, reconciliationIssues:issues, reconciledThrough:reconciliation.through, lastReconciliation:reconciliation.last });
 });
 
 function statementDate(v){
