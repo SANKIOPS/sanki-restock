@@ -2930,10 +2930,10 @@ test('bank reconciliation displays narration from the actual transaction marker'
   assert.doesNotMatch(html,/<b>BANK<\/b> · '\+esc\(bp\.entity\)\+' \| '\+esc\(bp\.vendor\)/);
 });
 
-test('Axis 3448 automatically matches fixed transfer charges and posts only the fee',()=>{
+test('every Axis account automatically matches fixed transfer charges and posts only the fee',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8');
   try{
-    const stored=JSON.parse(baseline),account='Axis Bank 3448',date='2099-12-01',draftId='BRD-AXIS-FIXED-FEE';
+    const stored=JSON.parse(baseline),account='Prashant Axis 3645',date='2099-12-01',draftId='BRD-AXIS-FIXED-FEE';
     stored.transfers=(stored.transfers||[]).filter(x=>x.id!=='TR-AXIS-FIXED-FEE');
     stored.transfers.push({id:'TR-AXIS-FIXED-FEE',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'IndusInd Bank 8181',amount:5000,date,classification:'internal_transfer',createdAt:date+'T10:00:00.000Z'},{id:'TR-AXIS-HALF-FEE',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Ashpreet 1919',amount:3000,date,classification:'internal_transfer',createdAt:date+'T11:00:00.000Z'});
     stored.openingBalances=stored.openingBalances||{};stored.openingBalances[account]=5005.90;
