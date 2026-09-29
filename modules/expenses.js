@@ -2978,6 +2978,17 @@ router.patch('/api/expenses/ledger-entry',(req,res)=>{
   audit(s,req,'LEDGER_ENTRY_EDITED',subjectType,id,{nature:b.nature,account:b.account,before,after:record,note:reason});saveStore(s);res.json({success:true,entry:record});
 });
 
+router.delete('/api/expenses/ledger-entry/:id',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can delete an adjustment.'});
+  const s=loadStore(),id=String(req.params.id||''),reason=String((req.body||{}).reason||'').trim(),index=(s.adjustments||[]).findIndex(x=>x.id===id);
+  if(!reason)return res.status(400).json({success:false,error:'A deletion reason is required for the audit trail.'});
+  if(index<0)return res.status(404).json({success:false,error:'Adjustment not found.'});
+  const adjustment=s.adjustments[index];
+  if(adjustment.reconciliationDraft||adjustment.automaticAxisTransferCharge||adjustment.reconciledClosingCorrection||unpayBlockedReferences(s).has(id))return res.status(409).json({success:false,error:'This adjustment is linked to reconciliation and cannot be deleted. Undo or correct its reconciliation first.'});
+  const before=JSON.parse(JSON.stringify(adjustment));s.adjustments.splice(index,1);
+  audit(s,req,'LEDGER_ENTRY_DELETED','adjustment',id,{nature:adjustment.nature,account:adjustment.account,before,note:reason});saveStore(s);res.json({success:true,id});
+});
+
 router.post('/api/expenses/transfers', (req, res) => {
   const s = loadStore(); const b = req.body || {};
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
@@ -3063,7 +3074,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   const openingDate=nature==='SANKI'?String((s.openingBalanceDates||{})[account]||''):String((((s.openingBalanceDatesByNature||{})[nature]||{})[account])||'');
   entries.push({ id: 'OPENING', date: openingDate||(account===DEFAULT_COUNTER_CASH?COUNTER_CASH_RESET_DATE:''), kind: 'opening', description: creditCard?'Opening credit-card outstanding':('Opening balance'+(openingDate?' effective '+openingDate:(account===DEFAULT_COUNTER_CASH?' effective 22 Aug 2026':''))), credit: creditCard?num(creditCard.openingOutstanding):num(openingMap[account]), debit: 0 });
   (s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.effectiveDate,kind:'restricted_funds',description:x.label||'Temporary blocked amount',reference:x.id,credit:0,debit:num(x.amount),note:x.note||'',by:x.createdBy||'',restricted:true}));
-  (s.adjustments || []).filter(x => !x.accountingExcluded&&normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',note:x.note||'',by:x.createdBy||'',editable:true }));
+  (s.adjustments || []).filter(x => !x.accountingExcluded&&normalizedNature(x.nature) === nature && x.account === account).forEach(x => entries.push({ id:x.id,date:x.date,kind:'adjustment',description:x.note||'Balance adjustment',credit:Math.max(0,num(x.amount)),debit:Math.max(0,-num(x.amount)),proof:x.proof||'',note:x.note||'',by:x.createdBy||'',editable:true,deletable:!x.reconciliationDraft&&!x.automaticAxisTransferCharge&&!x.reconciledClosingCorrection }));
   (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>{const gross=num(x.grossPaymentAmount);entries.push({id:x.paymentReference||x.id,date:x.date,kind:gross?'expense':'vendor_advance',description:(gross?'Vendor payment · ':'Vendor advance · ')+x.vendor+' · '+x.note,credit:0,debit:gross||num(x.amount),proof:x.proof||'',reference:x.bankReference||x.paymentReference||x.id,by:x.createdBy||'',vendorAdvanceAmount:gross?num(x.amount):0});});
   (s.receipts || []).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'receipt',description:(x.receiptType==='product_sale'?'Product sale':x.receiptType==='asset_sale'?'Asset sale':'Money received')+' · '+x.source,credit:num(x.amount),debit:0,proof:x.proof,note:x.note,source:x.source||'',by:x.createdBy,manualSaleId:x.manualSaleId||'',editable:!x.manualSaleId&&!x.paytmTransactionId}));
   if(nature==='SANKI')personalFundingRows(s).forEach(f=>{

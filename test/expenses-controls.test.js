@@ -841,6 +841,16 @@ test('a rejected Prashant Counter Cash adjustment never changes the ledger',()=>
   const after=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI'}}).body.accounts.find(x=>x.name==='Counter Cash').balance;assert.equal(after,before);
 });
 
+test('Owner can delete only an unreconciled manual adjustment with a required audit reason',()=>{
+  const created=invoke('POST','/api/expenses/balances',{role:'owner',body:{nature:'SANKI',adjust:{account:'Counter Cash',direction:'add',amount:300,date:'2026-09-29',note:'Mistaken customer extra'}}});assert.equal(created.status,200);
+  const ledgerBefore=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash'}}).body,entry=ledgerBefore.entries.find(x=>x.description==='Mistaken customer extra');assert.equal(entry.credit,300);assert.equal(entry.deletable,true);
+  assert.equal(invoke('DELETE','/api/expenses/ledger-entry/:id',{role:'admin',params:{id:entry.id},body:{reason:'Duplicate'}}).status,403);
+  assert.equal(invoke('DELETE','/api/expenses/ledger-entry/:id',{role:'owner',params:{id:entry.id},body:{}}).status,400);
+  const removed=invoke('DELETE','/api/expenses/ledger-entry/:id',{role:'owner',params:{id:entry.id},body:{reason:'Entered twice'}});assert.equal(removed.status,200);
+  const ledgerAfter=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash'}}).body;assert.equal(ledgerAfter.entries.some(x=>x.id===entry.id),false);
+  const auditRows=invoke('GET','/api/expenses/audit-log',{role:'owner'}).body.entries||[];assert.ok(auditRows.some(x=>x.subjectId===entry.id&&x.action==='LEDGER_ENTRY_DELETED'&&x.note==='Entered twice'));
+});
+
 test('date-range spending dashboard shows only actual payment transactions', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.doesNotMatch(html, /<label>Breakdown by<\/label>/);
