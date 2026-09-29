@@ -3976,6 +3976,22 @@ router.post('/api/expenses/balances', (req, res) => {
     if (!(rawAmount > 0)) return res.status(400).json({ success: false, error: 'Adjustment amount must be greater than 0.' });
     if (!['add', 'deduct'].includes(direction)) return res.status(400).json({ success: false, error: 'Choose Add money or Deduct money.' });
     if (!note) return res.status(400).json({ success: false, error: 'Adjustment reason is required.' });
+    if (!isOwner(req)) {
+      if (!isPrashant(req) || nature !== 'SANKI' || adjustmentAccount !== 'Counter Cash') {
+        return res.status(403).json({ success:false, error:'Only the Owner can post this adjustment.' });
+      }
+      s.reqSeq = (s.reqSeq || 0) + 1;
+      const request = {
+        id:'RQ-' + String(s.reqSeq).padStart(4,'0'), kind:'counter_cash_adjustment',
+        name:(direction === 'deduct' ? 'Deduct ' : 'Add ') + '₹' + rawAmount.toLocaleString('en-IN') + ' · Counter Cash',
+        nature:'SANKI', meta:{account:'Counter Cash',direction,amount:rawAmount,date:String(b.adjust.date||new Date().toISOString().slice(0,10)).slice(0,10),note,proof:String(b.adjust.proof||'').trim()},
+        status:'pending', by:(req.user&&req.user.username)||'prashant', at:new Date().toISOString(), decidedBy:null, decidedAt:null
+      };
+      s.requests=s.requests||[];s.requests.push(request);
+      audit(s,req,'COUNTER_CASH_ADJUSTMENT_REQUESTED','request',request.id,{nature:'SANKI',account:'Counter Cash',after:request,note});
+      saveStore(s);
+      return res.status(202).json({success:true,approvalPending:true,request});
+    }
     s.adjSeq = (s.adjSeq || 0) + 1;
     s.adjustments.push({
       id: 'ADJ-' + s.adjSeq, account: adjustmentAccount,
@@ -4236,6 +4252,7 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
   if (!r) return res.status(404).json({ success: false, error: 'Request not found.' });
   if (r.kind === 'ledger' && !isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can manage categories.'});
   if (r.kind === 'sale_split' && !isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can approve a sale allocation correction.' });
+  if (r.kind === 'counter_cash_adjustment' && !isOwner(req)) return res.status(403).json({success:false,error:'Only the Owner can approve a Counter Cash adjustment.'});
   if (!(isAdmin(req) || (r.kind === 'vendor' && canApprove(req)))) {
     return res.status(403).json({ success: false, error: r.kind === 'vendor' ? 'Only an approver/admin can decide vendor requests.' : 'Admin approval only.' });
   }
@@ -4248,6 +4265,13 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
       if(cashAmount<0||cashAmount>sale.gross||!reason)return res.status(400).json({success:false,error:'The requested allocation is no longer valid.'});
       if((s.bankDateOverrides||{})[sale.id]||(s.bankDateOverrides||{})[sale.id+'/NONCASH'])return res.status(409).json({success:false,error:'This sale allocation was reconciled after the request. Reopen reconciliation before approving it.'});
       r.allocation=applySaleAllocation(s,req,sale,cashAmount,reason,r.by);
+    } else if (r.kind === 'counter_cash_adjustment') {
+      const meta=r.meta||{},amount=Math.abs(num(meta.amount)),direction=String(meta.direction||'');
+      if(r.nature!=='SANKI'||meta.account!=='Counter Cash'||!(amount>0)||!['add','deduct'].includes(direction)||!String(meta.note||'').trim())return res.status(400).json({success:false,error:'This Counter Cash adjustment request is incomplete.'});
+      s.adjSeq=(s.adjSeq||0)+1;
+      const adjustment={id:'ADJ-'+s.adjSeq,account:'Counter Cash',nature:'SANKI',amount:direction==='deduct'?-amount:amount,note:String(meta.note).trim(),date:String(meta.date||new Date().toISOString().slice(0,10)).slice(0,10),proof:String(meta.proof||'').trim(),createdBy:r.by||'prashant',createdAt:new Date().toISOString(),approvedBy:(req.user&&req.user.username)||'owner',approvedAt:new Date().toISOString(),approvalRequestId:r.id};
+      s.adjustments.push(adjustment);r.adjustmentId=adjustment.id;
+      audit(s,req,'COUNTER_CASH_ADJUSTMENT_APPROVED','account','Counter Cash',{nature:'SANKI',account:'Counter Cash',requestId:r.id,after:adjustment,note:adjustment.note});
     } else if (r.kind === 'ledger') {
       s.customLedgers = s.customLedgers || {};
       s.customLedgers[r.name] = { name: r.name, type: (r.meta && r.meta.type) || 'variable' };

@@ -823,6 +823,24 @@ test('account adjustments require a reason and support explicit add or deduct en
   assert.equal(ledger.entries.find(x => x.description === 'Counting correction').debit, 125);
 });
 
+test('Prashant Counter Cash adjustments remain pending until Owner approval', () => {
+  const before=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI'}}).body.accounts.find(x=>x.name==='Counter Cash').balance;
+  const requested=invoke('POST','/api/expenses/balances',{role:'admin',body:{nature:'SANKI',adjust:{account:'Counter Cash',direction:'deduct',amount:6686,date:'2026-09-29',note:'Personal use from Counter Cash'}}});
+  assert.equal(requested.status,202);assert.equal(requested.body.approvalPending,true);assert.equal(requested.body.request.kind,'counter_cash_adjustment');
+  const unchanged=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI'}}).body.accounts.find(x=>x.name==='Counter Cash').balance;assert.equal(unchanged,before);
+  const denied=invoke('POST','/api/expenses/requests/:id/decide',{role:'admin',params:{id:requested.body.request.id},body:{approve:true}});assert.equal(denied.status,403);
+  const approved=invoke('POST','/api/expenses/requests/:id/decide',{role:'owner',params:{id:requested.body.request.id},body:{approve:true}});assert.equal(approved.status,200);assert.ok(approved.body.request.adjustmentId);
+  const after=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI'}}).body.accounts.find(x=>x.name==='Counter Cash').balance;assert.equal(after,before-6686);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash'}}).body;const row=ledger.entries.find(x=>x.id===approved.body.request.adjustmentId);assert.equal(row.debit,6686);assert.match(row.description,/Personal use/);
+});
+
+test('a rejected Prashant Counter Cash adjustment never changes the ledger',()=>{
+  const before=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI'}}).body.accounts.find(x=>x.name==='Counter Cash').balance;
+  const requested=invoke('POST','/api/expenses/balances',{role:'admin',body:{nature:'SANKI',adjust:{account:'Counter Cash',direction:'add',amount:900,date:'2026-09-29',note:'Cash count correction'}}});assert.equal(requested.status,202);
+  assert.equal(invoke('POST','/api/expenses/requests/:id/decide',{role:'owner',params:{id:requested.body.request.id},body:{approve:false}}).status,200);
+  const after=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI'}}).body.accounts.find(x=>x.name==='Counter Cash').balance;assert.equal(after,before);
+});
+
 test('date-range spending dashboard shows only actual payment transactions', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.doesNotMatch(html, /<label>Breakdown by<\/label>/);
