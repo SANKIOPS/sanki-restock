@@ -1582,6 +1582,13 @@ test('reconciliation closing excludes ledger movements before the statement open
   }finally{fs.writeFileSync(expenseFile,original);}
 });
 
+test('Axis 3448 complaint hold reduces usable funds without changing bank reconciliation truth',()=>{
+  const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',to:'2026-09-29'}}).body,axis=balances.accounts.find(x=>x.name==='Axis Bank 3448');
+  assert.equal(axis.restrictedAmount,45398);assert.equal(Math.round((axis.statementBalance-axis.balance)*100)/100,45398);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2026-08-22',to:'2026-09-29'}}).body,hold=ledger.entries.find(x=>x.id==='HOLD-AXIS3448-COMPLAINT');
+  assert.equal(hold.debit,45398);assert.equal(hold.description,'Temporary blocked amount');assert.equal(Math.round((ledger.statementBalance-ledger.balance)*100)/100,45398);
+});
+
 test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: submit transactions for finalization/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
 
 test('excluded statement rows remain bank truth without becoming expenses or P&L',()=>{
