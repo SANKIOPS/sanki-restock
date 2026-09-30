@@ -284,6 +284,15 @@ test('purchase image approval remains gated while rejected draft clutter stays h
   assert.match(server,/Generation stopped or lost contact/);
 });
 
+test('held paid image results are visible and can be accepted without regeneration',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','procurement.html'),'utf8');
+  assert.match(html,/Generated photos held for review/);
+  assert.match(html,/These paid results were saved/);
+  assert.match(html,/data-accept-held/);
+  assert.match(html,/data-held-url/);
+  assert.match(html,/Accept for review/);
+});
+
 test('SEO request uses the original photo and returns complete structured draft',async()=>{
   const seo={displayName:'Diamond Stitch',title:'Black Diamond Stitch Top | SANKI',metaTitle:'Black Diamond Stitch Top | SANKI',metaDescription:'A black crew-neck top with diamond stitching.',imageAlt:'Black diamond stitch top front view',tags:['Black','Crew Neck'],bodyHtml:'<p>Black crew-neck top.</p>'};
   const out=await pilot.generateSeo({key:'test-only',group,source,fetchImpl:async(url,options)=>{

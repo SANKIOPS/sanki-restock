@@ -2401,6 +2401,26 @@
           '</div>';
       });
       grid+='</div>';
+      // A paid image that fails the automated visual check is deliberately
+      // retained for owner review. Previously these records were returned by
+      // the API but never rendered, which made a completed paid call look like
+      // a missing image and encouraged an unnecessary regeneration.
+      var held=(studio.rejected[np.key]||[]).filter(function(image){return image&&image.url&&!image.supersededBy;});
+      var heldBlock='';
+      if(held.length){
+        heldBlock='<div class="banner warn" style="margin-top:10px"><b>Generated photos held for review</b><div class="muted" style="font-size:11px;margin:3px 0 8px">These paid results were saved. Inspect them against the original; accept a correct photo without regenerating or paying again.</div><div style="display:flex;gap:10px;flex-wrap:wrap">'+
+          held.map(function(image){
+            var issues=(image.qa&&image.qa.issues)||[];
+            var warnings=(image.qa&&image.qa.warnings)||[];
+            var reason=issues.concat(warnings).join('; ')||((image.qa&&image.qa.status)||'Automated check needs review');
+            return '<div style="width:190px;background:#fff;border:1px solid var(--line);border-radius:8px;padding:7px">'+
+              '<div style="font-size:11px;font-weight:700;margin-bottom:4px">'+esc(viewNames[image.type]||image.type||'Generated view')+'</div>'+
+              '<img data-zoom src="'+esc(image.url)+'" title="Held generated photo — click to enlarge" style="width:100%;height:190px;object-fit:contain;background:var(--ivory2);border-radius:6px;cursor:zoom-in">'+
+              '<div style="font-size:10px;color:#92400e;margin:5px 0">'+esc(reason)+'</div>'+
+              '<div style="display:flex;gap:4px"><button class="btn sm" data-accept-held data-held-type="'+esc(image.type||'')+'" data-held-url="'+esc(image.url)+'">Accept for review</button>'+
+              '<a class="btn ghost sm" href="'+esc(image.url)+'" download title="Download full-size held photo">⬇</a></div></div>';
+          }).join('')+'</div></div>';
+      }
       var seo=studio.seo[np.key];
       var seoBlock;
       if(!seo){
@@ -2423,7 +2443,7 @@
           '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs required approved views + approved SEO</span>';
-      return head+conflictNotice+retailNotice+audienceRow+fitRow+pair+grid+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
+      return head+conflictNotice+retailNotice+audienceRow+fitRow+pair+grid+heldBlock+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
     }
     function rerenderCard(i){
       var np=lastReceive.newProducts[i], c=el('scard'+i);
