@@ -264,7 +264,10 @@ test('existing image views can be regenerated separately or together without rew
   assert.match(html,/data-regen-product=/);
   assert.match(html,/regenerateTypes:chosen/);
   assert.match(html,/Earlier images remain if checking fails/);
-  assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\|\|!savedImages\.some/);
+  assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\|\|!\[\.\.\.savedImages,\.\.\.heldImages\]\.some/);
+  assert.match(server,/priorHeld\.qa&&priorHeld\.qa\.failed/);
+  assert.match(html,/data-regen-held/);
+  assert.match(html,/Regenerate this view/);
   assert.match(server,/const needsSeo=\(req\.body\|\|\{\}\)\.skipSeo!==true&&!regenerateTypes\.length/);
   assert.match(server,/approved:false,source:'openai-pilot'/);
   assert.match(server,/This view changed during regeneration; result was discarded/);
@@ -345,6 +348,9 @@ test('purchase image approval remains gated while rejected draft clutter stays h
   assert.match(server,/po\.qaRejected \|\| \{\}/);
   assert.match(server,/sourceFingerprint===currentFingerprint/);
   assert.match(server,/Generation stopped or lost contact/);
+  assert.match(server,/function reclaimRejectedPhotoStorage\(s\)/);
+  assert.match(server,/error&&error\.code==='ENOSPC'/);
+  assert.match(server,/candidate\.fileArchivedAt=/);
 });
 
 test('held paid image results are visible and can be accepted without regeneration',()=>{

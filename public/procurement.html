@@ -2258,7 +2258,8 @@
     }
     async function regeneratePaidImages(np,i,types,button){
       var po=(lastReceive&&lastReceive.po)||{}, current=studio.images[np.key]||[];
-      var allowed=paidTypesFor(np), chosen=types.filter(function(type){return allowed.indexOf(type)>=0&&current.some(function(image){return image.type===type&&image.url;});});
+      var held=studio.rejected[np.key]||[];
+      var allowed=paidTypesFor(np), chosen=types.filter(function(type){return allowed.indexOf(type)>=0&&(current.some(function(image){return image.type===type&&image.url;})||held.some(function(image){return image.type===type&&image.url&&!image.supersededBy;}));});
       if(!chosen.length){alert('No existing image was found for the selected view.');return;}
       if(po.status!=='received'||productNeedsSavedWeight(np)){alert('Receive and save the weight for this product before regeneration.');return;}
       if(!np.photoUrl){alert('Upload the original front reference first.');return;}
@@ -2419,7 +2420,8 @@
               '<div style="font-size:11px;font-weight:700;margin-bottom:4px">'+esc(viewNames[image.type]||image.type||'Generated view')+'</div>'+
               '<img data-zoom src="'+esc(image.url)+'" title="Held generated photo — click to enlarge" style="width:100%;height:190px;object-fit:contain;background:var(--ivory2);border-radius:6px;cursor:zoom-in">'+
               '<div style="font-size:10px;color:#92400e;margin:5px 0">'+esc(reason)+'</div>'+
-              '<div style="display:flex;gap:4px"><button class="btn sm" data-accept-held data-held-type="'+esc(image.type||'')+'" data-held-url="'+esc(image.url)+'">Use saved image</button>'+
+              '<div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn sm" data-accept-held data-held-type="'+esc(image.type||'')+'" data-held-url="'+esc(image.url)+'">Use saved image</button>'+
+              '<button class="btn ghost sm" data-regen-held data-type="'+esc(image.type||'')+'">Regenerate this view</button>'+
               '<a class="btn ghost sm" href="'+esc(image.url)+'" download title="Download full-size held photo">⬇</a></div></div>';
           }).join('')+'</div></div>';
       }
@@ -2501,6 +2503,7 @@
           .then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not accept held image.');studio.images[np.key]=r.images;studio.rejected[np.key]=r.rejectedImages;rerenderCard(i);})
           .catch(function(e){button.disabled=false;alert(e.message);});
       };});
+      Array.prototype.forEach.call(host.querySelectorAll('[data-regen-held]'),function(button){button.onclick=function(){regeneratePaidImages(np,i,[button.getAttribute('data-type')],button);};});
       var cr=host.querySelector('[data-codexreturn]'); if(cr) cr.onchange=function(){
         var file=cr.files&&cr.files[0]; if(!file)return;
         var batchId=prompt('Paste the Codex batch ID for this product:'),type=prompt('View: front, model-front, model-side, model-back, or detail');

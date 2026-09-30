@@ -160,7 +160,8 @@ const SERIAL_RE = new RegExp('^SA\\d+([A-Z]+)(\\d{1,3})(' + SIZE_ALT + ')$');
 // ── JSON store (atomic) ──────────────────────────────────────────
 function atomicWrite(fp, data) {
   const tmp = fp + '.tmp-' + process.pid + '-' + Date.now();
-  fs.writeFileSync(tmp, data); fs.renameSync(tmp, fp);
+  try { fs.writeFileSync(tmp, data); fs.renameSync(tmp, fp); }
+  finally { try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {} }
 }
 function loadStore() {
   let s;
@@ -202,7 +203,37 @@ function loadStore() {
   if (repairedInvalidSerials) atomicWrite(STORE_PATH, JSON.stringify(s));
   return s;
 }
-function saveStore(s) { atomicWrite(STORE_PATH, JSON.stringify(s)); }
+function reclaimRejectedPhotoStorage(s) {
+  const protectedFiles=new Set(),add=url=>{const name=path.basename(String(url||''));if(name)protectedFiles.add(name);};
+  for(const po of Object.values(s.pos||{})){
+    for(const images of Object.values(po.aiImages||{}))for(const image of images||[])add(image&&image.url);
+    for(const url of Object.values(po.backRefs||{}))add(url);
+    for(const line of po.lines||[])add(line&&line.photoUrl);
+  }
+  let removed=0,freed=0;
+  for(const po of Object.values(s.pos||{}))for(const rejected of Object.values(po.qaRejected||{})){
+    const latestUnresolvedByType={};
+    for(const candidate of rejected||[])if(candidate&&candidate.url&&!candidate.supersededBy)latestUnresolvedByType[candidate.type||'generated']=candidate;
+    for(const candidate of rejected||[]){
+      if(!candidate||!candidate.url||latestUnresolvedByType[candidate.type||'generated']===candidate)continue;
+      const name=path.basename(candidate.url),fp=path.join(PHOTO_DIR,name);
+      if(!protectedFiles.has(name))try{const size=fs.statSync(fp).size;fs.unlinkSync(fp);removed++;freed+=size;}catch{}
+      candidate.fileArchivedAt=new Date().toISOString();delete candidate.url;
+    }
+  }
+  return {removed,freed};
+}
+function saveStore(s) {
+  try { atomicWrite(STORE_PATH, JSON.stringify(s)); }
+  catch(error){
+    if(error&&error.code==='ENOSPC'){
+      reclaimRejectedPhotoStorage(s);
+      atomicWrite(STORE_PATH, JSON.stringify(s));
+      return;
+    }
+    throw error;
+  }
+}
 
 // ── small helpers ────────────────────────────────────────────────
 function num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
@@ -1007,6 +1038,10 @@ try {
   if (r.removed) console.log('[procurement] swept ' + r.removed + ' orphan photo(s), freed ' + r.freedMB + ' MB');
 } catch {}
 try {
+  const s=loadStore(),r=reclaimRejectedPhotoStorage(s);
+  if(r.removed){saveStore(s);console.log('[procurement] archived '+r.removed+' older rejected photo file(s), freed '+(r.freed/1048576).toFixed(2)+' MB');}
+} catch {}
+try {
   let reaped = 0;
   for (const fn of fs.readdirSync(DATA_DIR)) {
     if (!/\.tmp-\d+-\d+$/.test(fn)) continue;
@@ -1045,7 +1080,12 @@ router.post('/api/procurement/pos/:id/back-ref', (req, res) => {
 // Persist a generated image buffer to the photo volume, return its URL.
 function savePhotoBuffer(buf, ext) {
   const name = Date.now() + '-' + crypto.randomBytes(6).toString('hex') + (ext || '.jpg');
-  fs.writeFileSync(path.join(PHOTO_DIR, name), buf);
+  try { fs.writeFileSync(path.join(PHOTO_DIR, name), buf); }
+  catch(error){
+    if(!error||error.code!=='ENOSPC')throw error;
+    const store=loadStore();reclaimRejectedPhotoStorage(store);saveStore(store);
+    fs.writeFileSync(path.join(PHOTO_DIR, name), buf);
+  }
   return { file: name, url: '/api/procurement/photo/' + name };
 }
 // Read a stored /api/procurement/photo/<file> URL back into a buffer + mime.
@@ -2176,8 +2216,9 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const fingerprint=codexBatch.fingerprint(g,(po.backRefs||{})[key]);
     const allowedTypes=openaiPilot.pilotTypes(g,!!backSource);
     const savedImages=((po.aiImages||{})[key]||[]);
+    const heldImages=((po.qaRejected||{})[key]||[]).filter(image=>image&&image.url&&!image.supersededBy);
     const requestedRegeneration=(req.body||{}).regenerateTypes;
-    if(requestedRegeneration!==undefined && (!Array.isArray(requestedRegeneration)||!requestedRegeneration.length||requestedRegeneration.length>6||new Set(requestedRegeneration).size!==requestedRegeneration.length||requestedRegeneration.some(type=>!allowedTypes.includes(type)||!savedImages.some(image=>image.type===type&&image.url)))) {
+    if(requestedRegeneration!==undefined && (!Array.isArray(requestedRegeneration)||!requestedRegeneration.length||requestedRegeneration.length>6||new Set(requestedRegeneration).size!==requestedRegeneration.length||requestedRegeneration.some(type=>!allowedTypes.includes(type)||![...savedImages,...heldImages].some(image=>image.type===type&&image.url)))) {
       return res.status(400).json({success:false,error:'Select existing, supported image views to regenerate.'});
     }
     const regenerateTypes=requestedRegeneration||[];
@@ -2238,7 +2279,8 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         const matchingFront=matchingFrontType&&((currentForReference?.aiImages||{})[key]||[]).find(image=>image.type===matchingFrontType&&image.url&&imageCheckAccepted(image));
         const continuitySource=matchingFront?readStoredPhoto(matchingFront.url):null;
         if(matchingFrontType&&!continuitySource) throw new Error('Generate the matching front model view first so the three-quarter view can keep the same outfit.');
-        let repairFields=[];
+        const priorHeld=heldImages.slice().reverse().find(image=>image.type===type&&image.url&&!image.supersededBy);
+        let repairFields=regenerateTypes.includes(type)&&priorHeld&&Array.isArray(priorHeld.qa&&priorHeld.qa.failed)?priorHeld.qa.failed:[];
         for(let imageAttempt=1;imageAttempt<=maxImageAttempts;imageAttempt++){
         const before=loadStore(),started=before.pos[req.params.id].openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
         started.imageCalls=started.imageCalls||[];
