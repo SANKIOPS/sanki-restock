@@ -165,13 +165,17 @@ test('three-quarter image uses matching front and garment references to preserve
   assert.match(server,/Generate a visually checked front model image before its three-quarter view/);
 });
 
-test('purchase studio offers whole-PO, selected and single-product paid generation',()=>{
+test('purchase studio uses a product-wise image, SEO and approval flow',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
-  assert.match(html,/Listing images &amp; copy — new products<\/h2>'\+\s*'<p class="sub">Choose the entire PO/);
-  assert.match(html,/id="generatePoBtn">Generate entire PO/);
-  assert.match(html,/id="generateSelectedBtn">Generate selected/);
-  assert.match(html,/data-selectproduct/);
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/Work product by product/);
+  assert.doesNotMatch(html,/id="generatePoBtn"/);
+  assert.doesNotMatch(html,/id="generateSelectedBtn"/);
+  assert.match(html,/id="approvePoBtn">Approve complete PO/);
+  assert.match(html,/data-approve-product/);
+  assert.match(html,/Generate SEO names \(paid\)/);
   assert.match(html,/generatePaidGroups\('single',np\.key\)/);
+  assert.match(html,/skipSeo:true/);
   assert.match(html,/styling:paidStylingOf\(item\.np\)/);
   assert.match(html,/Five photo slots · source is not posted/);
   assert.match(html,/Optional accessories · select only what suits this article/);
@@ -182,6 +186,8 @@ test('purchase studio offers whole-PO, selected and single-product paid generati
   assert.match(html,/<b>SKU:<\/b>/);
   assert.match(html,/<button type="button" class="btn sm" data-openai-pilot=/);
   assert.match(html,/await Promise\.all\(selected\.map/);
+  assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/approve-product'/);
+  assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/approve-po'/);
 });
 
 test('reopening a received PO restores its Shopify posting panel from saved data',()=>{
@@ -222,7 +228,7 @@ test('existing image views can be regenerated separately or together without rew
   assert.match(html,/regenerateTypes:chosen/);
   assert.match(html,/Earlier images remain if checking fails/);
   assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\|\|!savedImages\.some/);
-  assert.match(server,/const needsSeo=!regenerateTypes\.length/);
+  assert.match(server,/const needsSeo=\(req\.body\|\|\{\}\)\.skipSeo!==true&&!regenerateTypes\.length/);
   assert.match(server,/approved:false,source:'openai-pilot'/);
   assert.match(server,/This view changed during regeneration; result was discarded/);
 });

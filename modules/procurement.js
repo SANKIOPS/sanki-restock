@@ -2164,7 +2164,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const existingSeo=(po.seoDraft||[]).find(x=>x.key===key);
     // A deterministic draft made when corrections were saved is NOT AI-written.
     // Preserve approved manual copy; replace unapproved placeholders with AI copy.
-    const needsSeo=!regenerateTypes.length&&!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
+    const needsSeo=(req.body||{}).skipSeo!==true&&!regenerateTypes.length&&!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
     const types=regenerateTypes.length?regenerateTypes:neededTypes;
     const replaceTypes=new Set(regenerateTypes.concat(invalidTypes));
     if(types.some(type=>sideToFront[type]&&!types.includes(sideToFront[type])&&!savedImages.some(image=>image.type===sideToFront[type]&&image.url&&imageCheckAccepted(image)))) {
@@ -2455,9 +2455,12 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     const groups = await newGroupsOf(s, po);
     const g = groups.find(x => x.key === b.groupKey);
     if (!g) return res.status(404).json({ success: false, error: 'Product group not found.' });
-    // Prefer an approved AI image; fall back to the model/studio shot, then the raw photo.
+    // Product approval now happens once, after images and SEO are reviewed.
+    // Prefer a visually checked generated image even before that final approval;
+    // fall back to the private raw reference only when no checked draft exists.
     const imgs = (po.aiImages && po.aiImages[g.key]) || [];
     const chosen = imgs.find(x => x.approved && (x.type === 'female' || x.type === 'male'))
+                || imgs.find(x => imageCheckAccepted(x) && ['model-front','female','male','front'].includes(x.type))
                 || imgs.find(x => x.approved) || null;
     const src = readStoredPhoto(chosen ? chosen.url : g.photoUrl);
     if (!src) return res.status(400).json({ success: false, error: 'No photo available to judge — generate/approve an image first.' });
@@ -2549,6 +2552,49 @@ router.post('/api/procurement/pos/:id/seo', (req, res) => {
   if (di >= 0) po.seoDraft[di] = rec; else po.seoDraft.push(rec);
   saveStore(s);
   res.json({ success: true, seoDraft: po.seoDraft });
+});
+
+async function approveProductDrafts(s, po, key) {
+  const group = (await newGroupsOf(s, po)).find(item => item.key === key);
+  if (!group) throw new Error('Product group not found.');
+  const required = openaiPilot.pilotTypes(group, !!(po.backRefs || {})[key]);
+  if (!required.length) throw new Error('Select Women, Men or Unisex before approving this product.');
+  const images = ((po.aiImages || {})[key] || []);
+  const missing = required.filter(type => !images.some(image => image.type === type && image.url && readStoredPhoto(image.url) && imageCheckAccepted(image)));
+  if (missing.length) throw new Error('Review or generate the missing product views first: ' + missing.join(', ') + '.');
+  const draft = (po.seoDraft || []).find(item => item.key === key);
+  if (!draft || !draft.seo || seoNeedsReview(draft.seo) || openaiPilot.seoCopyNeedsReview(draft.seo, group)) throw new Error('Generate and review the SEO names first.');
+  images.forEach(image => { if (required.includes(image.type) && imageCheckAccepted(image)) image.approved = true; });
+  draft.seoApproved = true;
+  return { images, seo: draft };
+}
+
+router.post('/api/procurement/pos/:id/approve-product', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    const s = loadStore(), po = s.pos[req.params.id], key = String((req.body || {}).groupKey || '');
+    if (!po || isLockedPo(po)) return res.status(409).json({ success: false, error: 'An editable purchase is required.' });
+    if (!key) return res.status(400).json({ success: false, error: 'Choose a product first.' });
+    const approved = await approveProductDrafts(s, po, key);
+    saveStore(s);
+    res.json({ success: true, ...approved });
+  } catch (e) { res.status(409).json({ success: false, error: e.message }); }
+});
+
+router.post('/api/procurement/pos/:id/approve-po', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    const s = loadStore(), po = s.pos[req.params.id];
+    if (!po || isLockedPo(po)) return res.status(409).json({ success: false, error: 'An editable purchase is required.' });
+    const groups = await newGroupsOf(s, po), blockers = [];
+    for (const group of groups) {
+      try { await approveProductDrafts(s, po, group.key); }
+      catch (e) { blockers.push((group.designName || group.designCode || group.colour || group.key) + ': ' + e.message); }
+    }
+    if (blockers.length) return res.status(409).json({ success: false, error: 'Complete these products first — ' + blockers.join(' | ') });
+    saveStore(s);
+    res.json({ success: true, approvedProducts: groups.length, po: publicPo(po, req) });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // The gated write. Body carries the user-approved plan (edited SEO allowed).
