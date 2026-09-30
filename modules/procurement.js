@@ -2080,7 +2080,7 @@ function promoteAdvisoryHeldImages(po,groups) {
   for(const group of groups||[]){
     const key=group.key,rejected=Array.isArray(po.qaRejected[key])?po.qaRejected[key]:[];
     const latestByType={};
-    for(const candidate of rejected)if(candidate&&candidate.url&&!candidate.supersededBy&&openaiPilot.canAutoAcceptAdvisoryCheck(candidate.qa))latestByType[candidate.type]=candidate;
+    for(const candidate of rejected)if(candidate&&candidate.url&&!candidate.supersededBy&&(openaiPilot.canAutoAcceptAdvisoryCheck(candidate.qa)||openaiPilot.canAutoAcceptConfirmedColourCheck(candidate.qa,group.colour)))latestByType[candidate.type]=candidate;
     for(const candidate of Object.values(latestByType)){
       const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[key]);
       if(candidate.sourceFingerprint!==fingerprint||!readStoredPhoto(candidate.url))continue;

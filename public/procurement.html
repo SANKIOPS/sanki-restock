@@ -2362,6 +2362,7 @@
       var modelLabel=s.modelOrigin==='International'?'International':'Indian';
       [['original','1 · Original references · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(np.audience==='Unisex'?[['female','4a · '+modelLabel+' female front'],['model-side-female','5a · Female three-quarter'],['male','4b · '+modelLabel+' male front'],['model-side-male','5b · Male three-quarter']]:[['model-front','4 · Styled '+modelLabel+' model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
+        var visibleWarnings=((im&&im.qa&&im.qa.warnings)||[]).filter(function(warning){return !/^modelMatch:\s*(?:Could not clearly verify|Cannot verify)/i.test(String(warning));});
         // "change back photo" link (only for the back slot once a ref exists)
         var chg=(isBack&&hasBackRef)?' <label class="muted" style="font-size:10px;cursor:pointer;text-decoration:underline">change<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label>':'';
         var empty;
@@ -2393,7 +2394,7 @@
               '<span class="pill '+(im.approved?'exist':'')+'">'+(im.approved?'Approved with product':'Ready for product approval')+'</span>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
               (t[0]==='original'?'':(canStartPaidImages()?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>'+
-              (im.qa&&im.qa.status==='manual-reviewed'?'<div class="muted" style="font-size:11px;margin-top:5px">Owner-reviewed: '+esc((im.qa.manualReview||{}).reason||'')+'</div>':im.qa&&im.qa.status!=='pass'?'<div class="banner warn" style="font-size:11px;margin-top:5px">Visual check: '+esc((im.qa.issues||[]).join('; ')||im.qa.status)+'</div>':im.qa&&(im.qa.warnings||[]).length?'<div class="banner warn" style="font-size:11px;margin-top:5px">Check before approving: '+esc(im.qa.warnings.join('; '))+'</div>':''))
+              (im.qa&&im.qa.status==='manual-reviewed'?'<div class="muted" style="font-size:11px;margin-top:5px">Owner-reviewed: '+esc((im.qa.manualReview||{}).reason||'')+'</div>':im.qa&&im.qa.status!=='pass'?'<div class="banner warn" style="font-size:11px;margin-top:5px">Visual check: '+esc((im.qa.issues||[]).join('; ')||im.qa.status)+'</div>':visibleWarnings.length?'<div class="banner warn" style="font-size:11px;margin-top:5px">Check before approving: '+esc(visibleWarnings.join('; '))+'</div>':''))
              :empty)+
           '</div>';
       });

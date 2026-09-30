@@ -171,6 +171,10 @@ test('historical drafts held only for uncertain adult-gender detection can be ac
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
   assert.match(server,/promoteAdvisoryHeldImages\(po,groups\)/);
   assert.match(server,/autoAcceptedAdvisory:true/);
+  const colourHold={failed:['garmentMatch'],uncertain:[],issues:['garmentMatch: The original product photo shows grey trousers, but they appear black in the candidate and model photos, indicating a color mismatch.']};
+  assert.equal(pilot.canAutoAcceptConfirmedColourCheck(colourHold,'Black'),true);
+  assert.equal(pilot.canAutoAcceptConfirmedColourCheck(colourHold,'Grey'),false);
+  assert.match(server,/canAutoAcceptConfirmedColourCheck\(candidate\.qa,group\.colour\)/);
 });
 
 test('three-quarter image uses matching front and garment references to preserve the outfit',async()=>{
