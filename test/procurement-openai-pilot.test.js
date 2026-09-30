@@ -430,3 +430,13 @@ test('merged same-size articles can be split safely by their original photos',()
   assert.match(server,/po\.aiImages\[primaryKey\]=oldImages/);
   assert.match(server,/image\.sourceFingerprint=fingerprint/);
 });
+
+test('a product that did not arrive can be removed from received posting without deleting its audit line',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/Did not arrive — remove from posting/);
+  assert.match(html,/discard-received-group/);
+  assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/discard-received-group'/);
+  assert.match(server,/line\.qty=0;line\.didNotArrive=true/);
+  assert.match(server,/po\.receiptExceptions\.push/);
+});

@@ -1823,6 +1823,29 @@ router.post('/api/procurement/pos/:id/split-group-by-photo', async (req, res) =>
   }catch(error){res.status(500).json({success:false,error:error.message});}
 });
 
+// Keep the ordered lines for audit, but remove an entire product group from
+// received stock and Shopify posting when it did not physically arrive.
+router.post('/api/procurement/pos/:id/discard-received-group', (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success:false, error:'Purchases access required.' });
+    const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
+    if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'An editable purchase is required.'});
+    const lines=(po.lines||[]).filter(line=>groupKey(line)===key&&num(line.qty)>0);
+    if(!key||!lines.length)return res.status(404).json({success:false,error:'Received product group not found.'});
+    const at=new Date().toISOString(),by=(req.user&&req.user.username)||'system';
+    let pieces=0;
+    for(const line of lines){
+      pieces+=num(line.qty);
+      if(!line.ordered||typeof line.ordered!=='object')line.ordered=orderedSnapshot(line);
+      line.qty=0;line.didNotArrive=true;line.didNotArriveAt=at;line.didNotArriveBy=by;line.editedAt=at;line.editedBy=by;
+    }
+    po.receiptExceptions=Array.isArray(po.receiptExceptions)?po.receiptExceptions:[];
+    po.receiptExceptions.push({type:'did-not-arrive',groupKey:key,skus:lines.map(line=>line.sku).filter(Boolean),pieces,at,by});
+    saveStore(s);
+    res.json({success:true,removedLines:lines.length,removedPieces:pieces});
+  }catch(error){res.status(500).json({success:false,error:error.message});}
+});
+
 // ── Edit a PO's header + drop lines (not posted) ─────────────────
 // Header fields (vendor / bill / dates / lead time) can be corrected any time
 // before the PO is posted. Individual lines may be removed. Remaining lines

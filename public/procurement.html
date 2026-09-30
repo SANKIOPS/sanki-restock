@@ -2309,7 +2309,7 @@
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span><div class="muted" style="font-size:12px;margin-top:2px"><b>SKU:</b> '+esc(productSkus.join(', ')||'Not assigned')+'</div>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div>'+(canStartPaidImages()?'<button type="button" class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+((missing.images||[]).length?'Generate product images (paid)':'Images generated — review below')+'</button> '+(existingPaidViews.length?'<button type="button" class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+'</div></div>'+
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">'+(canStartPaidImages()?'<button type="button" class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+((missing.images||[]).length?'Generate product images (paid)':'Images generated — review below')+'</button> '+(existingPaidViews.length?'<button type="button" class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+'<button type="button" class="btn ghost sm" data-discard-product style="color:#b42318;border-color:#fca5a5">Did not arrive — remove from posting</button></div></div>'+
         '<div data-pilot-message role="status" style="font-size:12px;min-height:18px;margin:6px 0;color:var(--emerald-d)">'+attemptNote+'</div>'+
         (hasPaidAttempt&&missingNote?'<div class="muted" style="font-size:11px;margin-bottom:6px">'+esc(missingNote)+'</div>':'');
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
@@ -2499,6 +2499,14 @@
       var pick=host.querySelector('[data-selectproduct]');if(pick)pick.onchange=function(){studio.selected[np.key]=pick.checked;updateStudioSelection();};
       var pilot=host.querySelector('[data-openai-pilot]'); if(pilot) pilot.onclick=function(){generatePaidGroups('single',np.key);};
       var approve=host.querySelector('[data-approve-product]');if(approve)approve.onclick=function(){approveProduct(np,i,approve);};
+      var discard=host.querySelector('[data-discard-product]');if(discard)discard.onclick=function(){
+        var pieces=(np.variants||[]).reduce(function(total,variant){return total+Number(variant.qty||0);},0);
+        if(!confirm('Mark all '+pieces+' received piece(s) of this product as DID NOT ARRIVE? It will disappear from Shopify posting, while the ordered record stays in the PO audit.'))return;
+        discard.disabled=true;discard.textContent='Removing…';
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/discard-received-group',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
+          .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not remove product.');alert('Removed '+result.removedPieces+' piece(s) from received stock and Shopify posting.');initStudioFor(receiveId);})
+          .catch(function(error){discard.disabled=false;discard.textContent='Did not arrive — remove from posting';alert(error.message);});
+      };
       var split=host.querySelector('[data-split-articles]');if(split)split.onclick=function(){
         if(!confirm('Split this merged product into separate articles using each original photo? The current generated set will stay with its matching first article.'))return;
         split.disabled=true;split.textContent='Splitting…';
