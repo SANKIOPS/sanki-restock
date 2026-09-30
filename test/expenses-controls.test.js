@@ -1264,7 +1264,7 @@ test('Owner can record a partial vendor payment from an existing claimant accoun
   assert.equal(expense.status,'partially_paid');assert.equal(expense.paidAmount,400);assert.equal(expense.personalPaidAmount,400);assert.equal(expense.reimbursementStatus,'pending');assert.equal(expense.fundedBy,'mixed');
   assert.equal(payment.account,'Arshpreet 1919');assert.equal(payment.personalFunds,true);assert.equal(payment.paidBy,'arshpreet');assert.equal(payment.recordedBy,'owner-user');
   const reimbursements=invoke('GET','/api/expenses/reimbursements',{role:'owner',query:{nature:'SANKI'}}).body;
-  assert.ok(reimbursements.reimbursements.some(x=>x.id===id&&x.closingBalance===400));
+  assert.ok(reimbursements.reimbursements.some(x=>x.id===id&&x.closingBalance===400&&x.reimbursementClaimant==='arshpreet'));
   const second=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[id],account:'Counter Cash',amount:600,paymentProof:'/api/expenses/photo/company-balance-pay.jpg',date:'2026-09-30'}});
   assert.equal(second.status,200,JSON.stringify(second.body));assert.equal(second.body.expenses[0].status,'paid');assert.equal(second.body.expenses[0].personalPaidAmount,400);
 });

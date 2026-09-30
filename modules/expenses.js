@@ -1382,6 +1382,10 @@ function claimantUsernameForAccount(account) {
   const candidate=canonicalAccountName(account).toLowerCase();
   return Object.keys(CLAIMANT_ACCOUNTS).find(username=>(CLAIMANT_ACCOUNTS[username]||[]).some(name=>name.toLowerCase()===candidate));
 }
+function reimbursementClaimantForExpense(expense){
+  const personalPayment=(expense.payments||[]).find(payment=>payment.personalFunds&&payment.account),account=expense.claimantFundingAccount||(personalPayment&&personalPayment.account)||'';
+  return claimantUsernameForAccount(account)||expense.claimant||expense.createdBy||'Unknown';
+}
 function vendorPaymentAccountsForReq(req,nature) {
   const company=payingAccountsForReq(req,nature),n=normalizedNature(nature);
   if(!isOwner(req)||!['SANKI','SAMAST'].includes(n))return company;
@@ -2701,6 +2705,7 @@ router.get('/api/expenses/reimbursements', (req, res) => {
     return true;
   });
   list = list.map(e => Object.assign({}, e, {
+    reimbursementClaimant: reimbursementClaimantForExpense(e),
     closingBalance: round0(Math.max(0, num(e.personalPaidAmount) - num(e.reimbursementAmount))),
     reimbursementPayments: (e.reimbursementPayments || []).map(p => Object.assign({}, p, { transactionReference:e.id+'/'+p.id }))
   }));
