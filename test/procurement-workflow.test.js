@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, genSeo, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, genSeo, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit } = require('../modules/procurement');
 
 test('purchase product corrections move one-to-one studio work but preserve ambiguous splits for recovery', () => {
   const bundle = [{ type: 'front', url: '/paid-a.png', approved: true }];
@@ -134,6 +134,8 @@ test('inventory can start paid image generation, without granting it to other st
   assert.equal(canStartPaidPilot({ user: { role: 'admin' } }), true);
   assert.equal(canStartPaidPilot({ user: { role: 'procurement', roles: ['procurement'] } }), false);
   assert.equal(canStartPaidPilot({ user: { role: 'sales', roles: ['sales'] } }), false);
+  assert.equal(canReviewPaidImage({ user: { role: 'inventory', roles: ['inventory'] } }), true);
+  assert.equal(canReviewPaidImage({ user: { role: 'procurement', roles: ['procurement'] } }), false);
   assert.match(html, /function canStartPaidImages\(\)/);
   assert.match(html, /role==='owner'\|\|role==='admin'\|\|role==='inventory'/);
   assert.match(html, /canStartPaidImages\(\)\?'<button type="button" class="btn sm" data-openai-pilot=/);

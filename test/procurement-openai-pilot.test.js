@@ -354,7 +354,7 @@ test('held paid image results are visible and can be accepted without regenerati
   assert.match(html,/earlier failed attempt\(s\) remain in the audit history/);
   assert.match(html,/data-accept-held/);
   assert.match(html,/data-held-url/);
-  assert.match(html,/Accept for review/);
+  assert.match(html,/Use saved image/);
 });
 
 test('SEO request uses the original photo and returns complete structured draft',async()=>{

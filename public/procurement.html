@@ -2419,7 +2419,7 @@
               '<div style="font-size:11px;font-weight:700;margin-bottom:4px">'+esc(viewNames[image.type]||image.type||'Generated view')+'</div>'+
               '<img data-zoom src="'+esc(image.url)+'" title="Held generated photo — click to enlarge" style="width:100%;height:190px;object-fit:contain;background:var(--ivory2);border-radius:6px;cursor:zoom-in">'+
               '<div style="font-size:10px;color:#92400e;margin:5px 0">'+esc(reason)+'</div>'+
-              '<div style="display:flex;gap:4px"><button class="btn sm" data-accept-held data-held-type="'+esc(image.type||'')+'" data-held-url="'+esc(image.url)+'">Accept for review</button>'+
+              '<div style="display:flex;gap:4px"><button class="btn sm" data-accept-held data-held-type="'+esc(image.type||'')+'" data-held-url="'+esc(image.url)+'">Use saved image</button>'+
               '<a class="btn ghost sm" href="'+esc(image.url)+'" download title="Download full-size held photo">⬇</a></div></div>';
           }).join('')+'</div></div>';
       }
@@ -2495,7 +2495,7 @@
         var reason=prompt('Inspect this held photo at full size against the original. If the visual check is mistaken, explain specifically why (at least 12 characters). This does not approve or post the image.');
         if(reason===null)return;
         if(reason.trim().length<12){alert('Please give a specific reason of at least 12 characters.');return;}
-        if(!confirm('Accept this '+type+' draft for manual photo approval? The checker warning will be retained in the audit record. No paid call will be made.'))return;
+        if(!confirm('Use this saved '+type+' image as the product draft? The checker warning will remain in the audit record. No paid call or separate owner approval is required.'))return;
         button.disabled=true;
         fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/qa-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,type:type,url:url,reason:reason.trim()})})
           .then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not accept held image.');studio.images[np.key]=r.images;studio.rejected[np.key]=r.rejectedImages;rerenderCard(i);})

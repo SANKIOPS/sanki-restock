@@ -2067,9 +2067,7 @@ function canStartPaidPilot(req) {
   return roles.some(r => ['owner','admin','inventory'].includes(String(r).toLowerCase()));
 }
 function canReviewPaidImage(req) {
-  const roles=(req.user && Array.isArray(req.user.roles) && req.user.roles.length)
-    ? req.user.roles : [req.user && req.user.role];
-  return roles.some(r=>['owner','admin'].includes(String(r).toLowerCase()));
+  return canStartPaidPilot(req);
 }
 function imageCheckAccepted(image) {
   return !image.qa || ['pass','manual-reviewed'].includes(image.qa.status);
@@ -2123,7 +2121,7 @@ router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
 // call, but only by an owner/admin who inspects the held draft and records why.
 router.post('/api/procurement/pos/:id/qa-review', async (req,res) => {
   try {
-    if(!canReviewPaidImage(req))return res.status(403).json({success:false,error:'Owner or admin review required.'});
+    if(!canReviewPaidImage(req))return res.status(403).json({success:false,error:'Paid image-generation access is required to use a saved exception image.'});
     const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||''),url=String((req.body||{}).url||'');
     const reason=String((req.body||{}).reason||'').trim();
     if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'Editable PO required.'});
@@ -3047,4 +3045,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };
+module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };
