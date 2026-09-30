@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {register,state,generate,termsAt,indiaDate,receiptUsage}=require('../modules/rental-register');
 function harness(){
-  let store={receipts:[{id:'R1',nature:'PERSONAL',account:'IndusInd Bank 7883',amount:200000,date:'2026-09-01',source:'Tenant'}]},date=new Date('2026-09-30T10:00:00Z'),saves=0;
+  let store={rentalSourceImport:require('../modules/rental-source.json').id,rentals:{tenancies:require('./fixtures/legacy-rentals')()},receipts:[{id:'R1',nature:'PERSONAL',account:'IndusInd Bank 7883',amount:200000,date:'2026-09-01',source:'Tenant'}]},date=new Date('2026-09-30T10:00:00Z'),saves=0;
   const routes={};const job=register({get:(p,f)=>routes['GET '+p]=f,post:(p,f)=>routes['POST '+p]=f},{loadStore:()=>structuredClone(store),saveStore:s=>{store=structuredClone(s);saves++},isOwner:req=>req.user.roles.includes('owner'),audit:()=>{},clock:()=>date});
   function call(body,roles=['owner']){let status=200,result;routes['POST /api/expenses/rentals']({body,user:{username:'test',roles}},{status(n){status=n;return this},json(x){result=x}});return {status,...result};}
   const terms=(overrides={})=>call({action:'terms',tenancyId:'amty-4',baseRent:1000,startMonth:'2026-09',dueDay:31,endDate:'',cgst:9,sgst:9,tds:10,confirmed:true,openingConfirmed:true,autoEnabled:true,autoFrom:'2026-09',...overrides});
