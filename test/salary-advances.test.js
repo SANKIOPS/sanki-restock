@@ -468,6 +468,7 @@ test('Owner can give an advance from every configured company bank or cash accou
   const emp=invoke('POST','/api/salary/employees',{body:{name:'All Accounts Advance Employee',salary:14000}}).body.employee;
   const options=telegramApi('GET','/api/salary/employees',owner,{entity:'SANKI'}).advancePayingAccounts;
   assert.ok(options.some(x=>x.name==='Tiana 0425'&&x.nature==='SANKI'));
+  assert.ok(options.some(x=>x.name==='Arshpreet 1919'&&x.nature==='SANKI'));
   assert.ok(options.some(x=>x.name==='Kirti Nagar Cash'&&x.nature==='SAMAST'));
   assert.ok(options.some(x=>x.name==='Gagan Personal Cash'&&x.nature==='PERSONAL'));
   assert.ok(!options.some(x=>/Paytm Settlement Clearing|Velocity/.test(x.name)),'clearing ledgers are not paying accounts');

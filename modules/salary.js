@@ -45,7 +45,7 @@ const ADVANCE_PAYING_ACCOUNTS = [...SALARY_PAYING_ACCOUNTS, 'Axis Bank 3448'];
 // Real bank/cash accounts only. Clearing ledgers hold money in transit and
 // cannot be the source of an employee advance.
 const OWNER_ADVANCE_PAYING_ACCOUNTS = {
-  SANKI: ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash'],
+  SANKI: ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash','Arshpreet 1919','Shivam 4807','Pradeep 8606'],
   SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
   PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']
 };
