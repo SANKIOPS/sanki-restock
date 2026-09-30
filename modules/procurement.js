@@ -2069,7 +2069,10 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-    const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
+    // The studio represents received stock that can be posted. Zero-quantity
+    // ordered lines remain in publicPo() for audit but must never become cards.
+    const receivedLines=(po.lines||[]).filter(line=>num(line.qty)>0);
+    const preview = await computePreview(s, { lines: receivedLines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     const groups = await newGroupsOf(s, po);
     const restoredKnownSet = restorePo0006SavedSet(po, groups);
     const promotedAdvisoryImages = promoteAdvisoryHeldImages(po,groups);
@@ -2080,6 +2083,7 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     // panel whenever a received PO is reopened; users should not have to save
     // the same weights again just to make the posting action appear.
     const savedPreview = stripPreviewForRole(preview, req);
+    res.set('Cache-Control','no-store');
     res.json({ success: true, ...savedPreview, newProducts: (preview.newProducts || []).map(np => ({...np,
       audience: byKey.get(np.key)?.audience || '', fit: byKey.get(np.key)?.fit || '', line: po.line || '', season:byKey.get(np.key)?.season||''})), po: publicPo(po, req) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }

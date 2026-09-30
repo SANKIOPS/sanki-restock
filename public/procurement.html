@@ -2131,7 +2131,7 @@
     // detail view — works at the advance stage (no receive/weights needed).
     function initStudioFor(id){
       receiveId=id;
-      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/studio').then(r=>r.json()).then(function(d){
+      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/studio?refresh='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(function(d){
         if(!d.success){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
         lastReceive=d;                          // studio funcs read lastReceive.newProducts
         studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };

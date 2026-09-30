@@ -442,4 +442,7 @@ test('a product that did not arrive can be removed from received posting without
   assert.match(server,/alreadyRemoved:true/);
   assert.match(server,/line\.qty=0;line\.didNotArrive=true/);
   assert.match(server,/po\.receiptExceptions\.push/);
+  assert.match(server,/const receivedLines=\(po\.lines\|\|\[\]\)\.filter\(line=>num\(line\.qty\)>0\)/);
+  assert.match(server,/Cache-Control','no-store/);
+  assert.match(html,/studio\?refresh='\+Date\.now\(\),\{cache:'no-store'\}/);
 });
