@@ -1132,6 +1132,8 @@ test('reimbursements UI groups transactions by person before showing expense det
   assert.match(html,/View '\+items\.length\+' reimbursement details/);
   assert.match(html,/item\.transactionReference/);
   assert.match(html,/Reimbursed<\/th><th>Closing balance/);
+  assert.match(html,/Split \/ partial/);
+  assert.match(html,/The remainder will stay pending and can be included in a later combined reimbursement/);
 });
 
 test('batch reimbursement validates every expense before recording any payment',()=>{
