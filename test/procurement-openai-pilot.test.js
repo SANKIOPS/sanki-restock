@@ -440,6 +440,18 @@ test('merged same-size articles can be split safely by their original photos',()
   assert.match(server,/image\.sourceFingerprint=fingerprint/);
 });
 
+test('same-photo duplicate size rows can be merged without erasing their purchase audit',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/Same design\/photo — merge duplicate size rows/);
+  assert.match(html,/merge-duplicate-variants/);
+  assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/merge-duplicate-variants'/);
+  assert.match(server,/keeper\.qty=totalQty/);
+  assert.match(server,/line\.qty=0;line\.mergedIntoSku=keeper\.sku/);
+  assert.match(server,/po\.variantMergeHistory\.push\(record\)/);
+  assert.match(server,/photos\.size!==1/);
+});
+
 test('a product that did not arrive can be removed from received posting without deleting its audit line',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');

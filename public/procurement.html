@@ -2324,7 +2324,7 @@
         (hasPaidAttempt&&missingNote?'<div class="muted" style="font-size:11px;margin-bottom:6px">'+esc(missingNote)+'</div>':'');
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
-        '. If each design has its own original photo, split them into separate articles. <button class="btn ghost sm" data-split-articles style="margin-left:8px">Split articles by original photos</button></div>':'';
+        '. Choose the matching correction: <button class="btn ghost sm" data-merge-duplicates style="margin-left:8px">Same design/photo — merge duplicate size rows</button> <button class="btn ghost sm" data-split-articles style="margin-left:6px">Different designs — split by original photos</button></div>':'';
       var retailNotice=np.audience==='Women'&&!(/^winter$/i.test(np.season||'')||/^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(np.productType||''))&&(/t[ -]?shirt/i.test(np.productType)||/muscle\s*fit/i.test(np.fit||''))
         ?'<div class="banner warn" style="font-size:12px">Purchase fields say '+esc(np.productType)+' / '+esc(np.fit||'no fit')+'. AI storefront copy will use a photo-verified women’s top description and omit “muscle fit”. This does not alter the internal SKU or category; correct those separately if needed.</div>':'';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?(np.line==='casuals'?PAIR_UPPER:PAIR_UPPER.concat(['Jeans','Shorts'])):PAIR_LOWER, s=stylingOf(np);
@@ -2523,6 +2523,13 @@
         fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/split-group-by-photo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
           .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not split articles.');alert(result.articles+' separate articles created. Review the new product cards before posting.');initStudioFor(receiveId);})
           .catch(function(error){split.disabled=false;split.textContent='Split articles by original photos';alert(error.message);});
+      };
+      var merge=host.querySelector('[data-merge-duplicates]');if(merge)merge.onclick=function(){
+        if(!confirm('Use this only when the repeated size rows are the SAME design and use the SAME original photo. Their quantities will be added to one active SKU; the other SKU rows will remain in the audit at quantity zero. Continue?'))return;
+        merge.disabled=true;merge.textContent='Merging…';
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/merge-duplicate-variants',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
+          .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not merge duplicate rows.');alert(result.alreadyResolved?'These duplicate rows were already resolved.':'Merged '+result.mergedRows+' duplicate row(s). Their quantities are now combined under one SKU per size.');initStudioFor(receiveId);})
+          .catch(function(error){merge.disabled=false;merge.textContent='Same design/photo — merge duplicate size rows';alert(error.message);});
       };
       var productRegen=host.querySelector('[data-regen-product]');if(productRegen)productRegen.onclick=function(){
         var types=(studio.images[np.key]||[]).filter(function(image){return image.url&&paidTypesFor(np).indexOf(image.type)>=0;}).map(function(image){return image.type;});

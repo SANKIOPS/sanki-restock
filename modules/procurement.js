@@ -1823,6 +1823,39 @@ router.post('/api/procurement/pos/:id/split-group-by-photo', async (req, res) =>
   }catch(error){res.status(500).json({success:false,error:error.message});}
 });
 
+// Resolve repeated variants that are the same photographed article and size.
+// One active SKU keeps the combined received quantity; the other rows remain
+// in the PO at quantity zero so the original purchase and SKU trail are kept.
+router.post('/api/procurement/pos/:id/merge-duplicate-variants', (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success:false, error:'Purchases access required.' });
+    const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
+    if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'An editable purchase is required.'});
+    const lines=(po.lines||[]).filter(line=>num(line.qty)>0&&key&&groupKey(line)===key);
+    if(!lines.length)return res.status(404).json({success:false,error:'Received product group not found. Refresh the PO and try again.'});
+    const sizeCodeOf=label=>s.sizes[label]||label,bySize=new Map();
+    for(const line of lines){const size=String(sizeCodeOf(line.sizeLabel)||'').trim().toUpperCase();if(!bySize.has(size))bySize.set(size,[]);bySize.get(size).push(line);}
+    const duplicates=[...bySize].filter(([,sameSize])=>sameSize.length>1);
+    if(!duplicates.length)return res.json({success:true,mergedRows:0,alreadyResolved:true});
+    for(const [size,sameSize] of duplicates){
+      const photos=new Set(sameSize.map(line=>String(line.photoUrl||'').trim()).filter(Boolean));
+      if(photos.size!==1||sameSize.some(line=>!String(line.photoUrl||'').trim()))return res.status(409).json({success:false,error:'Size '+size+' does not have one shared original photo. Use separate vendor codes for separate designs.'});
+    }
+    const at=new Date().toISOString(),by=(req.user&&req.user.username)||'system',mergedSizes=[];
+    po.variantMergeHistory=Array.isArray(po.variantMergeHistory)?po.variantMergeHistory:[];
+    for(const [size,sameSize] of duplicates){
+      const keeper=sameSize[0],removed=sameSize.slice(1),totalQty=sameSize.reduce((sum,line)=>sum+num(line.qty),0);
+      for(const line of sameSize)if(!line.ordered||typeof line.ordered!=='object')line.ordered=orderedSnapshot(line);
+      keeper.qty=totalQty;keeper.editedAt=at;keeper.editedBy=by;
+      for(const line of removed){line.qty=0;line.mergedIntoSku=keeper.sku;line.mergedDuplicateAt=at;line.mergedDuplicateBy=by;line.editedAt=at;line.editedBy=by;}
+      const record={type:'duplicate-variant-merge',groupKey:key,size,keptSku:keeper.sku,mergedSkus:removed.map(line=>line.sku).filter(Boolean),totalQty,at,by};
+      po.variantMergeHistory.push(record);mergedSizes.push(record);
+    }
+    saveStore(s);
+    res.json({success:true,mergedRows:mergedSizes.reduce((sum,item)=>sum+item.mergedSkus.length,0),mergedSizes});
+  }catch(error){res.status(500).json({success:false,error:error.message});}
+});
+
 // Keep the ordered lines for audit, but remove an entire product group from
 // received stock and Shopify posting when it did not physically arrive.
 router.post('/api/procurement/pos/:id/discard-received-group', (req, res) => {
