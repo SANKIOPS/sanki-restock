@@ -49,7 +49,7 @@ test('original photo remains a private reference and posting requires approved v
   assert.match(js, /\/use-original-photo'/);
   assert.match(js, /x\.type !== 'original'/);
   assert.match(js, /po\.status = 'posting_partial'/);
-  assert.match(js, /Approve all required product and matching model views/);
+  assert.match(js, /missing readable approved view/);
   assert.match(js, /const variantConflicts = \[\.\.\.bySize\]/);
   assert.match(js, /Different SKUs have the same product, colour and size/);
 });

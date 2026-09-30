@@ -450,6 +450,8 @@ test('same-photo duplicate size rows can be merged without erasing their purchas
   assert.match(server,/line\.qty=0;line\.mergedIntoSku=keeper\.sku/);
   assert.match(server,/po\.variantMergeHistory\.push\(record\)/);
   assert.match(server,/photos\.size!==1/);
+  assert.match(server,/image\.sourceFingerprint=fingerprint/);
+  assert.match(server,/mergedSameArticle/);
 });
 
 test('a product that did not arrive can be removed from received posting without deleting its audit line',()=>{

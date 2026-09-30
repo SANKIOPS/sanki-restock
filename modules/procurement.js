@@ -1826,7 +1826,7 @@ router.post('/api/procurement/pos/:id/split-group-by-photo', async (req, res) =>
 // Resolve repeated variants that are the same photographed article and size.
 // One active SKU keeps the combined received quantity; the other rows remain
 // in the PO at quantity zero so the original purchase and SKU trail are kept.
-router.post('/api/procurement/pos/:id/merge-duplicate-variants', (req, res) => {
+router.post('/api/procurement/pos/:id/merge-duplicate-variants', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success:false, error:'Purchases access required.' });
     const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
@@ -1850,6 +1850,14 @@ router.post('/api/procurement/pos/:id/merge-duplicate-variants', (req, res) => {
       for(const line of removed){line.qty=0;line.mergedIntoSku=keeper.sku;line.mergedDuplicateAt=at;line.mergedDuplicateBy=by;line.editedAt=at;line.editedBy=by;}
       const record={type:'duplicate-variant-merge',groupKey:key,size,keptSku:keeper.sku,mergedSkus:removed.map(line=>line.sku).filter(Boolean),totalQty,at,by};
       po.variantMergeHistory.push(record);mergedSizes.push(record);
+    }
+    // Removing an identical duplicate size changes the technical group
+    // fingerprint, but not the photographed article. Carry the already paid,
+    // reviewed images onto that corrected fingerprint.
+    const correctedGroup=(await newGroupsOf(s,po)).find(group=>group.key===key);
+    if(correctedGroup){
+      const fingerprint=codexBatch.fingerprint(correctedGroup,(po.backRefs||{})[key]);
+      for(const image of ((po.aiImages||{})[key]||[]))image.sourceFingerprint=fingerprint;
     }
     saveStore(s);
     res.json({success:true,mergedRows:mergedSizes.reduce((sum,item)=>sum+item.mergedSkus.length,0),mergedSizes});
@@ -2759,8 +2767,14 @@ router.post('/api/procurement/commit', async (req, res) => {
       }
       const required = openaiPilot.pilotTypes(group || {}, !!(po.backRefs || {})[np.key]);
       const currentFingerprint=group?codexBatch.fingerprint(group,(po.backRefs||{})[np.key]):'';
+      // Older duplicate-row merges predate fingerprint carry-forward. Those
+      // merges only combine the same size under the same original photograph,
+      // so their reviewed images remain valid and can be repaired in place.
+      const mergedSameArticle=(po.variantMergeHistory||[]).some(item=>item&&item.groupKey===np.key&&item.type==='duplicate-variant-merge');
+      if(mergedSameArticle)for(const image of ((po.aiImages||{})[np.key]||[]))if(image&&image.url)image.sourceFingerprint=currentFingerprint;
       const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && imageCheckAccepted(x) && (!x.sourceFingerprint || x.sourceFingerprint===currentFingerprint) && x.type !== 'original' && x.url !== group?.photoUrl);
-      if (!required.length || required.some(type => !approved.some(x => x.type === type && readStoredPhoto(x.url)))) return res.status(400).json({ success: false, error: 'Approve all required product and matching model views for each new product. The original reference photo cannot be posted.' });
+      const missingTypes=required.filter(type=>!approved.some(x=>x.type===type&&readStoredPhoto(x.url)));
+      if (!required.length || missingTypes.length) return res.status(400).json({ success: false, error: 'Cannot post '+(np.designName||np.designCode||np.colour||'product')+' ('+np.colour+'): missing readable approved view(s): '+(missingTypes.join(', ')||'required listing views')+'. The original reference photo cannot be posted.' });
       np.seo = seo;
       np.images = approved.map(x => ({ url: x.url, alt: seo.imageAlt }));
     }
