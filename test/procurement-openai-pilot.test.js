@@ -378,6 +378,17 @@ test('SEO request uses the original photo and returns complete structured draft'
   assert.deepEqual(out.usage,{input_tokens:200});
 });
 
+test('the product-wise SEO button uses the existing OpenAI account',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  const route=server.slice(server.indexOf("router.post('/api/procurement/pos/:id/generate-seo'"),server.indexOf("router.post('/api/procurement/pos/:id/seo'"));
+  assert.match(route,/OPENAI_API_KEY/);
+  assert.match(route,/openaiPilot\.generateSeo/);
+  assert.doesNotMatch(route,/ANTHROPIC_API_KEY|api\.anthropic\.com/);
+  assert.match(html,/Generate SEO names with OpenAI/);
+  assert.doesNotMatch(html,/separately billed Anthropic API/);
+});
+
 test('women’s storefront terms are independent of internal SKU category and unsuitable fit',()=>{
   assert.deepEqual(pilot.retailFacts({...group,fit:'Muscle Fit'}),{productType:'Top',fit:''});
   assert.equal(pilot.seoCopyNeedsReview({displayName:'Casuals',title:'Muscle Fit T-Shirt',tags:[]},group),true);

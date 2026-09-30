@@ -2540,7 +2540,7 @@
       var gi=host.querySelector('[data-genimg]'); if(gi) gi.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImagesSequential(np,i); };
       Array.prototype.forEach.call(host.querySelectorAll('[data-regen]'),function(b){ if(b.getAttribute('data-type').indexOf('model-')===0 || b.getAttribute('data-type')==='detail'){b.remove();return;} b.title='Gemini generation: paid API usage'; b.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImages(np,i,[b.getAttribute('data-type')],b); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-approveimg]'),function(b){ b.onclick=function(){ toggleImg(np,i,b.getAttribute('data-type')); }; });
-      var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ if(confirm('This calls the separately billed Anthropic API. Continue?'))genSeoFor(np,i,gs); };
+      var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ if(confirm('Generate SEO names with OpenAI? This uses your existing OpenAI API balance.'))genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
       var as=host.querySelector('[data-approveseo]'); if(as) as.onclick=function(){ saveSeo(np,i,!(studio.seo[np.key]&&studio.seo[np.key].approved)); };
       var audienceSelect=host.querySelector('[data-audience]');

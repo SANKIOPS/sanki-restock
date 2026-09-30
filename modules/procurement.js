@@ -78,8 +78,6 @@ const photoUpload = multer({
 // Simplified-Chinese OCR, so this workflow does not depend on paid AI credits.
 // Images and text-based PDFs are supported; the buyer reviews every extracted
 // field before the purchase is saved.
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY; // optional SEO generation only
-const AI_MODEL = process.env.PROCUREMENT_AI_MODEL || 'claude-sonnet-4-6';
 const invoiceUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
@@ -1225,15 +1223,6 @@ function pickClosest(value, options) {
   if (exact) return exact;
   const part = options.find(o => o.toLowerCase().includes(v) || v.includes(o.toLowerCase()));
   return part || '';
-}
-function extractJsonBlock(text) {
-  if (!text) return null;
-  // Prefer a fenced ```json block; else the first {...} span.
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const raw = fence ? fence[1] : text;
-  const start = raw.indexOf('{'); const end = raw.lastIndexOf('}');
-  if (start < 0 || end < 0 || end <= start) return null;
-  try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
 }
 let invoiceOcrWorkerPromise;
 let invoiceOcrQueue = Promise.resolve();
@@ -2510,7 +2499,7 @@ router.post('/api/procurement/pos/:id/images', (req, res) => {
 router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-    if (!ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'AI SEO is not enabled. Set ANTHROPIC_API_KEY in Railway.' });
+    if (!process.env.OPENAI_API_KEY) return res.status(503).json({ success: false, error: 'OpenAI SEO is not enabled. Set OPENAI_API_KEY in Railway.' });
     const s = loadStore();
     const po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
@@ -2529,50 +2518,14 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
                 || imgs.find(x => x.approved) || null;
     const src = readStoredPhoto(chosen ? chosen.url : g.photoUrl);
     if (!src) return res.status(400).json({ success: false, error: 'No photo available to judge — generate/approve an image first.' });
+    const generated = await openaiPilot.generateSeo({
+      key: process.env.OPENAI_API_KEY,
+      group: g,
+      source: src,
+      model: process.env.PROCUREMENT_OPENAI_TEXT_MODEL || 'gpt-4.1-mini'
+    });
+    const parsed = generated.seo;
     const sizeCodeOf = (label) => s.sizes[label] || label;
-    const sizeList = (g.sizeLabels || []).map(sizeCodeOf).join(', ');
-    const prompt =
-`You are an expert e-commerce SEO/AEO/GEO copywriter naming and writing listing copy for an Indian premium streetwear product for the brand SANKI, based on the product PHOTO shown.\n` +
-`Known facts: product type = ${g.productType || 'garment'}; colour = ${g.colour || 'as shown'}; audience = ${g.audience}; ${g.fit ? 'fit = ' + g.fit + '; ' : ''}available sizes = ${sizeList || 'as listed'}.\n` +
-`Look at the actual garment in the photo (graphics, print, silhouette, vibe) and write copy that fits WHAT YOU SEE.\n\n` +
-`Optimise for three things at once:\n` +
-`- SEO (Google): natural, keyword-rich phrasing built around real search terms a shopper types (e.g. "baggy red cargo pants men").\n` +
-`- AEO (answer engines / voice): clear, factual, self-contained sentences that directly answer "what is this product?" so it can be quoted as a snippet.\n` +
-`- GEO (ChatGPT/Perplexity/Gemini): state the product entity plainly — brand SANKI + product type + colour + fit + key visible detail — so generative engines can confidently cite it.\n\n` +
-`Return STRICT JSON ONLY:\n` +
-`{"displayName":"","title":"","metaTitle":"","metaDescription":"","imageAlt":"","tags":[""],"bodyHtml":""}\n\n` +
-`Rules:\n` +
-`- CRITICAL: never include any internal codes, vendor design numbers, SKUs, or bare numbers (e.g. "71383", "SA-2-11-FS") in ANY field. These are warehouse-only. Names must read like real retail product names.\n` +
-`- displayName = a short, catchy customer-facing product name (2-4 words), inspired by what the garment looks like. No brand, no colour, no numbers.\n` +
-`- title = storefront H1: "<displayName> <productType> — <Fit>, <Colour>" style, natural and clean.\n` +
-`- metaTitle <= 60 chars, front-loads the main keyword, ends with " | SANKI".\n` +
-`- metaDescription <= 155 chars: one natural sentence that states what it is (brand + colour + fit + product type), mentions premium streetwear, COD and limited drop. Written to answer a search query directly.\n` +
-`- imageAlt = concise, literal description of the garment as seen (colour + key visible feature + product type).\n` +
-`- tags = 5-8 short, real-world search tags (mix of head + long-tail keywords). No codes.\n` +
-`- bodyHtml = 2-3 sentences of product description in simple HTML (<p>…</p>), premium streetwear tone; lead with a plain factual sentence (great for AEO/GEO) then describe what is visibly distinctive.\n` +
-`- Never invent sizes/prices. No markdown, JSON only.`;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90000);
-    let r;
-    try {
-      r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: AI_MODEL, max_tokens: 1500, messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: src.mime, data: src.buf.toString('base64') } },
-          { type: 'text', text: prompt }
-        ] }] }),
-        signal: ctrl.signal
-      });
-    } catch (err) {
-      clearTimeout(timer);
-      if (err.name === 'AbortError') return res.status(504).json({ success: false, error: 'The SEO writer timed out — try again.' });
-      return res.status(502).json({ success: false, error: 'Could not reach the SEO writer: ' + err.message });
-    }
-    clearTimeout(timer);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) return res.status(502).json({ success: false, error: 'AI error: ' + ((j.error && j.error.message) || ('HTTP ' + r.status)) });
-    const parsed = extractJsonBlock((j.content || []).map(c => c.text || '').join('')) || {};
     // Deterministic fields still come from our own generator (handle uniqueness etc).
     // Clean the model's suggested name of any codes BEFORE using it as a fallback,
     // so genSeo's deterministic title/meta are built on clean copy too.
@@ -2594,7 +2547,7 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     // Persist onto the PO's seoDraft (keyed by group) so it survives reloads/posts.
     po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
     const di = po.seoDraft.findIndex(d => d.key === g.key);
-    const rec = { key: g.key, designCode: g.designCode, colour: g.colour, productType: g.productType, seo, seoApproved: false };
+    const rec = { key: g.key, designCode: g.designCode, colour: g.colour, productType: g.productType, seo, seoApproved: false, source: 'openai' };
     if (di >= 0) po.seoDraft[di] = rec; else po.seoDraft.push(rec);
     saveStore(s);
     res.json({ success: true, groupKey: g.key, seo });
