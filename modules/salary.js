@@ -42,12 +42,24 @@ function salaryForMonth(e, ym) {
 const CHANNELS = ['POS', 'Website', 'Shared'];
 const SALARY_PAYING_ACCOUNTS = ['Prashant Axis 3645', 'IndusInd Bank 8181', 'Prashant Cash', 'Gagan Sir Cash', 'Counter Cash'];
 const ADVANCE_PAYING_ACCOUNTS = [...SALARY_PAYING_ACCOUNTS, 'Axis Bank 3448'];
-const PERSONAL_ADVANCE_PAYING_ACCOUNTS = ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'];
+// Real bank/cash accounts only. Clearing ledgers hold money in transit and
+// cannot be the source of an employee advance.
+const OWNER_ADVANCE_PAYING_ACCOUNTS = {
+  SANKI: ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash'],
+  SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
+  PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']
+};
 const SOURCE_SHEET_POSTING_ACCOUNTS = [...SALARY_PAYING_ACCOUNTS,'Axis Bank 3448','IndusInd Bank 7883','ICICI Bank 0992','ICICI Bank 0993','Gagan Personal Cash'];
 const WEEK_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 // Paid-day value per attendance mark: Present 1, Half 0.5, Paid-leave 1,
 // Week-off 1 (paid), Absent 0.
 const MARKS = { P: 1, H: 0.5, PL: 1, WO: 1, A: 0 };
+
+function ownerAdvancePayingAccounts(){return Object.entries(OWNER_ADVANCE_PAYING_ACCOUNTS).flatMap(([nature,names])=>names.map(name=>({name,nature})));}
+function authorisedAdvanceAccount(req,nature,name){
+  if(isOwner(req))return ownerAdvancePayingAccounts().some(x=>x.nature===nature&&x.name===name);
+  return nature==='SANKI'&&ADVANCE_PAYING_ACCOUNTS.includes(name);
+}
 
 function blank() { return { employees: {}, months: {}, divisor: 30, seq: 0, advances: {}, advanceSeq: 0, advanceAudit: [], advanceRequests:{}, advanceRequestSeq:0, advanceRequestAudit:[], payrollPostings:{}, salaryPayments:[], salaryPaymentBatchSeq:0, salaryPaymentAudit:[], finalSalaryAudit:[], oneTimeMigrations:{} }; }
 function load() {
@@ -671,7 +683,7 @@ router.use('/api/salary',(req,res,next)=>salaryContext.run({entity:salaryEntity(
 router.get('/api/salary/employees', guard, (req, res) => {
   const s = load();
   const currentMonth=new Date().toISOString().slice(0,7),employees=Object.values(s.employees).sort(byEmployeeName).map(e=>Object.assign({},e,{salaryHistory:salaryHistoryOf(e),effectiveSalary:salaryForMonth(e,currentMonth)}));
-  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS, advancePayingAccounts:ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'SANKI'})).concat(isOwner(req)?PERSONAL_ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'PERSONAL'})):[]) });
+  res.json({ success: true, entity:activeSalaryEntity(), employees, currentMonth, divisor: num(s.divisor) || 30, channels: CHANNELS, weekDays: WEEK_DAYS, salaryPayingAccounts:SALARY_PAYING_ACCOUNTS, advancePayingAccounts:isOwner(req)?ownerAdvancePayingAccounts():ADVANCE_PAYING_ACCOUNTS.map(name=>({name,nature:'SANKI'})) });
 });
 router.post('/api/salary/employees', guard, (req, res) => {
   const s = load(); const b = req.body || {};
@@ -953,7 +965,7 @@ router.post('/api/salary/advances', guard, (req, res) => {
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Enter a valid advance amount.' });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date || ''))) return res.status(400).json({ success: false, error: 'Select the payment date.' });
   if (!String(b.account || '').trim()) return res.status(400).json({ success: false, error: 'Select the paying account.' });
-  if(!['SANKI','PERSONAL'].includes(payingNature)||payingNature==='SANKI'&&!ADVANCE_PAYING_ACCOUNTS.includes(payingAccount)||payingNature==='PERSONAL'&&(!isOwner(req)||!PERSONAL_ADVANCE_PAYING_ACCOUNTS.includes(payingAccount)))return res.status(400).json({success:false,error:'Choose an authorised paying account and entity.'});
+  if(!authorisedAdvanceAccount(req,payingNature,payingAccount))return res.status(400).json({success:false,error:'Choose an authorised paying account and entity.'});
   const recoveryStartMonth = String(b.recoveryStartMonth || b.date.slice(0, 7));
   if (!/^\d{4}-\d{2}$/.test(recoveryStartMonth)) return res.status(400).json({ success: false, error: 'Select a recovery start month.' });
   const duplicate=[...Object.values(s.advanceRequests||{}).filter(x=>!['Rejected','Posted'].includes(x.status)),...Object.values(s.advances||{}).filter(x=>x.active!==false)].find(x=>x.empId===emp.id&&String(x.account||'').trim()===String(b.account).trim()&&(String(b.reference||'').trim()&&String(x.reference||'').trim()?String(x.reference).trim()===String(b.reference).trim():String(x.date||'')===String(b.date)&&round2(num(x.amount))===round2(amount)));

@@ -203,7 +203,7 @@ test('advance UI merges employee history and exposes approval and proof-backed p
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/data-v="advances"/); assert.match(html,/Employee advance register · closing/); assert.doesNotMatch(html,/Advance approval queue/);assert.match(html,/Requests, approvals, posted advances/);assert.match(html,/Submit for Owner approval/);assert.match(html,/Upload proof & post/); assert.match(html,/saveRecovery/); assert.match(html,/oldest-first/);assert.match(html,/Company owes/);assert.match(html,/editAdvance/);
   assert.match(html,/S\.No\./); assert.match(html,/\(index\+1\)/);assert.match(html,/Connected advance history/);assert.match(html,/Advance given/);assert.match(html,/Amount deducted/);assert.match(html,/Date not recorded/);assert.match(html,/deductionDate/);assert.match(html,/salaryPaymentReference/);assert.match(html,/Fully deducted/);assert.match(html,/remainingAfter/);
-  assert.match(html,/0992\|0993\|7883/);assert.match(html,/personalOwnerAccounts/);
+  assert.match(html,/ed\.advancePayingAccounts/);assert.match(html,/x\.nature\+' · '\+x\.name/);
 });
 
 test('salary UI and storage keep SANKI and Samast payrolls independent',()=>{
@@ -461,6 +461,26 @@ test('Owner personal account advance debits PERSONAL ledger and employee advance
   assert.equal(telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body}).status,409);
   const admin=invoke('POST','/api/salary/advances',{role:'admin',body:{...body,date:'2099-07-15'}});
   assert.equal(admin.status,400,'staff cannot use Owner personal accounts for advances');
+});
+
+test('Owner can give an advance from every configured company bank or cash account',()=>{
+  const owner={username:'gaganlambasanki',roles:['owner']};
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'All Accounts Advance Employee',salary:14000}}).body.employee;
+  const options=telegramApi('GET','/api/salary/employees',owner,{entity:'SANKI'}).advancePayingAccounts;
+  assert.ok(options.some(x=>x.name==='Tiana 0425'&&x.nature==='SANKI'));
+  assert.ok(options.some(x=>x.name==='Kirti Nagar Cash'&&x.nature==='SAMAST'));
+  assert.ok(options.some(x=>x.name==='Gagan Personal Cash'&&x.nature==='PERSONAL'));
+  assert.ok(!options.some(x=>/Paytm Settlement Clearing|Velocity/.test(x.name)),'clearing ledgers are not paying accounts');
+  const posted=telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body:{empId:emp.id,amount:888,date:'2099-07-20',account:'Kirti Nagar Cash',payingNature:'SAMAST',proofs:['/api/expenses/photo/samast-advance.jpg']}});
+  assert.equal(posted.status,200);assert.equal(posted.advance.payingNature,'SAMAST');
+  const expenses=require('../modules/expenses');
+  const ledger=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'SAMAST',account:'Kirti Nagar Cash'}});
+  assert.equal(ledger.entries.filter(x=>x.id===posted.advance.id&&x.debit===888).length,1);
+  const staffOptions=invoke('GET','/api/salary/employees',{role:'admin',username:'prashant'}).body.advancePayingAccounts;
+  assert.ok(!staffOptions.some(x=>x.name==='Tiana 0425'||x.nature!=='SANKI'));
+  assert.equal(invoke('POST','/api/salary/advances',{role:'admin',username:'prashant',body:{empId:emp.id,amount:100,date:'2099-07-21',account:'Tiana 0425',payingNature:'SANKI'}}).status,400);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
+  assert.match(html,/x\.nature\+'\|'\+x\.name/);assert.match(html,/payingNature=separator>0/);
 });
 
 test('partial salary payment requires a reason and preserves the remaining balance with its own proof',()=>{
