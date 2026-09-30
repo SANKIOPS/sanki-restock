@@ -436,7 +436,10 @@ test('a product that did not arrive can be removed from received posting without
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
   assert.match(html,/Did not arrive — remove from posting/);
   assert.match(html,/discard-received-group/);
+  assert.match(html,/groupKey:np\.key,skus:/);
   assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/discard-received-group'/);
+  assert.match(server,/requestedSkus\.has/);
+  assert.match(server,/alreadyRemoved:true/);
   assert.match(server,/line\.qty=0;line\.didNotArrive=true/);
   assert.match(server,/po\.receiptExceptions\.push/);
 });

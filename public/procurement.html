@@ -2503,8 +2503,8 @@
         var pieces=(np.variants||[]).reduce(function(total,variant){return total+Number(variant.qty||0);},0);
         if(!confirm('Mark all '+pieces+' received piece(s) of this product as DID NOT ARRIVE? It will disappear from Shopify posting, while the ordered record stays in the PO audit.'))return;
         discard.disabled=true;discard.textContent='Removing…';
-        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/discard-received-group',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
-          .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not remove product.');alert('Removed '+result.removedPieces+' piece(s) from received stock and Shopify posting.');initStudioFor(receiveId);})
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/discard-received-group',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,skus:(np.variants||[]).map(function(variant){return variant.sku;}).filter(Boolean)})})
+          .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not remove product.');alert(result.alreadyRemoved?'This product was already removed. Refreshing the PO.':'Removed '+result.removedPieces+' piece(s) from received stock and Shopify posting.');initStudioFor(receiveId);})
           .catch(function(error){discard.disabled=false;discard.textContent='Did not arrive — remove from posting';alert(error.message);});
       };
       var split=host.querySelector('[data-split-articles]');if(split)split.onclick=function(){

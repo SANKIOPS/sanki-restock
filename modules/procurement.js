@@ -1828,10 +1828,14 @@ router.post('/api/procurement/pos/:id/split-group-by-photo', async (req, res) =>
 router.post('/api/procurement/pos/:id/discard-received-group', (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success:false, error:'Purchases access required.' });
-    const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
+    const body=req.body||{},s=loadStore(),po=s.pos[req.params.id],key=String(body.groupKey||'');
     if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'An editable purchase is required.'});
-    const lines=(po.lines||[]).filter(line=>groupKey(line)===key&&num(line.qty)>0);
-    if(!key||!lines.length)return res.status(404).json({success:false,error:'Received product group not found.'});
+    const requestedSkus=new Set((Array.isArray(body.skus)?body.skus:[]).map(sku=>String(sku||'').trim().toUpperCase()).filter(Boolean));
+    let matched=(po.lines||[]).filter(line=>key&&groupKey(line)===key);
+    if(!matched.length&&requestedSkus.size)matched=(po.lines||[]).filter(line=>requestedSkus.has(String(line.sku||'').trim().toUpperCase()));
+    if(!matched.length)return res.status(404).json({success:false,error:'Received product group not found. Refresh the PO and try again.'});
+    const lines=matched.filter(line=>num(line.qty)>0);
+    if(!lines.length)return res.json({success:true,removedLines:0,removedPieces:0,alreadyRemoved:true});
     const at=new Date().toISOString(),by=(req.user&&req.user.username)||'system';
     let pieces=0;
     for(const line of lines){
