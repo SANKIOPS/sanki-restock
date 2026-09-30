@@ -2182,7 +2182,7 @@
     function productNeedsSavedWeight(np){
       return (np.variants||[]).some(function(variant){return Number(variant.qty)>0&&!(Number(variant.weightGrams)>0);});
     }
-    async function generatePaidGroups(mode,singleKey){
+    async function generatePaidGroups(mode,singleKey,confirmed){
       var btn=mode==='single'?null:el(mode==='all'?'generatePoBtn':'generateSelectedBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
       function report(message,item){
         if(status)status.textContent=message;
@@ -2207,7 +2207,16 @@
       var imageCalls=pending.reduce(function(total,x){return total+missingPaidDrafts(x.np).images.length;},0);
       var preflightCalls=pending.filter(function(x){return missingPaidDrafts(x.np).images.length>0&&garmentCat(x.np.productType)==='upper'&&paidStylingOf(x.np).fit!=='Auto';}).length;
       var skipped=selected.length-pending.length;
-      if(!confirm('Generate the missing images for this product? Hard limit: up to '+(imageCalls*2)+' billed image calls and '+(imageCalls*2)+' billed visual checks (one corrective retry per view), plus up to '+preflightCalls+' original-fit check(s). Saved audience and styling presets will be used. SEO is generated separately. Continue?')){report('Cancelled — no paid call was made.',pending[0]);return;}
+      if(!confirmed){
+        var confirmCard=el('scard'+pending[0].i),confirmHost=confirmCard&&confirmCard.querySelector('[data-pilot-message]');
+        if(!confirmHost){alert('Could not open the generation confirmation. Refresh this PO and try again.');return;}
+        confirmHost.innerHTML='<span style="color:#92400e">Generate '+imageCalls+' missing image view(s)? Maximum '+(imageCalls*2)+' billed image calls and '+(imageCalls*2)+' billed visual checks, plus up to '+preflightCalls+' original-fit check(s). SEO is separate.</span> '+
+          '<button type="button" class="btn sm" data-confirm-paid-images>Confirm paid generation</button> '+
+          '<button type="button" class="btn ghost sm" data-cancel-paid-images>Cancel</button>';
+        confirmHost.querySelector('[data-confirm-paid-images]').onclick=function(){generatePaidGroups(mode,singleKey,true);};
+        confirmHost.querySelector('[data-cancel-paid-images]').onclick=function(){report('Cancelled — no paid call was made.',pending[0]);};
+        return;
+      }
       btn.disabled=true;var finished=0;
       var active=null,attention=[];
       try {

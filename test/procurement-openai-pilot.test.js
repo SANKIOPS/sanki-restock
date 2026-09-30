@@ -189,7 +189,11 @@ test('purchase studio uses a product-wise image, SEO and approval flow',()=>{
   const generateStart=html.indexOf('async function generatePaidGroups');
   const generateEnd=html.indexOf('async function regeneratePaidImages',generateStart);
   const generateFlow=html.slice(generateStart,generateEnd);
-  assert.ok(generateFlow.indexOf("if(!confirm('Generate the missing images")<generateFlow.indexOf('await Promise.all(selected.map'), 'paid confirmation must stay in the direct click event before asynchronous styling saves');
+  assert.match(generateFlow,/data-confirm-paid-images/);
+  assert.match(generateFlow,/Confirm paid generation/);
+  assert.match(generateFlow,/generatePaidGroups\(mode,singleKey,true\)/);
+  assert.doesNotMatch(generateFlow,/confirm\('Generate the missing images/);
+  assert.ok(generateFlow.indexOf('data-confirm-paid-images')<generateFlow.indexOf('await Promise.all(selected.map'), 'in-card confirmation must be shown before asynchronous styling saves');
   assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/approve-product'/);
   assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/approve-po'/);
 });
