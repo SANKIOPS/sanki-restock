@@ -588,6 +588,24 @@ test('spending dashboard still loads when posted salary advances add paying acco
   }
 });
 
+test('claimant-funded salary advance appears as reimbursement due and clears against claimant ledger',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),salaryFile=path.join(tempDir,'salary.json');if(!fs.existsSync(expenseFile))fs.writeFileSync(expenseFile,'{}');const expenseBefore=fs.readFileSync(expenseFile),salaryBefore=fs.existsSync(salaryFile)?fs.readFileSync(salaryFile):null;
+  try{
+    fs.writeFileSync(salaryFile,JSON.stringify({advances:{'ADV-SHIVAM-500':{id:'ADV-SHIVAM-500',employeeName:'Shivam',date:'2026-09-30',amount:500,account:'Arshpreet 1919',payingNature:'SANKI',proof:'/api/expenses/photo/shivam-advance.jpg',proofs:['/api/expenses/photo/shivam-advance.jpg'],active:true,createdBy:'owner-user',createdAt:'2026-09-30T10:00:00.000Z'}}}));
+    const pending=invoke('GET','/api/expenses/reimbursements',{role:'owner',query:{nature:'SANKI'}});
+    const claim=pending.body.reimbursements.find(x=>x.salaryAdvanceId==='ADV-SHIVAM-500');
+    assert.ok(claim);assert.equal(claim.claimant,'arshpreet');assert.equal(claim.closingBalance,500);assert.equal(claim.vendor,'Shivam');
+    const paid=invoke('POST','/api/expenses/:id/reimburse',{role:'owner',params:{id:claim.id},body:{account:'Axis Bank 3448',amount:500,date:'2026-09-30',paymentProof:'/api/expenses/photo/arshpreet-reimbursement.jpg'}});
+    assert.equal(paid.status,200);assert.equal(paid.body.expense.reimbursementStatus,'reimbursed');
+    const claimantLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Arshpreet 1919'}}).body;
+    assert.equal(claimantLedger.entries.filter(x=>x.id===claim.id+'/REIM-001/RECEIVED'&&x.credit===500).length,1);
+    const companyLedger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body;
+    assert.equal(companyLedger.entries.filter(x=>x.id===claim.id+'/REIM-001'&&x.debit===500).length,1);
+  }finally{
+    fs.writeFileSync(expenseFile,expenseBefore);if(salaryBefore)fs.writeFileSync(salaryFile,salaryBefore);else fs.rmSync(salaryFile,{force:true});
+  }
+});
+
 test('All Expenses ignores stale responses after the date range changes', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/listRequestSeq=0/);

@@ -996,6 +996,7 @@ function loadStore() {
     if(bankChargeRepairAdded)saveStore(s);if(applyOwnerRequestedKaluPaymentRemovals(s))saveStore(s);
     if(sankiCategories.applyWithBackup(s,EXP_PATH))saveStore(s);
     if(categoryFinalization.applyWithBackup(s,EXP_PATH))saveStore(s);
+    if(syncClaimantFundedSalaryAdvanceReimbursements(s))saveStore(s);
     return s;
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
@@ -1325,6 +1326,24 @@ function salaryAdvanceEntries() {
   return [[SALARY_PATH,'SANKI'],[SAMAST_SALARY_PATH,'SAMAST']].flatMap(([file,entity])=>{
     try{const sal=JSON.parse(fs.readFileSync(file,'utf8'));return Object.values(sal.advances||{}).filter(a=>a.active!==false&&num(a.amount)>0&&a.account).map(a=>({id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:canonicalAccountName(a.account),payingNature:a.payingNature||entity,entity,amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,empId:a.empId||'',reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'',fundingTransferId:a.fundingTransferId||'',fundingToAccount:canonicalAccountName(a.fundingToAccount)||''}));}catch(_){return[];}
   });
+}
+function syncClaimantFundedSalaryAdvanceReimbursements(s){
+  const owners=Object.fromEntries(Object.entries(CLAIMANT_ACCOUNTS).flatMap(([claimant,accounts])=>accounts.map(account=>[canonicalAccountName(account).toLowerCase(),claimant]))),active=new Set(),now=new Date().toISOString();
+  let changed=false;s.expenses=s.expenses||{};
+  salaryAdvanceEntries().forEach(advance=>{
+    const claimant=owners[String(advance.account||'').toLowerCase()];if(!claimant)return;
+    const id='SALADV-CLAIM-'+advance.entity+'-'+advance.id;active.add(id);
+    const existing=s.expenses[id],reimbursementPayments=existing&&Array.isArray(existing.reimbursementPayments)?existing.reimbursementPayments:[],reimbursementAmount=roundMoney(reimbursementPayments.reduce((sum,p)=>sum+num(p.amount),0)),amount=roundMoney(advance.amount),status=reimbursementAmount>=amount?'reimbursed':reimbursementAmount>0?'partially_reimbursed':'pending';
+    if(existing){
+      const before=JSON.stringify([existing.date,existing.personalPaidAmount,existing.claimant,existing.claimantFundingAccount,existing.reimbursementStatus]);
+      Object.assign(existing,{date:advance.date,particulars:'Employee advance given to '+advance.employee,vendor:advance.employee,claimant,account:advance.account,claimantFundingAccount:advance.account,personalPaidAmount:amount,reimbursementAmount,reimbursementStatus:status,salaryAdvanceId:advance.id,salaryEntity:advance.entity,proof:advance.proof||'',proofs:advance.proofs||[]});
+      if(before!==JSON.stringify([existing.date,existing.personalPaidAmount,existing.claimant,existing.claimantFundingAccount,existing.reimbursementStatus]))changed=true;
+      return;
+    }
+    s.expenses[id]={id,date:advance.date,particulars:'Employee advance given to '+advance.employee,amount:0,requestedAmount:0,nature:advance.payingNature||'SANKI',type:'fixed',ledger:'Employee salary advance',vendor:advance.employee,claimant,account:advance.account,claimantFundingAccount:advance.account,channel:'Shared',bill:'printed',fundedBy:'claimant',paymentType:'UPI',paidAlready:true,personalPaidAmount:amount,reimbursementStatus:'pending',reimbursementAmount:0,reimbursementPayments:[],payments:[],paymentProof:advance.proof||'',paymentProofs:advance.proofs||[],status:'paid',paidAmount:0,approvedAt:advance.createdAt||now,approvedBy:advance.by||'owner',createdAt:advance.createdAt||now,createdBy:claimant,salaryAdvanceId:advance.id,salaryEntity:advance.entity,accountingExcluded:true,nonExpenseReimbursement:true};changed=true;
+  });
+  Object.keys(s.expenses).filter(id=>id.startsWith('SALADV-CLAIM-')&&!active.has(id)).forEach(id=>{const item=s.expenses[id];if(!(item.reimbursementPayments||[]).length){delete s.expenses[id];changed=true;}});
+  return changed;
 }
 function loadSalaryStore(){try{return JSON.parse(fs.readFileSync(SALARY_PATH,'utf8'));}catch(_){return null;}}
 function saveSalaryStore(s){const tmp=SALARY_PATH+'.tmp-'+process.pid+'-'+Date.now();fs.writeFileSync(tmp,JSON.stringify(s,null,2));fs.renameSync(tmp,SALARY_PATH);}
@@ -3130,7 +3149,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
       if(entryNature==='PERSONAL'&&nature==='SANKI')(e.payments||[]).filter(p=>!p.accountingExcluded&&paymentIsPosted(e)&&(p.account||e.account)===account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p=>entries.push({id:e.id+'/'+p.id,date:p.date,kind:'personal_expense_redacted',entity:'PERSONAL',description:'Owner personal expense · private details restricted [PERSONAL]',reference:p.bankReference||'',credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:'',note:'',by:'',editable:false,privacyRedacted:true}));
       return;
     }
-    const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
+    const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account||e.claimantFundingAccount||'';
     (e.payments || []).filter(p => !p.accountingExcluded&&paymentIsPosted(e) && (p.account || e.account) === account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.personalFunds?'personal_expense':'expense',entity:entryNature,description:(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,creditCardStatementId:p.creditCardStatementId||'',editable:!p.batchPaymentId&&!p.creditCardStatementId}));
     (e.reimbursementPayments || []).filter(p => !p.accountingExcluded&&p.account === account).forEach(p => p.batchId?addReimbursementBatchItem('paid',e,p,entryNature):entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,editable:true}));
     (e.reimbursementPayments || []).filter(p => personalAccount === account).forEach(p => p.batchId?addReimbursementBatchItem('received',e,p,entryNature):entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
