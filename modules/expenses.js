@@ -2690,12 +2690,15 @@ router.get('/api/expenses/reimbursements', (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   const from=String(req.query.from||''),to=String(req.query.to||'');
+  const reimbursementStatuses=new Set(['pending','partially_reimbursed','reimbursed']);
   let list = Object.values(s.expenses || {}).filter(e => {
     if (!canApproveExpenseNature(req, e)) return false;
     if (nature && normalizedNature(e.nature) !== nature) return false;
-    if (!(e.paidAlready || num(e.personalPaidAmount)>0) || e.reimbursementStatus === 'awaiting_approval' || e.reimbursementStatus === 'rejected') return false;
+    // Personal/non-reimbursable payments use `not_applicable`. They must never
+    // become claimant liabilities merely because they were paid personally.
+    if (!(e.paidAlready || num(e.personalPaidAmount)>0) || !reimbursementStatuses.has(e.reimbursementStatus)) return false;
     if (status && e.reimbursementStatus !== status) return false;
-    if (person && !String(e.createdBy || e.claimant || '').toLowerCase().includes(person)) return false;
+    if (person && !reimbursementClaimantForExpense(e).toLowerCase().includes(person)) return false;
     if (todayOnly && e.date !== today) return false;
     // Completed reimbursements stay in history according to the reimbursement
     // transaction date, even when the original expense belongs to an older month.

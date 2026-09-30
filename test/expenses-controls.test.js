@@ -1269,6 +1269,13 @@ test('Owner can record a partial vendor payment from an existing claimant accoun
   assert.equal(second.status,200,JSON.stringify(second.body));assert.equal(second.body.expenses[0].status,'paid');assert.equal(second.body.expenses[0].personalPaidAmount,400);
 });
 
+test('non-reimbursable personal expenses never appear as owner reimbursement liabilities',()=>{
+  const reimbursements=invoke('GET','/api/expenses/reimbursements',{role:'owner',query:{}});
+  assert.equal(reimbursements.status,200);
+  assert.ok(!reimbursements.body.reimbursements.some(x=>x.id==='EX-PERSONAL-HARYANA'));
+  assert.ok(reimbursements.body.reimbursements.every(x=>['pending','partially_reimbursed','reimbursed'].includes(x.reimbursementStatus)));
+});
+
 test('claimant ledgers remain visible under both SANKI and SAMAST with zero activity', () => {
   for (const nature of ['SANKI','SAMAST']) {
     const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature}});
