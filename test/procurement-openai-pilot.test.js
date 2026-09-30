@@ -156,7 +156,7 @@ test('three-quarter image uses matching front and garment references to preserve
     assert.equal(options.body.getAll('image[]')[0].size,matchingFront.buf.length);
     assert.equal(options.body.getAll('image[]')[1].size,source.buf.length);
     assert.match(options.body.get('prompt'),/Turn the model approximately 45 degrees/);
-    assert.match(options.body.get('prompt'),/trouser colour, trouser cut/);
+    assert.match(options.body.get('prompt'),/featured garment, supporting outfit/);
     assert.match(options.body.get('prompt'),/not a three-quarter-length crop/);
     return {ok:true,json:async()=>({data:[{b64_json:Buffer.from('image').toString('base64')}]})};
   }});
@@ -268,13 +268,30 @@ test('independent visual check sends original, candidate and matching model fron
     assert.equal(body.text.format.type,'json_schema');
     assert.equal(body.input[0].content.filter(x=>x.type==='input_image').length,3);
     assert.doesNotMatch(body.input[0].content[0].text,/"productType":"T-Shirt"|"originalFit":"Muscle Fit"/);
-    assert.match(body.input[0].content[0].text,/Off-white, beige or other neutral trouser COLOUR is not evidence/);
+    assert.match(body.input[0].content[0].text,/Off-white, beige or another neutral trouser COLOUR is not evidence/);
     assert.match(body.input[0].content[0].text,/black loafers do NOT fail/);
     assert.match(body.input[0].content[0].text,/a tuck, changed pose, drape, lighting or camera angle alone does not prove a different fit/);
     assert.match(body.input[0].content[0].text,/clearly depicts a man when a woman was requested/);
     return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(allTrue)}]}]})};
   }});
   assert.equal(calls,1);assert.equal(out.status,'pass');
+});
+
+test('lower-garment generation and checks keep trousers as the product, not the supporting pair',async()=>{
+  const lower={...group,productType:'Trouser',colour:'Green'};
+  const prompt=pilot.imagePrompt(lower,'model-front',{pair:'Plain white tee'});
+  assert.match(prompt,/featured garment is the LOWER garment/);
+  assert.match(prompt,/supporting top/);
+  assert.match(prompt,/Never replace, redesign or evaluate the featured lower garment as supporting clothing/);
+  const allTrue={detectedModelGender:'woman',...Object.fromEntries(['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'].map(field=>[field,{status:'pass',evidence:'Visible match'}]))};
+  await pilot.verifyImage({key:'test-only',group:lower,source,generated:Buffer.from('candidate'),type:'model-front',styling:{pair:'Plain white tee'},fetchImpl:async(url,options)=>{
+    const text=JSON.parse(options.body).input[0].content[0].text;
+    assert.match(text,/"featuredGarmentCategory":"lower"/);
+    assert.match(text,/Never use shoulder seams to judge a lower garment/);
+    assert.match(text,/judge only the SUPPORTING TOP/);
+    assert.match(text,/trousers\/lower garment are the featured product/);
+    return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify(allTrue)}]}]})};
+  }});
 });
 
 test('purchase image approval remains gated while rejected draft clutter stays hidden',()=>{
@@ -292,8 +309,9 @@ test('purchase image approval remains gated while rejected draft clutter stays h
 
 test('held paid image results are visible and can be accepted without regeneration',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','procurement.html'),'utf8');
-  assert.match(html,/Generated photos held for review/);
-  assert.match(html,/These paid results were saved/);
+  assert.match(html,/Latest generated photo needs attention/);
+  assert.match(html,/latestHeldByType/);
+  assert.match(html,/earlier failed attempt\(s\) remain in the audit history/);
   assert.match(html,/data-accept-held/);
   assert.match(html,/data-held-url/);
   assert.match(html,/Accept for review/);

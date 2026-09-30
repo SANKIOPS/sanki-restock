@@ -2392,10 +2392,14 @@
       // retained for owner review. Previously these records were returned by
       // the API but never rendered, which made a completed paid call look like
       // a missing image and encouraged an unnecessary regeneration.
-      var held=(studio.rejected[np.key]||[]).filter(function(image){return image&&image.url&&!image.supersededBy;});
+      var allHeld=(studio.rejected[np.key]||[]).filter(function(image){return image&&image.url&&!image.supersededBy;});
+      var latestHeldByType={};
+      allHeld.forEach(function(image){latestHeldByType[image.type||'generated']=image;});
+      var held=Object.keys(latestHeldByType).map(function(type){return latestHeldByType[type];});
+      var earlierHeldCount=allHeld.length-held.length;
       var heldBlock='';
       if(held.length){
-        heldBlock='<div class="banner warn" style="margin-top:10px"><b>Generated photos held for review</b><div class="muted" style="font-size:11px;margin:3px 0 8px">These paid results were saved. Inspect them against the original; accept a correct photo without regenerating or paying again.</div><div style="display:flex;gap:10px;flex-wrap:wrap">'+
+        heldBlock='<div class="banner warn" style="margin-top:10px"><b>Latest generated photo needs attention</b><div class="muted" style="font-size:11px;margin:3px 0 8px">This paid result was saved because the automatic check could not safely approve it. Accept it if it is correct; no regeneration or extra payment is required.'+(earlierHeldCount?' '+earlierHeldCount+' earlier failed attempt(s) remain in the audit history.':'')+'</div><div style="display:flex;gap:10px;flex-wrap:wrap">'+
           held.map(function(image){
             var issues=(image.qa&&image.qa.issues)||[];
             var warnings=(image.qa&&image.qa.warnings)||[];
