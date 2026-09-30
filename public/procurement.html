@@ -2177,7 +2177,7 @@
     function missingPaidDrafts(np){
       var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url&&(!v.qa||v.qa.status==='pass'||v.qa.status==='manual-reviewed');}).map(function(v){return v.type;});
       var copy=studio.seo[np.key];
-      return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(copy&&copy.seo&&(copy.approved||copy.source==='openai-pilot'))};
+      return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(copy&&copy.seo&&(copy.approved||copy.source==='openai-pilot'||copy.source==='openai'))};
     }
     function productNeedsSavedWeight(np){
       return (np.variants||[]).some(function(variant){return Number(variant.qty)>0&&!(Number(variant.weightGrams)>0);});
@@ -2432,7 +2432,7 @@
       } else {
         var g=seo.seo||{};
         seoBlock='<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)">'+
-          '<div class="muted" style="font-size:12px;margin-bottom:8px">'+(seo.source==='openai-pilot'?'AI-written SEO draft · review before approval':seo.approved?'Approved manual listing copy':'Basic placeholder copy from purchase details · Generate images + SEO to replace it with image-judged copy')+'</div>'+
+          '<div class="muted" style="font-size:12px;margin-bottom:8px">'+((seo.source==='openai-pilot'||seo.source==='openai')?'AI-written SEO draft · review it, then approve images + SEO':seo.approved?'Approved manual listing copy':'Basic placeholder copy from purchase details · Generate images + SEO to replace it with image-judged copy')+'</div>'+
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
           '<div class="fld"><label>Display name</label><input data-seo="displayName" data-i="'+i+'" value="'+esc(g.displayName||'')+'"></div>'+
           '<div class="fld"><label>Storefront title (H1)</label><input data-seo="title" data-i="'+i+'" value="'+esc(g.title||'')+'"></div>'+
@@ -2443,8 +2443,8 @@
           '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
           '<button class="btn sm" data-saveseo="'+i+'">Save SEO edits</button>'+
           '<button class="btn ghost sm" data-genseo="'+i+'">Regenerate SEO names (paid)</button>'+
-          '<button class="btn sm" data-approve-product="'+i+'" style="margin-left:auto">Approve product</button>'+
-          '<span class="muted" data-seonote="'+i+'" style="font-size:12px"></span></div></div>';
+          '<button class="btn sm" data-approve-product="'+i+'" style="margin-left:auto">Approve images + SEO</button>'+
+          '<span class="muted" data-seonote="'+i+'" style="font-size:12px">'+esc(seo.savedMessage||'')+'</span></div></div>';
       }
       var status=studioReadyFor(np)?'<span class="pill exist">ready to post</span>':'<span class="pill" style="background:#f59e0b;color:#fff">needs required approved views + approved SEO</span>';
       return head+conflictNotice+retailNotice+audienceRow+fitRow+pair+grid+heldBlock+seoBlock+'<div style="margin-top:8px">'+status+'</div>';
@@ -2454,17 +2454,29 @@
       if(c){ c.innerHTML=studioCard(np,i); wireStudioCard(np,i); }
       refreshPostGate();
     }
+    function readSeoFields(np,i){
+      var host=el('scard'+i),entry=studio.seo[np.key];if(!host||!entry||!entry.seo)return null;
+      ['displayName','title','metaTitle','metaDescription','imageAlt'].forEach(function(field){var input=host.querySelector('[data-seo="'+field+'"]');if(input)entry.seo[field]=input.value.trim();});
+      return entry;
+    }
+    function saveSeoRequest(np,i,approve){
+      var entry=readSeoFields(np,i);if(!entry)return Promise.reject(new Error('Generate and review the SEO names first.'));
+      return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/seo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,seo:entry.seo,seoApproved:!!approve})}).then(readJson).then(function(result){
+        if(!result.success)throw new Error(result.error||'Save failed.');entry.approved=!!approve;return entry;
+      });
+    }
     function approveProduct(np,i,button){
       if(!studio.seo[np.key]||!studio.seo[np.key].seo){alert('Generate and review the SEO names first.');return;}
-      if(!confirm('Approve all checked images and the reviewed SEO for this product?'))return;
-      button.disabled=true;button.textContent='Approving…';
-      fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/approve-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
-        .then(readJson).then(function(result){
+      if(!confirm('Save the visible SEO edits and approve all checked images + SEO for this product?'))return;
+      button.disabled=true;button.textContent='Saving and approving…';
+      saveSeoRequest(np,i,false).then(function(){
+        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/approve-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})}).then(readJson);
+      }).then(function(result){
           if(!result.success)throw new Error(result.error||'Could not approve product.');
           studio.images[np.key]=result.images||[];
-          studio.seo[np.key]={seo:result.seo.seo,approved:true,source:result.seo.source||'openai-pilot'};
+          studio.seo[np.key]={seo:result.seo.seo,approved:true,source:result.seo.source||'openai',savedMessage:'Approved ✓'};
           rerenderCard(i);
-        }).catch(function(error){button.disabled=false;button.textContent='Approve product';alert(error.message);});
+        }).catch(function(error){button.disabled=false;button.textContent='Approve images + SEO';alert(error.message);});
     }
     function approveWholePo(button){
       if(!confirm('Approve every completed product in this PO? If any product is incomplete, nothing will be approved and the missing items will be listed.'))return;
@@ -2637,20 +2649,14 @@
         .then(readJson).then(function(dd){
           if(btn){ btn.disabled=false; btn.textContent=lbl; }
           if(!dd.success){ alert(dd.error||'SEO generation failed.'); return; }
-          studio.seo[np.key]={ seo:dd.seo, approved:false }; rerenderCard(i);
+          studio.seo[np.key]={seo:dd.seo,approved:false,source:dd.source||'openai',savedMessage:'OpenAI SEO generated — review before approval'};rerenderCard(i);
         }).catch(function(e){ if(btn){ btn.disabled=false; btn.textContent=lbl; } alert(e.message); });
     }
     function saveSeo(np,i,approve){
-      var host=el('scard'+i); var seo=studio.seo[np.key]; if(!seo) return;
-      var priorApproval=seo.approved;
-      ['displayName','title','metaTitle','metaDescription','imageAlt'].forEach(function(f){
-        var e=host.querySelector('[data-seo="'+f+'"]'); if(e) seo.seo[f]=e.value;
-      });
-      seo.approved=approve;
-      var note=host.querySelector('[data-seonote="'+i+'"]'); if(note) note.textContent='Saving…';
-      fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/seo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ groupKey:np.key, seo:seo.seo, seoApproved:approve })})
-        .then(readJson).then(function(dd){ if(!dd.success){seo.approved=priorApproval;alert(dd.error||'Save failed.');} rerenderCard(i); })
-        .catch(function(e){ seo.approved=priorApproval;rerenderCard(i);alert(e.message); });
+      var seo=studio.seo[np.key];if(!seo)return;
+      var host=el('scard'+i),note=host&&host.querySelector('[data-seonote="'+i+'"]');if(note)note.textContent='Saving…';
+      saveSeoRequest(np,i,approve).then(function(){seo.savedMessage=approve?'SEO approved ✓':'Saved ✓';rerenderCard(i);})
+        .catch(function(error){seo.savedMessage='';rerenderCard(i);alert(error.message);});
     }
 
     function collectApproved(){

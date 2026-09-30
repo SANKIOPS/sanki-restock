@@ -2550,7 +2550,7 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     const rec = { key: g.key, designCode: g.designCode, colour: g.colour, productType: g.productType, seo, seoApproved: false, source: 'openai' };
     if (di >= 0) po.seoDraft[di] = rec; else po.seoDraft.push(rec);
     saveStore(s);
-    res.json({ success: true, groupKey: g.key, seo });
+    res.json({ success: true, groupKey: g.key, seo, source: 'openai' });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
