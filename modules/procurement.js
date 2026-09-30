@@ -2774,9 +2774,22 @@ router.post('/api/procurement/commit', async (req, res) => {
       if(mergedSameArticle)for(const image of ((po.aiImages||{})[np.key]||[]))if(image&&image.url)image.sourceFingerprint=currentFingerprint;
       const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && imageCheckAccepted(x) && (!x.sourceFingerprint || x.sourceFingerprint===currentFingerprint) && x.type !== 'original' && x.url !== group?.photoUrl);
       const missingTypes=required.filter(type=>!approved.some(x=>x.type===type&&readStoredPhoto(x.url)));
-      if (!required.length || missingTypes.length) return res.status(400).json({ success: false, error: 'Cannot post '+(np.designName||np.designCode||np.colour||'product')+' ('+np.colour+'): missing readable approved view(s): '+(missingTypes.join(', ')||'required listing views')+'. The original reference photo cannot be posted.' });
+      // Historical ENOSPC incidents could remove an older flat-front file while
+      // leaving its approval record behind. If both approved model views still
+      // exist, post those readable listing photos instead of charging for a
+      // regeneration. The private vendor reference is never substituted.
+      const readableApproved=approved.filter(image=>readStoredPhoto(image.url));
+      const modelTypes=new Set(readableApproved.map(image=>image.type));
+      const recoverableLostFlatFront=missingTypes.length===1&&missingTypes[0]==='front'&&
+        (modelTypes.has('female')||modelTypes.has('male')||modelTypes.has('model-front'))&&
+        (modelTypes.has('model-side-female')||modelTypes.has('model-side-male')||modelTypes.has('model-side'));
+      if (!required.length || (missingTypes.length&&!recoverableLostFlatFront)) return res.status(400).json({ success: false, error: 'Cannot post '+(np.designName||np.designCode||np.colour||'product')+' ('+np.colour+'): missing readable approved view(s): '+(missingTypes.join(', ')||'required listing views')+'. The original reference photo cannot be posted.' });
+      if(recoverableLostFlatFront){
+        po.imageRecoveryHistory=Array.isArray(po.imageRecoveryHistory)?po.imageRecoveryHistory:[];
+        if(!po.imageRecoveryHistory.some(item=>item&&item.groupKey===np.key&&item.type==='lost-flat-front'))po.imageRecoveryHistory.push({type:'lost-flat-front',groupKey:np.key,missingUrl:(approved.find(image=>image.type==='front')||{}).url||'',postedWith:readableApproved.map(image=>image.type),at:new Date().toISOString(),by:(req.user&&req.user.username)||'system'});
+      }
       np.seo = seo;
-      np.images = approved.map(x => ({ url: x.url, alt: seo.imageAlt }));
+      np.images = readableApproved.map(x => ({ url: x.url, alt: seo.imageAlt }));
     }
     // Reserve the PO before the first external write. Any uncertain/partial
     // result needs manual reconciliation, never a blind retry that duplicates stock.
