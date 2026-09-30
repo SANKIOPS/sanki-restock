@@ -69,9 +69,9 @@
 <p class="sub">Tenants, monthly rent and receipts linked to your accounts.</p>
 <div id="panel" aria-live="polite">Loading rental register…</div></main>
 <script src="/sidebar.js"></script>
-<script src="/rental-register.js?v=20260930-owner-page"></script>
+<script src="/rental-register.js?v=20261001-automation"></script>
 <script>
-var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
+var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:2,maximumFractionDigits:2}); };
 var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
 function api(url, opts){ return fetch(url, opts).then(function(r){return r.text().then(function(raw){var data;try{data=JSON.parse(raw);}catch(e){data={success:false,error:r.ok?'The server returned an unreadable response. Please refresh and try again.':'The server could not complete this action (HTTP '+r.status+').'};}if(!r.ok&&data.success!==false)data.success=false;if(!r.ok&&!data.error)data.error='The server could not complete this action (HTTP '+r.status+').';return data;});}).catch(function(){return{success:false,error:'The server could not be reached. Please check the connection and try again.'};}); }
 api('/api/auth/me').then(function(me){

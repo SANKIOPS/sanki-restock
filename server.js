@@ -2651,6 +2651,10 @@ recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recover
   try { require('./modules/auth-users').seedAdminIfEmpty(); }
   catch (e) { console.error('[auth] seed error:', e.message); }
 
+  // Run India-date rental scheduling before slow external syncs.
+  try { require('./modules/expenses').startRentalAutomation(); }
+  catch (e) { console.error('[rentals] scheduler startup failed:', e.message); }
+
   // Sales spine — keep the local Shopify-order ledger fresh. Backfills on
   // first run, then incremental every few minutes. Read-only; never writes
   // back to Shopify.

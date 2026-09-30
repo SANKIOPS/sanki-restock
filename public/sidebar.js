@@ -157,5 +157,11 @@
     if (!me || !me.success) return;      // not logged in — leave optimistic render
     aside.innerHTML = render(navFromModules(mods), me);
     wireLogout();
+    if ((me.roles || [me.role]).includes('owner') && !document.querySelector('script[data-rental-notifications]')) {
+      var rentalScript = document.createElement('script');
+      rentalScript.src = '/rental-notifications.js?v=20261001';
+      rentalScript.dataset.rentalNotifications = '1';
+      document.head.appendChild(rentalScript);
+    }
   });
 })();
