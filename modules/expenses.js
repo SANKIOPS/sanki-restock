@@ -2361,6 +2361,32 @@ router.post('/api/expenses/reimbursements/batch', (req, res) => {
   res.json({success:true,batchId,expenseIds:ids,total:round0(expenses.reduce((n,x)=>n+x.due,0)),expenses:expenses.map(x=>x.e)});
 });
 
+// Owner-only cleanup for reimbursements that were genuinely paid before they
+// were recorded in this system. This clears the liability but deliberately
+// creates no bank/cash movement, so current account balances are not deducted
+// a second time. The mandatory reason and two-step UI confirmation keep this
+// exceptional workflow separate from an ordinary reimbursement.
+router.post('/api/expenses/reimbursements/historical-settlement',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can mark a reimbursement as previously paid.'});
+  const s=loadStore(),b=req.body||{},ids=Array.from(new Set((Array.isArray(b.expenseIds)?b.expenseIds:[]).map(x=>String(x||'').trim()).filter(Boolean))),date=String(b.date||'').slice(0,10),reason=String(b.reason||'').trim();
+  if(!ids.length)return res.status(400).json({success:false,error:'Select at least one pending reimbursement.'});
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||isNaN(Date.parse(date+'T00:00:00Z')))return res.status(400).json({success:false,error:'Enter the date the reimbursement was previously paid.'});
+  if(reason.length<10)return res.status(400).json({success:false,error:'Explain how you confirmed the old reimbursement was already paid (at least 10 characters).'});
+  const items=[];
+  for(const id of ids){
+    const e=s.expenses[id];if(!e)return res.status(404).json({success:false,error:'Reimbursement '+id+' was not found.'});
+    if(!canApproveExpenseNature(req,e))return res.status(403).json({success:false,error:'You cannot settle '+id+' for this accounting entity.'});
+    if(!['pending','partially_reimbursed'].includes(e.reimbursementStatus))return res.status(400).json({success:false,error:id+' has no pending reimbursement balance.'});
+    const due=roundMoney(Math.max(0,num(e.personalPaidAmount)-num(e.reimbursementAmount)));if(!(due>0))return res.status(400).json({success:false,error:id+' has no reimbursement amount due.'});items.push({e,due});
+  }
+  const settledAt=new Date().toISOString(),batchId='HREIM-'+settledAt.replace(/\D/g,'').slice(0,14)+'-'+Math.random().toString(36).slice(2,6).toUpperCase(),by=req.user&&req.user.username||'owner';
+  items.forEach(({e,due})=>{
+    e.reimbursementPayments=Array.isArray(e.reimbursementPayments)?e.reimbursementPayments:[];const payment={id:'REIM-'+String(e.reimbursementPayments.length+1).padStart(3,'0'),batchId,amount:due,date,account:'',paymentType:'Historical settlement',proof:'',proofs:[],note:reason,paidBy:by,paidAt:settledAt,historicalSettlement:true,accountingExcluded:true};
+    e.reimbursementPayments.push(payment);e.reimbursementAmount=roundMoney(num(e.reimbursementAmount)+due);e.reimbursementStatus='reimbursed';audit(s,req,'REIMBURSEMENT_HISTORICALLY_SETTLED','expense',e.id,{nature:e.nature,batchId,paymentId:payment.id,after:payment,note:'Owner confirmed prior payment; no bank/cash ledger movement created'});
+  });
+  saveStore(s);res.json({success:true,batchId,expenseIds:ids,total:roundMoney(items.reduce((sum,x)=>sum+x.due,0)),expenses:items.map(x=>x.e),ledgerMovementCreated:false});
+});
+
 router.post('/api/expenses/:id/reject', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can reject.' });
   const s = loadStore(); const e = s.expenses[req.params.id];

@@ -1134,6 +1134,20 @@ test('reimbursements UI groups transactions by person before showing expense det
   assert.match(html,/Reimbursed<\/th><th>Closing balance/);
   assert.match(html,/Split \/ partial/);
   assert.match(html,/The remainder will stay pending and can be included in a later combined reimbursement/);
+  assert.match(html,/cfg\.isOwner\?'<button class="btn mini ghost" onclick="openHistoricalReimbursement/);
+  assert.match(html,/Final Owner confirmation/);assert.match(html,/No bank or cash ledger will be deducted/);
+});
+
+test('only Owner can historically settle old reimbursements without changing an account ledger',()=>{
+  const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Old reimbursed vendor',amount:725,billPhoto:'/api/expenses/photo/old-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/old-personal.jpg'}}).body.expense;
+  invoke('POST','/api/expenses/:id',{params:{id:made.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});invoke('POST','/api/expenses/:id/approve',{params:{id:made.id},role:'owner'});
+  const route='/api/expenses/reimbursements/historical-settlement',body={expenseIds:[made.id],date:'2026-09-20',reason:'Paid earlier and confirmed by the Owner; old proof is unavailable.'};
+  assert.equal(invoke('POST',route,{role:'admin',body}).status,403);assert.equal(invoke('POST',route,{role:'accounting',body}).status,403);
+  const before=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body.closing;
+  const settled=invoke('POST',route,{role:'owner',body});assert.equal(settled.status,200);assert.equal(settled.body.ledgerMovementCreated,false);assert.equal(settled.body.total,725);
+  const expense=settled.body.expenses[0],payment=expense.reimbursementPayments.at(-1);assert.equal(expense.reimbursementStatus,'reimbursed');assert.equal(payment.historicalSettlement,true);assert.equal(payment.accountingExcluded,true);assert.equal(payment.proof,'');
+  const after=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body;assert.equal(after.closing,before);assert.equal(after.entries.some(x=>x.id===made.id+'/'+payment.id),false);
+  const audit=invoke('GET','/api/expenses/audit-log',{role:'owner',query:{subject:made.id}}).body.records.find(x=>x.id===made.id);assert.ok(audit.timeline.some(x=>x.action==='REIMBURSEMENT_HISTORICALLY_SETTLED'));
 });
 
 test('batch reimbursement validates every expense before recording any payment',()=>{
