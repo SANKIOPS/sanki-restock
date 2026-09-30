@@ -2314,7 +2314,7 @@
         (hasPaidAttempt&&missingNote?'<div class="muted" style="font-size:11px;margin-bottom:6px">'+esc(missingNote)+'</div>':'');
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
-        '. Confirm whether these are duplicate records or separate articles.</div>':'';
+        '. If each design has its own original photo, split them into separate articles. <button class="btn ghost sm" data-split-articles style="margin-left:8px">Split articles by original photos</button></div>':'';
       var retailNotice=np.audience==='Women'&&!(/^winter$/i.test(np.season||'')||/^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(np.productType||''))&&(/t[ -]?shirt/i.test(np.productType)||/muscle\s*fit/i.test(np.fit||''))
         ?'<div class="banner warn" style="font-size:12px">Purchase fields say '+esc(np.productType)+' / '+esc(np.fit||'no fit')+'. AI storefront copy will use a photo-verified women’s top description and omit “muscle fit”. This does not alter the internal SKU or category; correct those separately if needed.</div>':'';
       var cat=garmentCat(np.productType), pairOpts=cat==='upper'?(np.line==='casuals'?PAIR_UPPER:PAIR_UPPER.concat(['Jeans','Shorts'])):PAIR_LOWER, s=stylingOf(np);
@@ -2499,6 +2499,13 @@
       var pick=host.querySelector('[data-selectproduct]');if(pick)pick.onchange=function(){studio.selected[np.key]=pick.checked;updateStudioSelection();};
       var pilot=host.querySelector('[data-openai-pilot]'); if(pilot) pilot.onclick=function(){generatePaidGroups('single',np.key);};
       var approve=host.querySelector('[data-approve-product]');if(approve)approve.onclick=function(){approveProduct(np,i,approve);};
+      var split=host.querySelector('[data-split-articles]');if(split)split.onclick=function(){
+        if(!confirm('Split this merged product into separate articles using each original photo? The current generated set will stay with its matching first article.'))return;
+        split.disabled=true;split.textContent='Splitting…';
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/split-group-by-photo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})})
+          .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not split articles.');alert(result.articles+' separate articles created. Review the new product cards before posting.');initStudioFor(receiveId);})
+          .catch(function(error){split.disabled=false;split.textContent='Split articles by original photos';alert(error.message);});
+      };
       var productRegen=host.querySelector('[data-regen-product]');if(productRegen)productRegen.onclick=function(){
         var types=(studio.images[np.key]||[]).filter(function(image){return image.url&&paidTypesFor(np).indexOf(image.type)>=0;}).map(function(image){return image.type;});
         regeneratePaidImages(np,i,types,productRegen);

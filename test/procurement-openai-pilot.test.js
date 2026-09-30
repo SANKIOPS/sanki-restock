@@ -419,3 +419,14 @@ test('purchase pilot does not mistake initial product-detail SEO for AI-written 
   assert.match(html,/data-pilot-message/);
   assert.match(html,/Basic placeholder copy from purchase details/);
 });
+
+test('merged same-size articles can be split safely by their original photos',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(html,/Split articles by original photos/);
+  assert.match(html,/split-group-by-photo/);
+  assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/split-group-by-photo'/);
+  assert.match(server,/if\(byPhoto\.size<2\)/);
+  assert.match(server,/po\.aiImages\[primaryKey\]=oldImages/);
+  assert.match(server,/image\.sourceFingerprint=fingerprint/);
+});

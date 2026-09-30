@@ -1773,6 +1773,56 @@ router.post('/api/procurement/pos/:id/line-edits', async (req, res) => {
   res.json({ success: true, poId: po.id, touched, po: publicPo(po, req) });
 });
 
+// Split articles that were accidentally merged under a generic design name.
+// Rows with the same original photo remain size variants; different originals
+// become separate products. Existing paid work stays with the first article.
+router.post('/api/procurement/pos/:id/split-group-by-photo', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success:false, error:'Purchases access required.' });
+    const s=loadStore(),po=s.pos[req.params.id],oldKey=String((req.body||{}).groupKey||'');
+    if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'An editable purchase is required.'});
+    const lines=(po.lines||[]).filter(line=>groupKey(line)===oldKey);
+    if(!oldKey||lines.length<2)return res.status(404).json({success:false,error:'Merged product group not found.'});
+    if(lines.some(line=>!String(line.photoUrl||'').trim()))return res.status(409).json({success:false,error:'Every merged SKU needs its original photo before it can be split safely.'});
+    const byPhoto=new Map();
+    for(const line of lines){const photo=String(line.photoUrl).trim();if(!byPhoto.has(photo))byPhoto.set(photo,[]);byPhoto.get(photo).push(line);}
+    if(byPhoto.size<2)return res.status(409).json({success:false,error:'These SKUs use the same original photo. Give each separate design its own vendor code in the editable purchase table.'});
+    const sizeCodeOf=label=>s.sizes[label]||label;
+    for(const photoLines of byPhoto.values()){
+      const seen=new Set();
+      for(const line of photoLines){const size=String(sizeCodeOf(line.sizeLabel)||'').trim().toUpperCase();if(seen.has(size))return res.status(409).json({success:false,error:'Two SKUs with size '+size+' still share one original photo. Assign their vendor codes manually.'});seen.add(size);}
+    }
+    const oldImages=(po.aiImages||{})[oldKey],oldStyle=(po.imageStyling||{})[oldKey],oldBack=(po.backRefs||{})[oldKey],oldRejected=(po.qaRejected||{})[oldKey];
+    po.seoDraft=Array.isArray(po.seoDraft)?po.seoDraft:[];
+    const oldSeo=po.seoDraft.find(d=>d.key===oldKey),base=(po.id+'-ARTICLE').replace(/[^A-Z0-9-]/gi,'').toUpperCase();
+    let article=0,primaryKey='';
+    for(const photoLines of byPhoto.values()){
+      const code=base+'-'+String.fromCharCode(65+article++);
+      for(const line of photoLines){line.designCode=code;line.editedAt=new Date().toISOString();line.editedBy=(req.user&&req.user.username)||'system';}
+      if(!primaryKey)primaryKey=groupKey(photoLines[0]);
+    }
+    for(const name of ['aiImages','imageStyling','backRefs','qaRejected'])if(po[name])delete po[name][oldKey];
+    po.seoDraft=po.seoDraft.filter(d=>d.key!==oldKey);
+    if(oldImages){po.aiImages=po.aiImages||{};po.aiImages[primaryKey]=oldImages;}
+    if(oldStyle){po.imageStyling=po.imageStyling||{};po.imageStyling[primaryKey]=oldStyle;}
+    if(oldBack){po.backRefs=po.backRefs||{};po.backRefs[primaryKey]=oldBack;}
+    if(oldRejected){po.qaRejected=po.qaRejected||{};po.qaRejected[primaryKey]=oldRejected;}
+    if(oldSeo)po.seoDraft.push({...oldSeo,key:primaryKey,designCode:lines[0].designCode,seoApproved:false});
+    if(po.openaiPilot&&Array.isArray(po.openaiPilot.attempts))for(const attempt of po.openaiPilot.attempts)if(attempt.groupKey===oldKey)attempt.groupKey=primaryKey;
+    const groups=await newGroupsOf(s,po),newKeys=new Set([...byPhoto.values()].map(photoLines=>groupKey(photoLines[0])));
+    for(const group of groups.filter(g=>newKeys.has(g.key))){
+      const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[group.key]);
+      for(const image of ((po.aiImages||{})[group.key]||[]))image.sourceFingerprint=fingerprint;
+      if(!po.seoDraft.some(d=>d.key===group.key)){
+        const seo=genSeo({...group,sizeCodeOf});
+        po.seoDraft.push({key:group.key,designCode:group.designCode,colour:group.colour,productType:group.productType,seo,seoApproved:false,source:'product-details'});
+      }
+    }
+    saveStore(s);
+    res.json({success:true,articles:byPhoto.size,preservedGroupKey:primaryKey});
+  }catch(error){res.status(500).json({success:false,error:error.message});}
+});
+
 // ── Edit a PO's header + drop lines (not posted) ─────────────────
 // Header fields (vendor / bill / dates / lead time) can be corrected any time
 // before the PO is posted. Individual lines may be removed. Remaining lines
