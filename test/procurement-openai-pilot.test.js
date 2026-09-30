@@ -186,6 +186,10 @@ test('purchase studio uses a product-wise image, SEO and approval flow',()=>{
   assert.match(html,/<b>SKU:<\/b>/);
   assert.match(html,/<button type="button" class="btn sm" data-openai-pilot=/);
   assert.match(html,/await Promise\.all\(selected\.map/);
+  const generateStart=html.indexOf('async function generatePaidGroups');
+  const generateEnd=html.indexOf('async function regeneratePaidImages',generateStart);
+  const generateFlow=html.slice(generateStart,generateEnd);
+  assert.ok(generateFlow.indexOf("if(!confirm('Generate the missing images")<generateFlow.indexOf('await Promise.all(selected.map'), 'paid confirmation must stay in the direct click event before asynchronous styling saves');
   assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/approve-product'/);
   assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/approve-po'/);
 });

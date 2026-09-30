@@ -2194,8 +2194,6 @@
       var selected=groups.map(function(np,i){return {np:np,i:i};}).filter(function(x){return mode==='all'||mode==='single'&&x.np.key===singleKey||mode==='selected'&&studio.selected[x.np.key];});
       if(mode==='single'&&selected.length)btn=el('scard'+selected[0].i).querySelector('[data-openai-pilot]');
       if(!selected.length){alert('Tick at least one product first.');return;}
-      try { await Promise.all(selected.map(function(x){return studio.styleSaves[x.np.key]||Promise.resolve();})); }
-      catch(e){ report('Styling was not saved: '+e.message+'. No paid call was made.',selected[0]);return; }
       var pending=selected.filter(function(x){return missingPaidDrafts(x.np).images.length;});
       if(po.status!=='received'){report('Receive and weigh this PO, then Save corrections before generating.',selected[0]);return;}
       var missingWeight=pending.find(function(item){return productNeedsSavedWeight(item.np);});
@@ -2213,6 +2211,9 @@
       btn.disabled=true;var finished=0;
       var active=null,attention=[];
       try {
+        report('Saving the selected audience and styling before generation…',pending[0]);
+        try { await Promise.all(selected.map(function(x){return studio.styleSaves[x.np.key]||Promise.resolve();})); }
+        catch(e){ throw new Error('Styling was not saved: '+e.message+'. No paid call was made.'); }
         for(var item of pending){
           active=item;
           try {
