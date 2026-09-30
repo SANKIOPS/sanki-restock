@@ -2085,7 +2085,6 @@ function promoteAdvisoryHeldImages(po,groups) {
       const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[key]);
       if(candidate.sourceFingerprint!==fingerprint||!readStoredPhoto(candidate.url))continue;
       const savedStyling=openaiPilot.normalizeStyling((po.imageStyling||{})[key],group);
-      if(candidate.styling&&JSON.stringify(openaiPilot.normalizeStyling(candidate.styling,group))!==JSON.stringify(savedStyling))continue;
       const images=po.aiImages[key]||[];
       if(images.some(image=>image.type===candidate.type&&image.url&&imageCheckAccepted(image)))continue;
       const warning=(candidate.qa.issues||[]).join('; ')||'Automated check could not determine apparent adult gender.';

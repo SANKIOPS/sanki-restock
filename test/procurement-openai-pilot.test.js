@@ -162,7 +162,10 @@ test('corrective retry only follows a clear mismatch and uses fixed guidance',as
 
 test('historical drafts held only for uncertain adult-gender detection can be accepted without regeneration',()=>{
   assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:[],uncertain:['modelMatch']}),true);
+  assert.equal(pilot.canAutoAcceptAdvisoryCheck({issues:['modelMatch: Could not clearly verify that the model is an adult woman.']}),true);
+  assert.equal(pilot.canAutoAcceptAdvisoryCheck({issues:['modelMatch: Cannot verify from this image']}),true);
   assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:['modelMatch'],uncertain:[]}),false);
+  assert.equal(pilot.canAutoAcceptAdvisoryCheck({issues:['garmentMatch: Cannot verify from this image']}),false);
   assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:[],uncertain:['garmentMatch']}),false);
   assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:[],uncertain:[]}),false);
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');

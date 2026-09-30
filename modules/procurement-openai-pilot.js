@@ -283,7 +283,9 @@ function shouldRetryImageCheck(check,attempt,maxAttempts) {
 function canAutoAcceptAdvisoryCheck(check) {
   const failed=Array.isArray(check?.failed)?check.failed:[];
   const uncertain=Array.isArray(check?.uncertain)?check.uncertain:[];
-  return failed.length===0&&uncertain.length>0&&uncertain.every(field=>field==='modelMatch');
+  const issues=Array.isArray(check?.issues)?check.issues.map(issue=>String(issue)):[];
+  const legacyModelUncertainty=issues.length>0&&issues.every(issue=>/^modelMatch:\s*(?:Could not clearly verify|Cannot verify)/i.test(issue));
+  return failed.length===0&&(uncertain.length>0&&uncertain.every(field=>field==='modelMatch')||uncertain.length===0&&legacyModelUncertainty);
 }
 
 async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
