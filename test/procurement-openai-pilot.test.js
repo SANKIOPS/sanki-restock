@@ -429,6 +429,15 @@ test('refresh restores the active Purchases tab from the URL',()=>{
   assert.match(html,/if\(which==='receive'\)loadPos\(\)/);
 });
 
+test('audit purchase detail uses compact expandable work sections',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  assert.match(html,/id="costCalculationFold"/);
+  assert.match(html,/id="receivedProductsFold"/);
+  assert.match(html,/id="studioPanel"><summary>Listing images &amp; SEO/);
+  assert.match(html,/class="po-fold-summary"/);
+  assert.match(html,/\.po-fold\[open\]>summary:before/);
+});
+
 test('merged same-size articles can be split safely by their original photos',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');

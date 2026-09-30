@@ -28,6 +28,15 @@
     .btn:disabled{ opacity:.5; cursor:default; }
     .btn.sm{ padding:5px 10px; font-size:12px; }
     .panel{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+    .po-fold{ border:1px solid var(--line); border-radius:11px; background:#fff; margin-top:12px; overflow:hidden; }
+    .po-fold>summary{ list-style:none; cursor:pointer; display:flex; align-items:center; gap:10px; padding:13px 15px; font-size:14px; font-weight:800; color:var(--ink); background:#f7fbf9; user-select:none; }
+    .po-fold>summary::-webkit-details-marker{ display:none; }
+    .po-fold>summary:before{ content:'▸'; color:var(--emerald-d); font-size:16px; line-height:1; }
+    .po-fold[open]>summary:before{ content:'▾'; }
+    .po-fold>summary:hover{ background:#eef8f3; }
+    .po-fold-summary{ margin-left:auto; color:var(--muted); font-size:12px; font-weight:500; }
+    .po-fold-body{ padding:14px 15px 16px; overflow-x:auto; }
+    .panel.po-fold{ padding:0; }
     .fld label{ display:block; font-size:11px; font-weight:700; color:#5f6d65; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
     .fld input,.fld select,.fld textarea{ width:100%; font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); }
     .fld input:focus,.fld select:focus,.fld textarea:focus{ outline:2px solid var(--emerald-l); outline-offset:-1px; }
@@ -1737,7 +1746,8 @@
         '<div><h2 style="margin:0">'+esc(po.id)+'</h2>'+
           '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+(po.sourceBatchName?(' <span class="muted">· Fresh batch '+esc(po.sourceBatchName)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
-      if(!posted) h+=purchaseCalculationPanel(po);
+      if(!posted) h+='<details class="po-fold" id="costCalculationFold"><summary>Cost calculation <span class="po-fold-summary">Landed cost and freight breakdown</span></summary><div class="po-fold-body">'+purchaseCalculationPanel(po)+'</div></details>';
+      h+='<details class="po-fold" id="receivedProductsFold"><summary>Received products &amp; corrections <span class="po-fold-summary">'+(po.lines||[]).length+' rows · photos, quantities, weights and product details</span></summary><div class="po-fold-body">';
       // rates + date-of-receive carried from the advance purchase — editable here before final calc
       if(!posted){
         h+='<div class="settingsgrid" style="margin-top:12px">'+
@@ -1823,14 +1833,15 @@
           '<span class="muted" style="align-self:center;font-size:12px">Preview only — this no longer marks the PO received. Use “Mark goods received” when stock physically arrives.</span>'+
         '</div>';
       }
+      h+='</div></details>';
       h+='</div>';
       // AI STUDIO — available at every non-posted stage (incl. ADVANCE) so listing
       // photos + SEO are prepared during the shipping lead time, not at receive.
       if(me.canManage && !posted){
-        h+='<div class="panel" id="studioPanel"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
+        h+='<details class="panel po-fold" id="studioPanel"><summary>Listing images &amp; SEO <span class="po-fold-summary">Generate, review and approve products for Shopify</span></summary><div class="po-fold-body"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
            '<p class="sub">Work product by product: confirm its audience and presets, generate its images, generate its SEO names, review, then approve the product. No back view is invented without a real back photo.</p>'+
            (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn ghost" id="approvePoBtn">Approve complete PO</button><span class="muted">Approves only when every product has checked images and complete SEO.</span></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
-           '<div id="studioHost"><p class="muted">Loading new products…</p></div></div>';
+           '<div id="studioHost"><p class="muted">Loading new products…</p></div></div></details>';
       }
       h+='<div id="receiveHost"></div>';
       el('poDetailHost').innerHTML=h;
