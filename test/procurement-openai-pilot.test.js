@@ -420,6 +420,15 @@ test('purchase pilot does not mistake initial product-detail SEO for AI-written 
   assert.match(html,/Basic placeholder copy from purchase details/);
 });
 
+test('refresh restores the active Purchases tab from the URL',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  assert.match(html,/searchParams\.set\('tab',publicName\)/);
+  assert.match(html,/requested==='audit'\?'receive'/);
+  assert.match(html,/sessionStorage\.setItem\('procurementActiveTab'/);
+  assert.match(html,/restorePurchasesTab\(\)/);
+  assert.match(html,/if\(which==='receive'\)loadPos\(\)/);
+});
+
 test('merged same-size articles can be split safely by their original photos',()=>{
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');

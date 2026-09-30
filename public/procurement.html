@@ -406,13 +406,22 @@
     el('tabAdvance').onclick=function(){ setTab('advance'); };
     el('tabReceive').onclick=function(){ setTab('receive'); loadPos(); };
     el('tabSummary').onclick=function(){ setTab('summary'); loadPurchaseHistory(); };
-    function setTab(which){
+    function setTab(which,skipUrl){
       el('tabAdvance').classList.toggle('active', which==='advance');
       el('tabReceive').classList.toggle('active', which==='receive');
       el('tabSummary').classList.toggle('active', which==='summary');
       el('viewAdvance').classList.toggle('hidden', which!=='advance');
       el('viewReceive').classList.toggle('hidden', which!=='receive');
       el('viewSummary').classList.toggle('hidden', which!=='summary');
+      var publicName=which==='receive'?'audit':which;
+      try{sessionStorage.setItem('procurementActiveTab',publicName);}catch(e){}
+      if(!skipUrl){var url=new URL(window.location.href);url.searchParams.set('tab',publicName);history.replaceState({purchasesTab:publicName},'',url.pathname+url.search+url.hash);}
+    }
+    function restorePurchasesTab(){
+      var requested='';try{requested=new URLSearchParams(window.location.search).get('tab')||sessionStorage.getItem('procurementActiveTab')||'';}catch(e){}
+      var which=requested==='audit'?'receive':requested==='summary'?'summary':'advance';
+      setTab(which);
+      if(which==='receive')loadPos();else if(which==='summary')loadPurchaseHistory();
     }
 
     // ── purchases summary ──
@@ -992,6 +1001,7 @@
       if(!settings.warehouseLocationId) el('settingsNote').textContent='Pick the warehouse location that receives incoming stock, then Save.';
       fillVendors((res[4]&&res[4].vendors)||[]);
       fillSourceBatches((res[5]&&res[5].batches)||[]); syncSourceBatch();
+      restorePurchasesTab();
     });
 
     // ── live expected-arrival note (from lead time + purchase date) ──
