@@ -500,14 +500,22 @@
       }
       return Array.isArray(accounts)?accounts:[];
     }
+    function vendorPaymentAccountsForNature(nature){
+      var key=String(nature||'SANKI').trim().toUpperCase(),byNature=cfg.vendorPaymentAccountsByNature||{},accounts=byNature[key];
+      return Array.isArray(accounts)?accounts:payingAccountsForNature(nature);
+    }
+    function vendorPaymentAccountOptions(nature){
+      var owners=cfg.claimantAccountOwners||{};
+      return vendorPaymentAccountsForNature(nature).map(function(account){var owner=owners[account],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'';return '<option value="'+esc(account)+'">'+esc(account)+(person?' — paid personally by '+esc(person):'')+'</option>';}).join('');
+    }
     function populateVendorPayAccounts(nature,refreshIfEmpty){
-      var accounts=payingAccountsForNature(nature),select=el('payAcct');
-      select.innerHTML='<option value="">Select actual paying account</option>'+opts(accounts);
+      var accounts=vendorPaymentAccountsForNature(nature),select=el('payAcct');
+      select.innerHTML='<option value="">Select actual paying account</option>'+vendorPaymentAccountOptions(nature);
       if(accounts.length||!refreshIfEmpty)return Promise.resolve(accounts);
       el('payMsg').textContent='Refreshing paying accounts…';
       return loadConfig().then(function(){
-        accounts=payingAccountsForNature(nature);
-        select.innerHTML='<option value="">Select actual paying account</option>'+opts(accounts);
+        accounts=vendorPaymentAccountsForNature(nature);
+        select.innerHTML='<option value="">Select actual paying account</option>'+vendorPaymentAccountOptions(nature);
         el('payMsg').textContent=accounts.length?'':'No paying account is available for this entity. Refresh the page or contact an administrator.';
         return accounts;
       }).catch(function(){

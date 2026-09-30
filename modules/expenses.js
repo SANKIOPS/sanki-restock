@@ -1359,6 +1359,21 @@ function payingAccountsForReq(req, nature) {
   }
   return nativeAccounts;
 }
+function claimantUsernameForAccount(account) {
+  const candidate=canonicalAccountName(account).toLowerCase();
+  return Object.keys(CLAIMANT_ACCOUNTS).find(username=>(CLAIMANT_ACCOUNTS[username]||[]).some(name=>name.toLowerCase()===candidate));
+}
+function vendorPaymentAccountsForReq(req,nature) {
+  const company=payingAccountsForReq(req,nature),n=normalizedNature(nature);
+  if(!isOwner(req)||!['SANKI','SAMAST'].includes(n))return company;
+  return Array.from(new Set(company.concat(...Object.values(CLAIMANT_ACCOUNTS))));
+}
+function allowedVendorPaymentAccount(req,nature,account) {
+  const candidate=canonicalAccountName(account),allowed=vendorPaymentAccountsForReq(req,nature);
+  const exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
+  const name=exact||(matches.length===1?matches[0]:undefined);
+  return name?{name,claimant:claimantUsernameForAccount(name)||''}:null;
+}
 function allowedPayingAccount(req, nature, account) {
   const candidate = canonicalAccountName(account);
   const allowed=payingAccountsForReq(req,nature),exact=allowed.find(name=>name.toLowerCase()===candidate.toLowerCase()),digits=candidate.replace(/\D/g,''),matches=allowed.filter(name=>digits&&name.replace(/\D/g,'').endsWith(digits));
@@ -1684,6 +1699,8 @@ router.get('/api/expenses/config', (req, res) => {
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : []])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919']:[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
+    vendorPaymentAccountsByNature: Object.fromEntries(NATURES.map(n => [n, vendorPaymentAccountsForReq(req,n)])),
+    claimantAccountOwners: isOwner(req)?Object.fromEntries(Object.entries(CLAIMANT_ACCOUNTS).flatMap(([username,accounts])=>accounts.map(account=>[account,username]))):{},
     claimantPaymentAccountsByUser: (isPrashant(req)||ownerView) ? {arshpreet:CLAIMANT_ACCOUNTS.arshpreet.slice()} : {},
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
     types: TYPES, natures: allowed, channels: CHANNELS, creditCards,
@@ -2020,7 +2037,7 @@ function recordBatchVendorPayment(req, res) {
   const first = expenses[0], nature = normalizedNature(first.nature), vendor = vendorKey(first.vendor);
   if (expenses.some(e => !canApproveExpenseNature(req,e))) return res.status(403).json({ success:false, error:'You cannot pay one of the selected accounting entities.' });
   if (expenses.some(e => normalizedNature(e.nature)!==nature || vendorKey(e.vendor)!==vendor)) return res.status(400).json({ success:false, error:'Combined payments must use the same entity and vendor.' });
-  if (expenses.some(e => e.paidAlready || !['approved','partially_paid'].includes(e.status) || num(e.paidAmount)>=num(e.amount))) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
+  if (expenses.some(e => !['approved','partially_paid'].includes(e.status) || num(e.paidAmount)>=num(e.amount))) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
   const combinedOutstanding = roundMoney(expenses.reduce((n,e)=>n+Math.max(0,num(e.amount)-num(e.paidAmount)),0));
   const matchingAdvances=(s.vendorAdvances||[]).filter(a=>normalizedNature(a.nature)===nature&&vendorKey(a.vendor)===vendor&&num(a.remainingAmount)>0)
     .sort((a,b)=>String((a.date||'')+(a.id||'')).localeCompare(String((b.date||'')+(b.id||''))));
@@ -2032,9 +2049,11 @@ function recordBatchVendorPayment(req, res) {
   const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
   if (requestedTotal>0&&!proofs.length) return res.status(400).json({ success:false, error:'Payment proof is required — no proof, no payment.' });
   const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI'),card=requestedTotal>0&&paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
-  const account = requestedTotal>0?(card?creditCardName(card):allowedPayingAccount(req, nature, String(b.account || '').trim())):'';
+  const vendorAccount=requestedTotal>0&&!card?allowedVendorPaymentAccount(req,nature,String(b.account||'').trim()):null;
+  const account = requestedTotal>0?(card?creditCardName(card):vendorAccount&&vendorAccount.name):'';
   if (requestedTotal>0&&!account) return res.status(400).json({ success:false, error:paymentType==='Credit'?'Select the credit card used.':'Select a paying account assigned to this accounting entity.' });
-  const reconIssues = requestedTotal>0?(card?[]:reconciliationIssues(s, nature, account)):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
+  const claimantPayer=vendorAccount&&vendorAccount.claimant||'';
+  const reconIssues = requestedTotal>0?(card||claimantPayer?[]:reconciliationIssues(s, nature, account)):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
   const date = String(b.date || indiaBusinessDate()).slice(0,10), paidBy = (req.user&&req.user.username)||'admin';
   const batchPaymentId = 'BPAY-' + Date.now().toString(36).toUpperCase();
@@ -2065,7 +2084,9 @@ function recordBatchVendorPayment(req, res) {
     e.account=account; e.paymentProof=proof;e.paymentProofs=proofs; e.payments=Array.isArray(e.payments)?e.payments:[];
     e.payments.push({ id:nextExpensePaymentId(s,e), batchPaymentId, batchTotal:requestedTotal, amount, date, account,
       paymentType, creditCardId:card&&card.id||'', proof, proofs, note:String(b.note||'').trim(),
-      paidBy, paidAt:new Date().toISOString(), reconciliationOverrideReason:overrideReason, reconciliationIssuesAtPayment:reconIssues });
+      paidBy:claimantPayer||paidBy, recordedBy:claimantPayer?paidBy:'', personalFunds:!!claimantPayer,
+      paidAt:new Date().toISOString(), reconciliationOverrideReason:overrideReason, reconciliationIssuesAtPayment:reconIssues });
+    if(claimantPayer){e.personalPaidAmount=roundMoney(num(e.personalPaidAmount)+amount);e.reimbursementStatus='pending';e.fundedBy=num(e.personalPaidAmount)>=num(e.amount)?'claimant':'mixed';}
     e.paidAmount=roundMoney(num(e.paidAmount)+amount); e.status=e.paidAmount>=num(e.amount)?'paid':'partially_paid'; e.paidAt=new Date().toISOString(); e.paidBy=paidBy;
   });
   const allocatedIds=allocations.map(x=>x.expense.id);
@@ -2084,7 +2105,7 @@ function recordBatchVendorPayment(req, res) {
     audit(s,req,'VENDOR_ADVANCE_RECORDED','vendor',first.vendor,{nature,account,paymentId:advanceId,after:{batchPaymentId,grossPaymentAmount:requestedTotal,allocatedExpenseAmount,amount:remaining,remainingAmount:remaining}});
   }
   vendorCreditAllocations.forEach(x=>audit(s,req,'VENDOR_ADVANCE_APPLIED','expense',x.expense.id,{nature:x.expense.nature,account:'Vendor advance',paymentId:x.advance.id,after:{batchPaymentId,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount,status:x.expense.status}}));
-  allocations.forEach(x=>audit(s,req,'PAYMENT_ALLOCATED','expense',x.expense.id,{nature:x.expense.nature,account,paymentId:x.expense.payments.at(-1).id,after:{batchPaymentId,amount:x.amount,linkedExpenseIds:allocatedIds,status:x.expense.status}}));
+  allocations.forEach(x=>audit(s,req,claimantPayer?'CLAIMANT_PAYMENT_ALLOCATED':'PAYMENT_ALLOCATED','expense',x.expense.id,{nature:x.expense.nature,account,paymentId:x.expense.payments.at(-1).id,after:{batchPaymentId,amount:x.amount,linkedExpenseIds:allocatedIds,status:x.expense.status,claimantPayer,reimbursementDue:claimantPayer?x.amount:0}}));
   saveStore(s);
   const notificationAmounts={};allocations.concat(vendorCreditAllocations).forEach(x=>{notificationAmounts[x.expense.id]=roundMoney(num(notificationAmounts[x.expense.id])+x.amount);});
   Object.keys(notificationAmounts).forEach(id=>{const e=s.expenses[id];notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',notificationAmounts[id]);});
@@ -2623,7 +2644,7 @@ router.get('/api/expenses/reimbursements', (req, res) => {
   let list = Object.values(s.expenses || {}).filter(e => {
     if (!canApproveExpenseNature(req, e)) return false;
     if (nature && normalizedNature(e.nature) !== nature) return false;
-    if (!e.paidAlready || e.reimbursementStatus === 'awaiting_approval' || e.reimbursementStatus === 'rejected') return false;
+    if (!(e.paidAlready || num(e.personalPaidAmount)>0) || e.reimbursementStatus === 'awaiting_approval' || e.reimbursementStatus === 'rejected') return false;
     if (status && e.reimbursementStatus !== status) return false;
     if (person && !String(e.createdBy || e.claimant || '').toLowerCase().includes(person)) return false;
     if (todayOnly && e.date !== today) return false;

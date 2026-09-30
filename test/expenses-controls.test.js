@@ -1213,6 +1213,28 @@ test('Prashant can record a separate Ashpreet vendor bill directly from assigned
   assert.equal(paid.body.expenses[0].reimbursementStatus,'not_applicable');
 });
 
+test('Owner can record a partial vendor payment from an existing claimant account',()=>{
+  const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Claimant Part Pay Vendor',amount:1000,billPhoto:'/api/expenses/photo/claimant-part-bill.jpg',qrPhoto:'/api/expenses/photo/claimant-part-qr.jpg',paymentType:'UPI'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));
+  const id=made.body.expense.id;
+  invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id},role:'owner'});
+  const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+  assert.ok(ownerConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'));
+  assert.equal(ownerConfig.claimantAccountOwners['Arshpreet 1919'],'arshpreet');
+  const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+  assert.equal(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'),false);
+  const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[id],account:'Arshpreet 1919',amount:400,paymentProof:'/api/expenses/photo/claimant-part-pay.jpg',date:'2026-09-30'}});
+  assert.equal(paid.status,200,JSON.stringify(paid.body));
+  const expense=paid.body.expenses[0],payment=expense.payments.at(-1);
+  assert.equal(expense.status,'partially_paid');assert.equal(expense.paidAmount,400);assert.equal(expense.personalPaidAmount,400);assert.equal(expense.reimbursementStatus,'pending');assert.equal(expense.fundedBy,'mixed');
+  assert.equal(payment.account,'Arshpreet 1919');assert.equal(payment.personalFunds,true);assert.equal(payment.paidBy,'arshpreet');assert.equal(payment.recordedBy,'owner-user');
+  const reimbursements=invoke('GET','/api/expenses/reimbursements',{role:'owner',query:{nature:'SANKI'}}).body;
+  assert.ok(reimbursements.reimbursements.some(x=>x.id===id&&x.closingBalance===400));
+  const second=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[id],account:'Counter Cash',amount:600,paymentProof:'/api/expenses/photo/company-balance-pay.jpg',date:'2026-09-30'}});
+  assert.equal(second.status,200,JSON.stringify(second.body));assert.equal(second.body.expenses[0].status,'paid');assert.equal(second.body.expenses[0].personalPaidAmount,400);
+});
+
 test('claimant ledgers remain visible under both SANKI and SAMAST with zero activity', () => {
   for (const nature of ['SANKI','SAMAST']) {
     const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature}});
