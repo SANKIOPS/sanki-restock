@@ -2620,6 +2620,7 @@ app.use(require('./modules/credit-cards').router);
 // otherwise interpret "credit-cards" as an expense id and return Not found.
 app.use(require('./modules/expenses').router);
 app.use(require('./modules/telegram').router);
+app.use(require('./modules/seo-control').router);
 app.use(require('./modules/salary').router);
 app.use(require('./modules/pl').router);
 app.use(require('./modules/inventory-categorization').router);
