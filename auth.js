@@ -206,7 +206,7 @@ function gate(req, res, next) {
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.
-  if ((p === '/owner.html' || p.startsWith('/api/owner/')) && !rolesOf(user).includes('owner')) {
+  if ((p === '/owner.html' || p === '/rentals.html' || p.startsWith('/api/owner/')) && !rolesOf(user).includes('owner')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
     return res.redirect(302, landingFor(user.role));
   }

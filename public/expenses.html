@@ -195,7 +195,6 @@
       <button data-t="cash">Account ledgers</button>
       <button data-t="paytm" id="paytmTab" style="display:none">Paytm reports</button>
       <button data-t="reimbursements">Reimbursements</button>
-      <button data-t="rentals" id="rentalsTab" style="display:none">Rental income</button>
       <button data-t="categories" id="categoriesTab" style="display:none">Manage categories</button>
       <button data-t="audit" id="auditTab" style="display:none">Audit log</button>
     </div>
@@ -426,7 +425,6 @@
   </div></dialog>
 
   <script src="/sidebar.js"></script>
-  <script src="/rental-register.js?v=20260915-combined-register"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
@@ -481,7 +479,6 @@
       if(tab==='cash') return renderCash();
       if(tab==='paytm') return renderPaytmReports();
       if(tab==='reimbursements') return renderReimbursements();
-      if(tab==='rentals'&&cfg.isOwner) return window.mountRentalRegister(el('panel'),api,esc,fmt);
       if(tab==='categories'&&cfg.isOwner) return renderCategories();
       if(tab==='audit') return renderAudit();
       if(tab==='approvals') return renderApprovals();
@@ -1711,7 +1708,7 @@
 
     // boot
     loadConfig().then(function(){
-      if(cfg.isOwner){el('rentalsTab').style.display='';el('categoriesTab').style.display='';}
+      if(cfg.isOwner){el('categoriesTab').style.display='';}
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
       bankNature=selectedNature;
       if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';el('paytmTab').style.display='';}

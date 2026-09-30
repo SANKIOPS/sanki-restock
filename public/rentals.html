@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow">
+<title>Rental income · SANKI Business OS</title>
+<style>:root{--blue:#185FA5;--green:#047857;--red:#b42318;--amber:#b45309;--ink:#1a1a1a}
+    * { box-sizing:border-box; }
+
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f6f7f9; color:var(--ink); }
+
+    .wrap { max-width:1120px; margin:0 auto; padding:22px 20px 90px; }
+
+    h1 { font-size:22px; margin:0 0 2px; font-weight:800; }
+
+    .sub { color:#6b7280; font-size:13px; margin:0 0 16px; }
+
+    .tabs { display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
+
+    .tabs button { font-size:13px; padding:9px 16px; border:1px solid #d1d5db; background:#fff; border-radius:8px; cursor:pointer; font-weight:600; color:#374151; }
+
+    .tabs button.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+
+    .card { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:18px; margin-bottom:16px; }
+
+    .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px 16px; }
+
+    .fld { display:flex; flex-direction:column; min-width:0; }   /* min-width:0 lets grid/flex tracks shrink below input intrinsic width */
+
+    .fld.full { grid-column:1 / -1; }
+
+    .grid input, .grid select, .grid textarea, .filters input, .filters select { width:100%; min-width:0; }
+
+    label { font-size:11px; font-weight:700; color:#374151; margin:0 0 4px; text-transform:uppercase; letter-spacing:.3px; }
+
+    input, select, textarea { font-size:14px; padding:9px 11px; border:1px solid #d1d5db; border-radius:8px; outline:none; background:#fff; font-family:inherit; }
+
+    input:focus, select:focus, textarea:focus { border-color:var(--blue); box-shadow:0 0 0 3px rgba(24,95,165,.13); }
+
+    .row-actions { display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap; }
+
+    .btn { font-size:14px; padding:10px 18px; border:none; border-radius:8px; cursor:pointer; font-weight:700; }
+
+    .btn.primary { background:var(--blue); color:#fff; }
+
+    .btn.ghost { background:#fff; border:1px solid #d1d5db; color:#374151; }
+
+    .btn.mini { font-size:12px; padding:6px 11px; }
+
+    .btn.green { background:var(--green); color:#fff; }
+
+    .btn.amber { background:var(--amber); color:#fff; }
+
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+
+    th, td { padding:9px 10px; text-align:left; border-bottom:1px solid #eef0f2; vertical-align:middle; }
+
+    th { font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:#6b7280; background:#fafbfc; font-weight:700; }
+
+    td.r, th.r { text-align:right; }
+
+    .badge { font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.3px; }
+
+.wrap{max-width:1500px}.msg{margin:12px 0}.msg.err{color:#b42318}
+@media(max-width:680px){.wrap{padding:16px 12px}.grid{grid-template-columns:1fr}input,select{font-size:16px}}
+</style></head><body>
+<main class="wrap"><h1>Rental income</h1>
+<p class="sub">Tenants, monthly rent and receipts linked to your accounts.</p>
+<div id="panel" aria-live="polite">Loading rental register…</div></main>
+<script src="/sidebar.js"></script>
+<script src="/rental-register.js?v=20260930-owner-page"></script>
+<script>
+var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
+var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
+function api(url, opts){ return fetch(url, opts).then(function(r){return r.text().then(function(raw){var data;try{data=JSON.parse(raw);}catch(e){data={success:false,error:r.ok?'The server returned an unreadable response. Please refresh and try again.':'The server could not complete this action (HTTP '+r.status+').'};}if(!r.ok&&data.success!==false)data.success=false;if(!r.ok&&!data.error)data.error='The server could not complete this action (HTTP '+r.status+').';return data;});}).catch(function(){return{success:false,error:'The server could not be reached. Please check the connection and try again.'};}); }
+api('/api/auth/me').then(function(me){
+  var host=document.getElementById('panel');
+  if(!me.success){host.textContent=me.error||'Please sign in to continue.';return;}
+  if(!(me.roles||[me.role]).includes('owner')){host.textContent='This page is available only to the owner.';return;}
+  window.mountRentalRegister(host,api,esc,fmt);
+});
+</script></body></html>
