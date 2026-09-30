@@ -596,6 +596,58 @@ function groupKey(l) {
     .map(x => String(x).trim().toLowerCase()).join('|');
 }
 
+// Paid studio work is stored against the editable design/colour key. Keep it
+// safe when purchase details are corrected: a one-to-one rename may move the
+// bundle, but a split/merge is ambiguous and must never duplicate photographs
+// onto another article. Ambiguous bundles remain available in recovery
+// history with their source photographs and original key.
+function reconcileStudioKeysAfterLineEdit(po, beforeLines, afterLines) {
+  const beforeBySku = new Map((beforeLines || []).filter(l => l && l.sku).map(l => [String(l.sku), l]));
+  const transitions = new Map();
+  (afterLines || []).forEach((line, index) => {
+    const previous = (line && line.sku && beforeBySku.get(String(line.sku))) || (beforeLines || [])[index];
+    if (!previous) return;
+    const oldKey = groupKey(previous), nextKey = groupKey(line);
+    if (oldKey === nextKey) return;
+    if (!transitions.has(oldKey)) transitions.set(oldKey, new Set());
+    transitions.get(oldKey).add(nextKey);
+  });
+  const activeKeys = new Set((afterLines || []).map(groupKey));
+  const maps = ['aiImages', 'imageStyling', 'backRefs', 'qaRejected'];
+  po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
+  let changed = false;
+  for (const [oldKey, targets] of transitions) {
+    if (activeKeys.has(oldKey)) continue;
+    const targetList = [...targets].filter(Boolean);
+    const hasBundle = maps.some(name => po[name] && po[name][oldKey] != null) || po.seoDraft.some(d => d.key === oldKey);
+    if (!hasBundle) continue;
+    if (targetList.length === 1) {
+      const nextKey = targetList[0];
+      for (const name of maps) {
+        if (!po[name] || po[name][oldKey] == null || po[name][nextKey] != null) continue;
+        po[name][nextKey] = po[name][oldKey];
+        delete po[name][oldKey];
+      }
+      const oldSeo = po.seoDraft.find(d => d.key === oldKey);
+      if (oldSeo && !po.seoDraft.some(d => d.key === nextKey)) oldSeo.key = nextKey;
+      changed = true;
+      continue;
+    }
+    po.orphanedStudioDrafts = Array.isArray(po.orphanedStudioDrafts) ? po.orphanedStudioDrafts : [];
+    if (!po.orphanedStudioDrafts.some(x => x.key === oldKey)) {
+      po.orphanedStudioDrafts.push({
+        key: oldKey, targetKeys: targetList, preservedAt: new Date().toISOString(),
+        sourcePhotos: (beforeLines || []).filter(l => groupKey(l) === oldKey).map(l => l.photoUrl).filter(Boolean),
+        images: (po.aiImages || {})[oldKey] || [], styling: (po.imageStyling || {})[oldKey] || null,
+        backRef: (po.backRefs || {})[oldKey] || '', rejected: (po.qaRejected || {})[oldKey] || [],
+        seo: po.seoDraft.find(d => d.key === oldKey) || null
+      });
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // Normalize a raw intake line into a clean, storable shape. Weight is optional
 // at the ADVANCE stage (product not yet received / weighed).
 function normalizeLine(raw, body) {
@@ -1619,6 +1671,7 @@ router.post('/api/procurement/pos/:id/line-edits', async (req, res) => {
   const qtys  = b.qtys  || {};      // { lineIndex: qty }
   const who = (req.user && req.user.username) || 'system';
   const now = new Date().toISOString();
+  const beforeLines = (po.lines || []).map(line => ({ ...line }));
   let touched = 0;
   const copyChanged = new Set();
   const audienceChanged = new Map();
@@ -1659,6 +1712,7 @@ router.post('/api/procurement/pos/:id/line-edits', async (req, res) => {
     if (priorAudience !== l.audience) audienceChanged.set(oldGroup, {previous:priorAudience,next:l.audience});
     if (changed) { l.editedAt = now; l.editedBy = who; touched++; }
   });
+  reconcileStudioKeysAfterLineEdit(po, beforeLines, po.lines || []);
   for (const [key, audiences] of audienceChanged) retireAudienceModelImages(po,key,audiences.previous,audiences.next);
   if(audienceChanged.size){
     try {
@@ -1723,6 +1777,7 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     // FULL line edit: retain the serial, but rebuild the SKU when its product,
     // colour or size components changed. Brand-new lines receive a new serial.
     if (Array.isArray(b.lines)) {
+      const beforeLines = (po.lines || []).map(line => ({ ...line }));
       // Carry each line's frozen "ordered" baseline across a full-form edit. The
       // preview rebuild drops unknown fields, so we re-attach by (stable) SKU.
       const prevOrdered = {}, prevReceiptAdded = {};
@@ -1757,7 +1812,11 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
         ordered: (l.ordered && typeof l.ordered === 'object') ? l.ordered : (prevOrdered[l.sku] || orderedSnapshot(l)),
         receiptAdded: prevReceiptAdded[l.sku] || null
       }));
-      po.seoDraft = (preview.newProducts || []).map(np => ({ key: np.key, designCode: np.designCode, colour: np.colour, productType: np.productType, seo: np.seo }));
+      reconcileStudioKeysAfterLineEdit(po, beforeLines, po.lines);
+      po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
+      for (const np of (preview.newProducts || [])) {
+        if (!po.seoDraft.some(d => d.key === np.key)) po.seoDraft.push({ key: np.key, designCode: np.designCode, colour: np.colour, productType: np.productType, seo: np.seo, seoApproved: false, source: 'product-details' });
+      }
     } else if (Array.isArray(b.removeLineIndexes) && b.removeLineIndexes.length) {
       // Legacy path: just drop selected line indexes (from the ORIGINAL ordering).
       const drop = new Set(b.removeLineIndexes.map(Number));
@@ -1906,9 +1965,8 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
     const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     const groups = await newGroupsOf(s, po);
-    const restoredSplit = restoreDraftsAfterGroupSplit(po, groups);
     const restoredKnownSet = restorePo0006SavedSet(po, groups);
-    if (restoredSplit || restoredKnownSet) saveStore(s);
+    if (restoredKnownSet) saveStore(s);
     const byKey = new Map(groups.map(g => [g.key, g]));
     // Return the complete saved calculation as well as the studio groups. The
     // Purchases page uses this read-only response to restore the Shopify post
@@ -2918,4 +2976,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, retireAudienceModelImages };
+module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };

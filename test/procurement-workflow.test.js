@@ -3,7 +3,27 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, genSeo, retireAudienceModelImages } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, parseLocalInvoiceText, genSeo, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit } = require('../modules/procurement');
+
+test('purchase product corrections move one-to-one studio work but preserve ambiguous splits for recovery', () => {
+  const bundle = [{ type: 'front', url: '/paid-a.png', approved: true }];
+  const renamed = { aiImages: { '87375|white': bundle }, imageStyling: { '87375|white': { pair: 'Jeans' } }, seoDraft: [{ key: '87375|white', seoApproved: true }] };
+  reconcileStudioKeysAfterLineEdit(renamed,
+    [{ sku: 'M', designCode: '87375', colour: 'White', photoUrl: '/raw-a.png' }],
+    [{ sku: 'M', designCode: '87375 A', colour: 'White', photoUrl: '/raw-a.png' }]);
+  assert.strictEqual(renamed.aiImages['87375 a|white'], bundle);
+  assert.equal(renamed.aiImages['87375|white'], undefined);
+  assert.equal(renamed.seoDraft[0].key, '87375 a|white');
+
+  const split = { aiImages: { '87375|white': bundle }, seoDraft: [{ key: '87375|white', seoApproved: true }] };
+  reconcileStudioKeysAfterLineEdit(split,
+    [{ sku: 'M', designCode: '87375', colour: 'White', photoUrl: '/raw-a.png' }, { sku: 'L', designCode: '87375', colour: 'White', photoUrl: '/raw-b.png' }],
+    [{ sku: 'M', designCode: '87375 A', colour: 'White', photoUrl: '/raw-a.png' }, { sku: 'L', designCode: '87375 B', colour: 'White', photoUrl: '/raw-b.png' }]);
+  assert.strictEqual(split.aiImages['87375|white'], bundle);
+  assert.equal(split.aiImages['87375 a|white'], undefined);
+  assert.deepEqual(split.orphanedStudioDrafts[0].targetKeys.sort(), ['87375 a|white', '87375 b|white']);
+  assert.deepEqual(split.orphanedStudioDrafts[0].sourcePhotos, ['/raw-a.png', '/raw-b.png']);
+});
 
 test('listing copy does not repeat the product type and includes a display name', () => {
   const seo = genSeo({ designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'Pink', fit: 'Oversized', audience: 'Unisex', sizeLabels: ['FS'] });
