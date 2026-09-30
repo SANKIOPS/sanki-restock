@@ -120,6 +120,18 @@ test('fit preflight checks the original before paid image edits and never guesse
   assert.equal((await pilot.preflightFit({key:'test-only',group,source,styling:{fit:'Auto'},fetchImpl:()=>{throw new Error('No call expected');}})).status,'not-required');
 });
 
+test('lower-garment preflight lets the photograph override a contradictory saved length',async()=>{
+  const result=await pilot.preflightFit({key:'test-only',group:{...group,productType:'Trouser'},source,styling:{fit:'Shorts / half'},fetchImpl:async(url,options)=>{
+    const body=JSON.parse(options.body),prompt=body.input[0].content[0].text;
+    assert.match(prompt,/featured LOWER garment/);
+    assert.match(prompt,/full-length trousers selected as Shorts \/ half/);
+    assert.match(prompt,/photograph is the authority/);
+    return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify({status:'conflict',reason:'The visible trousers are full length.'})}]}]})};
+  }});
+  assert.equal(result.status,'conflict');
+  assert.equal(pilot.stylingForPhoto({fit:'Shorts / half'},result).fit,'Auto');
+});
+
 test('a conflicting selected fit uses the photographed cut without stopping all three views',()=>{
   const selected={fit:'Slim fit',pair:'Straight trousers',chain:'Gold chain'};
   const effective=pilot.stylingForPhoto(selected,{status:'conflict',reason:'Dropped shoulders in original'});
@@ -146,6 +158,16 @@ test('corrective retry only follows a clear mismatch and uses fixed guidance',as
     assert.match(options.body.get('prompt'),/distinguish baggy from straight by leg silhouette/);
     return {ok:true,json:async()=>({data:[{b64_json:Buffer.from('result').toString('base64')}]})};
   }});
+});
+
+test('historical drafts held only for uncertain adult-gender detection can be accepted without regeneration',()=>{
+  assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:[],uncertain:['modelMatch']}),true);
+  assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:['modelMatch'],uncertain:[]}),false);
+  assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:[],uncertain:['garmentMatch']}),false);
+  assert.equal(pilot.canAutoAcceptAdvisoryCheck({failed:[],uncertain:[]}),false);
+  const server=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
+  assert.match(server,/promoteAdvisoryHeldImages\(po,groups\)/);
+  assert.match(server,/autoAcceptedAdvisory:true/);
 });
 
 test('three-quarter image uses matching front and garment references to preserve the outfit',async()=>{
@@ -262,7 +284,10 @@ test('visual checks reject mismatched outfit, accessories, angle or continuity',
   assert.deepEqual(pilot.evaluateImageCheck({...pass,tuckMatch:{status:'uncertain',evidence:'Hem hidden'}},'model-front',styling,group).uncertain,['tuckMatch']);
   assert.equal(pilot.evaluateImageCheck({garmentMatch:{status:'pass',evidence:'match'}},'model-front',styling,group).status,'needs-review');
   assert.deepEqual(pilot.evaluateImageCheck({...pass,detectedModelGender:'man'},'model-front',styling,group).failed,['modelMatch']);
-  assert.deepEqual(pilot.evaluateImageCheck({...pass,detectedModelGender:'unclear'},'model-front',styling,group).uncertain,['modelMatch']);
+  const unclearModel=pilot.evaluateImageCheck({...pass,detectedModelGender:'unclear'},'model-front',styling,group);
+  assert.equal(unclearModel.status,'pass');
+  assert.deepEqual(unclearModel.uncertain,[]);
+  assert.match(unclearModel.warnings[0],/modelMatch/);
 });
 
 test('independent visual check sends original, candidate and matching model front without retry',async()=>{

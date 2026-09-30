@@ -2205,7 +2205,7 @@
       if(Object.keys(used).length+newArticles>max){report('This PO would exceed the '+max+'-article paid pilot limit. Select fewer products.',selected[0]);return;}
       if(!pending.length){report('All required product images already exist. Review them, then generate the SEO names.',selected[0]);return;}
       var imageCalls=pending.reduce(function(total,x){return total+missingPaidDrafts(x.np).images.length;},0);
-      var preflightCalls=pending.filter(function(x){return missingPaidDrafts(x.np).images.length>0&&garmentCat(x.np.productType)==='upper'&&paidStylingOf(x.np).fit!=='Auto';}).length;
+      var preflightCalls=pending.filter(function(x){return missingPaidDrafts(x.np).images.length>0&&['upper','lower'].indexOf(garmentCat(x.np.productType))>=0&&paidStylingOf(x.np).fit!=='Auto';}).length;
       var skipped=selected.length-pending.length;
       if(!confirmed){
         var confirmCard=el('scard'+pending[0].i),confirmHost=confirmCard&&confirmCard.querySelector('[data-pilot-message]');
@@ -2262,7 +2262,7 @@
       if(!chosen.length){alert('No existing image was found for the selected view.');return;}
       if(po.status!=='received'||productNeedsSavedWeight(np)){alert('Receive and save the weight for this product before regeneration.');return;}
       if(!np.photoUrl){alert('Upload the original front reference first.');return;}
-      if(!confirm('Regenerate '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(garmentCat(np.productType)==='upper'&&paidStylingOf(np).fit!=='Auto'?1:0)+' original-fit check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
+      if(!confirm('Regenerate '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(['upper','lower'].indexOf(garmentCat(np.productType))>=0&&paidStylingOf(np).fit!=='Auto'?1:0)+' original fit/length check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
       var label=button.textContent;
       function note(message){var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node)node.textContent=message;}
       button.disabled=true;button.textContent='Regenerating…';

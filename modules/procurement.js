@@ -1966,7 +1966,8 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     const preview = await computePreview(s, { lines: po.lines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     const groups = await newGroupsOf(s, po);
     const restoredKnownSet = restorePo0006SavedSet(po, groups);
-    if (restoredKnownSet) saveStore(s);
+    const promotedAdvisoryImages = promoteAdvisoryHeldImages(po,groups);
+    if (restoredKnownSet||promotedAdvisoryImages) saveStore(s);
     const byKey = new Map(groups.map(g => [g.key, g]));
     // Return the complete saved calculation as well as the studio groups. The
     // Purchases page uses this read-only response to restore the Shopify post
@@ -2072,6 +2073,31 @@ function canReviewPaidImage(req) {
 }
 function imageCheckAccepted(image) {
   return !image.qa || ['pass','manual-reviewed'].includes(image.qa.status);
+}
+function promoteAdvisoryHeldImages(po,groups) {
+  let changed=false;
+  po.aiImages=po.aiImages||{};po.qaRejected=po.qaRejected||{};
+  for(const group of groups||[]){
+    const key=group.key,rejected=Array.isArray(po.qaRejected[key])?po.qaRejected[key]:[];
+    const latestByType={};
+    for(const candidate of rejected)if(candidate&&candidate.url&&!candidate.supersededBy&&openaiPilot.canAutoAcceptAdvisoryCheck(candidate.qa))latestByType[candidate.type]=candidate;
+    for(const candidate of Object.values(latestByType)){
+      const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[key]);
+      if(candidate.sourceFingerprint!==fingerprint||!readStoredPhoto(candidate.url))continue;
+      const savedStyling=openaiPilot.normalizeStyling((po.imageStyling||{})[key],group);
+      if(candidate.styling&&JSON.stringify(openaiPilot.normalizeStyling(candidate.styling,group))!==JSON.stringify(savedStyling))continue;
+      const images=po.aiImages[key]||[];
+      if(images.some(image=>image.type===candidate.type&&image.url&&imageCheckAccepted(image)))continue;
+      const warning=(candidate.qa.issues||[]).join('; ')||'Automated check could not determine apparent adult gender.';
+      const rec={type:candidate.type,label:(AI_IMAGE_SPECS.find(x=>x.type===candidate.type)||{}).label||candidate.type,url:candidate.url,approved:false,source:'openai-pilot',
+        qa:{...candidate.qa,status:'pass',failed:[],uncertain:[],issues:[],warnings:[...(candidate.qa.warnings||[]),warning],autoAcceptedAdvisory:true},
+        sourceFingerprint:fingerprint,styling:candidate.styling||savedStyling};
+      const idx=images.findIndex(image=>image.type===candidate.type);if(idx>=0)images[idx]=rec;else images.push(rec);
+      po.aiImages[key]=images;candidate.supersededBy='active:'+candidate.url;candidate.supersededAt=new Date().toISOString();
+      invalidateDependentSides(images,candidate.type);changed=true;
+    }
+  }
+  return changed;
 }
 function invalidateDependentSides(images,frontType) {
   const sideType={'model-front':'model-side',female:'model-side-female',male:'model-side-male'}[frontType];
@@ -2196,7 +2222,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       } else if(fitPreflight.status==='conflict') {
         photoStyling=openaiPilot.stylingForPhoto(styling,fitPreflight);
         item.photoStyling=photoStyling;
-        item.warnings=[`The selected ${styling.fit} fit conflicts with the original photo (${fitPreflight.reason}). Images will follow the photographed cut instead. Correct the purchase fit before posting.`];
+        item.warnings=[`The selected ${styling.fit} fit/length conflicts with the original photo (${fitPreflight.reason}). Images will follow the photographed garment instead. Correct the saved fit/length before posting.`];
       }
       saveStore(fresh);
     } catch(e) {

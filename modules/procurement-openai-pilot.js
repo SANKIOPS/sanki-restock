@@ -217,9 +217,12 @@ async function generateImage({key, group, source, continuitySource=null, type, s
 
 async function preflightFit({key,group,source,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
   const style=normalizeStyling(styling,group);
-  if(garmentCategory(group)!=='upper'||style.fit==='Auto')return {status:'not-required',reason:''};
+  const category=garmentCategory(group);
+  if(category==='other'||style.fit==='Auto')return {status:'not-required',reason:''};
   const schema={type:'object',additionalProperties:false,required:['status','reason'],properties:{status:{type:'string',enum:['compatible','conflict','uncertain']},reason:{type:'string'}}};
-  const prompt=`Look ONLY at the original garment photograph. The user selected ${style.fit} for the model image. Is that choice visibly compatible with the actual shoulder seam and cut of the garment in the photo? Ignore the purchase category and title; they may call a long-sleeve knit a T-shirt. A hanger, fold or camera angle alone does not prove a garment is oversized. Treat a vendor label such as 'muscle fit' as unreliable; the photo is the authority. 'Fitted' and 'Slim fit' describe a close natural-shoulder silhouette, not a rigid measurement. Return conflict ONLY for a clear, obvious visual contradiction (for example, unmistakably dropped shoulder and broad boxy cut versus fitted). If not observable, return uncertain. Do not compare any generated image or supporting trousers.`;
+  const prompt=category==='lower'
+    ? `Look ONLY at the original featured LOWER garment photograph. The user selected the length ${style.fit} for the model image. Is that length visibly compatible with the actual garment? Judge the waistband-to-hem extent and visible leg length; do not use shoulder seams, the supporting top, or the purchase title. The photograph is the authority. Return conflict ONLY for a clear visual contradiction, such as full-length trousers selected as Shorts / half, or shorts selected as Full length. A crop, fold, obstruction or camera angle alone is not proof. If the hem or length cannot be observed, return uncertain.`
+    : `Look ONLY at the original garment photograph. The user selected ${style.fit} for the model image. Is that choice visibly compatible with the actual shoulder seam and cut of the garment in the photo? Ignore the purchase category and title; they may call a long-sleeve knit a T-shirt. A hanger, fold or camera angle alone does not prove a garment is oversized. Treat a vendor label such as 'muscle fit' as unreliable; the photo is the authority. 'Fitted' and 'Slim fit' describe a close natural-shoulder silhouette, not a rigid measurement. Return conflict ONLY for a clear, obvious visual contradiction (for example, unmistakably dropped shoulder and broad boxy cut versus fitted). If not observable, return uncertain. Do not compare any generated image or supporting trousers.`;
   const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,store:false,max_output_tokens:180,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'}]}],text:{format:{type:'json_schema',name:'sanki_fit_preflight',strict:true,schema}}}),signal:AbortSignal.timeout(90000)});
   const body=await readApiResponse(response),result=JSON.parse(responseText(body));
@@ -261,7 +264,10 @@ function evaluateImageCheck(check,type,styling={},group={}) {
   // the camera angle. Keep that finding visible for human approval, but do not
   // discard an otherwise faithful garment and outfit (or buy another attempt).
   // Unrequested visible accessories remain a blocking mismatch.
-  const advisory=modelView?required.filter(field=>(field==='chainMatch'&&style.chain!=='None'||field==='watchMatch'&&style.watch||field==='shadesMatch'&&style.sunglasses||field==='capMatch'&&style.capStyle!=='None')&&['fail','uncertain'].includes(check?.[field]?.status)):[];
+  const advisory=modelView?required.filter(field=>
+    field==='modelMatch'&&check?.[field]?.status==='uncertain'||
+    (field==='chainMatch'&&style.chain!=='None'||field==='watchMatch'&&style.watch||field==='shadesMatch'&&style.sunglasses||field==='capMatch'&&style.capStyle!=='None')&&['fail','uncertain'].includes(check?.[field]?.status)
+  ):[];
   const blocking=required.filter(field=>!advisory.includes(field));
   const missing=blocking.filter(field=>!check?.[field]||!['pass','fail','uncertain'].includes(check[field].status));
   const failed=blocking.filter(field=>check?.[field]?.status==='fail');
@@ -272,6 +278,12 @@ function evaluateImageCheck(check,type,styling={},group={}) {
 }
 function shouldRetryImageCheck(check,attempt,maxAttempts) {
   return check?.status==='needs-review'&&Array.isArray(check.failed)&&check.failed.length>0&&!(check.uncertain||[]).length&&attempt<maxAttempts;
+}
+
+function canAutoAcceptAdvisoryCheck(check) {
+  const failed=Array.isArray(check?.failed)?check.failed:[];
+  const uncertain=Array.isArray(check?.uncertain)?check.uncertain:[];
+  return failed.length===0&&uncertain.length>0&&uncertain.every(field=>field==='modelMatch');
 }
 
 async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
@@ -323,4 +335,4 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   return {seo,usage:body.usage || null,model};
 }
 
-module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
+module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,canAutoAcceptAdvisoryCheck,generateSeo,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
