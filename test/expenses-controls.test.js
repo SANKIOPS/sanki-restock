@@ -2301,6 +2301,27 @@ Statement period : August 12, 2026 to September 11, 2026`);
   assert.deepEqual(rows.statementSummary,{format:'ICICI Bank credit-card PDF',from:'2026-08-12',to:'2026-09-11',openingBalance:299822.33,closingBalance:27659.64,totalDebits:26636.62,totalCredits:298799.31,validated:true,accountType:'credit_card'});
 });
 
+test('HDFC protected-card text uses transaction amounts and preserves statement rounding',()=>{
+  const rows=parseBankStatementText(`HDFC Bank Credit Cards GSTIN: 33AAACH2702H2Z6
+Credit Card No.
+457262XXXXXX7376
+PAYMENTS/CREDITS RECEIVED PURCHASES/DEBIT FINANCE CHARGES
+29/08/2026| 14:18RAZ*Facebook IndiaGurugram C 3.00
+29/08/2026| 00:00RAZ*Facebook IndiaGurugram (Ref# VT262430075029050000031)+  C 1.00
+Page total C64,724.24
+C0.00C1.00C3.00C0.00
+TOTAL AMOUNT DUE C1.99
+Billing Period
+22 Aug, 2026 - 21 Sep, 2026`);
+  assert.deepEqual(rows.map(x=>({date:x.date,reference:x.reference,debit:x.debit,credit:x.credit,balance:x.balance})),[
+    {date:'2026-08-29',reference:'',debit:3,credit:0,balance:3},
+    {date:'2026-08-29',reference:'VT262430075029050000031',debit:0,credit:1,balance:2},
+    {date:'2026-09-21',reference:'HDFC-ROUNDING-20260921',debit:0,credit:.01,balance:1.99}
+  ]);
+  assert.deepEqual(rows.statementSummary,{format:'HDFC Bank credit-card PDF',accountLast4:'7376',from:'2026-08-22',to:'2026-09-21',openingBalance:0,closingBalance:1.99,totalDebits:3,totalCredits:1.01,declaredPurchases:3,declaredCredits:1,financeCharges:0,roundingAdjustment:.01,validated:true,accountType:'credit_card'});
+  assert.equal(rows.at(-1).statementGenerated,true);
+});
+
 test('ICICI 0425 one-time opening remains exact to paise from 22 August 2026',()=>{
   const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2026-08-22',to:'2026-08-22'}}).body;
   const account=balances.accounts.find(x=>x.name==='Tiana 0425');

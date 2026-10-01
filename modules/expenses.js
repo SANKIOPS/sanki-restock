@@ -3315,6 +3315,42 @@ function parseBankStatementText(raw){
   const text=String(raw||'').replace(/\r/g,'');
   const indusMobile=parseIndusIndMobileStatementText(text);if(indusMobile.length)return indusMobile;
   const indusIndRows=parseIndusIndScreenshotText(text);if(indusIndRows.length)return indusIndRows;
+  // HDFC card PDFs expose statement-level previous dues, purchases, credits,
+  // finance charges and total due, while transaction rows use a trailing "+"
+  // to identify reversals. Parse and validate every component before allowing
+  // the statement into review. Any sub-rupee amount-due rounding is preserved
+  // as an explicit row so the card ledger closes to the bank-declared truth.
+  if(/HDFC\s+Bank\s+Credit\s+Cards\s+GSTIN/i.test(text)&&/Credit\s+Card\s+No\./i.test(text)&&/PAYMENTS\s*\/\s*CREDITS/i.test(text)&&/PURCHASES\s*\/\s*DEBIT/i.test(text)){
+    const anchors=Array.from(text.matchAll(/(?:^|\n)(\d{2}\/\d{2}\/\d{4})\|\s*(\d{2}:\d{2})/g)),out=[];
+    anchors.forEach((anchor,index)=>{
+      // Use the first currency amount after the dated anchor. The final row on
+      // each HDFC page is followed by page-level totals before the next dated
+      // anchor, so taking the last amount would incorrectly import that total
+      // as the transaction value.
+      const block=text.slice(anchor.index+anchor[0].length,index+1<anchors.length?anchors[index+1].index:text.length),money=block.match(/[C₹]\s*([0-9][0-9,]*\.\d{2})/);if(!money)return;
+      const before=block.slice(0,money.index),credit=/\+\s*$/.test(before),amount=Math.abs(statementNum(money[1]));if(!(amount>0))return;
+      const description=before.replace(/\+\s*\d+\s*$/,'').replace(/\+\s*$/,'').replace(/\s+/g,' ').trim(),reference=((description.match(/Ref#\s*([A-Z0-9-]+)/i)||[])[1]||'');
+      out.push({date:statementDate(anchor[1]),postedAt:anchor[2],description:description||'HDFC credit-card transaction',reference,debit:credit?0:amount,credit:credit?amount:0,balance:0,row:index+1});
+    });
+    const totals=text.match(/(?:^|\n)\s*[C₹]\s*([0-9,]+\.\d{2})\s*[C₹]\s*([0-9,]+\.\d{2})\s*[C₹]\s*([0-9,]+\.\d{2})\s*[C₹]\s*([0-9,]+\.\d{2})/i);
+    if(out.length&&totals){
+      const declaredOpening=statementNum(totals[1]),declaredCredits=statementNum(totals[2]),declaredPurchases=statementNum(totals[3]),financeCharges=statementNum(totals[4]),parsedDebits=roundMoney(out.reduce((n,x)=>n+x.debit,0)),parsedCredits=roundMoney(out.reduce((n,x)=>n+x.credit,0));
+      if(Math.abs(parsedDebits-declaredPurchases)>.01||Math.abs(parsedCredits-declaredCredits)>.01)throw new Error('HDFC credit-card statement validation failed: parsed purchases ₹'+parsedDebits+' and credits ₹'+parsedCredits+' do not match declared totals ₹'+declaredPurchases+' and ₹'+declaredCredits+'.');
+      // HDFC's PDF extraction groups all field labels first and all values
+      // afterwards, so identify the billing-period value independently of its
+      // label. Its end is the statement date printed by this format.
+      const dueMatch=text.match(/TOTAL\s+AMOUNT\s+DUE\s*[C₹]\s*([0-9,]+\.\d{2})/i),closing=statementNum(dueMatch&&dueMatch[1]),period=text.match(/(\d{1,2}\s+[A-Za-z]{3},\s*\d{4})\s*-\s*(\d{1,2}\s+[A-Za-z]{3},\s*\d{4})/i),longDate=value=>{const parsed=new Date(String(value||'').replace(',','')+' 00:00:00 UTC');return Number.isNaN(parsed.getTime())?'':parsed.toISOString().slice(0,10);},statementDate=period?longDate(period[2]):out.at(-1).date;
+      if(!(closing>=0))throw new Error('HDFC credit-card statement validation failed: Total Amount Due was not readable.');
+      if(financeCharges>0)out.push({date:statementDate,description:'HDFC finance charges',reference:'HDFC-FINANCE-'+statementDate.replaceAll('-',''),debit:financeCharges,credit:0,balance:0,row:out.length+1,statementGenerated:true});
+      const calculated=roundMoney(declaredOpening+declaredPurchases+financeCharges-declaredCredits),rounding=roundMoney(calculated-closing);
+      if(Math.abs(rounding)>1)throw new Error('HDFC credit-card statement validation failed: transactions produce ₹'+calculated+' instead of Total Amount Due ₹'+closing+'.');
+      if(Math.abs(rounding)>=.01)out.push({date:statementDate,description:'HDFC statement amount-due rounding',reference:'HDFC-ROUNDING-'+statementDate.replaceAll('-',''),debit:rounding<0?Math.abs(rounding):0,credit:rounding>0?rounding:0,balance:0,row:out.length+1,statementGenerated:true});
+      out.sort((a,b)=>String(a.date).localeCompare(String(b.date))||a.row-b.row);let running=declaredOpening;out.forEach(row=>{running=roundMoney(running+row.debit-row.credit);row.balance=running;});
+      const cardNumber=(text.match(/\b\d{6}[Xx*]{4,}\d{4}\b/)||[])[0]||((text.match(/Credit\s+Card\s+No\.\s*([0-9Xx*-]+)/i)||[])[1]||'');
+      out.statementSummary={format:'HDFC Bank credit-card PDF',accountLast4:cardNumber.replace(/\D/g,'').slice(-4),from:period?longDate(period[1]):out[0].date,to:period?longDate(period[2]):statementDate,openingBalance:declaredOpening,closingBalance:closing,totalDebits:roundMoney(declaredPurchases+financeCharges+(rounding<0?Math.abs(rounding):0)),totalCredits:roundMoney(declaredCredits+(rounding>0?rounding:0)),declaredPurchases,declaredCredits,financeCharges,roundingAdjustment:rounding,validated:Math.abs(running-closing)<=.01,accountType:'credit_card'};
+      return out;
+    }
+  }
   // ICICI credit-card PDFs do not print a running balance for each row. They
   // provide the statement Total Amount Due instead, followed by transaction
   // rows with an optional CR suffix. Reconstruct a validated liability running
