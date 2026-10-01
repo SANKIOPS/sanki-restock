@@ -1873,11 +1873,11 @@
       h+='<div id="receiveHost"></div>';
       el('poDetailHost').innerHTML=h;
       var resumeBtn=el('resumePostingBtn'); if(resumeBtn)resumeBtn.onclick=function(){
-        if(!confirm('Check every received SKU in Shopify and create only completely missing products? Products already present will be skipped.'))return;
+        if(!confirm('Check every received SKU in Shopify and create only completely missing products? Products already present will be skipped. If an approved image file was lost, the product will be created as a Shopify draft without that image and no image generation will be charged.'))return;
         resumeBtn.disabled=true; var status=el('resumePostingStatus'); status.textContent='Checking Shopify…';
-        fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/resume-posting',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(readJson).then(function(d){
+        fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/resume-posting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allowLostImages:true})}).then(readJson).then(function(d){
           if(!d.success)throw new Error(d.error||'Could not continue posting.');
-          alert('Posting completed safely. '+(d.created||[]).length+' missing product(s) created; '+(d.alreadyPresent||[]).length+' existing product(s) skipped.'); loadPos(); openPoId=null; el('poDetailHost').innerHTML='';
+          alert('Posting completed safely. '+(d.created||[]).length+' missing product(s) created; '+(d.alreadyPresent||[]).length+' existing product(s) skipped.'+((d.missingImageGroups||[]).length?' '+d.missingImageGroups.length+' product(s) were saved as drafts with lost images omitted; no image generation was charged.':'')); loadPos(); openPoId=null; el('poDetailHost').innerHTML='';
         }).catch(function(e){resumeBtn.disabled=false;status.textContent=e.message;alert(e.message);});
       };
       el('poDetailHost').scrollIntoView({behavior:'smooth'});

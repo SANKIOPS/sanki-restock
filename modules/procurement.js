@@ -2842,7 +2842,8 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     if(!po) return res.status(404).json({success:false,error:'PO not found'});
     if(po.status!=='posting_partial') return res.status(409).json({success:false,error:'Only an interrupted posting can be continued.'});
     if(((po.results&&po.results.errors)||[]).length) return res.status(409).json({success:false,error:'This posting has a saved Shopify error. Reconcile that error before continuing.'});
-    const received=(po.lines||[]).filter(line=>num(line.qty)>0);
+    const allowLostImages=!!(req.body&&req.body.allowLostImages);
+    const received=(po.lines||[]).filter(line=>num(line.qty)>0), missingImageGroups=[];
     const cat=await loadCatalogue(true), byGroup=new Map();
     received.filter(line=>line.classification!=='EXISTING').forEach(line=>{
       const key=groupKey(line); if(!byGroup.has(key))byGroup.set(key,[]); byGroup.get(key).push(line);
@@ -2874,7 +2875,10 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
       const missingTypes=required.filter(type=>!approved.some(x=>x.type===type));
       const modelTypes=new Set(approved.map(x=>x.type));
       const recoverable=missingTypes.length===1&&missingTypes[0]==='front'&&(modelTypes.has('female')||modelTypes.has('male')||modelTypes.has('model-front'))&&(modelTypes.has('model-side-female')||modelTypes.has('model-side-male')||modelTypes.has('model-side'));
-      if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:'Missing readable approved image(s) for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made.',groupKey:np.key,missingTypes});
+      if(!required.length||(missingTypes.length&&!recoverable)){
+        if(!allowLostImages)return res.status(409).json({success:false,error:'Missing readable approved image(s) for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made.',groupKey:np.key,missingTypes});
+        missingImageGroups.push({groupKey:np.key,designName:np.designName||np.designCode||'Trouser',colour:np.colour||'',missingTypes});
+      }
       np.seo=seo; np.images=approved.map(x=>({url:x.url,alt:seo.imageAlt}));
     }
     const results=po.results||(po.results={created:[],adjusted:[],errors:[]});
@@ -2886,8 +2890,8 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     _catalogue=null;
     const verified=await loadCatalogue(true), stillMissing=received.filter(line=>line.classification!=='EXISTING'&&!verified.skuMap[String(line.sku||'').toUpperCase()]).map(line=>line.sku);
     if(stillMissing.length)return res.status(409).json({success:false,error:'Shopify verification still found missing received SKUs. The PO remains locked.',stillMissing,results});
-    po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key)}; saveStore(s);
-    res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),results});
+    po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key),missingImageGroups}; saveStore(s);
+    res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),missingImageGroups,results});
   }catch(e){res.status(500).json({success:false,error:e.message});}
 });
 
