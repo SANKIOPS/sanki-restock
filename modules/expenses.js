@@ -740,6 +740,10 @@ function indiaBusinessDate(value=new Date()){
   if(Number.isNaN(date.getTime()))return'';
   return date.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'});
 }
+function previousIndiaBusinessDate(value=new Date()){
+  const today=indiaBusinessDate(value),date=new Date(today+'T00:00:00Z');
+  date.setUTCDate(date.getUTCDate()-1);return date.toISOString().slice(0,10);
+}
 function paytmSalesInScope(date){return date>=PAYTM_START_DATE&&date<=indiaBusinessDate();}
 function applySep11PrashantReimbursementDateCorrection(s){
   const key='correct-ex-00300-ex-00301-payment-date-to-2026-09-11-v1',from='2026-09-10',to='2026-09-11',now=new Date().toISOString();
@@ -2166,6 +2170,19 @@ router.post('/api/expenses/:id/claimant-pay', (req,res) => {
   audit(s,req,'CLAIMANT_PAYMENT_RECORDED','expense',e.id,{nature:e.nature,account,paymentId:payment.id,after:payment});
   saveStore(s);notifyExpenseUser(e,'paid',amount);
   res.json({success:true,expense:e});
+});
+
+// Daily front-door reminder for the two high-frequency bank reconciliations.
+// A complete statement can reliably be required through yesterday; today's
+// banking day may still be receiving transactions.
+router.get('/api/expenses/reconciliation-reminders',(req,res)=>{
+  if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});
+  const s=loadStore(),requiredThrough=previousIndiaBusinessDate(),accounts=['Axis Bank 3448','Tiana 0425'];
+  const reminders=accounts.map(account=>{
+    const key=bankStatementBookKey('SANKI',account),book=(s.bankStatements||{})[key]||{},through=String(book.reconciledThrough||''),draft=Object.values(s.bankReconciliationDrafts||{}).filter(x=>normalizedNature(x.nature)==='SANKI'&&x.account===account).sort((a,b)=>String(a.summary&&a.summary.from||'').localeCompare(String(b.summary&&b.summary.from||'')))[0],needsStatement=!through||through<requiredThrough,daysBehind=through?Math.max(0,Math.round((Date.parse(requiredThrough+'T00:00:00Z')-Date.parse(through+'T00:00:00Z'))/86400000)):null;
+    return{account,nature:'SANKI',reconciledThrough:through,requiredThrough,needsStatement,pendingDraft:!!draft,draftId:draft&&draft.id||'',draftFrom:draft&&draft.summary&&draft.summary.from||'',draftTo:draft&&draft.summary&&draft.summary.to||'',daysBehind,status:draft?'review_pending':(needsStatement?'statement_required':'up_to_date'),href:'/expenses.html?tab=cash&account='+encodeURIComponent(account)};
+  });
+  res.json({success:true,requiredThrough,pendingCount:reminders.filter(x=>x.status!=='up_to_date').length,reminders});
 });
 
 // ── Pay (GATE 2: payment screenshot required) ────────────────────

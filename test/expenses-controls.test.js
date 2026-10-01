@@ -1618,6 +1618,16 @@ test('bank statement multipart fields are parsed before account permission is ch
   assert.match(route.route.stack[1].handle.toString(),/unlinkSync/);
 });
 
+test('daily dashboard reminder highlights 3448 and 0425 statements through yesterday',()=>{
+  assert.equal(invoke('GET','/api/expenses/reconciliation-reminders',{role:'claimant'}).status,403);
+  const initial=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});assert.equal(initial.status,200);
+  const required=initial.body.requiredThrough,olderDate=new Date(required+'T00:00:00Z');olderDate.setUTCDate(olderDate.getUTCDate()-2);const older=olderDate.toISOString().slice(0,10),expenseFile=path.join(tempDir,'expenses.json'),original=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):'',stored=original?JSON.parse(original):{};
+  stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']={reconciledThrough:older,imports:[],transactions:{}};stored.bankStatements['Tiana 0425']={reconciledThrough:required,imports:[],transactions:{}};stored.bankReconciliationDrafts={'BRD-DAILY-3448':{id:'BRD-DAILY-3448',nature:'SANKI',account:'Axis Bank 3448',summary:{from:older,to:required}}};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const result=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});if(original)fs.writeFileSync(expenseFile,original);else fs.rmSync(expenseFile,{force:true});assert.equal(result.status,200);assert.equal(result.body.pendingCount,1);
+  const axis=result.body.reminders.find(x=>x.account==='Axis Bank 3448'),tiana=result.body.reminders.find(x=>x.account==='Tiana 0425');assert.equal(axis.status,'review_pending');assert.equal(axis.pendingDraft,true);assert.equal(axis.reconciledThrough,older);assert.match(axis.href,/tab=cash&account=Axis%20Bank%203448/);assert.equal(tiana.status,'up_to_date');assert.equal(tiana.needsStatement,false);
+  const dashboard=fs.readFileSync(path.join(__dirname,'..','public','dashboard.html'),'utf8'),expensesUi=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(dashboard,/Bank statements pending reconciliation/);assert.match(dashboard,/statement required/);assert.match(dashboard,/reconciliation-reminders/);assert.match(expensesUi,/get\('account'\)/);
+});
+
 test('any manual ledger movement can be linked to a bank row, remarked and undone',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),now=new Date().toISOString();
   stored.openingBalances=stored.openingBalances||{};stored.openingBalances['Axis Bank 3448']=53341;

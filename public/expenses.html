@@ -1426,6 +1426,7 @@
         el('pfRecord').addEventListener('click',recordPrashantFunding);el('pfRepay').addEventListener('click',repayPrashantFunding);
         loadPrashantFunding();
       }
+      var requestedAccount=new URLSearchParams(location.search).get('account')||'';if(requestedAccount&&Array.prototype.some.call(el('lg_account').options,function(o){return o.value===requestedAccount;}))el('lg_account').value=requestedAccount;
       el('cf_nature').addEventListener('change',function(){selectedNature=this.value;bankNature=this.value;el('lg_account').innerHTML=opts(ledgerAccountsForNature(selectedNature));el('bs_nature').value=selectedNature;loadCash();loadAccountLedger();});el('cf_go').addEventListener('click',loadCash);
       el('rc_nature').addEventListener('change',function(){el('rc_account').innerHTML=opts(accountsForNature(this.value));syncExchangeAccounts();});el('rc_type').addEventListener('change',syncReceiptType);syncReceiptType();
       el('tr_from_nature').addEventListener('change',function(){el('tr_from').innerHTML=opts(transferAccountsForNature(this.value));syncTransferClass();});
