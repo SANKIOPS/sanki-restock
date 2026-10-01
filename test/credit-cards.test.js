@@ -107,3 +107,57 @@ test('review rejects classifications opposite to the statement direction and fin
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params,body:{rows:[{id,classification:'card_payment'}]}}).status,200);
   assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params}).status,200);
 });
+
+test('merchant cleanup and statement CR/DR totals preserve recognizable names and paise',()=>{
+  const {merchantName,totals}=require('../modules/credit-card-accounting');
+  for(const text of ['RAZ*Facebook IndiaGurugram','EMIFACEBOOK SIGURGAON','facebook.com Gurgaon'])assert.equal(merchantName(text,'HDFC'),'Facebook');
+  assert.equal(merchantName('IND*LINKEDIN (PGSI)WWW.LINKED'),'LinkedIn');
+  for(const text of ['FIRST YEAR MEMBERSHIPFEE','HDFC statement amount-due rounding','IGST-VPS2724916693596-RATE 18.0'])assert.equal(merchantName(text,'HDFC BANK'),'HDFC Bank');
+  assert.deepEqual(totals([{debit:1536.12,credit:0},{debit:0,credit:3},{debit:0,credit:.09}]),{debit:1536.12,credit:3.09,netMovement:1533.03});
+});
+test('finalized card expenses appear in search, vendor ledgers, spending and profit exactly once',()=>{
+  const {summaryForPL}=require('../modules/expenses');
+  const card=invoke('POST','/api/expenses/credit-cards',{body:{name:'Reporting card',last4:'9999',issuingBank:'HDFC'}}).body.card;
+  const make=(classification,amount,narration,type='marketing')=>{
+    const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-15',amount,narration,classification}}).body.statement;
+    const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:st.rows[0].id,classification,nature:'SANKI',category:'MARKETING EXPENSE',type,channel:'Both'}]}});assert.equal(reviewed.status,200);
+    assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:st.id}}).status,200);return st;
+  };
+  const purchase=make('expense',1000,'RAZ*Facebook IndiaGurugram');make('refund',100,'FACEBOOKGURGAON');make('card_payment',200,'PAYMENT THANK YOU');make('emi_principal',300,'EMIRAZ*Facebook IndiaGurugram');make('emi_interest',20,'EMI INTEREST','running');
+  const list=invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-15',to:'2026-10-15',search:'Facebook'}}).body;
+  assert.equal(list.expenses.length,2);assert.equal(list.totals.all,900);assert.ok(list.expenses.every(e=>e.statementBacked&&e.readOnly&&e.vendor==='Facebook'&&e.paymentType==='Credit'));
+  assert.equal(invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-15',to:'2026-10-15',type:'marketing'}}).body.totals.all,900);
+  const vendor=invokeExpense('GET','/api/expenses/vendors',{query:{nature:'SANKI',search:'Facebook',from:'2026-10-15',to:'2026-10-15'}}).body.vendors.find(v=>v.name==='Facebook');
+  assert.ok(vendor.tags.includes('Credit-card merchant'));assert.equal(vendor.billed,900);assert.equal(vendor.outstanding,0);
+  const spending=invokeExpense('GET','/api/expenses/spending-dashboard',{query:{from:'2026-10-15',to:'2026-10-15'}}).body;
+  assert.equal(spending.totalPaid,920);assert.ok(spending.payments.every(e=>e.kind==='Credit Card'));
+  const pl=summaryForPL('2026-10-15','2026-10-15');assert.equal(pl.Shared.marketing,900);assert.equal(pl.Shared.running,20);
+  assert.equal(invokeExpense('GET','/api/expenses/list',{role:'claimant',username:'someone',query:{search:purchase.id}}).body.expenses.length,0);
+});
+test('unbilled transactions are replaced by billed rows without doubling reports and restored on reopening',()=>{
+  const {summaryForPL}=require('../modules/expenses');
+  const card=invoke('POST','/api/expenses/credit-cards',{body:{name:'Unbilled card',last4:'8888',issuingBank:'HDFC'}}).body.card;
+  const provisional=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,kind:'unbilled',date:'2026-10-20',narration:'Facebook IndiaGurugram',amount:650,classification:'expense'}}).body.statement;
+  assert.equal(provisional.kind,'unbilled');assert.equal(provisional.totals.debit,650);
+  invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:provisional.id},body:{rows:[{id:provisional.rows[0].id,classification:'expense',category:'MARKETING EXPENSE',type:'marketing',nature:'SANKI',channel:'Website'}]}});
+  assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:provisional.id}}).status,200);
+  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
+  const billed=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-20',narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
+  assert.equal(billed.rows[0].replaces.statementId,provisional.id);assert.equal(billed.rows[0].type,'marketing');
+  assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:billed.id}}).status,200);
+  let rows=invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-20',to:'2026-10-20'}}).body.expenses;
+  assert.equal(rows.length,1);assert.equal(rows[0].creditCardStatementId,billed.id);assert.equal(rows[0].unbilled,false);
+  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
+  assert.equal(invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body.outstanding,650);
+  const repeat=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-20',narration:'RAZ*Facebook IndiaGurugram (Ref# 12345)',amount:650,classification:'expense'}}).body.statement;
+  assert.ok(repeat.rows[0].duplicateOf);assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:repeat.id}}).status,200);
+  assert.equal(summaryForPL('2026-10-20','2026-10-20').Website.marketing,650);
+  invoke('POST','/api/expenses/credit-cards/statements/:id/reopen',{params:{id:billed.id},body:{reason:'Correct generated statement'}});
+  rows=invokeExpense('GET','/api/expenses/list',{query:{from:'2026-10-20',to:'2026-10-20'}}).body.expenses;assert.equal(rows.length,1);assert.equal(rows[0].unbilled,true);
+});
+test('current-cycle screenshot text imports purchases and refunds without balance columns',()=>{
+  const {parseUnbilledTransactions}=require('../modules/credit-card-accounting');
+  const rows=parseUnbilledTransactions('Current cycle\n01 Oct 2026 Facebook India Gurgaon\n₹1,536.12 DR\n02/10/2026 LinkedIn refund\nINR 100.00 CR\n2026-10-03 Shopify\nRs. 250.00');
+  assert.equal(rows.length,3);assert.equal(rows[0].debit,1536.12);assert.equal(rows[1].credit,100);assert.equal(rows[2].debit,250);assert.equal(rows[0].date,'2026-10-01');
+  assert.equal(parseUnbilledTransactions('31/02/2026 Facebook ₹20.00 DR').length,0);
+});

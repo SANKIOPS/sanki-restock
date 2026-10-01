@@ -206,9 +206,10 @@ function searchRank(fields, query) {
   if(values.some(v=>fuzzyIncludes(v,q)))return 4;
   return 99;
 }
+const {cardExpenseRecords}=require('./credit-card-accounting');
 function expenseSearchFields(expense) {
   return [
-    expense.vendor, expense.particulars, expense.ledger, expense.id,
+    expense.vendor, expense.particulars, expense.ledger, expense.id, expense.type, expense.source, expense.creditCardStatementId,
     expense.billNo, expense.billNumber, expense.createdBy, expense.claimant,
     expense.paymentType, expense.account,
     ...(expense.payments || []).flatMap(payment => [payment.account, payment.reference, payment.bankReference, payment.note])
@@ -1552,6 +1553,7 @@ function expenseBelongsToUser(req, e) {
   return !!username && creator === username;
 }
 function canViewExpense(req, e) {
+  if(e&&e.ownerOnly&&!rolesOfReq(req).some(role=>['owner','admin'].includes(role)))return false;
   // PERSONAL remains private: the Owner can see the complete book, while a
   // submitter can see only the PERSONAL expenses that they created.
   if (normalizedNature(e && e.nature) === 'PERSONAL') return isOwner(req) || expenseBelongsToUser(req, e);
@@ -2473,7 +2475,7 @@ router.get('/api/expenses/list', (req, res) => {
   const missingBill = String(req.query.missingBill || '') === 'true';
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   if (nature && isAdmin(req) && !approvalNatures(req).includes(nature)) return res.status(403).json({ success:false, error:'You cannot view this accounting entity.' });
-  let list = Object.values(s.expenses).filter(e => {
+  let list = Object.values(s.expenses).concat(cardExpenseRecords(s)).filter(e => {
     if (!canViewExpense(req, e)) return false;
     if (id && e.id !== id) return false;
     if(search&&searchRank(expenseSearchFields(e),search)===99)return false;
@@ -2496,9 +2498,9 @@ router.get('/api/expenses/list', (req, res) => {
       (e.payments||[]).filter(p=>paymentIsPosted(e)).forEach(p=>movements.push({account:p.account||e.account,date:p.date,amount:num(p.amount)}));
       (e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded).forEach(p=>movements.push({account:p.account,date:p.date,amount:num(p.amount)}));
       e.payingAccountAmount=round0(movements.filter(p=>String(p.account||'').toLowerCase()===payingAccount&&(!from||String(p.date||'')>=from)&&(!to||String(p.date||'')<=to)).reduce((n,p)=>n+p.amount,0));
-      if(!(e.payingAccountAmount>0))return false;
+      if(e.payingAccountAmount===0)return false;
     }
-    if (missingBill && e.billPhoto) return false;
+    if (missingBill && (e.billPhoto||e.statementBacked)) return false;
     return true;
   }).sort((a,b)=>search?(searchRank(expenseSearchFields(a),search)-searchRank(expenseSearchFields(b),search)||(b.date+b.id).localeCompare(a.date+a.id)):(b.date+b.id).localeCompare(a.date+a.id));
 
@@ -2508,7 +2510,7 @@ router.get('/api/expenses/list', (req, res) => {
     const countedAmount=payingAccount?num(e.payingAccountAmount):num(e.amount);
     totals.all += countedAmount;
     totals[e.status] = (totals[e.status] || 0) + countedAmount;
-    if (!e.billPhoto) totals.noBill += countedAmount;
+    if (!e.billPhoto&&!e.statementBacked) totals.noBill += countedAmount;
     if ((e.status === 'approved' || e.status === 'paid') && BUSINESS_NATURES.includes(normalizedNature(e.nature))) totals.byType[e.type] += countedAmount;
   });
   const requestedLimit = Number(req.query.limit || 0);
@@ -2710,11 +2712,11 @@ router.get('/api/expenses/spending-dashboard', (req, res) => {
       if (!accountFilter || String(account).toLowerCase() === accountFilter) payments.push({ id:e.id, paymentId:p.id||'', reference:e.id+'/'+(p.id||'PAYMENT'), date:p.date||'', entity, kind:p.personalFunds?'Paid personally':'Vendor payment', vendor:e.vendor||'', claimant:e.claimant||e.createdBy||'', particulars:e.particulars||'', category:e.ledger||'', type:e.type||'', expenseAmount:round0(e.amount), amount:round0(p.grossPaymentAmount||p.amount),expenseAllocationAmount:round0(p.expenseAllocationAmount||p.amount),vendorAdvanceAmount:round0(p.vendorAdvanceAmount), account, paymentType:p.paymentType||e.paymentType||'', proof:p.proof||e.paymentProof||'', proofs:proofList(p.proofs,p.proof||e.paymentProof), billPhoto:e.billPhoto||'',billPhotos:proofList(e.billPhotos,e.billPhoto), qrPhoto:e.qrPhoto||'', approvedAt:e.approvedAt||'', approvedBy:e.approvedBy||'', paidBy:p.paidBy||'', contractTotal:e.isInstallment?round0(e.amount):0, contractBalance:e.isInstallment?round0(Math.max(0,num(e.amount)-num(e.paidAmount))):0 });
     });
   });
-  (s.reconciliationExpenses||[]).filter(e=>allowed.includes(normalizedNature(e.nature))&&(!nature||normalizedNature(e.nature)===nature)&&inRange(String(e.date||''))&&(!accountFilter||String(e.account||'').toLowerCase()===accountFilter)&&(!categoryFilter||String(e.category||'').toLowerCase()===categoryFilter)).forEach(e=>payments.push({id:e.id,paymentId:e.bankTransactionId||e.adjustmentId||'',date:e.date,entity:normalizedNature(e.nature),kind:'Bank-reconciled expense',vendor:e.vendor||'Bank',claimant:'',particulars:e.particulars||e.category,category:e.category,type:e.type||defaultType(e.category||''),expenseAmount:round0(e.amount),amount:round0(e.amount),account:e.account,paymentType:'Bank statement',proof:'',billPhoto:'',qrPhoto:'',approvedAt:e.createdAt||'',approvedBy:e.createdBy||'',paidBy:e.createdBy||''}));
+  (s.reconciliationExpenses||[]).filter(e=>canViewExpense(req,e)&&allowed.includes(normalizedNature(e.nature))&&(!nature||normalizedNature(e.nature)===nature)&&inRange(String(e.date||''))&&(!accountFilter||String(e.account||'').toLowerCase()===accountFilter)&&(!categoryFilter||String(e.category||'').toLowerCase()===categoryFilter)).forEach(e=>payments.push({id:e.id,paymentId:e.bankTransactionId||e.adjustmentId||'',date:e.date,entity:normalizedNature(e.nature),kind:e.creditCardId?(e.unbilled?'Credit Card · unbilled':'Credit Card'):'Bank-reconciled expense',vendor:e.vendor||'Bank',claimant:'',particulars:e.particulars||e.category,category:e.category,type:e.type||defaultType(e.category||''),expenseAmount:e.creditCardId?roundMoney(e.amount):round0(e.amount),amount:e.creditCardId?roundMoney(e.amount):round0(e.amount),account:e.account,paymentType:e.creditCardId?'Credit':'Bank statement',proof:'',billPhoto:'',qrPhoto:'',approvedAt:e.createdAt||'',approvedBy:e.createdBy||'',paidBy:e.createdBy||''}));
   const searchable=p=>[p.vendor,p.particulars,p.category,p.id,p.paymentId,p.reference,p.claimant,p.account,p.paymentType,p.kind,p.entity];
   const visiblePayments=search?payments.filter(p=>searchRank(searchable(p),search)<99):payments;
   visiblePayments.sort((a,b)=>search?(searchRank(searchable(a),search)-searchRank(searchable(b),search)||String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId))):String(b.date+b.id+b.paymentId).localeCompare(String(a.date+a.id+a.paymentId)));
-  res.json({ success:true, range:{from,to}, totalPaid:round0(visiblePayments.reduce((n,p)=>n+num(p.amount),0)), count:visiblePayments.length, payments:visiblePayments, accounts:visibleAccountsForReq(req,storedAccountNames(s)) });
+  res.json({ success:true, range:{from,to}, totalPaid:roundMoney(visiblePayments.reduce((n,p)=>n+num(p.amount),0)), count:visiblePayments.length, payments:visiblePayments, accounts:visibleAccountsForReq(req,storedAccountNames(s)) });
 });
 
 router.get('/api/expenses/reimbursements', (req, res) => {
@@ -2800,6 +2802,7 @@ router.get('/api/expenses/vendors', (req, res) => {
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const search=String(req.query.search||'').trim().toLowerCase(), category=String(req.query.category||'').trim().toLowerCase(), source=String(req.query.source||'expense'), from=String(req.query.from||''), to=String(req.query.to||'');
   const books = {};
+  cardExpenseRecords(s).forEach(e=>{const n=normalizedNature(e.nature),master=vendorMasterForNature(s,n),key=vendorIdentityKey(e.vendor);if(!Object.values(master).some(v=>vendorIdentityKey(v.name)===key))master[key]={name:e.vendor,tags:['Credit-card merchant']};});
   const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
   const addLedgerEntry=(book,entry,entryType)=>{
     const baseParticulars=String(entry.particulars||entry.supplier||entry.ledger||entry.billNo||entry.id||'Vendor entry');
@@ -2812,10 +2815,10 @@ router.get('/api/expenses/vendors', (req, res) => {
     (entry.payments||[]).forEach(payment=>{if(grossPaymentBatches.has(payment.batchPaymentId))return;book.ledgerItems.push({date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',kind:'payment',source:entry.source||'',order:20});});
   };
   const natures=nature?[nature]:approvalNatures(req);
-  natures.forEach(n=>{const master=n==='SANKI'?s.vendors:(((s.vendorsByNature||{})[n])||{});Object.values(master).forEach(v=>{const key=n+'|'+vendorIdentityKey(v.name),existing=books[key];if(existing){existing.notes=Array.from(new Set([existing.notes,v.notes].map(x=>String(x||'').trim()).filter(Boolean))).join(' · ');return;}books[key]={name:cleanVendorName(v.name),nature:n,billed:0,paid:0,outstanding:0,count:0,notes:v.notes||'',entries:[],ledgerItems:[]};});});
-  Object.values(s.expenses).forEach(e => {
+  natures.forEach(n=>{const master=n==='SANKI'?s.vendors:(((s.vendorsByNature||{})[n])||{});Object.values(master).forEach(v=>{const key=n+'|'+vendorIdentityKey(v.name),existing=books[key];if(existing){existing.notes=Array.from(new Set([existing.notes,v.notes].map(x=>String(x||'').trim()).filter(Boolean))).join(' · ');return;}books[key]={name:cleanVendorName(v.name),nature:n,billed:0,paid:0,outstanding:0,count:0,notes:v.notes||'',tags:v.tags||[],entries:[],ledgerItems:[]};});});
+  Object.values(s.expenses).concat(cardExpenseRecords(s)).forEach(e => {
     const n=normalizedNature(e.nature),key=n+'|'+vendorIdentityKey(e.vendor);
-    if (!natures.includes(n)||!e.vendor||!books[key]||!['approved','partially_paid','paid'].includes(e.status)) return;
+    if (!canViewExpense(req,e)||!natures.includes(n)||!e.vendor||!books[key]||!['approved','partially_paid','paid'].includes(e.status)) return;
     if(category&&!String(e.ledger||'').toLowerCase().includes(category))return;
     addLedgerEntry(books[key],e,'Expense');
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
@@ -2847,7 +2850,7 @@ router.get('/api/expenses/vendors', (req, res) => {
     const opening=roundMoney(all.filter(x=>from&&x.date<from).reduce((n,x)=>n+num(x.out)-num(x.in),0));
     const period=all.filter(x=>(!from||x.date>=from)&&(!to||x.date<=to));let balance=opening;
     const ledgerRows=period.map(x=>{balance=roundMoney(balance+num(x.out)-num(x.in));return Object.assign({},x,{balance});});
-    return {name:b.name,nature:b.nature,count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,entries:b.entries.sort((a,c)=>String(c.date+c.id).localeCompare(String(a.date+a.id))),ledgerOpeningBalance:opening,ledgerRows,ledgerClosingBalance:balance,ledgerTransactionCount:ledgerRows.length};
+    return {name:b.name,nature:b.nature,count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,tags:b.tags||[],entries:b.entries.sort((a,c)=>String(c.date+c.id).localeCompare(String(a.date+a.id))),ledgerOpeningBalance:opening,ledgerRows,ledgerClosingBalance:balance,ledgerTransactionCount:ledgerRows.length};
   }).filter(b=>(!category||b.ledgerTransactionCount>0)&&(!search||fuzzyIncludes(b.name,search)||b.ledgerRows.some(x=>fuzzyIncludes(x.particulars,search)||fuzzyIncludes(x.type,search)||String(x.reference||'').toLowerCase().includes(search)||String(x.in||'').includes(search)||String(x.out||'').includes(search)))).sort((a,b)=>a.name.localeCompare(b.name));
   const totalDue=roundMoney(list.reduce((n,b)=>n+Math.max(0,num(b.ledgerClosingBalance)),0)),totalAdvance=roundMoney(list.reduce((n,b)=>n+Math.max(0,-num(b.ledgerClosingBalance)),0));
   res.json({ success: true, vendors: list, totalOutstanding: list.reduce((n, b) => n + b.outstanding, 0), totalDue, totalAdvance });
@@ -3553,10 +3556,10 @@ async function readPdfText(filePath,password){
   try{let text='';for(let pageNo=1;pageNo<=doc.numPages;pageNo++){const page=await doc.getPage(pageNo),content=await page.getTextContent({normalizeWhitespace:false,disableCombineTextItems:false});let lastY,pageText='';(content.items||[]).forEach(item=>{const y=item.transform&&item.transform[5];pageText+=(lastY==null||lastY===y?'':'\n')+String(item.str||'');lastY=y;});text+='\n\n'+pageText;}return text;}
   finally{try{doc.destroy();}catch{}}
 }
-async function parseBankStatementUpload(filePath,originalName,password){
+async function parseBankStatementUpload(filePath,originalName,password,options={}){
   const ext=path.extname(originalName||filePath).toLowerCase();if(['.xlsx','.xls','.csv'].includes(ext))return parseBankStatementFile(filePath);
-  if(ext==='.pdf'){const text=await readPdfText(filePath,password);const rows=parseBankStatementText(text);if(rows.length)return rows;throw new Error('No readable statement table was found in this PDF. Upload clear page images or the bank Excel/CSV export.');}
-  if(['.png','.jpg','.jpeg','.webp','.bmp','.tif','.tiff'].includes(ext)){const worker=await createWorker(tesseractEnglish.code,1,{langPath:tesseractEnglish.langPath,gzip:tesseractEnglish.gzip,cacheMethod:'none'});try{const first=await worker.recognize(filePath),firstRows=parseBankStatementText(first&&first.data&&first.data.text||'');if(statementScreenshotRowsArePlausible(firstRows))return firstRows;await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});const table=await worker.recognize(filePath),tableRows=parseBankStatementText(table&&table.data&&table.data.text||'');return statementScreenshotRowsArePlausible(tableRows)?tableRows:firstRows;}finally{await worker.terminate();}}
+  if(ext==='.pdf'){const text=await readPdfText(filePath,password);const current=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(text):[];const rows=current.length?current:parseBankStatementText(text);if(rows.length)return rows;throw new Error('No readable statement table was found in this PDF. Upload clear page images or the bank Excel/CSV export.');}
+  if(['.png','.jpg','.jpeg','.webp','.bmp','.tif','.tiff'].includes(ext)){const worker=await createWorker(tesseractEnglish.code,1,{langPath:tesseractEnglish.langPath,gzip:tesseractEnglish.gzip,cacheMethod:'none'});try{const first=await worker.recognize(filePath),firstText=first&&first.data&&first.data.text||'',currentRows=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(firstText):[],firstRows=currentRows.length?currentRows:parseBankStatementText(firstText);if(currentRows.length)return currentRows;if(statementScreenshotRowsArePlausible(firstRows))return firstRows;await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});const table=await worker.recognize(filePath),tableText=table&&table.data&&table.data.text||'',currentTableRows=options.unbilled?require('./credit-card-accounting').parseUnbilledTransactions(tableText):[],tableRows=currentTableRows.length?currentTableRows:parseBankStatementText(tableText);if(currentTableRows.length)return currentTableRows;return statementScreenshotRowsArePlausible(tableRows)?tableRows:firstRows;}finally{await worker.terminate();}}
   throw new Error('Use XLS, XLSX, CSV, PDF, PNG, JPG, WEBP, BMP or TIFF.');
 }
 function bankRowKey(account,row,occurrence){return crypto.createHash('sha256').update([account,row.date,row.debit,row.credit,row.reference||row.description,row.balance,occurrence].join('|')).digest('hex').slice(0,24);}
@@ -4561,7 +4564,7 @@ function summaryForPL(from, to) {
     const ch = CHANNELS.includes(e.channel) ? e.channel : 'Shared';
     out[ch][e.type] = (out[ch][e.type] || 0) + e.amount;
   });
-  (s.reconciliationExpenses||[]).filter(e=>normalizedNature(e.nature)==='SANKI'&&(!from||e.date>=from)&&(!to||e.date<=to)).forEach(e=>{const type=e.creditCardId?defaultType(e.category||''):(e.type||defaultType(e.category||'')),channel=CHANNELS.includes(e.channel)?e.channel:'Shared';out[channel][type]=(out[channel][type]||0)+num(e.amount);});
+  (s.reconciliationExpenses||[]).filter(e=>normalizedNature(e.nature)==='SANKI'&&(!from||e.date>=from)&&(!to||e.date<=to)).forEach(e=>{const type=e.type||defaultType(e.category||''),channel=CHANNELS.includes(e.channel)?e.channel:'Shared';out[channel][type]=(out[channel][type]||0)+num(e.amount);});
   return out;
 }
 
