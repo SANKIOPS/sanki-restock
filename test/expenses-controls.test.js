@@ -121,7 +121,7 @@ test('owner-confirmed Axis 3645 cases preserve unrelated reconciliation progress
   assert.equal(applyOwnerConfirmedAxis3645Cases(store),false,'all seven corrections are idempotent');
 });
 
-function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant' } = {}) {
+function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant', username = '' } = {}) {
   const layer = router.stack.find(item => item.route && item.route.path === routePath && item.route.methods[method.toLowerCase()]);
   assert.ok(layer, `route exists: ${method} ${routePath}`);
   const req = {
@@ -129,7 +129,7 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
     headers: { 'user-agent':'SANKI Test Mobile', 'x-forwarded-for':'203.0.113.10' },
     get(name) { return this.headers[String(name).toLowerCase()] || ''; },
     ip: '203.0.113.10',
-    user: { username: role === 'claimant' ? 'arshpreet' : (role === 'admin' ? 'prashant' : role + '-user'), role, roles: [role] }
+    user: { username: username||(role === 'claimant' ? 'arshpreet' : (role === 'admin' ? 'prashant' : role + '-user')), role, roles: [role] }
   };
   let status = 200;
   let result;
@@ -1622,10 +1622,24 @@ test('daily dashboard reminder highlights 3448 and 0425 statements through yeste
   assert.equal(invoke('GET','/api/expenses/reconciliation-reminders',{role:'claimant'}).status,403);
   const initial=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});assert.equal(initial.status,200);
   const required=initial.body.requiredThrough,olderDate=new Date(required+'T00:00:00Z');olderDate.setUTCDate(olderDate.getUTCDate()-2);const older=olderDate.toISOString().slice(0,10),expenseFile=path.join(tempDir,'expenses.json'),original=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):'',stored=original?JSON.parse(original):{};
-  stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']={reconciledThrough:older,imports:[],transactions:{}};stored.bankStatements['Tiana 0425']={reconciledThrough:required,imports:[],transactions:{}};stored.bankReconciliationDrafts={'BRD-DAILY-3448':{id:'BRD-DAILY-3448',nature:'SANKI',account:'Axis Bank 3448',summary:{from:older,to:required}}};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']={reconciledThrough:older,imports:[],transactions:{}};stored.bankStatements['Tiana 0425']={reconciledThrough:required,imports:[],transactions:{}};stored.bankStatements['IndusInd Bank 8181']={reconciledThrough:required,imports:[],transactions:{}};stored.cashReconciliations=[{id:'CCR-TEST',verifiedThrough:required,status:'approved'}];stored.bankReconciliationDrafts={'BRD-DAILY-3448':{id:'BRD-DAILY-3448',nature:'SANKI',account:'Axis Bank 3448',summary:{from:older,to:required}}};fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const result=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});if(original)fs.writeFileSync(expenseFile,original);else fs.rmSync(expenseFile,{force:true});assert.equal(result.status,200);assert.equal(result.body.pendingCount,1);
   const axis=result.body.reminders.find(x=>x.account==='Axis Bank 3448'),tiana=result.body.reminders.find(x=>x.account==='Tiana 0425');assert.equal(axis.status,'review_pending');assert.equal(axis.pendingDraft,true);assert.equal(axis.reconciledThrough,older);assert.match(axis.href,/tab=cash&account=Axis%20Bank%203448/);assert.equal(tiana.status,'up_to_date');assert.equal(tiana.needsStatement,false);
-  const dashboard=fs.readFileSync(path.join(__dirname,'..','public','dashboard.html'),'utf8'),expensesUi=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(dashboard,/Bank statements pending reconciliation/);assert.match(dashboard,/statement required/);assert.match(dashboard,/reconciliation-reminders/);assert.match(expensesUi,/id="ledgerReconciliationAttention"/);assert.match(expensesUi,/loadReconciliationAttention\(\)/);assert.match(expensesUi,/Bank statements pending reconciliation/);assert.match(expensesUi,/get\('account'\)/);
+  const dashboard=fs.readFileSync(path.join(__dirname,'..','public','dashboard.html'),'utf8'),expensesUi=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(dashboard,/Account reconciliations pending/);assert.match(dashboard,/statement required/);assert.match(dashboard,/reconciliation-reminders/);assert.match(expensesUi,/id="ledgerReconciliationAttention"/);assert.match(expensesUi,/loadReconciliationAttention\(\)/);assert.match(expensesUi,/Account reconciliations pending/);assert.match(expensesUi,/get\('account'\)/);
+});
+
+test('reconciliation reminders include 8181, every active credit card and Counter Cash',()=>{
+  const cardFile=path.join(tempDir,'credit-cards.json'),original=fs.existsSync(cardFile)?fs.readFileSync(cardFile,'utf8'):'',cards={cards:{'CC-1':{id:'CC-1',name:'HDFC',last4:'7376',cycleDay:21,active:true},'CC-2':{id:'CC-2',name:'ICICI',last4:'1006',cycleDay:11,active:true}},statements:{'CCS-1':{id:'CCS-1',cardId:'CC-1',status:'review',storedName:'hdfc.pdf',uploadedAt:'2026-10-01T00:00:00Z',periodFrom:'2026-08-22',periodTo:'2026-09-21',summary:{from:'2026-08-22',to:'2026-09-21'}},'CCS-MANUAL':{id:'CCS-MANUAL',cardId:'CC-2',status:'finalized',originalName:'Manual entry',storedName:'',summary:{format:'Manual',to:'2099-01-01'}}}};fs.writeFileSync(cardFile,JSON.stringify(cards));
+  const result=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});if(original)fs.writeFileSync(cardFile,original);else fs.rmSync(cardFile,{force:true});assert.equal(result.status,200);assert.ok(result.body.reminders.some(x=>x.type==='bank'&&x.account==='IndusInd Bank 8181'));assert.ok(result.body.reminders.some(x=>x.type==='cash'&&x.account==='Counter Cash'));const hdfc=result.body.reminders.find(x=>x.account==='HDFC 7376'),icici=result.body.reminders.find(x=>x.account==='ICICI 1006');assert.equal(hdfc.status,'review_pending');assert.equal(icici.status,'statement_required','manual card entries do not count as a reconciled statement');assert.equal(hdfc.href,'/expenses.html?tab=creditcards');
+});
+
+test('Prashant Counter Cash verification requires Owner approval and never posts an adjustment',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):'',stored=original?JSON.parse(original):{};stored.cashReconciliations=[];stored.cashReconciliationSeq=0;stored.adjustments=stored.adjustments||[];fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const today=indiaBusinessDate(),ledger=invoke('GET','/api/expenses/account-ledger',{role:'claimant',username:'prashant',query:{nature:'SANKI',account:'Counter Cash',from:today,to:today}});assert.equal(ledger.status,200);const adjustmentCount=stored.adjustments.length;
+  const countedBalance=Math.max(0,ledger.body.balance),note=countedBalance===ledger.body.balance?'':'Test physical count differs from the ledger';
+  const requested=invoke('POST','/api/expenses/cash-reconciliations',{role:'claimant',username:'prashant',body:{verifiedThrough:today,countedBalance,note}});assert.equal(requested.status,200);assert.equal(requested.body.approvalPending,true);assert.equal(requested.body.verification.status,'pending');assert.equal(invoke('POST','/api/expenses/cash-reconciliations/:id/decision',{role:'claimant',username:'prashant',params:{id:requested.body.verification.id},body:{decision:'approve'}}).status,403);
+  const approved=invoke('POST','/api/expenses/cash-reconciliations/:id/decision',{role:'owner',params:{id:requested.body.verification.id},body:{decision:'approve'}});assert.equal(approved.status,200);assert.equal(approved.body.verification.status,'approved');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.adjustments.length,adjustmentCount);assert.equal(after.cashReconciliations[0].approvedBy,'owner-user');
+  if(original)fs.writeFileSync(expenseFile,original);else fs.rmSync(expenseFile,{force:true});
 });
 
 test('any manual ledger movement can be linked to a bank row, remarked and undone',()=>{
