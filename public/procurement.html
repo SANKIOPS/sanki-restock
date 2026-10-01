@@ -1727,6 +1727,31 @@
       return '<select class="'+cls+'"'+t+' data-f="'+f+'" data-i="'+i+'"'+(o.style?(' style="'+o.style+'"'):'')+'>'+optionsHtml+'</select>'; }
     // Count of lines with any discrepancy vs what was ordered.
     function poDiffCount(po){ return (po.lines||[]).filter(function(l){ return l&&l.ordered && ['qty','colour','productType','sizeLabel','chinaSize','designName','designCode','sku','fit','audience'].some(function(f){return isDiff(l,f);}); }).length; }
+    function postingResultPanel(po){
+      if(po.status!=='posting_partial') return '';
+      var results=po.results||{}, created=results.created||[], adjusted=results.adjusted||[], errors=results.errors||[];
+      var createdRows=created.map(function(item){
+        var stocked=(item.variants||[]).filter(function(v){return !v.stockError;}).length;
+        var failed=(item.variants||[]).filter(function(v){return !!v.stockError;});
+        return '<li><b>'+esc(item.title||item.handle||'Shopify product')+'</b>'+
+          (item.productId?' <span class="mono muted">ID '+esc(item.productId)+'</span>':'')+
+          ' · '+stocked+' variant'+(stocked===1?'':'s')+' stocked'+
+          (failed.length?' · <span style="color:var(--err)">'+failed.length+' stock error'+(failed.length===1?'':'s')+'</span>':'')+'</li>';
+      }).join('');
+      var adjustedRows=adjusted.map(function(item){
+        return '<li><b>'+esc(item.sku||'Existing SKU')+'</b> · added '+esc(item.added==null?'—':item.added)+(item.newAvailable==null?'':' · Shopify stock '+esc(item.newAvailable))+'</li>';
+      }).join('');
+      var errorRows=errors.map(function(item){
+        return '<li><b>'+esc(item.kind==='adjust'?(item.sku||'Stock update'):(item.product||'Product creation'))+':</b> '+esc(item.error||'Unknown Shopify error')+'</li>';
+      }).join('');
+      return '<div class="banner err" style="margin-top:14px"><b>Posting was started, but did not finish.</b> Do not post this PO again until the saved Shopify result below is reconciled.'+
+        '<div style="margin-top:8px;color:var(--ink)"><b>'+created.length+'</b> product'+(created.length===1?'':'s')+' created · <b>'+adjusted.length+'</b> existing SKU'+(adjusted.length===1?'':'s')+' updated · <b>'+errors.length+'</b> error'+(errors.length===1?'':'s')+'</div>'+
+        (createdRows?'<div style="margin-top:8px"><b>Created in Shopify</b><ul style="margin:5px 0 0 20px">'+createdRows+'</ul></div>':'')+
+        (adjustedRows?'<div style="margin-top:8px"><b>Existing stock updated</b><ul style="margin:5px 0 0 20px">'+adjustedRows+'</ul></div>':'')+
+        (errorRows?'<div style="margin-top:8px"><b>Where posting stopped</b><ul style="margin:5px 0 0 20px">'+errorRows+'</ul></div>':'')+
+        (!createdRows&&!adjustedRows&&!errorRows?'<div style="margin-top:8px">No successful Shopify write was saved. The posting result needs owner reconciliation.</div>':'')+
+        '</div>';
+    }
     function renderPoDetail(po){
       lastReceive=null; currentPo=po;
       var posted = po.status==='posted' || po.status==='posting_partial';
@@ -1746,6 +1771,7 @@
         '<div><h2 style="margin:0">'+esc(po.id)+'</h2>'+
           '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+(po.sourceBatchName?(' <span class="muted">· Fresh batch '+esc(po.sourceBatchName)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
+      h+=postingResultPanel(po);
       if(!posted) h+='<details class="po-fold" id="costCalculationFold"><summary>Cost calculation <span class="po-fold-summary">Landed cost and freight breakdown</span></summary><div class="po-fold-body">'+purchaseCalculationPanel(po)+'</div></details>';
       h+='<details class="po-fold" id="receivedProductsFold"><summary>Received products &amp; corrections <span class="po-fold-summary">'+(po.lines||[]).length+' rows · photos, quantities, weights and product details</span></summary><div class="po-fold-body">';
       // rates + date-of-receive carried from the advance purchase — editable here before final calc

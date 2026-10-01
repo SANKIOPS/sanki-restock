@@ -49,6 +49,9 @@ test('original photo remains a private reference and posting requires approved v
   assert.match(js, /\/use-original-photo'/);
   assert.match(js, /x\.type !== 'original'/);
   assert.match(js, /po\.status = 'posting_partial'/);
+  assert.match(html, /Posting was started, but did not finish/);
+  assert.match(html, /Where posting stopped/);
+  assert.match(html, /Do not post this PO again/);
   assert.match(js, /missing readable approved view/);
   assert.match(js, /recoverableLostFlatFront/);
   assert.match(js, /imageRecoveryHistory/);
