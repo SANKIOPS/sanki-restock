@@ -16,12 +16,12 @@ test('credit cards are entity-neutral liabilities with permanent statement revie
   assert.equal(made.status,200);assert.equal(made.body.card.displayName,'HDFC Regalia 1234');assert.equal(made.body.card.outstanding,1000);assert.equal(made.body.card.nature,undefined);
   const manual=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:made.body.card.id,date:'2026-08-27',narration:'Swiggy order Delhi',amount:500,classification:'expense'}});
   assert.equal(manual.status,200);assert.equal(manual.body.statement.status,'review');assert.equal(manual.body.statement.rows[0].suggestedCategory,'FOOD EXPENSE');assert.equal(manual.body.statement.originalName,'Manual entry');
-  const row=manual.body.statement.rows[0];const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:manual.body.statement.id},body:{rows:[{id:row.id,classification:'expense',category:'FOOD EXPENSE',nature:'SANKI',channel:'POS',confirmed:true}]}});
+  const row=manual.body.statement.rows[0];const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:manual.body.statement.id},body:{rows:[{id:row.id,classification:'expense',category:'FOOD EXPENSE',nature:'SANKI',channel:'Both',type:'marketing',merchant:'Merchant name',confirmed:true}]}});
   assert.equal(reviewed.status,200);assert.equal(reviewed.body.statement.rows[0].confirmed,true);
   const finalized=invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:manual.body.statement.id}});
   assert.equal(finalized.status,200);assert.equal(finalized.body.outstanding,1500);
   const expenses=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));const posting=expenses.reconciliationExpenses.find(x=>x.creditCardStatementId===manual.body.statement.id);
-  assert.equal(posting.category,'FOOD EXPENSE');assert.equal(posting.nature,'SANKI');assert.equal(posting.channel,'POS');assert.equal(posting.account,'HDFC Regalia 1234');
+  assert.equal(posting.category,'FOOD EXPENSE');assert.equal(posting.nature,'SANKI');assert.equal(posting.channel,'Both');assert.equal(posting.type,'marketing');assert.equal(posting.vendor,'Merchant name');assert.equal(posting.account,'HDFC Regalia 1234');
   const logs=invoke('GET','/api/expenses/credit-cards/statements').body.statements;assert.equal(logs[0].status,'finalized');assert.equal(logs[0].fileUrl,'','manual logs do not expose a broken source-file link');
 });
 test('Owner can edit card cycle and due days without changing finalized statements',()=>{
@@ -32,17 +32,17 @@ test('Owner can edit card cycle and due days without changing finalized statemen
 });
 test('confirmed merchant categories are remembered but future rows remain unconfirmed',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];const first=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-08-28',narration:'Cafe Blue Saket',amount:250}}).body.statement,row=first.rows[0];
-  invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:first.id},body:{rows:[{id:row.id,classification:'expense',category:'FOOD EXPENSE',nature:'SANKI',channel:'Website',confirmed:true}]}});invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:first.id}});
+  invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:first.id},body:{rows:[{id:row.id,classification:'expense',category:'FOOD EXPENSE',nature:'SANKI',channel:'Website',type:'running',confirmed:true}]}});invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:first.id}});
   const next=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-08-29',narration:'Cafe Blue Saket',amount:300}}).body.statement.rows[0];
   assert.equal(next.category,'FOOD EXPENSE');assert.equal(next.confirmed,false);assert.ok(next.suggestedRule);
 });
-test('card payment reduces liability and debits only the linked bank ledger',()=>{
+test('whole-card payment debits the bank while statement accounting controls liability',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding;
   const paid=invoke('POST','/api/expenses/credit-cards/payments',{body:{cardId:card.id,nature:'SANKI',account:'Axis Bank 3448',paymentKind:'partial',amount:400,date:'2026-08-30',reference:'UTR400'}});
-  assert.equal(paid.status,200);assert.equal(paid.body.outstanding,before-400);
+  assert.equal(paid.status,200);assert.equal(paid.body.outstanding,before);
   const expenses=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfer=expenses.transfers.find(x=>x.creditCardPaymentId===paid.body.payment.id);
   assert.equal(transfer.fromAccount,'Axis Bank 3448');assert.equal(transfer.toAccount,'HDFC Regalia 1234');assert.equal(transfer.classification,'credit_card_payment');
-  const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.equal(ledger.outstanding,paid.body.outstanding);assert.ok(ledger.entries.some(x=>x.id===paid.body.payment.id));
+  const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.equal(ledger.outstanding,paid.body.outstanding);assert.equal(ledger.entries.some(x=>x.id===paid.body.payment.id),false);
 });
 test('mixed-use card payment moves one bank amount and records entity ownership separately',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
@@ -55,13 +55,13 @@ test('mixed-use card payment rejects an allocation that does not equal the bank 
   const paid=invoke('POST','/api/expenses/credit-cards/payments',{body:{cardId:card.id,nature:'SANKI',account:'Axis Bank 3448',amount:1000,date:'2026-09-02',allocations:[{nature:'SANKI',amount:500},{nature:'PERSONAL',amount:200}]}});
   assert.equal(paid.status,400);assert.equal(JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')).transfers.length,before);
 });
-test('expense form can post an approved purchase directly to a selected credit card',()=>{
+test('legacy logged purchases do not double count statement card liability',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding;
   const made=invokeExpense('POST','/api/expenses',{role:'admin',body:{date:'2026-09-11',amount:321,particulars:'Shoot accessory',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:true,personalAccount:card.id,personalPaymentProof:'/card-proof.jpg',billPhoto:'/bill.jpg'}});
   assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.payments[0].creditCardId,card.id);assert.equal(made.body.expense.payments[0].account,card.displayName);assert.equal(made.body.expense.payments[0].personalFunds,false);
   const stored=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));stored.expenses[made.body.expense.id].status='approved';stored.expenses[made.body.expense.id].approvedAt='2026-09-11T00:00:00.000Z';fs.writeFileSync(path.join(temp,'expenses.json'),JSON.stringify(stored));
-  const after=invoke('GET','/api/expenses/credit-cards').body.cards.find(x=>x.id===card.id);assert.equal(after.outstanding,before+321);
-  const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.ok(ledger.entries.some(x=>x.id===made.body.expense.id+'/PAY-001'&&x.debit===321));
+  const after=invoke('GET','/api/expenses/credit-cards').body.cards.find(x=>x.id===card.id);assert.equal(after.outstanding,before);
+  const ledger=invoke('GET','/api/expenses/credit-cards/:id/ledger',{params:{id:card.id}}).body;assert.equal(ledger.entries.some(x=>x.id===made.body.expense.id+'/PAY-001'),false);
 });
 test('Prashant can select an accessible card and log a credit-card expense without broad admin access',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
@@ -75,17 +75,17 @@ test('an unpaid credit expense retains the selected card for its later payment',
   const made=invokeExpense('POST','/api/expenses',{body:{date:'2026-09-11',amount:789,particulars:'Equipment awaiting payment',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:false,creditCardId:card.id,billPhoto:'/bill-pending.jpg'}});
   assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.paidAmount,0);assert.deepEqual(made.body.expense.payments,[]);assert.equal(made.body.expense.status,'pending');
 });
-test('linked duplicate statement payment never creates a second bank transfer or liability reduction',()=>{
+test('statement payment is authoritative without a second bank transfer or duplicate decision',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding,expBefore=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfersBefore=expBefore.transfers.length;
   const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-08-30',narration:'Card payment Axis Bank 3448',amount:400,classification:'card_payment'}}).body.statement,row=st.rows[0];
   assert.ok(row.duplicateWarnings.some(x=>x.kind==='card_payment'));
   const reviewed=invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:row.id,classification:'card_payment',duplicateResolution:'link',confirmed:true}]}});assert.equal(reviewed.status,200);
-  const finalized=invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:st.id}});assert.equal(finalized.status,200);assert.equal(finalized.body.outstanding,before);
+  const finalized=invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:st.id}});assert.equal(finalized.status,200);assert.equal(finalized.body.outstanding,before-400);
   const expAfter=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));assert.equal(expAfter.transfers.length,transfersBefore);
 });
 test('owner can reopen a finalized statement with a reason while retaining its log',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-08-30',narration:'Reopen test expense',amount:99}}).body.statement,row=st.rows[0];
-  invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:row.id,classification:'expense',category:'OFFICE EXP',nature:'SANKI',channel:'POS',confirmed:true}]}});invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:st.id}});
+  invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params:{id:st.id},body:{rows:[{id:row.id,classification:'expense',category:'OFFICE EXP',nature:'SANKI',channel:'Both',type:'marketing',merchant:'Merchant name',confirmed:true}]}});invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params:{id:st.id}});
   const reopened=invoke('POST','/api/expenses/credit-cards/statements/:id/reopen',{params:{id:st.id},body:{reason:'Correct the category'}});assert.equal(reopened.status,200);assert.equal(reopened.body.statement.status,'review');assert.equal(reopened.body.statement.reopenReason,'Correct the category');
   const exp=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));assert.equal(exp.reconciliationExpenses.some(x=>x.creditCardStatementId===st.id),false);
   const log=invoke('GET','/api/expenses/credit-cards/statements').body.statements.find(x=>x.id===st.id);assert.ok(log);assert.equal(log.status,'review');
@@ -96,5 +96,14 @@ test('merchant and transaction inference recognizes refunds, fees and EMI',()=>{
   assert.equal(inferClassification({description:'EMI interest',debit:100}),'emi_interest');
   assert.equal(inferClassification({description:'Merchant refund',credit:100}),'refund');
 });
-test('expenses UI exposes credit cards, statement logs, review and merchant learning',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/data-t="creditcards"/);assert.match(html,/value="Credit">Credit Card/);assert.match(html,/Select credit card used/);assert.match(html,/Credit card to use/);assert.match(html,/Add or manage credit cards/);assert.match(html,/populatePaymentSource/);assert.match(html,/cfg\.creditCards/);assert.match(html,/Statement Logs/);assert.match(html,/Merchant rules/);assert.match(html,/Finalize and post to ledgers/);assert.match(html,/Possible duplicate/);assert.match(html,/Full payment/);assert.match(html,/Reopen with reason/);assert.match(html,/Optional bill\/proof URL/);assert.match(html,/id="cc_password"/);assert.match(html,/password is used once.*never saved/i);assert.match(html,/fd\.append\('password'/);assert.match(html,/Edit card settings/);assert.match(html,/Statement cycle day/);assert.match(html,/Payment due day/);assert.match(html,/Existing statement dates were not changed/);});
+test('expenses UI exposes credit cards, statement logs, review and merchant learning',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/data-t="creditcards"/);assert.match(html,/value="Credit">Credit Card/);assert.match(html,/Select credit card used/);assert.match(html,/Credit card to use/);assert.match(html,/Add or manage credit cards/);assert.match(html,/populatePaymentSource/);assert.match(html,/cfg\.creditCards/);assert.match(html,/Statement Logs/);assert.match(html,/Merchant rules/);assert.match(html,/Finalize and post to ledgers/);assert.doesNotMatch(html,/class="cc_dup"/);assert.match(html,/Full payment/);assert.match(html,/Reopen with reason/);assert.doesNotMatch(html,/Optional bill\/proof URL/);assert.match(html,/<th>Merchant<\/th>/);assert.match(html,/<th>Type<\/th>/);assert.match(html,/id="cc_password"/);assert.match(html,/password is used once.*never saved/i);assert.match(html,/fd\.append\('password'/);assert.match(html,/Edit card settings/);assert.match(html,/Statement cycle day/);assert.match(html,/Payment due day/);assert.match(html,/Existing statement dates were not changed/);});
 test('credit-card router mounts before the generic expense-id route',()=>{const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8'),cards=server.indexOf("require('./modules/credit-cards').router"),expenses=server.indexOf("require('./modules/expenses').router");assert.ok(cards>=0&&expenses>=0&&cards<expenses);});
+
+test('review rejects classifications opposite to the statement direction and finalizes without row confirmations',()=>{
+  const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
+  const st=invoke('POST','/api/expenses/credit-cards/statements/manual',{body:{cardId:card.id,date:'2026-10-01',narration:'New payment',amount:50,classification:'card_payment'}}).body.statement;
+  const params={id:st.id},id=st.rows[0].id;
+  assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params,body:{rows:[{id,classification:'expense'}]}}).status,400);
+  assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/review',{params,body:{rows:[{id,classification:'card_payment'}]}}).status,200);
+  assert.equal(invoke('POST','/api/expenses/credit-cards/statements/:id/finalize',{params}).status,200);
+});
