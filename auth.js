@@ -89,7 +89,7 @@ function checkApiKey(req) {
 // accidentally expose its backend to every logged-in employee. Rules are
 // checked in order; more-specific paths must come before broader prefixes.
 const API_ROLE_RULES = [
-  { prefix: '/api/stock-movements', roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
+  { prefix: '/api/stock-movements', roles: ['admin', 'inventory', 'warehouse'] },
   { path: '/api/auth/me',                 roles: '*' },
   { path: '/api/modules',                 roles: '*' },
   { prefix: '/api/admin',                 roles: ['admin', 'owner'] },
@@ -108,12 +108,12 @@ const API_ROLE_RULES = [
   { prefix: '/api/casuals/',              roles: ['admin', 'procurement'] },
   { prefix: '/api/sizetracker/',          roles: ['admin', 'procurement'] },
   { prefix: '/api/sales',                 roles: ['admin', 'sales'] },
-  { prefix: '/api/racks',                 roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
+  { prefix: '/api/racks',                 roles: ['owner'] },
   { prefix: '/api/stock-search',          roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
   { prefix: '/api/showroom/',             roles: ['admin', 'inventory', 'warehouse'] },
   { prefix: '/api/inventory-costs/',      roles: ['admin', 'inventory'] },
-  { prefix: '/api/inventory-categorization/catalog', roles: ['admin', 'inventory', 'warehouse', 'sales', 'stocksearch'] },
-  { prefix: '/api/inventory-categorization/image-search', roles: ['admin', 'inventory', 'warehouse', 'sales', 'stocksearch'] },
+  { prefix: '/api/inventory-categorization/catalog', roles: ['admin', 'inventory', 'warehouse', 'sales'] },
+  { prefix: '/api/inventory-categorization/image-search', roles: ['admin', 'inventory', 'warehouse', 'sales'] },
   { prefix: '/api/inventory-categorization/', roles: ['admin'] },
   { prefix: '/api/velocity/',             roles: ['admin', 'sales'] },
   { prefix: '/api/orders-ledger',         roles: ['admin', 'sales', 'revenue', 'warehouse'] },
@@ -123,8 +123,8 @@ const API_ROLE_RULES = [
   { prefix: '/api/whatsapp/',             roles: ['admin', 'sales'] },
   { path: '/api/data/save',               roles: ['admin', 'inventory'] },
   { path: '/api/data/load',               roles: ['admin', 'inventory', 'warehouse'] },
-  { path: '/api/products',                roles: ['admin', 'inventory', 'sales', 'procurement', 'warehouse', 'stocksearch'] },
-  { path: '/api/inventory',               roles: ['admin', 'inventory', 'sales', 'warehouse', 'stocksearch'] },
+  { path: '/api/products',                roles: ['admin', 'inventory', 'sales', 'procurement', 'warehouse'] },
+  { path: '/api/inventory',               roles: ['admin', 'inventory', 'sales', 'warehouse'] },
   { path: '/api/collections',             roles: ['admin', 'inventory', 'sales', 'procurement'] },
   { path: '/api/identify-product',        roles: ['admin', 'inventory', 'procurement'] },
   { path: '/api/health/full',             roles: ['admin'] }
@@ -141,7 +141,14 @@ function apiAllowedForUser(user, p, method='GET') {
   if(isPrashantUser(user)&&p.startsWith('/api/salary/'))return true;
   if(isPrashantUser(user)&&((method==='POST'&&p==='/api/expenses/upload')||(method==='GET'&&p==='/api/expenses/config')))return true;
   const userRoles = rolesOf(user);
+  // Rack assignment, catalogue refresh and RIS synchronization are Owner-only.
+  // Search itself stays available to the dedicated view-only Stylists role.
+  const ownerOnlyStockAction = p.startsWith('/api/racks') || p === '/api/stock-search/refresh';
+  if (ownerOnlyStockAction) return userRoles.includes('owner');
   if (userRoles.includes('admin') || userRoles.includes('owner')) return true;
+  if (userRoles.length === 1 && userRoles[0] === 'stocksearch') {
+    return method === 'GET' && ['/api/auth/me', '/api/modules', '/api/stock-search'].includes(p);
+  }
   // Accounting may review purchase figures and record vendor invoice data,
   // but cannot change PO quantities, inventory, or purchase settings.
   if (userRoles.includes('accounting')) {

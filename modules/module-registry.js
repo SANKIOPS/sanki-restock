@@ -45,9 +45,9 @@ const MODULES = [
   { key: 'velocity',     title: 'Velocity Intelligence', desc: 'How fast every product is selling',                  icon: '⚡', href: '/velocity.html',                  section: 'Main',      status: 'hidden', roles: ['admin', 'sales', 'inventory'] },
   { key: 'analytics',    title: 'Analytics',             desc: 'Sales & performance dashboards',                     icon: '📊', href: '/analytics.html',                 section: 'Main',      status: 'hidden', roles: ['admin', 'sales'] },
   { key: 'inv-stats',    title: 'Inventory Statistics',  desc: 'Stock levels & valuation',                           icon: '📈', href: '/inventory-stats.html',           section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
-  { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'hidden', roles: ['admin', 'stocksearch', 'warehouse'] },
+  { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'live', roles: ['admin', 'stocksearch', 'warehouse'] },
 
-  { key: 'inventory-dashboard', title: 'Dashboard', desc: 'Search, filter and locate every resolved product', icon: '▦', href: '/inventory.html', section: 'Inventory', status: 'live', roles: ['admin', 'inventory', 'warehouse', 'sales', 'stocksearch'] },
+  { key: 'inventory-dashboard', title: 'Dashboard', desc: 'Search, filter and locate every resolved product', icon: '▦', href: '/inventory.html', section: 'Inventory', status: 'live', roles: ['admin', 'inventory', 'warehouse', 'sales'] },
 
   { key: 'orders',       title: 'Orders',                desc: 'Every Shopify sale (POS + Website) + dispatch tracking', icon: '🧾', href: '/orders.html',                section: 'Sales',     status: 'live',   roles: ['admin', 'sales', 'revenue', 'warehouse'] },
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.

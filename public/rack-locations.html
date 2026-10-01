@@ -46,18 +46,18 @@
 <body>
 <div class="wrap">
   <h1>🔍 Stock Search &amp; Rack Locations</h1>
-  <p class="sub">Search inventory by any parameter — SKU, product, size, vendor, tag, or rack — and assign a rack code to each variant so anyone can find it fast.</p>
+  <p class="sub">Search inventory by any parameter — SKU, product, size, vendor, tag, or rack — and see the current quantity and rack location.</p>
 
   <div class="bar">
     <input id="q" type="text" placeholder="Search SKU, product, size, vendor, tag, rack…" autocomplete="off">
     <label class="chip"><input type="checkbox" id="inStock"> In stock only</label>
     <label class="chip"><input type="checkbox" id="hasRack"> Has rack</label>
     <label class="chip"><input type="checkbox" id="noRack"> No rack</label>
-    <button class="btn ghost" id="refreshBtn" title="Re-crawl the Shopify catalog">↻ Refresh catalog</button>
-    <button class="btn ghost" id="risBtn" title="Pull rack layout from the RIS Google Sheet">⤓ Sync RIS sheet</button>
+    <button class="btn ghost" id="refreshBtn" title="Re-crawl the Shopify catalog" hidden>↻ Refresh catalog</button>
+    <button class="btn ghost" id="risBtn" title="Pull rack layout from the RIS Google Sheet" hidden>⤓ Sync RIS sheet</button>
   </div>
   <div class="meta" id="meta"></div>
-  <div class="meta" id="risMeta"></div>
+  <div class="meta" id="risMeta" hidden></div>
 
   <table>
     <thead><tr>
@@ -79,7 +79,7 @@
   var refreshBtn = document.getElementById('refreshBtn');
   var risBtn = document.getElementById('risBtn');
   var risMetaEl = document.getElementById('risMeta');
-  var timer = null, seq = 0;
+  var timer = null, seq = 0, isOwner = false;
 
   function fmtAgo(ts) {
     if (!ts) return 'never';
@@ -134,15 +134,21 @@
       tr.appendChild(tdQty);
 
       var tdRack = document.createElement('td');
-      var input = document.createElement('input');
-      input.className = 'rack-in'; input.type = 'text'; input.placeholder = '—';
-      input.value = r.rack || ''; input.maxLength = 24;
-      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
-      input.addEventListener('blur', function () { saveRack(input, r.variantId, r.sku); });
-      tdRack.appendChild(input);
+      if (isOwner) {
+        var input = document.createElement('input');
+        input.className = 'rack-in'; input.type = 'text'; input.placeholder = '—';
+        input.value = r.rack || ''; input.maxLength = 24;
+        input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+        input.addEventListener('blur', function () { saveRack(input, r.variantId, r.sku); });
+        tdRack.appendChild(input);
+      } else {
+        var rackText = document.createElement('span');
+        rackText.className = 'sku'; rackText.textContent = r.rack || '—';
+        tdRack.appendChild(rackText);
+      }
       if (r.rackSource === 'ris') {
         var tag = document.createElement('span');
-        tag.textContent = 'RIS'; tag.title = 'From the RIS sheet — edit + blur to override manually';
+        tag.textContent = 'RIS'; tag.title = isOwner ? 'From the RIS sheet — edit + blur to override manually' : 'Rack location imported from the RIS sheet';
         tag.style.cssText = 'margin-left:6px;font-size:10px;font-weight:700;color:#185FA5;background:#eef2ff;padding:1px 6px;border-radius:20px;vertical-align:middle;';
         tdRack.appendChild(tag);
       }
@@ -214,9 +220,23 @@
       .catch(function () { risBtn.disabled = false; risBtn.textContent = old; risMetaEl.textContent = 'RIS sync failed (network).'; });
   });
 
-  // Initial load — show what's in the catalog straight away.
-  search();
-  loadRisStatus();
+  // Fail closed: editing controls are hidden until the server confirms Owner.
+  // Stylists and every other role receive a search-only view.
+  fetch('/api/auth/me').then(function (r) { return r.json(); }).then(function (j) {
+    var u = (j && j.user) || j || {};
+    var roles = Array.isArray(u.roles) ? u.roles : (u.role ? [u.role] : []);
+    isOwner = roles.indexOf('owner') !== -1;
+    if (isOwner) {
+      refreshBtn.hidden = false;
+      risBtn.hidden = false;
+      risMetaEl.hidden = false;
+      loadRisStatus();
+    }
+    search();
+  }).catch(function () {
+    // The API gate will return the appropriate error if the session expired.
+    search();
+  });
 })();
 </script>
 </body>

@@ -81,7 +81,9 @@ const ROLES = [
   { id: 'claimant',    label: 'Claimant (log expenses only)' },
   { id: 'revenue',     label: 'Revenue / Accounts' },
   { id: 'warehouse',   label: 'Warehouse / Rack' },
-  { id: 'stocksearch', label: 'Stock Search' }
+  // Keep the stable role id so existing assigned users continue to work, but
+  // present the role by its operational name in Users & Roles.
+  { id: 'stocksearch', label: 'Stylists (Stock Search — view only)' }
 ];
 const ROLE_IDS = ROLES.map(r => r.id);
 
@@ -101,7 +103,7 @@ const ROLE_HOME = {
   claimant:    '/expenses.html',
   revenue:     '/dashboard.html',
   warehouse:   '/dashboard.html',
-  stocksearch: '/dashboard.html'
+  stocksearch: '/rack-locations.html'
 };
 // '*' = all pages. Otherwise an allow-list of exact page paths. This is the
 // DEFAULT (seed) map — the admin can override it per role (persisted in the
@@ -153,6 +155,9 @@ function getRolePages() {
   const out = {};
   ROLE_IDS.forEach(r => {
     if (r === 'admin' || r === 'owner') { out[r] = '*'; return; }
+    // This role is intentionally non-configurable and least-privilege. Old
+    // stored overrides must never re-open Inventory Dashboard or other pages.
+    if (r === 'stocksearch') { out[r] = ['/rack-locations.html']; return; }
     out[r] = Array.isArray(overrides[r]) ? overrides[r] : seedPagesForRole(r);
   });
   return out;
@@ -503,6 +508,7 @@ router.post('/api/admin/permissions', requireAdmin, (req, res) => {
   const role = String(b.role || '');
   if (!ROLE_IDS.includes(role)) return res.json({ success: false, error: 'Unknown role' });
   if (role === 'admin') return res.json({ success: false, error: 'Admin always has full access — it cannot be limited.' });
+  if (role === 'stocksearch') return res.json({ success: false, error: 'Stylists is fixed to read-only Stock Search.' });
   const known = pageCatalog().map(p => p.path);
   const pages = Array.from(new Set((Array.isArray(b.pages) ? b.pages : []).map(String).filter(p => known.includes(p))));
   const store = loadUsers();

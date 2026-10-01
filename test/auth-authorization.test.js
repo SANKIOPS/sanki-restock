@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { apiRuleFor, apiAllowedForUser } = require('../auth');
+const { visibleFor } = require('../modules/module-registry');
 
 function user(...roles) {
   return { username: 'test-user', role: roles[0], roles };
@@ -81,17 +82,50 @@ test('personal claimants can create and view their own expense records', () => {
   assert.equal(apiAllowedForUser(claimant, '/api/pl/summary'), false);
 });
 
-test('warehouse and stock-search roles receive only operational stock access', () => {
+test('warehouse retains operational access while Stylists stock search is read-only', () => {
   assert.equal(apiAllowedForUser(user('warehouse'), '/api/showroom/queue/move'), true);
   assert.equal(apiAllowedForUser(user('warehouse'), '/api/orders-ledger'), true);
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/stock-search'), true);
-  assert.equal(apiAllowedForUser(user('stocksearch'), '/api/racks/set'), true);
+  assert.equal(apiAllowedForUser(user('stocksearch'), '/api/stock-search/refresh'), false);
+  assert.equal(apiAllowedForUser(user('stocksearch'), '/api/racks'), false);
+  assert.equal(apiAllowedForUser(user('stocksearch'), '/api/racks/set', 'POST'), false);
+  assert.equal(apiAllowedForUser(user('stocksearch'), '/api/products'), false);
+  assert.equal(apiAllowedForUser(user('stocksearch'), '/api/inventory'), false);
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/showroom/settings'), false);
+  assert.equal(apiAllowedForUser(user('owner'), '/api/racks/set', 'POST'), true);
+  assert.equal(apiAllowedForUser(user('owner'), '/api/stock-search/refresh'), true);
+  assert.equal(apiAllowedForUser(user('admin'), '/api/racks/set', 'POST'), false);
 });
 
 test('shared authenticated endpoints remain available to all roles', () => {
   assert.equal(apiAllowedForUser(user('stocksearch'), '/api/auth/me'), true);
   assert.equal(apiAllowedForUser(user('accounting'), '/api/modules'), true);
+});
+
+test('Stylists see only the Stock Search module', () => {
+  assert.deepEqual(
+    visibleFor(user('stocksearch')).map(module => module.key),
+    ['stock-search']
+  );
+});
+
+test('Stock Search UI exposes edit and sync controls only after Owner confirmation', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'rack-locations.html'), 'utf8');
+  assert.match(source, /id="refreshBtn"[^>]*hidden/);
+  assert.match(source, /id="risBtn"[^>]*hidden/);
+  assert.match(source, /fetch\('\/api\/auth\/me'\)/);
+  assert.match(source, /isOwner = roles\.indexOf\('owner'\) !== -1/);
+  assert.match(source, /if \(isOwner\) \{[\s\S]*?input\.className = 'rack-in'/);
+  assert.match(source, /rackText\.textContent = r\.rack \|\| '—'/);
+});
+
+test('Stylists page permission cannot be broadened from the admin editor', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const usersSource = fs.readFileSync(path.join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
+  const adminSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin-users.html'), 'utf8');
+  assert.match(usersSource, /role === 'stocksearch'[\s\S]*?fixed to read-only Stock Search/);
+  assert.match(adminSource, /r\.id === 'stocksearch'[\s\S]*?Locked — Stock Search only, view-only/);
 });
 
 test('safe PWA update assets remain public so expired sessions can recover', () => {

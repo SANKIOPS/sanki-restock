@@ -257,6 +257,15 @@
           return;
         }
 
+        if (r.id === 'stocksearch') {
+          var locked = document.createElement('span'); locked.className = 'perm-full';
+          locked.textContent = 'Locked — Stock Search only, view-only';
+          head.appendChild(locked);
+          block.appendChild(head);
+          host.appendChild(block);
+          return;
+        }
+
         var saveBtn = document.createElement('button'); saveBtn.className = 'sm'; saveBtn.textContent = 'Save';
         head.appendChild(saveBtn);
         block.appendChild(head);
