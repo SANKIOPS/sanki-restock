@@ -59,7 +59,7 @@ test('original photo remains a private reference and posting requires approved v
   assert.match(js, /mergedSameArticle/);
   assert.match(js, /Missing readable approved image\(s\)/);
   assert.match(js, /allowLostImages/);
-  assert.match(html, /no image generation will be charged/);
+  assert.match(html, /allowLostImages:true/);
   assert.match(js, /missing readable approved view/);
   assert.match(js, /recoverableLostFlatFront/);
   assert.match(js, /imageRecoveryHistory/);
