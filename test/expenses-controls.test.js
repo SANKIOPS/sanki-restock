@@ -1634,6 +1634,8 @@ test('reconciliation reminders include 8181, every active credit card and Counte
 });
 
 test('Prashant Counter Cash verification requires Owner approval and never posts an adjustment',()=>{
+  const genericPost=router.stack.find(item=>item.route&&item.route.path==='/api/expenses/:id'&&item.route.methods.post);assert.ok(genericPost,'generic expense update route exists');
+  let nextCalled=false;genericPost.route.stack[0].handle({params:{id:'cash-reconciliations'}},{},()=>{nextCalled=true;});assert.equal(nextCalled,true,'cash verification POST falls through to its dedicated route');
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):'',stored=original?JSON.parse(original):{};stored.cashReconciliations=[];stored.cashReconciliationSeq=0;stored.adjustments=stored.adjustments||[];fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const today=indiaBusinessDate(),ledger=invoke('GET','/api/expenses/account-ledger',{role:'claimant',username:'prashant',query:{nature:'SANKI',account:'Counter Cash',from:today,to:today}});assert.equal(ledger.status,200);const adjustmentCount=stored.adjustments.length;
   const countedBalance=Math.max(0,ledger.body.balance),note=countedBalance===ledger.body.balance?'':'Test physical count differs from the ledger';
