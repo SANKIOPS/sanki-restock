@@ -56,6 +56,8 @@ test('original photo remains a private reference and posting requires approved v
   assert.match(js, /resume-posting/);
   assert.match(js, /loadCatalogue\(true\)/);
   assert.match(js, /A Shopify product is only partly present/);
+  assert.match(js, /mergedSameArticle/);
+  assert.match(js, /Missing readable approved image\(s\)/);
   assert.match(js, /missing readable approved view/);
   assert.match(js, /recoverableLostFlatFront/);
   assert.match(js, /imageRecoveryHistory/);

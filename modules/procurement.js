@@ -2865,11 +2865,16 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
       if(!draft||!draft.seoApproved||seoNeedsReview(seo)||openaiPilot.seoCopyNeedsReview(seo,group))return res.status(409).json({success:false,error:'Saved SEO is no longer approved for '+(np.designName||np.key)+'. No Shopify write was made.'});
       const required=openaiPilot.pilotTypes(group,!!(po.backRefs||{})[np.key]);
       const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[np.key]);
+      // Match the normal posting path: a duplicate-size merge keeps the same
+      // article and source photo, so its paid, reviewed images may safely carry
+      // the current group fingerprint instead of being treated as missing.
+      const mergedSameArticle=(po.variantMergeHistory||[]).some(item=>item&&item.groupKey===np.key&&item.type==='duplicate-variant-merge');
+      if(mergedSameArticle)for(const image of ((po.aiImages||{})[np.key]||[]))if(image&&image.url)image.sourceFingerprint=fingerprint;
       const approved=((po.aiImages||{})[np.key]||[]).filter(x=>x.approved&&imageCheckAccepted(x)&&(!x.sourceFingerprint||x.sourceFingerprint===fingerprint)&&x.type!=='original'&&x.url!==group.photoUrl&&readStoredPhoto(x.url));
       const missingTypes=required.filter(type=>!approved.some(x=>x.type===type));
       const modelTypes=new Set(approved.map(x=>x.type));
       const recoverable=missingTypes.length===1&&missingTypes[0]==='front'&&(modelTypes.has('female')||modelTypes.has('male')||modelTypes.has('model-front'))&&(modelTypes.has('model-side-female')||modelTypes.has('model-side-male')||modelTypes.has('model-side'));
-      if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:'Missing readable approved images for '+(np.designName||np.key)+'. No Shopify write was made.',missingTypes});
+      if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:'Missing readable approved image(s) for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made.',groupKey:np.key,missingTypes});
       np.seo=seo; np.images=approved.map(x=>({url:x.url,alt:seo.imageAlt}));
     }
     const results=po.results||(po.results={created:[],adjusted:[],errors:[]});
