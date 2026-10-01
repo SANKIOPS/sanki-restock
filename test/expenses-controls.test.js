@@ -2282,6 +2282,25 @@ CR 1,00,000.00`;
   assert.deepEqual(rows.statementSummary,{format:'ICICI Bank corporate PDF',accountLast4:'0425',from:'2026-09-01',to:'2026-09-12',openingBalance:-2447837.66,closingBalance:-2421448.66,totalDebits:73611,totalCredits:100000,validated:true});
 });
 
+test('ICICI credit-card PDF rows reconcile to the declared total amount due',()=>{
+  const rows=parseBankStatementText(`CREDIT CARD STATEMENT
+STATEMENT DATE
+September 11, 2026
+Total Amount due
+\`27,659.64
+Date SerNo. Transaction Details Reward Points Intl.# amount Amount (in\`)
+27/08/2026 14055149423 INFINITY PAYMENT RECEIVED, THANK YOU 0 2,98,799.31 CR
+10/08/2026 13962111644 FACEBOOK SI GURGAON IN 134 6,736.62
+16/08/2026 13998355244 OPENAI CHATGPT SUBSCR SAN 796 19,900.00
+Statement period : August 12, 2026 to September 11, 2026`);
+  assert.deepEqual(rows.map(x=>({date:x.date,reference:x.reference,debit:x.debit,credit:x.credit,balance:x.balance})),[
+    {date:'2026-08-10',reference:'13962111644',debit:6736.62,credit:0,balance:306558.95},
+    {date:'2026-08-16',reference:'13998355244',debit:19900,credit:0,balance:326458.95},
+    {date:'2026-08-27',reference:'14055149423',debit:0,credit:298799.31,balance:27659.64}
+  ]);
+  assert.deepEqual(rows.statementSummary,{format:'ICICI Bank credit-card PDF',from:'2026-08-12',to:'2026-09-11',openingBalance:299822.33,closingBalance:27659.64,totalDebits:26636.62,totalCredits:298799.31,validated:true,accountType:'credit_card'});
+});
+
 test('ICICI 0425 one-time opening remains exact to paise from 22 August 2026',()=>{
   const balances=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI',from:'2026-08-22',to:'2026-08-22'}}).body;
   const account=balances.accounts.find(x=>x.name==='Tiana 0425');

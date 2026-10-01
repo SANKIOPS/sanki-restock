@@ -3315,6 +3315,48 @@ function parseBankStatementText(raw){
   const text=String(raw||'').replace(/\r/g,'');
   const indusMobile=parseIndusIndMobileStatementText(text);if(indusMobile.length)return indusMobile;
   const indusIndRows=parseIndusIndScreenshotText(text);if(indusIndRows.length)return indusIndRows;
+  // ICICI credit-card PDFs do not print a running balance for each row. They
+  // provide the statement Total Amount Due instead, followed by transaction
+  // rows with an optional CR suffix. Reconstruct a validated liability running
+  // balance from that declared closing amount. Keep this recognizer narrow so
+  // ordinary ICICI bank/current-account formats continue below unchanged.
+  if(/CREDIT\s+CARD\s+STATEMENT/i.test(text)&&/STATEMENT\s+DATE/i.test(text)&&/Total\s+Amount\s+due/i.test(text)&&/Transaction\s+Details\s*Reward/i.test(text)){
+    const out=[],compact=/DateSerNo\./i.test(text),anchors=Array.from(text.matchAll(/(?:^|\n)\s*(\d{2}\/\d{2}\/\d{4})\s*(\d{11})(?=\s*[A-Za-z])/g));
+    const amountFrom=value=>{
+      const raw=String(value||'').replace(/\s/g,''),candidates=[];
+      // In compact PDF extraction a plain sub-₹1,000 amount (for example the
+      // Railway USD conversion) has no reward-points prefix attached to it.
+      if(compact&&/^\d{1,3}\.\d{2}$/.test(raw))return{amount:Math.abs(statementNum(raw)),score:0,split:0};
+      for(let split=0;split<=Math.min(4,raw.search(/[,.]/));split++){
+        const reward=raw.slice(0,split),money=raw.slice(split);
+        if(reward.length>1&&reward.startsWith('0'))continue;
+        if(!/^\d{1,3}(?:(?:,\d{3})+|(?:,\d{2})?(?:,\d{3})*)?\.\d{2}$/.test(money))continue;
+        const amount=Math.abs(statementNum(money));if(!(amount>0))continue;
+        const points=reward===''?null:Number(reward),ratio=points==null?null:points/amount,rates=points===0?[0]:[.02,.04],score=points==null?(compact?.01:0):Math.min(...rates.map(rate=>Math.abs(ratio-rate)));
+        candidates.push({amount,score,split});
+      }
+      return candidates.sort((a,b)=>a.score-b.score||b.split-a.split)[0]||null;
+    };
+    anchors.forEach((anchor,index)=>{
+      const block=text.slice(anchor.index+anchor[0].length,index+1<anchors.length?anchors[index+1].index:text.length),money=block.match(/([0-9][0-9,]*\.\d{2})\s*(CR(?![A-Za-z]))?/i);if(!money)return;
+      const parsed=amountFrom(money[1]);if(!parsed)return;
+      const credit=!!money[2],description=block.slice(0,money.index).replace(/\s+/g,' ').trim().replace(/\s+\d+\s+\d+(?:\.\d+)?\s+[A-Z]{3}$/,'').replace(/\s+\d+$/,'').trim();
+      out.push({date:statementDate(anchor[1]),description:description||'ICICI credit-card transaction',reference:anchor[2],debit:credit?0:parsed.amount,credit:credit?parsed.amount:0,balance:0,row:index+1});
+    });
+    if(out.length){
+      const summaryStart=text.search(/Previous\s*Balance\s*Purchases\s*\/\s*Charges\s*Cash\s*Advances\s*Payments\s*\/\s*Credits/i),summaryValues=summaryStart>=0?Array.from(text.slice(summaryStart,summaryStart+240).matchAll(/[0-9][0-9,]*\.\d{2}/g)).map(x=>statementNum(x[0])):[],declaredOpening=summaryValues[0],declaredDebits=summaryValues[1],declaredCredits=summaryValues[3],debits=roundMoney(out.reduce((n,x)=>n+x.debit,0)),credits=roundMoney(out.reduce((n,x)=>n+x.credit,0));
+      const dueValues=Array.from((text.match(/Total\s+Amount\s+due[\s\S]{0,240}/i)||[''])[0].matchAll(/[0-9][0-9,]*\.\d{2}/g)).map(x=>statementNum(x[0])),closing=summaryValues.length>=4?roundMoney(declaredOpening+declaredDebits-declaredCredits):dueValues[0];
+      if(!(closing>=0))throw new Error('ICICI credit-card statement validation failed: Total Amount Due was not readable.');
+      if(summaryValues.length>=4&&(Math.abs(debits-declaredDebits)>.01||Math.abs(credits-declaredCredits)>.01))throw new Error('ICICI credit-card statement validation failed: parsed Purchases / Charges ₹'+debits+' and Payments / Credits ₹'+credits+' do not match declared totals ₹'+declaredDebits+' and ₹'+declaredCredits+'.');
+      const opening=summaryValues.length>=4?declaredOpening:roundMoney(closing-debits+credits);let running=opening;
+      out.sort((a,b)=>String(a.date).localeCompare(String(b.date))||a.row-b.row);
+      out.forEach(row=>{running=roundMoney(running+row.debit-row.credit);row.balance=running;});
+      if(Math.abs(running-closing)>.01)throw new Error('ICICI credit-card statement validation failed: transactions do not reproduce the Total Amount Due.');
+      const statementDateMatch=text.match(/STATEMENT\s+DATE\s+([A-Za-z]+\s+\d{1,2},\s*\d{4})/i),period=text.match(/Statement\s+period\s*:\s*([A-Za-z]+\s+\d{1,2},\s*\d{4})\s+to\s+([A-Za-z]+\s+\d{1,2},\s*\d{4})/i),longDate=value=>{const parsed=new Date(String(value||'')+' 00:00:00 UTC');return Number.isNaN(parsed.getTime())?'':parsed.toISOString().slice(0,10);};
+      out.statementSummary={format:'ICICI Bank credit-card PDF',from:period?longDate(period[1]):out[0].date,to:period?longDate(period[2]):longDate(statementDateMatch&&statementDateMatch[1])||out.at(-1).date,openingBalance:opening,closingBalance:closing,totalDebits:debits,totalCredits:credits,validated:true,accountType:'credit_card'};
+      return out;
+    }
+  }
   // ICICI corporate/current-account exports produced by OpTransactionHistoryUX3
   // place the available balance immediately above its transaction row. The
   // generic line parser therefore mistakes timestamp/reference digits for
