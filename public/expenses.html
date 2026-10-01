@@ -176,12 +176,21 @@
       table.resp td[data-label=""]::before { content:none; }
       table.resp input[type=number] { width:130px !important; }
     }
+    .ledger-recon-alert { display:none; margin:0 0 16px; padding:14px 16px; border:1px solid #f3b3ad; border-left:5px solid var(--red); border-radius:11px; background:#fff7f6; }
+    .ledger-recon-alert.show { display:block; }
+    .ledger-recon-alert h2 { margin:0 0 3px; font-size:15px; color:#8f1d15; }
+    .ledger-recon-alert .intro { margin:0 0 9px; color:#6b3a36; font-size:12px; }
+    .ledger-recon-links { display:flex; flex-wrap:wrap; gap:8px; }
+    .ledger-recon-link { display:inline-flex; flex-direction:column; gap:2px; min-width:220px; padding:9px 11px; color:inherit; text-decoration:none; border:1px solid #f1cbc7; border-radius:8px; background:#fff; }
+    .ledger-recon-link b { color:#8f1d15; font-size:12.5px; }
+    .ledger-recon-link span { color:#6b7280; font-size:11px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Ledgers</h1>
     <p class="sub">Log → approve (bill proof) → pay (payment proof). Only approved business expenses reach the P&amp;L.</p>
+    <div id="ledgerReconciliationAttention" class="ledger-recon-alert" role="status" aria-live="polite"></div>
 
     <div class="tabs" id="tabs">
       <button data-t="log" class="on">＋ Log expense</button>
@@ -450,6 +459,7 @@
     function today(){ return new Date(Date.now()+5.5*3600*1000).toISOString().slice(0,10); }
     function monthStart(){ return today().slice(0,8)+'01'; }
     function setMsg(t, ok){ el('msg').className='msg '+(ok?'ok':'err'); el('msg').textContent=t||''; }
+    function loadReconciliationAttention(){if(!cfg||!cfg.isAdmin)return;api('/api/expenses/reconciliation-reminders').then(function(d){var host=el('ledgerReconciliationAttention'),items=(d.success?d.reminders:[]).filter(function(x){return x.status!=='up_to_date';});if(!items.length){host.className='ledger-recon-alert';host.innerHTML='';return;}host.className='ledger-recon-alert show';host.innerHTML='<h2>⚠ Bank statements pending reconciliation</h2><p class="intro">Upload statements through '+esc(d.requiredThrough)+' so the bank remains the reconciliation truth.</p><div class="ledger-recon-links">'+items.map(function(x){var status=x.pendingDraft?'Finish pending review':'Statement required',detail=x.pendingDraft?('Review started'+(x.draftFrom?' · '+x.draftFrom+' to '+x.draftTo:'')):('Last reconciled: '+(x.reconciledThrough||'Not yet')+(x.daysBehind!=null?' · '+x.daysBehind+' day'+(x.daysBehind===1?'':'s')+' pending':''));return '<a class="ledger-recon-link" href="'+esc(x.href)+'"><b>'+esc(x.account)+' — '+status+'</b><span>'+esc(detail)+' · Open account →</span></a>';}).join('')+'</div>';});}
 
     // Same-page proof viewer with mouse-wheel, buttons, drag and phone pinch zoom.
     var proofScale=1,proofX=0,proofY=0,proofPointers={},proofStartDistance=0,proofStartScale=1;
@@ -1762,6 +1772,7 @@
         if(reimburseBtn) reimburseBtn.remove();
       }
       syncApprovalsTab();
+      loadReconciliationAttention();
       // Optional deep links can open a particular expense or the approvals queue.
       var qs = new URLSearchParams(location.search);
       var f = qs.get('focus'), tp = qs.get('tab');
