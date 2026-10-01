@@ -306,3 +306,25 @@ test('posting a reviewed payout records exact fee and bank evidence once', () =>
   assert.equal(again.code, 400);
   assert.equal(store.paytmPayoutPostings.length, 1);
 });
+
+
+test('bank matching includes non-Shopify cash deposits in the full settlement without creating revenue', () => {
+  const { matchPayoutBank } = require('../modules/paytm-accounting');
+  const store = { paytmExcludedTransactions: { cash: { reason: 'Cash Deposit' } }, bankStatements: { 'Axis Bank 3448': { transactions: { b: { id: 'b', date: '2026-08-27', credit: 28872.83, debit: 0, reference: 'PB0309613622' } } } } };
+  const payout = { net: 28872.83, settledDate: '2026-08-27', utr: 'PB0309613622', transactionIds: ['sale', 'cash'] };
+  const before = JSON.stringify(store);
+  assert.equal(matchPayoutBank(store, payout).bankMatched, true);
+  assert.equal(JSON.stringify(store), before);
+  store.bankStatements['Axis Bank 3448'].transactions.b.credit = 20000;
+  assert.equal(matchPayoutBank(store, payout).bankMatched, false);
+  store.bankStatements['Axis Bank 3448'].transactions.b.credit = 28872.83;
+  store.bankStatements['Axis Bank 3448'].transactions.b.reference = 'OTHER';
+  assert.equal(matchPayoutBank(store, payout).bankMatched, false);
+  store.bankStatements['Axis Bank 3448'].transactions.b.description = 'PB0309613622';
+  assert.equal(matchPayoutBank(store, payout).bankMatched, true);
+  store.bankStatements['Axis Bank 3448'].transactions.duplicate = { ...store.bankStatements['Axis Bank 3448'].transactions.b, id: 'duplicate' };
+  assert.equal(matchPayoutBank(store, payout).bankMatch, 'ambiguous');
+  delete store.bankStatements['Axis Bank 3448'].transactions.duplicate;
+  store.bankStatements['Axis Bank 3448'].transactions.b.date = '2026-09-27';
+  assert.equal(matchPayoutBank(store, payout).bankMatched, false);
+});

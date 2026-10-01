@@ -30,6 +30,17 @@ function getPayout(store, payoutId) {
   return summarizePayouts(Object.values(store.paytmReportTransactions || {})).find(p => p.payoutId === payoutId || p.utr === payoutId || p.sourcePayoutIds.includes(payoutId));
 }
 
+// Bank evidence belongs to the whole settlement, regardless of Shopify links.
+function matchPayoutBank(store, payout) {
+  const rows = Object.values(((store.bankStatements || {})[BANK] || {}).transactions || {});
+  const amountDate = rows.filter(row => cents(row.credit) === cents(payout.net) && cents(row.debit) === 0 && dayGap(row.date, payout.settledDate) <= 3);
+  const exact = amountDate.filter(row => payout.utr && `${row.reference || ''} ${row.description || ''}`.includes(payout.utr));
+  const candidates = exact.length ? exact : amountDate;
+  // Amount alone is a suggestion; a unique UTR, amount and date confirms evidence.
+  const matched = exact.length === 1;
+  return { bankMatched: matched, bankMatch: matched ? 'Matched to Axis bank' : candidates.length > 1 ? 'ambiguous' : candidates.length ? 'amount/date candidate' : 'not found', bankCandidates: candidates.map(row => ({ id: row.id, date: row.date, credit: Number(row.credit), reference: row.reference || row.description || '' })) };
+}
+
 function validateOrderLink(store, tx, orderId, orders, saleRows, reason) {
   if (!tx) throw new Error('Paytm transaction not found. Import its detailed report first.');
   if (tx.isCustomerPayment === false) throw new Error('This is a Paytm adjustment, not a customer payment, and must not be linked to Shopify.');
@@ -152,4 +163,4 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked };
 }
 
-module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };
+module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };

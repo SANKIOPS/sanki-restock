@@ -31,7 +31,7 @@ const tesseractEnglish = require('@tesseract.js-data/eng');
 const Jimp = require('jimp');
 const { START_DATE: PAYTM_START_DATE, parsePaytmReport, summarizePayouts } = require('./paytm-report');
 const { registerPaytmReports } = require('./paytm-reports-routes');
-const { LINK_TOLERANCE_CENTS, transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements } = require('./paytm-accounting');
+const { LINK_TOLERANCE_CENTS, transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements, matchPayoutBank } = require('./paytm-accounting');
 const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
@@ -1488,14 +1488,7 @@ function bankStatementBookKey(nature,account){const n=normalizedNature(nature);r
 function paytmReportView(s) {
   const transactions=Object.values(s.paytmReportTransactions||{}).map(tx=>Object.assign({platformFee:0,isCustomerPayment:true},tx)).sort((a,b)=>String(a.date+a.transactionId).localeCompare(String(b.date+b.transactionId)));
   const payouts=summarizePayouts(transactions);
-  const bankBook=(s.bankStatements||{})[DEFAULT_SALES_BANK]||{};
-  const bankRows=Object.values(bankBook.transactions||{}).filter(row=>Number(row.credit)>0);
-  const bankMatches=payouts.map(payout=>{
-    const exact=bankRows.filter(row=>payout.utr&&Math.abs(num(row.credit)-payout.net)<.01&&(String(row.reference||'')+' '+String(row.description||'')).includes(payout.utr));
-    const amount=bankRows.filter(row=>Math.abs(num(row.credit)-payout.net)<.01&&Math.abs((Date.parse(String(row.date||'')+'T00:00:00Z')-Date.parse(payout.settledDate+'T00:00:00Z'))/86400000)<=3);
-    const candidates=exact.length?exact:amount;
-    return Object.assign({},payout,{bankMatch:exact.length===1?'reference candidate':amount.length===1?'amount/date candidate':candidates.length?'ambiguous':'not found',bankCandidates:candidates.map(row=>({id:row.id,date:row.date,credit:num(row.credit),reference:row.reference||row.description||''}))});
-  });
+  const bankMatches=payouts.map(payout=>Object.assign({},payout,matchPayoutBank(s,payout)));
   const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(isOriginalPaymentOrder);
   const orderMatches=transactions.map(tx=>{
     if(tx.isCustomerPayment===false)return {transactionId:tx.transactionId,orderMatch:'Paytm adjustment — not a Shopify sale',orderCandidates:[]};
@@ -1515,8 +1508,8 @@ function paytmReportView(s) {
   orderMatches.forEach(match=>{if(match.orderMatch==='Possible match — amount/date only'&&suggestedCounts[match.orderCandidates[0].id]>1)match.orderMatch='Possible matches — amount/date only';});
   const links=s.paytmOrderLinks||{},manual=s.paytmManualResolutions||{},posted=new Map((s.paytmPayoutPostings||[]).map(x=>[x.payoutId,x])),verified=new Map((s.paytmVerifiedSettlements||[]).map(x=>[x.settlementId,x]));
   const excluded=s.paytmExcludedTransactions||{};
-  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.verified=verified.has(x.settlementId);x.verificationId=verified.get(x.settlementId)&&verified.get(x.settlementId).id||'';x.linkedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&(links[id]||manual[id])).length;x.excludedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&excluded[id]).length;x.readyForBulkFinalize=!x.posted&&!x.verified&&!x.excludedCount&&x.linkedCount===x.customerPaymentCount;x.readyToFinalize=false;x.readyToPost=x.verified&&!x.posted&&!x.excludedCount&&x.bankMatch==='reference candidate'&&x.bankCandidates.length===1;});
-  orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.manualResolution=manual[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;});
+  bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.verified=verified.has(x.settlementId);x.verificationId=verified.get(x.settlementId)&&verified.get(x.settlementId).id||'';x.linkedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&(links[id]||manual[id])).length;x.excludedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&excluded[id]).length;x.readyForBulkFinalize=!x.posted&&!x.verified&&!x.excludedCount&&x.linkedCount===x.customerPaymentCount;x.readyToFinalize=false;x.readyToPost=x.verified&&!x.posted&&!x.excludedCount&&x.bankMatched&&x.bankCandidates.length===1;});
+  orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.manualResolution=manual[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;const payout=bankMatches.find(p=>p.transactionIds.includes(x.transactionId));x.bankMatched=!!payout?.bankMatched;x.bankSettlement=payout?{payoutId:payout.payoutId,utr:payout.utr,net:payout.net,bankMatch:payout.bankMatch,bankCandidates:payout.bankCandidates}:null;});
   const legacyDrafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===PAYTM_CLEARING_ACCOUNT).map(d=>({id:d.id,name:d.originalName||'Legacy bank statement preview',createdAt:d.createdAt,from:d.summary?.from,to:d.summary?.to,rows:(d.transactions||[]).length}));
   return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
