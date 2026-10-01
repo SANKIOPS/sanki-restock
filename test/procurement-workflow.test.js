@@ -52,6 +52,10 @@ test('original photo remains a private reference and posting requires approved v
   assert.match(html, /Posting was started, but did not finish/);
   assert.match(html, /Where posting stopped/);
   assert.match(html, /Do not post this PO again/);
+  assert.match(html, /Check Shopify &amp; post only missing products/);
+  assert.match(js, /resume-posting/);
+  assert.match(js, /loadCatalogue\(true\)/);
+  assert.match(js, /A Shopify product is only partly present/);
   assert.match(js, /missing readable approved view/);
   assert.match(js, /recoverableLostFlatFront/);
   assert.match(js, /imageRecoveryHistory/);

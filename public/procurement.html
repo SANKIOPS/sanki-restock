@@ -1750,6 +1750,7 @@
         (adjustedRows?'<div style="margin-top:8px"><b>Existing stock updated</b><ul style="margin:5px 0 0 20px">'+adjustedRows+'</ul></div>':'')+
         (errorRows?'<div style="margin-top:8px"><b>Where posting stopped</b><ul style="margin:5px 0 0 20px">'+errorRows+'</ul></div>':'')+
         (!createdRows&&!adjustedRows&&!errorRows?'<div style="margin-top:8px">No successful Shopify write was saved. The posting result needs owner reconciliation.</div>':'')+
+        (!errors.length?'<button type="button" class="btn" id="resumePostingBtn" style="margin-top:10px">Check Shopify &amp; post only missing products</button><span id="resumePostingStatus" class="muted" style="margin-left:8px"></span>':'')+
         '</div>';
     }
     function renderPoDetail(po){
@@ -1871,6 +1872,14 @@
       }
       h+='<div id="receiveHost"></div>';
       el('poDetailHost').innerHTML=h;
+      var resumeBtn=el('resumePostingBtn'); if(resumeBtn)resumeBtn.onclick=function(){
+        if(!confirm('Check every received SKU in Shopify and create only completely missing products? Products already present will be skipped.'))return;
+        resumeBtn.disabled=true; var status=el('resumePostingStatus'); status.textContent='Checking Shopify…';
+        fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/resume-posting',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(readJson).then(function(d){
+          if(!d.success)throw new Error(d.error||'Could not continue posting.');
+          alert('Posting completed safely. '+(d.created||[]).length+' missing product(s) created; '+(d.alreadyPresent||[]).length+' existing product(s) skipped.'); loadPos(); openPoId=null; el('poDetailHost').innerHTML='';
+        }).catch(function(e){resumeBtn.disabled=false;status.textContent=e.message;alert(e.message);});
+      };
       el('poDetailHost').scrollIntoView({behavior:'smooth'});
       if(me.canManage && !posted) initStudioFor(po.id);
       if(!posted){

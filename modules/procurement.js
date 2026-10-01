@@ -2830,6 +2830,62 @@ router.post('/api/procurement/commit', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// Continue an interrupted product-creation phase without duplicating anything
+// already visible in Shopify. Shopify is re-read first; a design is created
+// only when none of its received SKUs exists. A partly present design is held
+// for manual reconciliation because creating only its missing sizes would
+// split one article across two Shopify products.
+router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    const s=loadStore(), po=s.pos[req.params.id];
+    if(!po) return res.status(404).json({success:false,error:'PO not found'});
+    if(po.status!=='posting_partial') return res.status(409).json({success:false,error:'Only an interrupted posting can be continued.'});
+    if(((po.results&&po.results.errors)||[]).length) return res.status(409).json({success:false,error:'This posting has a saved Shopify error. Reconcile that error before continuing.'});
+    const received=(po.lines||[]).filter(line=>num(line.qty)>0);
+    const cat=await loadCatalogue(true), byGroup=new Map();
+    received.filter(line=>line.classification!=='EXISTING').forEach(line=>{
+      const key=groupKey(line); if(!byGroup.has(key))byGroup.set(key,[]); byGroup.get(key).push(line);
+    });
+    const alreadyPresent=[], missing=[], partial=[];
+    byGroup.forEach((lines,key)=>{
+      const present=lines.filter(line=>cat.skuMap[String(line.sku||'').toUpperCase()]);
+      if(!present.length)missing.push(key);
+      else if(present.length===lines.length)alreadyPresent.push({key,skus:lines.map(line=>line.sku)});
+      else partial.push({key,present:present.map(line=>line.sku),missing:lines.filter(line=>!cat.skuMap[String(line.sku||'').toUpperCase()]).map(line=>line.sku)});
+    });
+    if(partial.length)return res.status(409).json({success:false,error:'A Shopify product is only partly present. No write was made; reconcile these variants first.',partial});
+    const preview=await computePreview(s,{lines:received,vendor:po.vendor,exRate:po.exRate,freightPerGram:po.freightPerGram,origin:po.origin,transportTotal:po.transportTotal,refresh:true});
+    const pending=(preview.newProducts||[]).filter(np=>missing.includes(np.key));
+    if(pending.length!==missing.length)return res.status(409).json({success:false,error:'The saved PO and current Shopify catalogue do not produce the same missing product groups. No write was made.',missing,pending:pending.map(np=>np.key)});
+    for(const np of pending){
+      const draft=(po.seoDraft||[]).find(x=>x.key===np.key), seo=draft&&draft.seo;
+      const details=received.find(line=>groupKey(line)===np.key)||{};
+      const group={key:np.key,colour:np.colour,productType:np.productType,designName:np.designName,designCode:np.designCode,audience:details.audience||'',fit:details.fit||'',season:details.season||po.season||'',sizeLabels:np.variants.map(v=>v.sizeLabel),photoUrl:details.photoUrl||''};
+      if(!draft||!draft.seoApproved||seoNeedsReview(seo)||openaiPilot.seoCopyNeedsReview(seo,group))return res.status(409).json({success:false,error:'Saved SEO is no longer approved for '+(np.designName||np.key)+'. No Shopify write was made.'});
+      const required=openaiPilot.pilotTypes(group,!!(po.backRefs||{})[np.key]);
+      const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[np.key]);
+      const approved=((po.aiImages||{})[np.key]||[]).filter(x=>x.approved&&imageCheckAccepted(x)&&(!x.sourceFingerprint||x.sourceFingerprint===fingerprint)&&x.type!=='original'&&x.url!==group.photoUrl&&readStoredPhoto(x.url));
+      const missingTypes=required.filter(type=>!approved.some(x=>x.type===type));
+      const modelTypes=new Set(approved.map(x=>x.type));
+      const recoverable=missingTypes.length===1&&missingTypes[0]==='front'&&(modelTypes.has('female')||modelTypes.has('male')||modelTypes.has('model-front'))&&(modelTypes.has('model-side-female')||modelTypes.has('model-side-male')||modelTypes.has('model-side'));
+      if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:'Missing readable approved images for '+(np.designName||np.key)+'. No Shopify write was made.',missingTypes});
+      np.seo=seo; np.images=approved.map(x=>({url:x.url,alt:seo.imageAlt}));
+    }
+    const results=po.results||(po.results={created:[],adjusted:[],errors:[]});
+    po.postingResumedAt=new Date().toISOString(); saveStore(s);
+    for(const np of pending){
+      try{const result=await createDraftProduct(np,String(po.warehouseLocationId||s.settings.warehouseLocationId||''));results.created.push(result);saveStore(s);const stockError=(result.variants||[]).find(v=>v.stockError);if(stockError)throw new Error('Product created, but stock failed for '+stockError.sku+': '+stockError.stockError);}
+      catch(e){results.errors.push({kind:'create',product:np.seo.title,error:e.message});saveStore(s);return res.status(409).json({success:false,error:'Continuation stopped after a Shopify error. '+e.message,results});}
+    }
+    _catalogue=null;
+    const verified=await loadCatalogue(true), stillMissing=received.filter(line=>line.classification!=='EXISTING'&&!verified.skuMap[String(line.sku||'').toUpperCase()]).map(line=>line.sku);
+    if(stillMissing.length)return res.status(409).json({success:false,error:'Shopify verification still found missing received SKUs. The PO remains locked.',stillMissing,results});
+    po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key)}; saveStore(s);
+    res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),results});
+  }catch(e){res.status(500).json({success:false,error:e.message});}
+});
+
 router.get('/api/procurement/pos', (req, res) => {
   const s = loadStore();
   let list = Object.values(s.pos);
