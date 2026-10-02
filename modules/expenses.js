@@ -1435,13 +1435,14 @@ function ledgerAccountsForNature(s, nature) {
 }
 function paytmClearingSettlementOutflows(s) {
   const postedKeys=new Set((s.paytmPayoutPostings||[]).flatMap(x=>[String(x.settlementId||''),String(x.payoutId||'')]));
-  const detailed=(s.paytmVerifiedSettlements||[]).filter(x=>!postedKeys.has(String(x.settlementId||''))&&!postedKeys.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,salesLedgerEntries(s)),s.paytmPayoutPostings||[]).map(x=>({date:x.date||x.settledDate||String(x.finalizedAt||'').slice(0,10),net:num(x.net),fees:num(x.commission)+num(x.platformFee)+num(x.gst)+num(x.nonCustomerAmount)}));
-  const legacy=(s.paytmSettlements||[]).filter(x=>!legacyPaytmSettlementIsCovered(s,x)).map(x=>{const net=num(x.netAmount),charge=num(x.chargeAmount),gross=num(x.grossAmount||net+charge);return{date:x.date,net,fees:Math.max(0,gross-net)};});
+  const reviewed=reviewedUnpostedSettlements(s,salesLedgerEntries(s));
+  const detailed=(s.paytmVerifiedSettlements||[]).filter(x=>!postedKeys.has(String(x.settlementId||''))&&!postedKeys.has(String(x.payoutId||''))).concat(reviewed,s.paytmPayoutPostings||[]).map(x=>({date:x.date||x.settledDate||String(x.finalizedAt||'').slice(0,10),net:num(x.net),fees:num(x.commission)+num(x.platformFee)+num(x.gst)+num(x.nonCustomerAmount)}));
+  const legacy=(s.paytmSettlements||[]).filter(x=>!legacyPaytmSettlementIsCovered(s,x,reviewed)).map(x=>{const net=num(x.netAmount),charge=num(x.chargeAmount),gross=num(x.grossAmount||net+charge);return{date:x.date,net,fees:Math.max(0,gross-net)};});
   return legacy.concat(detailed);
 }
 function paytmSettlementReference(x){return String(x&&x.utr||x&&x.bankReference||x&&x.reference||'').trim().toUpperCase();}
-function legacyPaytmSettlementIsCovered(s,legacy){
-  const detailed=[...(s.paytmVerifiedSettlements||[]),...(s.paytmPayoutPostings||[])],reference=paytmSettlementReference(legacy),legacyNet=roundMoney(num(legacy.netAmount)),legacyDate=String(legacy.date||'').slice(0,10);
+function legacyPaytmSettlementIsCovered(s,legacy,additionalDetailed=[]){
+  const detailed=[...(s.paytmVerifiedSettlements||[]),...(s.paytmPayoutPostings||[]),...additionalDetailed],reference=paytmSettlementReference(legacy),legacyNet=roundMoney(num(legacy.netAmount)),legacyDate=String(legacy.date||'').slice(0,10);
   return detailed.some(x=>{
     const detailedReference=paytmSettlementReference(x),detailedNet=roundMoney(num(x.net)),detailedDate=String(x.date||x.settledDate||String(x.finalizedAt||'').slice(0,10)).slice(0,10);
     if(reference&&detailedReference)return reference===detailedReference;
@@ -3275,7 +3276,9 @@ router.get('/api/expenses/account-ledger', (req, res) => {
       Object.values(daily).forEach(x=>{const saleKeys=new Set(x.sales.flatMap(s=>[s.orderNumber,s.orderId,s.id]).map(v=>String(v||'').replace(/^#/,'').replace(/^SHOPIFY\//,''))),linkedSettlements=(s.paytmSettlements||[]).filter(st=>(x.forcedSettlements||[]).includes(st.id)||(st.orderIds||[]).some(id=>saleKeys.has(String(id).replace(/^#/,'').replace(/^SHOPIFY\//,'')))||Math.abs(num(st.grossAmount)-x.total)<.01),knownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+num(st.chargeAmount),0)*100)/100,unknownCharges=Math.round(linkedSettlements.reduce((n,st)=>n+Math.max(0,num(st.grossAmount)-num(st.netAmount)-num(st.chargeAmount)),0)*100)/100,hasIndividualSales=x.sales.some(sale=>!String(sale.id||'').startsWith('SETTLEMENT/'));entries.push({id:'PAYTM-RECEIPTS/'+x.date,date:x.date,kind:'paytm_customer_receipts',description:'Daily Paytm sales summary',credit:hasIndividualSales?0:roundMoney(x.total),debit:0,connectedSales:x.sales,paytmSummary:{gross:roundMoney(x.total),knownCharges,unknownCharges,settlementIds:linkedSettlements.map(st=>st.id)}});});
     }else automaticSales.forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0,orderId:x.orderId||'',orderNumber:x.orderNumber||'',gross:num(x.gross||x.amount),cashAmount:x.cashAmount,nonCashAmount:x.nonCashAmount,allocationPart:x.allocationPart||'',saleAllocation:x.saleAllocation||null,editableSale:String(x.id||'').startsWith('SHOPIFY/')}));
   }
-  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).filter(x=>!legacyPaytmSettlementIsCovered(s,x)).forEach(x=>{
+  const postedPaytmKeys=new Set((s.paytmPayoutPostings||[]).flatMap(item=>[String(item.settlementId||''),String(item.payoutId||'')]));
+  const pendingPaytmSettlements=nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT?(s.paytmVerifiedSettlements||[]).filter(x=>!postedPaytmKeys.has(String(x.settlementId||''))&&!postedPaytmKeys.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,salesLedgerEntries(s))):[];
+  if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).filter(x=>!legacyPaytmSettlementIsCovered(s,x,pendingPaytmSettlements)).forEach(x=>{
     const bankBook=(s.bankStatements||{})[x.bankAccount]||{},bankTx=Object.values(bankBook.transactions||{}).find(t=>t.id===x.bankTransactionId),reference=String(x.bankReference||bankTx&&bankTx.reference||bankTx&&bankTx.description||x.bankTransactionId||''),net=Math.round(num(x.netAmount)*100)/100,charge=Math.round(num(x.chargeAmount)*100)/100,gross=Math.round(num(x.grossAmount||net+charge)*100)/100,unknown=Math.max(0,Math.round((gross-net-charge)*100)/100),settlement=Object.assign({},x,{bankReference:reference,unknownChargeAmount:unknown});
     entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Settlement to '+x.bankAccount,reference,credit:0,debit:net,settlement});
     if(charge>0)entries.push({id:x.id+'/CHARGES',date:x.date,kind:'paytm_charge',description:'Paytm charges',reference,credit:0,debit:charge,settlement});
@@ -3286,9 +3289,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   // Show that outgoing movement now; the later bank-link step replaces these
   // pending-bank rows with the posted payout and credits Axis exactly once.
   if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT){
-    const posted=new Set((s.paytmPayoutPostings||[]).flatMap(x=>[String(x.settlementId||''),String(x.payoutId||'')]));
-    const pending=(s.paytmVerifiedSettlements||[]).filter(x=>!posted.has(String(x.settlementId||''))&&!posted.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,salesLedgerEntries(s)));
-    pending.forEach(x=>{
+    pendingPaytmSettlements.forEach(x=>{
       const date=x.settledDate||String(x.finalizedAt||'').slice(0,10),reference=x.utr||x.payoutId||x.settlementId,fees=roundMoney(num(x.commission)+num(x.platformFee)+num(x.gst)),other=roundMoney(num(x.nonCustomerAmount));
       entries.push({id:x.id,date,kind:'paytm_settlement',description:(x.reviewedNotFinalized?'Paytm settlement · reconciled report · awaiting Axis 3448 bank link':'Paytm settlement · awaiting Axis 3448 bank link'),reference,credit:0,debit:num(x.net),settlement:x,pendingBankLink:true,reviewedNotFinalized:!!x.reviewedNotFinalized});
       if(fees>0)entries.push({id:x.id+'/CHARGES',date,kind:'paytm_charge',description:'Paytm commission, platform fee and GST',reference,credit:0,debit:fees,settlement:x,pendingBankLink:true});

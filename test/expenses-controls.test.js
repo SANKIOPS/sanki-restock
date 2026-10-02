@@ -2861,6 +2861,20 @@ test('detailed Paytm settlement supersedes the matching legacy row without doubl
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
+test('reviewed Paytm report payout supersedes its legacy settlement before finalization',()=>{
+  const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
+  stored.paytmSettlements=[{id:'PTM-LEGACY-REVIEWED-DUP',date:'2026-10-01',bankAccount:'Axis Bank 3448',bankReference:'PB0322558559',netAmount:4492.54,grossAmount:4547,chargeAmount:54.46}];
+  stored.paytmVerifiedSettlements=[];stored.paytmPayoutPostings=[];
+  stored.paytmReportTransactions={'TX-REVIEWED-DUP':{transactionId:'TX-REVIEWED-DUP',date:'2026-10-01',amount:4547,commission:20,platformFee:20,gst:14.46,settledAmount:4492.54,payoutId:'PB0322558559',utr:'PB0322558559',settledDate:'2026-10-01',isCustomerPayment:true}};
+  stored.paytmManualResolutions={'TX-REVIEWED-DUP':{transactionId:'TX-REVIEWED-DUP',type:'manual_sale',amount:4547,recordId:'REC-REVIEWED-DUP'}};
+  stored.receipts=(stored.receipts||[]).concat({id:'REC-REVIEWED-DUP',nature:'SANKI',account:'Paytm Settlement Clearing',amount:4547,date:'2026-10-01',proof:'/api/expenses/photo/reviewed-duplicate.jpg',paytmTransactionId:'TX-REVIEWED-DUP'});
+  fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-10-01',to:'2026-10-01'}}).body;
+  const settlementRows=ledger.entries.filter(x=>x.kind==='paytm_settlement'&&x.reference==='PB0322558559');assert.equal(settlementRows.length,1);assert.match(settlementRows[0].id,/^PTMV-REVIEWED-/);assert.equal(settlementRows[0].debit,4492.54);
+  assert.equal(ledger.entries.filter(x=>x.kind==='paytm_charge'&&x.reference==='PB0322558559').length,1);
+  fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
+});
+
 test('Prashant Axis 3645 top balance matches its detailed running balance',()=>{
   const storeFile=path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),original=fs.readFileSync(storeFile,'utf8'),baseline=JSON.parse(original);
   baseline.adjustments.push({id:'ADJ-EXCLUDED-3645',nature:'SANKI',account:'Prashant Axis 3645',amount:-18826.75,date:'2026-09-01',accountingExcluded:true});
