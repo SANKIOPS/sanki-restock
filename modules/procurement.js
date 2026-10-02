@@ -1478,7 +1478,7 @@ function parseLocalInvoiceText(rawText, store) {
 
   const fallbackVendor = textLines.slice(0, 8).find(x =>
     !/(?:invoice|bill|order|单据|单号|订单|票据|date|日期|时间|电话|phone)/i.test(x) &&
-    !/(?:名称|商品|颜色|数量|单价|小计)/i.test(x) && /[A-Z\u3400-\u9fff]/i.test(x) && !/\d{4,}/.test(x)
+    !/(?:名称|商品|颜色|数量|单价|小计)/i.test(x) && /[A-Z\u3400-\u9fff]/i.test(x) && !/\d{4,}/.test(x) && x.replace(/\s/g,'').length > 1
   );
   const invoiceQtyMatch = text.match(/(?:合计\s*)?数量\s*:\s*(\d+)/i) || text.match(/销售\s*:\s*(\d+)/i);
   const totalLines=textLines.filter(line=>/(?:合计|总计|总额|金额|销售)/i.test(line));
@@ -1558,7 +1558,8 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
           const warnings=[...(vision.warnings||[])];
           if(Number(vision.invoiceQty)>0&&extractedQty!==Number(vision.invoiceQty))warnings.push('Invoice says '+vision.invoiceQty+' pieces; extracted '+extractedQty+'. Review missing or misread rows.');
           if(Number(vision.invoiceAmount)>0&&Math.abs(extractedAmount-Number(vision.invoiceAmount))>Math.max(1,Number(vision.invoiceAmount)*.01))warnings.push('Invoice total is ¥'+vision.invoiceAmount+'; extracted lines total ¥'+extractedAmount+'. Review highlighted fields.');
-          const visionVendor=/^(?:量|名称|商品|颜色|客户|销售)$/i.test(String(vision.vendor||'').trim())?'':String(vision.vendor||'').trim();
+          const vendorCandidate=String(vision.vendor||'').trim(), vendorNumbers=vendorCandidate.match(/\d+(?:\.\d+)?/g)||[];
+          const visionVendor=/^(?:量|名称|商品|颜色|客户|销售)$/i.test(vendorCandidate)||vendorNumbers.length>1||/(?:黑色|白色|灰色|粉色|蓝色|绿色|咖啡色)\s*\d/i.test(vendorCandidate)?'':vendorCandidate;
           parsed={vendor:visionVendor||parsed.vendor,billNo:vision.billNo||parsed.billNo,datePurchase:vision.datePurchase||parsed.datePurchase,lines:visionLines,warnings,totals:{invoiceQty:Number(vision.invoiceQty||0),invoiceAmount:Number(vision.invoiceAmount||0),extractedQty,extractedAmount}};
           reader='openai-vision';
         }
