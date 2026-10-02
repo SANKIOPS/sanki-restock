@@ -1479,10 +1479,11 @@ function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
 const PRASHANT_3448_TRANSFER_DESTINATIONS=new Set(['Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919']);
-function isPrashant3448Transfer(fromNature,toNature,fromAccount,toAccount,classification){
+function isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification){
   if(fromNature!=='SANKI'||toNature!=='SANKI'||classification!=='internal_transfer')return false;
   if(fromAccount==='Axis Bank 3448'&&PRASHANT_3448_TRANSFER_DESTINATIONS.has(toAccount))return true;
-  return (fromAccount==='Axis Bank 3448'&&toAccount==='Counter Cash')||(fromAccount==='Counter Cash'&&toAccount==='Axis Bank 3448');
+  const pair=new Set([fromAccount,toAccount]);
+  return (pair.has('Axis Bank 3448')&&pair.has('Counter Cash'))||(pair.has('Prashant Axis 3645')&&pair.has('IndusInd Bank 8181'));
 }
 function canLogCreditCardExpense(req){return isAdmin(req)||isPrashant(req);}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
@@ -3117,8 +3118,8 @@ router.post('/api/expenses/transfers', (req, res) => {
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
-  const prashantAllowed=isPrashant(req)&&isPrashant3448Transfer(fromNature,toNature,fromAccount,toAccount,classification);
-  if(!isOwner(req)&&!prashantAllowed)return res.status(403).json({success:false,error:'Prashant can record approved Axis Bank 3448 transfers, including transfers in either direction between Axis Bank 3448 and Counter Cash.'});
+  const prashantAllowed=isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification);
+  if(!isOwner(req)&&!prashantAllowed)return res.status(403).json({success:false,error:'Prashant can record approved internal-transfer routes: Axis Bank 3448 to assigned accounts, Axis Bank 3448 ↔ Counter Cash, and Prashant Axis 3645 ↔ IndusInd Bank 8181.'});
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
   if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
   if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });
@@ -3879,7 +3880,7 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     if(!fromAccount)return res.status(400).json({success:false,error:'Choose the internal source account.'});
     if(fromNature===toNature&&fromAccount.toLowerCase()===toAccount.toLowerCase())return res.status(400).json({success:false,error:'Source and receiving accounts must be different.'});
     if(fromNature!==toNature&&!['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement','salary_advance_funding'].includes(classification))return res.status(400).json({success:false,error:'Choose why money is moving between these entities.'});
-    if(!isOwner(req)&&!(isPrashant(req)&&isPrashant3448Transfer(fromNature,toNature,fromAccount,toAccount,classification)))return res.status(403).json({success:false,error:'Prashant can record only approved Axis Bank 3448 transfers from this reconciliation.'});
+    if(!isOwner(req)&&!(isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification)))return res.status(403).json({success:false,error:'Prashant can record only approved internal-transfer routes from this reconciliation.'});
     let salaryStore=null,salaryAdvance=null;
     if(classification==='salary_advance_funding'){
       if(fromNature!=='SANKI'||toNature!=='SANKI')return res.status(400).json({success:false,error:'A salary advance funding transfer must stay inside the SANKI entity.'});
