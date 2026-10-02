@@ -2014,6 +2014,17 @@ test('incoming reconciliation records an internal transfer in both account ledge
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
+test('bank interest received records the party and income category in the receiving ledger',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='IndusInd Bank 8181',id='BRD-BANK-INTEREST';
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date:'2026-09-30',description:'159355468181:Int.Pd:01-07-2026 to 30-09-2026',reference:'S84347357',debit:0,credit:10,balance:10}],summary:{from:'2026-09-30',to:'2026-09-30',openingBalance:0,closingBalance:10,totalDebits:0,totalCredits:10,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const missingCategory=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:id,rowId:'bank-0',sourceKind:'external',source:'IndusInd Bank',receiptType:'bank_interest',note:'Quarterly bank interest'}});assert.equal(missingCategory.status,400);assert.match(missingCategory.body.error,/income category/i);
+  const made=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:id,rowId:'bank-0',sourceKind:'external',source:'IndusInd Bank',receiptType:'bank_interest',category:'Bank Interest Received',note:'Quarterly bank interest'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.receipt.source,'IndusInd Bank');assert.equal(made.body.receipt.receiptType,'bank_interest');assert.equal(made.body.receipt.category,'Bank Interest Received');
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account}}).body.entries.find(x=>x.id===made.body.receipt.id);assert.equal(ledger.credit,10);assert.equal(ledger.category,'Bank Interest Received');assert.match(ledger.description,/Bank interest received · IndusInd Bank · Bank Interest Received/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/value="bank_interest">Bank interest received/);assert.match(html,/id="biCategory"/);assert.match(html,/category:el\('biCategory'\)\.value/);
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
+
 test('salary advance funding links one internal transfer without double-counting the source debit',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),salaryFile=path.join(tempDir,'salary.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),expenseBaseline=JSON.parse(JSON.stringify(stored)),salaryBaseline=fs.existsSync(salaryFile)?fs.readFileSync(salaryFile,'utf8'):null,now=new Date().toISOString(),destination='Prashant Axis 3645';
   const salary={employees:{EMP1:{id:'EMP1',name:'Prashant'}},advances:{'ADV-00030':{id:'ADV-00030',empId:'EMP1',employeeName:'Prashant',amount:10000,date:'2026-08-31',account:'Axis Bank 3448',reference:'SALARY ADVANCE',recoveries:[],active:true,createdAt:now}},advanceAudit:[]};fs.writeFileSync(salaryFile,JSON.stringify(salary));
