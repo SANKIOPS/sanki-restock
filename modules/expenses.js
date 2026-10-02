@@ -3905,8 +3905,8 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     audit(s,req,'CREATED_FROM_BANK_RECONCILIATION','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer,note,draftId:draft.id,bankRowId:b.rowId});
     if(salaryStore)saveSalaryStore(salaryStore);
   }else if(sourceKind==='external'){
-    if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can classify an external receipt from bank reconciliation.'});
     const source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim(),category=String(b.category||'').trim();
+    if(!isOwner(req)&&!(receiptType==='bank_interest'&&canApprove(req)))return res.status(403).json({success:false,error:'Only the Owner can classify an external receipt from bank reconciliation. Accounting approvers may record verified bank interest.'});
     if(!source)return res.status(400).json({success:false,error:'Enter the external person or company that sent the money.'});
     if(!RECEIPT_TYPES.includes(receiptType))return res.status(400).json({success:false,error:'Choose a valid receipt type.'});
     if(!RECEIPT_CATEGORIES.includes(category))return res.status(400).json({success:false,error:'Choose a valid income category.'});
