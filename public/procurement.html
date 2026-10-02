@@ -1776,6 +1776,7 @@
           '<div style="font-size:13px;margin-top:3px">Vendor: <b>'+esc(po.vendor||'—')+'</b>'+(po.billNo?(' <span class="muted">· bill '+esc(po.billNo)+'</span>'):'')+(po.sourceBatchName?(' <span class="muted">· Fresh batch '+esc(po.sourceBatchName)+'</span>'):'')+'</div>'+etaHdr+'</div>'+
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
       h+=postingResultPanel(po);
+      if(po.status==='posted'&&me.canManage) h+='<div class="banner" style="margin-top:10px"><button type="button" class="btn ghost" id="repairShopifyImagesBtn">Check &amp; repair missing Shopify photos</button><span id="repairShopifyImagesStatus" class="muted" style="margin-left:8px">Uses saved approved photos only; no AI generation.</span></div>';
       if(!posted) h+='<details class="po-fold" id="costCalculationFold"><summary>Cost calculation <span class="po-fold-summary">Landed cost and freight breakdown</span></summary><div class="po-fold-body">'+purchaseCalculationPanel(po)+'</div></details>';
       h+='<details class="po-fold" id="receivedProductsFold"><summary>Received products &amp; corrections <span class="po-fold-summary">'+(po.lines||[]).length+' rows · photos, quantities, weights and product details</span></summary><div class="po-fold-body">';
       // rates + date-of-receive carried from the advance purchase — editable here before final calc
@@ -1877,10 +1878,18 @@
       el('poDetailHost').innerHTML=h;
       var resumeBtn=el('resumePostingBtn'); if(resumeBtn)resumeBtn.onclick=function(){
         resumeBtn.disabled=true; var status=el('resumePostingStatus'); status.textContent='Checking Shopify…';
-        fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/resume-posting',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allowLostImages:true})}).then(readJson).then(function(d){
+        fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/resume-posting',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(readJson).then(function(d){
           if(!d.success)throw new Error(d.error||'Could not continue posting.');
-          alert('Posting completed safely. '+(d.created||[]).length+' missing product(s) created; '+(d.alreadyPresent||[]).length+' existing product(s) skipped.'+((d.missingImageGroups||[]).length?' '+d.missingImageGroups.length+' product(s) were saved as drafts with lost images omitted; no image generation was charged.':'')); loadPos(); openPoId=null; el('poDetailHost').innerHTML='';
+          alert('Posting completed safely. '+(d.created||[]).length+' missing product(s) created with their approved photos; '+(d.alreadyPresent||[]).length+' existing product(s) skipped.'); loadPos(); openPoId=null; el('poDetailHost').innerHTML='';
         }).catch(function(e){resumeBtn.disabled=false;status.textContent=e.message;alert(e.message);});
+      };
+      var repairBtn=el('repairShopifyImagesBtn'); if(repairBtn)repairBtn.onclick=function(){
+        repairBtn.disabled=true;var repairStatus=el('repairShopifyImagesStatus');repairStatus.textContent='Checking Shopify products…';
+        fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/repair-shopify-images',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(readJson).then(function(d){
+          if(!d.success)throw new Error(d.error||'Could not repair Shopify photos.');
+          repairBtn.disabled=false;repairStatus.textContent=(d.repaired||[]).length+' product(s) repaired; '+(d.alreadyHadPhotos||[]).length+' already had photos; '+(d.unavailable||[]).length+' need restored or regenerated saved views.';
+          if((d.unavailable||[]).length)alert(repairStatus.textContent+'\n\n'+d.unavailable.map(function(x){return x.groupKey+': '+x.reason;}).join('\n'));
+        }).catch(function(e){repairBtn.disabled=false;repairStatus.textContent=e.message;alert(e.message);});
       };
       el('poDetailHost').scrollIntoView({behavior:'smooth'});
       if(me.canManage && !posted) initStudioFor(po.id);

@@ -881,6 +881,13 @@ async function shopifyPost(pathUrl, payload) {
 }
 
 async function createDraftProduct(np, warehouseLocationId) {
+  const imgs = Array.isArray(np.images) ? np.images : [];
+  if (!imgs.length) throw new Error('No readable approved listing photos were supplied. Shopify product creation was cancelled.');
+  const attachments = imgs.map(im => {
+    const src = readStoredPhoto(im.url);
+    if (!src) throw new Error('Approved listing photo is no longer readable: ' + String(im.url || '(missing URL)') + '. Shopify product creation was cancelled.');
+    return { attachment: src.buf.toString('base64'), alt: (im.alt || np.seo.imageAlt || '').slice(0, 512) };
+  });
   const sizes = np.variants.map(v => v.sizeCode);
   const payload = {
     product: {
@@ -917,13 +924,10 @@ async function createDraftProduct(np, warehouseLocationId) {
   };
   // Attach the approved AI images (base64) so the listing is born with photos.
   // Shopify can't fetch our private URLs, so we upload each as an attachment.
-  const imgs = Array.isArray(np.images) ? np.images : [];
-  const attachments = imgs.map(im => {
-    const src = readStoredPhoto(im.url);
-    return src ? { attachment: src.buf.toString('base64'), alt: (im.alt || np.seo.imageAlt || '').slice(0, 512) } : null;
-  }).filter(Boolean);
-  if (attachments.length) payload.product.images = attachments;
+  payload.product.images = attachments;
   const created = await shopifyPost('products.json', payload).then(d => d.product);
+  const uploadedCount = Array.isArray(created.images) ? created.images.length : 0;
+  if (uploadedCount < attachments.length) throw new Error('Shopify created the product but confirmed only ' + uploadedCount + ' of ' + attachments.length + ' listing photos. Reconcile this product before continuing.');
 
   // Stock each variant at the warehouse location with its received qty.
   const stocked = [];
@@ -945,7 +949,7 @@ async function createDraftProduct(np, warehouseLocationId) {
       }
     }
   }
-  return { productId: String(created.id), handle: created.handle, title: created.title, variants: stocked };
+  return { productId: String(created.id), handle: created.handle, title: created.title, imagesUploaded: uploadedCount, variants: stocked };
 }
 
 async function addExistingInventory(ea, warehouseLocationId) {
@@ -3087,7 +3091,6 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     if(!po) return res.status(404).json({success:false,error:'PO not found'});
     if(po.status!=='posting_partial') return res.status(409).json({success:false,error:'Only an interrupted posting can be continued.'});
     if(((po.results&&po.results.errors)||[]).length) return res.status(409).json({success:false,error:'This posting has a saved Shopify error. Reconcile that error before continuing.'});
-    const allowLostImages=!!(req.body&&req.body.allowLostImages);
     const received=(po.lines||[]).filter(line=>num(line.qty)>0), missingImageGroups=[];
     const cat=await loadCatalogue(true), byGroup=new Map();
     received.filter(line=>line.classification!=='EXISTING').forEach(line=>{
@@ -3120,10 +3123,8 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
       const missingTypes=required.filter(type=>!approved.some(x=>x.type===type));
       const modelTypes=new Set(approved.map(x=>x.type));
       const recoverable=missingTypes.length===1&&missingTypes[0]==='front'&&(modelTypes.has('female')||modelTypes.has('male')||modelTypes.has('model-front'))&&(modelTypes.has('model-side-female')||modelTypes.has('model-side-male')||modelTypes.has('model-side'));
-      if(!required.length||(missingTypes.length&&!recoverable)){
-        if(!allowLostImages)return res.status(409).json({success:false,error:'Missing readable approved image(s) for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made.',groupKey:np.key,missingTypes});
-        missingImageGroups.push({groupKey:np.key,designName:np.designName||np.designCode||'Trouser',colour:np.colour||'',missingTypes});
-      }
+      if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:'Missing readable approved image(s) for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made. Restore or regenerate the missing views, then retry.',groupKey:np.key,missingTypes});
+      if(!approved.length)return res.status(409).json({success:false,error:'No readable approved listing photos remain for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+'. No Shopify write was made.',groupKey:np.key});
       np.seo=seo; np.images=approved.map(x=>({url:x.url,alt:seo.imageAlt}));
     }
     const results=po.results||(po.results={created:[],adjusted:[],errors:[]});
@@ -3138,6 +3139,47 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key),missingImageGroups}; saveStore(s);
     res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),missingImageGroups,results});
   }catch(e){res.status(500).json({success:false,error:e.message});}
+});
+
+// Repair products from the historical resume bug that allowed Shopify drafts
+// to be created after their local approved image files had been skipped.
+// Existing Shopify images are never replaced; only an empty image list is
+// filled from readable, approved listing views already saved on the PO.
+router.post('/api/procurement/pos/:id/repair-shopify-images', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    const s = loadStore(), po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+    if (po.status !== 'posted') return res.status(409).json({ success: false, error: 'This repair is only for a posted PO.' });
+    const groups = await newGroupsOf(s, po), cat = await loadCatalogue(true);
+    const repaired = [], alreadyHadPhotos = [], unavailable = [];
+    for (const group of groups) {
+      const lineSkus = (po.lines || []).filter(line => num(line.qty) > 0 && groupKey(line) === group.key).map(line => String(line.sku || '').toUpperCase()).filter(Boolean);
+      const productIds = Array.from(new Set(lineSkus.map(sku => cat.skuMap[sku] && cat.skuMap[sku].productId).filter(Boolean)));
+      if (productIds.length !== 1) { unavailable.push({ groupKey: group.key, reason: 'Could not identify one Shopify product from the PO SKUs.' }); continue; }
+      const productId = productIds[0];
+      const detailResponse = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/products/${productId}.json?fields=id,title,images`);
+      if (!detailResponse.ok) throw new Error('Shopify could not read product ' + productId + '.');
+      const detail = (await detailResponse.json()).product || {};
+      if ((detail.images || []).length) { alreadyHadPhotos.push({ groupKey: group.key, productId, count: detail.images.length }); continue; }
+      const seoDraft = (po.seoDraft || []).find(item => item.key === group.key), alt = seoDraft?.seo?.imageAlt || '';
+      const approved = ((po.aiImages || {})[group.key] || []).filter(image => image && image.approved && imageCheckAccepted(image) && image.type !== 'original' && image.url !== group.photoUrl && readStoredPhoto(image.url));
+      if (!approved.length) { unavailable.push({ groupKey: group.key, productId, reason: 'No readable approved saved photos remain. Restore or regenerate this product’s listing views.' }); continue; }
+      for (const image of approved) {
+        const src = readStoredPhoto(image.url);
+        await shopifyPost(`products/${productId}/images.json`, { image: { attachment: src.buf.toString('base64'), alt: alt.slice(0, 512) } });
+      }
+      const verifyResponse = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/products/${productId}.json?fields=id,images`);
+      const verified = verifyResponse.ok ? ((await verifyResponse.json()).product || {}) : {};
+      const count = (verified.images || []).length;
+      if (!count) throw new Error('Shopify did not confirm the repaired photos for product ' + productId + '.');
+      repaired.push({ groupKey: group.key, productId, count });
+    }
+    po.shopifyImageRepairHistory = Array.isArray(po.shopifyImageRepairHistory) ? po.shopifyImageRepairHistory : [];
+    po.shopifyImageRepairHistory.push({ at: new Date().toISOString(), by: (req.user && req.user.username) || 'system', repaired, alreadyHadPhotos, unavailable });
+    saveStore(s); _catalogue = null;
+    res.json({ success: true, repaired, alreadyHadPhotos, unavailable });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 router.get('/api/procurement/pos', (req, res) => {
