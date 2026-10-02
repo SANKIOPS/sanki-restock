@@ -1871,7 +1871,7 @@
       if(me.canManage && !posted){
         h+='<details class="panel po-fold" id="studioPanel"><summary>Listing images &amp; SEO <span class="po-fold-summary">Generate, review and approve products for Shopify</span></summary><div class="po-fold-body"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
            '<p class="sub">Work product by product: confirm its audience and presets, generate its images, generate its SEO names, review, then approve the product. No back view is invented without a real back photo.</p>'+
-           (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn ghost" id="approvePoBtn">Approve complete PO</button><span class="muted">Approves only when every product has checked images and complete SEO.</span></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
+           (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn" id="generatePoImagesBtn">Generate images for complete PO</button><button type="button" class="btn ghost" id="generatePoSeoBtn">Generate SEO for complete PO</button><button type="button" class="btn ghost" id="approvePoBtn">Approve complete PO</button><span class="muted">Bulk actions skip completed products and keep every product’s saved rules.</span></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div></details>';
       }
       h+='<div id="receiveHost"></div>';
@@ -2260,6 +2260,8 @@
       host.innerHTML=html;
       (d.newProducts||[]).forEach(function(np,i){ wireStudioCard(np,i); });
       var approvePo=el('approvePoBtn');if(approvePo)approvePo.onclick=function(){approveWholePo(approvePo);};
+      var generatePoImages=el('generatePoImagesBtn');if(generatePoImages)generatePoImages.onclick=function(){generatePaidGroups('all');};
+      var generatePoSeo=el('generatePoSeoBtn');if(generatePoSeo)generatePoSeo.onclick=function(){generateSeoForPo(false);};
       updateStudioSelection();
       refreshPostGate();
     }
@@ -2282,7 +2284,7 @@
       return (np.variants||[]).some(function(variant){return Number(variant.qty)>0&&!(Number(variant.weightGrams)>0);});
     }
     async function generatePaidGroups(mode,singleKey,confirmed){
-      var btn=mode==='single'?null:el(mode==='all'?'generatePoBtn':'generateSelectedBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
+      var btn=mode==='single'?null:el(mode==='all'?'generatePoImagesBtn':'generateSelectedBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
       function report(message,item){
         if(status)status.textContent=message;
         if(item){var card=el('scard'+item.i),local=card&&card.querySelector('[data-pilot-message]');if(local)local.textContent=message;}
@@ -2772,6 +2774,31 @@
           if(!dd.success){ alert(dd.error||'SEO generation failed.'); return; }
           studio.seo[np.key]={seo:dd.seo,approved:false,source:dd.source||'openai',savedMessage:'OpenAI SEO generated — review before approval'};rerenderCard(i);
         }).catch(function(e){ if(btn){ btn.disabled=false; btn.textContent=lbl; } alert(e.message); });
+    }
+    async function generateSeoForPo(confirmed){
+      var button=el('generatePoSeoBtn'),status=el('poGenerationStatus'),groups=(lastReceive&&lastReceive.newProducts)||[];
+      var pending=groups.map(function(np,i){return {np:np,i:i};}).filter(function(item){return missingPaidDrafts(item.np).seo;});
+      var ready=pending.filter(function(item){return !missingPaidDrafts(item.np).images.length;});
+      var blocked=pending.filter(function(item){return missingPaidDrafts(item.np).images.length;});
+      if(!pending.length){status.textContent='Every product already has generated or approved SEO. Nothing was charged.';return;}
+      if(!ready.length){status.textContent='Generate and review the missing product images first. No SEO call was made.';return;}
+      if(!confirmed){
+        if(!confirm('Generate SEO for '+ready.length+' product(s) in this PO using OpenAI? '+blocked.length+' product(s) with incomplete images will be skipped. This uses your OpenAI API balance.'))return;
+      }
+      button.disabled=true;var completed=0,failed=[];
+      try{
+        for(var item of ready){
+          status.textContent='Generating SEO '+(completed+1)+' of '+ready.length+' · '+(item.np.colour||item.np.designName||'product')+'…';
+          try{
+            var result=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/generate-seo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key})}).then(readJson);
+            if(!result.success)throw new Error(result.error||'SEO generation failed.');
+            studio.seo[item.np.key]={seo:result.seo,approved:false,source:result.source||'openai',savedMessage:'OpenAI SEO generated — review before approval'};
+            rerenderCard(item.i);completed++;
+          }catch(error){failed.push((item.np.colour||item.np.designName||item.np.key)+': '+error.message);}
+        }
+        status.textContent='Generated SEO for '+completed+' product(s). '+blocked.length+' skipped until images are complete.'+(failed.length?' '+failed.length+' need attention.':' Review before approval.');
+        if(failed.length)alert('SEO generation continued for the rest of the PO.\n\n'+failed.join('\n'));
+      }finally{button.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);}
     }
     function saveSeo(np,i,approve){
       var seo=studio.seo[np.key];if(!seo)return;

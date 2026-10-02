@@ -56,6 +56,16 @@ test('accounts can override calculated MRP before Shopify posting', () => {
   assert.match(html, /data-selling-price/);
 });
 
+test('purchase studio offers separate guarded image and SEO generation for the complete PO', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.match(html, /Generate images for complete PO/);
+  assert.match(html, /Generate SEO for complete PO/);
+  assert.match(html, /generatePaidGroups\('all'\)/);
+  assert.match(html, /function generateSeoForPo/);
+  assert.match(html, /missingPaidDrafts\(item\.np\)\.images\.length/);
+  assert.match(html, /Bulk actions skip completed products and keep every product’s saved rules/);
+});
+
 test('basic women’s listing copy says Top, while winter keeps the bill product type', () => {
   const base = { designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'White', fit: 'Muscle Fit', audience: 'Women', sizeLabels: ['FS'] };
   const summer = genSeo(base);
