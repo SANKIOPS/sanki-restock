@@ -420,3 +420,18 @@ test('receipt can record missing and extra products without deleting the billed 
   assert.match(js, /line\.ordered = \{ \.\.\.orderedSnapshot\(line\), qty: 0 \}/);
   assert.match(js, /const receivedLines = \(po\.lines \|\| \[\]\)\.filter\(line => num\(line\.qty\) > 0\)/);
 });
+
+test('advance purchase lines edit inside their existing table row', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const start = html.indexOf('function lineEditorRow');
+  const end = html.indexOf('// Vendor shown next to', start);
+  const editor = html.slice(start, end);
+  assert.match(editor, /<tr class="editrow" data-edit-row=/);
+  assert.doesNotMatch(editor, /colspan=/);
+  assert.match(editor, /data-e="designName"/);
+  assert.match(editor, /data-e="productType"/);
+  assert.match(editor, /data-e="qty"/);
+  assert.match(editor, /data-savline=/);
+  assert.match(editor, /data-cancelline=/);
+  assert.match(html, /var editRow=host\.querySelector\('\[data-edit-row\]'\)/);
+});

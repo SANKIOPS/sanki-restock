@@ -1138,26 +1138,30 @@
     }
     function lineEditorRow(l,i){
       var p=l.productType;
-      return '<tr class="editrow"><td colspan="12" style="background:var(--ivory2)">'+
-        '<div class="lineform">'+
-          '<div class="fld wide"><label>Design name</label><input data-e="designName" value="'+esc(l.designName||'')+'"></div>'+
-          '<div class="fld"><label>Vendor product code</label><input data-e="designCode" class="mono" value="'+esc(l.designCode||'')+'"></div>'+
-          '<div class="fld"><label>Product</label><select data-e="productType" data-refresh="1">'+objOpts(lookups.products,p)+'</select></div>'+
-          '<div class="fld"><label>Colour</label><select data-e="colour">'+objOpts(lookups.colours,l.colour)+'</select></div>'+
-          '<div class="fld"><label>Fit</label><select data-e="fit">'+optList(fitsFor(p),l.fit)+'</select></div>'+
-          '<div class="fld"><label>Size</label><select data-e="sizeLabel">'+optList(sizesFor(p),l.sizeLabel)+'</select></div>'+
-          '<div class="fld"><label>China size</label><select data-e="chinaSize">'+optList(CHINA_SIZES,l.chinaSize)+'</select></div>'+
-          '<div class="fld"><label>Audience</label><select data-e="audience"><option value="">Select audience</option>'+optList(['Men','Women','Unisex'],l.audience)+'</select></div>'+
-          '<div class="fld"><label>Qty</label><input data-e="qty" type="number" min="0" value="'+esc(l.qty)+'"></div>'+
-          '<div class="fld"><label>'+(isIndia()?'₹/pc':'¥/pc')+'</label><input data-e="perPcsYuan" type="number" step="0.01" value="'+esc(l.perPcsYuan)+'"></div>'+
-          '<div class="fld wide"><label>Product photo <span style="color:var(--err)">*</span></label>'+
-            '<div class="photocell"><input type="file" accept="image/*" data-photoinput style="font-size:12px"><img data-photothumb class="thumb'+(l.photoUrl?'':' hidden')+'" src="'+esc(l.photoUrl||'')+'" alt=""></div>'+
-            '<label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;text-transform:none;font-size:12px"><input type="checkbox" data-approve'+(l.photoApproved?' checked':'')+'> Photo is correct — approve it</label>'+
-            '<div class="muted" data-photonote style="font-size:12px"></div>'+
-          '</div>'+
-          '<div class="fld"><label>&nbsp;</label><div style="display:flex;gap:6px"><button class="btn sm" data-savline="'+i+'">Save</button><button class="btn ghost sm" data-cancelline="'+i+'">Cancel</button></div></div>'+
-        '</div>'+
-      '</td></tr>';
+      var cellStyle='style="background:var(--ivory2);vertical-align:top"';
+      var fieldStyle='style="min-width:0;width:100%;padding:7px 6px;font-size:12px"';
+      return '<tr class="editrow" data-edit-row="'+i+'">'+
+        '<td '+cellStyle+'>'+
+          (l.photoUrl?'<img data-photothumb class="thumb thumb-lg" src="'+esc(l.photoUrl)+'" alt="">':'<img data-photothumb class="thumb thumb-lg hidden" alt="">')+
+          '<label class="btn ghost sm" style="display:block;margin-top:5px;text-align:center;cursor:pointer">'+(l.photoUrl?'Replace':'Add photo')+'<input type="file" accept="image/*" data-photoinput style="display:none"></label>'+
+          '<label style="display:flex;align-items:center;gap:4px;margin-top:5px;font-size:11px;font-weight:400;text-transform:none"><input type="checkbox" data-approve'+(l.photoApproved?' checked':'')+'> Approve</label>'+
+          '<div class="muted" data-photonote style="font-size:10px;max-width:105px"></div>'+
+        '</td>'+
+        '<td '+cellStyle+'>'+esc((el('b_vendor')&&el('b_vendor').value||'').trim()||'—')+'</td>'+
+        '<td '+cellStyle+'><input aria-label="Design name" title="Design name" data-e="designName" '+fieldStyle+' value="'+esc(l.designName||'')+'"></td>'+
+        '<td '+cellStyle+'><input aria-label="Vendor product code" title="Vendor product code" data-e="designCode" class="mono" '+fieldStyle+' value="'+esc(l.designCode||'')+'"></td>'+
+        '<td '+cellStyle+'><select aria-label="Product" title="Product" data-e="productType" data-refresh="1" '+fieldStyle+'>'+objOpts(lookups.products,p)+'</select>'+
+          '<select aria-label="Audience" title="Audience" data-e="audience" style="min-width:0;width:100%;padding:7px 6px;font-size:12px;margin-top:5px"><option value="">Audience</option>'+optList(['Men','Women','Unisex'],l.audience)+'</select></td>'+
+        '<td '+cellStyle+'><select aria-label="Colour" title="Colour" data-e="colour" '+fieldStyle+'>'+objOpts(lookups.colours,l.colour)+'</select></td>'+
+        '<td '+cellStyle+'><select aria-label="Fit" title="Fit" data-e="fit" '+fieldStyle+'>'+optList(fitsFor(p),l.fit)+'</select></td>'+
+        '<td '+cellStyle+'><select aria-label="Size" title="Size" data-e="sizeLabel" '+fieldStyle+'>'+optList(sizesFor(p),l.sizeLabel)+'</select>'+
+          '<select aria-label="China size" title="China size" data-e="chinaSize" style="min-width:0;width:100%;padding:7px 6px;font-size:12px;margin-top:5px">'+optList(CHINA_SIZES,l.chinaSize)+'</select></td>'+
+        '<td '+cellStyle+'><input aria-label="Quantity" title="Quantity" data-e="qty" type="number" min="0" '+fieldStyle+' value="'+esc(l.qty)+'"></td>'+
+        '<td '+cellStyle+'><input aria-label="Unit price" title="'+(isIndia()?'₹/pc':'¥/pc')+'" data-e="perPcsYuan" type="number" step="0.01" '+fieldStyle+' value="'+esc(l.perPcsYuan)+'"></td>'+
+        '<td '+cellStyle+' class="money">'+(isIndia()?money(lineYuan(l)):yuan(lineYuan(l)))+'</td>'+
+        '<td '+cellStyle+' class="money">'+money(lineCost(l))+'</td>'+
+        '<td '+cellStyle+'><div style="display:flex;flex-direction:column;gap:5px"><button class="btn sm" data-savline="'+i+'">Save</button><button class="btn ghost sm" data-cancelline="'+i+'">Cancel</button></div></td>'+
+      '</tr>';
     }
 
     // Vendor shown next to the (sticky) "Lines" header, so it stays visible while scrolling.
@@ -1204,6 +1208,7 @@
     }
     function wireLineHandlers(){
       var host=el('linesHost');
+      var editRow=host.querySelector('[data-edit-row]');
       Array.prototype.forEach.call(host.querySelectorAll('[data-del]'),function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-del'),1); if(editingLineIdx>-1)editingLineIdx=-1; renderLines(); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-edit]'),function(b){ b.onclick=function(){ editingLineIdx=+b.getAttribute('data-edit'); editorPhotoUrl=lines[editingLineIdx].photoUrl||''; renderLines(); }; });
       // one-click approve / undo of a line's photo, without opening Edit
@@ -1211,38 +1216,38 @@
       Array.prototype.forEach.call(host.querySelectorAll('[data-unapproveline]'),function(b){ b.onclick=function(){ lines[+b.getAttribute('data-unapproveline')].photoApproved=false; renderLines(); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-cancelline]'),function(b){ b.onclick=function(){ editingLineIdx=-1; renderLines(); }; });
       // product change → refresh fit + size option lists in place
-      var prodSel=host.querySelector('[data-e="productType"][data-refresh]');
+      var prodSel=editRow&&editRow.querySelector('[data-e="productType"][data-refresh]');
       if(prodSel) prodSel.onchange=function(){
         var p=prodSel.value;
-        var fitSel=host.querySelector('[data-e="fit"]'), sizeSel=host.querySelector('[data-e="sizeLabel"]');
+        var fitSel=editRow.querySelector('[data-e="fit"]'), sizeSel=editRow.querySelector('[data-e="sizeLabel"]');
         if(fitSel) fitSel.innerHTML=optList(fitsFor(p), fitSel.value);
         if(sizeSel) sizeSel.innerHTML=optList(sizesFor(p), sizeSel.value);
       };
       // inline photo upload
-      var fileIn=host.querySelector('[data-photoinput]');
+      var fileIn=editRow&&editRow.querySelector('[data-photoinput]');
       if(fileIn) fileIn.onchange=function(){
         var f=fileIn.files&&fileIn.files[0]; if(!f) return;
-        var note=host.querySelector('[data-photonote]'); if(note) note.textContent='Uploading photo…';
+        var note=editRow.querySelector('[data-photonote]'); if(note) note.textContent='Uploading photo…';
         var fd=new FormData(); fd.append('photo',f);
         fetch('/api/procurement/photo',{method:'POST',body:fd}).then(r=>r.json()).then(function(d){
           if(!d.success){ if(note) note.textContent=d.error||'Upload failed.'; return; }
           editorPhotoUrl=d.url;
-          var t=host.querySelector('[data-photothumb]'); if(t){ t.src=d.url; t.classList.remove('hidden'); }
-          var ap=host.querySelector('[data-approve]'); if(ap) ap.checked=true;   // a freshly chosen photo is approved
+          var t=editRow.querySelector('[data-photothumb]'); if(t){ t.src=d.url; t.classList.remove('hidden'); }
+          var ap=editRow.querySelector('[data-approve]'); if(ap) ap.checked=true;   // a freshly chosen photo is approved
           if(note) note.textContent='Photo ready — approved.';
         }).catch(function(e){ if(note) note.textContent=e.message; });
       };
       // save inline edit
-      var saveBtn=host.querySelector('[data-savline]');
+      var saveBtn=editRow&&editRow.querySelector('[data-savline]');
       if(saveBtn) saveBtn.onclick=function(){
         var i=+saveBtn.getAttribute('data-savline'), l=lines[i];
-        function g(f){ var e=host.querySelector('[data-e="'+f+'"]'); return e?e.value:''; }
+        function g(f){ var e=editRow.querySelector('[data-e="'+f+'"]'); return e?e.value:''; }
         l.designName=g('designName').trim(); l.designCode=g('designCode').trim();
         l.productType=g('productType'); l.colour=g('colour'); l.fit=g('fit');
         l.sizeLabel=g('sizeLabel'); l.chinaSize=g('chinaSize'); l.audience=g('audience');
         l.qty=g('qty'); l.perPcsYuan=g('perPcsYuan');
         l.photoUrl=editorPhotoUrl;
-        var ap=host.querySelector('[data-approve]'); l.photoApproved=!!(ap&&ap.checked)&&!!editorPhotoUrl;
+        var ap=editRow.querySelector('[data-approve]'); l.photoApproved=!!(ap&&ap.checked)&&!!editorPhotoUrl;
         editingLineIdx=-1; renderLines();
       };
     }
