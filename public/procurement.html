@@ -1115,7 +1115,8 @@
       lines.push(l); resetLineForm(); renderLines();
     };
     function resetLineForm(){
-      el('f_qty').value='1';
+      // Keep the buyer's quantity as the default for the next colour/size row.
+      // It changes only when the buyer changes it manually.
       el('f_sku').value='';
       el('photoNote').textContent = pendingPhotoUrl ? 'Photo kept from last line — replace it if the colour changed.' : '';
     }
@@ -1252,6 +1253,7 @@
       if(!lines.length){ alert('Add at least one line.'); return; }
       if(!el('b_vendor').value.trim()){ alert('Pick or add a vendor name before saving the PO.'); el('b_vendor').focus(); return; }
       if(!el('b_line').value){ alert('Pick the Line — SANKI Funky or SANKI Casuals — before saving the PO.'); el('b_line').focus(); return; }
+      if(!el('b_billNo').value.trim()){ alert('Enter the vendor bill number before saving the PO.'); el('b_billNo').focus(); return; }
       var noPhoto=lines.filter(function(l){ return !(l.photoUrl||'').trim(); }).length;
       if(noPhoto){ alert(noPhoto+' line(s) have no product photo. Add a photo to every line before saving.'); return; }
       var unappr=lines.filter(function(l){ return (l.photoUrl||'').trim() && !l.photoApproved; }).length;
@@ -1941,7 +1943,13 @@
         Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-lineback]'),function(inp){
           inp.onchange=function(){ uploadLineBackPhoto(po.id, inp.getAttribute('data-gk'), inp.files&&inp.files[0]); };
         });
-        // live total-weight + per-line weight as the user types
+        // live total-weight + per-line weight as the user types. A design/article
+        // has one per-piece weight, so entering it once fills every colour/size.
+        function auditArticleKey(index){
+          var line=(currentPo.lines||[])[Number(index)]||{};
+          var code=String(line.designCode||'').trim().toUpperCase();
+          return code ? ('CODE:'+code) : ('NAME:'+String(line.designName||'').trim().toUpperCase()+'|'+String(line.productType||'').trim().toUpperCase());
+        }
         function recalcWeights(){
           var t=0; Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(x){
             var q=Number(x.getAttribute('data-qty'))||0, g=Number(x.value)||0, i=x.getAttribute('data-w');
@@ -1950,7 +1958,13 @@
           });
           var tw=el('totWeight'); if(tw) tw.textContent = t?(t.toLocaleString('en-IN')+' g / '+(t/1000).toFixed(2)+' kg'):'—';
         }
-        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(inp){ inp.oninput=recalcWeights; });
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(inp){ inp.oninput=function(){
+          var key=auditArticleKey(inp.getAttribute('data-w'));
+          Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-w]'),function(other){
+            if(other!==inp && auditArticleKey(other.getAttribute('data-w'))===key) other.value=inp.value;
+          });
+          recalcWeights();
+        }; });
         // editable received qty — keep the matching weight input's qty in sync and
         // live-update the line weight, total weight, and total qty as it changes.
         Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-q]'),function(inp){
@@ -2003,7 +2017,18 @@
         body:JSON.stringify({ edits:collectEdits(), qtys:collectQtys() })})
         .then(readJson).then(function(d){
           if(!d.success){ if(btn){ btn.disabled=false; btn.textContent='💾 Save corrections'; } alert(d.error||'Could not save corrections.'); return; }
-          loadPos(); openPoId=null; openPo(id);   // refresh list + re-render detail with highlights
+          // Keep the editor exactly where it is. Update the in-memory PO and
+          // visual difference markers without rebuilding or scrolling the page.
+          currentPo=d.po||currentPo;
+          if(poIndex[id]) poIndex[id]=currentPo;
+          var at=allPos.findIndex(function(po){return po.id===id;}); if(at>=0) allPos[at]=currentPo;
+          Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-f]'),function(inp){
+            var i=+inp.getAttribute('data-i'),f=inp.getAttribute('data-f'),line=(currentPo.lines||[])[i];if(!line)return;
+            var was=(line.ordered&&line.ordered[f]!=null)?String(line.ordered[f]):'';
+            var now=f==='sku'?inp.value.toUpperCase():inp.value;
+            inp.classList.toggle('diffcell',line.ordered!=null&&was!==String(now));
+          });
+          if(btn){btn.disabled=false;btn.textContent='✓ Corrections saved';setTimeout(function(){btn.textContent='💾 Save corrections';},1600);}
         }).catch(function(e){ if(btn){ btn.disabled=false; btn.textContent='💾 Save corrections'; } alert(e.message); });
     }
     function computeReceive(id){

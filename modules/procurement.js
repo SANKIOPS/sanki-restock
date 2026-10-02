@@ -115,7 +115,7 @@ const SEED = {
   products: { // product type → numeric code
     'Shirt': 1, 'T-Shirt': 2, 'Jeans': 10, 'Trouser': 11, 'Lower': 12,
     'Shorts': 13, 'Jogger': 14, 'Coord Set': 15, 'Jorts': 16, 'Sando': 17,
-    'Bag': 18, 'Denim Joggers': 19
+    'Bag': 18, 'Denim Joggers': 19, 'Top': 20
   },
   colours: { // colour → numeric code
     'Black': 1, 'Blue': 2, 'Brown': 3, 'Cream': 4, 'Green': 5, 'Grey': 6,
@@ -166,6 +166,7 @@ function loadStore() {
   try { s = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')); } catch { s = {}; }
   if (!s.brand)    s.brand = SEED.brand;
   if (!s.products) s.products = { ...SEED.products };
+  else s.products = { ...SEED.products, ...s.products };
   if (!s.colours)  s.colours = { ...SEED.colours };
   if (!s.sizes)    s.sizes = { ...SEED.sizes };
   else s.sizes = { ...SEED.sizes, ...s.sizes };
@@ -1265,6 +1266,7 @@ function localInvoiceProduct(line, products) {
   const rules = [
     ['Denim Joggers', /denim\s*jogger|牛仔束脚/i], ['Coord Set', /coord|co-ord|套装/i],
     ['T-Shirt', /t[\s-]?shirt|tee\b|polo|T恤|短袖/i], ['Shirt', /\bshirt\b|衬衫/i],
+    ['Top', /\btop\b|上衣|女上装|针织衫/i],
     ['Jeans', /\bjeans?\b|牛仔裤/i], ['Trouser', /trouser|pants?|长裤|裤子|西裤|阔腿裤/i],
     ['Jogger', /jogger|束脚裤/i], ['Shorts', /shorts?|短裤/i], ['Jorts', /jorts?/i],
     ['Sando', /sando|背心/i], ['Lower', /lower/i], ['Bag', /\bbag\b|包/i]
@@ -1296,6 +1298,11 @@ function localInvoiceFit(line, fits) {
   return hit ? hit[0] : '';
 }
 function localInvoiceSize(line, sizes) {
+  const explicit = normalInvoiceText(line).match(/(?:size|尺码|码数)\s*[:：-]?\s*(FREE\s*SIZE|均码|FS|4XL|3XL|XXL|XL|L|M|S|(?:2[468]|3[02468]|4[024]))/i);
+  if (explicit) {
+    const value = /FREE\s*SIZE|均码/i.test(explicit[1]) ? 'FS' : explicit[1].toUpperCase();
+    if (sizes.includes(value)) return value;
+  }
   const matches = normalInvoiceText(line).toUpperCase().match(/(?:^|[^A-Z0-9])(FS|4XL|3XL|XXL|XL|L|M|S|(?:2[468]|3[02468]|4[024]))(?:[^A-Z0-9]|$)/g) || [];
   for (const match of matches) {
     const size = match.replace(/[^A-Z0-9]/g, '');
@@ -1307,6 +1314,11 @@ function localInvoiceNumbers(line, designCode) {
   const clean = normalInvoiceText(line)
     .replace(/(?:20\d{2})[年\/.-]\s*\d{1,2}[月\/.-]\s*\d{1,2}日?/g, ' ')
     .replace(/\b\d{7,}\b/g, ' ');
+  const labelledQty = clean.match(/(?:qty|quantity|数量|件数)\s*[:：-]?\s*(\d+)/i);
+  const labelledPrice = clean.match(/(?:unit\s*price|price|单价|售价)\s*[:：-]?\s*(?:¥|￥|RMB|CNY)?\s*(\d+(?:\.\d+)?)/i);
+  if (labelledQty && labelledPrice && Number(labelledQty[1]) > 0 && Number(labelledPrice[1]) > 0) {
+    return { qty: Number(labelledQty[1]), price: Number(labelledPrice[1]) };
+  }
   const values = [];
   for (const m of clean.matchAll(/(?:^|[^A-Z0-9])(?:¥|￥|RMB|CNY)?\s*(\d+(?:\.\d+)?)(?=$|[^A-Z0-9])/gi)) {
     if (designCode && m[1] === designCode) continue;
@@ -1336,10 +1348,26 @@ function parseLocalInvoiceText(rawText, store) {
   const textLines = text.split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const vendorLine = textLines.slice(0, 12).find(x => /公司|商行|服饰|服装|档口|供应商|supplier|vendor/i.test(x));
   const lines = [];
-  textLines.forEach((line, index) => {
-    if (/合计|总计|小计|运费|税额|折扣|应付|实付|收款|电话|地址|日期|单号|订单号|subtotal|grand\s*total|freight|discount|tax/i.test(line)) return;
+  for (let index = 0; index < textLines.length; index++) {
+    let line = textLines[index];
+    if (/合计|总计|小计|运费|税额|折扣|应付|实付|收款|电话|地址|日期|单号|订单号|subtotal|grand\s*total|freight|discount|tax/i.test(line)) continue;
+    let consumed = 0;
+    // OCR frequently breaks one printed invoice row across two or three text
+    // lines (code/name, then size/quantity, then price). Rejoin only until a
+    // complete row is found, and consume those fragments once.
+    for (let extra = 0; extra < 3; extra++) {
+      if (!textLines[index + extra]) break;
+      if (extra) line += ' ' + textLines[index + extra];
+      const probeCode = line.match(/(?:货号|款号|货品编码|商品编码|style|article|item|vendor\s*(?:code|sku))\s*[:#-]?\s*([A-Z0-9_-]{2,})/i);
+      const probeProduct = localInvoiceProduct(line, products);
+      const probeColour = localInvoiceColour(line, colours);
+      const probeSize = localInvoiceSize(line, sizes);
+      const probeAmounts = localInvoiceNumbers(line, probeCode && probeCode[1]);
+      if (probeAmounts.qty && (probeCode || probeProduct || probeColour || probeSize)) { consumed = extra; break; }
+    }
+    const labelledCode = line.match(/(?:货号|款号|货品编码|商品编码|style|article|item|vendor\s*(?:code|sku))\s*[:#-]?\s*([A-Z0-9_-]{2,})/i);
     const tokens = line.match(/[A-Z]*\d[A-Z0-9_-]{2,}/gi) || [];
-    let designCode = tokens.find(x => /[A-Z]/i.test(x) && /\d/.test(x)) || '';
+    let designCode = (labelledCode && labelledCode[1]) || tokens.find(x => /[A-Z]/i.test(x) && /\d/.test(x)) || '';
     // OCR can glue the printed row number to an alphanumeric style code
     // ("1 A611" → "1A611"). Separate that harmlessly.
     if (/^\d{1,3}[A-Z]\d/i.test(designCode) && line.trim().startsWith(designCode)) {
@@ -1353,7 +1381,7 @@ function parseLocalInvoiceText(rawText, store) {
     const colour = localInvoiceColour(line, colours);
     const sizeLabel = localInvoiceSize(line, sizes);
     const amounts = localInvoiceNumbers(line, designCode);
-    if (!amounts.qty || (!productType && !colour && !sizeLabel && !designCode)) return;
+    if (!amounts.qty || (!productType && !colour && !sizeLabel && !designCode)) continue;
     const fit = localInvoiceFit(line, fits);
     const sourceName = line.replace(/[¥￥]/g, ' ').replace(/\b\d+(?:\.\d+)?\b/g, ' ').replace(/\s+/g, ' ').trim();
     const baseName = [productType, colour].filter(Boolean).join(' ');
@@ -1363,7 +1391,8 @@ function parseLocalInvoiceText(rawText, store) {
       sizeLabel, chinaSize: sizeLabel, audience: 'Men', qty: amounts.qty,
       perPcsYuan: amounts.price, photoBox: null
     });
-  });
+    index += consumed;
+  }
   const fallbackVendor = textLines.slice(0, 8).find(x =>
     !/(?:invoice|bill|order|单据|单号|订单|票据|date|日期|电话|phone)/i.test(x) &&
     /[A-Z\u3400-\u9fff]/i.test(x) && !/\d{4,}/.test(x)
@@ -1372,6 +1401,37 @@ function parseLocalInvoiceText(rawText, store) {
     vendor: String(knownVendor || vendorLine || fallbackVendor || '').replace(/^(?:供应商|vendor|supplier)\s*[:：-]?\s*/i, '').toUpperCase().trim().slice(0, 100),
     billNo: localInvoiceBillNo(text), datePurchase: localInvoiceDate(text), lines
   };
+}
+
+function normalizedBillNumber(value) {
+  return String(value || '').normalize('NFKC').trim().replace(/\s+/g, '').toUpperCase();
+}
+function duplicateBillPo(store, billNo, exceptPoId) {
+  const wanted = normalizedBillNumber(billNo);
+  if (!wanted) return null;
+  return Object.values((store && store.pos) || {}).find(po => po && po.id !== exceptPoId && normalizedBillNumber(po.billNo) === wanted) || null;
+}
+
+function articleWeightKey(line) {
+  const code = String(line && line.designCode || '').normalize('NFKC').trim().toUpperCase();
+  if (code) return 'CODE:' + code;
+  const nameParts = [line && line.designName, line && line.productType]
+    .map(value => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toUpperCase());
+  if (nameParts.some(Boolean)) return 'NAME:' + nameParts.join('|');
+  return 'SKU:' + String(line && line.sku || '').trim().toUpperCase();
+}
+function expandArticleWeights(lines, weights) {
+  const selected = new Map();
+  Object.entries(weights || {}).forEach(([index, weight]) => {
+    const line = (lines || [])[Number(index)];
+    if (line) selected.set(articleWeightKey(line), Number(weight));
+  });
+  const expanded = {};
+  (lines || []).forEach((line, index) => {
+    const key = articleWeightKey(line);
+    if (selected.has(key)) expanded[index] = selected.get(key);
+  });
+  return expanded;
 }
 router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), async (req, res) => {
   try {
@@ -1423,6 +1483,10 @@ router.post('/api/procurement/advance', async (req, res) => {
     const s = loadStore();
     const b = req.body || {};
     if (!(b.lines || []).length) return res.status(400).json({ success: false, error: 'Add at least one line before saving.' });
+    const billNo = String(b.billNo || '').trim();
+    if (!billNo) return res.status(400).json({ success: false, error: 'Enter the vendor bill number before saving.' });
+    const existingBill = duplicateBillPo(s, billNo);
+    if (existingBill) return res.status(409).json({ success: false, error: 'Bill number "' + billNo + '" already exists in ' + existingBill.id + '. Duplicate bills are not allowed.' });
     // Vendor is mandatory — it identifies who the goods were bought from and
     // is shown on every advance / receive / post line.
     if (!String(b.vendor || '').trim()) return res.status(400).json({ success: false, error: 'Pick or type a vendor name before saving the PO.' });
@@ -1461,7 +1525,7 @@ router.post('/api/procurement/advance', async (req, res) => {
       // batch names, fit words or product titles when calculating open-to-buy.
       sourceBatchId: normLine(b.line) ? String(b.sourceBatchId || '').trim().slice(0, 80) : '',
       sourceBatchName: normLine(b.line) ? String(b.sourceBatchName || '').trim().slice(0, 120) : '',
-      billNo: b.billNo || '',
+      billNo,
       invoice: b.invoice && b.invoice.url ? b.invoice : null,
       datePurchase: b.datePurchase || '',
       dateReceive: '',
@@ -1511,10 +1575,11 @@ router.patch('/api/procurement/pos/:id/weights', (req, res) => {
         (typeof weight !== 'number' && typeof weight !== 'string') || String(weight).trim() === '' || !Number.isFinite(Number(weight)) || Number(weight) <= 0)
       return res.status(400).json({ success: false, error: 'Each weight must be a positive number in grams per piece.' });
   }
+  const expandedWeights = expandArticleWeights(po.lines || [], weights);
   po.weightHistory = po.weightHistory || [];
   po.weightHistory.push({ at: new Date().toISOString(), by: (req.user || {}).username || '',
-    changes: Object.entries(weights).map(([index, weight]) => ({ index: Number(index), before: num(po.lines[index].weightGrams), after: Number(weight) })) });
-  Object.entries(weights).forEach(([index, weight]) => { po.lines[index].weightGrams = Number(weight); });
+    changes: Object.entries(expandedWeights).map(([index, weight]) => ({ index: Number(index), before: num(po.lines[index].weightGrams), after: Number(weight) })) });
+  Object.entries(expandedWeights).forEach(([index, weight]) => { po.lines[index].weightGrams = Number(weight); });
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req) });
 });
@@ -1528,7 +1593,7 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
     if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
     const b = req.body || {};
-    const weights = b.weights || {};            // { lineIndex: grams }
+    const weights = expandArticleWeights(po.lines || [], b.weights || {}); // one entered article weight applies to every colour/size
     const qtys    = b.qtys || {};               // { lineIndex: actual received qty }
     po.lines = (po.lines || []).map((l, i) => {
       const w = weights[i] != null ? num(weights[i]) : num(l.weightGrams);
@@ -1907,7 +1972,13 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
     if (b.sourceBatchId != null) po.sourceBatchId = po.line ? String(b.sourceBatchId).trim().slice(0, 80) : '';
     if (b.sourceBatchName != null) po.sourceBatchName = po.line ? String(b.sourceBatchName).trim().slice(0, 120) : '';
     if (!po.line) { po.sourceBatchId = ''; po.sourceBatchName = ''; }
-    if (b.billNo != null)       po.billNo = String(b.billNo).trim();
+    if (b.billNo != null) {
+      const billNo = String(b.billNo).trim();
+      if (!billNo) return res.status(400).json({ success: false, error: 'Enter the vendor bill number before saving.' });
+      const existingBill = duplicateBillPo(s, billNo, po.id);
+      if (existingBill) return res.status(409).json({ success: false, error: 'Bill number "' + billNo + '" already exists in ' + existingBill.id + '. Duplicate bills are not allowed.' });
+      po.billNo = billNo;
+    }
     if (b.datePurchase != null) po.datePurchase = String(b.datePurchase);
     if (b.leadTimeDays != null && b.leadTimeDays !== '') po.leadTimeDays = Math.max(0, Math.round(num(b.leadTimeDays)));
     if (b.exRate != null && b.exRate !== '')         po.exRate = num(b.exRate);
@@ -3246,4 +3317,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };
+module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, duplicateBillPo, expandArticleWeights, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };

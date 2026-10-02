@@ -1,9 +1,10 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../modules/procurement.js'),'utf8');
 const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+const {expandArticleWeights}=require('../modules/procurement');
 function handler(store,allowed=true){
  const start=source.indexOf("router.patch('/api/procurement/pos/:id/weights'"),end=source.indexOf('\n});',start)+4;let fn,saves=0;
- vm.runInNewContext(source.slice(start,end),{router:{patch:(url,f)=>fn=f},canManagePurchases:()=>allowed,loadStore:()=>store,saveStore:()=>saves++,num:x=>Number(x)||0,publicPo:po=>po});
+ vm.runInNewContext(source.slice(start,end),{router:{patch:(url,f)=>fn=f},canManagePurchases:()=>allowed,loadStore:()=>store,saveStore:()=>saves++,num:x=>Number(x)||0,publicPo:po=>po,expandArticleWeights});
  return weights=>{let code=200,body;fn({params:{id:'PO-5'},body:{weights},user:{username:'owner'}},{status:n=>{code=n;return {json:b=>body=b}},json:b=>body=b});return {code,body,saves};};
 }
 test('summary weights save atomically without changing receipt status, price or quantity',()=>{
@@ -18,6 +19,14 @@ test('summary weights save atomically without changing receipt status, price or 
 test('posted POs and unauthorized users cannot use summary weight saving',()=>{
  assert.equal(handler({pos:{'PO-5':{status:'posted'}}})({'0':10}).code,400);
  assert.equal(handler({pos:{}},false)({'0':10}).code,403);
+});
+test('one article weight expands to every colour and size with the same vendor code',()=>{
+ const lines=[
+  {designCode:'A-7',designName:'Top',productType:'Top',colour:'Black',sizeLabel:'M'},
+  {designCode:'a-7',designName:'Top',productType:'Top',colour:'White',sizeLabel:'L'},
+  {designCode:'B-8',designName:'Top',productType:'Top',colour:'Blue',sizeLabel:'M'}
+ ];
+ assert.deepEqual(expandArticleWeights(lines,{'0':'225'}),{'0':225,'1':225});
 });
 test('summary uses one editable calculation table with zoomable photos',()=>{
  const a=html.indexOf('function purchaseCalculationPanel('),b=html.indexOf('window.attachPoInvoice',a);

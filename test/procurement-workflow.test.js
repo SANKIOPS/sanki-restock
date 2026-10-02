@@ -124,6 +124,53 @@ test('China invoice reading uses local Chinese OCR and parses reviewable garment
   ]);
 });
 
+test('invoice OCR rejoins split rows and extracts vendor code, Top, size, quantity and unit price', () => {
+  const parsed = parseLocalInvoiceText([
+    '供应商: NTVG',
+    '单号: TOP-991',
+    '货号: WZ882',
+    '女装上衣 米白色',
+    '尺码: XL 数量: 12 单价: 48 金额: 576'
+  ].join('\n'), {
+    products: { Top: 20, Shirt: 1, 'T-Shirt': 2 },
+    colours: { Cream: 4, White: 12 },
+    vendors: ['NTVG']
+  });
+  assert.equal(parsed.vendor, 'NTVG');
+  assert.equal(parsed.billNo, 'TOP-991');
+  assert.deepEqual(parsed.lines.map(line => ({ code: line.designCode, type: line.productType, size: line.sizeLabel, qty: line.qty, price: line.perPcsYuan })), [
+    { code: 'WZ882', type: 'Top', size: 'XL', qty: 12, price: 48 }
+  ]);
+});
+
+test('Top is a permanent intake lookup and added-line quantity is retained', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.match(source, /'Top': 20/);
+  assert.match(source, /s\.products = \{ \.\.\.SEED\.products, \.\.\.s\.products \}/);
+  assert.doesNotMatch(html, /function resetLineForm\(\)\{\s*el\('f_qty'\)\.value='1'/);
+});
+
+test('duplicate vendor bill numbers are rejected consistently', () => {
+  const { duplicateBillPo } = require('../modules/procurement');
+  const store = { pos: {
+    'PO-0001': { id: 'PO-0001', billNo: ' INV  /  77 ' },
+    'PO-0002': { id: 'PO-0002', billNo: 'OTHER-1' }
+  } };
+  assert.equal(duplicateBillPo(store, 'inv/77').id, 'PO-0001');
+  assert.equal(duplicateBillPo(store, 'INV / 77', 'PO-0001'), null);
+  assert.equal(duplicateBillPo(store, 'new-1'), null);
+});
+
+test('Audit Purchase saves in place and propagates weight across an article', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.match(html, /function auditArticleKey\(index\)/);
+  assert.match(html, /auditArticleKey\(other\.getAttribute\('data-w'\)\)===key/);
+  const saveBlock = html.slice(html.indexOf('function saveCorrections(id)'), html.indexOf('function computeReceive(id)'));
+  assert.doesNotMatch(saveBlock, /loadPos\(\).*openPo/);
+  assert.match(saveBlock, /Corrections saved/);
+});
+
 test('owner and procurement roles receive the full Purchases workflow in the UI', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   assert.match(html, /userRoles\.indexOf\('owner'\)>=0/);
