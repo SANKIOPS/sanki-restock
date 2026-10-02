@@ -104,16 +104,18 @@ function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
   return matched;
 }
 
-function validateSettlementReview(store, payoutId, saleRows) {
+function validateSettlementReview(store, payoutId, saleRows, options = {}) {
   const payout = getPayout(store, payoutId);
   if (!payout) throw new Error('Payout not found. Import the Paytm report first.');
-  if (payout.transactionIds.some(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && (store.paytmExcludedTransactions || {})[id])) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before posting the payout.');
+  const excludedIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && (store.paytmExcludedTransactions || {})[id]);
+  if (excludedIds.length && !options.allowExcluded) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before finalizing the payout.');
   if (!payout.utr || !payout.settledDate) throw new Error('Settlement UTR and settled date are required for an exact bank link.');
   const links = store.paytmOrderLinks || {}, manual = store.paytmManualResolutions || {};
-  const customerIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false);
+  const customerIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && !excludedIds.includes(id));
   const linked = customerIds.map(id => links[id] || manual[id]);
   if (linked.some(x => !x)) throw new Error('Every Paytm payment in this payout must be linked to Shopify or classified as a verified manual sale/cash transfer before posting.');
-  if (linked.reduce((sum, x) => sum + cents(x.amount), 0) !== cents(payout.customerGross)) throw new Error('Reviewed customer receipts do not equal the customer-payment gross for this settlement.');
+  const excludedAmount=excludedIds.reduce((sum,id)=>sum+Number((store.paytmReportTransactions||{})[id]?.amount||0),0);
+  if (linked.reduce((sum, x) => sum + cents(x.amount), 0) !== cents(payout.customerGross-excludedAmount)) throw new Error('Reviewed customer receipts plus excluded payments do not equal the customer-payment gross for this settlement.');
   for (const link of linked) {
     if (link.type === 'manual_sale' || link.type === 'cash_transfer') {
       const source = link.type === 'manual_sale' ? store.receipts : store.transfers;
@@ -126,7 +128,7 @@ function validateSettlementReview(store, payoutId, saleRows) {
     if ((store.bankDateOverrides || {})[row.id]) throw new Error(`Shopify order ${link.orderNumber} is already linked to a bank transaction. Correct that existing link before posting its Paytm payout.`);
   }
   if (cents(payout.gross) - cents(payout.commission) - cents(payout.platformFee) - cents(payout.gst) - cents(payout.nonCustomerAmount) !== cents(payout.net)) throw new Error('Paytm customer gross, commission, platform fee, GST, VAS deductions and bank net do not balance.');
-  return { payout, linked };
+  return { payout, linked, excludedIds, excludedAmount };
 }
 
 // A settlement whose customer rows have all been reviewed is already a real
@@ -148,19 +150,20 @@ function reviewedUnpostedSettlements(store, saleRows) {
 }
 
 function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
-  const { payout, linked } = validateSettlementReview(store, payoutId, saleRows);
+  const { payout, linked, excludedIds, excludedAmount } = validateSettlementReview(store, payoutId, saleRows, { allowExcluded: true });
   if ((store.paytmPayoutPostings || []).some(x => x.payoutId === payout.payoutId || payout.sourcePayoutIds.includes(x.payoutId) || x.settlementId === payout.settlementId || (x.transactionIds || []).some(id => payout.transactionIds.includes(id)))) throw new Error('This Paytm settlement was already posted.');
   if ((store.paytmSettlements || []).some(x => x.payoutId === payoutId || x.bankTransactionId === bankTransactionId)) throw new Error('An existing Paytm settlement already uses this payout or bank transaction.');
   const bank = Object.values(((store.bankStatements || {})[BANK] || {}).transactions || {}).find(x => x.id === bankTransactionId);
   if (!bank || cents(bank.credit) !== cents(payout.net) || cents(bank.debit) !== 0) throw new Error('Choose an Axis 3448 credit equal to the exact Paytm payout net.');
   if (!String(bank.reference || bank.description || '').includes(payout.utr)) throw new Error('The Axis bank reference must contain the Paytm payout UTR.');
+  if (excludedIds.length && bank.date !== payout.settledDate) throw new Error('A payout containing excluded payments can be linked only when the Axis credit is on the exact Paytm settled date.');
   if (dayGap(bank.date, payout.settledDate) > 3) throw new Error('Axis credit and Paytm settled dates differ by more than three days.');
   if ((store.paytmPayoutPostings || []).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis bank credit is already used by a Paytm payout.');
   if (Object.values(store.bankDateOverrides || {}).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis credit is already linked to another ledger entry. Correct that link first.');
   const book = (store.bankStatements || {})[BANK] || {};
   if ((book.imports || []).some(record => [].concat(record.reconciliationRows || [], record.carriedReconciliationRows || []).some(row => row.bank && row.bank.id === bankTransactionId && (row.linkedRecordIds || []).length))) throw new Error('This Axis credit was already linked in a finalized reconciliation. Correct that link first.');
   if ([...(store.adjustments || []), ...(store.receipts || []), ...(store.bankTruthMovements || [])].some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis credit already has a ledger posting. Review it before posting Paytm.');
-  return { payout, bank, linked };
+  return { payout, bank, linked, excludedIds, excludedAmount };
 }
 
 module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };

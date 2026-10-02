@@ -248,7 +248,7 @@ test('Shopify payment split sync caches exact successful components for review',
   assert.equal(store.paytmShopifyPayments['12345'].storeCreditAmount, 1499);
 });
 
-test('exclusion is audited and reversible but cannot silently post a mixed payout', () => {
+test('excluded payments stay excluded but an exact UTR bank credit can still link the payout', () => {
   const tx = { transactionId: 'T1', date: '2026-09-17', amount: 100, commission: 0, gst: 0, settledAmount: 100, payoutId: 'P1', payoutDate: '2026-09-18', utr: 'UTR123' };
   const store = { paytmReportTransactions: { T1: tx }, paytmOrderLinks: {}, bankStatements: { 'Axis Bank 3448': { transactions: {} } } };
   const routes = {}, audits = [];
@@ -259,7 +259,10 @@ test('exclusion is audited and reversible but cannot silently post a mixed payou
   routes['/api/expenses/paytm-reports/exclude']({ user: { username: 'owner' }, body: { transactionId: 'T1', reason: 'Not a Shopify customer sale' } }, first);
   assert.equal(first.body.success, true);
   assert.match(store.paytmExcludedTransactions.T1.reason, /Not a Shopify/);
-  assert.throws(() => validatePayoutPosting(store, 'P1', 'bank-id', []), /excluded payment/);
+  assert.throws(() => validatePayoutPosting(store, 'P1', 'bank-id', []), /Choose an Axis 3448 credit/);
+  store.bankStatements['Axis Bank 3448'].transactions.b={id:'bank-id',date:'2026-09-18',credit:100,debit:0,reference:'UTR123'};
+  const exact=validatePayoutPosting(store,'P1','bank-id',[]);assert.deepEqual(exact.excludedIds,['T1']);assert.equal(exact.excludedAmount,100);assert.deepEqual(exact.linked,[]);
+  store.bankStatements['Axis Bank 3448'].transactions.b.date='2026-09-19';assert.throws(()=>validatePayoutPosting(store,'P1','bank-id',[]),/exact Paytm settled date/);store.bankStatements['Axis Bank 3448'].transactions.b.date='2026-09-18';
   const restored = reply();
   routes['/api/expenses/paytm-reports/restore']({ user: { username: 'owner' }, body: { transactionId: 'T1', reason: 'Confirmed against Shopify order' } }, restored);
   assert.equal(restored.body.success, true);

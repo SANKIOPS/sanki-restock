@@ -220,9 +220,9 @@ function registerPaytmReports(router, deps) {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {}, payoutId = String(body.payoutId || ''), bankTransactionId = String(body.bankTransactionId || '');
     try {
-      const { payout, bank, linked } = validatePayoutPosting(store, payoutId, bankTransactionId, saleRows(store));
+      const { payout, bank, linked, excludedIds, excludedAmount } = validatePayoutPosting(store, payoutId, bankTransactionId, saleRows(store));
       const postedAt = new Date().toISOString();
-      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId: payout.payoutId, settlementId: payout.settlementId, sourcePayoutIds: payout.sourcePayoutIds, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, settledDate: payout.settledDate, gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
+      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId: payout.payoutId, settlementId: payout.settlementId, sourcePayoutIds: payout.sourcePayoutIds, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), excludedTransactionIds:excludedIds,excludedAmount,bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, settledDate: payout.settledDate, gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
       store.paytmPayoutPostings = store.paytmPayoutPostings || [];
       store.paytmPayoutPostings.push(posting);
       store.reconciliationExpenses = store.reconciliationExpenses || [];
