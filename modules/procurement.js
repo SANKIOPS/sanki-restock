@@ -1541,20 +1541,25 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
     if (!isPdf && process.env.OPENAI_API_KEY) {
       try {
         const vision = await openaiPilot.extractInvoice({ key: process.env.OPENAI_API_KEY, buffer: req.file.buffer, mime: req.file.mimetype || 'image/jpeg' });
-        const visionLines=(vision.lines||[]).filter(line=>Number(line.qty)>0).map(line=>({
-          designName:String(line.designName||line.sourceDescription||'Invoice item').slice(0,80), designCode:String(line.designCode||'').slice(0,40),
-          productType:pickClosest(line.productType,Object.keys(s.products||{})), colour:pickClosest(line.colour,Object.keys(s.colours||{})), sourceColour:String(line.sourceColour||''),
-          fit:String(line.fit||''), sizeLabel:invoiceSizeToken(line.sizeLabel), chinaSize:String(line.chinaSize||line.sizeLabel||''), audience:'Unisex',
-          qty:Number(line.qty), perPcsYuan:Number(line.perPcsYuan||0), photoBox:null,
-          reviewRequired:line.confidence!=='high'||!!line.reviewReason||!line.designCode||!line.productType||!line.colour||!line.sizeLabel||!(Number(line.perPcsYuan)>0),
-          reviewReasons:[String(line.reviewReason||''),!line.designCode?'design code':'',!line.productType?'product type':'',!line.colour?'colour':'',!line.sizeLabel?'size':'',!(Number(line.perPcsYuan)>0)?'unit price':''].filter(Boolean)
-        }));
+        const visionLines=(vision.lines||[]).filter(line=>Number(line.qty)>0).map(line=>{
+          const sourceColour=String(line.sourceColour||''), colour=pickClosest(line.colour,Object.keys(s.colours||{}))||localInvoiceColour(sourceColour,Object.keys(s.colours||{}));
+          const chinaSize=String(line.chinaSize||line.sizeLabel||''), sizeLabel=invoiceSizeToken(chinaSize||line.sizeLabel);
+          const productType=pickClosest(line.productType,Object.keys(s.products||{}));
+          return {
+            designName:String(line.designName||line.sourceDescription||'Invoice item').slice(0,80), designCode:String(line.designCode||'').slice(0,40),
+            productType, colour, sourceColour, fit:String(line.fit||''), sizeLabel, chinaSize, audience:'Unisex',
+            qty:Number(line.qty), perPcsYuan:Number(line.perPcsYuan||0), photoBox:null,
+            reviewRequired:line.confidence!=='high'||!!line.reviewReason||!line.designCode||!productType||!colour||!sizeLabel||!(Number(line.perPcsYuan)>0),
+            reviewReasons:[String(line.reviewReason||''),!line.designCode?'design code':'',!productType?'product type':'',!colour?'colour':'',!sizeLabel?'size':'',!(Number(line.perPcsYuan)>0)?'unit price':''].filter(Boolean)
+          };
+        });
         if (visionLines.length) {
           const extractedQty=visionLines.reduce((sum,line)=>sum+line.qty,0), extractedAmount=visionLines.reduce((sum,line)=>sum+line.qty*line.perPcsYuan,0);
           const warnings=[...(vision.warnings||[])];
           if(Number(vision.invoiceQty)>0&&extractedQty!==Number(vision.invoiceQty))warnings.push('Invoice says '+vision.invoiceQty+' pieces; extracted '+extractedQty+'. Review missing or misread rows.');
           if(Number(vision.invoiceAmount)>0&&Math.abs(extractedAmount-Number(vision.invoiceAmount))>Math.max(1,Number(vision.invoiceAmount)*.01))warnings.push('Invoice total is ¥'+vision.invoiceAmount+'; extracted lines total ¥'+extractedAmount+'. Review highlighted fields.');
-          parsed={vendor:vision.vendor||parsed.vendor,billNo:vision.billNo||parsed.billNo,datePurchase:vision.datePurchase||parsed.datePurchase,lines:visionLines,warnings,totals:{invoiceQty:Number(vision.invoiceQty||0),invoiceAmount:Number(vision.invoiceAmount||0),extractedQty,extractedAmount}};
+          const visionVendor=/^(?:量|名称|商品|颜色|客户|销售)$/i.test(String(vision.vendor||'').trim())?'':String(vision.vendor||'').trim();
+          parsed={vendor:visionVendor||parsed.vendor,billNo:vision.billNo||parsed.billNo,datePurchase:vision.datePurchase||parsed.datePurchase,lines:visionLines,warnings,totals:{invoiceQty:Number(vision.invoiceQty||0),invoiceAmount:Number(vision.invoiceAmount||0),extractedQty,extractedAmount}};
           reader='openai-vision';
         }
       } catch (visionError) {
