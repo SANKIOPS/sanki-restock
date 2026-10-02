@@ -172,7 +172,7 @@
           <button class="btn" id="parseInvoiceBtn">Read invoice &amp; fill lines</button>
           <span class="muted" id="invoiceNote" style="font-size:12px"></span>
         </div>
-        <p class="sub">Upload the bill first. Local China-invoice OCR will read the vendor, bill number, date and line items for review—no paid AI credits required.</p>
+        <p class="sub">Upload the bill first. Invoice vision reads Chinese receipt cards, size grids and product tables, translates them, and fills reviewable lines. Printed totals are checked against the extracted lines before you save.</p>
       </div>
 
       <div class="panel">
@@ -1373,13 +1373,14 @@
       if(!f){ el('invoiceNote').textContent='Choose an invoice image or PDF first.'; return; }
       var btn=el('parseInvoiceBtn'); btn.disabled=true; btn.textContent='Reading…';
       el('invoiceNote').textContent='Reading the invoice — this can take a few seconds…';
-      downscaleImage(f, 2200).then(function(up){
+      downscaleImage(f, 3200).then(function(up){
         var fd=new FormData(); fd.append('invoice',up,/^image\//.test(f.type)?'invoice.jpg':(f.name||'invoice'));
         return fetch('/api/procurement/parse-invoice',{method:'POST',body:fd}).then(readJson);
       }).then(function(d){
         btn.disabled=false; btn.textContent='Read invoice & fill lines';
         if(!d.success){ el('invoiceNote').textContent=d.error||'Could not read the invoice.'; return; }
-        var readerNote=d.reader==='local-ocr'?'Read locally — no AI credits used. ':'';
+        var readerNote=d.reader==='openai-vision'?'Read with OpenAI invoice vision. ':d.reader==='local-ocr'?'Read locally with Chinese OCR. ':'';
+        var invoiceWarnings=(d.warnings||[]).join(' ');
         // Populate bill headers from OCR. Preserve a value the user already entered.
         if(d.vendor){
           var vendorName=String(d.vendor).toUpperCase().trim(), vendorSel=el('b_vendor');
@@ -1413,7 +1414,7 @@
             renderLines();
           });
         } else {
-          el('invoiceNote').textContent=readerNote+'Filled '+added.length+' line(s). '+(boxed&&!d.canCropPhotos?'(PDF — add each photo via Edit.) ':'')+'Review each line — Edit to add/approve its photo, then Save.';
+          el('invoiceNote').textContent=readerNote+'Filled '+added.length+' line(s). '+(invoiceWarnings?('Check: '+invoiceWarnings+' '):'')+(boxed&&!d.canCropPhotos?'(PDF — add each photo via Edit.) ':'')+'Review each line — Edit to add/approve its photo, then Save.';
         }
       }).catch(function(e){ btn.disabled=false; btn.textContent='Read invoice & fill lines'; el('invoiceNote').textContent=e.message; });
     };

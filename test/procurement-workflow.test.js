@@ -143,6 +143,45 @@ test('invoice OCR rejoins split rows and extracts vendor code, Top, size, quanti
   ]);
 });
 
+test('invoice OCR expands Chinese size-grid tables and carries design codes across colour rows', () => {
+  const parsed = parseLocalInvoiceText([
+    '名称 颜色 M L XL 2XL 数量 单价 金额',
+    '6801#西装面料阔腿裤秋款',
+    '黑色 1 1 1 2 5 51 255',
+    '灰色 1 1 1 2 5 51 255',
+    '合计 数量:10 金额:510'
+  ].join('\n'), {
+    products: { Trouser: 11, Shirt: 1 }, colours: { Black: 1, Grey: 6 }, vendors: []
+  });
+  assert.equal(parsed.lines.length, 8);
+  assert.deepEqual(parsed.lines.map(line => line.designCode), Array(8).fill('6801'));
+  assert.deepEqual(parsed.lines.slice(0, 4).map(line => [line.sizeLabel, line.qty, line.perPcsYuan]),
+    [['M', 1, 51], ['L', 1, 51], ['XL', 1, 51], ['XXL', 2, 51]]);
+  assert.equal(parsed.totals.extractedQty, 10);
+  assert.equal(parsed.totals.extractedAmount, 510);
+  assert.deepEqual(parsed.warnings, []);
+});
+
+test('invoice OCR carries product codes through compact colour-list invoices and validates totals', () => {
+  const parsed = parseLocalInvoiceText([
+    '商品 颜色 数量 单价 小计',
+    '971 黑色 5 22 110',
+    '白杏 5 22 110',
+    '栗灰 5 22 110',
+    '星灰 5 22 110',
+    '958 黑色 5 21 105',
+    '粉色 5 21 105',
+    '杏灰 5 21 105',
+    '合计 数量:35 金额:755'
+  ].join('\n'), {
+    products: { Top: 20 }, colours: { Black: 1, White: 12, Beige: 14, Grey: 6, Pink: 9 }, vendors: []
+  });
+  assert.deepEqual(parsed.lines.map(line => line.designCode), ['971', '971', '971', '971', '958', '958', '958']);
+  assert.equal(parsed.totals.extractedQty, 35);
+  assert.equal(parsed.totals.extractedAmount, 755);
+  assert.doesNotMatch(parsed.warnings.join(' '), /Invoice says|Invoice total/);
+});
+
 test('Top is a permanent intake lookup and added-line quantity is retained', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');

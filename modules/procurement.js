@@ -1237,6 +1237,7 @@ function localInvoiceOcr(buffer) {
       });
     }
     const worker = await invoiceOcrWorkerPromise;
+    await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
     const result = await worker.recognize(buffer);
     return String(result && result.data && result.data.text || '');
   });
@@ -1244,16 +1245,28 @@ function localInvoiceOcr(buffer) {
   return job;
 }
 function normalInvoiceText(value) {
-  return String(value || '').normalize('NFKC').replace(/\r/g, '').replace(/[，]/g, ',').replace(/[：]/g, ':');
+  let text = String(value || '').normalize('NFKC').replace(/\r/g, '').replace(/[，]/g, ',').replace(/[：]/g, ':');
+  // Chinese Tesseract often inserts a space between every Han character
+  // ("单 价", "咖 啡 色").  Those spaces prevent every label/colour rule
+  // below from matching.  Remove only CJK-to-CJK spaces; Latin words and the
+  // numeric table columns keep their separators.
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/([\u3400-\u9fff])[ \t]+(?=[\u3400-\u9fff])/g, '$1');
+  } while (text !== previous);
+  return text;
 }
 function localInvoiceDate(text) {
   const raw = normalInvoiceText(text);
   const m = raw.match(/(?:20\d{2})[年\/.-]\s*\d{1,2}[月\/.-]\s*\d{1,2}日?/) ||
+            raw.match(/(?:日期|时间|date|time)\s*[:：-]?\s*(\d{2})[\/.-]\s*(\d{1,2})[\/.-]\s*(\d{1,2})/i) ||
             raw.match(/\d{1,2}[\/.-]\s*\d{1,2}[\/.-]\s*(?:20)?\d{2}/);
   if (!m) return '';
   const nums = m[0].match(/\d+/g).map(Number);
   let y, month, day;
   if (nums[0] > 1900) [y, month, day] = nums;
+  else if (/(?:日期|时间|date|time)/i.test(m[0]) && nums[0] < 100) { [y, month, day] = nums; y += 2000; }
   else { [day, month, y] = nums; if (y < 100) y += 2000; }
   if (month < 1 || month > 12 || day < 1 || day > 31) return '';
   return String(y).padStart(4, '0') + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
@@ -1276,11 +1289,11 @@ function localInvoiceProduct(line, products) {
 }
 function localInvoiceColour(line, colours) {
   const rules = [
-    ['Sky Blue', /sky\s*blue|天蓝/i], ['Blue', /navy|blue|蓝|藏青/i], ['Black', /black|黑/i],
+    ['Sky Blue', /sky\s*blue|天蓝|浅蓝/i], ['Blue', /navy|blue|蓝|藏青|宝蓝/i], ['Black', /black|黑/i],
     ['White', /white|白/i], ['Brown', /brown|coffee|咖啡|棕|褐/i], ['Cream', /cream|off[ -]?white|米白|奶油/i],
     ['Green', /green|绿/i], ['Grey', /gr[ae]y|灰/i], ['Maroon', /maroon|酒红/i], ['Orange', /orange|橙|桔/i],
     ['Pink', /pink|粉/i], ['Purple', /purple|紫/i], ['Red', /red|红/i], ['Yellow', /yellow|黄/i],
-    ['Beige', /beige|杏|米色/i], ['Olive', /olive|军绿/i], ['Khaki', /khaki|卡其/i],
+    ['Beige', /beige|杏|米色/i], ['Olive', /olive|军绿/i], ['Khaki', /khaki|卡其|卡色/i],
     ['Golden', /gold(?:en)?|金色/i], ['Silver', /silver|银色/i]
   ];
   const hit = rules.find(r => r[1].test(line) && colours.includes(r[0]));
@@ -1338,68 +1351,150 @@ function localInvoiceNumbers(line, designCode) {
   }
   return { qty, price };
 }
+function invoiceSizeToken(value) {
+  const token = String(value || '').toUpperCase().replace(/\s+/g, '');
+  return ({ 'FREE': 'FS', 'FREESIZE': 'FS', '均码': 'FS', '2X': 'XXL', '2XL': 'XXL', '3X': '3XL' })[token] || token;
+}
+function invoiceRowCode(line) {
+  const labelled = line.match(/(?:货号|款号|货品编码|商品编码|style|article|item|vendor\s*(?:code|sku))\s*[:#-]?\s*([A-Z0-9_\/-]{2,})/i);
+  if (labelled) return labelled[1];
+  const numbered = line.match(/^\s*\d{1,3}[.)、]?\s+([A-Z]*\d[A-Z0-9_\/-]{1,}|\d{3,8})\b/i);
+  if (numbered) return numbered[1];
+  const start = line.match(/^\s*([A-Z]*\d[A-Z0-9_\/-]{1,}|\d{3,8}(?:[#/][A-Z0-9\u3400-\u9fff]+)?)\b/i);
+  return start ? start[1].replace(/#$/, '') : '';
+}
+function invoiceTableSizes(line, validSizes) {
+  if (!/(?:颜色|colour|color)/i.test(line) || !/(?:数量|qty|quantity)/i.test(line)) return [];
+  const middle = line.split(/(?:颜色|colour|color)/i)[1].split(/(?:数量|qty|quantity)/i)[0];
+  const raw = middle.toUpperCase().match(/(?:FREE\s*SIZE|均码|FS|XS|S|M|L|2XL|3XL|4XL|XXL|XL|2X|3X|(?:2[468]|3[02468]|4[024]))/g) || [];
+  return raw.map(invoiceSizeToken).filter((size, index, all) => validSizes.includes(size) && all.indexOf(size) === index);
+}
 function parseLocalInvoiceText(rawText, store) {
   const text = normalInvoiceText(rawText);
   const products = Object.keys(store.products || {}), colours = Object.keys(store.colours || {});
-  const sizes = ['FS', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44'];
+  const sizes = ['FS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '24', '26', '28', '30', '32', '34', '36', '38', '40', '42', '44'];
   const fits = ['Oversized', 'Drop Shoulder', 'Boxy Fit', 'Relaxed Fit', 'Regular Fit', 'Slim Fit', 'Muscle Fit',
                 'Baggy Fit', 'Straight Fit', 'Tapered Fit', 'Skinny Fit', 'Narrow Fit', 'Wide Leg', 'Bootcut', 'Cargo Fit'];
   const knownVendor = (store.vendors || []).find(v => text.toLowerCase().includes(String(v).toLowerCase()));
   const textLines = text.split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const vendorLine = textLines.slice(0, 12).find(x => /公司|商行|服饰|服装|档口|供应商|supplier|vendor/i.test(x));
-  const lines = [];
-  for (let index = 0; index < textLines.length; index++) {
-    let line = textLines[index];
-    if (/合计|总计|小计|运费|税额|折扣|应付|实付|收款|电话|地址|日期|单号|订单号|subtotal|grand\s*total|freight|discount|tax/i.test(line)) continue;
-    let consumed = 0;
-    // OCR frequently breaks one printed invoice row across two or three text
-    // lines (code/name, then size/quantity, then price). Rejoin only until a
-    // complete row is found, and consume those fragments once.
-    for (let extra = 0; extra < 3; extra++) {
-      if (!textLines[index + extra]) break;
-      if (extra) line += ' ' + textLines[index + extra];
-      const probeCode = line.match(/(?:货号|款号|货品编码|商品编码|style|article|item|vendor\s*(?:code|sku))\s*[:#-]?\s*([A-Z0-9_-]{2,})/i);
-      const probeProduct = localInvoiceProduct(line, products);
-      const probeColour = localInvoiceColour(line, colours);
-      const probeSize = localInvoiceSize(line, sizes);
-      const probeAmounts = localInvoiceNumbers(line, probeCode && probeCode[1]);
-      if (probeAmounts.qty && (probeCode || probeProduct || probeColour || probeSize)) { consumed = extra; break; }
-    }
-    const labelledCode = line.match(/(?:货号|款号|货品编码|商品编码|style|article|item|vendor\s*(?:code|sku))\s*[:#-]?\s*([A-Z0-9_-]{2,})/i);
-    const tokens = line.match(/[A-Z]*\d[A-Z0-9_-]{2,}/gi) || [];
-    let designCode = (labelledCode && labelledCode[1]) || tokens.find(x => /[A-Z]/i.test(x) && /\d/.test(x)) || '';
-    // OCR can glue the printed row number to an alphanumeric style code
-    // ("1 A611" → "1A611"). Separate that harmlessly.
-    if (/^\d{1,3}[A-Z]\d/i.test(designCode) && line.trim().startsWith(designCode)) {
-      designCode = designCode.replace(/^\d{1,3}(?=[A-Z]\d)/i, '');
-    }
-    if (!designCode) {
-      const numericCode = line.match(/(?:^|\s)(\d{4,8})(?=\s|$)/);
-      if (numericCode) designCode = numericCode[1];
-    }
-    const productType = localInvoiceProduct(line, products);
-    const colour = localInvoiceColour(line, colours);
-    const sizeLabel = localInvoiceSize(line, sizes);
-    const amounts = localInvoiceNumbers(line, designCode);
-    if (!amounts.qty || (!productType && !colour && !sizeLabel && !designCode)) continue;
-    const fit = localInvoiceFit(line, fits);
-    const sourceName = line.replace(/[¥￥]/g, ' ').replace(/\b\d+(?:\.\d+)?\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const lines = [], warnings = [];
+  let current = { code: '', name: '', productType: '', fit: '', size: '', price: 0, expectedQty: 0 };
+  let tableSizes = [];
+  const addLine = (data, sourceLine) => {
+    const qty = Number(data.qty || 0), price = Number(data.price || 0);
+    if (!(qty > 0)) return;
+    const productType = data.productType || current.productType || '';
+    const colour = data.colour || '';
+    const sizeLabel = invoiceSizeToken(data.sizeLabel || current.size || '');
+    const designCode = String(data.designCode || current.code || '').replace(/#$/, '').slice(0, 40);
+    const missing = [];
+    if (!designCode) missing.push('design code');
+    if (!productType) missing.push('product type');
+    if (!colour) missing.push('colour');
+    if (!sizeLabel) missing.push('size');
+    if (!(price > 0)) missing.push('unit price');
+    const sourceName = String(data.sourceName || current.name || sourceLine || '').replace(/[¥￥]/g, ' ').replace(/\b\d+(?:\.\d+)?\b/g, ' ').replace(/\s+/g, ' ').trim();
     const baseName = [productType, colour].filter(Boolean).join(' ');
     lines.push({
-      designName: (baseName || sourceName || ('Invoice item ' + (index + 1))).slice(0, 80),
-      designCode: String(designCode).slice(0, 40), productType, colour, fit,
-      sizeLabel, chinaSize: sizeLabel, audience: 'Men', qty: amounts.qty,
-      perPcsYuan: amounts.price, photoBox: null
+      designName: (baseName || sourceName || ('Invoice item ' + (lines.length + 1))).slice(0, 80),
+      designCode, productType, colour, sourceColour: data.sourceColour || '', fit: data.fit || current.fit || '',
+      sizeLabel, chinaSize: sizeLabel, audience: 'Unisex', qty,
+      perPcsYuan: price, photoBox: null, reviewRequired: missing.length > 0, reviewReasons: missing
     });
-    index += consumed;
+  };
+
+  for (let index = 0; index < textLines.length; index++) {
+    const line = textLines[index];
+    if (/^(?:客户|销售|单号|时间|日期|批次|店员|本单|未付|款数|开单时间|联系电话)\s*[:：]/i.test(line)) continue;
+    const headerSizes = invoiceTableSizes(line, sizes);
+    if (headerSizes.length) { tableSizes = headerSizes; continue; }
+    if (/合计|总计|小计|运费|税额|折扣|应付|实付|收款|销售\b|电话|地址|subtotal|grand\s*total|freight|discount|tax/i.test(line)) continue;
+
+    const rowCode = invoiceRowCode(line);
+    const productType = localInvoiceProduct(line, products);
+    const fit = localInvoiceFit(line, fits);
+    const colour = localInvoiceColour(line, colours);
+    const size = localInvoiceSize(line, sizes);
+    const amounts = localInvoiceNumbers(line, rowCode || current.code);
+    const priceTimesQty = line.match(/(\d+(?:\.\d+)?)\s*元\s*[x×*]\s*(\d+)\s*件/i);
+
+    // Product headings in printed table invoices occur once, followed by many
+    // colour rows.  Retain the code/name/type until the next heading.
+    if (rowCode) {
+      current.code = rowCode;
+      current.name = line.replace(rowCode, '').replace(/^\s*[#/:.-]+/, '').trim() || current.name;
+      current.productType = productType || current.productType;
+      current.fit = fit || current.fit;
+      current.size = size || '';
+    }
+    if (!amounts.qty && current.code) {
+      current.name = productType || fit || colour ? line : current.name;
+      current.productType = productType || current.productType;
+      current.fit = fit || current.fit;
+      current.size = size || current.size;
+    }
+    if (priceTimesQty) {
+      current.price = Number(priceTimesQty[1]);
+      current.expectedQty = Number(priceTimesQty[2]);
+      current.productType = productType || current.productType;
+      current.fit = fit || current.fit;
+      continue;
+    }
+    if (/^(?:均码|FS|S|M|L|XL|XXL|2XL|3XL|4XL)$/i.test(line)) {
+      current.size = invoiceSizeToken(line);
+      continue;
+    }
+
+    // Size-grid row: code/colour + one quantity per header + row qty/price/total.
+    if (amounts.qty && tableSizes.length && (colour || rowCode)) {
+      const numeric = [];
+      const withoutCode = rowCode ? line.replace(rowCode, ' ') : line;
+      for (const match of withoutCode.matchAll(/(?:^|\s)(\d+(?:\.\d+)?)(?=\s|$)/g)) numeric.push(Number(match[1]));
+      let qtyIndex = -1;
+      for (let i = numeric.length - 3; i >= 0; i--) {
+        if (numeric[i] === amounts.qty && Math.abs(numeric[i] * numeric[i + 1] - numeric[i + 2]) <= Math.max(2, numeric[i + 2] * .03)) { qtyIndex = i; break; }
+      }
+      const sizeQty = qtyIndex >= tableSizes.length ? numeric.slice(qtyIndex - tableSizes.length, qtyIndex) : [];
+      if (sizeQty.length === tableSizes.length && sizeQty.reduce((sum, qty) => sum + qty, 0) === amounts.qty) {
+        tableSizes.forEach((sizeLabel, i) => { if (sizeQty[i] > 0) addLine({ designCode: rowCode, productType, colour, fit, sizeLabel, qty: sizeQty[i], price: amounts.price }, line); });
+        continue;
+      }
+    }
+
+    if (amounts.qty && (rowCode || colour || productType || size || current.code)) {
+      addLine({ designCode: rowCode, productType, colour, fit, sizeLabel: size, qty: amounts.qty, price: amounts.price }, line);
+      continue;
+    }
+
+    // Mobile receipt cards state the unit price/total first, then list one or
+    // more colour variants below it.  Reuse that price for each variant row.
+    if (current.price > 0 && (colour || /均色/.test(line))) {
+      const nums = line.match(/\d+/g) || [];
+      const qty = Number(nums[nums.length - 1] || 0);
+      if (qty > 0) addLine({ colour, sourceColour: colour ? '' : line.replace(/\d+/g, '').trim(), qty, price: current.price, sizeLabel: size }, line);
+    }
   }
+
   const fallbackVendor = textLines.slice(0, 8).find(x =>
-    !/(?:invoice|bill|order|单据|单号|订单|票据|date|日期|电话|phone)/i.test(x) &&
-    /[A-Z\u3400-\u9fff]/i.test(x) && !/\d{4,}/.test(x)
+    !/(?:invoice|bill|order|单据|单号|订单|票据|date|日期|时间|电话|phone)/i.test(x) &&
+    !/(?:名称|商品|颜色|数量|单价|小计)/i.test(x) && /[A-Z\u3400-\u9fff]/i.test(x) && !/\d{4,}/.test(x)
   );
+  const invoiceQtyMatch = text.match(/(?:合计\s*)?数量\s*:\s*(\d+)/i) || text.match(/销售\s*:\s*(\d+)/i);
+  const totalLines=textLines.filter(line=>/(?:合计|总计|总额|金额|销售)/i.test(line));
+  const invoiceAmountMatch = totalLines.join('\n').match(/(?:总计|总额|金额)\s*[:：]?\s*[¥￥#Y]?\s*(\d+(?:\.\d+)?)/i);
+  const extractedQty = lines.reduce((sum, line) => sum + Number(line.qty || 0), 0);
+  const extractedAmount = lines.reduce((sum, line) => sum + Number(line.qty || 0) * Number(line.perPcsYuan || 0), 0);
+  const invoiceQty = invoiceQtyMatch ? Number(invoiceQtyMatch[1]) : 0;
+  const invoiceAmount = invoiceAmountMatch ? Number(invoiceAmountMatch[1]) : 0;
+  if (invoiceQty && extractedQty !== invoiceQty) warnings.push('Invoice says ' + invoiceQty + ' pieces; OCR extracted ' + extractedQty + '. Review missing or misread rows.');
+  if (invoiceAmount && Math.abs(extractedAmount - invoiceAmount) > Math.max(1, invoiceAmount * .01)) warnings.push('Invoice total is ¥' + invoiceAmount + '; extracted lines total ¥' + extractedAmount + '. Review highlighted fields.');
+  const reviewCount = lines.filter(line => line.reviewRequired).length;
+  if (reviewCount) warnings.push(reviewCount + ' extracted line(s) have fields that need review before saving.');
   return {
     vendor: String(knownVendor || vendorLine || fallbackVendor || '').replace(/^(?:供应商|vendor|supplier)\s*[:：-]?\s*/i, '').toUpperCase().trim().slice(0, 100),
-    billNo: localInvoiceBillNo(text), datePurchase: localInvoiceDate(text), lines
+    billNo: localInvoiceBillNo(text), datePurchase: localInvoiceDate(text), lines, warnings,
+    totals: { invoiceQty, invoiceAmount, extractedQty, extractedAmount }
   };
 }
 
@@ -1442,7 +1537,30 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
     if (!text.trim()) return res.status(422).json({ success: false, error: isPdf
       ? 'This PDF has no readable text. Upload a clear JPG/PNG photo of each page instead.'
       : 'No readable invoice text was found. Retake the photo straight-on in good light and try again.' });
-    const parsed = parseLocalInvoiceText(text, s);
+    let parsed = parseLocalInvoiceText(text, s), reader = 'local-ocr';
+    if (!isPdf && process.env.OPENAI_API_KEY) {
+      try {
+        const vision = await openaiPilot.extractInvoice({ key: process.env.OPENAI_API_KEY, buffer: req.file.buffer, mime: req.file.mimetype || 'image/jpeg' });
+        const visionLines=(vision.lines||[]).filter(line=>Number(line.qty)>0).map(line=>({
+          designName:String(line.designName||line.sourceDescription||'Invoice item').slice(0,80), designCode:String(line.designCode||'').slice(0,40),
+          productType:pickClosest(line.productType,Object.keys(s.products||{})), colour:pickClosest(line.colour,Object.keys(s.colours||{})), sourceColour:String(line.sourceColour||''),
+          fit:String(line.fit||''), sizeLabel:invoiceSizeToken(line.sizeLabel), chinaSize:String(line.chinaSize||line.sizeLabel||''), audience:'Unisex',
+          qty:Number(line.qty), perPcsYuan:Number(line.perPcsYuan||0), photoBox:null,
+          reviewRequired:line.confidence!=='high'||!!line.reviewReason||!line.designCode||!line.productType||!line.colour||!line.sizeLabel||!(Number(line.perPcsYuan)>0),
+          reviewReasons:[String(line.reviewReason||''),!line.designCode?'design code':'',!line.productType?'product type':'',!line.colour?'colour':'',!line.sizeLabel?'size':'',!(Number(line.perPcsYuan)>0)?'unit price':''].filter(Boolean)
+        }));
+        if (visionLines.length) {
+          const extractedQty=visionLines.reduce((sum,line)=>sum+line.qty,0), extractedAmount=visionLines.reduce((sum,line)=>sum+line.qty*line.perPcsYuan,0);
+          const warnings=[...(vision.warnings||[])];
+          if(Number(vision.invoiceQty)>0&&extractedQty!==Number(vision.invoiceQty))warnings.push('Invoice says '+vision.invoiceQty+' pieces; extracted '+extractedQty+'. Review missing or misread rows.');
+          if(Number(vision.invoiceAmount)>0&&Math.abs(extractedAmount-Number(vision.invoiceAmount))>Math.max(1,Number(vision.invoiceAmount)*.01))warnings.push('Invoice total is ¥'+vision.invoiceAmount+'; extracted lines total ¥'+extractedAmount+'. Review highlighted fields.');
+          parsed={vendor:vision.vendor||parsed.vendor,billNo:vision.billNo||parsed.billNo,datePurchase:vision.datePurchase||parsed.datePurchase,lines:visionLines,warnings,totals:{invoiceQty:Number(vision.invoiceQty||0),invoiceAmount:Number(vision.invoiceAmount||0),extractedQty,extractedAmount}};
+          reader='openai-vision';
+        }
+      } catch (visionError) {
+        parsed.warnings=[...(parsed.warnings||[]),'OpenAI invoice reading was unavailable; local Chinese OCR was used. '+String(visionError.message||visionError).slice(0,160)];
+      }
+    }
     if (!parsed.lines.length) return res.status(422).json({ success: false,
       error: 'The invoice text was read, but no complete quantity-and-price rows were found. Use a clearer straight-on photo, or add the lines manually.' });
     res.json({
@@ -1451,9 +1569,11 @@ router.post('/api/procurement/parse-invoice', invoiceUpload.single('invoice'), a
       billNo: String(parsed.billNo || '').trim(),
       datePurchase: String(parsed.datePurchase || '').trim(),
       canCropPhotos: false,
-      reader: 'local-ocr',
+      reader,
       invoice,
-      lines: parsed.lines
+      lines: parsed.lines,
+      warnings: parsed.warnings || [],
+      totals: parsed.totals || {}
     });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
