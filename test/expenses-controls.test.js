@@ -1766,7 +1766,17 @@ test('a missing internal transfer can be created from an official bank row witho
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('bank review offers a bank-confirmed internal transfer action',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);});
+test('bank review offers bank-confirmed transfers including direct Counter Cash and 3448 actions',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);assert.match(html,/Counter Cash → Axis 3448/);assert.match(html,/Axis 3448 → Counter Cash/);});
+
+test('Prashant can record Counter Cash into Axis 3448 directly from bank reconciliation',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),id='BRD-PRASHANT-CASH-TO-3448';
+  stored.bankReconciliationDrafts[id]={id,account:'Axis Bank 3448',nature:'SANKI',transactions:[{date:'2026-10-01',description:'THIRD PARTY CASH DEP/BNA',reference:'CASH-23000',debit:0,credit:23000,balance:23000}],summary:{from:'2026-10-01',to:'2026-10-01',openingBalance:0,closingBalance:23000,totalDebits:0,totalCredits:23000,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const made=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'admin',body:{draftId:id,rowId:'bank-0',sourceKind:'internal',fromNature:'SANKI',fromAccount:'Counter Cash',classification:'internal_transfer',note:'Counter Cash deposited into Axis Bank 3448'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.fromAccount,'Counter Cash');assert.equal(made.body.transfer.toAccount,'Axis Bank 3448');assert.equal(made.body.transfer.amount,23000);assert.equal(made.body.transfer.createdBy,'prashant');assert.equal(made.body.rows.find(x=>x.id==='bank-0').status,'resolved');
+  const deniedId='BRD-PRASHANT-DISALLOWED-TO-3448';stored.bankReconciliationDrafts[deniedId]={...stored.bankReconciliationDrafts[id],id:deniedId,resolutions:{},transactions:[{...stored.bankReconciliationDrafts[id].transactions[0],reference:'DISALLOWED-8181'}]};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+  const denied=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'admin',body:{draftId:deniedId,rowId:'bank-0',sourceKind:'internal',fromNature:'SANKI',fromAccount:'IndusInd Bank 8181',classification:'internal_transfer',note:'Disallowed source'}});assert.equal(denied.status,403);
+  fs.writeFileSync(expenseFile,JSON.stringify(baseline));
+});
 
 test('Velocity is a clearing ledger and White Wizard credits request remittance evidence',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.ok(config.ledgerAccountsByNature.SANKI.includes('Velocity'));assert.equal(config.bankAccountsByNature.SANKI.includes('Velocity'),false);assert.match(html,/Upload Velocity remittance/);assert.match(html,/uploadVelocityRemittanceForBank/);});
 

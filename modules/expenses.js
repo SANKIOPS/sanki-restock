@@ -3879,6 +3879,7 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
     if(!fromAccount)return res.status(400).json({success:false,error:'Choose the internal source account.'});
     if(fromNature===toNature&&fromAccount.toLowerCase()===toAccount.toLowerCase())return res.status(400).json({success:false,error:'Source and receiving accounts must be different.'});
     if(fromNature!==toNature&&!['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement','salary_advance_funding'].includes(classification))return res.status(400).json({success:false,error:'Choose why money is moving between these entities.'});
+    if(!isOwner(req)&&!(isPrashant(req)&&isPrashant3448Transfer(fromNature,toNature,fromAccount,toAccount,classification)))return res.status(403).json({success:false,error:'Prashant can record only approved Axis Bank 3448 transfers from this reconciliation.'});
     let salaryStore=null,salaryAdvance=null;
     if(classification==='salary_advance_funding'){
       if(fromNature!=='SANKI'||toNature!=='SANKI')return res.status(400).json({success:false,error:'A salary advance funding transfer must stay inside the SANKI entity.'});
