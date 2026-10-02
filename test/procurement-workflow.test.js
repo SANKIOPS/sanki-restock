@@ -45,6 +45,17 @@ test('purchase SEO titles use one catalogue pattern and normalize equivalent but
   assert.doesNotMatch(purple.title, /\bFS\b/);
 });
 
+test('accounts can override calculated MRP before Shopify posting', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  assert.match(source, /selling-prices/);
+  assert.match(source, /manualMrp \|\| calculatedMrp/);
+  assert.match(source, /price: l\.suggestedMrp/);
+  assert.match(html, /Calculated MRP/);
+  assert.match(html, /Save selling prices/);
+  assert.match(html, /data-selling-price/);
+});
+
 test('basic women’s listing copy says Top, while winter keeps the bill product type', () => {
   const base = { designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'White', fit: 'Muscle Fit', audience: 'Women', sizeLabels: ['FS'] };
   const summer = genSeo(base);

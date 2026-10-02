@@ -434,12 +434,15 @@ function landedCost(line, settings, opts) {
   // MRP ≈ 2×landed + GST; GST tier depends on the resulting price.
   let mrpRaw = 2 * landed * (1 + settings.gstLow);
   if (mrpRaw >= settings.gstLowThreshold) mrpRaw = 2 * landed * (1 + settings.gstHigh);
-  const mrp = charmPrice(mrpRaw);
+  const calculatedMrp = charmPrice(mrpRaw);
+  const manualMrp = num(line.manualMrp) > 0 ? Math.round(num(line.manualMrp)) : 0;
   return {
     inrValue: round2(inrValue),
     freightPerPc: round2(freightPerPc),
     landed: round2(landed),
-    suggestedMrp: mrp
+    calculatedMrp,
+    suggestedMrp: manualMrp || calculatedMrp,
+    mrpOverridden: !!manualMrp
   };
 }
 function poCostBreakdown(po, defaults) {
@@ -736,7 +739,8 @@ function normalizeLine(raw, body) {
     sku:         (raw.sku || '').toUpperCase().trim(),
     qty:         Math.max(0, Math.round(num(raw.qty))),
     perPcsYuan:  num(raw.perPcsYuan),
-    weightGrams: num(raw.weightGrams)               // 0 until received & weighed
+    weightGrams: num(raw.weightGrams),              // 0 until received & weighed
+    manualMrp: num(raw.manualMrp) > 0 ? Math.round(num(raw.manualMrp)) : 0
   };
 }
 
@@ -1753,6 +1757,31 @@ router.patch('/api/procurement/pos/:id/weights', (req, res) => {
   Object.entries(expandedWeights).forEach(([index, weight]) => { po.lines[index].weightGrams = Number(weight); });
   saveStore(s);
   res.json({ success: true, po: publicPo(po, req) });
+});
+
+// Accounts may replace the formula MRP before Shopify posting. The override is
+// stored per SKU/line, survives every recalculation and is the variant price
+// used by computePreview/createDraftProduct.
+router.patch('/api/procurement/pos/:id/selling-prices', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+  const s = loadStore(), po = s.pos[req.params.id], prices = (req.body || {}).prices;
+  if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
+  if (isLockedPo(po)) return res.status(409).json({ success: false, error: 'Selling prices must be finalized before Shopify posting.' });
+  if (!prices || typeof prices !== 'object' || Array.isArray(prices)) return res.status(400).json({ success: false, error: 'Selling prices are required.' });
+  const changes = [];
+  for (const [sku, value] of Object.entries(prices)) {
+    const index = (po.lines || []).findIndex(line => String(line.sku || '').toUpperCase() === String(sku).toUpperCase());
+    if (index < 0) return res.status(400).json({ success: false, error: 'Selling-price SKU no longer matches this PO: ' + sku });
+    const price = Number(value);
+    if (!Number.isFinite(price) || price <= 0 || Math.round(price) !== price) return res.status(400).json({ success: false, error: 'Each selling price must be a positive whole rupee amount.' });
+    const line = po.lines[index], before = num(line.manualMrp) || 0;
+    line.manualMrp = price;
+    if (before !== price) changes.push({ index, sku: line.sku, before, after: price });
+  }
+  po.sellingPriceHistory = Array.isArray(po.sellingPriceHistory) ? po.sellingPriceHistory : [];
+  if (changes.length) po.sellingPriceHistory.push({ at: new Date().toISOString(), by: (req.user && req.user.username) || 'system', changes });
+  saveStore(s);
+  res.json({ success: true, changed: changes.length, po: publicPo(po, req) });
 });
 
 // Merges the per-line weights the user recorded on arrival, then generates

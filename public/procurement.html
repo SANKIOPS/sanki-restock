@@ -2110,13 +2110,15 @@
       var unit=function(v){ return india?money(v):yuan(v); };
       var h='<div class="panel"><h2 style="margin-top:0">Final landed cost</h2>'+
         (india?'<p class="sub" style="margin:0 2px 8px">India PO — landed = ₹ unit cost + transport share (₹'+(Number(d.transportTotal)||0).toLocaleString('en-IN')+' ÷ '+((d.lines||[]).reduce(function(s,l){return s+(Number(l.qty)||0);},0)||0)+' pcs = '+money(d.transportPerPc)+'/pc).</p>':'')+
-        '<table><thead><tr><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th class="money">'+(india?'₹/pc':'¥/pc')+'</th><th class="money">'+(india?'Transport':'Freight')+'</th><th class="money">Landed</th><th class="money">MRP</th><th>Qty</th></tr></thead><tbody>';
-      (d.lines||[]).forEach(function(l){
+        '<p class="sub" style="margin:0 0 8px">Calculated MRP is the default. Accounts may edit the selling price below; the saved amount is sent to Shopify.</p>'+
+        '<table><thead><tr><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th class="money">'+(india?'₹/pc':'¥/pc')+'</th><th class="money">'+(india?'Transport':'Freight')+'</th><th class="money">Landed</th><th class="money">Calculated MRP</th><th class="money">Selling price</th><th>Qty</th></tr></thead><tbody>';
+      (d.lines||[]).forEach(function(l,lineIndex){
         h+='<tr><td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
           '<td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType)+' · '+esc(l.colour)+' · '+esc(l.sizeLabel)+'</td>'+
-          '<td class="money">'+unit(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.suggestedMrp)+'</td><td>'+esc(l.qty)+'</td></tr>';
+          '<td class="money">'+unit(l.perPcsYuan)+'</td><td class="money">'+money(l.freightPerPc)+'</td><td class="money">'+money(l.landed)+'</td><td class="money">'+money(l.calculatedMrp||l.suggestedMrp)+'</td>'+
+          '<td class="money"><input type="number" min="1" step="1" data-selling-price data-selling-sku="'+esc(l.sku)+'" value="'+esc(l.suggestedMrp)+'" style="width:105px;text-align:right" aria-label="Selling price for '+esc(l.sku||l.designName||('line '+(lineIndex+1)))+'">'+(l.mrpOverridden?'<div class="muted" style="font-size:10px">Manual</div>':'')+'</td><td>'+esc(l.qty)+'</td></tr>';
       });
-      h+='</tbody></table></div>';
+      h+='</tbody></table><div style="margin-top:10px"><button type="button" class="btn ghost" id="saveSellingPricesBtn">Save selling prices</button><span class="muted" id="sellingPriceStatus" style="margin-left:8px"></span></div></div>';
 
       if(me.canManage){
         if((d.newProducts||[]).length){
@@ -2139,6 +2141,13 @@
       el('receiveHost').innerHTML=h;
       if(me.canManage){
         receiveId=id;
+        var priceBtn=el('saveSellingPricesBtn');if(priceBtn)priceBtn.onclick=function(){
+          var prices={};Array.prototype.forEach.call(el('receiveHost').querySelectorAll('[data-selling-price]'),function(input){prices[input.getAttribute('data-selling-sku')]=input.value;});
+          priceBtn.disabled=true;var priceStatus=el('sellingPriceStatus');priceStatus.textContent='Saving…';
+          fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/selling-prices',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({prices:prices})}).then(readJson).then(function(result){
+            if(!result.success)throw new Error(result.error||'Could not save selling prices.');priceStatus.textContent='Saved. Shopify will use these prices.';priceBtn.disabled=false;computeReceive(id);
+          }).catch(function(error){priceBtn.disabled=false;priceStatus.textContent=error.message;});
+        };
         // Studio state was already prepared in the PO detail (initStudioFor) and
         // persists in module-level `studio`; here we just gate the post button.
         el('postBtn').onclick=function(){ postToShopify(id); };
