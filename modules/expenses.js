@@ -1404,8 +1404,8 @@ function reimbursementClaimantForExpense(expense){
   return claimantUsernameForAccount(account)||expense.claimant||expense.createdBy||'Unknown';
 }
 function vendorPaymentAccountsForReq(req,nature) {
-  const company=payingAccountsForReq(req,nature),n=normalizedNature(nature);
-  if(!isOwner(req)||!['SANKI','SAMAST'].includes(n))return company;
+  const company=payingAccountsForReq(req,nature);
+  if(!isOwner(req))return company;
   return Array.from(new Set(company.concat(...Object.values(CLAIMANT_ACCOUNTS))));
 }
 function allowedVendorPaymentAccount(req,nature,account) {

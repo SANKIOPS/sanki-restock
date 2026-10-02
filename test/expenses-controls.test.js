@@ -1273,6 +1273,15 @@ test('Owner can record a partial vendor payment from an existing claimant accoun
   assert.equal(second.status,200,JSON.stringify(second.body));assert.equal(second.body.expenses[0].status,'paid');assert.equal(second.body.expenses[0].personalPaidAmount,400);
 });
 
+test('Owner can select every registered claimant account for a PERSONAL vendor payment',()=>{
+  const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+  for(const account of ['Arshpreet 1919','Shivam 4807','Pradeep 8606'])assert.ok(ownerConfig.vendorPaymentAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL vendor payment accounts');
+  assert.equal(ownerConfig.claimantAccountOwners['Shivam 4807'],'shivam');
+  const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+  assert.equal(adminConfig.vendorPaymentAccountsByNature.PERSONAL.includes('Shivam 4807'),false,'claimant accounts remain Owner-only in this picker');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/paid personally by/);
+});
+
 test('non-reimbursable personal expenses never appear as owner reimbursement liabilities',()=>{
   const reimbursements=invoke('GET','/api/expenses/reimbursements',{role:'owner',query:{}});
   assert.equal(reimbursements.status,200);
