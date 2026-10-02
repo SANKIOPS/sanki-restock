@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, genSeo, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit } = require('../modules/procurement');
+const { parseSerial, nextSerial, buildSku, rebuildLineSku, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, genSeo, canonicalSeoNaming, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit } = require('../modules/procurement');
 
 test('purchase product corrections move one-to-one studio work but preserve ambiguous splits for recovery', () => {
   const bundle = [{ type: 'front', url: '/paid-a.png', approved: true }];
@@ -28,8 +28,21 @@ test('purchase product corrections move one-to-one studio work but preserve ambi
 test('listing copy does not repeat the product type and includes a display name', () => {
   const seo = genSeo({ designName: 'Casuals T-shirt', productType: 'T-Shirt', colour: 'Pink', fit: 'Oversized', audience: 'Unisex', sizeLabels: ['FS'] });
   assert.equal(seo.displayName, 'Casuals');
-  assert.equal(seo.title, 'Casuals T-Shirt — Oversized Fit, Pink');
+  assert.equal(seo.title, 'SANKI Pink Oversized Fit Casuals T-Shirt Unisex');
   assert.doesNotMatch(seo.metaTitle, /T-Shirt\s+T-Shirt/i);
+});
+
+test('purchase SEO titles use one catalogue pattern and normalize equivalent button wording', () => {
+  const group = { designCode: 'H26353', colour: 'Olive', fit: 'Slim Fit', productType: 'T-Shirt', audience: 'Women' };
+  const first = canonicalSeoNaming({ displayName: 'Olive Slim Fit V-Neck Top with Button Placket for Women' }, group);
+  assert.equal(first.title, 'SANKI Olive Slim Fit V-Neck Button-Detail Top for Women');
+  assert.equal(first.displayName, 'V-Neck Button-Detail Top');
+  assert.ok(first.metaTitle.length <= 60);
+  const white = canonicalSeoNaming({ displayName: 'SANKI White Slim Fit V-Neck Button-Trim Top for Women' }, { ...group, colour: 'White' }, first.styleDescriptor);
+  assert.equal(white.title, 'SANKI White Slim Fit V-Neck Button-Detail Top for Women');
+  const purple = canonicalSeoNaming({ displayName: 'SANKI Purple V-Neck Knit Top Slim Fit FS' }, { ...group, colour: 'Purple' });
+  assert.equal(purple.title, 'SANKI Purple Slim Fit V-Neck Knit Top for Women');
+  assert.doesNotMatch(purple.title, /\bFS\b/);
 });
 
 test('basic women’s listing copy says Top, while winter keeps the bill product type', () => {

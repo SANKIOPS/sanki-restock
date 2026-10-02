@@ -518,9 +518,9 @@ function genSeo(g) {
   const nm          = nameForTitle ? nameForTitle + ' ' : '';
 
   // Customer-facing product title (the H1 / storefront name).
-  const descriptor  = [fitBase ? fitBase + ' Fit' : '', colour].filter(Boolean).join(', ');
   const titleCore   = [nameForTitle, productType].filter(Boolean).join(' ').trim() || productType;
-  const title       = descriptor ? `${titleCore} — ${descriptor}` : titleCore;
+  const audienceSuffix = audience === 'Women' ? 'for Women' : audience === 'Men' ? 'for Men' : 'Unisex';
+  const title       = ['SANKI', colour, fitBase ? fitBase + ' Fit' : '', titleCore, audienceSuffix].filter(Boolean).join(' ');
 
   // URL handle: clean, keyword-rich. Always fold in the design code (when
   // present) so two same-named products can never collide on the same URL.
@@ -530,7 +530,7 @@ function genSeo(g) {
 
   // SEO <title> (global.title_tag) — keep ~60 chars, brand at the end.
   const metaTitle = truncate(
-    `${[fitBase, colour].filter(Boolean).join(' ')} ${productType}${nameForTitle ? ' – ' + nameForTitle : ''} | SANKI`.replace(/\s+/g, ' ').trim(),
+    `${[colour, fitBase ? fitBase + ' Fit' : '', nameForTitle, productType, audienceSuffix].filter(Boolean).join(' ')} | SANKI`.replace(/\s+/g, ' ').trim(),
     60
   );
 
@@ -569,6 +569,47 @@ function genSeo(g) {
     `</ul>`;
 
   return { displayName: nameForTitle, title, handle, metaTitle, metaDescription, imageAlt, tags, bodyHtml };
+}
+
+function normalizeSeoStyle(value, group = {}) {
+  let out = stripInternalCodes(String(value || ''), group.designCode)
+    .replace(/\bSANKI\b/ig, ' ').replace(/\bfor\s+(?:women|men)\b/ig, ' ')
+    .replace(/\b(?:women|men)'?s\b/ig, ' ').replace(/\bV[\s-]?neck(?:ed)?\b/ig, 'V-Neck')
+    .replace(/\b(?:with\s+)?button(?:ed)?[\s-]*(?:placket|trim|details?)\b/ig, 'Button-Detail');
+  [group.colour, group.fit].filter(Boolean).forEach(part => {
+    const esc = String(part).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\ /g, '\\s+');
+    out = out.replace(new RegExp('\\b' + esc + '\\b', 'ig'), ' ');
+  });
+  const productType = String(group.productType || '').trim();
+  if (productType) {
+    const esc = productType.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\ /g, '\\s+');
+    out = out.replace(new RegExp('\\b' + esc + 's?\\b', 'ig'), ' ');
+  }
+  if (String(group.audience || '').toLowerCase() === 'women') out = out.replace(/\b(?:t[ -]?shirts?|tops?)\b/ig, ' ');
+  out = stripSizeSuffix(out.replace(/[—–|,]/g, ' ').replace(/\s+/g, ' ').trim())
+    .replace(/\b(?:FS|XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-6]XL|\d{2})\b$/i, '').replace(/\s+/g, ' ').trim();
+  return titleCase(out).replace(/\bV-neck(?:ed)?\b/ig, 'V-Neck').replace(/\bButton-detail\b/ig, 'Button-Detail');
+}
+
+function canonicalSeoNaming(seo, group, preferredStyle = '') {
+  const audience = group.audience || 'Unisex';
+  const winter = /^winter$/i.test(group.season || '') || /^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(group.productType || '');
+  const productType = audience === 'Women' && !winter && /^t[ -]?shirt$/i.test(group.productType || '') ? 'Top' : titleCase(group.productType || 'Product');
+  const colour = titleCase(group.colour || '');
+  const fit = audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(group.fit || '') ? '' : titleCase(group.fit || '').replace(/\s*fit$/i, '').trim();
+  const style = normalizeSeoStyle(preferredStyle, group) || normalizeSeoStyle(seo.displayName || seo.title, group) || normalizeSeoStyle(group.designName, group);
+  const audienceSuffix = audience === 'Women' ? 'for Women' : audience === 'Men' ? 'for Men' : 'Unisex';
+  const descriptiveType = [style, productType].filter(Boolean).join(' ').replace(/\b(Top|T-Shirt|Shirt|Trouser|Jeans)\s+\1\b/ig, '$1');
+  const title = ['SANKI', colour, fit ? fit + ' Fit' : '', descriptiveType, audienceSuffix].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  const metaTitle = truncate([colour, fit ? fit + ' Fit' : '', descriptiveType, audienceSuffix, '| SANKI'].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim(), 60);
+  return { ...seo, displayName: descriptiveType, title, metaTitle, styleDescriptor: style };
+}
+
+function siblingSeoStyle(po, group) {
+  const code = String(group.designCode || '').trim().toLowerCase();
+  if (!code) return '';
+  const sibling = (po.seoDraft || []).find(d => d.key !== group.key && String(d.designCode || '').trim().toLowerCase() === code && d.seo);
+  return sibling ? (sibling.styleDescriptor || normalizeSeoStyle(sibling.seo.displayName || sibling.seo.title, { ...group, colour: sibling.colour })) : '';
 }
 
 function seoNeedsReview(seo) {
@@ -2642,15 +2683,16 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       const clean=(value,fallback)=>stripInternalCodes(String(value||'').trim(),g.designCode)||fallback;
       const draft=generated.seo;
       const retail=openaiPilot.retailFacts(g);
-      const seo={displayName:clean(draft.displayName,base.displayName),title:clean(draft.title,base.title),
+      let seo={displayName:clean(draft.displayName,base.displayName),title:clean(draft.title,base.title),
         handle:slugify([draft.displayName,g.colour,retail.productType,g.designCode].filter(Boolean).join(' ')) || base.handle,
         metaTitle:clean(draft.metaTitle,base.metaTitle).slice(0,70),metaDescription:clean(draft.metaDescription,base.metaDescription).slice(0,320),
         imageAlt:clean(draft.imageAlt,base.imageAlt),tags:draft.tags.map(x=>clean(x,'')).filter(Boolean),
         bodyHtml:clean(draft.bodyHtml,base.bodyHtml).replace(/<([^>]+)>/g,(tag,inside)=>/^\/?p$/i.test(inside.trim())?tag:'')};
+      seo=canonicalSeoNaming(seo,g,siblingSeoStyle(current,g));
       if(seoNeedsReview(seo)) throw new Error('Generated SEO was incomplete or repetitive.');
       if(openaiPilot.seoCopyNeedsReview(seo,g)) throw new Error('Generated SEO did not meet the women’s top/fit and distinctive-name rules. The earlier draft was kept for review.');
       current.seoDraft=current.seoDraft||[];
-      const rec={key,designCode:g.designCode,colour:g.colour,productType:g.productType,seo,seoApproved:false,source:'openai-pilot'};
+      const rec={key,designCode:g.designCode,colour:g.colour,productType:g.productType,styleDescriptor:seo.styleDescriptor,seo,seoApproved:false,source:'openai-pilot'};
       const idx=current.seoDraft.findIndex(x=>x.key===key);if(idx>=0)current.seoDraft[idx]=rec;else current.seoDraft.push(rec);
       const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);item.seo={model:textModel,usage:generated.usage||null};
       saveStore(fresh);
@@ -2852,7 +2894,7 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
     const base = genSeo({ designName: cleanDisplay || g.designName, designCode: g.designCode, productType: g.productType, colour: g.colour, fit: g.fit, audience: g.audience, sizeLabels: g.sizeLabels, sizeCodeOf });
     // Belt-and-braces: strip codes from every customer-facing field the model returned.
     const clean = (v, fb) => stripInternalCodes(String(v || '').trim(), g.designCode) || fb;
-    const seo = {
+    let seo = {
       displayName: cleanDisplay || base.title.split('—')[0].trim(),
       title: clean(parsed.title, base.title),
       handle: base.handle,
@@ -2863,10 +2905,11 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
         .map(t => stripInternalCodes(String(t).trim(), g.designCode)).filter(Boolean),
       bodyHtml: stripInternalCodes(String(parsed.bodyHtml || base.bodyHtml), g.designCode)
     };
+    seo = canonicalSeoNaming(seo, g, siblingSeoStyle(po, g));
     // Persist onto the PO's seoDraft (keyed by group) so it survives reloads/posts.
     po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
     const di = po.seoDraft.findIndex(d => d.key === g.key);
-    const rec = { key: g.key, designCode: g.designCode, colour: g.colour, productType: g.productType, seo, seoApproved: false, source: 'openai' };
+    const rec = { key: g.key, designCode: g.designCode, colour: g.colour, productType: g.productType, styleDescriptor: seo.styleDescriptor, seo, seoApproved: false, source: 'openai' };
     if (di >= 0) po.seoDraft[di] = rec; else po.seoDraft.push(rec);
     saveStore(s);
     res.json({ success: true, groupKey: g.key, seo, source: 'openai' });
@@ -2874,7 +2917,8 @@ router.post('/api/procurement/pos/:id/generate-seo', async (req, res) => {
 });
 
 // Persist edited/approved SEO from the studio (before posting).
-router.post('/api/procurement/pos/:id/seo', (req, res) => {
+router.post('/api/procurement/pos/:id/seo', async (req, res) => {
+ try {
   if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
   const s = loadStore();
   const po = s.pos[req.params.id];
@@ -2885,10 +2929,14 @@ router.post('/api/procurement/pos/:id/seo', (req, res) => {
   po.seoDraft = Array.isArray(po.seoDraft) ? po.seoDraft : [];
   const di = po.seoDraft.findIndex(d => d.key === b.groupKey);
   const prev = di >= 0 ? po.seoDraft[di] : { key: b.groupKey };
-  const rec = Object.assign({}, prev, { key: b.groupKey, seo: Object.assign({}, prev.seo, b.seo), seoApproved: !!b.seoApproved });
+  const group = (await newGroupsOf(s, po)).find(g => g.key === b.groupKey);
+  if (!group) return res.status(404).json({ success: false, error: 'Product group not found.' });
+  const seo = canonicalSeoNaming(Object.assign({}, prev.seo, b.seo), group, prev.styleDescriptor || siblingSeoStyle(po, group));
+  const rec = Object.assign({}, prev, { key: b.groupKey, designCode: group.designCode, colour: group.colour, productType: group.productType, styleDescriptor: seo.styleDescriptor, seo, seoApproved: !!b.seoApproved });
   if (di >= 0) po.seoDraft[di] = rec; else po.seoDraft.push(rec);
   saveStore(s);
   res.json({ success: true, seoDraft: po.seoDraft });
+ } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 async function approveProductDrafts(s, po, key) {
@@ -3443,4 +3491,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, duplicateBillPo, expandArticleWeights, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };
+module.exports = { router, genSeo, normalizeSeoStyle, canonicalSeoNaming, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, duplicateBillPo, expandArticleWeights, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };
