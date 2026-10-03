@@ -3151,17 +3151,19 @@ test('expense and transfer proof uploads preserve real upload errors instead of 
 test('expense proof upload compresses phone photos and reports safe storage error codes',()=>{
   const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
   assert.match(source,/image\.scaleToFit\(max,max\)/);
-  assert.match(source,/image\.quality\(75\)\.getBufferAsync\(Jimp\.MIME_JPEG\)/);
+  assert.match(source,/max=1400/);
+  assert.match(source,/image\.quality\(62\)\.getBufferAsync\(Jimp\.MIME_JPEG\)/);
   assert.match(source,/Proof storage is full/);
   assert.match(source,/could not be stored \('\+code\+'\)/);
 });
 
-test('full-volume recovery compresses only oversized historical JPEG proofs in place',()=>{
+test('full-volume recovery compresses retained JPEG proofs and sourcing photos in place',()=>{
   const source=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
   assert.match(source,/async function recoverExpenseProofStorage\(\)/);
-  assert.match(source,/before<180\*1024/);
-  assert.match(source,/image\.scaleToFit\(1400,1400\)/);
-  assert.match(source,/replacement\.length>=before\*\.92/);
+  assert.match(source,/\['expense-proofs',1400,62,90\]/);
+  assert.match(source,/\['fresh-candidates',1600,68,150\]/);
+  assert.match(source,/before<minKb\*1024/);
+  assert.match(source,/replacement\.length>=before\*\.97/);
   assert.match(source,/fs\.writeFileSync\(fp,replacement\)/);
   assert.match(source,/recoverExpenseProofStorage\(\)[\s\S]*\.then\(\(\)=>app\.listen/);
 });

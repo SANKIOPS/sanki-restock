@@ -106,19 +106,22 @@ try {
   if(swept.removed)console.log('[storage] removed '+swept.removed+' abandoned file(s), freed '+(swept.freedBytes/1048576).toFixed(2)+' MB');
 } catch(error) { console.error('[storage] abandoned-file sweep failed safely:',error); }
 
-// One-time/resumable recovery for a full volume. Historical JPEG proofs are
-// decoded completely before their original file is touched, then overwritten
-// only when the readable replacement is materially smaller. A restart simply
-// resumes with any remaining oversized files; accounting JSON is never edited.
+// Resumable recovery for a full volume. Linked files are never deleted. Large
+// JPEGs in the main proof/photo archives are decoded completely before their
+// original is touched, then overwritten only when the readable replacement is
+// materially smaller. A restart resumes safely; accounting JSON is never edited.
 async function recoverExpenseProofStorage(){
-  const dir=path.join(RUNTIME_DATA_DIR,'expense-proofs');let names=[];
-  try{names=fs.readdirSync(dir).filter(name=>/\.jpe?g$/i.test(name));}catch{return;}
   let compressed=0,freedBytes=0;
-  for(const name of names){
-    const fp=path.join(dir,name);let before=0;
-    try{before=fs.statSync(fp).size;if(before<180*1024)continue;const image=await Jimp.read(fp);if(image.bitmap.width>1400||image.bitmap.height>1400)image.scaleToFit(1400,1400);const replacement=await image.quality(72).getBufferAsync(Jimp.MIME_JPEG);if(replacement.length>=before*.92)continue;fs.writeFileSync(fp,replacement);compressed++;freedBytes+=before-replacement.length;}catch(error){console.warn('[storage] skipped proof '+name+': '+String(error&&error.code||error&&error.message||error));}
+  const archives=[['expense-proofs',1400,62,90],['fresh-candidates',1600,68,150],['casuals-candidates',1600,68,150],['procurement-photos',1600,68,150]];
+  for(const [dirName,max,quality,minKb] of archives){
+    const dir=path.join(RUNTIME_DATA_DIR,dirName);let names=[];
+    try{names=fs.readdirSync(dir).filter(name=>/\.jpe?g$/i.test(name));}catch{continue;}
+    for(const name of names){
+      const fp=path.join(dir,name);let before=0;
+      try{before=fs.statSync(fp).size;if(before<minKb*1024)continue;const image=await Jimp.read(fp);if(image.bitmap.width>max||image.bitmap.height>max)image.scaleToFit(max,max);const replacement=await image.quality(quality).getBufferAsync(Jimp.MIME_JPEG);if(replacement.length>=before*.97)continue;fs.writeFileSync(fp,replacement);compressed++;freedBytes+=before-replacement.length;}catch(error){console.warn('[storage] skipped '+dirName+'/'+name+': '+String(error&&error.code||error&&error.message||error));}
+    }
   }
-  if(compressed)console.log('[storage] compressed '+compressed+' historical proof(s), freed '+(freedBytes/1048576).toFixed(2)+' MB');
+  if(compressed)console.log('[storage] compressed '+compressed+' retained image(s), freed '+(freedBytes/1048576).toFixed(2)+' MB');
 }
 
 // Owner-confirmed one-time accounting reset: preserve master/configuration
