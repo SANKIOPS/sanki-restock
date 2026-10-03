@@ -841,6 +841,18 @@ test('account adjustments require a reason and support explicit add or deduct en
   assert.equal(ledger.entries.find(x => x.description === 'Counting correction').debit, 125);
 });
 
+test('Services is an Owner-only SANKI money ledger supporting receipts, transfers and expenses',()=>{
+  const owner=invoke('GET','/api/expenses/config',{role:'owner'}).body,admin=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+  for(const collection of ['accountsByNature','ledgerAccountsByNature','transferAccountsByNature','payingAccountsByNature','vendorPaymentAccountsByNature'])assert.ok(owner[collection].SANKI.includes('Services'),collection+' does not expose Services to Owner');
+  for(const collection of ['accountsByNature','ledgerAccountsByNature','transferAccountsByNature','payingAccountsByNature','vendorPaymentAccountsByNature'])assert.equal(admin[collection].SANKI.includes('Services'),false,collection+' exposed Services to Admin');
+  const receipt=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SANKI',account:'Services',receiptType:'other_income',category:'Other Income',source:'Service customer',amount:1200,date:'2026-10-03',note:'Consulting receipt',proof:'/api/expenses/photo/services-receipt.jpg'}});assert.equal(receipt.status,200,JSON.stringify(receipt.body));
+  const transfer=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Services',toAccount:'Axis Bank 3448',classification:'internal_transfer',amount:200,date:'2026-10-03',note:'Move service funds',proof:'/api/expenses/photo/services-transfer.jpg'}});assert.equal(transfer.status,200,JSON.stringify(transfer.body));
+  const expense=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Service supplies',amount:100,billPhoto:'/api/expenses/photo/services-bill.jpg',qrPhoto:'/api/expenses/photo/services-qr.jpg',paymentType:'UPI'}}).body.expense;invoke('POST','/api/expenses/:id',{role:'owner',params:{id:expense.id},body:{ledger:'FOOD EXPENSE'}});invoke('POST','/api/expenses/:id/approve',{role:'owner',params:{id:expense.id}});
+  const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[expense.id],account:'Services',amount:100,date:'2026-10-03',paymentProof:'/api/expenses/photo/services-payment.jpg'}});assert.equal(paid.status,200,JSON.stringify(paid.body));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Services'}});assert.equal(ledger.status,200);assert.ok(ledger.body.entries.some(x=>x.id===receipt.body.receipt.id&&x.credit===1200));assert.ok(ledger.body.entries.some(x=>x.id===transfer.body.transfer.id&&x.debit===200));assert.ok(ledger.body.entries.some(x=>x.id===expense.id+'/PAY-001'&&x.debit===100));
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'SANKI',account:'Services'}}).status,403);
+});
+
 test('Prashant Counter Cash adjustments remain pending until Owner approval', () => {
   const before=invoke('GET','/api/expenses/balances',{role:'owner',query:{nature:'SANKI'}}).body.accounts.find(x=>x.name==='Counter Cash').balance;
   const requested=invoke('POST','/api/expenses/balances',{role:'admin',body:{nature:'SANKI',adjust:{account:'Counter Cash',direction:'deduct',amount:6686,date:'2026-09-29',note:'Personal use from Counter Cash'}}});

@@ -169,7 +169,7 @@ const PAID_BY = ['company', 'claimant'];
 const PAYMENT_TYPES = ['UPI', 'Cash', 'Credit'];
 const PERSONAL_CATEGORIES = ['Food & Dining','Household Staff','Children & Education','Medical & Healthcare','Travel & Transport','Home & Utilities','Shopping','Subscriptions','Personal Care','Gifts & Charity','Entertainment','Financial Charges','Miscellaneous Personal'];
 const ENTITY_ACCOUNTS = {
-  SANKI: ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash'],
+  SANKI: ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash','Services'],
   SAMAST: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Kirti Nagar Cash'],
   PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']
 };
@@ -185,7 +185,7 @@ const USER_PAYMENT_ACCOUNTS = {
     'IndusInd Bank 7883', 'ICICI Bank 0993', 'IndusInd Bank 8181', 'Kirti Nagar Cash'
   ]
 };
-const OWNER_ONLY_ACCOUNTS = ['ICICI Bank 0992'];
+const OWNER_ONLY_ACCOUNTS = ['ICICI Bank 0992','Services'];
 const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash', 'prashant Cash':'Prashant Cash' };
 
 function canonicalAccountName(value) {
@@ -3121,7 +3121,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
   if (!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature)) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
   const fromAccount = allowedTransferAccount(fromNature, b.fromAccount), toAccount = allowedTransferAccount(toNature, b.toAccount);
-  if(!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))return res.status(403).json({success:false,error:'ICICI Bank 0992 is restricted to the Owner.'});
+  if(!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))return res.status(403).json({success:false,error:'One of these accounts is restricted to the Owner.'});
   const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',routedThroughIntermediary=b.routedThroughIntermediary===true||b.routedThroughIntermediary==='true',intermediary=String(b.intermediary||'').trim();
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
