@@ -421,7 +421,7 @@ test('receipt can record missing and extra products without deleting the billed 
   assert.match(js, /const receivedLines = \(po\.lines \|\| \[\]\)\.filter\(line => num\(line\.qty\) > 0\)/);
 });
 
-test('advance purchase lines edit inside their existing table row', () => {
+test('advance purchase edits the entire table and saves all rows together', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
   const start = html.indexOf('function lineEditorRow');
   const end = html.indexOf('// Vendor shown next to', start);
@@ -431,7 +431,29 @@ test('advance purchase lines edit inside their existing table row', () => {
   assert.match(editor, /data-e="designName"/);
   assert.match(editor, /data-e="productType"/);
   assert.match(editor, /data-e="qty"/);
-  assert.match(editor, /data-savline=/);
-  assert.match(editor, /data-cancelline=/);
-  assert.match(html, /var editRow=host\.querySelector\('\[data-edit-row\]'\)/);
+  assert.match(editor, /data-apply-design=/);
+  assert.match(editor, /data-reset-design=/);
+  assert.match(html, /id="editAllLinesBtn"/);
+  assert.match(html, /id="saveAllLinesBtn"/);
+  assert.match(html, /editingAllLines=true;renderLines/);
+  assert.match(html, /querySelectorAll\('\[data-edit-row\]'\)/);
+});
+
+test('raw purchase photos have a permanent recovery reference', () => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(js, /rawPhotoUrl/);
+  assert.match(js, /if \(!line\.photoUrl && line\.rawPhotoUrl\)/);
+  assert.match(js, /add\(line&&line\.rawPhotoUrl\)/);
+  assert.match(js, /po\.lines\[i\]\.rawPhotoUrl = url/);
+});
+
+test('design defaults retain explicit colour-level overrides', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'procurement.html'), 'utf8');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'modules', 'procurement.js'), 'utf8');
+  assert.match(html, /DESIGN_COMMON_FIELDS=\['designName','designCode','productType','fit','audience','perPcsYuan'\]/);
+  assert.match(html, /Apply to all colours/);
+  assert.match(html, /Reset to design default/);
+  assert.match(html, /designOverrides\[field\]/);
+  assert.match(js, /const overrides = b\.overrides/);
+  assert.match(js, /l\.designOverrides\[field\] = true/);
 });

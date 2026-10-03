@@ -227,6 +227,9 @@
         <div class="lines-hdr" style="display:flex; justify-content:space-between; align-items:center; position:sticky; top:0; z-index:20; background:var(--ivory,#fbfaf7); padding:8px 2px; margin:-4px 0 4px; border-bottom:1px solid var(--line);">
           <h2 style="margin:0">Lines <span class="muted" id="lineCount"></span> <span id="linesVendor" style="font-size:13px;font-weight:600;color:var(--emerald-d,#047857)"></span></h2>
           <div>
+            <button class="btn ghost" id="editAllLinesBtn">Edit entire table</button>
+            <button class="btn hidden" id="saveAllLinesBtn">Save all table changes</button>
+            <button class="btn ghost hidden" id="cancelAllLinesBtn">Cancel edits</button>
             <button class="btn ghost" id="clearLines">Clear</button>
             <button class="btn" id="saveAdvanceBtn">Save advance purchase →</button>
             <button class="btn warn hidden" id="updatePoBtn">Update PO →</button>
@@ -1097,7 +1100,8 @@
         qty:el('f_qty').value,
         perPcsYuan:el('f_perPcsYuan').value,
         sku:el('f_sku').value.trim(),
-        photoUrl:pendingPhotoUrl,
+        photoUrl:pendingPhotoUrl, rawPhotoUrl:pendingPhotoUrl,
+        designId:String(el('f_designCode').value.trim()||el('f_designName').value.trim()).toUpperCase(), designOverrides:{},
         photoApproved: !!pendingPhotoUrl   // a photo the user chose manually is approved
       };
       var miss=[];
@@ -1120,15 +1124,30 @@
       el('f_sku').value='';
       el('photoNote').textContent = pendingPhotoUrl ? 'Photo kept from last line — replace it if the colour changed.' : '';
     }
-    el('clearLines').onclick=function(){ lines=[]; editingLineIdx=-1; el('advanceResult').innerHTML=''; renderLines(); };
+    el('clearLines').onclick=function(){ lines=[]; editingAllLines=false; tableEditSnapshot=[]; editorPhotoUrls={}; el('advanceResult').innerHTML=''; renderLines(); };
 
     // ── option builders for the inline editor ──
     function optList(arr,sel){ return (arr||[]).map(function(v){ return '<option'+(String(v)===String(sel)?' selected':'')+'>'+esc(v)+'</option>'; }).join(''); }
     function objOpts(obj,sel){ return '<option value="">—</option>'+Object.keys(obj||{}).map(function(v){ return '<option'+(v===sel?' selected':'')+'>'+esc(v)+'</option>'; }).join(''); }
     function fitsFor(p){ return categoryOf(p)==='lower'?LOWER_FITS:UPPER_FITS; }
 
-    var editingLineIdx=-1;     // which saved line is being edited inline (-1 = none)
-    var editorPhotoUrl='';     // working photo url for the inline editor
+    var editingAllLines=false;
+    var tableEditSnapshot=[];
+    var editorPhotoUrls={};
+    var DESIGN_COMMON_FIELDS=['designName','designCode','productType','fit','audience','perPcsYuan'];
+    function designIdFor(l){
+      return String(l.designId||l.designCode||l.designName||('DESIGN-'+Math.random().toString(36).slice(2))).trim().toUpperCase();
+    }
+    function ensureDesignMeta(l){
+      l.designId=designIdFor(l);
+      if(!l.designOverrides||typeof l.designOverrides!=='object')l.designOverrides={};
+      if(!l.rawPhotoUrl&&l.photoUrl)l.rawPhotoUrl=l.photoUrl;
+      if(!l.photoUrl&&l.rawPhotoUrl)l.photoUrl=l.rawPhotoUrl;
+      return l;
+    }
+    function designLineIndexes(designId){
+      var out=[];lines.forEach(function(l,i){if(ensureDesignMeta(l).designId===designId)out.push(i);});return out;
+    }
 
     function photoBadge(l){
       if(!l.photoUrl) return '<span class="pill" style="background:#b42318;color:#fff">no photo</span>';
@@ -1160,7 +1179,7 @@
         '<td '+cellStyle+'><input aria-label="Unit price" title="'+(isIndia()?'₹/pc':'¥/pc')+'" data-e="perPcsYuan" type="number" step="0.01" '+fieldStyle+' value="'+esc(l.perPcsYuan)+'"></td>'+
         '<td '+cellStyle+' class="money">'+(isIndia()?money(lineYuan(l)):yuan(lineYuan(l)))+'</td>'+
         '<td '+cellStyle+' class="money">'+money(lineCost(l))+'</td>'+
-        '<td '+cellStyle+'><div style="white-space:nowrap"><button class="btn sm" data-savline="'+i+'">Save</button> <button class="btn ghost sm" data-cancelline="'+i+'">Cancel</button></div></td>'+
+        '<td '+cellStyle+'><div style="white-space:nowrap"><button class="btn ghost sm" data-apply-design="'+i+'">Apply to all colours</button> <button class="btn ghost sm" data-reset-design="'+i+'">Reset to design default</button> <button class="x" data-del="'+i+'" title="Remove line">✕</button></div></td>'+
       '</tr>';
     }
 
@@ -1171,7 +1190,11 @@
       vhdr.textContent = (vv&&vv!=='__new__') ? ('· '+vv) : '';
     }
     function renderLines(){
+      lines.forEach(ensureDesignMeta);
       el('lineCount').textContent = lines.length ? '('+lines.length+')' : '';
+      el('editAllLinesBtn').classList.toggle('hidden',editingAllLines||!lines.length);
+      el('saveAllLinesBtn').classList.toggle('hidden',!editingAllLines);
+      el('cancelAllLinesBtn').classList.toggle('hidden',!editingAllLines);
       updateLinesVendor();
       if(!lines.length){ el('linesHost').innerHTML='<p class="muted" style="padding:8px 2px">No lines yet. Add intake lines above, or upload an invoice to auto-fill.</p>'; return; }
       var india=isIndia();
@@ -1179,7 +1202,7 @@
       var unit=function(v){ return india?money(v):yuan(v); };
       var vend=(el('b_vendor')&&el('b_vendor').value||'').trim();   // vendor is per-PO, shown on every line
       var rows=lines.map(function(l,i){
-        if(i===editingLineIdx) return lineEditorRow(l,i);
+        if(editingAllLines) return lineEditorRow(l,i);
         // Approve the photo right here — no need to open Edit first.
         var approveBtn = (l.photoUrl && !l.photoApproved)
           ? ' <button class="btn sm" data-approveline="'+i+'" style="background:#059669;color:#fff;border-color:#059669">Approve</button>'
@@ -1192,7 +1215,7 @@
           '<td>'+esc(l.productType||'—')+'</td><td>'+esc(l.colour||'—')+'</td><td>'+esc(l.fit||'—')+'</td><td>'+esc(l.sizeLabel||'—')+'</td>'+
           '<td>'+esc(l.chinaSize||'—')+'</td><td>'+esc(l.audience||'—')+'</td>'+
           '<td>'+esc(l.qty)+'</td><td class="money">'+unit(l.perPcsYuan)+'</td><td class="money">'+unit(lineYuan(l))+'</td><td class="money">'+money(lineCost(l))+'</td>'+
-          '<td><button class="btn ghost sm" data-edit="'+i+'">Edit</button> <button class="x" data-del="'+i+'">✕</button></td></tr>';
+          '<td><button class="x" data-del="'+i+'">✕</button></td></tr>';
       }).join('');
       var totalYuan = lines.reduce(function(s,l){ return s + lineYuan(l); }, 0);
       var totalInr  = lines.reduce(function(s,l){ return s + lineCost(l); }, 0);
@@ -1201,56 +1224,83 @@
       el('linesHost').innerHTML='<table style="min-width:1500px;font-size:12px"><thead><tr><th>Photo</th><th>Vendor</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>China size</th><th>Audience</th><th>Qty</th><th>'+unitHdr+'</th><th>'+costHdr+'</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
         '<tr class="totalrow"><td colspan="10" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+unit(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
         '</tbody></table>'+
-        '<p class="sub">Tap <b>Edit</b> on a line to change any field or its photo right here. '+(india
+        '<p class="sub">Use <b>Edit entire table</b> to change several rows, then save all changes once. Design fields flow to non-overridden colours; use Apply to all colours or Reset to design default when needed. '+(india
           ? 'Purchase cost (₹) = qty × ₹/pc; landed cost adds the shipment transport (₹'+(Number(el('b_transportTotal')&&el('b_transportTotal').value)||0).toLocaleString('en-IN')+' split by pieces) at receive.'
           : 'Purchase cost (¥) = qty × ¥/pc; Total (₹) = × exchange rate ('+exRate()+').')+'</p>';
       wireLineHandlers();
     }
     function wireLineHandlers(){
       var host=el('linesHost');
-      var editRow=host.querySelector('[data-edit-row]');
-      Array.prototype.forEach.call(host.querySelectorAll('[data-del]'),function(b){ b.onclick=function(){ lines.splice(+b.getAttribute('data-del'),1); if(editingLineIdx>-1)editingLineIdx=-1; renderLines(); }; });
-      Array.prototype.forEach.call(host.querySelectorAll('[data-edit]'),function(b){ b.onclick=function(){ editingLineIdx=+b.getAttribute('data-edit'); editorPhotoUrl=lines[editingLineIdx].photoUrl||''; renderLines(); }; });
+      function rowAt(i){return host.querySelector('[data-edit-row="'+i+'"]');}
+      function readRow(i){
+        var row=rowAt(i),l=lines[i];if(!row||!l)return;
+        Array.prototype.forEach.call(row.querySelectorAll('[data-e]'),function(input){l[input.getAttribute('data-e')]=input.value;});
+        l.photoUrl=editorPhotoUrls[i]||l.photoUrl||l.rawPhotoUrl||'';
+        if(l.photoUrl)l.rawPhotoUrl=l.photoUrl;
+        var approve=row.querySelector('[data-approve]');l.photoApproved=!!(approve&&approve.checked&&l.photoUrl);
+      }
+      function writeField(i,field,value){var row=rowAt(i),input=row&&row.querySelector('[data-e="'+field+'"]');if(input)input.value=value;lines[i][field]=value;}
+      function defaultIndex(designId){var indexes=designLineIndexes(designId);return indexes.length?indexes[0]:-1;}
+      function applyDesignFrom(i,force){
+        readRow(i);var source=lines[i],indexes=designLineIndexes(source.designId);
+        indexes.forEach(function(idx){
+          if(idx===i)return;
+          DESIGN_COMMON_FIELDS.forEach(function(field){
+            if(force||!lines[idx].designOverrides[field]){writeField(idx,field,source[field]);delete lines[idx].designOverrides[field];}
+          });
+        });
+        if(force)source.designOverrides={};
+      }
+      Array.prototype.forEach.call(host.querySelectorAll('[data-del]'),function(b){ b.onclick=function(){
+        var removed=+b.getAttribute('data-del'),nextPhotos={};
+        lines.splice(removed,1);
+        Object.keys(editorPhotoUrls).forEach(function(key){var index=+key;if(index<removed)nextPhotos[index]=editorPhotoUrls[key];else if(index>removed)nextPhotos[index-1]=editorPhotoUrls[key];});
+        editorPhotoUrls=nextPhotos;renderLines();
+      }; });
       // one-click approve / undo of a line's photo, without opening Edit
       Array.prototype.forEach.call(host.querySelectorAll('[data-approveline]'),function(b){ b.onclick=function(){ lines[+b.getAttribute('data-approveline')].photoApproved=true; renderLines(); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-unapproveline]'),function(b){ b.onclick=function(){ lines[+b.getAttribute('data-unapproveline')].photoApproved=false; renderLines(); }; });
-      Array.prototype.forEach.call(host.querySelectorAll('[data-cancelline]'),function(b){ b.onclick=function(){ editingLineIdx=-1; renderLines(); }; });
-      // product change → refresh fit + size option lists in place
-      var prodSel=editRow&&editRow.querySelector('[data-e="productType"][data-refresh]');
-      if(prodSel) prodSel.onchange=function(){
-        var p=prodSel.value;
-        var fitSel=editRow.querySelector('[data-e="fit"]'), sizeSel=editRow.querySelector('[data-e="sizeLabel"]');
-        if(fitSel) fitSel.innerHTML=optList(fitsFor(p), fitSel.value);
-        if(sizeSel) sizeSel.innerHTML=optList(sizesFor(p), sizeSel.value);
-      };
-      // inline photo upload
-      var fileIn=editRow&&editRow.querySelector('[data-photoinput]');
-      if(fileIn) fileIn.onchange=function(){
-        var f=fileIn.files&&fileIn.files[0]; if(!f) return;
-        var note=editRow.querySelector('[data-photonote]'); if(note) note.textContent='Uploading photo…';
-        var fd=new FormData(); fd.append('photo',f);
-        fetch('/api/procurement/photo',{method:'POST',body:fd}).then(r=>r.json()).then(function(d){
-          if(!d.success){ if(note) note.textContent=d.error||'Upload failed.'; return; }
-          editorPhotoUrl=d.url;
-          var t=editRow.querySelector('[data-photothumb]'); if(t){ t.src=d.url; t.classList.remove('hidden'); }
-          var ap=editRow.querySelector('[data-approve]'); if(ap) ap.checked=true;   // a freshly chosen photo is approved
-          if(note) note.textContent='Photo ready — approved.';
-        }).catch(function(e){ if(note) note.textContent=e.message; });
-      };
-      // save inline edit
-      var saveBtn=editRow&&editRow.querySelector('[data-savline]');
-      if(saveBtn) saveBtn.onclick=function(){
-        var i=+saveBtn.getAttribute('data-savline'), l=lines[i];
-        function g(f){ var e=editRow.querySelector('[data-e="'+f+'"]'); return e?e.value:''; }
-        l.designName=g('designName').trim(); l.designCode=g('designCode').trim();
-        l.productType=g('productType'); l.colour=g('colour'); l.fit=g('fit');
-        l.sizeLabel=g('sizeLabel'); l.chinaSize=g('chinaSize'); l.audience=g('audience');
-        l.qty=g('qty'); l.perPcsYuan=g('perPcsYuan');
-        l.photoUrl=editorPhotoUrl;
-        var ap=editRow.querySelector('[data-approve]'); l.photoApproved=!!(ap&&ap.checked)&&!!editorPhotoUrl;
-        editingLineIdx=-1; renderLines();
-      };
+      Array.prototype.forEach.call(host.querySelectorAll('[data-edit-row]'),function(row){
+        var i=+row.getAttribute('data-edit-row'),designId=lines[i].designId;
+        editorPhotoUrls[i]=editorPhotoUrls[i]||lines[i].photoUrl||lines[i].rawPhotoUrl||'';
+        Array.prototype.forEach.call(row.querySelectorAll('[data-e]'),function(input){
+          input.onchange=function(){
+            var field=input.getAttribute('data-e'),first=defaultIndex(designId);lines[i][field]=input.value;
+            if(DESIGN_COMMON_FIELDS.indexOf(field)>=0){
+              if(i===first)applyDesignFrom(i,false);
+              else if(String(input.value)!==String(lines[first]&&lines[first][field]||''))lines[i].designOverrides[field]=true;
+              else delete lines[i].designOverrides[field];
+            }
+            if(field==='productType'){
+              var fit=row.querySelector('[data-e="fit"]'),size=row.querySelector('[data-e="sizeLabel"]');
+              if(fit)fit.innerHTML=optList(fitsFor(input.value),fit.value);
+              if(size)size.innerHTML=optList(sizesFor(input.value),size.value);
+            }
+          };
+        });
+        var fileIn=row.querySelector('[data-photoinput]');if(fileIn)fileIn.onchange=function(){
+          var f=fileIn.files&&fileIn.files[0];if(!f)return;var note=row.querySelector('[data-photonote]');if(note)note.textContent='Uploading…';
+          var fd=new FormData();fd.append('photo',f);fetch('/api/procurement/photo',{method:'POST',body:fd}).then(readJson).then(function(d){
+            if(!d.success)throw new Error(d.error||'Upload failed.');editorPhotoUrls[i]=d.url;lines[i].photoUrl=d.url;lines[i].rawPhotoUrl=d.url;
+            var thumb=row.querySelector('[data-photothumb]');if(thumb){thumb.src=d.url;thumb.classList.remove('hidden');}var ap=row.querySelector('[data-approve]');if(ap)ap.checked=true;if(note)note.textContent='Saved raw photo.';
+          }).catch(function(error){if(note)note.textContent=error.message;});
+        };
+      });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-apply-design]'),function(button){button.onclick=function(){applyDesignFrom(+button.getAttribute('data-apply-design'),true);};});
+      Array.prototype.forEach.call(host.querySelectorAll('[data-reset-design]'),function(button){button.onclick=function(){
+        var i=+button.getAttribute('data-reset-design'),first=defaultIndex(lines[i].designId);if(first<0||first===i)return;
+        DESIGN_COMMON_FIELDS.forEach(function(field){writeField(i,field,lines[first][field]);});lines[i].designOverrides={};
+      };});
     }
+    el('editAllLinesBtn').onclick=function(){tableEditSnapshot=JSON.parse(JSON.stringify(lines));editorPhotoUrls={};editingAllLines=true;renderLines();};
+    el('cancelAllLinesBtn').onclick=function(){lines=tableEditSnapshot;tableEditSnapshot=[];editorPhotoUrls={};editingAllLines=false;renderLines();};
+    el('saveAllLinesBtn').onclick=function(){
+      Array.prototype.forEach.call(el('linesHost').querySelectorAll('[data-edit-row]'),function(row){
+        var i=+row.getAttribute('data-edit-row'),l=lines[i];Array.prototype.forEach.call(row.querySelectorAll('[data-e]'),function(input){l[input.getAttribute('data-e')]=input.value;});
+        l.photoUrl=editorPhotoUrls[i]||l.photoUrl||l.rawPhotoUrl||'';if(l.photoUrl)l.rawPhotoUrl=l.photoUrl;var ap=row.querySelector('[data-approve]');l.photoApproved=!!(ap&&ap.checked&&l.photoUrl);
+      });
+      editingAllLines=false;tableEditSnapshot=[];editorPhotoUrls={};renderLines();el('advanceResult').innerHTML='<div class="banner ok">All table changes are ready. Save the advance purchase to store them permanently.</div>';
+    };
     renderLines();
 
     // ── save advance purchase ──
@@ -1307,7 +1357,8 @@
         return { designName:l.designName||'', designCode:l.designCode||'', productType:l.productType,
           colour:l.colour, fit:l.fit, sizeLabel:l.sizeLabel, chinaSize:l.chinaSize||'',
           audience:l.audience||'Men', qty:l.qty, perPcsYuan:l.perPcsYuan, sku:l.sku||'',
-          weightGrams:l.weightGrams||0, photoUrl:l.photoUrl||'', photoApproved:!!l.photoUrl };
+          weightGrams:l.weightGrams||0, photoUrl:l.photoUrl||l.rawPhotoUrl||'', rawPhotoUrl:l.rawPhotoUrl||l.photoUrl||'',
+          designId:l.designId||String(l.designCode||l.designName||'').toUpperCase(), designOverrides:l.designOverrides||{}, photoApproved:!!(l.photoUrl||l.rawPhotoUrl) };
       });
       renderLines();
       // UI mode
@@ -1404,7 +1455,7 @@
           return { designName:l.designName||'', designCode:l.designCode||'', productType:l.productType||'',
             colour:l.colour||'', fit:l.fit||'', sizeLabel:l.sizeLabel||'', chinaSize:l.chinaSize||'',
             audience:l.audience||'Men', qty:(l.qty||1), perPcsYuan:(l.perPcsYuan||0), sku:'',
-            photoUrl:'', photoApproved:false, _photoBox:(l.photoBox||null) };
+            photoUrl:'', rawPhotoUrl:'', designId:String(l.designCode||l.designName||'').toUpperCase(), designOverrides:{}, photoApproved:false, _photoBox:(l.photoBox||null) };
         });
         var startIdx=lines.length;
         lines=lines.concat(added); renderLines();
@@ -1442,7 +1493,7 @@
                 if(!blob){ res(); return; }
                 var fd=new FormData(); fd.append('photo',blob,'invoice-crop.jpg');
                 fetch('/api/procurement/photo',{method:'POST',body:fd}).then(r=>r.json()).then(function(pd){
-                  if(pd.success){ lines[startIdx+k].photoUrl=pd.url; lines[startIdx+k].photoApproved=false; ok++; }
+                  if(pd.success){ lines[startIdx+k].photoUrl=pd.url; lines[startIdx+k].rawPhotoUrl=pd.url; lines[startIdx+k].photoApproved=false; ok++; }
                   res();
                 }).catch(function(){ res(); });
               },'image/jpeg',0.9);
@@ -1713,6 +1764,7 @@
       });
     }
     var currentPo=null;
+    var auditDesignOverrides={};
     // ── Post-order discrepancy helpers ──
     // A line's `ordered` snapshot is the frozen at-purchase baseline. Any tracked
     // field that now differs is a discrepancy we highlight in the receiving grid.
@@ -1727,14 +1779,14 @@
     function edInput(l,f,i,o){ o=o||{};
       var cls='rcell'+(o.mono?' mono':'')+(isDiff(l,f)?' diffcell':'');
       var t=isDiff(l,f)?(' title="'+esc(diffTitle(l,f))+'"'):'';
-      return '<input class="'+cls+'"'+t+' data-f="'+f+'" data-i="'+i+'" value="'+esc(l[f]==null?'':l[f])+'"'+
+      return '<input class="'+cls+'"'+t+' data-f="'+f+'" data-i="'+i+'"'+(o.type?(' type="'+o.type+'"'):'')+(o.step?(' step="'+o.step+'"'):'')+' value="'+esc(l[f]==null?'':l[f])+'"'+
         (o.ph?(' placeholder="'+esc(o.ph)+'"'):'')+(o.style?(' style="'+o.style+'"'):'')+'>'; }
     function edSelect(l,f,i,optionsHtml,o){ o=o||{};
       var cls='rcell'+(isDiff(l,f)?' diffcell':'');
       var t=isDiff(l,f)?(' title="'+esc(diffTitle(l,f))+'"'):'';
       return '<select class="'+cls+'"'+t+' data-f="'+f+'" data-i="'+i+'"'+(o.style?(' style="'+o.style+'"'):'')+'>'+optionsHtml+'</select>'; }
     // Count of lines with any discrepancy vs what was ordered.
-    function poDiffCount(po){ return (po.lines||[]).filter(function(l){ return l&&l.ordered && ['qty','colour','productType','sizeLabel','chinaSize','designName','designCode','sku','fit','audience'].some(function(f){return isDiff(l,f);}); }).length; }
+    function poDiffCount(po){ return (po.lines||[]).filter(function(l){ return l&&l.ordered && ['qty','colour','productType','sizeLabel','chinaSize','designName','designCode','sku','fit','audience','perPcsYuan'].some(function(f){return isDiff(l,f);}); }).length; }
     function postingResultPanel(po){
       if(po.status!=='posting_partial') return '';
       var results=po.results||{}, created=results.created||[], adjusted=results.adjusted||[], errors=results.errors||[];
@@ -1762,7 +1814,7 @@
         '</div>';
     }
     function renderPoDetail(po){
-      lastReceive=null; currentPo=po;
+      lastReceive=null; currentPo=po; auditDesignOverrides={};
       var posted = po.status==='posted' || po.status==='posting_partial';
       var india = po.origin==='india';
       var unit=function(v){ return india?money(v):yuan(v); };
@@ -1800,6 +1852,11 @@
       // weight-entry table
       h+='<table style="margin-top:10px"><thead><tr><th>Photo</th><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th>Class</th><th>Qty</th><th class="money">'+(india?'₹/pc':'¥/pc')+'</th><th>Weight g/pc '+((posted||india)?'':'<span style="color:var(--err)">*</span>')+'</th><th class="money">Line weight</th></tr></thead><tbody>';
       (po.lines||[]).forEach(function(l,i){
+        l.designId=l.designId||String(l.designCode||l.designName||('DESIGN-'+i)).toUpperCase();
+        l.designOverrides=l.designOverrides||{};
+        auditDesignOverrides[i]=Object.assign({},l.designOverrides);
+        var designIndexes=(po.lines||[]).map(function(x,idx){return {x:x,idx:idx};}).filter(function(item){return String(item.x.designId||item.x.designCode||item.x.designName||'').toUpperCase()===String(l.designId).toUpperCase();}).map(function(item){return item.idx;});
+        var designDefaultIndex=designIndexes[0];
         var cls = l.classification==='EXISTING' ? '<span class="pill exist">restock</span>' : '<span class="pill new">new</span>';
         if(l.receiptAdded) cls+=' <span class="pill" style="background:#e0f2fe;color:#075985">Extra on arrival</span>';
         else if(Number(l.qty)===0 && l.ordered && Number(l.ordered.qty)>0) cls+=' <span class="pill" style="background:#fef3c7;color:#92400e">Not received</span>';
@@ -1818,7 +1875,8 @@
         // read-only once posted. Each edited-away-from-ordered field self-highlights.
         var designCellRO = esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'');
         var designCell = posted ? designCellRO
-          : edInput(l,'designName',i,{ph:'design name'})+edInput(l,'designCode',i,{mono:true,ph:'vendor code',style:'margin-top:3px'});
+          : edInput(l,'designName',i,{ph:'design name'})+edInput(l,'designCode',i,{mono:true,ph:'vendor code',style:'margin-top:3px'})+
+            '<div style="margin-top:4px;white-space:nowrap">'+(i===designDefaultIndex?'<button type="button" class="btn ghost sm" data-audit-apply="'+i+'">Apply to all colours</button>':'<button type="button" class="btn ghost sm" data-audit-reset="'+i+'">Reset to design default</button>')+'</div>';
         var skuCell = posted ? esc(l.sku||l.skuError||'—')
           : edInput(l,'sku',i,{mono:true,ph:'SKU'});
         var pcsCell = posted ? (esc(l.productType)+' · '+esc(l.colour)+' · '+sizeCell+'<div class="muted" style="margin-top:3px">'+esc(l.audience||'Not specified')+' · '+esc(l.fit||'Not specified')+'</div>')
@@ -1837,7 +1895,7 @@
           '<td style="min-width:150px">'+designCell+'</td>'+
           '<td class="mono" style="min-width:120px">'+skuCell+'</td>'+
           '<td style="min-width:150px">'+pcsCell+'</td><td>'+cls+'</td>'+
-          '<td>'+(posted?esc(l.qty):'<input type="number" min="0" step="1" data-q="'+i+'" value="'+(Number(l.qty)||0)+'" class="rcell'+(qtyDiff?' diffcell':'')+'" style="width:70px"'+(qtyDiff?(' title="'+esc(diffTitle(l,'qty'))+'"'):' title="Actual received qty — edit if it differs from ordered"')+'><div class="muted" style="font-size:10px">Billed '+esc(l.ordered&&l.ordered.qty!=null?l.ordered.qty:l.qty)+'</div>'+(Number(l.qty)>0?'<button type="button" class="btn ghost sm" data-notreceived="'+i+'" style="margin-top:4px;white-space:nowrap">Did not arrive</button>':''))+'</td><td class="money">'+unit(l.perPcsYuan)+'</td>'+
+          '<td>'+(posted?esc(l.qty):'<input type="number" min="0" step="1" data-q="'+i+'" value="'+(Number(l.qty)||0)+'" class="rcell'+(qtyDiff?' diffcell':'')+'" style="width:70px"'+(qtyDiff?(' title="'+esc(diffTitle(l,'qty'))+'"'):' title="Actual received qty — edit if it differs from ordered"')+'><div class="muted" style="font-size:10px">Billed '+esc(l.ordered&&l.ordered.qty!=null?l.ordered.qty:l.qty)+'</div>'+(Number(l.qty)>0?'<button type="button" class="btn ghost sm" data-notreceived="'+i+'" style="margin-top:4px;white-space:nowrap">Did not arrive</button>':''))+'</td><td class="money">'+(posted?unit(l.perPcsYuan):edInput(l,'perPcsYuan',i,{type:'number',step:'0.01',style:'width:86px'}))+'</td>'+
           '<td>'+(posted?esc(l.weightGrams):'<input type="number" min="0" step="1" data-w="'+i+'" data-qty="'+(Number(l.qty)||0)+'" value="'+(l.weightGrams||'')+'" style="width:90px"'+(india?' placeholder="optional"':'')+'>')+'</td>'+
           '<td class="money" data-lw="'+i+'">'+(lw?(lw.toLocaleString('en-IN')+' g'):'—')+'</td></tr>';
       });
@@ -1937,6 +1995,23 @@
         });
         el('computeBtn').onclick=function(){ computeReceive(po.id); };
         var scb=el('saveCorrBtn'); if(scb) scb.onclick=function(){ saveCorrections(po.id); };
+        var auditCommonFields=['designName','designCode','productType','fit','audience','perPcsYuan'];
+        function auditDesignIndexes(index){
+          var line=(currentPo.lines||[])[index]||{},id=String(line.designId||line.designCode||line.designName||'').toUpperCase(),out=[];
+          (currentPo.lines||[]).forEach(function(other,i){if(String(other.designId||other.designCode||other.designName||'').toUpperCase()===id)out.push(i);});return out;
+        }
+        function auditField(index,field){return el('poDetailHost').querySelector('[data-f="'+field+'"][data-i="'+index+'"]');}
+        function setAuditField(index,field,value){var input=auditField(index,field);if(input)input.value=value;}
+        function applyAuditDesign(index,force){
+          var indexes=auditDesignIndexes(index),source={};auditCommonFields.forEach(function(field){var input=auditField(index,field);source[field]=input?input.value:((currentPo.lines||[])[index][field]||'');});
+          indexes.forEach(function(other){if(other===index)return;auditCommonFields.forEach(function(field){if(force||!((auditDesignOverrides[other]||{})[field])){setAuditField(other,field,source[field]);delete (auditDesignOverrides[other]||(auditDesignOverrides[other]={}))[field];}});});
+          if(force)auditDesignOverrides[index]={};
+        }
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-audit-apply]'),function(button){button.onclick=function(){applyAuditDesign(+button.getAttribute('data-audit-apply'),true);};});
+        Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-audit-reset]'),function(button){button.onclick=function(){
+          var index=+button.getAttribute('data-audit-reset'),indexes=auditDesignIndexes(index),first=indexes[0];if(first==null||first===index)return;
+          auditCommonFields.forEach(function(field){var source=auditField(first,field);setAuditField(index,field,source?source.value:((currentPo.lines||[])[first][field]||''));});auditDesignOverrides[index]={};
+        };});
         // live-highlight a field the moment it's edited away from what was ordered
         Array.prototype.forEach.call(el('poDetailHost').querySelectorAll('[data-f]'),function(inp){
           inp.oninput=inp.onchange=function(){
@@ -1946,6 +2021,11 @@
             var now=f==='sku'?inp.value.toUpperCase():inp.value;
             var diff=(l.ordered!=null)&&(was!==String(now));
             inp.classList.toggle('diffcell', diff);
+            if(auditCommonFields.indexOf(f)>=0){
+              var indexes=auditDesignIndexes(i),first=indexes[0];
+              if(i===first)applyAuditDesign(i,false);
+              else {var source=auditField(first,f);if(source&&String(inp.value)!==String(source.value))(auditDesignOverrides[i]||(auditDesignOverrides[i]={}))[f]=true;else delete (auditDesignOverrides[i]||(auditDesignOverrides[i]={}))[f];}
+            }
           };
         });
         var mrb=el('markRecvBtn'); if(mrb) mrb.onclick=function(){ markReceived(po.id,false); };
@@ -2029,7 +2109,7 @@
     function saveCorrections(id){
       var btn=el('saveCorrBtn'); if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
       fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/line-edits',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ edits:collectEdits(), qtys:collectQtys() })})
+        body:JSON.stringify({ edits:collectEdits(), qtys:collectQtys(), overrides:auditDesignOverrides })})
         .then(readJson).then(function(d){
           if(!d.success){ if(btn){ btn.disabled=false; btn.textContent='💾 Save corrections'; } alert(d.error||'Could not save corrections.'); return; }
           // Keep the editor exactly where it is. Update the in-memory PO and

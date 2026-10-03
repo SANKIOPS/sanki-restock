@@ -184,9 +184,24 @@ function loadStore() {
   // '[' and reserved malformed SKUs such as SA111[134 on unposted POs.
   // The intended Excel-style sequence continues Z999 → AA1.
   let repairedInvalidSerials = false;
+  let repairedPurchaseMetadata = false;
   Object.values(s.pos).forEach(po => {
-    if (!po || po.status === 'posted' || po.status === 'posting_partial') return;
+    if (!po) return;
     (po.lines || []).forEach(line => {
+      // Raw references are permanent purchase records. `photoUrl` remains the
+      // working source used by the studio; `rawPhotoUrl` is the recovery copy
+      // that cannot be lost during recalculation, line edits or regeneration.
+      if (!line.rawPhotoUrl && line.photoUrl) { line.rawPhotoUrl = line.photoUrl; repairedPurchaseMetadata = true; }
+      if (!line.photoUrl && line.rawPhotoUrl) { line.photoUrl = line.rawPhotoUrl; repairedPurchaseMetadata = true; }
+      if (!line.designId) {
+        line.designId = ((line.designCode || '').trim() || stripSizeSuffix(line.designName || '') || crypto.randomUUID()).toUpperCase();
+        repairedPurchaseMetadata = true;
+      }
+      if (!line.designOverrides || typeof line.designOverrides !== 'object' || Array.isArray(line.designOverrides)) {
+        line.designOverrides = {};
+        repairedPurchaseMetadata = true;
+      }
+      if (po.status === 'posted' || po.status === 'posting_partial') return;
       const serial = line && line.serialUsed;
       if (!serial || serial.alpha !== '[') return;
       serial.alpha = 'AA';
@@ -199,7 +214,7 @@ function loadStore() {
       repairedInvalidSerials = true;
     });
   });
-  if (repairedInvalidSerials) atomicWrite(STORE_PATH, JSON.stringify(s));
+  if (repairedInvalidSerials || repairedPurchaseMetadata) atomicWrite(STORE_PATH, JSON.stringify(s));
   return s;
 }
 function reclaimRejectedPhotoStorage(s) {
@@ -207,7 +222,7 @@ function reclaimRejectedPhotoStorage(s) {
   for(const po of Object.values(s.pos||{})){
     for(const images of Object.values(po.aiImages||{}))for(const image of images||[])add(image&&image.url);
     for(const url of Object.values(po.backRefs||{}))add(url);
-    for(const line of po.lines||[])add(line&&line.photoUrl);
+    for(const line of po.lines||[]){add(line&&line.photoUrl);add(line&&line.rawPhotoUrl);}
   }
   let removed=0,freed=0;
   for(const po of Object.values(s.pos||{}))for(const rejected of Object.values(po.qaRejected||{})){
@@ -648,7 +663,7 @@ function normLine(v) {
 // edit that makes a tracked field differ from `l.ordered` is a discrepancy
 // the UI highlights — so a bill audited months later still shows what was
 // corrected. The baseline is written ONCE and never overwritten.
-const ORDERED_FIELDS = ['qty', 'colour', 'productType', 'sizeLabel', 'chinaSize', 'designName', 'designCode', 'sku', 'fit', 'audience'];
+const ORDERED_FIELDS = ['qty', 'colour', 'productType', 'sizeLabel', 'chinaSize', 'designName', 'designCode', 'sku', 'fit', 'audience', 'perPcsYuan'];
 function orderedSnapshot(l) {
   const o = {};
   ORDERED_FIELDS.forEach(k => { o[k] = l[k] == null ? '' : l[k]; });
@@ -725,6 +740,7 @@ function reconcileStudioKeysAfterLineEdit(po, beforeLines, afterLines) {
 // Normalize a raw intake line into a clean, storable shape. Weight is optional
 // at the ADVANCE stage (product not yet received / weighed).
 function normalizeLine(raw, body) {
+  const rawPhotoUrl = (raw.rawPhotoUrl || raw.photoUrl || '').trim();
   return {
     designName:  (raw.designName || '').trim(),
     productType: (raw.productType || '').trim(),
@@ -735,7 +751,10 @@ function normalizeLine(raw, body) {
     audience:    (raw.audience || '').trim(),
     vendor:      (raw.vendor || (body && body.vendor) || '').trim(),  // vendor comes from the bill
     designCode:  (raw.designCode || '').trim(),
-    photoUrl:    (raw.photoUrl || '').trim(),        // mandatory raw image → AI pipeline
+    photoUrl:    (raw.photoUrl || rawPhotoUrl).trim(), // working studio source
+    rawPhotoUrl,                                      // permanent purchase reference
+    designId: String(raw.designId || raw.designCode || stripSizeSuffix(raw.designName || '') || crypto.randomUUID()).trim().toUpperCase(),
+    designOverrides: raw.designOverrides && typeof raw.designOverrides === 'object' && !Array.isArray(raw.designOverrides) ? { ...raw.designOverrides } : {},
     sku:         (raw.sku || '').toUpperCase().trim(),
     qty:         Math.max(0, Math.round(num(raw.qty))),
     perPcsYuan:  num(raw.perPcsYuan),
@@ -1052,7 +1071,7 @@ function collectReferencedPhotos(s) {
     Object.values(po.aiImages || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
     Object.values(po.qaRejected || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
     Object.values(po.backRefs || {}).forEach(add);
-    (po.lines || []).forEach(l => add(l && l.photoUrl));
+    (po.lines || []).forEach(l => { add(l && l.photoUrl); add(l && l.rawPhotoUrl); });
   });
   return keep;
 }
@@ -1676,7 +1695,8 @@ router.post('/api/procurement/advance', async (req, res) => {
     const lines = preview.lines.map(l => ({
       designName: l.designName, productType: l.productType, colour: l.colour,
       sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
-      vendor: l.vendor, designCode: l.designCode, photoUrl: l.photoUrl,
+      vendor: l.vendor, designCode: l.designCode, photoUrl: l.photoUrl, rawPhotoUrl: l.rawPhotoUrl || l.photoUrl,
+      designId: l.designId, designOverrides: l.designOverrides || {},
       qty: l.qty, perPcsYuan: l.perPcsYuan,
       weightGrams: 0,                                   // filled at receive
       sku: l.sku, serialUsed: l.serialUsed || null, skuError: l.skuError || null,
@@ -1871,6 +1891,7 @@ router.post('/api/procurement/pos/:id/line-photo', (req, res) => {
     (po.seoDraft || []).filter(d => d.key === key).forEach(d => { d.seoApproved = false; });
   }
   po.lines[i].photoUrl = url;
+  po.lines[i].rawPhotoUrl = url;
   saveStore(s);
   res.json({ success: true, lineIndex: i, url: po.lines[i].photoUrl });
 });
@@ -1942,7 +1963,7 @@ router.post('/api/procurement/pos/:id/receipt-add', async (req, res) => {
 // field that ends up differing from `ordered` is a highlighted discrepancy.
 // A direct SKU correction remains possible, but changing product type, colour
 // or size automatically rebuilds the SKU while retaining its article serial.
-const LINE_EDIT_FIELDS = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'chinaSize', 'fit', 'audience', 'sku'];
+const LINE_EDIT_FIELDS = ['designName', 'designCode', 'productType', 'colour', 'sizeLabel', 'chinaSize', 'fit', 'audience', 'sku', 'perPcsYuan'];
 const MODEL_IMAGE_TYPES = new Set(['female','male','model-front','model-side','model-side-female','model-side-male']);
 function retireAudienceModelImages(po, key, previousAudience, nextAudience) {
   const images = (po.aiImages || {})[key] || [];
@@ -1963,6 +1984,7 @@ router.post('/api/procurement/pos/:id/line-edits', async (req, res) => {
   const b = req.body || {};
   const edits = b.edits || {};      // { lineIndex: { field: value } }
   const qtys  = b.qtys  || {};      // { lineIndex: qty }
+  const overrides = b.overrides || {}; // { lineIndex: { field: true } }
   const who = (req.user && req.user.username) || 'system';
   const now = new Date().toISOString();
   const beforeLines = (po.lines || []).map(line => ({ ...line }));
@@ -1984,13 +2006,18 @@ router.post('/api/procurement/pos/:id/line-edits', async (req, res) => {
     const priorIdentity = [l.productType, l.colour, l.sizeLabel].map(v => String(v == null ? '' : v));
     if (e) LINE_EDIT_FIELDS.forEach(k => {
       if (e[k] == null) return;
-      let v = String(e[k]).trim();
+      let v = k === 'perPcsYuan' ? Math.max(0, num(e[k])) : String(e[k]).trim();
       if (k === 'sku') v = v.toUpperCase();
-      if (v !== String(l[k] == null ? '' : l[k])) { l[k] = v; changed = true; }
+      const oldValue = k === 'perPcsYuan' ? Math.max(0, num(l[k])) : String(l[k] == null ? '' : l[k]);
+      if (v !== oldValue) { l[k] = v; changed = true; }
     });
     if (hasQty) {
       const q = Math.max(0, Math.round(num(qtys[i])));
       if (q !== (num(l.qty) || 0)) { l.qty = q; changed = true; }
+    }
+    if (overrides[i] && typeof overrides[i] === 'object') {
+      l.designOverrides = {};
+      for (const [field, enabled] of Object.entries(overrides[i])) if (enabled) l.designOverrides[field] = true;
     }
     const nextIdentity = [l.productType, l.colour, l.sizeLabel].map(v => String(v == null ? '' : v));
     if (priorIdentity.some((v, idx) => v !== nextIdentity[idx])) {
@@ -2207,6 +2234,10 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
         const incoming = { ...raw };
         const old = (po.lines || [])[idx];
         if (!old) return incoming;
+        incoming.rawPhotoUrl = incoming.rawPhotoUrl || old.rawPhotoUrl || old.photoUrl || incoming.photoUrl || '';
+        incoming.photoUrl = incoming.photoUrl || incoming.rawPhotoUrl;
+        incoming.designId = incoming.designId || old.designId;
+        incoming.designOverrides = incoming.designOverrides || old.designOverrides || {};
         const identityChanged = ['productType', 'colour', 'sizeLabel'].some(k => String(incoming[k] == null ? '' : incoming[k]) !== String(old[k] == null ? '' : old[k]));
         if (identityChanged) {
           const rebuilt = rebuildLineSku(s, incoming, old.sku);
@@ -2220,7 +2251,9 @@ router.patch('/api/procurement/pos/:id', async (req, res) => {
       po.lines = preview.lines.map(l => ({
         designName: l.designName, productType: l.productType, colour: l.colour,
         sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
-        vendor: l.vendor || po.vendor, designCode: l.designCode, photoUrl: l.photoUrl,
+        vendor: l.vendor || po.vendor, designCode: l.designCode,
+        photoUrl: l.photoUrl || l.rawPhotoUrl, rawPhotoUrl: l.rawPhotoUrl || l.photoUrl,
+        designId: l.designId, designOverrides: l.designOverrides || {},
         qty: l.qty, perPcsYuan: l.perPcsYuan,
         weightGrams: num(l.weightGrams),
         sku: l.sku, serialUsed: l.serialUsed || null, skuError: l.skuError || null,
