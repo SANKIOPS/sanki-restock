@@ -232,7 +232,7 @@
             <button class="btn warn hidden" id="updatePoBtn">Update PO →</button>
           </div>
         </div>
-        <div id="linesHost" style="margin-top:10px"></div>
+        <div id="linesHost" style="margin-top:10px;overflow-x:auto"></div>
         <div id="advanceResult"></div>
       </div>
     </div>
@@ -1143,24 +1143,24 @@
       return '<tr class="editrow" data-edit-row="'+i+'">'+
         '<td '+cellStyle+'>'+
           (l.photoUrl?'<img data-photothumb class="thumb thumb-lg" src="'+esc(l.photoUrl)+'" alt="">':'<img data-photothumb class="thumb thumb-lg hidden" alt="">')+
-          '<label class="btn ghost sm" style="display:block;margin-top:5px;text-align:center;cursor:pointer">'+(l.photoUrl?'Replace':'Add photo')+'<input type="file" accept="image/*" data-photoinput style="display:none"></label>'+
-          '<label style="display:flex;align-items:center;gap:4px;margin-top:5px;font-size:11px;font-weight:400;text-transform:none"><input type="checkbox" data-approve'+(l.photoApproved?' checked':'')+'> Approve</label>'+
+          '<label class="btn ghost sm" style="display:inline-block;margin-left:4px;padding:5px 7px;text-align:center;cursor:pointer">Photo<input type="file" accept="image/*" data-photoinput style="display:none"></label>'+
+          '<label title="Approve photo" style="display:inline-flex;align-items:center;margin-left:4px;font-size:11px;font-weight:400;text-transform:none"><input type="checkbox" data-approve'+(l.photoApproved?' checked':'')+'> ✓</label>'+
           '<div class="muted" data-photonote style="font-size:10px;max-width:105px"></div>'+
         '</td>'+
         '<td '+cellStyle+'>'+esc((el('b_vendor')&&el('b_vendor').value||'').trim()||'—')+'</td>'+
         '<td '+cellStyle+'><input aria-label="Design name" title="Design name" data-e="designName" '+fieldStyle+' value="'+esc(l.designName||'')+'"></td>'+
         '<td '+cellStyle+'><input aria-label="Vendor product code" title="Vendor product code" data-e="designCode" class="mono" '+fieldStyle+' value="'+esc(l.designCode||'')+'"></td>'+
-        '<td '+cellStyle+'><select aria-label="Product" title="Product" data-e="productType" data-refresh="1" '+fieldStyle+'>'+objOpts(lookups.products,p)+'</select>'+
-          '<select aria-label="Audience" title="Audience" data-e="audience" style="min-width:0;width:100%;padding:7px 6px;font-size:12px;margin-top:5px"><option value="">Audience</option>'+optList(['Men','Women','Unisex'],l.audience)+'</select></td>'+
+        '<td '+cellStyle+'><select aria-label="Product" title="Product" data-e="productType" data-refresh="1" '+fieldStyle+'>'+objOpts(lookups.products,p)+'</select></td>'+
         '<td '+cellStyle+'><select aria-label="Colour" title="Colour" data-e="colour" '+fieldStyle+'>'+objOpts(lookups.colours,l.colour)+'</select></td>'+
         '<td '+cellStyle+'><select aria-label="Fit" title="Fit" data-e="fit" '+fieldStyle+'>'+optList(fitsFor(p),l.fit)+'</select></td>'+
-        '<td '+cellStyle+'><select aria-label="Size" title="Size" data-e="sizeLabel" '+fieldStyle+'>'+optList(sizesFor(p),l.sizeLabel)+'</select>'+
-          '<select aria-label="China size" title="China size" data-e="chinaSize" style="min-width:0;width:100%;padding:7px 6px;font-size:12px;margin-top:5px">'+optList(CHINA_SIZES,l.chinaSize)+'</select></td>'+
+        '<td '+cellStyle+'><select aria-label="Size" title="Size" data-e="sizeLabel" '+fieldStyle+'>'+optList(sizesFor(p),l.sizeLabel)+'</select></td>'+
+        '<td '+cellStyle+'><select aria-label="China size" title="China size" data-e="chinaSize" '+fieldStyle+'>'+optList(CHINA_SIZES,l.chinaSize)+'</select></td>'+
+        '<td '+cellStyle+'><select aria-label="Audience" title="Audience" data-e="audience" '+fieldStyle+'><option value="">Select</option>'+optList(['Men','Women','Unisex'],l.audience)+'</select></td>'+
         '<td '+cellStyle+'><input aria-label="Quantity" title="Quantity" data-e="qty" type="number" min="0" '+fieldStyle+' value="'+esc(l.qty)+'"></td>'+
         '<td '+cellStyle+'><input aria-label="Unit price" title="'+(isIndia()?'₹/pc':'¥/pc')+'" data-e="perPcsYuan" type="number" step="0.01" '+fieldStyle+' value="'+esc(l.perPcsYuan)+'"></td>'+
         '<td '+cellStyle+' class="money">'+(isIndia()?money(lineYuan(l)):yuan(lineYuan(l)))+'</td>'+
         '<td '+cellStyle+' class="money">'+money(lineCost(l))+'</td>'+
-        '<td '+cellStyle+'><div style="display:flex;flex-direction:column;gap:5px"><button class="btn sm" data-savline="'+i+'">Save</button><button class="btn ghost sm" data-cancelline="'+i+'">Cancel</button></div></td>'+
+        '<td '+cellStyle+'><div style="white-space:nowrap"><button class="btn sm" data-savline="'+i+'">Save</button> <button class="btn ghost sm" data-cancelline="'+i+'">Cancel</button></div></td>'+
       '</tr>';
     }
 
@@ -1180,7 +1180,6 @@
       var vend=(el('b_vendor')&&el('b_vendor').value||'').trim();   // vendor is per-PO, shown on every line
       var rows=lines.map(function(l,i){
         if(i===editingLineIdx) return lineEditorRow(l,i);
-        var sizeCell=esc(l.sizeLabel)+(l.chinaSize?(' <span class="muted">(CN '+esc(l.chinaSize)+')</span>'):'');
         // Approve the photo right here — no need to open Edit first.
         var approveBtn = (l.photoUrl && !l.photoApproved)
           ? ' <button class="btn sm" data-approveline="'+i+'" style="background:#059669;color:#fff;border-color:#059669">Approve</button>'
@@ -1190,7 +1189,8 @@
           '<td>'+photoCell+'</td>'+
           '<td>'+esc(vend||'—')+'</td>'+
           '<td>'+esc(l.designName||'—')+'</td><td class="mono">'+esc(l.designCode||'—')+'</td>'+
-          '<td>'+esc(l.productType||'—')+'</td><td>'+esc(l.colour||'—')+'</td><td>'+esc(l.fit||'—')+'</td><td>'+sizeCell+'</td>'+
+          '<td>'+esc(l.productType||'—')+'</td><td>'+esc(l.colour||'—')+'</td><td>'+esc(l.fit||'—')+'</td><td>'+esc(l.sizeLabel||'—')+'</td>'+
+          '<td>'+esc(l.chinaSize||'—')+'</td><td>'+esc(l.audience||'—')+'</td>'+
           '<td>'+esc(l.qty)+'</td><td class="money">'+unit(l.perPcsYuan)+'</td><td class="money">'+unit(lineYuan(l))+'</td><td class="money">'+money(lineCost(l))+'</td>'+
           '<td><button class="btn ghost sm" data-edit="'+i+'">Edit</button> <button class="x" data-del="'+i+'">✕</button></td></tr>';
       }).join('');
@@ -1198,8 +1198,8 @@
       var totalInr  = lines.reduce(function(s,l){ return s + lineCost(l); }, 0);
       var totalQty  = lines.reduce(function(s,l){ return s + (Number(l.qty)||0); }, 0);
       var unitHdr=india?'₹/pc':'¥/pc', costHdr=india?'Purchase cost (₹)':'Purchase cost (¥)';
-      el('linesHost').innerHTML='<table><thead><tr><th>Photo</th><th>Vendor</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>Qty</th><th>'+unitHdr+'</th><th>'+costHdr+'</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
-        '<tr class="totalrow"><td colspan="8" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+unit(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
+      el('linesHost').innerHTML='<table style="min-width:1500px;font-size:12px"><thead><tr><th>Photo</th><th>Vendor</th><th>Design</th><th>Vendor code</th><th>Product</th><th>Colour</th><th>Fit</th><th>Size</th><th>China size</th><th>Audience</th><th>Qty</th><th>'+unitHdr+'</th><th>'+costHdr+'</th><th>Total purchase cost (₹)</th><th></th></tr></thead><tbody>'+rows+
+        '<tr class="totalrow"><td colspan="10" style="text-align:right;font-weight:600">Total</td><td style="font-weight:600">'+totalQty+'</td><td></td><td class="money" style="font-weight:700">'+unit(totalYuan)+'</td><td class="money" style="font-weight:700">'+money(totalInr)+'</td><td></td></tr>'+
         '</tbody></table>'+
         '<p class="sub">Tap <b>Edit</b> on a line to change any field or its photo right here. '+(india
           ? 'Purchase cost (₹) = qty × ₹/pc; landed cost adds the shipment transport (₹'+(Number(el('b_transportTotal')&&el('b_transportTotal').value)||0).toLocaleString('en-IN')+' split by pieces) at receive.'
