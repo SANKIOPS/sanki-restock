@@ -3187,7 +3187,8 @@ test('full-volume recovery compresses retained JPEG proofs and sourcing photos i
   assert.match(source,/before<minKb\*1024/);
   assert.match(source,/replacement\.length>=before\*\.97/);
   assert.match(source,/fs\.writeFileSync\(fp,replacement\)/);
-  assert.match(source,/recoverExpenseProofStorage\(\)[\s\S]*\.then\(\(\)=>app\.listen/);
+  assert.match(source,/app\.listen\(PORT,[\s\S]*setImmediate\(\(\)=>recoverExpenseProofStorage\(\)/);
+  assert.doesNotMatch(source,/recoverExpenseProofStorage\(\)[\s\S]*\.then\(\(\)=>app\.listen/);
 });
 
 test('all date-range reports receive one inclusive Till Date filter',()=>{

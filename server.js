@@ -2637,10 +2637,11 @@ app.get('*', (req, res) => {
 // ════════════════════════════════════════════════════════════════
 //  START SERVER
 // ════════════════════════════════════════════════════════════════
-// Finish reclaiming the persistent volume before accepting uploads. Previously
-// the server started first, allowing a user to hit ENOSPC while recovery was
-// still running in the background.
-recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)).then(()=>app.listen(PORT, async () => {
+// Start serving immediately so a large retained-image archive cannot keep the
+// Railway health check waiting. Recovery remains resumable and runs in the
+// background without changing accounting JSON.
+app.listen(PORT, async () => {
+  setImmediate(()=>recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recovery failed safely:',error)));
   const hasVelocity = VELOCITY_API_KEY || (VELOCITY_USERNAME && VELOCITY_PASSWORD);
   console.log(`🚀 SANKI Business OS v4.0 — port ${PORT}`);
   console.log(`   Shopify:   ${SHOPIFY_STORE ? '✅ ' + SHOPIFY_STORE : '❌ not configured'}`);
@@ -2756,4 +2757,4 @@ recoverExpenseProofStorage().catch(error=>console.error('[storage] proof recover
     setInterval(notificationTick, 5 * 60 * 1000);
     console.log(`[showroom] notifications → ${NOTIFY_EMAIL_TO} ${RESEND_API_KEY ? '(Resend live)' : '(log-only, set RESEND_API_KEY)'}`);
   }
-}));
+});
