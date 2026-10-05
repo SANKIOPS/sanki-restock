@@ -2324,16 +2324,19 @@ router.delete('/api/procurement/pos/:id', (req, res) => {
 // already have a Shopify listing we only add stock to).
 async function newGroupsOf(s, po) {
   const preview = await computePreview(s, { lines: (po.lines || []).filter(line => num(line.qty) > 0), vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
-  return (preview.newProducts || []).map(np => {
-    const line = (po.lines || []).find(l => groupKey(l) === np.key && (l.photoUrl || '').trim());
-    const details = (po.lines || []).find(l => groupKey(l) === np.key) || {};
-    const audiences = [...new Set((po.lines || []).filter(l => groupKey(l) === np.key).map(l => String(l.audience || '').trim()))];
-    const audience = audiences.length === 1 && ['Men','Women','Unisex'].includes(audiences[0]) ? audiences[0] : '';
-    return { key: np.key, colour: np.colour, productType: np.productType, designName: np.designName,
-             designCode: np.designCode, audience, line: po.line || '', season: details.season || po.season || '',
-             fit: details.fit || '', sizeLabels: np.variants.map(v => v.sizeLabel),
-             photoUrl: line ? line.photoUrl : '' };
-  });
+  return (preview.newProducts || []).map(np => studioSourceGroup(po, np));
+}
+// Keep the exact studio field order for compatibility with saved image hashes.
+// Normal posting and continuation must inspect the same approved reference.
+function studioSourceGroup(po, np) {
+  const lines = (po.lines || []).filter(line => groupKey(line) === np.key);
+  const line = lines.find(line => (line.photoUrl || '').trim());
+  const details = lines[0] || {};
+  const audiences = [...new Set(lines.map(line => String(line.audience || '').trim()))];
+  const audience = audiences.length === 1 && ['Men','Women','Unisex'].includes(audiences[0]) ? audiences[0] : '';
+  return {key:np.key, colour:np.colour, productType:np.productType, designName:np.designName,
+    designCode:np.designCode, audience, line:po.line || '', season:details.season || po.season || '',
+    fit:details.fit || '', sizeLabels:np.variants.map(variant => variant.sizeLabel), photoUrl:line ? line.photoUrl : ''};
 }
 
 // A design-code correction can split one product group into several groups
@@ -3072,7 +3075,7 @@ router.post('/api/procurement/commit', async (req, res) => {
     for (const np of preview.newProducts) {
       const draft = (po.seoDraft || []).find(x => x.key === np.key);
       const seo = draft && draft.seo;
-      const group = (await newGroupsOf(s, po)).find(g => g.key === np.key);
+      const group = studioSourceGroup(po, np);
       if (!draft || !draft.seoApproved || seoNeedsReview(seo) || (group&&openaiPilot.seoCopyNeedsReview(seo,group))) {
         return res.status(400).json({ success: false, error: 'Approve complete, non-repetitive listing copy for every new product.' });
       }
@@ -3108,6 +3111,9 @@ router.post('/api/procurement/commit', async (req, res) => {
     po.status = 'posting_partial';
     po.postingStartedAt = new Date().toISOString();
     po.results = results;
+    po.newProducts = preview.newProducts;
+    po.existingAdds = preview.existingAdds;
+    po.warehouseLocationId = warehouseLocationId;
     saveStore(s);
     for (const np of preview.newProducts) {
       try {
@@ -3146,9 +3152,13 @@ router.post('/api/procurement/commit', async (req, res) => {
 // only when none of its received SKUs exists. A partly present design is held
 // for manual reconciliation because creating only its missing sizes would
 // split one article across two Shopify products.
+const activePostingContinuations = new Set();
 router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
+  let ownsLock = false;
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    if (activePostingContinuations.has(req.params.id)) return res.status(409).json({success:false,error:'Posting continuation is already running for this purchase.'});
+    activePostingContinuations.add(req.params.id); ownsLock = true;
     const s=loadStore(), po=s.pos[req.params.id];
     if(!po) return res.status(404).json({success:false,error:'PO not found'});
     if(po.status!=='posting_partial') return res.status(409).json({success:false,error:'Only an interrupted posting can be continued.'});
@@ -3171,8 +3181,7 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     if(pending.length!==missing.length)return res.status(409).json({success:false,error:'The saved PO and current Shopify catalogue do not produce the same missing product groups. No write was made.',missing,pending:pending.map(np=>np.key)});
     for(const np of pending){
       const draft=(po.seoDraft||[]).find(x=>x.key===np.key), seo=draft&&draft.seo;
-      const details=received.find(line=>groupKey(line)===np.key)||{};
-      const group={key:np.key,colour:np.colour,productType:np.productType,designName:np.designName,designCode:np.designCode,audience:details.audience||'',fit:details.fit||'',season:details.season||po.season||'',sizeLabels:np.variants.map(v=>v.sizeLabel),photoUrl:details.photoUrl||''};
+      const group=studioSourceGroup(po,np);
       if(!draft||!draft.seoApproved||seoNeedsReview(seo)||openaiPilot.seoCopyNeedsReview(seo,group))return res.status(409).json({success:false,error:'Saved SEO is no longer approved for '+(np.designName||np.key)+'. No Shopify write was made.'});
       const required=openaiPilot.pilotTypes(group,!!(po.backRefs||{})[np.key]);
       const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[np.key]);
@@ -3185,14 +3194,16 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
       const missingTypes=required.filter(type=>!approved.some(x=>x.type===type));
       const modelTypes=new Set(approved.map(x=>x.type));
       const recoverable=missingTypes.length===1&&missingTypes[0]==='front'&&(modelTypes.has('female')||modelTypes.has('male')||modelTypes.has('model-front'))&&(modelTypes.has('model-side-female')||modelTypes.has('model-side-male')||modelTypes.has('model-side'));
-      if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:'Missing readable approved image(s) for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made. Restore or regenerate the missing views, then retry.',groupKey:np.key,missingTypes});
+      const changedReference=((po.aiImages||{})[np.key]||[]).some(image=>image.approved&&imageCheckAccepted(image)&&image.sourceFingerprint&&image.sourceFingerprint!==fingerprint&&readStoredPhoto(image.url));
+      if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:(changedReference?'Previously approved images no longer match the current product reference for ':'Missing readable approved image(s) for ')+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made. '+(changedReference?'Review the changed product details before generating replacements.':'Restore or regenerate the missing views, then retry.'),groupKey:np.key,missingTypes});
       if(!approved.length)return res.status(409).json({success:false,error:'No readable approved listing photos remain for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+'. No Shopify write was made.',groupKey:np.key});
       np.seo=seo; np.images=approved.map(x=>({url:x.url,alt:seo.imageAlt}));
     }
     const results=po.results||(po.results={created:[],adjusted:[],errors:[]});
+    po.newProducts=(po.newProducts||[]).filter(np=>!pending.some(created=>created.key===np.key)).concat(pending);
     po.postingResumedAt=new Date().toISOString(); saveStore(s);
     for(const np of pending){
-      try{const result=await createDraftProduct(np,String(po.warehouseLocationId||s.settings.warehouseLocationId||''));results.created.push(result);saveStore(s);const stockError=(result.variants||[]).find(v=>v.stockError);if(stockError)throw new Error('Product created, but stock failed for '+stockError.sku+': '+stockError.stockError);}
+      try{const result=await createDraftProduct(np,String(po.warehouseLocationId||s.settings.warehouseLocationId||''),{noCreateRetries:true,onCreated:created=>{results.created.push(created);saveStore(s);}});Object.assign(results.created[results.created.length-1],result);saveStore(s);const stockError=(result.variants||[]).find(v=>v.stockError);if(stockError)throw new Error('Product created, but stock failed for '+stockError.sku+': '+stockError.stockError);}
       catch(e){results.errors.push({kind:'create',product:np.seo.title,error:e.message});saveStore(s);return res.status(409).json({success:false,error:'Continuation stopped after a Shopify error. '+e.message,results});}
     }
     _catalogue=null;
@@ -3202,6 +3213,7 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key),missingImageGroups}; saveStore(s);
     res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),missingImageGroups,results});
   }catch(e){res.status(500).json({success:false,error:e.message});}
+  finally{if(ownsLock)activePostingContinuations.delete(req.params.id);}
 });
 
 // Repair products from the historical resume bug that allowed Shopify drafts
