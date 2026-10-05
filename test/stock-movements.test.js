@@ -87,3 +87,27 @@ test('cancellation cannot release reservations for dispatched, uncertain, reject
   await assert.rejects(review(s,m.id,{action:'cancel',reason:'Retest'},manager,()=>{throw Error('Must not save');},async()=>{throw Error('Must not send');}),/awaiting-approval/);assert.deepEqual(m,before);
  }
 });
+
+test('register review and cancellation stay available during a blocked Shopify read; late reads return current history',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sanki-register-'));
+ const source=`
+ const assert=require('node:assert/strict'),express=require(${JSON.stringify(require.resolve('express'))});
+ const inventory=require(${JSON.stringify(require.resolve('../modules/inventory-state'))});
+ let started,release;const began=new Promise(r=>started=r),stock=new Promise(r=>release=r);
+ inventory.snapshot=()=>{started();return stock;};
+ const moves=require(${JSON.stringify(require.resolve('../modules/stock-movements'))});
+ const s=${JSON.stringify(liveStore())},live=${JSON.stringify(liveState())};
+ const m=moves.submitLive(s,${JSON.stringify(liveBody())},{username:'prashant',role:'admin'},live);moves.save(s);
+ const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={username:'tushar',roles:['inventory','warehouse']};next();});app.use(moves.router);
+ const server=app.listen(0,'127.0.0.1',async()=>{try{
+  const url='http://127.0.0.1:'+server.address().port+'/api/stock-movements';
+  const slow=fetch(url).then(r=>r.json());await began;
+  const before=await fetch(url+'?registerOnly=1',{signal:AbortSignal.timeout(2000)}).then(r=>r.json());assert.equal(before.registerOnly,true);assert.equal(before.canApprove,true);assert.equal(before.movements[0].status,'pending');
+  const cancelled=await fetch(url+'/'+m.id+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cancel',reason:'Replace this request'}),signal:AbortSignal.timeout(2000)}).then(r=>r.json());assert.equal(cancelled.success,true);
+  const history=await fetch(url+'?registerOnly=1',{signal:AbortSignal.timeout(2000)}).then(r=>r.json());assert.equal(history.movements[0].status,'cancelled');assert.equal(history.movements[0].cancelledBy,'tushar');
+  release(live);const late=await slow;assert.equal(late.movements[0].status,'cancelled');assert.equal(late.positions[0].quantity,1);
+ }catch(e){console.error(e);process.exitCode=1;}finally{server.closeAllConnections();server.close();}});
+ `;
+ try{const result=require('node:child_process').spawnSync(process.execPath,['-e',source],{encoding:'utf8',timeout:10000,env:{...process.env,STOCK_MOVEMENTS_PATH:path.join(dir,'moves.json'),INVENTORY_CARE_PATH:path.join(dir,'care.json')}});assert.equal(result.status,0,result.stderr||String(result.error||''));}
+ finally{fs.rmSync(dir,{recursive:true});}
+});
