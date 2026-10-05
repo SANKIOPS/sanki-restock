@@ -663,7 +663,7 @@
     }
     function historyCategoryName(line){return String(line.productType||'Uncategorised').trim()||'Uncategorised';}
     function historyCategoryLabel(category){
-      var labels={'T-Shirt':'T-Shirts','Trouser':'Trousers','Shirt':'Shirts'};
+      var labels={'T-Shirt':'T-Shirts','T-Shirt Hood':'Hooded T-Shirts','Trouser':'Trousers','Shirt':'Shirts'};
       return labels[category]||category;
     }
     function historyLineCost(po,line){
@@ -2334,7 +2334,7 @@
     var COMPLEXION=['Fair','Medium','Deep'];
     var ACC_TOGGLES=[['cap','Cap','a cap'],['sunglasses','Sunglasses','sunglasses'],['watch','Watch','a watch']];
     function garmentCat(pt){
-      var uppers=['Shirt','T-Shirt','Sando','Hoodie','Jacket','Top','Sweatshirt','Sweater'];
+      var uppers=['Shirt','T-Shirt','T-Shirt Hood','Sando','Hoodie','Jacket','Top','Sweatshirt','Sweater'];
       var lowers=['Jeans','Trouser','Trousers','Lower','Lowers','Shorts','Jogger','Jorts','Denim Joggers','Cargo','Skirt'];
       if(uppers.indexOf(pt)>=0) return 'upper';
       if(lowers.indexOf(pt)>=0) return 'lower';
