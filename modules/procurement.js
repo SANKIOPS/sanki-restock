@@ -3198,6 +3198,7 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     _catalogue=null;
     const verified=await loadCatalogue(true), stillMissing=received.filter(line=>line.classification!=='EXISTING'&&!verified.skuMap[String(line.sku||'').toUpperCase()]).map(line=>line.sku);
     if(stillMissing.length)return res.status(409).json({success:false,error:'Shopify verification still found missing received SKUs. The PO remains locked.',stillMissing,results});
+    po.newProducts=(po.newProducts||[]).filter(np=>!pending.some(created=>created.key===np.key)).concat(pending);
     po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key),missingImageGroups}; saveStore(s);
     res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),missingImageGroups,results});
   }catch(e){res.status(500).json({success:false,error:e.message});}
@@ -3264,8 +3265,15 @@ async function recoveryCatalogue() {
   }
   return catalogue;
 }
-async function recoveryPlan(s, po, inventoryMode, includeRestocks = false) {
-  return buildRecoveryPlan(po, await recoveryCatalogue(), {groupKey, sizes: s.sizes || {}, readPhoto: readStoredPhoto, inventoryMode, includeRestocks});
+function recoveryPriceCalculator(s, po) {
+  const settings = {...s.settings};
+  if (po.exRate != null && po.exRate !== '') settings.exRate = num(po.exRate);
+  if (po.freightPerGram != null && po.freightPerGram !== '') settings.freightPerGram = num(po.freightPerGram);
+  const totalQty = (po.lines || []).reduce((sum, line) => sum + num(line.qty), 0);
+  return line => landedCost(line, settings, {origin:po.origin, transportPerPc:totalQty ? num(po.transportTotal) / totalQty : 0}).suggestedMrp;
+}
+async function recoveryPlan(s, po, inventoryMode, includeRestocks = false, priceMode = 'saved') {
+  return buildRecoveryPlan(po, await recoveryCatalogue(), {groupKey, sizes: s.sizes || {}, readPhoto: readStoredPhoto, inventoryMode, includeRestocks, priceMode, calculatePrice:recoveryPriceCalculator(s,po)});
 }
 const activeDraftRecoveries = new Set();
 function persistDraftRecovery(poId, run, link) {
@@ -3285,7 +3293,7 @@ router.get('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
     if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
     const s = loadStore(), po = s.pos[req.params.id];
     if (!po) return res.status(404).json({success:false,error:'PO not found.'});
-    const plan = await recoveryPlan(s, po, req.query.inventoryMode || 'zero', req.query.includeRestocks === 'true');
+    const plan = await recoveryPlan(s, po, req.query.inventoryMode || 'zero', req.query.includeRestocks === 'true', req.query.priceMode || 'saved');
     res.json({success:true, plan:publicRecoveryPlan(plan), history:po.shopifyDraftRecoveryHistory || []});
   } catch (error) { res.status(409).json({success:false,error:error.message}); }
 });
@@ -3299,14 +3307,14 @@ router.post('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
     const s = loadStore(), po = s.pos[id], b = req.body || {};
     if (!po) return res.status(404).json({success:false,error:'PO not found.'});
     if (b.approve !== true || !b.fingerprint) return res.status(400).json({success:false,error:'Review the recovery preview before recreating drafts.'});
-    const plan = await recoveryPlan(s, po, b.inventoryMode, b.includeRestocks === true);
+    const plan = await recoveryPlan(s, po, b.inventoryMode, b.includeRestocks === true, b.priceMode || 'saved');
     if (plan.fingerprint !== b.fingerprint) return res.status(409).json({success:false,error:'The saved receipt, photos or Shopify products changed. Refresh the recovery preview; no products were created.'});
     const pending = plan.products.filter(product => product.status === 'ready');
     const warehouse = String(po.warehouseLocationId || s.settings.warehouseLocationId || '');
     if (!warehouse) return res.status(409).json({success:false,error:'The original warehouse location is missing. No products were created.'});
     if (!pending.length) return res.json({success:true,created:[],plan:publicRecoveryPlan(plan)});
     run = {id:crypto.randomUUID(), at:new Date().toISOString(), by:(req.user || {}).username || 'system',
-      inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, status:'running', created:[], errors:[], skippedRestocks:plan.excludedRestocks};
+      inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, priceMode:plan.priceMode, status:'running', created:[], errors:[], skippedRestocks:plan.excludedRestocks};
     persistDraftRecovery(id, run);
     for (const product of pending) {
       // Re-read Shopify immediately before each create. Never repeat a stock
@@ -3314,7 +3322,7 @@ router.post('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
       const catalogue = await recoveryCatalogue();
       if (product.skus.some(sku => (catalogue[sku] || []).length)) throw new Error('Shopify now contains SKU(s) for ' + product.label + '. Refresh the preview.');
       const latest = loadStore(), current = buildRecoveryPlan(latest.pos[id], catalogue,
-        {groupKey, sizes:latest.sizes || {}, readPhoto:readStoredPhoto, inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks}).products.find(candidate => candidate.key === product.key);
+        {groupKey, sizes:latest.sizes || {}, readPhoto:readStoredPhoto, inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, priceMode:plan.priceMode, calculatePrice:recoveryPriceCalculator(latest,latest.pos[id])}).products.find(candidate => candidate.key === product.key);
       if (JSON.stringify(current) !== JSON.stringify(product)) throw new Error('The saved listing or photos changed for ' + product.label + '. Refresh the preview.');
       run.currentGroup = product.key; persistDraftRecovery(id, run);
       const result = await createDraftProduct({...product, images:product.images, seo:{...product.seo,
