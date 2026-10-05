@@ -1,22 +1,15 @@
 # Stock movements
 
-Inventory Dashboard now includes Move Stock, Pending Approval, and History.
-Keyboard/USB/Bluetooth scanners can enter an exact SKU. Scanner Enter never submits a transfer. Non-SKU barcodes need verified mapping before use.
+Move Stock now supports current Shopify inventory even when no audited physical-count baseline has been provisioned. It resolves each unique tracked SKU to its Shopify inventory item and the existing Display/Warehouse location mapping. Both locations must be distinct and stocked for that item.
 
-Deployment is not activation. The old static inventory is NOT a baseline. Moves remain locked until an audited `stock_movements.json` has been provisioned on the persistent data volume by the reconciliation workflow. Do not hand-set `reconciled: true` before matching the new physical count to live Shopify and verifying opening quantities at both locations.
+In this live mode, available quantity is checked by location. Rack choices are physical labels from the existing rack list; they are not proof of current rack balances. Staff select source/destination racks and confirm they checked and physically moved the pieces. The register records those declarations without marking the old physical count reconciled or creating invented opening rack balances.
 
-While reconciliation is pending, the movement form displays the nonempty rack labels from the 15 September physical-count sheet, separately for Display and Warehouse. These are choices for orientation only; they are not SKU-level position evidence. The source list is `modules/counted-rack-options.json`, and the approved baseline supersedes it after activation. A source rack becomes SKU-specific once an approved baseline is available.
+Submission creates a pending movement and reserves its source quantity in the movement form. A SKU with a pending, uncertain or correction-required movement cannot be submitted again or used for a conflicting cleaning operation. Shopify availability remains unchanged until approval by a different manager. Owner/admin and existing STOCK_MOVEMENT_APPROVERS can review; staff cannot approve and managers cannot approve their own move.
 
-Store schema:
+Cross-location approval reads current Shopify source/destination availability, checks sufficient stock, persists the exact compare-and-set quantities and idempotency key, then updates both locations atomically. Approval invalidates the shared inventory snapshot and signals dashboard tabs to refresh. The dashboard, care register and stock search therefore read the resulting current quantities. Same-location rack transfers only update the movement history and do not change Shopify stock.
 
-```json
-{"version":1,"baseline":{"reconciled":true,"reviewedBy":"owner","reconciledAt":"ISO timestamp","racks":{"Display":["1","T1","Accesorries"],"Warehouse":["5A","5B"]},"locations":{"Display":"gid://shopify/Location/ID","Warehouse":"gid://shopify/Location/ID"},"skus":{"EXACT_SKU":{"inventoryItemId":"gid://shopify/InventoryItem/ID"}}},"positions":[{"sku":"EXACT_SKU","location":"Display","rack":"1","quantity":1}],"movements":[]}
-```
+Unknown Shopify responses remain sync-pending; retry uses the same input and key. Never cancel an uncertain dispatched request. Retries stop after 23 hours and require inventory-history reconciliation. A known compare-and-set rejection may be marked for physical correction. After another manager verifies the pieces returned to the original source rack, resolving the correction cancels the unconfirmed move and releases its reservation. This does not write stock to Shopify.
 
-Use `STOCK_MOVEMENTS_PATH` to override the persistent path. Owner/admin can review; `STOCK_MOVEMENT_APPROVERS` is a comma-separated list of existing named manager usernames. Nobody may approve their own movement. No new role assignments are made automatically.
+Persistent storage remains stock_movements.json beside DATA_PATH, overridable via STOCK_MOVEMENTS_PATH. Existing approved-baseline stores keep their original counted-position workflow. Do not hand-set baseline.reconciled: true. A future audited per-rack ledger still requires sales/receipt integration and reconciliation; live mode makes no claim that its rack balances have been audited.
 
-On submission, rack positions change immediately and status is pending. Review of a cross-location transfer sends a Shopify compare-and-set update to both available quantities with a persisted idempotency key. Same-location rack moves require approval but do not alter Shopify quantities. Earlier pending moves for the same SKU must be approved first. Failed Shopify confirmation remains sync-pending, never silently approved. Retries use the original request. Conflicting quantities require investigation, not an automatic overwrite.
-
-Correction marks the reported physical position as needing investigation and blocks further SKU moves. It never silently returns stock to its previous rack. A manager must verify the physical correction and reconcile the store; a dedicated correction-resolution UI is still required before activation. After Shopify request dispatch, correction is blocked until its outcome is confirmed.
-
-Remaining activation work: import verified physical baseline, integrate movement positions with all stock-search/product-detail views, integrate sales/receipts so rack balances remain current, add manager correction resolution, test live Shopify transfers and persistent-volume recovery. The feature is intentionally fail-closed until these checks are complete.
+Keyboard scanners enter exact SKUs. Scanner Enter focuses the quantity field and never submits. Forms require an exact SKU, positive whole-piece quantity, sufficient source availability, different destination and physical confirmation in live mode. Changes to SKU, quantities, locations or racks reset that confirmation.
