@@ -1,7 +1,7 @@
 // Metered, explicitly started PO generation. Every retry is separately confirmed.
 const IMAGE_TYPES = ['front', 'back', 'female', 'male', 'model-front', 'model-side', 'model-side-female', 'model-side-male', 'detail'];
 const SEO_FIELDS = ['displayName', 'title', 'metaTitle', 'metaDescription', 'imageAlt', 'bodyHtml'];
-const UPPER_TYPES = new Set(['shirt','t-shirt','sando','hoodie','jacket','top','sweatshirt','sweater']);
+const UPPER_TYPES = new Set(['shirt','t-shirt','t-shirt hood','sando','hoodie','jacket','top','sweatshirt','sweater']);
 const LOWER_TYPES = new Set(['jeans','trouser','trousers','lower','lowers','shorts','jogger','jorts','denim joggers','cargo','skirt']);
 const UPPER_PAIRS = ['Auto','Baggy trousers','Straight trousers','Tailored trousers'];
 const FUNKY_UPPER_PAIRS = [...UPPER_PAIRS,'Jeans','Shorts'];
@@ -124,7 +124,7 @@ function retailFacts(group) {
   const rawType=String(group.productType||'').trim();
   const rawFit=String(group.fit||'').trim();
   return {
-    productType:womenTop && /^t[ -]?shirt$/i.test(rawType)?'Top':rawType,
+    productType:womenTop && /^t[ -]?shirt(?: hood)?$/i.test(rawType)?(/ hood$/i.test(rawType)?'Hooded Top':'Top'):rawType,
     fit:womenTop && /^muscle\s*fit$/i.test(rawFit)?'':rawFit
   };
 }
@@ -371,7 +371,7 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
 }
 
 async function extractInvoice({key, buffer, mime='image/jpeg', model='gpt-4.1-mini', fetchImpl=global.fetch}) {
-  const productTypes=['','Shirt','T-Shirt','Jeans','Trouser','Lower','Shorts','Jogger','Coord Set','Jorts','Sando','Bag','Denim Joggers','Top'];
+  const productTypes=['','Shirt','T-Shirt','T-Shirt Hood','Jeans','Trouser','Lower','Shorts','Jogger','Coord Set','Jorts','Sando','Bag','Denim Joggers','Top'];
   const colours=['','Black','Blue','Brown','Cream','Green','Grey','Maroon','Orange','Pink','Purple','Red','White','Yellow','Beige','Sky Blue','Olive','Khaki','Golden','Silver'];
   const sizes=['','FS','S','M','L','XL','XXL','3XL','4XL','24','26','28','30','32','34','36','38','40','42','44'];
   const line={type:'object',additionalProperties:false,required:['designName','designCode','sourceDescription','productType','colour','sourceColour','fit','sizeLabel','chinaSize','qty','perPcsYuan','confidence','reviewReason'],properties:{

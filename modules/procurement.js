@@ -114,7 +114,7 @@ const AI_IMAGE_SPECS = [
 const SEED = {
   brand: 'SA',
   products: { // product type → numeric code
-    'Shirt': 1, 'T-Shirt': 2, 'Jeans': 10, 'Trouser': 11, 'Lower': 12,
+    'Shirt': 1, 'T-Shirt': 2, 'T-Shirt Hood': 21, 'Jeans': 10, 'Trouser': 11, 'Lower': 12,
     'Shorts': 13, 'Jogger': 14, 'Coord Set': 15, 'Jorts': 16, 'Sando': 17,
     'Bag': 18, 'Denim Joggers': 19, 'Top': 20
   },
@@ -528,8 +528,8 @@ function genSeo(g) {
   const nameForTitle = designName.replace(new RegExp('\\s+' + String(g.productType || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'), '').trim();
   const audience    = g.audience || 'Men';           // 'Men' | 'Women' | 'Unisex'
   const winter = /^winter$/i.test(g.season || '') || /^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(g.productType || '');
-  const productType = audience === 'Women' && !winter && /^t[ -]?shirt$/i.test(g.productType || '')
-    ? 'Top' // Basic copy cannot verify a polo collar; only photo-based AI copy may say that.
+  const productType = audience === 'Women' && !winter && /^t[ -]?shirt(?: hood)?$/i.test(g.productType || '')
+    ? (/ hood$/i.test(g.productType || '') ? 'Hooded Top' : 'Top') // Basic copy cannot verify a polo collar; only photo-based AI copy may say that.
     : (g.productType || '');
   const colour      = titleCase(g.colour || '');
   const fit         = audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(g.fit || '') ? '' : titleCase(g.fit || '');
@@ -614,7 +614,7 @@ function normalizeSeoStyle(value, group = {}) {
 function canonicalSeoNaming(seo, group, preferredStyle = '') {
   const audience = group.audience || 'Unisex';
   const winter = /^winter$/i.test(group.season || '') || /^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(group.productType || '');
-  const productType = audience === 'Women' && !winter && /^t[ -]?shirt$/i.test(group.productType || '') ? 'Top' : titleCase(group.productType || 'Product');
+  const productType = audience === 'Women' && !winter && /^t[ -]?shirt(?: hood)?$/i.test(group.productType || '') ? (/ hood$/i.test(group.productType || '') ? 'Hooded Top' : 'Top') : titleCase(group.productType || 'Product');
   const colour = titleCase(group.colour || '');
   const fit = audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(group.fit || '') ? '' : titleCase(group.fit || '').replace(/\s*fit$/i, '').trim();
   const style = normalizeSeoStyle(preferredStyle, group) || normalizeSeoStyle(seo.displayName || seo.title, group) || normalizeSeoStyle(group.designName, group);
@@ -1352,6 +1352,7 @@ function localInvoiceBillNo(text) {
 function localInvoiceProduct(line, products) {
   const rules = [
     ['Denim Joggers', /denim\s*jogger|牛仔束脚/i], ['Coord Set', /coord|co-ord|套装/i],
+    ['T-Shirt Hood', /\bt[\s-]?shirt\s*hood(?:ed)?\b|\bhooded\s*(?:t[\s-]?shirt|tee)\b|连帽\s*(?:T恤|短袖)/i],
     ['T-Shirt', /t[\s-]?shirt|tee\b|polo|T恤|短袖/i], ['Shirt', /\bshirt\b|衬衫/i],
     ['Top', /\btop\b|上衣|女上装|针织衫/i],
     ['Jeans', /\bjeans?\b|牛仔裤/i], ['Trouser', /trouser|pants?|长裤|裤子|西裤|阔腿裤/i],
