@@ -1845,6 +1845,13 @@ router.post('/api/procurement/pos/:id/receive', async (req, res) => {
       exRate: po.exRate, freightPerGram: po.freightPerGram,
       origin: po.origin, transportTotal: po.transportTotal
     });
+    // Recalculating weights or saving selling prices replaces lastReceive in
+    // the page. Keep the same group metadata as /studio so its approved model
+    // views still satisfy the posting gate (and conflicting audiences stay blocked).
+    preview.newProducts = (preview.newProducts || []).map(np => {
+      const group = studioSourceGroup(po, np);
+      return { ...np, audience: group.audience, fit: group.fit, line: group.line, season: group.season };
+    });
     // Overlay the SEO drafts saved at advance so the admin edits persist.
     if (canManagePurchases(req) && Array.isArray(po.seoDraft)) {
       (preview.newProducts || []).forEach(np => {
