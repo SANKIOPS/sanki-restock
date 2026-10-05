@@ -116,7 +116,7 @@ const SEED = {
   products: { // product type → numeric code
     'Shirt': 1, 'T-Shirt': 2, 'T-Shirt Hood': 21, 'Jeans': 10, 'Trouser': 11, 'Lower': 12,
     'Shorts': 13, 'Jogger': 14, 'Coord Set': 15, 'Jorts': 16, 'Sando': 17,
-    'Bag': 18, 'Denim Joggers': 19, 'Top': 20
+    'Bag': 18, 'Denim Joggers': 19, 'Top': 20, 'Perfumes': 22
   },
   colours: { // colour → numeric code
     'Black': 1, 'Blue': 2, 'Brown': 3, 'Cream': 4, 'Green': 5, 'Grey': 6,
@@ -1351,6 +1351,7 @@ function localInvoiceBillNo(text) {
 }
 function localInvoiceProduct(line, products) {
   const rules = [
+    ['Perfumes', /\bperfumes?\b|\bcologne\b|\beau\s+de\s+(?:parfum|toilette)\b|香水/i],
     ['Denim Joggers', /denim\s*jogger|牛仔束脚/i], ['Coord Set', /coord|co-ord|套装/i],
     ['T-Shirt Hood', /\bt[\s-]?shirt\s*hood(?:ed)?\b|\bhooded\s*(?:t[\s-]?shirt|tee)\b|连帽\s*(?:T恤|短袖)/i],
     ['T-Shirt', /t[\s-]?shirt|tee\b|polo|T恤|短袖/i], ['Shirt', /\bshirt\b|衬衫/i],
