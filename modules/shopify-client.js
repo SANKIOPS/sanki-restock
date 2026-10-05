@@ -38,31 +38,33 @@ class ShopifyClient {
 
   async request(url, options = {}) {
     const target = this._validateUrl(url);
+    const { maxRetries: requestedRetries, ...fetchOptions } = options;
+    const retries = requestedRetries == null ? this.maxRetries : Math.max(0, Math.min(this.maxRetries, Number(requestedRetries) || 0));
     return this._schedule(async () => {
       let lastError;
-      for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      for (let attempt = 0; attempt <= retries; attempt++) {
         const spacing = Math.max(0, this.minIntervalMs - (this.now() - this._lastStart));
         if (spacing) await this.sleep(spacing);
         this._lastStart = this.now();
 
         try {
           const response = await this.fetch(target, {
-            ...options,
+            ...fetchOptions,
             headers: {
               'Content-Type': 'application/json',
-              ...(options.headers || {}),
+              ...(fetchOptions.headers || {}),
               'X-Shopify-Access-Token': this.token
             }
           });
           const retryable = response.status === 429 || response.status === 500 || response.status === 502 || response.status === 503 || response.status === 504;
-          if (!retryable || attempt === this.maxRetries) return response;
+          if (!retryable || attempt === retries) return response;
 
           const fromHeader = parseRetryAfter(response.headers && response.headers.get('Retry-After'));
           const backoff = fromHeader == null ? Math.min(1000 * (2 ** attempt), 10000) : fromHeader;
           await this.sleep(backoff + Math.floor(Math.random() * 200));
         } catch (error) {
           lastError = error;
-          if (attempt === this.maxRetries) throw error;
+          if (attempt === retries) throw error;
           await this.sleep(Math.min(1000 * (2 ** attempt), 10000));
         }
       }

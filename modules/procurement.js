@@ -44,6 +44,7 @@ const tesseractChinese = require('@tesseract.js-data/chi_sim');
 const { shopifyClient } = require('./shopify-client');
 const { purchasePaymentStatus } = require('./purchase-payment-status');
 const { invoiceAmounts, allocateAmount, finalizedByPo } = require('./lg-invoices');
+const { buildRecoveryPlan, publicRecoveryPlan } = require('./procurement-shopify-recovery');
 
 const router = express.Router();
 
@@ -893,10 +894,10 @@ async function computePreview(store, body) {
 }
 
 // ── Shopify writes ───────────────────────────────────────────────
-async function shopifyPost(pathUrl, payload) {
+async function shopifyPost(pathUrl, payload, options = {}) {
   const r = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/${pathUrl}`, {
     method: 'POST',
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload), ...options
   });
   const text = await r.text();
   let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
@@ -904,7 +905,7 @@ async function shopifyPost(pathUrl, payload) {
   return json;
 }
 
-async function createDraftProduct(np, warehouseLocationId) {
+async function createDraftProduct(np, warehouseLocationId, recoveryOptions = {}) {
   const imgs = Array.isArray(np.images) ? np.images : [];
   if (!imgs.length) throw new Error('No readable approved listing photos were supplied. Shopify product creation was cancelled.');
   const attachments = imgs.map(im => {
@@ -949,8 +950,10 @@ async function createDraftProduct(np, warehouseLocationId) {
   // Attach the approved AI images (base64) so the listing is born with photos.
   // Shopify can't fetch our private URLs, so we upload each as an attachment.
   payload.product.images = attachments;
-  const created = await shopifyPost('products.json', payload).then(d => d.product);
+  const created = await shopifyPost('products.json', payload, recoveryOptions.noCreateRetries ? {maxRetries:0} : {}).then(d => d.product);
   const uploadedCount = Array.isArray(created.images) ? created.images.length : 0;
+  if (recoveryOptions.onCreated) recoveryOptions.onCreated({productId:String(created.id), handle:created.handle,
+    title:created.title, imagesUploaded:uploadedCount, variants:[]});
   if (uploadedCount < attachments.length) throw new Error('Shopify created the product but confirmed only ' + uploadedCount + ' of ' + attachments.length + ' listing photos. Reconcile this product before continuing.');
 
   // Stock each variant at the warehouse location with its received qty.
@@ -1072,6 +1075,7 @@ function collectReferencedPhotos(s) {
     Object.values(po.aiImages || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
     Object.values(po.qaRejected || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
     (po.imageRejectionHistory || []).forEach(x => add(x && x.url));
+    (po.newProducts || []).forEach(product => (product.images || []).forEach(image => add(image && image.url)));
     Object.values(po.backRefs || {}).forEach(add);
     (po.lines || []).forEach(l => { add(l && l.photoUrl); add(l && l.rawPhotoUrl); });
   });
@@ -3238,6 +3242,103 @@ router.post('/api/procurement/pos/:id/repair-shopify-images', async (req, res) =
     saveStore(s); _catalogue = null;
     res.json({ success: true, repaired, alreadyHadPhotos, unavailable });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// This catalogue is always fresh and retains duplicate SKU matches instead of
+// silently choosing one product. It is used only by deleted-draft recovery.
+async function recoveryCatalogue() {
+  const catalogue = {};
+  let url = `https://${SHOPIFY_STORE}/admin/api/${API}/products.json?limit=250&fields=id,status,variants`;
+  while (url) {
+    const response = await shopifyClient.request(url);
+    if (!response.ok) throw new Error('Shopify could not check recovery SKUs: HTTP ' + response.status);
+    const body = await response.json();
+    for (const product of body.products || []) for (const variant of product.variants || []) {
+      const sku = String(variant.sku || '').trim().toUpperCase();
+      if (!sku) continue;
+      (catalogue[sku] || (catalogue[sku] = [])).push({productId: String(product.id), status: product.status,
+        variantId: String(variant.id), inventoryItemId: String(variant.inventory_item_id || '')});
+    }
+    const next = (response.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/);
+    url = next ? next[1] : null;
+  }
+  return catalogue;
+}
+async function recoveryPlan(s, po, inventoryMode, includeRestocks = false) {
+  return buildRecoveryPlan(po, await recoveryCatalogue(), {groupKey, sizes: s.sizes || {}, readPhoto: readStoredPhoto, inventoryMode, includeRestocks});
+}
+const activeDraftRecoveries = new Set();
+function persistDraftRecovery(poId, run, link) {
+  const latest = loadStore(), po = latest.pos[poId];
+  if (!po || po.status !== 'posted') throw new Error('The posted purchase changed during recovery.');
+  const history = po.shopifyDraftRecoveryHistory || (po.shopifyDraftRecoveryHistory = []);
+  const index = history.findIndex(item => item.id === run.id);
+  if (index < 0) history.push(JSON.parse(JSON.stringify(run))); else history[index] = JSON.parse(JSON.stringify(run));
+  if (link) {
+    po.shopifyRecoveryLinks = po.shopifyRecoveryLinks || {};
+    po.shopifyRecoveryLinks[link.groupKey] = {productId:link.productId, at:run.at, recoveryId:run.id};
+  }
+  saveStore(latest);
+}
+router.get('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+    const s = loadStore(), po = s.pos[req.params.id];
+    if (!po) return res.status(404).json({success:false,error:'PO not found.'});
+    const plan = await recoveryPlan(s, po, req.query.inventoryMode || 'zero', req.query.includeRestocks === 'true');
+    res.json({success:true, plan:publicRecoveryPlan(plan), history:po.shopifyDraftRecoveryHistory || []});
+  } catch (error) { res.status(409).json({success:false,error:error.message}); }
+});
+router.post('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
+  const id = req.params.id;
+  let ownsLock = false, run;
+  try {
+    if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+    if (activeDraftRecoveries.has(id)) return res.status(409).json({success:false,error:'Recovery is already running for this purchase.'});
+    activeDraftRecoveries.add(id); ownsLock = true;
+    const s = loadStore(), po = s.pos[id], b = req.body || {};
+    if (!po) return res.status(404).json({success:false,error:'PO not found.'});
+    if (b.approve !== true || !b.fingerprint) return res.status(400).json({success:false,error:'Review the recovery preview before recreating drafts.'});
+    const plan = await recoveryPlan(s, po, b.inventoryMode, b.includeRestocks === true);
+    if (plan.fingerprint !== b.fingerprint) return res.status(409).json({success:false,error:'The saved receipt, photos or Shopify products changed. Refresh the recovery preview; no products were created.'});
+    const pending = plan.products.filter(product => product.status === 'ready');
+    const warehouse = String(po.warehouseLocationId || s.settings.warehouseLocationId || '');
+    if (!warehouse) return res.status(409).json({success:false,error:'The original warehouse location is missing. No products were created.'});
+    if (!pending.length) return res.json({success:true,created:[],plan:publicRecoveryPlan(plan)});
+    run = {id:crypto.randomUUID(), at:new Date().toISOString(), by:(req.user || {}).username || 'system',
+      inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, status:'running', created:[], errors:[], skippedRestocks:plan.excludedRestocks};
+    persistDraftRecovery(id, run);
+    for (const product of pending) {
+      // Re-read Shopify immediately before each create. Never repeat a stock
+      // adjustment or create a product after an uncertain partial response.
+      const catalogue = await recoveryCatalogue();
+      if (product.skus.some(sku => (catalogue[sku] || []).length)) throw new Error('Shopify now contains SKU(s) for ' + product.label + '. Refresh the preview.');
+      const latest = loadStore(), current = buildRecoveryPlan(latest.pos[id], catalogue,
+        {groupKey, sizes:latest.sizes || {}, readPhoto:readStoredPhoto, inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks}).products.find(candidate => candidate.key === product.key);
+      if (JSON.stringify(current) !== JSON.stringify(product)) throw new Error('The saved listing or photos changed for ' + product.label + '. Refresh the preview.');
+      run.currentGroup = product.key; persistDraftRecovery(id, run);
+      const result = await createDraftProduct({...product, images:product.images, seo:{...product.seo,
+        tags:Array.isArray(product.seo.tags) ? product.seo.tags : []}}, warehouse, {noCreateRetries:true,
+        onCreated:created => {run.created.push({...created, groupKey:product.key}); persistDraftRecovery(id,run,{...created,groupKey:product.key});}});
+      Object.assign(run.created[run.created.length - 1], result);
+      delete run.currentGroup; persistDraftRecovery(id, run); _catalogue = null;
+      const stockError = result.variants.find(variant => variant.stockError);
+      if (stockError) throw new Error('Draft created, but stock setup needs reconciliation for ' + stockError.sku + ': ' + stockError.stockError);
+      const verified = await recoveryCatalogue();
+      if (!product.skus.every(sku => (verified[sku] || []).length === 1 && verified[sku][0].productId === result.productId && verified[sku][0].status === 'draft'))
+        throw new Error('Shopify did not confirm the complete recreated draft for ' + product.label + '. Inspect Shopify before retrying.');
+    }
+    run.status = 'complete'; run.finishedAt = new Date().toISOString(); persistDraftRecovery(id, run);
+    res.json({success:true,created:run.created,plan:publicRecoveryPlan(plan)});
+  } catch (error) {
+    if (run) {
+      // Reload rather than overwriting another purchase's intervening changes.
+      const latest = loadStore(), po = latest.pos[id];
+      const saved = po && (po.shopifyDraftRecoveryHistory || []).find(item => item.id === run.id);
+      if (saved) { saved.status = 'needs-reconciliation'; saved.errors.push(error.message); saveStore(latest); }
+    }
+    res.status(409).json({success:false,error:error.message,created:run && run.created || []});
+  } finally { if (ownsLock) activeDraftRecoveries.delete(id); }
 });
 
 router.get('/api/procurement/pos', (req, res) => {
