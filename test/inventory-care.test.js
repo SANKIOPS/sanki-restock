@@ -92,6 +92,18 @@ test('inventory care permissions match inventory roles; stylists, sales and acco
   for(const role of ['inventory','warehouse','owner','admin'])assert.equal(apiAllowedForUser({role},'/api/inventory-care/batches','POST'),true);
   for(const role of ['sales','accounting','stocksearch','claimant'])assert.equal(apiAllowedForUser({role},'/api/inventory-care/batches','POST'),false);
 });
+
+test('Tushar can confirm his own and other staff cleaning requests, inspect returns and manage miscellaneous stock',async()=>{
+ const tushar={username:'tushar',roles:['inventory','procurement','warehouse','stocksearch']};
+ for(const submitter of [staff,tushar]){
+  const s=care.empty(),l=live(),op=makeOpen(s,body(),submitter,l);
+  assert.equal(registerData(s,l,tushar).canManage,true);assert.equal(registerData(s,l,staff).canManage,false);
+  await confirm(s,op,tushar,{snapshot:async()=>l,save:()=>{},graphql:async()=>({inventoryMoveQuantities:{userErrors:[],inventoryAdjustmentGroup:{createdAt:'now'}}})});
+  assert.equal(op.status,'confirmed');assert.equal(op.requestedBy,submitter.username);assert.equal(op.confirmedBy,'tushar');
+  const line=s.batches[0].lines[0];
+  const release=makeAction(s,s.batches[0].id,{requestId:crypto.randomUUID(),action:'release',inspected:true,note:'Inspected clean',lines:[{lineId:line.id,from:'cleaning',quantity:10}]},tushar);assert.equal(release.requestedBy,'tushar');
+ }
+});
 test('snapshot paginates item and location lists and never hides an incomplete quantity',async()=>{
   const queries=[];const item={id:'gid://shopify/InventoryItem/10',sku:'SA1',tracked:true,variant:{id:'v',title:'FS',inventoryPolicy:'DENY',product:{handle:'tee',title:'Tee'}},inventoryLevels:{nodes:[],pageInfo:{hasNextPage:true,endCursor:'level-1'}}};
   const level={location:{id:location,name:'Display'},quantities:['available','on_hand','committed','quality_control','damaged','reserved','safety_stock'].map(name=>({name,quantity:name==='available'||name==='on_hand'?1:0}))};

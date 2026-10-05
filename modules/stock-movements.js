@@ -12,7 +12,9 @@ function fail(message, status = 409) { const e = new Error(message); e.status = 
 function canApprove(user) {
   const roles = user?.roles || [user?.role];
   const managers = (process.env.STOCK_MOVEMENT_APPROVERS || '').split(',').map(x => x.trim()).filter(Boolean);
-  return roles.some(r => ['owner', 'admin'].includes(r)) || managers.includes(user?.username);
+  // Tushar runs inventory; this grant stays scoped to his inventory login.
+  const inventoryLead = user?.username === 'tushar' && roles.some(r => ['inventory', 'warehouse'].includes(r));
+  return inventoryLead || roles.some(r => ['owner', 'admin'].includes(r)) || managers.includes(user?.username);
 }
 function empty() { return { version: 1, baseline: null, positions: [], movements: [] }; }
 function load(file = storePath) {
@@ -149,10 +151,14 @@ async function review(s, id, body, user, persist = save, send = inventory.graphq
   if (!canApprove(user)) fail('Only the owner or an assigned stock manager can review moves.', 403);
   const m = s.movements.find(m => m.id === id);
   if (!m) fail('Movement not found.', 404);
-  if (m.submittedBy === user.username) fail('A different manager must review your move.', 403);
-  if (!['approve', 'correction', 'resolve'].includes(body.action)) fail('Choose approval or physical correction.', 400);
+  if (!['approve', 'cancel', 'correction', 'resolve'].includes(body.action)) fail('Choose approval, cancellation or physical correction.', 400);
   if (['approved','cancelled'].includes(m.status)) return m;
-  if (body.action === 'resolve') {
+  if (body.action === 'cancel') {
+    if (m.mode !== 'live' || m.status !== 'pending' || m.syncInput || m.firstAttemptAt) fail('Only an awaiting-approval request with no Shopify attempt can be cancelled.');
+    const reason = String(body.reason || '').trim();
+    if (!reason || reason.length > 500) fail('Record the reason for cancellation.', 400);
+    m.status='cancelled';m.cancellationReason=reason;m.cancelledBy=user.username;m.cancelledAt=new Date().toISOString();persist(s);
+  } else if (body.action === 'resolve') {
     if (m.mode !== 'live' || m.status !== 'correction_required' || (m.syncInput && !m.syncRejected)) fail('This movement cannot be resolved before confirming its Shopify result.');
     const reason=String(body.reason || '').trim();
     if (!reason || reason.length>500 || body.physicalCorrected !== true) fail('Verify the pieces returned to the source rack and record the correction.',400);
@@ -166,7 +172,7 @@ async function review(s, id, body, user, persist = save, send = inventory.graphq
     if (m.status === 'correction_required') fail('This move requires a physical correction, not approval.');
     if (care.blockedSku(care.load(),m.sku)) fail('Confirm the pending dry cleaning Shopify result for this SKU first.');
     if (s.movements.some(x => x.sku === m.sku && x.id !== m.id && outstanding(x) && s.movements.indexOf(x) < s.movements.indexOf(m))) fail('Review earlier moves for this SKU first.');
-    m.status = 'sync_pending'; m.reviewedBy = user.username; persist(s);
+    m.status = 'sync_pending'; m.reviewedBy = user.username; m.reviewedAt = new Date().toISOString(); persist(s);
     try { await sync(s,m,persist,send); m.status='approved';m.approvedAt=new Date().toISOString();delete m.syncError;persist(s);inventory.invalidate(); }
     catch(e) { m.syncError=e.message;persist(s);throw e; }
   }
