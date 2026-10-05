@@ -14,3 +14,41 @@ test('unassigned rack is permitted, correction-required SKU is blocked',()=>{con
 test('warehouse users cannot approve; only owner/admin or explicitly assigned managers',()=>{assert.equal(canApprove({role:'warehouse',username:'staff'}),false);assert.equal(canApprove({role:'inventory',username:'staff'}),false);assert.equal(canApprove({role:'admin'}),true);assert.equal(canApprove({roles:['owner']}),true);});
 test('atomic store survives reload; corrupt data fails closed',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'sanki-move-test-'));const file=path.join(dir,'moves.json');assert.equal(ready(load(file)),false);save(baseline(),file);assert.equal(load(file).positions[0].quantity,3);fs.writeFileSync(file,'broken');assert.throws(()=>load(file));fs.rmSync(dir,{recursive:true});});
 test('unreconciled form lists counted racks by location without enabling moves',()=>{const s={version:1,baseline:null,positions:[],movements:[]};const racks=rackChoices(s);assert.equal(ready(s),false);assert.ok(racks.Display.includes('Accesorries'));assert.ok(racks.Display.includes('T1'));assert.ok(racks.Warehouse.includes('5A'));assert.ok(racks.Warehouse.includes('14C'));assert.equal(racks.Warehouse.includes('T1'),false);assert.throws(()=>submit(s,body(),{username:'staff'}),/baseline/);assert.deepEqual(rackChoices(baseline()),baseline().baseline.racks);});
+
+const {submitLive,livePositions,liveReady,review}=require('../modules/stock-movements');
+function liveState(){return {mapping:{Display:'gid://shopify/Location/1',Warehouse:'gid://shopify/Location/2'},items:[{id:'gid://shopify/InventoryItem/10',sku:'SA3210J515L',tracked:true,product:{title:'Tee'},levels:[{locationId:'gid://shopify/Location/1',available:1,on_hand:1},{locationId:'gid://shopify/Location/2',available:0,on_hand:0}]}]};}
+function liveStore(){return {version:1,baseline:null,positions:[],movements:[]};}
+function liveBody(){return {requestId:'12345678-1234-4321-8888-123456789012',sku:'SA3210J515L',quantity:1,from:{location:'Display',rack:'T1'},to:{location:'Warehouse',rack:'5B'},physicalConfirmed:true};}
+const mover={username:'staff',role:'warehouse'},manager={username:'reviewer',role:'admin'};
+test('a new movement register can submit Display T1 to Warehouse 5B from live stock without inventing a reconciled baseline',()=>{
+ const s=liveStore(),l=liveState();assert.equal(liveReady(l),true);const m=submitLive(s,liveBody(),mover,l);assert.equal(m.status,'pending');assert.equal(s.baseline,null);assert.equal(s.positions.length,0);assert.equal(l.items[0].levels[0].available,1);assert.equal(livePositions(s,l)[0].quantity,0);assert.equal(livePositions(s,l)[1].quantity,0);
+ assert.equal(submitLive(s,liveBody(),mover,l).id,m.id);assert.equal(s.movements.length,1);assert.throws(()=>submitLive(s,{...liveBody(),requestId:'another-request-id-1234'},mover,l),/existing movement/);
+});
+test('live movement rejects missing confirmation, excess pieces, unknown racks, duplicate SKU and missing location mappings',()=>{
+ for(const changes of [{physicalConfirmed:false},{quantity:2},{from:{location:'Display',rack:'unknown'}}])assert.throws(()=>submitLive(liveStore(),{...liveBody(),...changes},mover,liveState()));
+ const l=liveState();l.items.push({...l.items[0]});assert.throws(()=>submitLive(liveStore(),liveBody(),mover,l),/one tracked/);l.items.pop();l.mapping.Warehouse=l.mapping.Display;assert.equal(liveReady(l),false);assert.throws(()=>submitLive(liveStore(),liveBody(),mover,l),/different Display/);
+});
+test('approval transfers 1 to 0 using exact persisted CAS, retains total and cannot double transfer',async()=>{
+ const s=liveStore(),l=liveState(),m=submitLive(s,liveBody(),mover,l);let writes=0,persistedInput;
+ const send=async(q,v)=>{if(q.startsWith('query'))return {inventoryItem:{source:{quantities:[{name:'available',quantity:1}]},destination:{quantities:[{name:'available',quantity:0}]}}};writes++;assert.deepEqual(persistedInput,v.input);assert.equal(v.key,m.id);const quantities=v.input.quantities;assert.deepEqual(quantities.map(x=>[x.changeFromQuantity,x.quantity]),[[1,0],[0,1]]);assert.equal(quantities.reduce((n,x)=>n+x.quantity,0),1);return {inventorySetQuantities:{inventoryAdjustmentGroup:{createdAt:'now'},userErrors:[]}};};
+ const persist=()=>{persistedInput=structuredClone(m.syncInput);};
+ await assert.rejects(review(s,m.id,{action:'approve'},mover,persist,send),/manager/);await assert.rejects(review(s,m.id,{action:'approve'},{username:'staff',role:'admin'},persist,send),/different manager/);
+ await review(s,m.id,{action:'approve'},manager,persist,send);assert.equal(m.status,'approved');await review(s,m.id,{action:'approve'},manager,persist,send);assert.equal(writes,1);
+});
+test('uncertain transfer retries the same key and quantities and cannot be physically cancelled',async()=>{
+ const s=liveStore(),m=submitLive(s,liveBody(),mover,liveState());const calls=[];
+ const send=async(q,v)=>{if(q.startsWith('query'))return {inventoryItem:{source:{quantities:[{name:'available',quantity:1}]},destination:{quantities:[{name:'available',quantity:0}]}}};calls.push(structuredClone(v));throw Error('network interrupted');};
+ await assert.rejects(review(s,m.id,{action:'approve'},manager,()=>{},send),/interrupted/);assert.equal(m.status,'sync_pending');await assert.rejects(review(s,m.id,{action:'correction',reason:'return'},manager,()=>{},send),/already been attempted/);
+ await review(s,m.id,{action:'approve'},manager,()=>{},async(q,v)=>{calls.push(structuredClone(v));return {inventorySetQuantities:{inventoryAdjustmentGroup:{createdAt:'now'},userErrors:[]}};});assert.deepEqual(calls[0],calls[1]);
+});
+test('failed CAS can be corrected and resolved without altering Shopify or leaving a stale reservation',async()=>{
+ const s=liveStore(),l=liveState(),m=submitLive(s,liveBody(),mover,l);
+ const send=async(q)=>q.startsWith('query')?{inventoryItem:{source:{quantities:[{name:'available',quantity:1}]},destination:{quantities:[{name:'available',quantity:0}]}}}:{inventorySetQuantities:{userErrors:[{code:'CHANGE_FROM_QUANTITY_STALE',message:'stale'}]}};
+ await assert.rejects(review(s,m.id,{action:'approve'},manager,()=>{},send),/not applied/);assert.equal(m.syncRejected,true);
+ await review(s,m.id,{action:'correction',reason:'Return physically'},manager,()=>{},send);
+ await assert.rejects(review(s,m.id,{action:'resolve',reason:'Returned'},manager,()=>{},send),/Verify/);
+ await review(s,m.id,{action:'resolve',reason:'Verified returned to T1',physicalCorrected:true},manager,()=>{},send);assert.equal(m.status,'cancelled');assert.equal(livePositions(s,l)[0].quantity,1);
+});
+test('same-location rack move records approval without altering Shopify quantity',async()=>{
+ const s=liveStore(),m=submitLive(s,{...liveBody(),to:{location:'Display',rack:'1'}},mover,liveState());await review(s,m.id,{action:'approve'},manager,()=>{},async()=>{throw Error('Must not change Shopify for rack-only move');});assert.equal(m.status,'approved');
+});
