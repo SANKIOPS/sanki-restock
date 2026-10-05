@@ -1813,6 +1813,38 @@
         (!errors.length?'<button type="button" class="btn" id="resumePostingBtn" style="margin-top:10px">Check Shopify &amp; post only missing products</button><span id="resumePostingStatus" class="muted" style="margin-left:8px"></span>':'')+
         '</div>';
     }
+    async function previewShopifyRecovery(poId){
+      var host=el('shopifyRecoveryPreview'),button=el('previewShopifyRecoveryBtn'),mode=el('shopifyRecoveryInventory').value,includeRestocks=el('shopifyRecoveryRestocks').checked;
+      button.disabled=true;host.textContent='Checking current Shopify SKUs and saved listing files…';
+      try{
+        var response=await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/shopify-recovery?inventoryMode='+encodeURIComponent(mode)+'&includeRestocks='+includeRestocks),d=await readJson(response);
+        if(!d.success)throw new Error(d.error||'Could not prepare recovery.');
+        var plan=d.plan,ready=plan.products.filter(function(p){return p.status==='ready';}),blocked=plan.products.filter(function(p){return p.status==='blocked';}),existing=plan.products.filter(function(p){return p.status==='existing';});
+        var qty=ready.reduce(function(sum,p){return sum+p.variants.reduce(function(total,v){return total+v.qty;},0);},0);
+        host.innerHTML='<p><b>'+ready.length+' missing product(s) ready</b> · '+existing.length+' already exist · '+blocked.length+' blocked. '+qty+' pieces will be set on the new variants. '+plan.excludedNotReceived+' zero-quantity rows and '+plan.excludedRestocks.length+' restock row(s) are skipped. Deleted restock variants are included when selected.</p>'+
+          '<div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Status / issue</th><th>Saved photos</th><th>Variants to recreate</th></tr></thead><tbody>'+plan.products.map(function(p){
+            return '<tr><td>'+esc(p.label)+'<div class="muted">'+esc(p.title||'')+'</div></td><td>'+esc(p.status)+(p.issues.length?'<div class="warn">'+p.issues.map(esc).join('<br>')+'</div>':'')+'</td><td>'+p.photoCount+(p.photos[0]?'<br><img data-zoom src="'+esc(p.photos[0].url)+'" style="max-height:90px;max-width:90px;object-fit:contain" title="Saved listing photo">':'')+'</td><td>'+p.variants.map(function(v){return esc(v.sku)+' · '+esc(v.size)+' · '+money(v.price)+' · qty '+v.qty;}).join('<br>')+(p.status==='existing'?p.skus.map(esc).join('<br>'):'')+'</td></tr>';
+          }).join('')+'</tbody></table></div>'+
+          '<p class="muted">Products are recreated as Shopify drafts using saved listing text and previously approved photos. No AI requests are made. Existing stock and the posted purchase remain intact.</p>'+
+          (ready.length?'<button type="button" class="btn" id="commitShopifyRecoveryBtn">Recreate '+ready.length+' missing Shopify drafts</button>':'')+'<div id="shopifyRecoveryResult" role="status" style="margin-top:10px"></div>';
+        var prior=(d.history||[]).filter(function(run){return run.status==='needs-reconciliation';});
+        if(prior.length)el('shopifyRecoveryResult').textContent='Earlier recovery needs reconciliation: '+prior.map(function(run){return (run.errors||[]).join('; ');}).join(' | ');
+        var commit=el('commitShopifyRecoveryBtn');if(commit)commit.onclick=async function(){
+          if(!confirm('Recreate '+ready.length+' deleted products as Shopify DRAFTS and set '+qty+' pieces on their new variants? Existing products and existing restock inventory will be preserved. No AI generation or payment is required.'))return;
+          commit.disabled=true;button.disabled=true;el('shopifyRecoveryInventory').disabled=true;el('shopifyRecoveryRestocks').disabled=true;
+          var status=el('shopifyRecoveryResult');status.textContent='Recreating missing drafts. Keep this page open; do not start another recovery.';
+          try{
+            var result=await readJson(await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/shopify-recovery',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approve:true,fingerprint:plan.fingerprint,inventoryMode:mode,includeRestocks:includeRestocks})}));
+            if(!result.success)throw new Error(result.error+((result.created||[]).length?' '+result.created.length+' draft(s) were created; inspect them before retrying.':''));
+            status.textContent='Recovery completed: '+result.created.length+' Shopify draft(s) recreated. '+qty+' pieces set on the new variants. Existing products and existing restock inventory were preserved.';
+            commit.remove();
+          }catch(error){status.textContent=error.message;commit.disabled=true;}
+          finally{button.disabled=false;el('shopifyRecoveryInventory').disabled=false;el('shopifyRecoveryRestocks').disabled=false;}
+        };
+      }catch(error){host.textContent=error.message;}
+      finally{button.disabled=false;}
+    }
+
     function renderPoDetail(po){
       lastReceive=null; currentPo=po; auditDesignOverrides={};
       var posted = po.status==='posted' || po.status==='posting_partial';
@@ -1834,6 +1866,7 @@
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
       h+=postingResultPanel(po);
       if(po.status==='posted'&&me.canManage) h+='<div class="banner" style="margin-top:10px"><button type="button" class="btn ghost" id="repairShopifyImagesBtn">Check &amp; repair missing Shopify photos</button><span id="repairShopifyImagesStatus" class="muted" style="margin-left:8px">Uses saved approved photos only; no AI generation.</span></div>';
+      if(po.status==='posted'&&me.canManage) h+='<details class="po-fold" id="shopifyRecoveryFold"><summary>Recover deleted Shopify drafts <span class="po-fold-summary">Check saved listings and recreate only missing products</span></summary><div class="po-fold-body"><label>Inventory on recreated variants <select id="shopifyRecoveryInventory"><option value="zero">Zero — check current stock before setting inventory</option><option value="received">Restore saved received quantities from this PO</option></select></label> <label><input type="checkbox" id="shopifyRecoveryRestocks"> Include deleted restock variants using saved PO quantities</label> <button type="button" class="btn ghost" id="previewShopifyRecoveryBtn">Check recovery availability</button><div id="shopifyRecoveryPreview" style="margin-top:10px">This check does not write to Shopify. Existing stock and zero-quantity lines are preserved. Select the option to recover deleted restock variants too.</div></div></details>';
       if(!posted) h+='<details class="po-fold" id="costCalculationFold"><summary>Cost calculation <span class="po-fold-summary">Landed cost and freight breakdown</span></summary><div class="po-fold-body">'+purchaseCalculationPanel(po)+'</div></details>';
       h+='<details class="po-fold" id="receivedProductsFold"><summary>Received products &amp; corrections <span class="po-fold-summary">'+(po.lines||[]).length+' rows · photos, quantities, weights and product details</span></summary><div class="po-fold-body">';
       // rates + date-of-receive carried from the advance purchase — editable here before final calc
@@ -1950,10 +1983,13 @@
         repairBtn.disabled=true;var repairStatus=el('repairShopifyImagesStatus');repairStatus.textContent='Checking Shopify products…';
         fetch('/api/procurement/pos/'+encodeURIComponent(po.id)+'/repair-shopify-images',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(readJson).then(function(d){
           if(!d.success)throw new Error(d.error||'Could not repair Shopify photos.');
-          repairBtn.disabled=false;repairStatus.textContent=(d.repaired||[]).length+' product(s) repaired; '+(d.alreadyHadPhotos||[]).length+' already had photos; '+(d.unavailable||[]).length+' need restored or regenerated saved views.';
+          repairBtn.disabled=false;repairStatus.textContent=(d.repaired||[]).length+' product(s) repaired; '+(d.alreadyHadPhotos||[]).length+' already had photos; '+(d.unavailable||[]).length+' could not be repaired. Deleted products need draft recovery; unreadable photos need restoration.';
           if((d.unavailable||[]).length)alert(repairStatus.textContent+'\n\n'+d.unavailable.map(function(x){return x.groupKey+': '+x.reason;}).join('\n'));
         }).catch(function(e){repairBtn.disabled=false;repairStatus.textContent=e.message;alert(e.message);});
       };
+      var recoveryBtn=el('previewShopifyRecoveryBtn');if(recoveryBtn)recoveryBtn.onclick=function(){previewShopifyRecovery(po.id);};
+      var recoveryRestocks=el('shopifyRecoveryRestocks');if(recoveryRestocks)recoveryRestocks.onchange=function(){el('shopifyRecoveryPreview').textContent='Restock choice changed. Check recovery availability again before recreating drafts.';};
+      var recoveryMode=el('shopifyRecoveryInventory');if(recoveryMode)recoveryMode.onchange=function(){el('shopifyRecoveryPreview').textContent='Inventory choice changed. Check recovery availability again before recreating drafts.';};
       el('poDetailHost').scrollIntoView({behavior:'smooth'});
       if(me.canManage && !posted) initStudioFor(po.id);
       if(!posted){
