@@ -3288,6 +3288,21 @@ async function recoveryPlan(s, po, inventoryMode, includeRestocks = false, price
   return buildRecoveryPlan(po, await recoveryCatalogue(), {groupKey, sizes: s.sizes || {}, readPhoto: readStoredPhoto, inventoryMode, includeRestocks, priceMode, calculatePrice:recoveryPriceCalculator(s,po)});
 }
 const activeDraftRecoveries = new Set();
+function recoveryHistory(id) {
+  const s = loadStore(), po = s.pos[id];
+  if (!po) return null;
+  let changed = false;
+  const history = po.shopifyDraftRecoveryHistory || [];
+  if (!activeDraftRecoveries.has(id)) for (const run of history) {
+    if (run.status !== 'running') continue;
+    run.status = 'needs-reconciliation';
+    run.finishedAt = new Date().toISOString();
+    (run.errors || (run.errors = [])).push('Recovery was interrupted by a service restart. Check saved drafts before recovering the remaining products.');
+    changed = true;
+  }
+  if (changed) saveStore(s);
+  return {active:activeDraftRecoveries.has(id), history};
+}
 function persistDraftRecovery(poId, run, link) {
   const latest = loadStore(), po = latest.pos[poId];
   if (!po || po.status !== 'posted') throw new Error('The posted purchase changed during recovery.');
@@ -3303,18 +3318,58 @@ function persistDraftRecovery(poId, run, link) {
 router.get('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+    const progress = recoveryHistory(req.params.id);
     const s = loadStore(), po = s.pos[req.params.id];
     if (!po) return res.status(404).json({success:false,error:'PO not found.'});
     const plan = await recoveryPlan(s, po, req.query.inventoryMode || 'zero', req.query.includeRestocks === 'true', req.query.priceMode || 'saved');
-    res.json({success:true, plan:publicRecoveryPlan(plan), history:po.shopifyDraftRecoveryHistory || []});
+    res.json({success:true, plan:publicRecoveryPlan(plan), ...progress});
   } catch (error) { res.status(409).json({success:false,error:error.message}); }
 });
+// Progress reads never wait for the Shopify catalogue or its request queue.
+router.get('/api/procurement/pos/:id/shopify-recovery/status', (req, res) => {
+  if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
+  const progress = recoveryHistory(req.params.id);
+  if (!progress) return res.status(404).json({success:false,error:'PO not found.'});
+  res.set('Cache-Control', 'no-store').json({success:true,...progress});
+});
+async function executeDraftRecovery(id, plan, warehouse, run) {
+  try {
+    for (const product of plan.products.filter(product => product.status === 'ready')) {
+      run.phase = 'checking-skus'; persistDraftRecovery(id, run);
+      const catalogue = await recoveryCatalogue();
+      if (product.skus.some(sku => (catalogue[sku] || []).length)) throw new Error('Shopify now contains SKU(s) for ' + product.label + '. Refresh the preview.');
+      const latest = loadStore(), current = buildRecoveryPlan(latest.pos[id], catalogue,
+        {groupKey, sizes:latest.sizes || {}, readPhoto:readStoredPhoto, inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, priceMode:plan.priceMode, calculatePrice:recoveryPriceCalculator(latest,latest.pos[id])}).products.find(candidate => candidate.key === product.key);
+      if (JSON.stringify(current) !== JSON.stringify(product)) throw new Error('The saved listing or photos changed for ' + product.label + '. Refresh the preview.');
+      // Keep the uncertain group durable until creation, stock and verification finish.
+      run.currentGroup = product.key; run.phase = 'creating'; persistDraftRecovery(id, run);
+      const result = await createDraftProduct({...product, images:product.images, seo:{...product.seo,
+        tags:Array.isArray(product.seo.tags) ? product.seo.tags : []}}, warehouse, {noCreateRetries:true,
+        onCreated:created => {run.phase = 'setting-stock'; run.created.push({...created, groupKey:product.key}); persistDraftRecovery(id,run,{...created,groupKey:product.key});}});
+      Object.assign(run.created[run.created.length - 1], result);
+      run.phase = 'verifying'; persistDraftRecovery(id, run); _catalogue = null;
+      const stockError = result.variants.find(variant => variant.stockError);
+      if (stockError) throw new Error('Draft created, but stock setup needs reconciliation for ' + stockError.sku + ': ' + stockError.stockError);
+      const verified = await recoveryCatalogue();
+      if (!product.skus.every(sku => (verified[sku] || []).length === 1 && verified[sku][0].productId === result.productId && verified[sku][0].status === 'draft'))
+        throw new Error('Shopify did not confirm the complete recreated draft for ' + product.label + '. Inspect Shopify before retrying.');
+      run.completed.push(product.key); delete run.currentGroup; persistDraftRecovery(id, run);
+    }
+    run.status = 'complete'; run.phase = 'complete'; run.finishedAt = new Date().toISOString(); persistDraftRecovery(id, run);
+    return run.created;
+  } catch (error) {
+    run.status = 'needs-reconciliation'; run.finishedAt = new Date().toISOString(); run.errors.push(error.message);
+    persistDraftRecovery(id, run);
+    throw error;
+  } finally { activeDraftRecoveries.delete(id); }
+}
 router.post('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
   const id = req.params.id;
   let ownsLock = false, run;
   try {
     if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
     if (activeDraftRecoveries.has(id)) return res.status(409).json({success:false,error:'Recovery is already running for this purchase.'});
+    recoveryHistory(id);
     activeDraftRecoveries.add(id); ownsLock = true;
     const s = loadStore(), po = s.pos[id], b = req.body || {};
     if (!po) return res.status(404).json({success:false,error:'PO not found.'});
@@ -3326,37 +3381,17 @@ router.post('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
     if (!warehouse) return res.status(409).json({success:false,error:'The original warehouse location is missing. No products were created.'});
     if (!pending.length) return res.json({success:true,created:[],plan:publicRecoveryPlan(plan)});
     run = {id:crypto.randomUUID(), at:new Date().toISOString(), by:(req.user || {}).username || 'system',
-      inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, priceMode:plan.priceMode, status:'running', created:[], errors:[], skippedRestocks:plan.excludedRestocks};
+      inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, priceMode:plan.priceMode, status:'running', created:[], completed:[], total:pending.length,
+      pieces:pending.reduce((sum,p)=>sum+p.variants.reduce((qty,v)=>qty+v.qty,0),0), errors:[], skippedRestocks:plan.excludedRestocks};
     persistDraftRecovery(id, run);
-    for (const product of pending) {
-      // Re-read Shopify immediately before each create. Never repeat a stock
-      // adjustment or create a product after an uncertain partial response.
-      const catalogue = await recoveryCatalogue();
-      if (product.skus.some(sku => (catalogue[sku] || []).length)) throw new Error('Shopify now contains SKU(s) for ' + product.label + '. Refresh the preview.');
-      const latest = loadStore(), current = buildRecoveryPlan(latest.pos[id], catalogue,
-        {groupKey, sizes:latest.sizes || {}, readPhoto:readStoredPhoto, inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, priceMode:plan.priceMode, calculatePrice:recoveryPriceCalculator(latest,latest.pos[id])}).products.find(candidate => candidate.key === product.key);
-      if (JSON.stringify(current) !== JSON.stringify(product)) throw new Error('The saved listing or photos changed for ' + product.label + '. Refresh the preview.');
-      run.currentGroup = product.key; persistDraftRecovery(id, run);
-      const result = await createDraftProduct({...product, images:product.images, seo:{...product.seo,
-        tags:Array.isArray(product.seo.tags) ? product.seo.tags : []}}, warehouse, {noCreateRetries:true,
-        onCreated:created => {run.created.push({...created, groupKey:product.key}); persistDraftRecovery(id,run,{...created,groupKey:product.key});}});
-      Object.assign(run.created[run.created.length - 1], result);
-      delete run.currentGroup; persistDraftRecovery(id, run); _catalogue = null;
-      const stockError = result.variants.find(variant => variant.stockError);
-      if (stockError) throw new Error('Draft created, but stock setup needs reconciliation for ' + stockError.sku + ': ' + stockError.stockError);
-      const verified = await recoveryCatalogue();
-      if (!product.skus.every(sku => (verified[sku] || []).length === 1 && verified[sku][0].productId === result.productId && verified[sku][0].status === 'draft'))
-        throw new Error('Shopify did not confirm the complete recreated draft for ' + product.label + '. Inspect Shopify before retrying.');
+    const task = executeDraftRecovery(id, plan, warehouse, run);
+    ownsLock = false; // The worker holds the lock until its durable result is saved.
+    if (b.background === true) {
+      void task.catch(error => console.error('[purchase-recovery]', id, run.id, error.message));
+      return res.status(202).json({success:true,runId:run.id,status:'running'});
     }
-    run.status = 'complete'; run.finishedAt = new Date().toISOString(); persistDraftRecovery(id, run);
-    res.json({success:true,created:run.created,plan:publicRecoveryPlan(plan)});
+    res.json({success:true,created:await task,plan:publicRecoveryPlan(plan)});
   } catch (error) {
-    if (run) {
-      // Reload rather than overwriting another purchase's intervening changes.
-      const latest = loadStore(), po = latest.pos[id];
-      const saved = po && (po.shopifyDraftRecoveryHistory || []).find(item => item.id === run.id);
-      if (saved) { saved.status = 'needs-reconciliation'; saved.errors.push(error.message); saveStore(latest); }
-    }
     res.status(409).json({success:false,error:error.message,created:run && run.created || []});
   } finally { if (ownsLock) activeDraftRecoveries.delete(id); }
 });
