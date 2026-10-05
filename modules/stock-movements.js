@@ -136,9 +136,12 @@ function serial(fn) { const next = queue.then(fn); queue = next.catch(() => {});
 const router = express.Router();
 router.get('/api/stock-movements', async (req, res) => {
   try {
+    const initial = load();
+    if (req.query.registerOnly === '1') return res.json({ success:true, registerOnly:true, ready:false, liveMode:!ready(initial), username:req.user.username, canApprove:canApprove(req.user), positions:[], movements:initial.movements.slice(-500).reverse() });
+    const live = ready(initial) ? null : await inventory.snapshot();
+    // A long inventory read must not return an old approval/cancellation state.
     const s = load();
     const register = care.load();
-    const live = ready(s) ? null : await inventory.snapshot();
     const positions = live ? livePositions(s,live) : s.positions.map(p => ({ ...p, quantity: p.quantity - care.reservedAt(register, p.sku, s.baseline?.locations?.[p.location], p.rack) }));
     res.json({ success: true, ready: live ? liveReady(live) : true, liveMode:!!live, at:live?.at, username:req.user.username, canApprove: canApprove(req.user), baseline: s.baseline ? { reconciledAt: s.baseline.reconciledAt, racks: s.baseline.racks } : null, rackOptions: rackChoices(s), rackSource: ready(s) ? 'Approved movement baseline' : countedRackOptions.source, positions, movements: s.movements.slice(-500).reverse() });
   } catch (e) { res.status(e.status || 503).json({ success: false, error: 'Movement data unavailable. Contact the inventory manager.' }); }
