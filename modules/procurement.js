@@ -223,6 +223,7 @@ function reclaimRejectedPhotoStorage(s) {
     for(const images of Object.values(po.aiImages||{}))for(const image of images||[])add(image&&image.url);
     for(const url of Object.values(po.backRefs||{}))add(url);
     for(const line of po.lines||[]){add(line&&line.photoUrl);add(line&&line.rawPhotoUrl);}
+    for(const image of po.imageRejectionHistory||[])add(image&&image.url);
   }
   let removed=0,freed=0;
   for(const po of Object.values(s.pos||{}))for(const rejected of Object.values(po.qaRejected||{})){
@@ -1070,6 +1071,7 @@ function collectReferencedPhotos(s) {
   Object.values(s.pos || {}).forEach(po => {
     Object.values(po.aiImages || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
     Object.values(po.qaRejected || {}).forEach(arr => (arr || []).forEach(x => add(x && x.url)));
+    (po.imageRejectionHistory || []).forEach(x => add(x && x.url));
     Object.values(po.backRefs || {}).forEach(add);
     (po.lines || []).forEach(l => { add(l && l.photoUrl); add(l && l.rawPhotoUrl); });
   });
@@ -2387,6 +2389,7 @@ function restorePo0006SavedSet(po, groups) {
   ];
   po.aiImages = po.aiImages || {};
   const restoredUrls = new Set(saved.map(([, , url]) => url));
+  if((po.imageRejectionHistory||[]).some(image=>restoredUrls.has(image.url)))return false;
   let cleaned = false;
   // A previous over-broad recovery copied A's set onto B/C. Remove only those
   // exact duplicate links; never remove a distinct historical file.
@@ -2421,7 +2424,8 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     const groups = await newGroupsOf(s, po);
     const restoredKnownSet = restorePo0006SavedSet(po, groups);
     const promotedAdvisoryImages = promoteAdvisoryHeldImages(po,groups);
-    if (restoredKnownSet||promotedAdvisoryImages) saveStore(s);
+    const heldUncheckedImages = holdUncheckedImages(po,groups);
+    if (restoredKnownSet||promotedAdvisoryImages||heldUncheckedImages) saveStore(s);
     const byKey = new Map(groups.map(g => [g.key, g]));
     // Return the complete saved calculation as well as the studio groups. The
     // Purchases page uses this read-only response to restore the Shopify post
@@ -2525,7 +2529,25 @@ function canReviewPaidImage(req) {
   return canStartPaidPilot(req);
 }
 function imageCheckAccepted(image) {
-  return !image.qa || ['pass','manual-reviewed'].includes(image.qa.status);
+  if(!image.qa||!['pass','manual-reviewed'].includes(image.qa.status))return false;
+  return image.qa.status==='manual-reviewed'||!['front','back','detail'].includes(image.type)||image.qa.productOnlyVerified===true;
+}
+function holdUncheckedImages(po,groups) {
+  if(isLockedPo(po))return false;
+  let changed=false;
+  for(const group of groups){
+    const images=(po.aiImages||{})[group.key]||[],unchecked=images.filter(image=>image.url&&(!image.qa||image.qa.status==='pass'&&!imageCheckAccepted(image)));
+    if(!unchecked.length)continue;
+    po.qaRejected=po.qaRejected||{};po.qaRejected[group.key]=po.qaRejected[group.key]||[];
+    for(const image of unchecked)po.qaRejected[group.key].push({...image,approved:false,
+      qa:{...(image.qa||{}),status:'needs-review',failed:[],uncertain:['verification'],issues:['This legacy image has no product-only verification. Inspect it against the original before accepting or reject it.']},
+      sourceFingerprint:codexBatch.fingerprint(group,(po.backRefs||{})[group.key]),
+      styling:openaiPilot.normalizeStyling((po.imageStyling||{})[group.key],group),at:new Date().toISOString()});
+    po.aiImages[group.key]=images.filter(image=>!unchecked.includes(image));
+    for(const seo of po.seoDraft||[])if(seo.key===group.key)seo.seoApproved=false;
+    changed=true;
+  }
+  return changed;
 }
 function promoteAdvisoryHeldImages(po,groups) {
   let changed=false;
@@ -2533,7 +2555,7 @@ function promoteAdvisoryHeldImages(po,groups) {
   for(const group of groups||[]){
     const key=group.key,rejected=Array.isArray(po.qaRejected[key])?po.qaRejected[key]:[];
     const latestByType={};
-    for(const candidate of rejected)if(candidate&&candidate.url&&!candidate.supersededBy&&(openaiPilot.canAutoAcceptAdvisoryCheck(candidate.qa)||openaiPilot.canAutoAcceptConfirmedColourCheck(candidate.qa,group.colour)))latestByType[candidate.type]=candidate;
+    for(const candidate of rejected)if(candidate&&candidate.url&&!candidate.supersededBy&&(!['front','back','detail'].includes(candidate.type)||candidate.qa?.productOnlyVerified===true)&&(openaiPilot.canAutoAcceptAdvisoryCheck(candidate.qa)||openaiPilot.canAutoAcceptConfirmedColourCheck(candidate.qa,group.colour)))latestByType[candidate.type]=candidate;
     for(const candidate of Object.values(latestByType)){
       const fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[key]);
       if(candidate.sourceFingerprint!==fingerprint||!readStoredPhoto(candidate.url))continue;
@@ -2557,6 +2579,40 @@ function invalidateDependentSides(images,frontType) {
   const side=images.find(image=>image.type===sideType);
   if(side){side.approved=false;side.qa={...(side.qa||{}),status:'needs-review',issues:['Matching front image changed. Regenerate this three-quarter view.']};}
 }
+// Rejecting a draft is free and never deletes the permanent source or audit file.
+function rejectGeneratedImage(po,{groupKey,type,url,reason,by},at=new Date().toISOString()) {
+  if(!openaiPilot.IMAGE_TYPES.includes(type))throw new Error('Only generated listing views can be rejected.');
+  if((po.lines||[]).some(line=>line.photoUrl===url||line.rawPhotoUrl===url)||Object.values(po.backRefs||{}).includes(url))throw new Error('Original references cannot be rejected.');
+  const images=(po.aiImages||{})[groupKey]||[],held=(po.qaRejected||{})[groupKey]||[];
+  const active=images.find(image=>image.type===type&&image.url===url);
+  const candidate=active||held.find(image=>image.type===type&&image.url===url&&!image.supersededBy);
+  if(!candidate)throw new Error('This image changed. Reopen the PO before rejecting it.');
+  const retired=held.filter(image=>image.type===type&&!image.supersededBy);
+  if(active)retired.push(active);
+  po.imageRejectionHistory=po.imageRejectionHistory||[];
+  for(const image of retired)po.imageRejectionHistory.push({...image,approved:false,groupKey,reason,by,rejectedAt:at});
+  po.qaRejected=po.qaRejected||{};
+  po.qaRejected[groupKey]=held.filter(image=>!retired.includes(image));
+  if(active){
+    po.aiImages[groupKey]=images.filter(image=>image!==active);
+    invalidateDependentSides(po.aiImages[groupKey],type);
+    for(const seo of po.seoDraft||[])if(seo.key===groupKey)seo.seoApproved=false;
+  }
+  return {images:(po.aiImages||{})[groupKey]||[],rejectedImages:po.qaRejected[groupKey]};
+}
+router.post('/api/procurement/pos/:id/reject-image',(req,res)=>{
+  if(!canManagePurchases(req))return res.status(403).json({success:false,error:'Purchases access required.'});
+  const s=loadStore(),po=s.pos[req.params.id],b=req.body||{};
+  if(!po||isLockedPo(po))return res.status(409).json({success:false,error:'Editable PO required.'});
+  if(expireStalePaidAttempts(po))saveStore(s);
+  if(paidPilotInFlight.has(req.params.id)||((po.openaiPilot||{}).attempts||[]).some(item=>item.status==='running'))return res.status(409).json({success:false,error:'Wait for this PO’s generation to finish before rejecting an image.'});
+  const reason=String(b.reason||'').trim();
+  if(!reason||reason.length>500)return res.status(400).json({success:false,error:'Give a rejection reason (1–500 characters).'});
+  try{
+    const result=rejectGeneratedImage(po,{groupKey:String(b.groupKey||''),type:String(b.type||''),url:String(b.url||''),reason,by:String(req.user?.username||req.user?.role||'user')});
+    saveStore(s);res.json({success:true,...result});
+  }catch(e){res.status(409).json({success:false,error:e.message});}
+});
 router.get('/api/procurement/openai-pilot-status', (req,res) => {
   if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
   res.json({success:true,configured:!!process.env.OPENAI_API_KEY,
@@ -2633,13 +2689,13 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const savedImages=((po.aiImages||{})[key]||[]);
     const heldImages=((po.qaRejected||{})[key]||[]).filter(image=>image&&image.url&&!image.supersededBy);
     const requestedRegeneration=(req.body||{}).regenerateTypes;
-    if(requestedRegeneration!==undefined && (!Array.isArray(requestedRegeneration)||!requestedRegeneration.length||requestedRegeneration.length>6||new Set(requestedRegeneration).size!==requestedRegeneration.length||requestedRegeneration.some(type=>!allowedTypes.includes(type)||![...savedImages,...heldImages].some(image=>image.type===type&&image.url)))) {
-      return res.status(400).json({success:false,error:'Select existing, supported image views to regenerate.'});
+    if(requestedRegeneration!==undefined && (!Array.isArray(requestedRegeneration)||!requestedRegeneration.length||requestedRegeneration.length>allowedTypes.length||new Set(requestedRegeneration).size!==requestedRegeneration.length||requestedRegeneration.some(type=>!allowedTypes.includes(type)))) {
+      return res.status(400).json({success:false,error:'Select supported image views to generate or regenerate.'});
     }
     const regenerateTypes=requestedRegeneration||[];
     const sideToFront={ 'model-side':'model-front', 'model-side-female':'female', 'model-side-male':'male' };
-    const invalidTypes=allowedTypes.filter(type=>savedImages.some(x=>x.type===type&&x.url&&x.qa&&!imageCheckAccepted(x)));
-    const neededTypes=allowedTypes.filter(type=>!savedImages.some(x=>x.type===type&&x.url&&(!x.qa||imageCheckAccepted(x))));
+    const invalidTypes=allowedTypes.filter(type=>savedImages.some(x=>x.type===type&&x.url&&!imageCheckAccepted(x)));
+    const neededTypes=allowedTypes.filter(type=>!savedImages.some(x=>x.type===type&&x.url&&imageCheckAccepted(x)));
     const existingSeo=(po.seoDraft||[]).find(x=>x.key===key);
     // A deterministic draft made when corrections were saved is NOT AI-written.
     // Preserve approved manual copy; replace unapproved placeholders with AI copy.
@@ -2825,70 +2881,10 @@ router.post('/api/procurement/pos/:id/use-original-photo', async (req, res) => {
 });
 
 // Generate the AI shots for ONE product group (or specific `types`).
-router.post('/api/procurement/pos/:id/generate-images', async (req, res) => {
-  try {
-    if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-    if (!GEMINI_API_KEY) return res.status(400).json({ success: false, error: 'AI images are not enabled. Set GEMINI_API_KEY in Railway to turn it on.' });
-    const s = loadStore();
-    const po = s.pos[req.params.id];
-    if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
-    if (isLockedPo(po)) return res.status(400).json({ success: false, error: 'Posted or interrupted purchases cannot be edited.' });
-    const b = req.body || {};
-    if (!b.groupKey) return res.status(400).json({ success: false, error: 'groupKey required.' });
-    const groups = await newGroupsOf(s, po);
-    const g = groups.find(x => x.key === b.groupKey);
-    if (!g) return res.status(404).json({ success: false, error: 'Product group not found on this PO.' });
-    const src = readStoredPhoto(g.photoUrl);
-    if (!src) return res.status(400).json({ success: false, error: 'No source photo for this product — add one first.' });
-    const baseB64 = src.buf.toString('base64');
-    // Optional explicit fit/length chosen in the studio (e.g. "oversized",
-    // "three-quarter (3/4)") — the strongest lever for getting the cut right.
-    const fitDesc = String(b.fit || '').trim();
-    const context = ` The product is a ${g.colour} ${g.productType}${g.fit ? ' (' + g.fit + ' fit)' : ''} for ${g.audience}. Match this colour exactly.` +
-      (fitDesc ? ` This garment is a ${fitDesc.toUpperCase()} — render it with exactly that cut and length in every shot; do not change it.` : '') +
-      // Lock the garment's real proportions — Gemini otherwise lengthens 3/4 or
-      // cropped pieces into full-length ones.
-      ` Preserve the garment's EXACT length, hemline, proportions and silhouette exactly as shown in the reference — if it is cropped, three-quarter, calf-length or ankle-length, keep that same length; never lengthen or shorten it.` +
-      // Shopify product-image rules: high-res, clean, centered, no text/watermark/border.
-      // (Model shots get a 4:5 ratio via imageConfig; flat-lays keep their natural white-bg framing.)
-      ` Output a high-resolution image formatted for a Shopify product listing: the subject centered and fully in frame with even margins, sharp focus, plain uncluttered background, no text, logos, watermarks, borders or UI overlays.`;
-    const wantTypes = Array.isArray(b.types) && b.types.length ? b.types : AI_IMAGE_SPECS.map(s2 => s2.type);
-    po.aiImages = po.aiImages || {};
-    const existing = Array.isArray(po.aiImages[g.key]) ? po.aiImages[g.key] : [];
-    const errors = [];
-    // Optional per-product styling for the model shots only (e.g. pair a top with
-    // jeans/trousers). Front/back flat-lays have no model so it's ignored there.
-    const styling = String(b.styling || '').trim();
-    // If the admin uploaded a REAL back-view photo for this group, the "back"
-    // shot is generated from it (accurate) instead of guessed from the front.
-    const backRef = (po.backRefs && po.backRefs[g.key]) ? readStoredPhoto(po.backRefs[g.key]) : null;
-    const backRefB64 = backRef ? backRef.buf.toString('base64') : null;
-    for (const spec of AI_IMAGE_SPECS) {
-      if (wantTypes.indexOf(spec.type) < 0) continue;
-      // Never fabricate a back: the back shot is only produced from a real
-      // uploaded back photo. Without one we simply skip it (no error).
-      if (spec.type === 'back' && !backRefB64) continue;
-      try {
-        const styleAdd = (styling && (spec.type === 'female' || spec.type === 'male'))
-          ? ` Style the model wearing this exact garment ${styling}. Keep any paired clothing understated and choose colours that complement and flatter THIS garment tastefully, so it stays the clear hero of the photo.`
-          : '';
-        const useBackRef = spec.type === 'back' && backRefB64;
-        const promptText = useBackRef
-          ? 'Generate a clean FLAT-LAY / ghost-mannequin photo of the BACK of this exact garment, reproducing the reference image faithfully — same colour, print, graphics, cut and length; do not redesign it. Centered on a pure white background, even studio lighting, no model, no props, no text or watermark, sharp product detail. Do NOT show any inner neck label, brand tag, size tag or care label — the collar/neckline must be clean with no visible tag. Show a SINGLE garment fully in frame; no duplicated copies, no collage. The background must be pure white filling the ENTIRE frame to all four edges — absolutely no black bars, letterboxing, borders or coloured padding.' + context
-          : spec.prompt + styleAdd + context;
-        const out = await geminiGenerateImage(useBackRef ? backRefB64 : baseB64, useBackRef ? backRef.mime : src.mime, promptText, spec.aspect);
-        const saved = savePhotoBuffer(out.buf, extForMime(out.mime));
-        const idx = existing.findIndex(x => x.type === spec.type);
-        const rec = { type: spec.type, label: spec.label, url: saved.url, approved: false };
-        if (idx >= 0) existing[idx] = rec; else existing.push(rec);
-      } catch (e) { errors.push({ type: spec.type, error: e.message }); }
-    }
-    // keep a stable model→front→back→studio order
-    existing.sort((a, c) => AI_IMAGE_SPECS.findIndex(x => x.type === a.type) - AI_IMAGE_SPECS.findIndex(x => x.type === c.type));
-    po.aiImages[g.key] = existing;
-    saveStore(s);
-    res.json({ success: true, groupKey: g.key, images: existing, errors });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+// Retire the unchecked legacy path; stale clients must reload before any charge.
+router.post('/api/procurement/pos/:id/generate-images', (req,res) => {
+  if(!canManagePurchases(req))return res.status(403).json({success:false,error:'Purchases access required.'});
+  res.status(409).json({success:false,error:'This image-generation route is retired. Refresh Purchases and use the visually checked Generate image (paid) action. No paid call was made.'});
 });
 
 // Persist image approve/unapprove (and manual replacements) from the studio.
@@ -3595,4 +3591,4 @@ router.get('/api/procurement/summary', (req, res) => {
   res.json({ success: true, totals, categories, vendors, generatedAt: new Date().toISOString() });
 });
 
-module.exports = { router, genSeo, normalizeSeoStyle, canonicalSeoNaming, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, duplicateBillPo, expandArticleWeights, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };
+module.exports = { router, rejectGeneratedImage, imageCheckAccepted, genSeo, normalizeSeoStyle, canonicalSeoNaming, buildSku, rebuildLineSku, landedCost, parseSerial, nextSerial, canManagePurchases, canStartPaidPilot, canReviewPaidImage, parseLocalInvoiceText, duplicateBillPo, expandArticleWeights, retireAudienceModelImages, reconcileStudioKeysAfterLineEdit };
