@@ -3023,28 +3023,56 @@ router.post('/api/procurement/pos/:id/seo', async (req, res) => {
  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-async function approveProductDrafts(s, po, key) {
-  const group = (await newGroupsOf(s, po)).find(item => item.key === key);
-  if (!group) throw new Error('Product group not found.');
+async function productApprovalContext(id) {
+  const initial = loadStore(), before = initial.pos[id];
+  if (!before || isLockedPo(before)) throw new Error('An editable purchase is required.');
+  const snapshot = JSON.stringify(before);
+  const preview = await computePreview(initial, { lines: (before.lines || []).filter(line => num(line.qty) > 0), vendor: before.vendor, exRate: before.exRate, freightPerGram: before.freightPerGram, origin: before.origin, transportTotal: before.transportTotal });
+  // Catalogue reads can yield to styling, generation or receipt saves. Never
+  // overwrite a newer purchase with the snapshot that began approval.
+  const s = loadStore(), po = s.pos[id];
+  if (!po || JSON.stringify(po) !== snapshot) throw new Error('The purchase changed while checking approval. Reopen it and try again.');
+  if (paidPilotInFlight.has(id) || ((po.openaiPilot || {}).attempts || []).some(attempt => attempt.status === 'running')) throw new Error('Wait for this PO’s image generation to finish before approving.');
+  return { s, po, products: preview.newProducts || [] };
+}
+function productApprovalDrafts(po, product) {
+  const key = product.key, group = studioSourceGroup(po, product);
+  if ((product.variantConflicts || []).length) throw new Error('Resolve the duplicate colour and size rows before approving.');
   const required = openaiPilot.pilotTypes(group, !!(po.backRefs || {})[key]);
   if (!required.length) throw new Error('Select Women, Men or Unisex before approving this product.');
   const images = ((po.aiImages || {})[key] || []);
-  const missing = required.filter(type => !images.some(image => image.type === type && image.url && readStoredPhoto(image.url) && imageCheckAccepted(image)));
-  if (missing.length) throw new Error('Review or generate the missing product views first: ' + missing.join(', ') + '.');
+  const fingerprint = codexBatch.fingerprint(group, (po.backRefs || {})[key]);
+  const checked = images.filter(image => {
+    refreshImageStylingCheck(image, (po.imageStyling || {})[key], group);
+    return required.includes(image.type) && image.url && image.url !== group.photoUrl && readStoredPhoto(image.url) && imageCheckAccepted(image) && (!image.sourceFingerprint || image.sourceFingerprint === fingerprint);
+  });
+  const missing = required.filter(type => !checked.some(image => image.type === type));
+  if (missing.length) {
+    const stylingChanged = images.filter(image => missing.includes(image.type) && image.qa?.stylingChanged).map(image => image.type);
+    if (stylingChanged.length) throw new Error('Saved image styling differs for ' + stylingChanged.join(', ') + '. Restore image styling (free) or regenerate these views before approving.');
+    const sourceChanged = images.filter(image => missing.includes(image.type) && image.sourceFingerprint && image.sourceFingerprint !== fingerprint).map(image => image.type);
+    if (sourceChanged.length) throw new Error('Saved images no longer match the original product for ' + sourceChanged.join(', ') + '. Review the changed product reference before approving.');
+    throw new Error('Review or generate the missing product views first: ' + missing.join(', ') + '.');
+  }
   const draft = (po.seoDraft || []).find(item => item.key === key);
   if (!draft || !draft.seo || seoNeedsReview(draft.seo) || openaiPilot.seoCopyNeedsReview(draft.seo, group)) throw new Error('Generate and review the SEO names first.');
-  images.forEach(image => { if (required.includes(image.type) && imageCheckAccepted(image)) image.approved = true; });
-  draft.seoApproved = true;
-  return { images, seo: draft };
+  return { images, seo: draft, checked, required };
+}
+function applyProductApproval(drafts) {
+  drafts.images.forEach(image => { if (drafts.required.includes(image.type)) image.approved = drafts.checked.includes(image); });
+  drafts.seo.seoApproved = true;
+  return { images: drafts.images, seo: drafts.seo };
 }
 
 router.post('/api/procurement/pos/:id/approve-product', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-    const s = loadStore(), po = s.pos[req.params.id], key = String((req.body || {}).groupKey || '');
-    if (!po || isLockedPo(po)) return res.status(409).json({ success: false, error: 'An editable purchase is required.' });
+    const key = String((req.body || {}).groupKey || '');
     if (!key) return res.status(400).json({ success: false, error: 'Choose a product first.' });
-    const approved = await approveProductDrafts(s, po, key);
+    const { s, po, products } = await productApprovalContext(req.params.id);
+    const product = products.find(item => item.key === key);
+    if (!product) throw new Error('Product group not found.');
+    const approved = applyProductApproval(productApprovalDrafts(po, product));
     saveStore(s);
     res.json({ success: true, ...approved });
   } catch (e) { res.status(409).json({ success: false, error: e.message }); }
@@ -3053,17 +3081,32 @@ router.post('/api/procurement/pos/:id/approve-product', async (req, res) => {
 router.post('/api/procurement/pos/:id/approve-po', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-    const s = loadStore(), po = s.pos[req.params.id];
-    if (!po || isLockedPo(po)) return res.status(409).json({ success: false, error: 'An editable purchase is required.' });
-    const groups = await newGroupsOf(s, po), blockers = [];
-    for (const group of groups) {
-      try { await approveProductDrafts(s, po, group.key); }
-      catch (e) { blockers.push((group.designName || group.designCode || group.colour || group.key) + ': ' + e.message); }
+    const { s, po, products } = await productApprovalContext(req.params.id);
+    const edits = (req.body || {}).seoDrafts;
+    if (edits != null) {
+      if (!Array.isArray(edits)) throw new Error('SEO edits must be a list.');
+      const seen = new Set();
+      for (const edit of edits) {
+        const product = products.find(item => item.key === edit?.groupKey);
+        if (!product || seen.has(edit.groupKey) || !edit.seo || typeof edit.seo !== 'object' || Array.isArray(edit.seo)) throw new Error('SEO edits contain an unknown or duplicate product. Reopen the PO and try again.');
+        seen.add(edit.groupKey);
+        const draft = (po.seoDraft || []).find(item => item.key === edit.groupKey);
+        if (!draft || !draft.seo) throw new Error('Generate and review the SEO names first.');
+        const group = studioSourceGroup(po, product);
+        draft.seo = canonicalSeoNaming({ ...draft.seo, ...edit.seo }, group, draft.styleDescriptor || siblingSeoStyle(po, group));
+        draft.styleDescriptor = draft.seo.styleDescriptor;
+      }
+    }
+    const blockers = [], drafts = [];
+    for (const product of products) {
+      try { drafts.push(productApprovalDrafts(po, product)); }
+      catch (e) { blockers.push((product.designName || product.designCode || product.key) + ' · ' + product.colour + ': ' + e.message); }
     }
     if (blockers.length) return res.status(409).json({ success: false, error: 'Complete these products first — ' + blockers.join(' | ') });
+    drafts.forEach(applyProductApproval);
     saveStore(s);
-    res.json({ success: true, approvedProducts: groups.length, po: publicPo(po, req) });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    res.json({ success: true, approvedProducts: products.length, po: publicPo(po, req) });
+  } catch (e) { res.status(409).json({ success: false, error: e.message }); }
 });
 
 // The gated write. Body carries the user-approved plan (edited SEO allowed).
