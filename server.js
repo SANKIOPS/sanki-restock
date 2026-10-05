@@ -520,6 +520,17 @@ const META_PATH  = path.join(RUNTIME_DATA_DIR, 'sanki_order_meta.json');
 
 let ordersCache = { orders: [], lastSync: null, syncing: false };
 let productsCache = { products: null, lastSync: null };
+async function currentProductQuantities(products) {
+  const inventory = require('./modules/inventory-state');
+  const live = inventory.withCare(await inventory.snapshot());
+  const items = new Map(live.items.map(i => [i.id.split('/').pop(), i]));
+  return products.map(p => ({ ...p, variants: p.variants.map(v => {
+    const item = items.get(String(v.inventoryItemId));
+    if (!item) return { ...v, inventory: null, ownedInventory: null, quantityUnavailable: true };
+    const q = inventory.quantities(item, live.mapping);
+    return { ...v, inventory: q.availableQty, ownedInventory: q.totalQty, cleaningInventory: q.cleaningQty, notForSaleInventory: q.notForSaleQty, stockUpdatedAt: live.at };
+  }) }));
+}
 
 function loadCache() {
   try {
@@ -1193,9 +1204,9 @@ app.patch('/api/orders/meta/:orderId', (req, res) => {
 //  SHOPIFY — PRODUCTS
 // ════════════════════════════════════════════════════════════════
 app.get('/api/products', async (req, res) => {
-  if (productsCache.products && productsCache.lastSync && (Date.now()-new Date(productsCache.lastSync).getTime())<30*60*1000) { return res.json({success:true,products:productsCache.products,total:productsCache.products.length}); }
-  productsCache.lastSync = new Date().toISOString();
   try {
+  if (productsCache.products && productsCache.lastSync && (Date.now()-new Date(productsCache.lastSync).getTime())<30*60*1000) { return res.json({success:true,products:await currentProductQuantities(productsCache.products),total:productsCache.products.length}); }
+  productsCache.lastSync = new Date().toISOString();
     const fetch = require('node-fetch');
     const all = await shopifyFetchAll(fetch,
       `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,status,variants,image,images,vendor,tags,product_type,created_at,updated_at`
@@ -1246,7 +1257,7 @@ app.get('/api/products', async (req, res) => {
     });
     productsCache.products = products;
     productsCache.lastSync = new Date().toISOString();
-    res.json({ success: true, products, total: products.length });
+    res.json({ success: true, products: await currentProductQuantities(products), total: products.length });
   } catch(e) { res.json({ success: false, error: e.message }); }
 });
 
@@ -2611,6 +2622,7 @@ app.get('/api/showroom/notify/test', async (req, res) => {
 //    through to index.html). Each module owns its own store + helpers.
 app.use(require('./modules/rack-locations').router);
 app.use(require('./modules/stock-movements').router);
+app.use(require('./modules/inventory-care').router);
 app.use(require('./modules/auth-users').router);
 app.use(require('./modules/sales').router);
 app.use(require('./modules/orders').router);
