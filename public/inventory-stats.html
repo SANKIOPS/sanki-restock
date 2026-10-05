@@ -256,7 +256,7 @@
       if (dpCategory && p.product_type !== dpCategory) continue;
       if (dpProductId && String(p.id) !== String(dpProductId)) continue;
       for (const v of (p.variants || [])) {
-        const qty = Number(v.inventory) || 0;
+        const qty = Number(v.ownedInventory == null ? v.inventory : v.ownedInventory) || 0;
         if (f.excludeOOS && qty <= 0) continue;
         if (search) {
           const hay = ((v.sku||'') + ' ' + (p.name||'') + ' ' + (v.title||'')).toLowerCase();
@@ -387,7 +387,7 @@
         { key: 'sku', label: 'SKU', sortable: true, get: r => r.sku, render: r => `<span class="num">${escape(r.sku)}</span>`, exp: r => r.sku },
         { key: 'category', label: 'Category', sortable: true, get: r => r.category, render: r => escape(r.category), exp: r => r.category },
         { key: 'vendor', label: 'Vendor', sortable: true, get: r => r.vendor, render: r => escape(r.vendor), exp: r => r.vendor },
-        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'qty', label: 'Total owned Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
         { key: 'landingCost', label: 'Landing Cost', sortable: true, get: r => r.landingCost, render: r => `<span class="num">${money(r.landingCost)}</span>`, align: 'right', exp: r => r.landingCost },
         { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
         { key: 'sellingPrice', label: 'Selling Price', sortable: true, get: r => r.sellingPrice, render: r => `<span class="num">${money(r.sellingPrice)}</span>`, align: 'right', exp: r => r.sellingPrice },
@@ -401,7 +401,7 @@
         { key: 'category', label: 'Category', sortable: true, get: r => r.category, render: r => escape(r.category), exp: r => r.category },
         { key: 'vendor', label: 'Vendor', sortable: true, get: r => r.vendor, render: r => escape(r.vendor), exp: r => r.vendor },
         { key: 'skuCount', label: 'SKUs', sortable: true, get: r => r.skuCount, render: r => `<span class="num">${fmt(r.skuCount)}</span>`, align: 'right', exp: r => r.skuCount, totalSum: 'skuCount' },
-        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'qty', label: 'Total owned Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
         { key: 'avgLandingCost', label: 'Avg Landing', sortable: true, get: r => r.avgLandingCost, render: r => `<span class="num">${money(r.avgLandingCost)}</span>`, align: 'right', exp: r => r.avgLandingCost },
         { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
         { key: 'avgSellingPrice', label: 'Avg Selling', sortable: true, get: r => r.avgSellingPrice, render: r => `<span class="num">${money(r.avgSellingPrice)}</span>`, align: 'right', exp: r => r.avgSellingPrice },
@@ -413,7 +413,7 @@
         { key: 'name', label: 'Vendor', sortable: true, get: r => r.vendor, render: r => `<span class="clickable" data-drill="vendor" data-value="${escape(r.vendor)}">${escape(r.vendor)}</span>`, exp: r => r.vendor },
         { key: 'productCount', label: 'Products', sortable: true, get: r => r.productCount, render: r => `<span class="num">${fmt(r.productCount)}</span>`, align: 'right', exp: r => r.productCount, totalSum: 'productCount' },
         { key: 'skuCount', label: 'SKUs', sortable: true, get: r => r.skuCount, render: r => `<span class="num">${fmt(r.skuCount)}</span>`, align: 'right', exp: r => r.skuCount, totalSum: 'skuCount' },
-        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'qty', label: 'Total owned Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
         { key: 'avgLandingCost', label: 'Avg Landing', sortable: true, get: r => r.avgLandingCost, render: r => `<span class="num">${money(r.avgLandingCost)}</span>`, align: 'right', exp: r => r.avgLandingCost },
         { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
         { key: 'avgSellingPrice', label: 'Avg Selling', sortable: true, get: r => r.avgSellingPrice, render: r => `<span class="num">${money(r.avgSellingPrice)}</span>`, align: 'right', exp: r => r.avgSellingPrice },
@@ -425,7 +425,7 @@
         { key: 'name', label: 'Category', sortable: true, get: r => r.category, render: r => `<span class="clickable" data-drill="category" data-value="${escape(r.category)}">${escape(r.category)}</span>`, exp: r => r.category },
         { key: 'productCount', label: 'Products', sortable: true, get: r => r.productCount, render: r => `<span class="num">${fmt(r.productCount)}</span>`, align: 'right', exp: r => r.productCount, totalSum: 'productCount' },
         { key: 'skuCount', label: 'SKUs', sortable: true, get: r => r.skuCount, render: r => `<span class="num">${fmt(r.skuCount)}</span>`, align: 'right', exp: r => r.skuCount, totalSum: 'skuCount' },
-        { key: 'qty', label: 'In-Hand Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
+        { key: 'qty', label: 'Total owned Qty', sortable: true, get: r => r.qty, render: r => `<span class="num">${fmt(r.qty)}</span>`, align: 'right', exp: r => r.qty, totalSum: 'qty' },
         { key: 'avgLandingCost', label: 'Avg Landing', sortable: true, get: r => r.avgLandingCost, render: r => `<span class="num">${money(r.avgLandingCost)}</span>`, align: 'right', exp: r => r.avgLandingCost },
         { key: 'landingValue', label: 'Landing Value', sortable: true, get: r => r.landingValue, render: r => `<span class="num text-orange-600">${money(r.landingValue)}</span>`, align: 'right', exp: r => r.landingValue, totalSum: 'landingValue' },
         { key: 'avgSellingPrice', label: 'Avg Selling', sortable: true, get: r => r.avgSellingPrice, render: r => `<span class="num">${money(r.avgSellingPrice)}</span>`, align: 'right', exp: r => r.avgSellingPrice },
