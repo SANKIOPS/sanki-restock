@@ -100,3 +100,8 @@ test('snapshot paginates item and location lists and never hides an incomplete q
   const s=await inventory.fetchSnapshot(client);assert.equal(s.items[0].levels[0].available,1);assert.equal(queries[1].after,'level-1');assert.equal(queries[2].after,'item-1');
   assert.throws(()=>inventory.normalizeItem({...item,inventoryLevels:{nodes:[{...level,quantities:[]} ]}}),/incomplete/);
 });
+test('GraphQL throttling retries after the advertised budget refill without disabling CAS',async()=>{
+  let calls=0;const delays=[];
+  const client={store:'test.myshopify.com',sleep:async ms=>delays.push(ms),request:async()=>({ok:true,status:200,json:async()=>++calls===1?{errors:[{extensions:{code:'THROTTLED'}}],extensions:{cost:{requestedQueryCost:200,throttleStatus:{currentlyAvailable:0,restoreRate:100}}}}:{data:{confirmed:true}}})};
+  assert.deepEqual(await inventory.graphql('query{shop{id}}',{},client),{confirmed:true});assert.equal(calls,2);assert.equal(delays[0],2250);
+});
