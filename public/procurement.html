@@ -2734,7 +2734,7 @@
       if(!studio.seo[np.key]||!studio.seo[np.key].seo){alert('Generate and review the SEO names first.');return;}
       if(!confirm('Save the visible SEO edits and approve all checked images + SEO for this product?'))return;
       button.disabled=true;button.textContent='Saving and approving…';
-      saveSeoRequest(np,i,false).then(function(){
+      (studio.styleSaves[np.key]||Promise.resolve()).then(function(){return saveSeoRequest(np,i,false);}).then(function(){
         return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/approve-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})}).then(readJson);
       }).then(function(result){
           if(!result.success)throw new Error(result.error||'Could not approve product.');
@@ -2744,9 +2744,13 @@
         }).catch(function(error){button.disabled=false;button.textContent='Approve images + SEO';alert(error.message);});
     }
     function approveWholePo(button){
-      if(!confirm('Approve every completed product in this PO? If any product is incomplete, nothing will be approved and the missing items will be listed.'))return;
+      if(!confirm('Save the visible SEO edits and approve every completed product in this PO? If any product is incomplete, nothing will be approved and the missing items will be listed.'))return;
       button.disabled=true;button.textContent='Checking PO…';
-      fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/approve-po',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+      var products=(lastReceive&&lastReceive.newProducts)||[],seoDrafts=[];
+      products.forEach(function(np,i){var entry=readSeoFields(np,i);if(entry&&entry.seo)seoDrafts.push({groupKey:np.key,seo:JSON.parse(JSON.stringify(entry.seo))});});
+      return Promise.all(products.map(function(np){return studio.styleSaves[np.key]||Promise.resolve();})).then(function(){
+        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/approve-po',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seoDrafts:seoDrafts})});
+      })
         .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not approve PO.');initStudioFor(receiveId);})
         .catch(function(error){button.disabled=false;button.textContent='Approve complete PO';alert(error.message);});
     }
