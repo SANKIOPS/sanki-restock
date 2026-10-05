@@ -371,7 +371,7 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
 }
 
 async function extractInvoice({key, buffer, mime='image/jpeg', model='gpt-4.1-mini', fetchImpl=global.fetch}) {
-  const productTypes=['','Shirt','T-Shirt','T-Shirt Hood','Jeans','Trouser','Lower','Shorts','Jogger','Coord Set','Jorts','Sando','Bag','Denim Joggers','Top','Perfumes'];
+  const productTypes=['','Shirt','T-Shirt','T-Shirt Hood','Jeans','Trouser','Lower','Shorts','Jogger','Coord Set','Jorts','Sando','Bag','Denim Joggers','Top','Perfumes','Belts'];
   const colours=['','Black','Blue','Brown','Cream','Green','Grey','Maroon','Orange','Pink','Purple','Red','White','Yellow','Beige','Sky Blue','Olive','Khaki','Golden','Silver'];
   const sizes=['','FS','S','M','L','XL','XXL','3XL','4XL','24','26','28','30','32','34','36','38','40','42','44'];
   const line={type:'object',additionalProperties:false,required:['designName','designCode','sourceDescription','productType','colour','sourceColour','fit','sizeLabel','chinaSize','qty','perPcsYuan','confidence','reviewReason'],properties:{
