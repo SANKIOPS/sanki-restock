@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { shopifyClient } = require('./shopify-client');
 const countedRackOptions = require('./counted-rack-options.json');
+const care = require('./inventory-care-store');
 const storePath = process.env.STOCK_MOVEMENTS_PATH || path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'), 'stock_movements.json');
 const locations = ['Display', 'Warehouse'];
 function fail(message, status = 409) { const e = new Error(message); e.status = status; throw e; }
@@ -49,8 +50,11 @@ function submit(s, body, user) {
     return existing;
   }
   if (s.movements.some(m => m.sku === sku && m.status === 'correction_required')) fail('Resolve the physical correction for this SKU first.');
+  const careStore = care.load();
+  if (care.blockedSku(careStore, sku)) fail('Confirm the pending dry cleaning Shopify result for this SKU first.');
   const source = s.positions.find(p => p.sku === sku && same(p, from));
-  if (!source || source.quantity < quantity) fail('Not enough counted pieces on the selected source rack.');
+  const reserved = care.reservedAt(careStore, sku, s.baseline.locations?.[from.location], from.rack);
+  if (!source || source.quantity - reserved < quantity) fail('Not enough available counted pieces on the selected source rack.');
   // Destination codes must be drawn from the reviewed rack list, not free text.
   if (to.rack && !(s.baseline.racks?.[to.location] || []).includes(to.rack)) fail('Destination rack is not in the reviewed rack list.', 400);
   source.quantity -= quantity;
@@ -94,7 +98,9 @@ const router = express.Router();
 router.get('/api/stock-movements', (req, res) => {
   try {
     const s = load();
-    res.json({ success: true, ready: ready(s), canApprove: canApprove(req.user), baseline: s.baseline ? { reconciledAt: s.baseline.reconciledAt, racks: s.baseline.racks } : null, rackOptions: rackChoices(s), rackSource: ready(s) ? 'Approved movement baseline' : countedRackOptions.source, positions: s.positions, movements: s.movements.slice(-500).reverse() });
+    const register = care.load();
+    const positions = s.positions.map(p => ({ ...p, quantity: p.quantity - care.reservedAt(register, p.sku, s.baseline?.locations?.[p.location], p.rack) }));
+    res.json({ success: true, ready: ready(s), canApprove: canApprove(req.user), baseline: s.baseline ? { reconciledAt: s.baseline.reconciledAt, racks: s.baseline.racks } : null, rackOptions: rackChoices(s), rackSource: ready(s) ? 'Approved movement baseline' : countedRackOptions.source, positions, movements: s.movements.slice(-500).reverse() });
   } catch (e) { res.status(e.status || 503).json({ success: false, error: 'Movement data unavailable. Contact the inventory manager.' }); }
 });
 router.post('/api/stock-movements', (req, res) => serial(async () => {
@@ -122,4 +128,4 @@ router.post('/api/stock-movements/:id/review', (req, res) => serial(async () => 
   }
   res.json({ success: true, movement: m });
 }).catch(e => res.status(e.status || 500).json({ success: false, error: e.message })));
-module.exports = { router, submit, ready, rackChoices, canApprove, load, save };
+module.exports = { router, submit, ready, rackChoices, canApprove, load, save, serial };

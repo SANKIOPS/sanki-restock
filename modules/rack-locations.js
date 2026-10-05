@@ -229,7 +229,17 @@ router.get('/api/stock-search', async (req, res) => {
     const inStock = String(req.query.inStock || '').toLowerCase();   // 'true' | 'false' | ''
     const limit   = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
 
-    const [variants, store] = [await getCatalog(false), loadRacks()];
+    let variants = await getCatalog(false);
+    const store = loadRacks();
+    const inventory = require('./inventory-state');
+    const live = inventory.withCare(await inventory.snapshot());
+    const byId = new Map(live.items.map(i => [i.id.split('/').pop(), i]));
+    variants = variants.map(v => {
+      const item = byId.get(String(v.inventoryItemId));
+      if (!item) return { ...v, inventoryQuantity: null };
+      const q = inventory.quantities(item, live.mapping);
+      return { ...v, inventoryQuantity: q.availableQty, ownedQuantity: q.totalQty, cleaningQuantity: q.cleaningQty, notForSaleQuantity: q.notForSaleQty };
+    });
     const racks = store.racks || {};
     const skuRacks = store.skuRacks || {};
 
