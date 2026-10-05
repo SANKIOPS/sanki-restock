@@ -105,7 +105,7 @@ shopifyClient.request=async(url,opts={})=>{
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));base='http://127.0.0.1:'+server.address().port+'/api/procurement/pos/PO-0099/shopify-recovery';});
 test.after(()=>{server.closeAllConnections();server.close();if(sandbox.startsWith(path.join(os.tmpdir(),'sanki-draft-recovery-')))fs.rmSync(sandbox,{recursive:true,force:true});});
 const preview=async(mode='received')=>(await fetch(base+'?inventoryMode='+mode)).json();
-const commit=async(plan,body={})=>fetch(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approve:true,fingerprint:plan.fingerprint,inventoryMode:plan.inventoryMode,includeRestocks:plan.includeRestocks,...body})});
+const commit=async(plan,body={})=>fetch(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approve:true,fingerprint:plan.fingerprint,inventoryMode:plan.inventoryMode,includeRestocks:plan.includeRestocks,priceMode:plan.priceMode,...body})});
 
 test('recovery endpoint enforces authorization and rejects a missing or stale approval',async()=>{
   seed();assert.equal((await fetch(base,{headers:{'x-test-role':'viewer'}})).status,403);
@@ -174,4 +174,26 @@ test('endpoint restores explicitly selected deleted restock stock without an adj
   assert.deepEqual(writes.find(w=>w.url.endsWith('/products.json')).payload.product.variants.map(v=>v.sku),['OLD28','NEW30','NEW32']);
   assert.deepEqual(writes.filter(w=>w.url.endsWith('/inventory_levels/set.json')).map(w=>w.payload.available),[1,1,2]);
   assert.ok(writes.every(w=>!w.url.endsWith('/inventory_levels/adjust.json')));
+});
+
+
+test('missing historical prices require an explicit choice and saved prices always win',()=>{
+  const po=makePo();delete po.newProducts[0].variants[0].price;delete po.lines[1].suggestedMrp;
+  assert.equal(buildRecoveryPlan(po,{},options('received')).products[0].status,'blocked');
+  const calc=buildRecoveryPlan(po,{},{...options('received'),priceMode:'calculated',calculatePrice:()=>2499});
+  assert.equal(calc.products[0].status,'ready');assert.deepEqual(calc.products[0].variants.map(v=>v.price),[2499,2099]);
+  assert.deepEqual(calc.products[0].variants.map(v=>v.priceSource),['calculated','saved']);
+  const zero=buildRecoveryPlan(po,{},{...options('received'),priceMode:'zero'});
+  assert.equal(zero.products[0].status,'ready');assert.deepEqual(zero.products[0].variants.map(v=>v.price),[0,2099]);
+  assert.notEqual(calc.fingerprint,zero.fingerprint);
+  assert.equal(buildRecoveryPlan(po,{},{...options(),priceMode:'calculated',calculatePrice:()=>NaN}).products[0].status,'blocked');
+});
+
+test('explicit zero draft prices reach Shopify and remain preview-locked',async()=>{
+  seed();const po=makePo();po.newProducts[0].variants.forEach(v=>delete v.price);po.lines.forEach(l=>delete l.suggestedMrp);
+  fs.writeFileSync(process.env.PROCUREMENT_PATH,JSON.stringify({sizes:{},settings:{warehouseLocationId:'55'},pos:{'PO-0099':po}}));
+  const {plan}=await(await fetch(base+'?inventoryMode=received&priceMode=zero')).json();
+  assert.equal(plan.products[0].status,'ready');assert.equal((await commit(plan,{priceMode:'saved'})).status,409);assert.equal(writes.length,0);
+  assert.equal((await(await commit(plan)).json()).success,true);
+  assert.deepEqual(writes.find(w=>w.url.endsWith('/products.json')).payload.product.variants.map(v=>v.price),['0','0']);
 });

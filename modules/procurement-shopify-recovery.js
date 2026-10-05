@@ -7,9 +7,10 @@ const fingerprint = value => crypto.createHash('sha256').update(JSON.stringify(v
 // Recovery uses the posted receipt, never a newly classified purchase preview.
 // Existing restock stock is preserved; explicitly selected deleted variants
 // can be recreated with their saved receipt quantity.
-function buildRecoveryPlan(po, catalogue, {groupKey, sizes, readPhoto, inventoryMode = 'zero', includeRestocks = false}) {
+function buildRecoveryPlan(po, catalogue, {groupKey, sizes, readPhoto, inventoryMode = 'zero', includeRestocks = false, priceMode = 'saved', calculatePrice}) {
   if (po.status !== 'posted') throw new Error('Only a posted purchase can recover deleted Shopify drafts.');
   if (!['zero', 'received'].includes(inventoryMode)) throw new Error('Choose zero stock or saved received quantities.');
+  if (!['saved', 'calculated', 'zero'].includes(priceMode)) throw new Error('Choose saved prices, calculated MRPs or zero draft prices.');
   const received = (po.lines || []).filter(line => Number(line.qty) > 0);
   const restocks = received.filter(line => line.classification === 'EXISTING');
   const skippedRestocks = restocks.filter(line => !includeRestocks || (catalogue[skuOf(line.sku)] || []).length === 1);
@@ -68,18 +69,20 @@ function buildRecoveryPlan(po, catalogue, {groupKey, sizes, readPhoto, inventory
     for (const line of lines) {
       const sku = skuOf(line.sku), savedVariant = ((snapshot || {}).variants || []).find(variant => skuOf(variant.sku) === sku);
       const sizeCode = String(savedVariant && savedVariant.sizeCode || sizes[line.sizeLabel] || line.sizeLabel || '').trim();
-      const price = Number(savedVariant && savedVariant.price != null ? savedVariant.price : line.manualMrp || line.suggestedMrp);
+      const savedPrice = savedVariant && savedVariant.price != null ? savedVariant.price : line.manualMrp || line.suggestedMrp;
+      const hasSavedPrice = savedPrice != null && savedPrice !== '' && Number.isFinite(Number(savedPrice)) && Number(savedPrice) > 0;
+      const price = hasSavedPrice ? Number(savedPrice) : priceMode === 'zero' ? 0 : priceMode === 'calculated' && calculatePrice ? Number(calculatePrice(line)) : NaN;
       if (!sizeCode || usedSizes.has(sizeCode)) row.issues.push('Missing or duplicate size for ' + sku + '.');
       usedSizes.add(sizeCode);
-      if (!Number.isFinite(price) || price <= 0) row.issues.push('Saved selling price is missing for ' + sku + '.');
+      if (!Number.isFinite(price) || price < 0 || price === 0 && priceMode !== 'zero') row.issues.push('Saved selling price is missing for ' + sku + '. Select a recovery pricing option before recreating drafts.');
       const qty = Number(line.qty);
       if (!Number.isSafeInteger(qty) || qty <= 0) row.issues.push('Invalid received quantity for ' + sku + '.');
-      row.variants.push({sku, sizeCode, price, qty: inventoryMode === 'received' ? qty : 0});
+      row.variants.push({sku, sizeCode, price, priceSource:hasSavedPrice ? 'saved' : priceMode, qty: inventoryMode === 'received' ? qty : 0});
     }
     if (row.issues.length) row.status = 'blocked';
     products.push(row);
   }
-  const plan = {poId: po.id, inventoryMode, includeRestocks, products,
+  const plan = {poId: po.id, inventoryMode, includeRestocks, priceMode, products,
     excludedNotReceived: (po.lines || []).length - received.length,
     excludedRestocks: skippedRestocks.map(line => ({sku: skuOf(line.sku), qty: Number(line.qty)}))};
   plan.fingerprint = fingerprint(plan);
@@ -90,7 +93,7 @@ function publicRecoveryPlan(plan) {
   return {...plan, products: plan.products.map(({seo, images, variants, ...product}) => ({...product,
     title: seo && seo.title || '', photoCount: images.length,
     photos: images.map(image => ({url: image.url, alt: image.alt})),
-    variants: variants.map(({sku, sizeCode, price, qty}) => ({sku, size: sizeCode, price, qty}))}))};
+    variants: variants.map(({sku, sizeCode, price, priceSource, qty}) => ({sku, size: sizeCode, price, priceSource, qty}))}))};
 }
 
 module.exports = {buildRecoveryPlan, publicRecoveryPlan};
