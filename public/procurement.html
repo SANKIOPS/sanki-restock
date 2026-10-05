@@ -2657,6 +2657,7 @@
               '<span class="pill '+(im.approved?'exist':'')+'">'+(im.qa&&['pass','manual-reviewed'].indexOf(im.qa.status)>=0?(im.approved?'Approved with product':'Ready for product approval'):'Needs visual verification')+'</span>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
               '<button class="btn ghost sm" data-reject-image data-image-type="'+esc(t[0])+'" data-image-url="'+esc(im.url)+'" style="color:#b42318">Reject image</button>'+
+              (im.styling&&im.qa&&(im.qa.stylingChanged||(im.qa.issues||[]).some(function(issue){return /^Model styling changed/.test(issue);}))?'<button class="btn ghost sm" data-restore-image-styling data-image-type="'+esc(t[0])+'" data-image-url="'+esc(im.url)+'">Restore image styling (free)</button>':'')+
               (t[0]==='original'?'':(canStartPaidImages()?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>'+
               (im.qa&&im.qa.status==='manual-reviewed'?'<div class="muted" style="font-size:11px;margin-top:5px">Owner-reviewed: '+esc((im.qa.manualReview||{}).reason||'')+'</div>':im.qa&&im.qa.status!=='pass'?'<div class="banner warn" style="font-size:11px;margin-top:5px">Visual check: '+esc((im.qa.issues||[]).join('; ')||im.qa.status)+'</div>':visibleWarnings.length?'<div class="banner warn" style="font-size:11px;margin-top:5px">Check before approving: '+esc(visibleWarnings.join('; '))+'</div>':''))
              :empty)+
@@ -2805,6 +2806,15 @@
           }).catch(function(error){button.disabled=false;alert(error.message);});
       };});
       Array.prototype.forEach.call(host.querySelectorAll('[data-paid-regen]'),function(button){button.onclick=function(){regeneratePaidImages(np,i,[button.getAttribute('data-type')],button);};});
+      Array.prototype.forEach.call(host.querySelectorAll('[data-restore-image-styling]'),function(button){button.onclick=async function(){
+        var image=(studio.images[np.key]||[]).find(function(x){return x.type===button.getAttribute('data-image-type')&&x.url===button.getAttribute('data-image-url');});
+        if(!image||!image.styling)return;
+        var saved=image.requestedStyling||image.styling;
+        if(!confirm('Restore this product’s model settings to those used for this saved image? Other views will be checked against the restored settings. This is free and does not approve images.'))return;
+        button.disabled=true;
+        try{await (studio.styleSaves[np.key]||Promise.resolve());studio.styling[np.key]=Object.assign({},saved);await saveStudioStyling(np);rerenderCard(i);}
+        catch(error){button.disabled=false;alert(error.message);}
+      };});
       Array.prototype.forEach.call(host.querySelectorAll('[data-accept-held]'),function(button){button.onclick=function(){
         var type=button.getAttribute('data-held-type'),url=button.getAttribute('data-held-url');
         var reason=prompt('Inspect this held photo at full size against the original. If the visual check is mistaken, explain specifically why (at least 12 characters). This does not approve or post the image.');
@@ -2812,7 +2822,7 @@
         if(reason.trim().length<12){alert('Please give a specific reason of at least 12 characters.');return;}
         if(!confirm('Use this saved '+type+' image as the product draft? The checker warning will remain in the audit record. No paid call or separate owner approval is required.'))return;
         button.disabled=true;
-        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/qa-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,type:type,url:url,reason:reason.trim()})})
+        (studio.styleSaves[np.key]||Promise.resolve()).then(function(){return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/qa-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,type:type,url:url,reason:reason.trim()})});})
           .then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not accept held image.');studio.images[np.key]=r.images;studio.rejected[np.key]=r.rejectedImages;rerenderCard(i);})
           .catch(function(e){button.disabled=false;alert(e.message);});
       };});
