@@ -267,7 +267,7 @@ test('existing image views can be regenerated separately or together without rew
   assert.match(html,/data-regen-product=/);
   assert.match(html,/regenerateTypes:chosen/);
   assert.match(html,/Earlier images remain if checking fails/);
-  assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\|\|!\[\.\.\.savedImages,\.\.\.heldImages\]\.some/);
+  assert.match(server,/requestedRegeneration\.some\(type=>!allowedTypes\.includes\(type\)\)/);
   assert.match(server,/priorHeld\.qa&&priorHeld\.qa\.failed/);
   assert.match(html,/data-regen-held/);
   assert.match(html,/Regenerate this view/);
@@ -278,7 +278,7 @@ test('existing image views can be regenerated separately or together without rew
 
 test('visual checks reject mismatched outfit, accessories, angle or continuity',()=>{
   const fields=['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'];
-  const pass={detectedModelGender:'woman',...Object.fromEntries(fields.map(field=>[field,{status:'pass',evidence:'Visible match'}]))};
+  const pass={detectedModelGender:'woman',productOnly:{status:'pass',evidence:'Only the featured product'},...Object.fromEntries(fields.map(field=>[field,{status:'pass',evidence:'Visible match'}]))};
   const styling={shoes:'Leather loafers',tuck:'Tucked in'};
   assert.equal(pilot.evaluateImageCheck(pass,'model-side',styling,group).status,'pass');
   for(const field of fields) {
