@@ -8,10 +8,17 @@ const dataDir = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : pa
 let cached, inflight, generation = 0;
 function fail(message, status = 409) { const e = new Error(message); e.status = status; throw e; }
 async function graphql(query, variables, client = shopifyClient) {
-  const r = await client.request(`https://${client.store}/admin/api/${API}/graphql.json`, { method: 'POST', body: JSON.stringify({ query, variables }) });
-  const d = await r.json();
-  if (!r.ok || d.errors?.length || !d.data) fail('Shopify inventory could not be confirmed. ' + (d.errors?.[0]?.message || `Response ${r.status}`), 502);
-  return d.data;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const r = await client.request(`https://${client.store}/admin/api/${API}/graphql.json`, { method: 'POST', body: JSON.stringify({ query, variables }), timeout: 20000 });
+    const d = await r.json();
+    if (attempt < 4 && d.errors?.some(e => e.extensions?.code === 'THROTTLED')) {
+      const cost = d.extensions?.cost, limit = cost?.throttleStatus;
+      const delay = Math.min(10000, Math.max(1000, Math.ceil(((cost?.requestedQueryCost || 100) - (limit?.currentlyAvailable || 0)) / (limit?.restoreRate || 50) * 1000) + 250));
+      await client.sleep(delay); continue;
+    }
+    if (!r.ok || d.errors?.length || !d.data) fail('Shopify inventory could not be confirmed. ' + (d.errors?.[0]?.message || `Response ${r.status}`), 502);
+    return d.data;
+  }
 }
 function locationMapping() {
   const file = path.join(dataDir, 'showroom-settings.json');
@@ -32,7 +39,7 @@ const levelFields = 'nodes{location{id name} quantities(names:$names){name quant
 async function fetchSnapshot(client = shopifyClient) {
   const items = []; let after = null;
   do {
-    const d = await graphql(`query($after:String,$names:[String!]!){inventoryItems(first:50,after:$after){nodes{id sku tracked unitCost{amount} variant{id title inventoryPolicy product{id handle title productType tags status featuredImage{url}}} inventoryLevels(first:5){${levelFields}}} pageInfo{hasNextPage endCursor}}}`, { after, names }, client);
+    const d = await graphql(`query($after:String,$names:[String!]!){inventoryItems(first:50,after:$after){nodes{id sku tracked unitCost{amount} variant{id title inventoryPolicy product{id handle title productType tags status featuredImage{url}}} inventoryLevels(first:2){${levelFields}}} pageInfo{hasNextPage endCursor}}}`, { after, names }, client);
     const page = d.inventoryItems;
     if (!page?.nodes || !page.pageInfo) fail('Shopify inventory page is incomplete.', 502);
     for (const n of page.nodes) {
@@ -55,7 +62,10 @@ async function snapshot(force = false) {
   if (inflight) { await inflight; if (force) return snapshot(true); if (cached) return cached; }
   const version = generation;
   inflight = fetchSnapshot().then(s => { if (version === generation) cached = s; return s; });
-  try { return await inflight; } finally { inflight = null; }
+  let result;
+  try { result = await inflight; } finally { inflight = null; }
+  if (version !== generation) return snapshot(false);
+  return result;
 }
 function invalidate() { generation++; cached = null; }
 function quantities(item, mapping = {}) {

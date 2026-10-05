@@ -81,10 +81,21 @@ function makeAction(s, batchId, body, user) {
 }
 function buildInput(s, op, live) {
   const batch = s.batches.find(b => b.id === op.batchId), expected = new Map();
+  if (op.action === 'open') {
+    const m = moves.load();
+    if (moves.ready(m)) for (const a of op.lines) {
+      const l = batch.lines.find(l => l.id === a.lineId);
+      const location = Object.keys(m.baseline.locations || {}).find(k => m.baseline.locations[k] === l.locationId);
+      const p = m.positions.find(p => p.sku === l.sku && p.location === location && p.rack === l.rack);
+      if (!p || p.quantity - store.reservedAt(s, l.sku, l.locationId, l.rack) < a.quantity) state.fail('Available stock on the reviewed source rack changed. Review this batch.');
+    }
+  }
   if (op.action === 'dispose') return { name: 'damaged', reason: 'damaged', referenceDocumentUri: `gid://sanki/InventoryCare/${op.id}`, changes: op.lines.map(a => {
     const l = batch.lines.find(l => l.id === a.lineId), item = live.items.find(i => i.id === l.inventoryItemId), level = item?.levels.find(x => x.locationId === l.locationId);
     if (!level || !item.tracked || item.sku !== l.sku || level.damaged < a.quantity || store.balances(s, batch).find(x => x.id === l.id).miscellaneous < a.quantity) state.fail('Not enough confirmed not-for-sale stock to dispose.');
-    return { inventoryItemId: item.id, locationId: level.locationId, delta: -a.quantity, ledgerDocumentUri: `gid://sanki/InventoryCare/${batch.id}` };
+    const registered = s.batches.flatMap(b => store.balances(s, b)).filter(x => x.inventoryItemId === item.id && x.locationId === level.locationId).reduce((n, x) => n + x.miscellaneous, 0);
+    if (registered > level.damaged) state.fail('Shopify and the registered not-for-sale pieces differ. Review this SKU before disposal.');
+    return { inventoryItemId: item.id, locationId: level.locationId, delta: -a.quantity, changeFromQuantity: level.damaged, ledgerDocumentUri: `gid://sanki/InventoryCare/${batch.id}` };
   }) };
   const changes = op.lines.map(a => {
     const l = batch.lines.find(l => l.id === a.lineId), item = live.items.find(i => i.id === l.inventoryItemId);
