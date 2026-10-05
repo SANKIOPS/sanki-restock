@@ -5,6 +5,7 @@ const path = require('path');
 const { ShopifyClient, shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
+const inventoryState = require('./inventory-state');
 const DATA = require(path.join(__dirname, '..', 'public', 'inventory-data.json'));
 const STORE = process.env.SHOPIFY_STORE || '';
 const API = '2024-07';
@@ -28,7 +29,8 @@ require('./inventory-visual-search').register(router, async () => {
       return {...p,images,image:images[0] || null};
     }) };
   }
-  return visualCatalog.products;
+  const byHandle = new Map(visualCatalog.products.map(p => [p.handle, p]));
+  return inventoryState.catalog(await inventoryState.snapshot(), DATA).map(p => ({ ...p, images: byHandle.get(p.handle)?.images || p.images }));
 });
 
 async function jsonRequest(url, options) {
@@ -67,77 +69,23 @@ async function fetchCatalogImages() {
   return output;
 }
 
-async function fetchCostAttention() {
-  let url = `https://${STORE}/admin/api/${API}/products.json?limit=250&fields=handle,title,image,variants`;
-  const shopifyProducts = [];
-  while (url) {
-    const response = await catalogClient.request(url);
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
-    shopifyProducts.push(...(body.products || []));
-    const next = (response.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/);
-    url = next ? next[1] : null;
-  }
-  const sourceByHandle = new Map(DATA.map(product => [product.handle, product]));
-  const relevant = shopifyProducts.filter(product => sourceByHandle.has(product.handle));
-  const itemIds = [];
-  for (const product of relevant) for (const variant of (product.variants || [])) if (variant.inventory_item_id) itemIds.push(String(variant.inventory_item_id));
-  const costs = new Map();
-  for (let index = 0; index < itemIds.length; index += 100) {
-    const ids = itemIds.slice(index, index + 100);
-    const response = await catalogClient.request(`https://${STORE}/admin/api/${API}/inventory_items.json?ids=${ids.join(',')}&limit=100`);
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(`Shopify ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
-    for (const item of (body.inventory_items || [])) costs.set(String(item.id), Number(item.cost) || 0);
-  }
-  const averages = new Map();
-  const missingProducts = relevant.map(product => {
-    const source = sourceByHandle.get(product.handle);
-    const physicalBySku = new Map((source.variants || []).map(variant => [String(variant.sku || '').trim(), variant]));
-    const variants = (product.variants || []).map(variant => {
-      const sku = String(variant.sku || '').trim();
-      const physical = physicalBySku.get(sku);
-      return { sku, inventoryItemId: String(variant.inventory_item_id || ''), cost: costs.get(String(variant.inventory_item_id)) || 0, physical };
-    });
-    for (const item of variants) {
-      const qty = item.physical ? (Number(item.physical.displayQty) || 0) + (Number(item.physical.warehouseQty) || 0) : 0;
-      if (qty > 0 && item.cost > 0) {
-        const stat = averages.get(source.category) || { category: source.category, costedPieces: 0, costedSkus: 0, weightedTotal: 0 };
-        stat.costedPieces += qty;
-        stat.costedSkus++;
-        stat.weightedTotal += qty * item.cost;
-        averages.set(source.category, stat);
-      }
+async function fetchCostAttention(live) {
+  const products = inventoryState.catalog(live, DATA);
+  const byId = new Map(live.items.map(i => [i.id, i]));
+  const averages = new Map(), missingProducts = [];
+  for (const p of products) {
+    const missingSkus = [];
+    for (const v of p.variants) {
+      const item = byId.get(v.inventoryItemId), cost = item?.unitCost || 0, qty = v.totalQty;
+      if (qty <= 0) continue;
+      if (cost > 0) {
+        const stat = averages.get(p.category) || { category: p.category, costedPieces: 0, costedSkus: 0, weightedTotal: 0 };
+        stat.costedPieces += qty; stat.costedSkus++; stat.weightedTotal += qty * cost; averages.set(p.category, stat);
+      } else missingSkus.push({ ...v, inventoryItemId: v.inventoryItemId.split('/').pop() });
     }
-    const missing = variants.filter(item => item.physical && (Number(item.physical.displayQty) + Number(item.physical.warehouseQty)) > 0 && !item.cost && item.inventoryItemId);
-    if (!missing.length) return null;
-    return {
-      handle: product.handle,
-      title: source.title || product.title,
-      image: product.image && product.image.src || null,
-      collection: source.collection,
-      category: source.category,
-      productType: source.productType,
-      gender: source.gender,
-      missingSkus: missing.map(item => ({
-        sku: item.sku,
-        inventoryItemId: item.inventoryItemId,
-        variant: item.physical.variant,
-        size: item.physical.size,
-        colour: item.physical.colour,
-        displayQty: Number(item.physical.displayQty) || 0,
-        warehouseQty: Number(item.physical.warehouseQty) || 0,
-        totalQty: (Number(item.physical.displayQty) || 0) + (Number(item.physical.warehouseQty) || 0)
-      }))
-    };
-  }).filter(Boolean);
-  const categoryAverages = Array.from(averages.values()).map(stat => ({
-    category: stat.category,
-    averageCost: Math.round((stat.weightedTotal / stat.costedPieces) * 100) / 100,
-    costedPieces: stat.costedPieces,
-    costedSkus: stat.costedSkus
-  })).sort((a, b) => a.category.localeCompare(b.category));
-  return { products: missingProducts, categoryAverages };
+    if (missingSkus.length) missingProducts.push({ ...p, missingSkus });
+  }
+  return { inventoryAt: live.at, products: missingProducts, categoryAverages: [...averages.values()].map(s => ({ category: s.category, averageCost: Math.round(s.weightedTotal / s.costedPieces * 100) / 100, costedPieces: s.costedPieces, costedSkus: s.costedSkus })).sort((a,b) => a.category.localeCompare(b.category)) };
 }
 
 function desiredTags(product, existing) {
@@ -217,8 +165,9 @@ router.get('/api/inventory-categorization/status', (req, res) => res.json({ succ
 
 router.get('/api/inventory-costs/attention', async (req, res) => {
   try {
-    if (!costCache.products || Date.now() - costCache.at > 15 * 60 * 1000) {
-      if (!costInflight) costInflight = fetchCostAttention().then(result => { costCache = { at: Date.now(), ...result }; }).finally(() => { costInflight = null; });
+    const live = await inventoryState.snapshot();
+    if (!costCache.products || costCache.inventoryAt !== live.at) {
+      if (!costInflight) costInflight = fetchCostAttention(live).then(result => { costCache = { at: Date.now(), ...result }; }).finally(() => { costInflight = null; });
       await costInflight;
     }
     const missingSkus = costCache.products.reduce((total, product) => total + product.missingSkus.length, 0);
@@ -255,24 +204,8 @@ router.post('/api/inventory-costs/set', async (req, res) => {
 
 router.get('/api/inventory-categorization/catalog', async (req, res) => {
   try {
-    if (!catalogCache.products || Date.now() - catalogCache.at > 30 * 60 * 1000) {
-      if (!catalogInflight) catalogInflight = (async () => {
-        try {
-          const shopify = await fetchCatalogImages();
-          const byHandle = new Map(shopify.map(p => [p.handle, p]));
-          catalogCache = {
-            at: Date.now(),
-            products: DATA.map(product => {
-              const match = byHandle.get(product.handle);
-              const images = match && match.image && match.image.src ? [match.image.src] : [];
-              return { ...product, images, image: images[0] || null };
-            })
-          };
-        } finally { catalogInflight = null; }
-      })();
-      await catalogInflight;
-    }
-    res.json({ success: true, products: catalogCache.products });
+    const live = await inventoryState.snapshot(req.query.refresh === '1');
+    res.json({ success: true, source: 'Live Shopify quantities', at: live.at, products: inventoryState.catalog(live, DATA) });
   } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
 });
 

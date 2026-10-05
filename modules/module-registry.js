@@ -48,6 +48,7 @@ const MODULES = [
   { key: 'stock-search', title: 'Stock Search',          desc: 'Find any SKU and where it is',                       icon: '🔍', href: '/rack-locations.html',            section: 'Main',      status: 'live', roles: ['admin', 'stocksearch', 'warehouse'] },
 
   { key: 'inventory-dashboard', title: 'Dashboard', desc: 'Search, filter and locate every resolved product', icon: '▦', href: '/inventory.html', section: 'Inventory', status: 'live', roles: ['admin', 'inventory', 'warehouse', 'sales'] },
+  { key: 'inventory-care', title: 'Dry cleaning & miscellaneous', desc: 'Cleaning batches, partial returns and pieces not for sale', icon: '🧺', href: '/inventory-care.html', section: 'Inventory', status: 'live', roles: ['admin', 'inventory', 'warehouse'] },
 
   { key: 'orders',       title: 'Orders',                desc: 'Every Shopify sale (POS + Website) + dispatch tracking', icon: '🧾', href: '/orders.html',                section: 'Sales',     status: 'live',   roles: ['admin', 'sales', 'revenue', 'warehouse'] },
   // Retired: manual POS entry duplicated Shopify POS. Superseded by Orders (read-only Shopify mirror). Kept hidden.

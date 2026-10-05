@@ -89,6 +89,7 @@ function checkApiKey(req) {
 // accidentally expose its backend to every logged-in employee. Rules are
 // checked in order; more-specific paths must come before broader prefixes.
 const API_ROLE_RULES = [
+  { prefix: '/api/inventory-care', roles: ['admin', 'inventory', 'warehouse'] },
   { prefix: '/api/stock-movements', roles: ['admin', 'inventory', 'warehouse'] },
   { path: '/api/auth/me',                 roles: '*' },
   { path: '/api/modules',                 roles: '*' },
