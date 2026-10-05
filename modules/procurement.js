@@ -2498,23 +2498,30 @@ router.post('/api/procurement/pos/:id/image-styling', async (req,res) => {
   if(!group)return res.status(404).json({success:false,error:'Product group not found.'});
   const styling=openaiPilot.normalizeStyling((req.body||{}).styling,group);
   po.imageStyling=po.imageStyling||{};
-  const previous=openaiPilot.normalizeStyling(po.imageStyling[key],group);
-  const changedFields=Object.keys(styling).filter(field=>previous[field]!==styling[field]);
   po.imageStyling[key]=styling;
-  if(changedFields.length) for(const image of ((po.aiImages||{})[key]||[])) {
-    if(image.source==='openai-pilot' && image.styling && ['female','male','model-front','model-side','model-side-female','model-side-male'].includes(image.type)) {
-      const gender= image.type==='female'||image.type==='model-side-female'?'female'
-        :image.type==='male'||image.type==='model-side-male'?'male':group.audience==='Men'?'male':'female';
-      if(changedFields.every(field=>field===(gender==='female'?'maleComplexion':'femaleComplexion')))continue;
-      image.approved=false;
-      image.qa={...(image.qa||{}),status:'needs-review',issues:['Model styling changed after this image was generated. Regenerate this view.']};
-    }
-  }
+  for(const image of ((po.aiImages||{})[key]||[]))refreshImageStylingCheck(image,styling,group);
   saveStore(s);
   res.json({success:true,groupKey:key,styling,images:(po.aiImages||{})[key]||[]});
   } catch(e) { res.status(500).json({success:false,error:e.message}); }
 });
 const paidPilotInFlight = new Set();
+function refreshImageStylingCheck(image,styling,group) {
+  if(image.source!=='openai-pilot'||!image.styling||!openaiPilot.MODEL_VIEWS.includes(image.type))return;
+  const changes=openaiPilot.stylingChanges(image.requestedStyling||image.styling,styling,group,image.type);
+  if(changes.length){
+    if(!image.stylingReview){image.stylingReview={qa:structuredClone(image.qa||{}),approved:!!image.approved};}
+    image.approved=false;
+    image.qa={...(image.qa||{}),status:'needs-review',stylingChanged:true,stylingChanges:changes,
+      issues:['Model styling changed: '+changes.map(x=>x.field+' ('+x.before+' → '+x.after+')').join(', ')+'. Restore the image’s styling or regenerate this view.']};
+  }else if(image.stylingReview){
+    image.qa=image.stylingReview.qa;image.approved=false;delete image.stylingReview;
+    refreshImageStylingCheck(image,styling,group);
+  }else if(image.qa?.issues?.length===1&&/^Model styling changed after this image was generated\./.test(image.qa.issues[0])&&Array.isArray(image.qa.failed)&&!image.qa.failed.length&&Array.isArray(image.qa.uncertain)&&!image.qa.uncertain.length){
+    // Older styling invalidation overwrote the verdict but retained its findings.
+    // Restore only a known clean check, and still require explicit approval.
+    image.qa={...image.qa,status:image.qa.manualReview?'manual-reviewed':'pass',issues:[]};image.approved=false;
+  }
+}
 function expireStalePaidAttempts(po) {
   let changed=false;
   for(const attempt of ((po.openaiPilot||{}).attempts||[])) {
@@ -2543,7 +2550,9 @@ function holdUncheckedImages(po,groups) {
   if(isLockedPo(po))return false;
   let changed=false;
   for(const group of groups){
-    const images=(po.aiImages||{})[group.key]||[],unchecked=images.filter(image=>image.url&&(!image.qa||image.qa.status==='pass'&&!imageCheckAccepted(image)));
+    const images=(po.aiImages||{})[group.key]||[];
+    for(const image of images){const before=JSON.stringify(image);refreshImageStylingCheck(image,(po.imageStyling||{})[group.key],group);if(before!==JSON.stringify(image))changed=true;}
+    const unchecked=images.filter(image=>image.url&&(!image.qa||image.qa.status==='pass'&&!imageCheckAccepted(image)));
     if(!unchecked.length)continue;
     po.qaRejected=po.qaRejected||{};po.qaRejected[group.key]=po.qaRejected[group.key]||[];
     for(const image of unchecked)po.qaRejected[group.key].push({...image,approved:false,
@@ -2584,7 +2593,7 @@ function invalidateDependentSides(images,frontType) {
   const sideType={'model-front':'model-side',female:'model-side-female',male:'model-side-male'}[frontType];
   if(!sideType)return;
   const side=images.find(image=>image.type===sideType);
-  if(side){side.approved=false;side.qa={...(side.qa||{}),status:'needs-review',issues:['Matching front image changed. Regenerate this three-quarter view.']};}
+  if(side){side.approved=false;delete side.stylingReview;side.qa={...(side.qa||{}),status:'needs-review',stylingChanged:false,issues:['Matching front image changed. Regenerate this three-quarter view.']};}
 }
 // Rejecting a draft is free and never deletes the permanent source or audit file.
 function rejectGeneratedImage(po,{groupKey,type,url,reason,by},at=new Date().toISOString()) {
@@ -2652,12 +2661,15 @@ router.post('/api/procurement/pos/:id/qa-review', async (req,res) => {
     const fingerprint=candidate.sourceFingerprint||attempt?.sourceFingerprint;
     const styling=candidate.styling||attempt?.styling;
     if(!fingerprint||fingerprint!==codexBatch.fingerprint(group,(po.backRefs||{})[key]))return res.status(409).json({success:false,error:'The product reference changed. Generate a new image before review.'});
-    if(!styling||JSON.stringify(openaiPilot.normalizeStyling(styling,group))!==JSON.stringify(openaiPilot.normalizeStyling((po.imageStyling||{})[key],group)))return res.status(409).json({success:false,error:'The styling changed. Generate a new image before review.'});
+    const requestedStyling=candidate.requestedStyling||(attempt?.photoStyling&&JSON.stringify(openaiPilot.normalizeStyling(styling,group))===JSON.stringify(openaiPilot.normalizeStyling(attempt.photoStyling,group))?attempt.styling:styling);
+    const modelView=openaiPilot.MODEL_VIEWS.includes(candidate.type);
+    const changes=openaiPilot.stylingChanges(requestedStyling,(po.imageStyling||{})[key],group,candidate.type);
+    if(modelView&&(!requestedStyling||changes.length))return res.status(409).json({success:false,error:'Model styling changed'+(changes.length?': '+changes.map(x=>x.field+' ('+x.before+' → '+x.after+')').join(', '):' or its saved settings are missing')+'. Restore the image’s styling or regenerate this view before review.',stylingChanges:changes});
     po.aiImages=po.aiImages||{};
     const images=po.aiImages[key]||[];
     const rec={type:candidate.type,label:(AI_IMAGE_SPECS.find(x=>x.type===candidate.type)||{}).label||candidate.type,url:candidate.url,approved:false,source:'openai-pilot',
-      qa:{...candidate.qa,status:'manual-reviewed',issues:[],manualReview:{reason,by:String(req.user?.username||req.user?.role||'owner'),at:new Date().toISOString()}},sourceFingerprint:fingerprint,
-      styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(candidate.type)?styling:null};
+      qa:{...candidate.qa,status:'manual-reviewed',issues:[],manualReview:{reason,by:String(req.user?.username||req.user?.role||'owner'),at:new Date().toISOString(),automatedCheck:structuredClone(candidate.qa)}},sourceFingerprint:fingerprint,
+      styling:modelView?styling:null,requestedStyling:modelView?requestedStyling:null};
     const idx=images.findIndex(image=>image.type===rec.type);if(idx>=0)images[idx]=rec;else images.push(rec);
     invalidateDependentSides(images,rec.type);
     po.aiImages[key]=images;
@@ -2779,7 +2791,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         if(check.status!=='pass') {
           current.qaRejected=current.qaRejected||{};
           current.qaRejected[key]=Array.isArray(current.qaRejected[key])?current.qaRejected[key]:[];
-          current.qaRejected[key].push({type,url:saved.url,qa:check,sourceFingerprint:fingerprint,styling:photoStyling,at:new Date().toISOString()});
+          current.qaRejected[key].push({type,url:saved.url,qa:check,sourceFingerprint:fingerprint,styling:photoStyling,requestedStyling:styling,at:new Date().toISOString()});
           current.qaRejected[key]=current.qaRejected[key].slice(-12);
           const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
           const canRepair=openaiPilot.shouldRetryImageCheck(check,imageAttempt,maxImageAttempts);
@@ -2789,7 +2801,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
           break;
         }
         const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot',qa:check,
-          sourceFingerprint:fingerprint,styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type)?photoStyling:null};
+          sourceFingerprint:fingerprint,styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type)?photoStyling:null,requestedStyling:styling};
         const idx=images.findIndex(x=>x.type===type);if(idx>=0)images[idx]=rec;else images.push(rec);
         for(const held of ((current.qaRejected||{})[key]||[]))if(held.type===type&&!held.supersededBy){held.supersededBy=rec.url;held.supersededAt=new Date().toISOString();}
         invalidateDependentSides(images,type);

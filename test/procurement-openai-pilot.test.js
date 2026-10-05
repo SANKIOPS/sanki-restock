@@ -19,8 +19,8 @@ test('missing unisex side views show their own last failure and styling changes 
   assert.match(html,/Missing views: .*Generate missing drafts/);
   assert.match(html,/lastAttempt\.errors\|\|\[\]\)\.slice\(\)\.reverse\(\)\.find\(function\(error\)\{return error\.type===t\[0\];\}\)/);
   assert.match(html,/Matching front view must pass its visual check first/);
-  assert.match(server,/const changedFields=Object\.keys\(styling\)\.filter\(field=>previous\[field\]!==styling\[field\]\)/);
-  assert.match(server,/changedFields\.every\(field=>field===\(gender==='female'\?'maleComplexion':'femaleComplexion'\)\)/);
+  assert.deepEqual(pilot.stylingChanges({maleComplexion:'Fair'},{maleComplexion:'Deep'},group,'model-front'),[]);
+  assert.deepEqual(pilot.stylingChanges({femaleComplexion:'Fair'},{femaleComplexion:'Deep'}, {...group,audience:'Unisex'},'male'),[]);
 });
 
 test('paid model prompts honor safe outfit choices without changing product-only shots',()=>{

@@ -44,6 +44,16 @@ function normalizeStyling(input,group) {
   };
 }
 
+const MODEL_VIEWS = ['female','male','model-front','model-side','model-side-female','model-side-male'];
+function stylingChanges(saved,current,group,type) {
+  if(!MODEL_VIEWS.includes(type))return [];
+  const before=normalizeStyling(saved,group),after=normalizeStyling(current,group);
+  const female=type==='female'||type==='model-side-female'||!['male','model-side-male'].includes(type)&&group.audience!=='Men';
+  return Object.keys(after).filter(field=>field!==(female?'maleComplexion':'femaleComplexion')&&
+    !(field==='bagColour'&&before.bagStyle==='None'&&after.bagStyle==='None')&&before[field]!==after[field])
+    .map(field=>({field,before:before[field],after:after[field]}));
+}
+
 function stylingPrompt(group,styling) {
   const style=normalizeStyling(styling,group),category=garmentCategory(group);
   const casuals=String(group.line||group.collection||'').toLowerCase().includes('casual');
@@ -324,12 +334,14 @@ async function verifyImage({key,group,source,generated,continuitySource=null,typ
     : 'For pairMatch judge the supporting TROUSER CUT by leg silhouette: straight, baggy or tailored. Off-white, beige or another neutral trouser COLOUR is not evidence that straight trousers are wrong. If the trouser silhouette is hidden, return uncertain, never fail.';
   const prompt=`Independently inspect three images in this order: original product photo, generated candidate, then optional matching model-front photo. Compare visible evidence to ${JSON.stringify(checks)}. For EACH named finding return status pass, fail, or uncertain plus one short evidence sentence. Do not list generic complaints or mix criteria. Product garment must retain visible colour, construction and silhouette; if the purchase title or fit conflicts with the original photograph, the photograph wins. The confirmed productColour is authoritative when the original is dark, washed out or colour-ambiguous: if the candidate and matching front agree with productColour, lighting-related shade variation in the original is not a garmentMatch failure. Fail colour only for a clearly different hue from the confirmed productColour. For a women's top, an internal 'muscle fit' label and selected fitted/slim silhouette are not by themselves a contradiction; compare the actual shoulder seam and cut. ${fitRule} Fail only for a clearly changed garment cut; if the source does not establish the cut, return uncertain. singleFrame means one continuous photo/one person, not a diptych. Front angle is front-facing; three-quarter means body visibly rotated about 45 degrees rather than only a different crop. ${pairRule} For shoeMatch judge visible SHOE SHAPE: loafers are loafers whether black or brown. Do not infer leather material from pixels; black loafers do NOT fail 'leather loafers'. For tuckMatch use only a clearly visible waist or hem; if hidden, uncertain, not fail. Check bag style/colour only when a bag is requested; if None, any bag fails. Check shades, cap, chain and watch against selected presence/absence; do not mention a missing cap if None was selected. modelMatch checks visible model count and apparent requested gender: if the candidate clearly depicts a man when a woman was requested, or a woman when a man was requested, return fail regardless of whether the outfit matches. If the face and body are clearly visible and consistent with the requested adult gender, pass; ordinary variation in height, build or styling is not uncertainty. If appearance is genuinely ambiguous or obscured, return uncertain, not pass. Do not infer nationality from a face or penalize a complexion difference that lighting could explain. When a matching front is supplied, outfitContinuity requires the same visible model, featured garment, supporting outfit, shoes and accessories. For product-only views set all model-only findings to pass. If evidence is ambiguous, choose uncertain over fail. Report a failure only when the actual visual evidence contradicts the specific choice; do not judge one field by another field's colour or material.`;
   const productOnlyRule=isModel?'For productOnly return pass; supporting clothing is allowed in model photographs.':'For productOnly, require ONLY the featured product, with no person, visible mannequin, body parts, supporting clothing or invented matching garments. A lower garment plus an invented matching top must fail, even if the trousers look correct. For garmentMatch, compare the featured product, never the supporting clothing from the source.';
-  const content=[{type:'input_text',text:prompt+' '+productOnlyRule},
+  const content=[{type:'input_text',text:prompt+' '+productOnlyRule+' The original may show a person; judge productOnly solely from IMAGE 2, the generated candidate. Never report the person in IMAGE 1 as a person in IMAGE 2.'},
+    {type:'input_text',text:'IMAGE 1 — ORIGINAL REFERENCE. Use this only to identify the featured garment.'},
     {type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'},
+    {type:'input_text',text:'IMAGE 2 — GENERATED CANDIDATE. This is the image being evaluated for productOnly and all other findings.'},
     {type:'input_image',image_url:`data:image/png;base64,${generated.toString('base64')}`,detail:'high'}];
-  if(continuitySource)content.push({type:'input_image',image_url:`data:${continuitySource.mime};base64,${continuitySource.buf.toString('base64')}`,detail:'high'});
+  if(continuitySource)content.push({type:'input_text',text:'IMAGE 3 — MATCHING MODEL FRONT. Use only for outfit continuity.'},{type:'input_image',image_url:`data:${continuitySource.mime};base64,${continuitySource.buf.toString('base64')}`,detail:'high'});
   const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
-    body:JSON.stringify({model,store:false,max_output_tokens:1000,input:[{role:'user',content}],text:{format:{type:'json_schema',name:'sanki_image_check',strict:true,schema:imageCheckSchema()}}}),
+    body:JSON.stringify({model,store:false,max_output_tokens:2200,input:[{role:'user',content}],text:{format:{type:'json_schema',name:'sanki_image_check',strict:true,schema:imageCheckSchema()}}}),
     signal:AbortSignal.timeout(90000)});
   const body=await readApiResponse(response),check=JSON.parse(responseText(body));
   return {...evaluateImageCheck(check,type,style,group),model,usage:body.usage||null};
@@ -372,4 +384,4 @@ async function extractInvoice({key, buffer, mime='image/jpeg', model='gpt-4.1-mi
   return {...JSON.parse(responseText(body)),model,usage:body.usage||null};
 }
 
-module.exports={IMAGE_TYPES,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,canAutoAcceptAdvisoryCheck,canAutoAcceptConfirmedColourCheck,generateSeo,extractInvoice,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
+module.exports={IMAGE_TYPES,MODEL_VIEWS,stylingChanges,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,canAutoAcceptAdvisoryCheck,canAutoAcceptConfirmedColourCheck,generateSeo,extractInvoice,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
