@@ -105,3 +105,15 @@ test('GraphQL throttling retries after the advertised budget refill without disa
   const client={store:'test.myshopify.com',sleep:async ms=>delays.push(ms),request:async()=>({ok:true,status:200,json:async()=>++calls===1?{errors:[{extensions:{code:'THROTTLED'}}],extensions:{cost:{requestedQueryCost:200,throttleStatus:{currentlyAvailable:0,restoreRate:100}}}}:{data:{confirmed:true}}})};
   assert.deepEqual(await inventory.graphql('query{shop{id}}',{},client),{confirmed:true});assert.equal(calls,2);assert.equal(delays[0],2250);
 });
+
+test('live inventory does not wait behind a blocked background Shopify request',async()=>{
+  const {ShopifyClient,shopifyClient}=require('../modules/shopify-client');
+  const original=ShopifyClient.prototype.request;let unblock,timer;
+  const background=shopifyClient._schedule(()=>new Promise(resolve=>{unblock=resolve;}));
+  await new Promise(resolve=>setImmediate(resolve));
+  ShopifyClient.prototype.request=function(){return this._schedule(async()=>({ok:true,status:200,json:async()=>({data:{inventoryReady:true}})}));};
+  try {
+    const result=await Promise.race([inventory.graphql('query{shop{id}}',{}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Inventory waited for the background queue')),500);})]);
+    assert.deepEqual(result,{inventoryReady:true});
+  } finally {clearTimeout(timer);ShopifyClient.prototype.request=original;unblock();await background;}
+});

@@ -1,13 +1,17 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { shopifyClient } = require('./shopify-client');
+const { ShopifyClient } = require('./shopify-client');
+// Inventory GraphQL reads must not wait behind long REST order backfills in
+// the shared client's queue. GraphQL throttling is handled below using Shopify's
+// advertised query budget; care writes still share the stock-movement serial lock.
+const inventoryClient = new ShopifyClient({ minIntervalMs: 250 });
 const API = '2026-07';
 const names = ['available', 'on_hand', 'committed', 'quality_control', 'damaged', 'reserved', 'safety_stock'];
 const dataDir = process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..');
 let cached, inflight, generation = 0;
 function fail(message, status = 409) { const e = new Error(message); e.status = status; throw e; }
-async function graphql(query, variables, client = shopifyClient) {
+async function graphql(query, variables, client = inventoryClient) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const r = await client.request(`https://${client.store}/admin/api/${API}/graphql.json`, { method: 'POST', body: JSON.stringify({ query, variables }), timeout: 20000 });
     const d = await r.json();
@@ -36,7 +40,7 @@ function normalizeItem(n) {
   return { id: n.id, sku: (n.sku || '').trim().toUpperCase(), tracked: n.tracked, variantId: n.variant.id, variant: n.variant.title, inventoryPolicy: n.variant.inventoryPolicy, unitCost: Number(n.unitCost?.amount) || 0, product: n.variant.product, levels };
 }
 const levelFields = 'nodes{location{id name} quantities(names:$names){name quantity}} pageInfo{hasNextPage endCursor}';
-async function fetchSnapshot(client = shopifyClient) {
+async function fetchSnapshot(client = inventoryClient) {
   const items = []; let after = null;
   do {
     const d = await graphql(`query($after:String,$names:[String!]!){inventoryItems(first:50,after:$after){nodes{id sku tracked unitCost{amount} variant{id title inventoryPolicy product{id handle title productType tags status featuredImage{url}}} inventoryLevels(first:2){${levelFields}}} pageInfo{hasNextPage endCursor}}}`, { after, names }, client);
