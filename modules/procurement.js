@@ -2436,13 +2436,23 @@ router.get('/api/procurement/pos/:id/studio', async (req, res) => {
     if (!po) return res.status(404).json({ success: false, error: 'PO not found' });
     // The studio represents received stock that can be posted. Zero-quantity
     // ordered lines remain in publicPo() for audit but must never become cards.
+    const snapshot = JSON.stringify(po);
     const receivedLines=(po.lines||[]).filter(line=>num(line.qty)>0);
     const preview = await computePreview(s, { lines: receivedLines, vendor: po.vendor, exRate: po.exRate, freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
     const groups = await newGroupsOf(s, po);
     const restoredKnownSet = restorePo0006SavedSet(po, groups);
+    const interruptedAttempts = expireStalePaidAttempts(po);
     const promotedAdvisoryImages = promoteAdvisoryHeldImages(po,groups);
     const heldUncheckedImages = holdUncheckedImages(po,groups);
-    if (restoredKnownSet||promotedAdvisoryImages||heldUncheckedImages) saveStore(s);
+    if (interruptedAttempts||restoredKnownSet||promotedAdvisoryImages||heldUncheckedImages) {
+      const latest = loadStore();
+      // A generation may finish during the asynchronous catalogue read. Keep
+      // its new result instead of persisting this older studio snapshot.
+      if (JSON.stringify(latest.pos[req.params.id]) === snapshot) {
+        latest.pos[req.params.id] = po;
+        saveStore(latest);
+      }
+    }
     const byKey = new Map(groups.map(g => [g.key, g]));
     // Return the complete saved calculation as well as the studio groups. The
     // Purchases page uses this read-only response to restore the Shopify post
@@ -2515,6 +2525,9 @@ router.post('/api/procurement/pos/:id/image-styling', async (req,res) => {
   } catch(e) { res.status(500).json({success:false,error:e.message}); }
 });
 const paidPilotInFlight = new Set();
+const paidPilotWorkerId = crypto.randomUUID();
+const paidPilotWorkerStartedAt = Date.now();
+const activePaidAttemptIds = new Set();
 function refreshImageStylingCheck(image,styling,group) {
   if(image.source!=='openai-pilot'||!image.styling||!openaiPilot.MODEL_VIEWS.includes(image.type))return;
   const changes=openaiPilot.stylingChanges(image.requestedStyling||image.styling,styling,group,image.type);
@@ -2535,10 +2548,17 @@ function refreshImageStylingCheck(image,styling,group) {
 function expireStalePaidAttempts(po) {
   let changed=false;
   for(const attempt of ((po.openaiPilot||{}).attempts||[])) {
-    if(attempt.status==='running' && Date.now()-Date.parse(attempt.startedAt||'')>90*60*1000) {
+    if(attempt.status!=='running' || activePaidAttemptIds.has(attempt.id))continue;
+    const startedAt=Date.parse(attempt.startedAt||'');
+    // Generation runs in this app's one server process. A restarted worker
+    // cannot resume a saved job, but its images and paid-call audit survive.
+    const lostWorker=!!attempt.workerId || Number.isFinite(startedAt)&&startedAt<paidPilotWorkerStartedAt;
+    const stale=!Number.isFinite(startedAt)||Date.now()-startedAt>90*60*1000;
+    if(lostWorker||stale) {
       attempt.status='interrupted';attempt.completedAt=new Date().toISOString();
+      attempt.interruptionReason=lostWorker?'worker-restarted':'stale-job';
       attempt.errors=Array.isArray(attempt.errors)?attempt.errors:[];
-      attempt.errors.push({type:'job',error:'Generation stopped or lost contact. Saved drafts remain; review them before an explicit retry.'});
+      attempt.errors.push({type:'job',error:'Generation stopped or lost contact after the server restarted or lost the job. Saved drafts and earlier paid calls remain in the audit. Review them before explicitly generating again; no automatic paid retry was made.'});
       changed=true;
     }
   }
@@ -2693,6 +2713,7 @@ router.post('/api/procurement/pos/:id/qa-review', async (req,res) => {
 // No automatic approvals or Shopify writes.
 router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
   const lockKey=req.params.id;
+  let activeAttemptId;
   if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Paid image-generation access required.'});
   if (!process.env.OPENAI_API_KEY) return res.status(503).json({success:false,error:'Set OPENAI_API_KEY in Railway before starting the paid pilot.'});
   if (paidPilotInFlight.has(lockKey)) return res.status(409).json({success:false,error:'Another paid generation is running for this PO.'});
@@ -2743,7 +2764,9 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     if(!po.imageStyling[key])po.imageStyling[key]=styling;
     else if(JSON.stringify(po.imageStyling[key])!==JSON.stringify(styling))return res.status(409).json({success:false,error:'Styling changed or is still saving. Wait for it to save, then retry.'});
     const maxImageAttempts=2;
-    const attempt={groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,maxImageAttempts,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
+    activeAttemptId=crypto.randomUUID();
+    const attempt={id:activeAttemptId,workerId:paidPilotWorkerId,groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,maxImageAttempts,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
+    activePaidAttemptIds.add(activeAttemptId);
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});
     const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
@@ -2861,7 +2884,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       if(record){record.errors.push({type:'job',error:e.message});record.status='failed';record.completedAt=new Date().toISOString();saveStore(s);}
     }
   }
-  finally{paidPilotInFlight.delete(lockKey);}
+  finally{activePaidAttemptIds.delete(activeAttemptId);paidPilotInFlight.delete(lockKey);}
 });
 router.post('/api/procurement/pos/:id/codex-batch', async (req, res) => {
   try {
@@ -3033,6 +3056,7 @@ router.post('/api/procurement/pos/:id/seo', async (req, res) => {
 async function productApprovalContext(id) {
   const initial = loadStore(), before = initial.pos[id];
   if (!before || isLockedPo(before)) throw new Error('An editable purchase is required.');
+  if (expireStalePaidAttempts(before)) saveStore(initial);
   const snapshot = JSON.stringify(before);
   const preview = await computePreview(initial, { lines: (before.lines || []).filter(line => num(line.qty) > 0), vendor: before.vendor, exRate: before.exRate, freightPerGram: before.freightPerGram, origin: before.origin, transportTotal: before.transportTotal });
   // Catalogue reads can yield to styling, generation or receipt saves. Never

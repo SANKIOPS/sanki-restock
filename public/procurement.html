@@ -2551,6 +2551,21 @@
       }catch(e){note('Regeneration stopped: '+e.message);alert(e.message);}
       finally{if(button.isConnected){button.disabled=false;button.textContent=label;}}
     }
+    function refreshGenerationProgress(np,i,button){
+      var poId=receiveId,label=button.textContent;
+      readSeoFields(np,i);
+      button.disabled=true;button.textContent='Checking progress…';
+      return (studio.styleSaves[np.key]||Promise.resolve()).then(function(){
+        return fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/openai-pilot-status?groupKey='+encodeURIComponent(np.key)).then(readJson);
+      }).then(function(result){
+        if(!result.success)throw new Error(result.error||'Could not read generation progress.');
+        if(receiveId!==poId)return;
+        var po=lastReceive.po,attempts=((po.openaiPilot||{}).attempts)||[],record=attempts.slice().reverse().find(function(x){return x.groupKey===np.key;});
+        if(record)Object.assign(record,result.pilot);
+        studio.images[np.key]=result.images||[];studio.rejected[np.key]=result.rejectedImages||[];
+        rerenderCard(i);
+      }).catch(function(error){alert(error.message);}).finally(function(){if(button.isConnected){button.disabled=false;button.textContent=label;}});
+    }
     function studioCard(np,i){
       var imgs=studio.images[np.key]||[];
       var byType={}; imgs.forEach(function(x){ byType[x.type]=x; });
@@ -2571,7 +2586,7 @@
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span><div class="muted" style="font-size:12px;margin-top:2px"><b>SKU:</b> '+esc(productSkus.join(', ')||'Not assigned')+'</div>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div style="display:flex;gap:6px;flex-wrap:wrap">'+(canStartPaidImages()?'<button type="button" class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+((missing.images||[]).length?'Generate product images (paid)':'Images generated — review below')+'</button> '+(existingPaidViews.length?'<button type="button" class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+'<button type="button" class="btn ghost sm" data-discard-product style="color:#b42318;border-color:#fca5a5">Did not arrive — remove from posting</button></div></div>'+
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">'+(canStartPaidImages()?'<button type="button" class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+((missing.images||[]).length?'Generate product images (paid)':'Images generated — review below')+'</button> '+(existingPaidViews.length?'<button type="button" class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+(hasPaidAttempt?'<button type="button" class="btn ghost sm" data-check-generation>Check generation progress (free)</button>':'')+'<button type="button" class="btn ghost sm" data-discard-product style="color:#b42318;border-color:#fca5a5">Did not arrive — remove from posting</button></div></div>'+
         '<div data-pilot-message role="status" style="font-size:12px;min-height:18px;margin:6px 0;color:var(--emerald-d)">'+attemptNote+'</div>'+
         (hasPaidAttempt&&missingNote?'<div class="muted" style="font-size:11px;margin-bottom:6px">'+esc(missingNote)+'</div>':'');
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
@@ -2765,6 +2780,9 @@
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
+      var progress=host.querySelector('[data-check-generation]');if(progress)progress.onclick=function(){refreshGenerationProgress(np,i,progress);};
+      var lastAttempt=((((lastReceive||{}).po||{}).openaiPilot||{}).attempts||[]).slice().reverse().find(function(x){return x.groupKey===np.key;});
+      if(lastAttempt&&lastAttempt.status==='running')Array.prototype.forEach.call(host.querySelectorAll('[data-openai-pilot],[data-regen-product],[data-regen],[data-regen-held]'),function(button){button.disabled=true;button.title='Generation is in progress. Use Check generation progress (free).';});
       var pick=host.querySelector('[data-selectproduct]');if(pick)pick.onchange=function(){studio.selected[np.key]=pick.checked;updateStudioSelection();};
       var pilot=host.querySelector('[data-openai-pilot]'); if(pilot) pilot.onclick=function(){generatePaidGroups('single',np.key);};
       var approve=host.querySelector('[data-approve-product]');if(approve)approve.onclick=function(){approveProduct(np,i,approve);};
