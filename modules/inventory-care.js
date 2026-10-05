@@ -21,7 +21,7 @@ function ensureNoConflict(s, lines, ignoreId) {
   for (const l of lines) {
     if (s.operations.some(o => o.id !== ignoreId && ['sync_pending', 'review_required'].includes(o.status) && o.lines.some(x => x.sku === l.sku))) state.fail('Resolve the pending Shopify result for ' + l.sku + ' first.');
     const m = moves.load();
-    if (m.movements.some(o => o.sku === l.sku && o.status !== 'approved')) state.fail('Review the existing stock movement for ' + l.sku + ' first.');
+    if (m.movements.some(o => o.sku === l.sku && !['approved','cancelled'].includes(o.status))) state.fail('Review the existing stock movement for ' + l.sku + ' first.');
   }
 }
 function makeOpen(s, body, user, live) {
