@@ -2304,7 +2304,7 @@
     function studioReadyFor(np){
       if((np.variantConflicts||[]).length) return false;
       var imgs=studio.images[np.key]||[]; var required=paidTypesFor(np);
-      var okImg=required.length>0&&required.every(function(type){return imgs.some(function(x){return x.type===type&&x.approved&&x.url&&x.url!==np.photoUrl&&(!x.qa||x.qa.status==='pass'||x.qa.status==='manual-reviewed');});});
+      var okImg=required.length>0&&required.every(function(type){return imgs.some(function(x){return x.type===type&&x.approved&&x.url&&x.url!==np.photoUrl&&(x.qa&&(x.qa.status==='pass'||x.qa.status==='manual-reviewed'));});});
       var seo=studio.seo[np.key], copy=seo&&seo.seo||{};
       var winter=/^winter$/i.test(np.season||'')||/^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(np.productType||'');
       var badWomenCopy=np.audience==='Women'&&!winter&&(/\bmuscle\s*fit\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' '))||/\b(?<!polo\s)t[ -]?shirts?\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' ')));
@@ -2361,7 +2361,7 @@
       return [];
     }
     function missingPaidDrafts(np){
-      var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url&&(!v.qa||v.qa.status==='pass'||v.qa.status==='manual-reviewed');}).map(function(v){return v.type;});
+      var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url&&(v.qa&&(v.qa.status==='pass'||v.qa.status==='manual-reviewed'));}).map(function(v){return v.type;});
       var copy=studio.seo[np.key];
       return {images:paidTypesFor(np).filter(function(type){return existing.indexOf(type)<0;}),seo:!(copy&&copy.seo&&(copy.approved||copy.source==='openai-pilot'||copy.source==='openai'))};
     }
@@ -2445,19 +2445,22 @@
     async function regeneratePaidImages(np,i,types,button){
       var po=(lastReceive&&lastReceive.po)||{}, current=studio.images[np.key]||[];
       var held=studio.rejected[np.key]||[];
-      var allowed=paidTypesFor(np), chosen=types.filter(function(type){return allowed.indexOf(type)>=0&&(current.some(function(image){return image.type===type&&image.url;})||held.some(function(image){return image.type===type&&image.url&&!image.supersededBy;}));});
-      if(!chosen.length){alert('No existing image was found for the selected view.');return;}
+      var allowed=paidTypesFor(np), chosen=types.filter(function(type){return allowed.indexOf(type)>=0;});
+      if(!chosen.length){alert('Select a supported image view. A back view needs a real back reference.');return;}
       if(po.status!=='received'||productNeedsSavedWeight(np)){alert('Receive and save the weight for this product before regeneration.');return;}
       if(!np.photoUrl){alert('Upload the original front reference first.');return;}
-      if(!confirm('Regenerate '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(['upper','lower'].indexOf(garmentCat(np.productType))>=0&&paidStylingOf(np).fit!=='Auto'?1:0)+' original fit/length check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
+      if(!confirm('Generate fresh '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(['upper','lower'].indexOf(garmentCat(np.productType))>=0&&paidStylingOf(np).fit!=='Auto'?1:0)+' original fit/length check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
       var label=button.textContent;
       function note(message){var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node)node.textContent=message;}
       button.disabled=true;button.textContent='Regenerating…';
       try{
         await (studio.styleSaves[np.key]||Promise.resolve());
         var attempted=(((po.openaiPilot||{}).attempts)||[]).some(function(attempt){return attempt.groupKey===np.key;});
-        var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,retry:attempted,regenerateTypes:chosen,maxImageAttempts:2,styling:paidStylingOf(np)})}).then(readJson);
+        var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,retry:attempted,regenerateTypes:chosen,skipSeo:true,maxImageAttempts:2,styling:paidStylingOf(np)})}).then(readJson);
         if(!start.success)throw new Error(start.error||'Could not start regeneration.');
+        po.openaiPilot=po.openaiPilot||{attempts:[]};
+        var queuedAttempt=start.pilot||{groupKey:np.key,status:'running'};
+        po.openaiPilot.attempts.push(queuedAttempt);
         note('Regenerating '+chosen.length+' selected image view(s)…');
         var result;
         for(var poll=0;poll<900;poll++){
@@ -2467,6 +2470,7 @@
           if(result.pilot.status!=='running')break;
         }
         if(result.pilot.status==='running')throw new Error('Regeneration is still running. Reopen this PO to inspect saved drafts.');
+        Object.assign(queuedAttempt,result.pilot);
         studio.images[np.key]=result.images||[];studio.rejected[np.key]=result.rejectedImages||[];
         if(result.seo&&result.seo.seo)studio.seo[np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
         rerenderCard(i);
@@ -2559,7 +2563,7 @@
             '<div style="margin-top:5px"><label class="btn ghost sm" style="cursor:pointer">Upload back photo<input type="file" accept="image/*" data-backup="'+i+'" style="display:none"></label></div>';
         } else {
           empty='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;background:var(--ivory2);border-radius:6px">— not generated —</div>'+
-            '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate this</button>'+chg+'</div>';
+            '<div style="margin-top:5px"><button class="btn ghost sm" data-regen="'+i+'" data-type="'+t[0]+'">Generate image (paid)</button>'+chg+'</div>';
         }
         if(t[0]==='original') empty='<div style="display:flex;gap:5px;align-items:start;justify-content:center">'+
           '<div style="width:50%"><div class="muted" style="font-size:10px">Front reference</div>'+(np.photoUrl?'<img data-zoom src="'+esc(np.photoUrl)+'" title="Original front · never posted" style="width:100%;height:105px;object-fit:contain;cursor:zoom-in">':'<div class="muted">Add front in purchase lines</div>')+'</div>'+
@@ -2570,16 +2574,17 @@
           var viewError=lastAttempt&&(lastAttempt.errors||[]).slice().reverse().find(function(error){return error.type===t[0];});
           var frontType={'model-side':'model-front','model-side-female':'female','model-side-male':'male'}[t[0]];
           var frontImage=frontType&&byType[frontType];
-          var frontReady=!frontType||(frontImage&&frontImage.url&&(!frontImage.qa||['pass','manual-reviewed'].indexOf(frontImage.qa.status)>=0));
+          var frontReady=!frontType||(frontImage&&frontImage.url&&(frontImage.qa&&['pass','manual-reviewed'].indexOf(frontImage.qa.status)>=0));
           empty='<div class="muted" style="padding:16px 4px;font-size:12px">'+
             (viewError?'<b>Previous attempt did not complete this view</b><br>'+esc(viewError.error):!frontReady?'Matching front view must pass its visual check first.':'Not generated yet. Use Generate missing drafts (paid).')+'</div>';
         }
         grid+='<div style="border:1px solid var(--line);border-radius:8px;padding:6px;text-align:center">'+
           '<div class="muted" style="font-size:11px;margin-bottom:4px">'+esc(t[1])+'</div>'+
           (im&&t[0]!=='original'?('<img data-zoom src="'+esc(im.url)+'" title="Click to enlarge" style="width:100%;height:'+(t[0].indexOf('model-')===0||t[0]==='female'||t[0]==='male'?'190':'160')+'px;object-fit:contain;background:var(--ivory2);border-radius:6px;cursor:zoom-in'+(im.approved?';outline:3px solid #059669':'')+'">'+
-              '<div style="display:flex;gap:4px;margin-top:5px;justify-content:center;align-items:center">'+
-              '<span class="pill '+(im.approved?'exist':'')+'">'+(im.approved?'Approved with product':'Ready for product approval')+'</span>'+
+              '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;justify-content:center;align-items:center">'+
+              '<span class="pill '+(im.approved?'exist':'')+'">'+(im.qa&&['pass','manual-reviewed'].indexOf(im.qa.status)>=0?(im.approved?'Approved with product':'Ready for product approval'):'Needs visual verification')+'</span>'+
               '<a class="btn ghost sm" href="'+esc(im.url)+'" download="'+esc((np.designCode||np.key||'image')+'-'+t[0])+((im.url.match(/\.[a-z0-9]+$/i)||['.jpg'])[0])+'" title="Download full-size to check quality" style="text-decoration:none">⬇</a>'+
+              '<button class="btn ghost sm" data-reject-image data-image-type="'+esc(t[0])+'" data-image-url="'+esc(im.url)+'" style="color:#b42318">Reject image</button>'+
               (t[0]==='original'?'':(canStartPaidImages()?'<button class="btn ghost sm" data-paid-regen="'+i+'" data-type="'+t[0]+'" title="Regenerate this image with the paid OpenAI service"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate</button>':''))+chg+'</div>'+
               (im.qa&&im.qa.status==='manual-reviewed'?'<div class="muted" style="font-size:11px;margin-top:5px">Owner-reviewed: '+esc((im.qa.manualReview||{}).reason||'')+'</div>':im.qa&&im.qa.status!=='pass'?'<div class="banner warn" style="font-size:11px;margin-top:5px">Visual check: '+esc((im.qa.issues||[]).join('; ')||im.qa.status)+'</div>':visibleWarnings.length?'<div class="banner warn" style="font-size:11px;margin-top:5px">Check before approving: '+esc(visibleWarnings.join('; '))+'</div>':''))
              :empty)+
@@ -2607,6 +2612,7 @@
               '<img data-zoom src="'+esc(image.url)+'" title="Held generated photo — click to enlarge" style="width:100%;height:190px;object-fit:contain;background:var(--ivory2);border-radius:6px;cursor:zoom-in">'+
               '<div style="font-size:10px;color:#92400e;margin:5px 0">'+esc(reason)+'</div>'+
               '<div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn sm" data-accept-held data-held-type="'+esc(image.type||'')+'" data-held-url="'+esc(image.url)+'">Use saved image</button>'+
+              '<button class="btn ghost sm" data-reject-image data-image-type="'+esc(image.type||'')+'" data-image-url="'+esc(image.url)+'" style="color:#b42318">Reject image</button>'+
               '<button class="btn ghost sm" data-regen-held data-type="'+esc(image.type||'')+'">Regenerate this view</button>'+
               '<a class="btn ghost sm" href="'+esc(image.url)+'" download title="Download full-size held photo">⬇</a></div></div>';
           }).join('')+'</div></div>';
@@ -2711,6 +2717,21 @@
         var types=(studio.images[np.key]||[]).filter(function(image){return image.url&&paidTypesFor(np).indexOf(image.type)>=0;}).map(function(image){return image.type;});
         regeneratePaidImages(np,i,types,productRegen);
       };
+      Array.prototype.forEach.call(host.querySelectorAll('[data-reject-image]'),function(button){button.onclick=function(){
+        var reason=prompt('Why is this image incorrect? Rejection is free. A new paid generation starts only when you click Generate again.','Wrong garment or added clothing');
+        if(reason===null)return;
+        if(!reason.trim()||reason.trim().length>500){alert('Give a rejection reason (1–500 characters).');return;}
+        button.disabled=true;
+        fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/reject-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,type:button.getAttribute('data-image-type'),url:button.getAttribute('data-image-url'),reason:reason.trim()})})
+          .then(readJson).then(function(result){
+            if(!result.success)throw new Error(result.error||'Could not reject image.');
+            studio.images[np.key]=result.images||[];studio.rejected[np.key]=result.rejectedImages||[];
+            if(studio.seo[np.key])studio.seo[np.key].approved=false;
+            rerenderCard(i);
+            var message=el('scard'+i).querySelector('[data-pilot-message]');
+            if(message)message.textContent='Image rejected and saved in audit history. Generate again to create a fresh draft from the original reference. No paid call was made.';
+          }).catch(function(error){button.disabled=false;alert(error.message);});
+      };});
       Array.prototype.forEach.call(host.querySelectorAll('[data-paid-regen]'),function(button){button.onclick=function(){regeneratePaidImages(np,i,[button.getAttribute('data-type')],button);};});
       Array.prototype.forEach.call(host.querySelectorAll('[data-accept-held]'),function(button){button.onclick=function(){
         var type=button.getAttribute('data-held-type'),url=button.getAttribute('data-held-url');
@@ -2758,7 +2779,7 @@
           }).catch(function(e){alert(e.message);}).finally(function(){cb.disabled=false;});
       };
       var gi=host.querySelector('[data-genimg]'); if(gi) gi.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImagesSequential(np,i); };
-      Array.prototype.forEach.call(host.querySelectorAll('[data-regen]'),function(b){ if(b.getAttribute('data-type').indexOf('model-')===0 || b.getAttribute('data-type')==='detail'){b.remove();return;} b.title='Gemini generation: paid API usage'; b.onclick=function(){ if(confirm('This calls the paid Gemini API. Continue?')) genImages(np,i,[b.getAttribute('data-type')],b); }; });
+      Array.prototype.forEach.call(host.querySelectorAll('[data-regen]'),function(b){b.disabled=!canStartPaidImages()||!!(openaiPilotConfig&&!openaiPilotConfig.configured);b.onclick=function(){regeneratePaidImages(np,i,[b.getAttribute('data-type')],b);};});
       Array.prototype.forEach.call(host.querySelectorAll('[data-approveimg]'),function(b){ b.onclick=function(){ toggleImg(np,i,b.getAttribute('data-type')); }; });
       var gs=host.querySelector('[data-genseo]'); if(gs) gs.onclick=function(){ if(confirm('Generate SEO names with OpenAI? This uses your existing OpenAI API balance.'))genSeoFor(np,i,gs); };
       var ss=host.querySelector('[data-saveseo]'); if(ss) ss.onclick=function(){ saveSeo(np,i,false); };
