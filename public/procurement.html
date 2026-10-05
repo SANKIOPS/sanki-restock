@@ -1813,8 +1813,40 @@
         (!errors.length?'<button type="button" class="btn" id="resumePostingBtn" style="margin-top:10px">Check Shopify &amp; post only missing products</button><span id="resumePostingStatus" class="muted" style="margin-left:8px"></span>':'')+
         '</div>';
     }
+    function setRecoveryBusy(busy){
+      ['previewShopifyRecoveryBtn','recoveryProgressBtn','commitShopifyRecoveryBtn','shopifyRecoveryInventory','shopifyRecoveryRestocks','shopifyRecoveryPrices'].forEach(function(id){var control=el(id);if(control)control.disabled=busy;});
+    }
+    async function watchShopifyRecovery(poId,status,runId){
+      setRecoveryBusy(true);
+      var recoveryCommit=el('commitShopifyRecoveryBtn');if(recoveryCommit)recoveryCommit.remove();
+      try{
+        while(el('shopifyRecoveryResult')===status){
+          var progress=await readJson(await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/shopify-recovery/status',{cache:'no-store'}));
+          if(el('shopifyRecoveryResult')!==status)return;
+          if(!progress.success)throw new Error(progress.error||'Could not read recovery progress.');
+          var history=progress.history||[],run=runId?history.find(function(r){return r.id===runId;}):history[history.length-1];
+          if(!run){status.textContent=progress.active?'Checking the recovery preview…':'No saved recovery attempts yet.';if(!progress.active)return;}
+          else if(progress.active&&run.status!=='running'&&!runId){status.textContent='Checking the recovery preview…';}
+          else if(run.status==='running'&&progress.active){
+            status.textContent='Recovery running: '+(run.completed||[]).length+' / '+run.total+' drafts verified. '+(run.currentGroup?'Current product: '+run.currentGroup+'. ':'')+'You can return later and check recovery progress.';
+          }else{
+            var count=(run.created||[]).length;
+            status.textContent=run.status==='complete'?'Recovery completed: '+count+' Shopify draft(s) recreated. '+run.pieces+' pieces set on the new variants.':'Recovery stopped: '+count+' draft(s) were saved. '+(run.errors||[]).join('; ')+' Check recovery availability to see which products remain missing.';
+            var commit=el('commitShopifyRecoveryBtn');if(commit)commit.remove();
+            return;
+          }
+          await new Promise(function(resolve){setTimeout(resolve,3000);});
+        }
+      }catch(error){status.textContent='Could not read recovery progress: '+error.message+'. Use Check recovery progress before starting another attempt.';}
+      finally{if(el('shopifyRecoveryResult')===status)setRecoveryBusy(false);}
+    }
+    async function checkShopifyRecoveryProgress(poId){
+      var host=el('shopifyRecoveryPreview'),status=el('shopifyRecoveryResult');
+      if(!status){host.innerHTML='<div id="shopifyRecoveryResult" role="status"></div>';status=el('shopifyRecoveryResult');}
+      await watchShopifyRecovery(poId,status);
+    }
     async function previewShopifyRecovery(poId){
-      var host=el('shopifyRecoveryPreview'),button=el('previewShopifyRecoveryBtn'),mode=el('shopifyRecoveryInventory').value,includeRestocks=el('shopifyRecoveryRestocks').checked,priceMode=el('shopifyRecoveryPrices').value;
+      var host=el('shopifyRecoveryPreview'),button=el('previewShopifyRecoveryBtn'),mode=el('shopifyRecoveryInventory').value,includeRestocks=el('shopifyRecoveryRestocks').checked,priceMode=el('shopifyRecoveryPrices').value,watching=false;
       button.disabled=true;host.textContent='Checking current Shopify SKUs and saved listing files…';
       try{
         var response=await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/shopify-recovery?inventoryMode='+encodeURIComponent(mode)+'&includeRestocks='+includeRestocks+'&priceMode='+encodeURIComponent(priceMode)),d=await readJson(response);
@@ -1828,21 +1860,23 @@
           '<p class="muted">Products are recreated as Shopify drafts using saved listing text and previously approved photos. No AI requests are made. Existing stock and the posted purchase remain intact.</p>'+
           (ready.length?'<button type="button" class="btn" id="commitShopifyRecoveryBtn">Recreate '+ready.length+' missing Shopify drafts</button>':'')+'<div id="shopifyRecoveryResult" role="status" style="margin-top:10px"></div>';
         var prior=(d.history||[]).filter(function(run){return run.status==='needs-reconciliation';});
-        if(prior.length)el('shopifyRecoveryResult').textContent='Earlier recovery needs reconciliation: '+prior.map(function(run){return (run.errors||[]).join('; ');}).join(' | ');
+        if(prior.length)el('shopifyRecoveryResult').textContent='Earlier recovery needs reconciliation: '+prior.map(function(run){return (run.created||[]).length+' saved draft(s). '+(run.errors||[]).join('; ');}).join(' | ');
+        if(d.active){watching=true;var running=(d.history||[]).find(function(run){return run.status==='running';});void watchShopifyRecovery(poId,el('shopifyRecoveryResult'),running&&running.id);return;}
         var commit=el('commitShopifyRecoveryBtn');if(commit)commit.onclick=async function(){
           if(!confirm('Recreate '+ready.length+' deleted products as Shopify DRAFTS and set '+qty+' pieces on their new variants at the prices shown in this preview? Existing products and existing restock inventory will be preserved. No AI generation or payment is required.'))return;
           commit.disabled=true;button.disabled=true;el('shopifyRecoveryInventory').disabled=true;el('shopifyRecoveryRestocks').disabled=true;el('shopifyRecoveryPrices').disabled=true;
-          var status=el('shopifyRecoveryResult');status.textContent='Recreating missing drafts. Keep this page open; do not start another recovery.';
+          var status=el('shopifyRecoveryResult');status.textContent='Starting recovery. Saved progress will remain available if the connection is interrupted.';
           try{
-            var result=await readJson(await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/shopify-recovery',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approve:true,fingerprint:plan.fingerprint,inventoryMode:mode,includeRestocks:includeRestocks,priceMode:priceMode})}));
+            var result=await readJson(await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/shopify-recovery',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approve:true,fingerprint:plan.fingerprint,inventoryMode:mode,includeRestocks:includeRestocks,priceMode:priceMode,background:true})}));
             if(!result.success)throw new Error(result.error+((result.created||[]).length?' '+result.created.length+' draft(s) were created; inspect them before retrying.':''));
+            if(result.runId){await watchShopifyRecovery(poId,status,result.runId);return;}
             status.textContent='Recovery completed: '+result.created.length+' Shopify draft(s) recreated. '+qty+' pieces set on the new variants. Existing products and existing restock inventory were preserved.';
             commit.remove();
-          }catch(error){status.textContent=error.message;commit.disabled=true;}
+          }catch(error){status.textContent=error.message+'. Use Check recovery progress before retrying; some drafts may already have been saved.';commit.disabled=true;}
           finally{button.disabled=false;el('shopifyRecoveryInventory').disabled=false;el('shopifyRecoveryRestocks').disabled=false;el('shopifyRecoveryPrices').disabled=false;}
         };
       }catch(error){host.textContent=error.message;}
-      finally{button.disabled=false;}
+      finally{if(!watching)button.disabled=false;}
     }
 
     function renderPoDetail(po){
@@ -1866,7 +1900,7 @@
         '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><span class="pill '+(STATUS_META[po.status]||['adv'])[0]+'">'+esc((STATUS_META[po.status]||['',po.status])[1])+'</span>'+actions+'</div></div>';
       h+=postingResultPanel(po);
       if(po.status==='posted'&&me.canManage) h+='<div class="banner" style="margin-top:10px"><button type="button" class="btn ghost" id="repairShopifyImagesBtn">Check &amp; repair missing Shopify photos</button><span id="repairShopifyImagesStatus" class="muted" style="margin-left:8px">Uses saved approved photos only; no AI generation.</span></div>';
-      if(po.status==='posted'&&me.canManage) h+='<details class="po-fold" id="shopifyRecoveryFold"><summary>Recover deleted Shopify drafts <span class="po-fold-summary">Check saved listings and recreate only missing products</span></summary><div class="po-fold-body"><label>Inventory on recreated variants <select id="shopifyRecoveryInventory"><option value="zero">Zero — check current stock before setting inventory</option><option value="received">Restore saved received quantities from this PO</option></select></label> <label>Missing selling prices <select id="shopifyRecoveryPrices"><option value="saved">Require saved prices</option><option value="calculated">Use calculated MRP when no saved price remains</option><option value="zero">Use ₹0 on drafts when no saved price remains</option></select></label> <label><input type="checkbox" id="shopifyRecoveryRestocks"> Include deleted restock variants using saved PO quantities</label> <button type="button" class="btn ghost" id="previewShopifyRecoveryBtn">Check recovery availability</button><div id="shopifyRecoveryPreview" style="margin-top:10px">This check does not write to Shopify. Existing stock and zero-quantity lines are preserved. Select the option to recover deleted restock variants too.</div></div></details>';
+      if(po.status==='posted'&&me.canManage) h+='<details class="po-fold" id="shopifyRecoveryFold"><summary>Recover deleted Shopify drafts <span class="po-fold-summary">Check saved listings and recreate only missing products</span></summary><div class="po-fold-body"><label>Inventory on recreated variants <select id="shopifyRecoveryInventory"><option value="zero">Zero — check current stock before setting inventory</option><option value="received">Restore saved received quantities from this PO</option></select></label> <label>Missing selling prices <select id="shopifyRecoveryPrices"><option value="saved">Require saved prices</option><option value="calculated">Use calculated MRP when no saved price remains</option><option value="zero">Use ₹0 on drafts when no saved price remains</option></select></label> <label><input type="checkbox" id="shopifyRecoveryRestocks"> Include deleted restock variants using saved PO quantities</label> <button type="button" class="btn ghost" id="previewShopifyRecoveryBtn">Check recovery availability</button> <button type="button" class="btn ghost" id="recoveryProgressBtn">Check recovery progress</button><div id="shopifyRecoveryPreview" style="margin-top:10px">This check does not write to Shopify. Existing stock and zero-quantity lines are preserved. Select the option to recover deleted restock variants too.</div></div></details>';
       if(!posted) h+='<details class="po-fold" id="costCalculationFold"><summary>Cost calculation <span class="po-fold-summary">Landed cost and freight breakdown</span></summary><div class="po-fold-body">'+purchaseCalculationPanel(po)+'</div></details>';
       h+='<details class="po-fold" id="receivedProductsFold"><summary>Received products &amp; corrections <span class="po-fold-summary">'+(po.lines||[]).length+' rows · photos, quantities, weights and product details</span></summary><div class="po-fold-body">';
       // rates + date-of-receive carried from the advance purchase — editable here before final calc
@@ -1988,6 +2022,7 @@
         }).catch(function(e){repairBtn.disabled=false;repairStatus.textContent=e.message;alert(e.message);});
       };
       var recoveryBtn=el('previewShopifyRecoveryBtn');if(recoveryBtn)recoveryBtn.onclick=function(){previewShopifyRecovery(po.id);};
+      var recoveryProgress=el('recoveryProgressBtn');if(recoveryProgress)recoveryProgress.onclick=function(){checkShopifyRecoveryProgress(po.id);};
       var recoveryPrices=el('shopifyRecoveryPrices');if(recoveryPrices)recoveryPrices.onchange=function(){el('shopifyRecoveryPreview').textContent='Pricing choice changed. Check recovery availability again before recreating drafts.';};
       var recoveryRestocks=el('shopifyRecoveryRestocks');if(recoveryRestocks)recoveryRestocks.onchange=function(){el('shopifyRecoveryPreview').textContent='Restock choice changed. Check recovery availability again before recreating drafts.';};
       var recoveryMode=el('shopifyRecoveryInventory');if(recoveryMode)recoveryMode.onchange=function(){el('shopifyRecoveryPreview').textContent='Inventory choice changed. Check recovery availability again before recreating drafts.';};

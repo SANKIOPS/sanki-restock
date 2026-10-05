@@ -197,3 +197,55 @@ test('explicit zero draft prices reach Shopify and remain preview-locked',async(
   assert.equal((await(await commit(plan)).json()).success,true);
   assert.deepEqual(writes.find(w=>w.url.endsWith('/products.json')).payload.product.variants.map(v=>v.price),['0','0']);
 });
+
+test('background recovery responds before creation finishes and exposes durable progress without Shopify reads',async()=>{
+  seed();const {plan}=await preview();let release;holdCreate=new Promise(resolve=>release=resolve);
+  let readCount=0;const request=shopifyClient.request;
+  shopifyClient.request=async(url,opts)=>{if(!opts||!opts.method)readCount++;return request(url,opts);};
+  try{
+    const accepted=await commit(plan,{background:true});assert.equal(accepted.status,202);
+    const {runId}=await accepted.json();assert.ok(runId);
+    while(!writes.length)await new Promise(resolve=>setTimeout(resolve,5));
+    const before=readCount,progress=await(await fetch(base+'/status')).json();
+    assert.equal(readCount,before);assert.equal(progress.active,true);
+    assert.equal(progress.history[0].id,runId);assert.equal(progress.history[0].total,1);
+    assert.equal(progress.history[0].currentGroup,key);assert.equal(progress.history[0].phase,'creating');
+    assert.equal((await commit(plan,{background:true})).status,409);
+    release();
+    let finished;
+    for(let tries=0;tries<100;tries++){
+      finished=await(await fetch(base+'/status')).json();if(!finished.active)break;
+      await new Promise(resolve=>setTimeout(resolve,5));
+    }
+    assert.equal(finished.active,false);assert.equal(finished.history[0].status,'complete');
+    assert.deepEqual(finished.history[0].completed,[key]);assert.equal(finished.history[0].pieces,3);
+    assert.equal(writes.filter(write=>write.url.endsWith('/products.json')).length,1);
+  }finally{release();shopifyClient.request=request;}
+});
+
+test('restart marks a stranded run and blocks uncertain creation while leaving other missing products recoverable',async()=>{
+  seed();const store=JSON.parse(fs.readFileSync(process.env.PROCUREMENT_PATH));
+  store.pos['PO-0099'].shopifyDraftRecoveryHistory=[{id:'interrupted',status:'running',currentGroup:key,created:[],errors:[]}];
+  fs.writeFileSync(process.env.PROCUREMENT_PATH,JSON.stringify(store));
+  assert.equal((await fetch(base+'/status',{headers:{'x-test-role':'viewer'}})).status,403);
+  const progress=await(await fetch(base+'/status')).json();assert.equal(progress.active,false);
+  assert.equal(progress.history[0].status,'needs-reconciliation');assert.match(progress.history[0].errors[0],/service restart/);
+  assert.equal((await preview()).plan.products[0].status,'blocked');assert.equal(writes.length,0);
+  delete store.pos['PO-0099'].shopifyDraftRecoveryHistory[0].currentGroup;
+  fs.writeFileSync(process.env.PROCUREMENT_PATH,JSON.stringify(store));
+  assert.equal((await preview()).plan.products[0].status,'ready');
+});
+
+test('background creation failure remains available after the original request ends and is never repeated',async()=>{
+  seed();const {plan}=await preview();failCreate=true;
+  assert.equal((await commit(plan,{background:true})).status,202);
+  let progress;
+  for(let tries=0;tries<100;tries++){
+    progress=await(await fetch(base+'/status')).json();if(!progress.active)break;
+    await new Promise(resolve=>setTimeout(resolve,5));
+  }
+  assert.equal(progress.active,false);assert.equal(progress.history[0].status,'needs-reconciliation');
+  assert.match(progress.history[0].errors[0],/Uncertain network failure/);
+  assert.equal((await preview()).plan.products[0].status,'blocked');
+  assert.equal(writes.filter(write=>write.url.endsWith('/products.json')).length,1);
+});
