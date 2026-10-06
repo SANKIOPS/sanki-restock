@@ -1,5 +1,7 @@
 (function () {
   'use strict';
+  window.sankiInventoryAccess.then(function(access){
+  if(!access.categorization)return;
   var text = document.getElementById('syncText');
   var check = document.getElementById('previewSync');
   var apply = document.getElementById('applySync');
@@ -42,4 +44,5 @@
       .catch(function (error) { text.textContent = error.message; apply.disabled = false; });
   };
   poll();
+  });
 })();
