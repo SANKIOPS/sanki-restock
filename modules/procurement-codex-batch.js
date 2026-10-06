@@ -6,6 +6,8 @@ function fingerprint(group, back) {
 function prepare(po, group) {
   const back = (po.backRefs || {})[group.key] || '';
   const draft = (po.seoDraft || []).find(x => x.key === group.key);
+  const unisex=String(group.audience||'').toLowerCase()==='unisex';
+  const types=unisex?require('../public/purchase-product-profile')(group,!!back).views:VIEWS;
   return {id:crypto.randomUUID(), version:2, poId:po.id, groupKey:group.key,
     sourceFingerprint:fingerprint(group, back), createdAt:new Date().toISOString(),
     status:'prepared', product:group, backPhotoUrl:back,
@@ -14,8 +16,8 @@ function prepare(po, group) {
       instructions:'Inspect the actual source garment photo and verified product facts. Write accurate, natural customer-facing copy for SEO, GEO and answer engines. Do not infer unseen fabric, construction, gender, origin, or availability. Do not repeat the product type, include internal SKU/vendor codes, or make unsupported claims. Return one JSON object with batchId, groupKey, and seo. Keep the existing handle if suitable.',
       requiredFields:['displayName','title','handle','metaTitle','metaDescription','imageAlt','tags','bodyHtml'],
       resultExample:{batchId:'<this batch id>',groupKey:group.key,seo:{displayName:'',title:'',handle:'',metaTitle:'',metaDescription:'',imageAlt:'',tags:[],bodyHtml:''}}},
-    views:VIEWS.map(type=>({type, status: type==='model-side' || (type==='model-back' && !back)?'needs-reference':'pending',
-      prompt:({front:'Product-only front packshot, pure white background.', 'model-front':'Full-body model facing camera wearing the exact garment.', 'model-side':'Same model in side profile; requires a reliable side reference.', 'model-back':'Same model from rear; requires real rear garment reference.',detail:'Close-up of visible garment print and construction; do not invent texture.'})[type]}))};
+    views:types.map(type=>({type, status: type==='model-side' || (type==='model-back' && !back)?'needs-reference':'pending',
+      prompt:({female:'Full-body adult female model with fair complexion facing the camera, wearing the exact garment. One model, one front photograph.',male:'Full-body adult male model with fair complexion facing the camera, wearing the exact garment. One model, one front photograph.',back:'Product-only back photograph using the real back reference; never invent back details.',front:'Product-only front packshot, pure white background.', 'model-front':'Full-body model facing camera wearing the exact garment.', 'model-side':'Same model in side profile; requires a reliable side reference.', 'model-back':'Same model from rear; requires real rear garment reference.',detail:'Close-up of visible garment print and construction; do not invent texture.'})[type]}))};
 }
 function acceptSeo(batch, group, back, seo) {
   if(batch.sourceFingerprint !== fingerprint(group, back)) throw new Error('Source product changed. Prepare a fresh batch before importing.');
@@ -30,9 +32,10 @@ function acceptSeo(batch, group, back, seo) {
 function accept(batch, group, back, images, readPhoto) {
   if(batch.sourceFingerprint !== fingerprint(group, back)) throw new Error('Source product changed. Prepare a fresh batch before importing.');
   if(!Array.isArray(images) || !images.length) throw new Error('Images required.');
+  const types=String(group.audience||'').toLowerCase()==='unisex'?require('../public/purchase-product-profile')(group,!!back).views:VIEWS;
   const seen = new Set();
   return images.map(i=>{
-    if(!VIEWS.includes(i.type) || seen.has(i.type)) throw new Error('Invalid or duplicate view.');
+    if(!types.includes(i.type) || seen.has(i.type)) throw new Error('Invalid or duplicate view.');
     seen.add(i.type);
     if(!readPhoto(i.url)) throw new Error('Upload the result to Purchases first; remote image URLs are not accepted.');
     return {type:i.type,label:i.type,url:i.url,approved:false,codexBatchId:batch.id};

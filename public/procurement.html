@@ -2625,16 +2625,17 @@
         sel('modelOrigin','Model origin',MODEL_ORIGINS,s.modelOrigin)+
         (np.audience==='Men'||np.audience==='Unisex'?sel('maleComplexion','Male model',COMPLEXION,s.maleComplexion):'')+
         (np.audience==='Women'||np.audience==='Unisex'?sel('femaleComplexion','Female model',COMPLEXION,s.femaleComplexion):'')+
-        '</div><div class="muted" style="font-size:11px;margin-top:5px">'+(np.audience==='Unisex'?'Unisex creates both female and male views.':np.audience?'Only the selected model audience is generated.':'Select the product audience above before paid generation.')+'</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
+        '</div><div class="muted" style="font-size:11px;margin-top:5px">'+(np.audience==='Unisex'?'Unisex creates one female front and one male front model photo.':np.audience?'Only the selected model audience is generated.':'Select the product audience above before paid generation.')+'</div><div class="studio-controls-title" style="margin-top:12px">Optional accessories · select only what suits this article</div><div class="studio-controls-row">'+
         sel('chain','Chain',CHAIN,s.chain)+sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+sel('bagColour','Bag colour',BAG_COLOURS,s.bagColour)+
         chk('sunglasses','Elegant shades',s.sunglasses)+chk('watch','Watch',s.watch)+
         '</div><div class="muted" style="font-size:11px;margin-top:8px">'+(np.line==='casuals'?'Casuals defaults to a limestone-estate setting and understated old-money styling. ':'')+'With light neutral outfits, Auto chooses a beige or tan bag. Accessories must not hide the garment.</div><div data-style-message role="status" class="muted" style="font-size:11px;margin-top:5px">Each change is saved for this product. Existing images do not change until you regenerate them.</div></div>';
       if(productOnly)pair='';
       var grid='<div class="studio-controls-title" style="margin-top:12px">Five photo slots · source is not posted; back needs a real reference</div><div class="muted" style="font-size:11px;margin:0 0 7px">Three-quarter view uses the matching front model image to keep the same person and trousers. If model casting or outfit changes, regenerate the product images together; if only the angle is wrong, approve a good front image first.</div><div class="studio-photo-grid">';
+      if(np.audience==='Unisex')grid='<div class="studio-controls-title" style="margin-top:12px">Unisex listing views · two front model photos</div><div class="muted" style="font-size:11px;margin-bottom:7px">Product front, female model front and male model front. Original references are never posted. A product back view needs a real back reference.</div><div class="studio-photo-grid">';
       if(productOnly)grid='<div class="studio-controls-title" style="margin-top:12px">Product-only listing views · source is never posted</div><div class="muted" style="font-size:11px;margin-bottom:7px">Front and visible product detail are required. A back view requires a real back reference. Preserve original labels, packaging and hardware.</div><div class="studio-photo-grid">';
       var hasBackRef=!!studio.backRefs[np.key];
       var modelLabel=s.modelOrigin==='International'?'International':'Indian';
-      [['original','1 · Original references · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(productOnly?[['detail','4 · Product detail']]:np.audience==='Unisex'?[['female','4a · '+modelLabel+' female front'],['model-side-female','5a · Female three-quarter'],['male','4b · '+modelLabel+' male front'],['model-side-male','5b · Male three-quarter']]:[['model-front','4 · Styled '+modelLabel+' model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
+      [['original','1 · Original references · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(productOnly?[['detail','4 · Product detail']]:np.audience==='Unisex'?[['female','4 · '+modelLabel+' female front'],['male','5 · '+modelLabel+' male front']]:[['model-front','4 · Styled '+modelLabel+' model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         var visibleWarnings=((im&&im.qa&&im.qa.warnings)||[]).filter(function(warning){return !/^modelMatch:\s*(?:Could not clearly verify|Cannot verify)/i.test(String(warning));});
         // "change back photo" link (only for the back slot once a ref exists)
@@ -2679,7 +2680,7 @@
       // retained for owner review. Previously these records were returned by
       // the API but never rendered, which made a completed paid call look like
       // a missing image and encouraged an unnecessary regeneration.
-      var allHeld=(studio.rejected[np.key]||[]).filter(function(image){return image&&image.url&&!image.supersededBy;});
+      var allHeld=(studio.rejected[np.key]||[]).filter(function(image){return image&&image.url&&!image.supersededBy&&(np.audience!=='Unisex'||paidTypesFor(np).indexOf(image.type)>=0);});
       var latestHeldByType={};
       allHeld.forEach(function(image){latestHeldByType[image.type||'generated']=image;});
       var held=Object.keys(latestHeldByType).map(function(type){return latestHeldByType[type];});

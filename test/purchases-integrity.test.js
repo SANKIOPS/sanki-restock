@@ -168,8 +168,8 @@ test('one automatic design MRP spans colours and sizes; manual overrides survive
   assert.equal(prices[received.lines[2].sku],prices[resetSku]);assert.equal(prices[saved.lines[3].sku],undefined);
 });
 
-for(const type of ['Shirt','T-Shirt Hood','Perfumes','Belts','Bag'])test('complete purchase flow from advance through generated review, approval and Shopify draft: '+type,async()=>{
-  seed();const saved=await advance('FLOW-'+type,[line(type,type)]);assert.equal(saved.status,200,JSON.stringify(saved));const id=saved.poId;
+for(const type of ['Shirt','T-Shirt Hood','Perfumes','Belts','Bag','Unisex'])test('complete purchase flow from advance through generated review, approval and Shopify draft: '+type,async()=>{
+  seed();const saved=await advance('FLOW-'+type,[{...line(type,type==='Unisex'?'Shirt':type),audience:type==='Unisex'?'Unisex':'Men'}]);assert.equal(saved.status,200,JSON.stringify(saved));const id=saved.poId;
   const receive=await send('/api/procurement/pos/'+id+'/receive',{weights:{0:200},qtys:{0:3}});assert.equal(receive.status,200);assert.equal(receive.po.status,'advance');assert.equal(receive.po.lines[0].ordered.qty,2);
   assert.equal((await send('/api/procurement/pos/'+id+'/mark-received')).status,200);
   assert.equal((await send('/api/procurement/commit',{poId:id,approve:true})).status,400);assert.equal(writes.length,0);
@@ -177,8 +177,20 @@ for(const type of ['Shirt','T-Shirt Hood','Perfumes','Belts','Bag'])test('comple
   const generated=await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,maxImageAttempts:2});assert.equal(generated.status,202,JSON.stringify(generated));
   let po;for(let i=0;i<100;i++){po=load().pos[id];if(po.openaiPilot?.attempts[0]?.status!=='running')break;await new Promise(r=>setTimeout(r,10));}
   assert.equal(po.openaiPilot.attempts[0].status,'drafts-ready',JSON.stringify(po.openaiPilot));assert.deepEqual(po.aiImages[group.key].map(im=>im.type),profile(group).views);
+  if(type==='Unisex'){
+    assert.equal(po.aiImages[group.key].length,3,'product front and two model fronts only');
+    const rejected=await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,retry:true,regenerateTypes:['model-side-female']});
+    assert.equal(rejected.status,400);assert.match(rejected.error,/supported/);
+    fs.writeFileSync(path.join(sandbox,'procurement-photos','legacy-side.jpg'),'legacy-side-image');
+    const store=load();store.pos[id].aiImages[group.key].push(...['model-side-female','model-side-male'].map(t=>({...po.aiImages[group.key][1],type:t,approved:true,url:'/api/procurement/photo/legacy-side.jpg'})));save(store);
+  }
   assert.equal((await send('/api/procurement/pos/'+id+'/approve-po')).status,200);
   const posted=await send('/api/procurement/commit',{poId:id,approve:true});assert.equal(posted.status,200,JSON.stringify(posted));assert.equal(load().pos[id].status,'posted');
   assert.equal(products.length,1);assert.equal(products[0].status,'draft');assert.equal(products[0].variants[0].sku,saved.lines[0].sku);assert.ok(products[0].images.every(im=>im.attachment));
+  if(type==='Unisex'){
+    assert.equal(products[0].images.length,3,'old side photos must not be included in new Shopify drafts');
+    assert.ok(products[0].images.every(im=>Buffer.from(im.attachment,'base64').toString()!=='legacy-side-image'));
+    assert.equal(load().pos[id].aiImages[group.key].length,5,'legacy files are retained');
+  }
   assert.equal(writes.find(w=>w.url.endsWith('/set.json')).payload.available,3);assert.equal((await send('/api/procurement/commit',{poId:id,approve:true})).status,409);
 });

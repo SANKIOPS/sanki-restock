@@ -56,6 +56,8 @@ function buildRecoveryPlan(po, catalogue, {groupKey, sizes, readPhoto, inventory
     for (const image of images) {
       if (!image || !image.url || seen.has(image.url) || rawUrls.has(image.url) || rejectedUrls.has(image.url) || image.type === 'original') continue;
       const current = active.find(candidate => candidate.url === image.url);
+      if (lines.every(line=>String(line.audience||'').toLowerCase()==='unisex') &&
+          ['model-front','model-side','model-side-female','model-side-male','model-back'].includes(image.type || current && current.type)) continue;
       if (current && (current.approved === false || current.qa && !['pass', 'manual-reviewed'].includes(current.qa.status))) continue;
       if (image.qa && !['pass', 'manual-reviewed'].includes(image.qa.status)) continue;
       const source = readPhoto(image.url);

@@ -31,6 +31,15 @@ test('zero inventory is explicit and does not change received quantities on the 
   assert.equal(plan.products[0].receivedQty,3);
   assert.deepEqual(plan.products[0].variants.map(v=>v.qty),[0,0]);
 });
+test('Unisex recovery excludes old side photos from untyped posted snapshots while preserving saved files',()=>{
+  const po=makePo();po.lines.forEach(line=>{line.audience='Unisex';});
+  po.aiImages[key]=['front','female','male','model-side-female','model-side-male'].map(type=>({type,url:'/api/procurement/photo/'+type+'.jpg',approved:true,qa:{status:'pass'}}));
+  po.newProducts[0].images=po.aiImages[key].map(({url})=>({url}));
+  const plan=buildRecoveryPlan(po,{},{...options(),readPhoto:()=>({buf:Buffer.from('saved image')})});
+  assert.deepEqual(plan.products[0].images.map(image=>image.url),po.aiImages[key].slice(0,3).map(image=>image.url));
+  assert.equal(po.aiImages[key].length,5);
+});
+
 test('existing complete products are skipped, partial and duplicate matches are blocked', () => {
   const one={productId:'1'},two={productId:'2'};
   assert.equal(buildRecoveryPlan(makePo(),{NEW30:[one],NEW32:[one]},options()).products[0].status,'existing');
