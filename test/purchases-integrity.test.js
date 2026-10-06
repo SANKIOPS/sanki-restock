@@ -130,6 +130,44 @@ test('rendered purchase categories reconcile with the header and shared server s
   const rows=context.historyCategoryRows([po]);assert.equal(rows.reduce((s,r)=>s+r.value,0),context.historyTotals(po).total);
   const summary=await send('/api/procurement/summary',null,'GET');assert.equal(summary.totals.pending.cost,costs(po,{exRate:15.3,freightPerGram:.35}).total);
 });
+test('one automatic design MRP spans colours and sizes; manual overrides survive recalculation and reach Shopify',async()=>{
+  seed();
+  const rows=[{...line('Shared Shirt'),designCode:'SHARED',colour:'Black',sizeLabel:'M'},
+    {...line('Shared Shirt'),designCode:'SHARED',colour:'Black',sizeLabel:'L'},
+    {...line('Shared Shirt'),designCode:'SHARED',colour:'White',sizeLabel:'M'},
+    {...line('Shared Shirt'),designCode:'SHARED',colour:'Pink',sizeLabel:'M',perPcsYuan:500}];
+  const saved=await advance('UNIFORM-MRP',rows),id=saved.poId;
+  let received=await send('/api/procurement/pos/'+id+'/receive',{weights:{0:100,1:100,2:350,3:100},qtys:{3:0}});
+  assert.equal(received.status,200,JSON.stringify(received));
+  assert.equal(new Set(received.lines.map(l=>l.calculatedMrp)).size,1);
+  assert.equal(received.lines[0].calculatedMrp,received.lines[2].variantCalculatedMrp);
+  assert.equal(received.lines.length,3,'missing colour is excluded and does not inflate shared price');
+  const defaults=Object.fromEntries(received.lines.map(l=>[l.sku,l.suggestedMrp]));
+  assert.equal((await send('/api/procurement/pos/'+id+'/selling-prices',{prices:defaults},'PATCH')).changed,0);
+  assert.ok(load().pos[id].lines.every(l=>!l.manualMrp),'automatic save stays automatic');
+  const overridden=received.lines[0].sku;
+  assert.equal((await send('/api/procurement/pos/'+id+'/selling-prices',{prices:{[overridden]:1299}},'PATCH')).status,200);
+  received=await send('/api/procurement/pos/'+id+'/receive',{weights:{2:500}});
+  assert.equal(received.lines[0].suggestedMrp,1299);assert.equal(received.lines[0].mrpOverridden,true);
+  assert.equal(received.lines[1].suggestedMrp,received.lines[2].suggestedMrp);
+  assert.ok(received.lines[1].calculatedMrp>defaults[overridden],'unchanged automatic fields follow updated costs');
+  const resetSku=received.lines[1].sku;
+  await send('/api/procurement/pos/'+id+'/selling-prices',{prices:{[resetSku]:1499}},'PATCH');
+  await send('/api/procurement/pos/'+id+'/selling-prices',{prices:{[resetSku]:null}},'PATCH');
+  assert.equal(load().pos[id].lines[1].manualMrp,0);
+  assert.equal((await send('/api/procurement/pos/'+id+'/mark-received')).status,200);
+  const studio=await send('/api/procurement/pos/'+id+'/studio',null,'GET');
+  for(const group of studio.newProducts){
+    assert.equal((await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,maxImageAttempts:2})).status,202);
+    for(let i=0;i<100;i++){if(load().pos[id].openaiPilot.attempts.slice(-1)[0].status!=='running')break;await new Promise(r=>setTimeout(r,10));}
+  }
+  assert.equal((await send('/api/procurement/pos/'+id+'/approve-po')).status,200);
+  const posted=await send('/api/procurement/commit',{poId:id,approve:true});assert.equal(posted.status,200,JSON.stringify(posted));
+  const prices=Object.fromEntries(products.flatMap(p=>p.variants.map(v=>[v.sku,Number(v.price)])));
+  assert.equal(prices[overridden],1299);assert.equal(prices[resetSku],received.lines[1].calculatedMrp);
+  assert.equal(prices[received.lines[2].sku],prices[resetSku]);assert.equal(prices[saved.lines[3].sku],undefined);
+});
+
 for(const type of ['Shirt','T-Shirt Hood','Perfumes','Belts','Bag'])test('complete purchase flow from advance through generated review, approval and Shopify draft: '+type,async()=>{
   seed();const saved=await advance('FLOW-'+type,[line(type,type)]);assert.equal(saved.status,200,JSON.stringify(saved));const id=saved.poId;
   const receive=await send('/api/procurement/pos/'+id+'/receive',{weights:{0:200},qtys:{0:3}});assert.equal(receive.status,200);assert.equal(receive.po.status,'advance');assert.equal(receive.po.lines[0].ordered.qty,2);
