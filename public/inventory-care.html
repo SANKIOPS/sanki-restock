@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SANKI · Dry cleaning &amp; miscellaneous</title><link rel="stylesheet" href="/inventory-care.css?v=1"></head>
 <body><main class="care-wrap">
 <header class="care-hero"><div><p class="eyebrow">INVENTORY</p><h1>Dry cleaning &amp; miscellaneous</h1><p class="sub">Track pieces sent for cleaning, altered returns, and stock that is not ready for sale.</p></div><div class="hero-links"><a href="/inventory.html">Inventory dashboard</a><button id="refresh" type="button">Refresh quantities</button></div></header>
-<p id="status" role="status" aria-live="polite">Loading current inventory…</p><section class="care-totals" id="totals" aria-label="Inventory quantities"></section>
+<p id="status" role="status" aria-live="polite">Loading register…</p><p id="quantity-status" class="sub" role="status" aria-live="polite">Loading confirmed inventory quantities…</p><section class="care-totals" id="totals" aria-label="Inventory quantities"></section>
 <section class="care-panel"><header><div><p class="eyebrow">NEW ENTRY</p><h2>Set pieces aside</h2></div><p class="sub" id="permission">Checking access…</p></header>
 <form id="batch-form">
 <div class="care-fields"><label>Section<select id="kind"><option value="cleaning">Dry cleaning</option><option value="miscellaneous">Not for sale</option></select></label><label>Reason<select id="reason"></select></label><label id="vendor-label">Cleaner name<input id="vendor" maxlength="120" placeholder="Business or person handling the cleaning"></label><label id="date-label">Expected return<input id="expected" type="date"></label></div>
@@ -13,4 +13,4 @@
 <div class="form-foot"><p class="sub">Cleaning and not-for-sale pieces remain owned. Once confirmed, they are unavailable to Shopify sales and replenishment. Returns restore the original location and rack.</p><button id="submit" class="primary" disabled>Create batch</button></div>
 </form></section>
 <section class="care-panel"><header class="register-header"><div><p class="eyebrow">REGISTER</p><h2>Outstanding pieces &amp; history</h2></div><label>Search register<input id="register-search" placeholder="SKU, cleaner, reason or product"></label></header><nav class="care-tabs" aria-label="Register views"><button data-view="cleaning" aria-selected="true">Dry cleaning</button><button data-view="miscellaneous" aria-selected="false">Not for sale</button><button data-view="pending" aria-selected="false">Pending &amp; sync</button><button data-view="history" aria-selected="false">History</button></nav><div id="register"><p class="empty">Loading register…</p></div></section>
-</main><script src="/sidebar.js"></script><script src="/inventory-care.js?v=1"></script></body></html>
+</main><script src="/sidebar.js"></script><script src="/inventory-care.js?v=2"></script></body></html>

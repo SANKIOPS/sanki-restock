@@ -123,7 +123,12 @@ function buildInput(s, op, live) {
   return { reason: op.action === 'release' ? 'correction' : 'damaged', referenceDocumentUri: `gid://sanki/InventoryCare/${op.id}`, changes };
 }
 async function confirm(s, op, user, deps = {}) {
-  const persist = deps.save || store.save, getLive = deps.snapshot || state.snapshot, send = deps.graphql || state.graphql;
+  const persist = deps.save || store.save, send = deps.graphql || state.graphql;
+  const getLive = deps.snapshot || (() => {
+    const batch = s.batches.find(b => b.id === op.batchId);
+    const lineIds = new Set(op.lines.map(l => l.lineId));
+    return state.snapshotItems(batch.lines.filter(l => lineIds.has(l.id)).map(l => l.inventoryItemId));
+  });
   if (!manager(user)) state.fail('Only the owner or an assigned stock manager can confirm this action.', 403);
   if (op.status === 'confirmed') return op;
   if (['cancelled', 'review_required'].includes(op.status)) state.fail('This action needs review or has been cancelled.');
@@ -149,21 +154,35 @@ async function confirm(s, op, user, deps = {}) {
     state.invalidate(); throw e;
   }
 }
-function registerData(s, live, user) {
+function registerSummary(s, user) {
+  return { success: true, canManage: manager(user), reasons, rackOptions: moves.rackChoices(moves.load()), batches: s.batches.map(b => ({ ...b, balances: store.balances(s, b) })), operations: s.operations.slice().reverse() };
+}
+function quantityData(s, live) {
   live = state.withCare(live, s);
-  const batches = s.batches.map(b => ({ ...b, balances: store.balances(s, b) }));
   const totals = live.items.reduce((n, i) => { const q = state.quantities(i, live.mapping); for (const k of Object.keys(q)) n[k] = (n[k] || 0) + q[k]; return n; }, {});
   const alerts = [];
   for (const item of live.items) for (const l of item.levels) if ((item.careCleaning?.[l.locationId] || 0) > l.quality_control) alerts.push(item.sku + ' at ' + l.location + ': Shopify cleaning stock differs from the register.');
-  return { success: true, at: live.at, totals, alerts, canManage: manager(user), reasons, mapping: live.mapping, items: live.items, batches, operations: s.operations.slice().reverse() };
+  return { at: live.at, totals, alerts, mapping: live.mapping, items: live.items };
+}
+function registerData(s, live, user) {
+  return { ...registerSummary(s, user), ...quantityData(s, live) };
 }
 router.get('/api/inventory-care', async (req, res) => {
-  try { res.json(registerData(store.load(), await state.snapshot(req.query.refresh === '1'), req.user)); }
+  try {
+    if (req.query.registerOnly === '1') return res.json({ ...registerSummary(store.load(), req.user), registerOnly: true });
+    if (req.query.quantitiesOnly === '1') {
+      const { snapshot: live, ...refresh } = state.readSnapshot(req.query.refresh === '1');
+      return res.json({ success: true, ...(live && live.at !== req.query.knownAt ? quantityData(store.load(), live) : { at: live?.at || null }), ...refresh });
+    }
+    const live = await state.snapshot(req.query.refresh === '1');
+    res.json(registerData(store.load(), live, req.user));
+  }
   catch (e) { res.status(e.status || 503).json({ success: false, error: e.message }); }
 });
 router.post('/api/inventory-care/batches', (req, res) => moves.serial(async () => {
   const s = store.load(), old = duplicate(s, req.body, req.user);
-  const live = old ? null : await state.snapshot(true);
+  if (!old && (!Array.isArray(req.body.lines) || !req.body.lines.length || req.body.lines.length > 50)) state.fail('Add between 1 and 50 SKU lines.', 400);
+  const live = old ? null : await state.snapshotSkus(req.body.lines.map(l => l.sku));
   const op = old || makeOpen(s, req.body, req.user, live); store.save(s);
   if (manager(req.user)) await confirm(s, op, req.user, live ? { snapshot: async () => live } : {});
   res.json({ success: true, operation: op });
@@ -185,4 +204,4 @@ router.post('/api/inventory-care/operations/:id/review', (req, res) => moves.ser
   } else state.fail('Choose confirmation or cancellation.', 400);
   res.json({ success: true, operation: op });
 }).catch(e => res.status(e.status || 500).json({ success: false, error: e.message })));
-module.exports = { router, makeOpen, makeAction, buildInput, confirm, registerData, reasons };
+module.exports = { router, makeOpen, makeAction, buildInput, confirm, registerData, registerSummary, reasons };

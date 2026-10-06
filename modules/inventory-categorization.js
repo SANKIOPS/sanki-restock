@@ -204,8 +204,8 @@ router.post('/api/inventory-costs/set', async (req, res) => {
 
 router.get('/api/inventory-categorization/catalog', async (req, res) => {
   try {
-    const live = await inventoryState.snapshot(req.query.refresh === '1');
-    res.json({ success: true, source: 'Live Shopify quantities', at: live.at, products: inventoryState.catalog(live, DATA) });
+    const { snapshot: live, ...refresh } = inventoryState.readSnapshot(req.query.refresh === '1');
+    res.json({ success: true, source: 'Shopify quantities', at: live?.at || null, products: live && live.at !== req.query.knownAt ? inventoryState.catalog(live, DATA) : null, ...refresh });
   } catch (error) { res.status(502).json({ success: false, error: String(error.message || error) }); }
 });
 
