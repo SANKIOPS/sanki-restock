@@ -514,6 +514,35 @@ function poCostBreakdown(po, defaults) {
 function round2(n) { return Math.round(n * 100) / 100; }
 function charmPrice(x) { const up = Math.ceil(x / 100) * 100; return Math.max(up - 1, 0); } // → …99
 
+// One automatic retail price per vendor/design/category, across colour and size.
+// Received variants determine the price; missing variants cannot inflate it.
+function uniformDesignMrps(lines) {
+  const keyOf = (line, index) => JSON.stringify([
+    String(line.vendor || '').trim().toLowerCase(), String(line.productType || '').trim().toLowerCase(),
+    String(line.designCode || stripSizeSuffix(line.designName || '') || ('unnamed-row-' + index)).trim().toLowerCase()
+  ]);
+  const maxima = new Map();
+  lines.forEach((line, index) => {
+    if (num(line.qty) > 0) maxima.set(keyOf(line, index), Math.max(maxima.get(keyOf(line, index)) || 0, line.calculatedMrp));
+  });
+  return lines.map((line, index) => {
+    const calculatedMrp = maxima.get(keyOf(line, index)) ?? line.calculatedMrp;
+    return {...line, variantCalculatedMrp:line.calculatedMrp, calculatedMrp,
+      suggestedMrp:num(line.manualMrp) > 0 ? Math.round(num(line.manualMrp)) : calculatedMrp};
+  });
+}
+
+function pricedLinesForPo(store, po) {
+  const settings = {...store.settings};
+  if (po.exRate != null && po.exRate !== '') settings.exRate = num(po.exRate);
+  if (po.freightPerGram != null && po.freightPerGram !== '') settings.freightPerGram = num(po.freightPerGram);
+  const totalQty = (po.lines || []).reduce((sum, line) => sum + num(line.qty), 0);
+  return uniformDesignMrps((po.lines || []).map(raw => {
+    const line = normalizeLine(raw, po);
+    return {...line, ...landedCost(line, settings, {origin:po.origin, transportPerPc:totalQty ? num(po.transportTotal) / totalQty : 0})};
+  }));
+}
+
 // ── SEO / GEO / AEO field generation ─────────────────────────────
 // Matches SANKI's newer, keyword-first title style (em-dash, fit words,
 // colour) rather than the old code-first names. Everything is a starting
@@ -829,7 +858,7 @@ function computePreviewWithCatalogue(store, body, cat) {
   const pend = pendingSerialMax(store);
   if (pend && serialGt(pend, cursor)) cursor = { ...pend };
 
-  const lines = (body.lines || []).map(raw => {
+  const lines = uniformDesignMrps((body.lines || []).map(raw => {
     const line = normalizeLine(raw, body);
     const cost = landedCost(line, settings, costOpts);
 
@@ -852,7 +881,7 @@ function computePreviewWithCatalogue(store, body, cat) {
       classification: existing ? 'EXISTING' : 'NEW',
       existing: existing || null
     });
-  });
+  }));
 
   // Build the SEO/product preview for each NEW-product group.
   const groups = {};
@@ -1840,15 +1869,19 @@ router.patch('/api/procurement/pos/:id/selling-prices', (req, res) => {
   if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
   if (isLockedPo(po)) return res.status(409).json({ success: false, error: 'Selling prices must be finalized before Shopify posting.' });
   if (!prices || typeof prices !== 'object' || Array.isArray(prices)) return res.status(400).json({ success: false, error: 'Selling prices are required.' });
+  const automaticLines = pricedLinesForPo(s, po);
   const changes = [];
   for (const [sku, value] of Object.entries(prices)) {
     const index = (po.lines || []).findIndex(line => String(line.sku || '').toUpperCase() === String(sku).toUpperCase());
     if (index < 0) return res.status(400).json({ success: false, error: 'Selling-price SKU no longer matches this PO: ' + sku });
-    const price = Number(value);
-    if (!Number.isFinite(price) || price <= 0 || Math.round(price) !== price) return res.status(400).json({ success: false, error: 'Each selling price must be a positive whole rupee amount.' });
+    const reset = value === null || value === '';
+    const price = reset ? 0 : Number(value);
+    if (!reset && (!Number.isFinite(price) || price <= 0 || Math.round(price) !== price)) return res.status(400).json({ success: false, error: 'Each selling price must be a positive whole rupee amount.' });
     const line = po.lines[index], before = num(line.manualMrp) || 0;
-    line.manualMrp = price;
-    if (before !== price) changes.push({ index, sku: line.sku, before, after: price });
+    // Saving unchanged automatic fields must not freeze them as overrides.
+    const after = !before && price === automaticLines[index].calculatedMrp ? 0 : price;
+    line.manualMrp = after;
+    if (before !== after) changes.push({ index, sku: line.sku, before, after });
   }
   po.sellingPriceHistory = Array.isArray(po.sellingPriceHistory) ? po.sellingPriceHistory : [];
   if (changes.length) po.sellingPriceHistory.push({ at: new Date().toISOString(), by: (req.user && req.user.username) || 'system', changes });
@@ -3443,11 +3476,12 @@ async function recoveryCatalogue() {
   return catalogue;
 }
 function recoveryPriceCalculator(s, po) {
-  const settings = {...s.settings};
-  if (po.exRate != null && po.exRate !== '') settings.exRate = num(po.exRate);
-  if (po.freightPerGram != null && po.freightPerGram !== '') settings.freightPerGram = num(po.freightPerGram);
-  const totalQty = (po.lines || []).reduce((sum, line) => sum + num(line.qty), 0);
-  return line => landedCost(line, settings, {origin:po.origin, transportPerPc:totalQty ? num(po.transportTotal) / totalQty : 0}).suggestedMrp;
+  const lines = pricedLinesForPo(s, po);
+  return line => {
+    const index = (po.lines || []).indexOf(line);
+    const priced = lines[index] || lines.find(candidate => candidate.sku === line.sku);
+    return priced ? priced.suggestedMrp : 0;
+  };
 }
 async function recoveryPlan(s, po, inventoryMode, includeRestocks = false, priceMode = 'saved') {
   return buildRecoveryPlan(po, await recoveryCatalogue(), {groupKey, sizes: s.sizes || {}, readPhoto: readStoredPhoto, inventoryMode, includeRestocks, priceMode, calculatePrice:recoveryPriceCalculator(s,po)});
