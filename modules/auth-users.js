@@ -83,7 +83,7 @@ const ROLES = [
   { id: 'warehouse',   label: 'Warehouse / Rack' },
   // Keep the stable role id so existing assigned users continue to work, but
   // present the role by its operational name in Users & Roles.
-  { id: 'stocksearch', label: 'Stylists (Stock Search — view only)' }
+  { id: 'stocksearch', label: 'Stylists (Stock Search & Inventory — view only)' }
 ];
 const ROLE_IDS = ROLES.map(r => r.id);
 
@@ -121,7 +121,7 @@ const DEFAULT_ROLE_PAGES = {
   claimant:    ['/expenses.html'],
   revenue:     ['/orders.html', '/coming-soon.html'],
   warehouse:   ['/orders.html', '/rack-locations.html'],
-  stocksearch: ['/rack-locations.html']
+  stocksearch: ['/rack-locations.html', '/inventory.html']
 };
 
 // The module registry pushes its catalog here at boot (avoids a circular
@@ -155,9 +155,9 @@ function getRolePages() {
   const out = {};
   ROLE_IDS.forEach(r => {
     if (r === 'admin' || r === 'owner') { out[r] = '*'; return; }
-    // This role is intentionally non-configurable and least-privilege. Old
-    // stored overrides must never re-open Inventory Dashboard or other pages.
-    if (r === 'stocksearch') { out[r] = ['/rack-locations.html']; return; }
+    // Stylists have a fixed browsing allow-list, including existing accounts.
+    // Stored overrides cannot grant cleaning or other operational pages.
+    if (r === 'stocksearch') { out[r] = ['/rack-locations.html', '/inventory.html']; return; }
     out[r] = Array.isArray(overrides[r]) ? overrides[r] : seedPagesForRole(r);
   });
   return out;
@@ -508,7 +508,7 @@ router.post('/api/admin/permissions', requireAdmin, (req, res) => {
   const role = String(b.role || '');
   if (!ROLE_IDS.includes(role)) return res.json({ success: false, error: 'Unknown role' });
   if (role === 'admin') return res.json({ success: false, error: 'Admin always has full access — it cannot be limited.' });
-  if (role === 'stocksearch') return res.json({ success: false, error: 'Stylists is fixed to read-only Stock Search.' });
+  if (role === 'stocksearch') return res.json({ success: false, error: 'Stylists is fixed to read-only Stock Search and Inventory Dashboard.' });
   const known = pageCatalog().map(p => p.path);
   const pages = Array.from(new Set((Array.isArray(b.pages) ? b.pages : []).map(String).filter(p => known.includes(p))));
   const store = loadUsers();
