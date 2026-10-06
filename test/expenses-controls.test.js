@@ -3050,14 +3050,16 @@ test('later reconciliation periods use the finalized cutoff and do not re-reconc
   assert.equal(view.rows.find(x=>x.id==='bank-1').status,'matched');
 });
 
-test('a new transaction on the reconciliation cutoff date is not hidden as previously reconciled',()=>{
+test('a new Axis transaction on the cutoff date matches a late ledger entry and ignores the prior automatic fee',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='Axis Bank 3448',id='BRD-CUTOFF-NEW';
-  stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-10-01',transactions:{old:{id:'BTX-OLD-ARSH',date:'2026-10-01',debit:20005.90,credit:0,reference:'OLD-ARSH'}},imports:[],lastReconciliation:{through:'2026-10-01',closingBalance:220000}};
-  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[{date:'2026-10-01',description:'ARSHPREET SINGH ARO',reference:'NEW-ARSH',debit:10005.90,credit:0,balance:209994.10}],summary:{from:'2026-10-01',to:'2026-10-01',openingBalance:220000,closingBalance:209994.10,totalDebits:10005.90,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString()};
+  stored.transfers=(stored.transfers||[]).filter(x=>x.id!=='TR-CUTOFF-LATE');stored.transfers.push({id:'TR-CUTOFF-LATE',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Arshpreet 1919',amount:10000,date:'2026-10-01',classification:'salary_advance',createdAt:'2026-10-01T21:00:00.000Z'});
+  stored.adjustments=stored.adjustments||[];stored.adjustments.push({id:'ADJ-CUTOFF-OLD-FEE',nature:'SANKI',account,date:'2026-10-01',amount:-5.9,note:'Axis automatic transfer charge ₹5.90',automaticAxisTransferCharge:true,reconciliationDraft:'BRD-PRIOR',bankRowId:'bank-0',createdAt:'2026-10-01T20:35:00.000Z'});
+  stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-10-01',transactions:{old:{id:'BTX-OLD-ARSH',date:'2026-10-01',debit:20005.90,credit:0,reference:'OLD-ARSH'}},imports:[{id:'BST-PRIOR',reconciliationRows:[{id:'bank-0',linkedRecordIds:['TR-OLD']}]}],lastReconciliation:{through:'2026-10-01',closingBalance:220000}};
+  stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[{date:'2026-10-01',description:'IMPS ARSHPREET SINGH ARO',reference:'NEW-ARSH',debit:10005.90,credit:0,balance:209994.10}],summary:{from:'2026-10-01',to:'2026-10-02',openingBalance:220000,closingBalance:209994.10,totalDebits:10005.90,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString()};
   fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:id,account}}).body,row=view.rows.find(x=>x.id==='bank-0');
-  assert.notEqual(row.status,'already_reconciled');
-  assert.equal(row.status,'missing_in_app');
+  assert.equal(row.status,'matched');assert.equal(row.app.id,'TR-CUTOFF-LATE');assert.equal(row.axisTransferCharge,true);assert.equal(row.chargeAmount,5.9);
+  assert.equal(view.balanceDifference,0);assert.equal(view.linkCandidates.some(x=>x.id==='ADJ-CUTOFF-OLD-FEE'),false);
 });
 
 test('consecutive statement uploads merge into one workspace without duplicate overlap or lost decisions',()=>{
