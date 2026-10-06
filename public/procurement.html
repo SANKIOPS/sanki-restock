@@ -321,6 +321,8 @@
   </div>
 
   <script src="/sidebar.js"></script>
+  <script src="/purchase-product-profile.js"></script>
+  <script src="/purchase-costs.js"></script>
   <script>
   (function(){
     // ── image zoom (any .thumb, anywhere) ──
@@ -638,15 +640,7 @@
       }).catch(function(e){ el('sumTotals').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     }
     function historyTotals(po){
-      var qty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0);
-      var transport=po.origin==='india'&&qty?Number(po.transportTotal||0)/qty:0;
-      var total=(po.lines||[]).reduce(function(n,l){
-        var per=po.origin==='india' ? Number(l.perPcsYuan||0)+transport
-          : Number(l.perPcsYuan||0)*Number(po.exRate||settings.exRate||0)+Number(l.weightGrams||0)*Number(po.freightPerGram||settings.freightPerGram||0);
-        return n+per*(Number(l.qty)||0);
-      },0);
-      var rate=Number(po.exRate!=null?po.exRate:settings.exRate||0);
-      return {qty:qty,total:Math.round(total+(Number(po.localTransportYuan||0)+Number(po.otherCostsYuan||0))*rate)};
+      return PurchaseCosts(po,settings);
     }
     function historyStatusCode(po){
       var raw=po.status||'advance';
@@ -667,10 +661,12 @@
       return labels[category]||category;
     }
     function historyLineCost(po,line){
-      var poQty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0);
-      var transport=po.origin==='india'&&poQty?Number(po.transportTotal||0)/poQty:0;
-      return po.origin==='india' ? Number(line.perPcsYuan||0)+transport
-        : Number(line.perPcsYuan||0)*Number(po.exRate||settings.exRate||0)+Number(line.weightGrams||0)*Number(po.freightPerGram||settings.freightPerGram||0);
+      var cost=PurchaseCosts(po,settings),index=(po.lines||[]).indexOf(line);
+      return index>=0?cost.lines[index].perPiece:0;
+    }
+    function historyLineAmount(po,line){
+      var cost=PurchaseCosts(po,settings),index=(po.lines||[]).indexOf(line);
+      return index>=0?cost.lines[index].amount:0;
     }
     function purchaseCalculationPanel(po){
       var india=po.origin==='india',qty=(po.lines||[]).reduce(function(n,l){return n+(Number(l.qty)||0);},0),rate=Number(po.exRate!=null?po.exRate:settings.exRate||0),freight=Number(po.freightPerGram!=null?po.freightPerGram:settings.freightPerGram||0),transport=Number(po.transportTotal||0),share=india&&qty?transport/qty:0;
@@ -751,7 +747,7 @@
           var row=categories[category]||(categories[category]={category:category,pos:{},designs:{},pieces:0,value:0});
           var per=historyLineCost(po,line);
           row.pos[po.id]=1; row.designs[historyDesignKey(po,line,category)]=1;
-          row.pieces+=qty; row.value+=Math.round(per*qty);
+          row.pieces+=qty; row.value+=historyLineAmount(po,line);
         });
       });
       return Object.keys(categories).map(function(key){
@@ -766,7 +762,7 @@
         var category=historyCategoryName(line),key=historyDesignKey(po,line,category);
         var group=groups[key]||(groups[key]={key:key,name:line.designName||line.designCode||'Unnamed design',code:line.designCode||'',category:category,colours:{},sizes:{},pieces:0,value:0,lines:[],photo:''});
         var qty=Number(line.qty)||0;
-        group.pieces+=qty;group.value+=Math.round(historyLineCost(po,line)*qty);group.lines.push(line);
+        group.pieces+=qty;group.value+=historyLineAmount(po,line);group.lines.push(line);
         if(line.colour)group.colours[line.colour]=1;if(line.sizeLabel||line.chinaSize)group.sizes[line.sizeLabel||line.chinaSize]=1;
         if(!group.photo&&line.photoUrl)group.photo=line.photoUrl;
       });
@@ -816,7 +812,7 @@
       if(typeof bindPurchaseHistoryRows==='function')bindPurchaseHistoryRows();
     }
     function historyExplorerPoRow(po,idx,category){
-      var groups=historyDesignGroups(po,category),lines=historyMatchingLines(po,category),pieces=lines.reduce(function(n,l){return n+(Number(l.qty)||0);},0),value=lines.reduce(function(n,l){return n+Math.round(historyLineCost(po,l)*(Number(l.qty)||0));},0);
+      var groups=historyDesignGroups(po,category),lines=historyMatchingLines(po,category),pieces=lines.reduce(function(n,l){return n+(Number(l.qty)||0);},0),value=lines.reduce(function(n,l){return n+historyLineAmount(po,l);},0);
       var open=!!historyOpenPos[po.id],bodyId='historyExplorerPoBody'+idx;
       var head='<div data-hx-po="'+esc(po.id)+'" data-body="'+bodyId+'" style="display:grid;grid-template-columns:24px minmax(180px,1.5fr) minmax(150px,1fr) auto auto auto;gap:10px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-top:7px"><span class="sumcaret muted">'+(open?'▾':'▸')+'</span><div><b>'+esc(po.id)+'</b><div class="muted" style="font-size:11px">'+esc(po.vendor||'—')+' · Bill '+esc(po.billNo||'—')+'</div></div><div>'+historyStatus(po)+'<div class="muted" style="font-size:11px;margin-top:4px">Ordered '+esc(po.datePurchase||'—')+' · Received '+esc(po.dateReceive||'not yet')+'</div></div><div class="money"><b>'+groups.length+' design'+(groups.length===1?'':'s')+'</b></div><div class="money"><b>'+pieces+' pcs</b></div><div class="money"><b>'+money(value)+'</b></div></div>';
       var body='<div id="'+bodyId+'" class="'+(open?'':'hidden')+'" style="margin:-2px 5px 10px;padding:10px;background:#fafafa;border:1px solid var(--line);border-top:0;border-radius:0 0 9px 9px">'+groups.map(function(group,gidx){return historyExplorerDesignRow(po,group,idx,gidx);}).join('')+purchaseCostPanel(po)+'</div>';
@@ -827,7 +823,7 @@
       var photo=group.photo?'<img class="thumb" data-zoom src="'+esc(group.photo)+'" title="Click to enlarge" style="width:48px;height:56px;object-fit:cover;border-radius:6px;cursor:zoom-in">':'<span class="muted">No photo</span>';
       var colours=Object.keys(group.colours),sizes=Object.keys(group.sizes);
       var head='<div data-hx-design="'+esc(stateKey)+'" data-body="'+bodyId+'" style="display:grid;grid-template-columns:24px 58px minmax(170px,1.5fr) minmax(145px,1fr) auto auto;gap:9px;align-items:center;cursor:pointer;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px"><span class="sumcaret muted">'+(open?'▾':'▸')+'</span><div>'+photo+'</div><div><b>'+esc(group.name)+'</b><div class="muted" style="font-size:11px">'+esc(group.code||'No vendor code')+'</div></div><div><span class="pill">'+esc(historyCategoryLabel(group.category))+'</span><div style="margin-top:5px">'+historyStatus(po)+'</div></div><div class="money"><b>'+group.pieces+' pcs</b><div class="muted" style="font-size:11px">'+colours.length+' colour'+(colours.length===1?'':'s')+' · '+sizes.length+' size'+(sizes.length===1?'':'s')+'</div></div><div class="money"><b>'+money(group.value)+'</b></div></div>';
-      var rows=group.lines.map(function(line){var qty=Number(line.qty)||0,per=historyLineCost(po,line),pic=line.photoUrl?'<img class="thumb" data-zoom src="'+esc(line.photoUrl)+'" title="Click to enlarge" style="width:42px;height:50px;object-fit:cover;border-radius:5px;cursor:zoom-in">':'—';return '<tr><td>'+pic+'</td><td><b>'+esc(historyCategoryLabel(historyCategoryName(line)))+'</b></td><td>'+esc(line.colour||'—')+'</td><td>'+esc(line.sizeLabel||'—')+(line.chinaSize?' <span class="muted">(CN '+esc(line.chinaSize)+')</span>':'')+'</td><td class="mono">'+esc(line.sku||'—')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(line.weightGrams||'—')+'</td></tr>';}).join('');
+      var rows=group.lines.map(function(line){var qty=Number(line.qty)||0,per=historyLineCost(po,line),pic=line.photoUrl?'<img class="thumb" data-zoom src="'+esc(line.photoUrl)+'" title="Click to enlarge" style="width:42px;height:50px;object-fit:cover;border-radius:5px;cursor:zoom-in">':'—';return '<tr><td>'+pic+'</td><td><b>'+esc(historyCategoryLabel(historyCategoryName(line)))+'</b></td><td>'+esc(line.colour||'—')+'</td><td>'+esc(line.sizeLabel||'—')+(line.chinaSize?' <span class="muted">(CN '+esc(line.chinaSize)+')</span>':'')+'</td><td class="mono">'+esc(line.sku||'—')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(historyLineAmount(po,line))+'</td><td>'+esc(line.weightGrams||'—')+'</td></tr>';}).join('');
       var detail='<div id="'+bodyId+'" class="'+(open?'':'hidden')+'" style="margin:-1px 4px 8px;padding:8px;background:#fff;border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;overflow-x:auto"><table style="font-size:12px"><thead><tr><th>Photo</th><th>Category</th><th>Colour</th><th>Size</th><th>SKU</th><th class="money">Qty</th><th class="money">Landed/pc</th><th class="money">Total</th><th>Weight g/pc</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
       return head+detail;
     }
@@ -941,7 +937,7 @@
         var qty=Number(l.qty)||0;
         var per=po.origin==='india'?Number(l.perPcsYuan||0)+transport:Number(l.perPcsYuan||0)*Number(po.exRate||settings.exRate||0)+Number(l.weightGrams||0)*Number(po.freightPerGram||settings.freightPerGram||0);
         var photo=l.photoUrl?'<img class="thumb" src="'+esc(l.photoUrl)+'" style="width:36px;height:44px;object-fit:cover;border-radius:5px;cursor:zoom-in">':'—';
-        return '<tr><td>'+photo+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+(l.chinaSize?' (CN '+esc(l.chinaSize)+')':'')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(Math.round(per*qty))+'</td><td>'+esc(l.weightGrams||'—')+'</td></tr>';
+        return '<tr><td>'+photo+'</td><td><b>'+esc(l.designName||'—')+'</b><div class="muted">'+esc(l.designCode||'')+'</div></td><td class="mono">'+esc(l.sku||'—')+'</td><td>'+esc(l.productType||'—')+' · '+esc(l.colour||'—')+' · '+esc(l.sizeLabel||'—')+(l.chinaSize?' (CN '+esc(l.chinaSize)+')':'')+'</td><td class="money">'+qty+'</td><td class="money">'+money(Math.round(per))+'</td><td class="money">'+money(historyLineAmount(po,line))+'</td><td>'+esc(l.weightGrams||'—')+'</td></tr>';
       }).join('');
       var lineLabel=po.line==='funky'?'SANKI Funky':(po.line==='casuals'?'SANKI Casuals':'Unclassified');
       var head=purchaseHistoryHead(po,received,ordered==='—'?'Not recorded':ordered,po.id,po.vendor||'Not recorded',t.qty+' pcs',money(po.paymentSummary&&po.paymentSummary.amount!=null?po.paymentSummary.amount:t.total));
@@ -2427,10 +2423,7 @@
       if(el('selectedStudioCount'))el('selectedStudioCount').textContent=n+' selected';
     }
     function paidTypesFor(np){
-      var back=studio.backRefs[np.key]?['back']:[];
-      if(np.audience==='Women'||np.audience==='Men')return ['front'].concat(back,['model-front','model-side']);
-      if(np.audience==='Unisex')return ['front'].concat(back,['female','model-side-female','male','model-side-male']);
-      return [];
+      return PurchaseProductProfile(np,!!studio.backRefs[np.key]).views;
     }
     function missingPaidDrafts(np){
       var existing=(studio.images[np.key]||[]).filter(function(v){return !!v.url&&(v.qa&&(v.qa.status==='pass'||v.qa.status==='manual-reviewed'));}).map(function(v){return v.type;});
@@ -2612,6 +2605,7 @@
         return '<label class="muted" style="font-size:12px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap">'+
           '<input type="checkbox" data-styck="'+kind+'" data-i="'+i+'"'+(on?' checked':'')+'>'+label+'</label>';
       }
+      var productOnly=PurchaseProductProfile(np).productOnly;
       var fitOpts=cat==='upper'?FIT_UPPER:(cat==='lower'?FIT_LOWER:null);
       var audienceRow='<div style="margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap">'+
         '<label for="studioAudience'+i+'" style="font-size:12px;font-weight:700">Product audience</label>'+
@@ -2635,10 +2629,12 @@
         sel('chain','Chain',CHAIN,s.chain)+sel('capStyle','Cap',CAPS,s.capStyle)+sel('bagStyle','Bag',BAGS,s.bagStyle)+sel('bagColour','Bag colour',BAG_COLOURS,s.bagColour)+
         chk('sunglasses','Elegant shades',s.sunglasses)+chk('watch','Watch',s.watch)+
         '</div><div class="muted" style="font-size:11px;margin-top:8px">'+(np.line==='casuals'?'Casuals defaults to a limestone-estate setting and understated old-money styling. ':'')+'With light neutral outfits, Auto chooses a beige or tan bag. Accessories must not hide the garment.</div><div data-style-message role="status" class="muted" style="font-size:11px;margin-top:5px">Each change is saved for this product. Existing images do not change until you regenerate them.</div></div>';
+      if(productOnly)pair='';
       var grid='<div class="studio-controls-title" style="margin-top:12px">Five photo slots · source is not posted; back needs a real reference</div><div class="muted" style="font-size:11px;margin:0 0 7px">Three-quarter view uses the matching front model image to keep the same person and trousers. If model casting or outfit changes, regenerate the product images together; if only the angle is wrong, approve a good front image first.</div><div class="studio-photo-grid">';
+      if(productOnly)grid='<div class="studio-controls-title" style="margin-top:12px">Product-only listing views · source is never posted</div><div class="muted" style="font-size:11px;margin-bottom:7px">Front and visible product detail are required. A back view requires a real back reference. Preserve original labels, packaging and hardware.</div><div class="studio-photo-grid">';
       var hasBackRef=!!studio.backRefs[np.key];
       var modelLabel=s.modelOrigin==='International'?'International':'Indian';
-      [['original','1 · Original references · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(np.audience==='Unisex'?[['female','4a · '+modelLabel+' female front'],['model-side-female','5a · Female three-quarter'],['male','4b · '+modelLabel+' male front'],['model-side-male','5b · Male three-quarter']]:[['model-front','4 · Styled '+modelLabel+' model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
+      [['original','1 · Original references · never posted'],['front','2 · Product front'],['back','3 · Product back · if supplied']].concat(productOnly?[['detail','4 · Product detail']]:np.audience==='Unisex'?[['female','4a · '+modelLabel+' female front'],['model-side-female','5a · Female three-quarter'],['male','4b · '+modelLabel+' male front'],['model-side-male','5b · Male three-quarter']]:[['model-front','4 · Styled '+modelLabel+' model front'],['model-side','5 · Styled three-quarter view']]).forEach(function(t){
         var im=byType[t[0]], isBack=t[0]==='back';
         var visibleWarnings=((im&&im.qa&&im.qa.warnings)||[]).filter(function(warning){return !/^modelMatch:\s*(?:Could not clearly verify|Cannot verify)/i.test(String(warning));});
         // "change back photo" link (only for the back slot once a ref exists)
