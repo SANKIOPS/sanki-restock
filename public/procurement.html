@@ -2263,7 +2263,7 @@
       var unit=function(v){ return india?money(v):yuan(v); };
       var h='<div class="panel"><h2 style="margin-top:0">Final landed cost</h2>'+
         (india?'<p class="sub" style="margin:0 2px 8px">India PO — landed = ₹ unit cost + transport share (₹'+(Number(d.transportTotal)||0).toLocaleString('en-IN')+' ÷ '+((d.lines||[]).reduce(function(s,l){return s+(Number(l.qty)||0);},0)||0)+' pcs = '+money(d.transportPerPc)+'/pc).</p>':'')+
-        '<p class="sub" style="margin:0 0 8px">Calculated MRP is the default. Accounts may edit the selling price below; the saved amount is sent to Shopify.</p>'+
+        '<p class="sub" style="margin:0 0 8px">The highest calculated MRP among received variants is the default for every colour and size of the same design. Edit any selling price to override it, or clear it to restore the automatic price, then Save selling prices. The saved amount is sent to Shopify.</p>'+
         '<table><thead><tr><th>Design</th><th>SKU</th><th>Product / Colour / Size</th><th class="money">'+(india?'₹/pc':'¥/pc')+'</th><th class="money">'+(india?'Transport':'Freight')+'</th><th class="money">Landed</th><th class="money">Calculated MRP</th><th class="money">Selling price</th><th>Qty</th></tr></thead><tbody>';
       (d.lines||[]).forEach(function(l,lineIndex){
         h+='<tr><td>'+esc(l.designName||'—')+(l.designCode?(' <span class="muted mono" style="font-size:11px">'+esc(l.designCode)+'</span>'):'')+'</td>'+
@@ -2336,7 +2336,7 @@
       if(lowers.indexOf(pt)>=0) return 'lower';
       return 'other';
     }
-    function stylingOf(np){ return studio.styling[np.key]||(studio.styling[np.key]={fit:'Auto',pair:'Auto',aesthetic:'Auto',tuck:'Auto',chain:'None',shoes:'Auto',capStyle:'None',bagStyle:'None',bagColour:'Auto',modelOrigin:'Indian',femaleComplexion:'Medium',maleComplexion:'Medium',sunglasses:false,watch:false}); }
+    function stylingOf(np){ return studio.styling[np.key]=Object.assign({fit:'Auto',pair:'Auto',aesthetic:'Auto',tuck:'Auto',chain:'None',shoes:'Auto',capStyle:'None',bagStyle:'None',bagColour:'Auto',modelOrigin:'Indian',femaleComplexion:'Fair',maleComplexion:'Fair',sunglasses:false,watch:false},studio.styling[np.key]||{}); }
     function paidStylingOf(np){ var s=stylingOf(np); return {fit:s.fit,pair:s.pair,aesthetic:s.aesthetic,tuck:s.tuck,chain:s.chain,shoes:s.shoes,capStyle:s.capStyle,bagStyle:s.bagStyle,bagColour:s.bagColour||'Auto',modelOrigin:s.modelOrigin||'Indian',femaleComplexion:s.femaleComplexion,maleComplexion:s.maleComplexion,sunglasses:!!s.sunglasses,watch:!!s.watch}; }
     function saveStudioStyling(np){
       function note(message){var card=(lastReceive&&lastReceive.newProducts||[]).findIndex(function(x){return x.key===np.key;}),node=el('scard'+card)&&el('scard'+card).querySelector('[data-style-message]');if(node)node.textContent=message;}

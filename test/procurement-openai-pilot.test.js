@@ -4,6 +4,22 @@ const pilot=require('../modules/procurement-openai-pilot');
 const group={key:'971|black',colour:'Black',productType:'T-Shirt',audience:'Women',fit:'Muscle Fit',sizeLabels:['FS']};
 const source={buf:Buffer.from('test-image'),mime:'image/jpeg'};
 
+test('Fair is the default casting for both genders while saved complexion overrides are retained',()=>{
+  assert.equal(pilot.normalizeStyling({},group).femaleComplexion,'Fair');
+  assert.equal(pilot.normalizeStyling({},group).maleComplexion,'Fair');
+  assert.match(pilot.imagePrompt(group,'female'),/fair, light complexion/);
+  assert.match(pilot.imagePrompt({...group,audience:'Men'},'male'),/fair, light complexion/);
+  assert.equal(pilot.normalizeStyling({femaleComplexion:'Medium',maleComplexion:'Deep'},group).femaleComplexion,'Medium');
+  assert.equal(pilot.normalizeStyling({femaleComplexion:'Medium',maleComplexion:'Deep'},group).maleComplexion,'Deep');
+  const vm=require('node:vm'),html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+  const context={studio:{styling:{saved:{maleComplexion:'Medium'}}}};vm.createContext(context);
+  vm.runInContext(html.slice(html.indexOf('    function stylingOf(np)'),html.indexOf('    function paidStylingOf(np)')),context);
+  assert.equal(context.stylingOf({key:'new'}).femaleComplexion,'Fair');
+  assert.equal(context.stylingOf({key:'new'}).maleComplexion,'Fair');
+  assert.equal(context.stylingOf({key:'saved'}).maleComplexion,'Medium');
+  assert.equal(context.stylingOf({key:'saved'}).femaleComplexion,'Fair');
+});
+
 test('pilot limits views to supported front and audience model without a fabricated back',()=>{
   assert.deepEqual(pilot.pilotTypes(group),['front','model-front','model-side']);
   assert.deepEqual(pilot.pilotTypes({...group,audience:'Unisex'}),['front','female','model-side-female','male','model-side-male']);
@@ -27,7 +43,7 @@ test('paid model prompts honor safe outfit choices without changing product-only
   const styling={pair:'Baggy trousers',aesthetic:'Streetwear',bag:true,chain:'Gold chain',cap:true};
   assert.deepEqual(pilot.normalizeStyling(styling,group),{
     fit:'Auto',pair:'Baggy trousers',aesthetic:'Streetwear',tuck:'Auto',chain:'Gold chain',
-    shoes:'Auto',femaleComplexion:'Medium',maleComplexion:'Medium',modelOrigin:'Indian',capStyle:'Classic linen cap',sunglasses:false,watch:false,bagStyle:'Structured handbag',bagColour:'Auto'
+    shoes:'Auto',femaleComplexion:'Fair',maleComplexion:'Fair',modelOrigin:'Indian',capStyle:'Classic linen cap',sunglasses:false,watch:false,bagStyle:'Structured handbag',bagColour:'Auto'
   });
   assert.match(pilot.imagePrompt(group,'female',styling),/baggy trousers/);
   assert.match(pilot.imagePrompt(group,'female',styling),/structured handbag/);
@@ -39,7 +55,7 @@ test('paid model prompts honor safe outfit choices without changing product-only
   assert.doesNotMatch(pilot.pilotTypes(group).join(','),/back/);
   assert.match(pilot.imagePrompt(group,'model-front',{femaleComplexion:'Fair'}),/fair, light complexion/);
   assert.match(pilot.imagePrompt({...group,audience:'Men'},'model-front',{maleComplexion:'Deep'}),/deep brown complexion/);
-  assert.equal(pilot.normalizeStyling({femaleComplexion:'random'},group).femaleComplexion,'Medium');
+  assert.equal(pilot.normalizeStyling({femaleComplexion:'random'},group).femaleComplexion,'Fair');
 });
 
 test('men and women get a single-frame model photograph and visible complexion controls',()=>{
