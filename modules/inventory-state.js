@@ -39,10 +39,10 @@ function normalizeItem(n) {
     if (!names.every(k => Number.isSafeInteger(quantities[k]))) fail('Shopify returned incomplete inventory quantities.', 502);
     return { locationId: l.location.id, location: l.location.name, ...quantities };
   });
-  return { id: n.id, sku: (n.sku || '').trim().toUpperCase(), tracked: n.tracked, variantId: n.variant.id, variant: n.variant.title, inventoryPolicy: n.variant.inventoryPolicy, unitCost: Number(n.unitCost?.amount) || 0, product: n.variant.product, levels };
+  return { id: n.id, sku: (n.sku || '').trim().toUpperCase(), tracked: n.tracked, variantId: n.variant.id, variant: n.variant.title, price: n.variant.price != null && String(n.variant.price).trim() !== '' && Number.isFinite(Number(n.variant.price)) && Number(n.variant.price) >= 0 ? Number(n.variant.price) : null, inventoryPolicy: n.variant.inventoryPolicy, unitCost: Number(n.unitCost?.amount) || 0, product: n.variant.product, levels };
 }
 const levelFields = 'nodes{location{id name} quantities(names:$names){name quantity}} pageInfo{hasNextPage endCursor}';
-const itemFields = `id sku tracked unitCost{amount} variant{id title inventoryPolicy product{id handle title productType tags status featuredImage{url}}} inventoryLevels(first:2){${levelFields}}`;
+const itemFields = `id sku tracked unitCost{amount} variant{id title price inventoryPolicy product{id handle title productType tags status featuredImage{url}}} inventoryLevels(first:2){${levelFields}}`;
 async function completeItem(n, client) {
   if (!n) return null;
   let pi = n.inventoryLevels.pageInfo;
@@ -113,7 +113,7 @@ function catalog(s, physical, purchases = metadata.loadPurchases()) {
       products.set(p.handle, { ...base, ...metadata.resolveMetadata(p, base, posted), handle: p.handle, title: p.title, image: p.featuredImage?.url || base.image || null, images: p.featuredImage?.url ? [p.featuredImage.url] : (base.images || []), variants: [] });
     }
     const previous = (base.variants || []).find(v => String(v.sku).trim().toUpperCase() === item.sku) || {};
-    products.get(p.handle).variants.push({ ...previous, sku: item.sku, variant: item.variant, inventoryItemId: item.id, ...quantities(item, s.mapping) });
+    products.get(p.handle).variants.push({ ...previous, sku: item.sku, variant: item.variant, price: item.price ?? null, inventoryItemId: item.id, ...quantities(item, s.mapping) });
   }
   return [...products.values()].map(p => {
     for (const k of Object.keys(quantities({ levels: [] }))) p[k] = p.variants.reduce((n, v) => n + v[k], 0);
