@@ -51,11 +51,22 @@ function fieldsFor(catKey) { return FIELDS_BY_CAT[catKey] || ['Chest', 'Shoulder
 
 // Build the config the UI needs: each category with its fits, sizes, and the
 // measurement fields that apply to it.
-function buildConfig() {
+const MEASUREMENT_FITS = {
+  'Trouser': { wideleg:'Wide leg', relaxedstraight:'Relaxed straight', koreanpleated:'Korean pleated', flared:'Flared', tapered:'Tapered' },
+  'Shirt': { oversized:'Oversized', relaxed:'Relaxed', regular:'Regular' },
+  'T-shirt': { oversized:'Oversized', relaxed:'Relaxed', regular:'Regular' }
+};
+function buildConfig(store = loadStore()) {
   return CASUALS_SPEC.map(spec => ({
     key: spec.key,
     label: spec.label,
-    fits: spec.fits.map(f => ({ key: f.key, label: f.label })),
+    // Measurement charts have their own identities. Retiring a sourcing fit
+    // must never hide or merge its measurements with another fit's chart.
+    fits: Object.entries({ ...MEASUREMENT_FITS[spec.key],
+      ...Object.fromEntries(spec.fits.map(f => [f.key, f.label])),
+      ...Object.fromEntries(Object.keys((store.targets || {})[spec.key] || {}).map(key =>
+        [key, (MEASUREMENT_FITS[spec.key] || {})[key] || (spec.fits.find(f => f.key === key) || {}).label || key]))
+    }).map(([key, label]) => ({ key, label })),
     sizes: spec.sizes.map(s => s.key),
     fields: fieldsFor(spec.key)
   }));
@@ -63,7 +74,7 @@ function buildConfig() {
 const CAT_KEYS = () => CASUALS_SPEC.map(c => c.key);
 const catExists = (k) => CAT_KEYS().includes(k);
 const fitExists = (catKey, fitKey) => {
-  const c = CASUALS_SPEC.find(x => x.key === catKey);
+  const c = buildConfig().find(x => x.key === catKey);
   return !!(c && c.fits.some(f => f.key === fitKey));
 };
 

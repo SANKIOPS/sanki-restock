@@ -1879,7 +1879,7 @@
     } else if(b.count){
       out.push('<span class="czbchip muted">not segregated yet</span>');
     }
-    var bud = czSettings ? CAT_KEYS.reduce(function(s,k){ var c=czSettings.categories[k]; return s + ((c&&c.enabled)?czBudgetOf(c):0); }, 0) : 0;
+    var bud = Number(b.budget) || 0;
     if(bud) out.push('<span class="czbchip bud">est. budget ₹'+fmtINR(bud)+'</span>');
     if(isActive && czPriced && czLastPlan){
       var sp = czPlanSpend();
