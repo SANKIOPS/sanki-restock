@@ -415,7 +415,12 @@ function batchList(s) {
     const categories = CAT_KEYS.filter(k => by[k]).map(k => ({ category: k, label: CAT_BY_KEY[k].label, count: by[k] }));
     // Soft pieces-coming estimate = one default set per categorised photo.
     const pieces = Object.keys(by).reduce((sum, k) => sum + by[k] * (SET_PIECES[k] || 10), 0);
-    return { id: b.id, num: b.num, name: b.name, createdAt: b.createdAt, category: b.category || null,
+    const settings = b.planSettings ? settingsWithDefaults({ settings:b.planSettings }) : settingsWithDefaults(s);
+    const plan = buildPlan(cs, settings);
+    const allowed = batchCats(b);
+    const budget = plan.categories.filter(c => !allowed.length || allowed.includes(c.category))
+      .reduce((sum,c) => sum + (Number(c.budget) || 0), 0);
+    return { budget, id: b.id, num: b.num, name: b.name, createdAt: b.createdAt, category: b.category || null,
       categoryName: b.categoryName || (b.category && CAT_BY_KEY[b.category] ? CAT_BY_KEY[b.category].label : ''),
       audience: b.audience || '', type: b.type || '', line: b.line === 'funky' ? 'funky' : 'casuals',
       batchCategories: batchCats(b),   // the category SET this batch spans (multi-category); [] = legacy/unconstrained
@@ -428,18 +433,8 @@ function readProcurementStore() {
   catch { return { settings: {}, pos: {} }; }
 }
 function procurementLineCost(po, line, settings) {
-  const qty = Math.max(0, Number(line && line.qty) || 0);
-  if (!qty) return 0;
-  const totalQty = (po.lines || []).reduce((sum, row) => sum + Math.max(0, Number(row.qty) || 0), 0);
-  const unit = Math.max(0, Number(line.perPcsYuan) || 0);
-  if (po.origin === 'india') {
-    const transport = totalQty ? Math.max(0, Number(po.transportTotal) || 0) / totalQty : 0;
-    return Math.round((unit + transport) * qty);
-  }
-  const exRate = Number(po.exRate != null ? po.exRate : settings.exRate) || 0;
-  const freight = Number(po.freightPerGram != null ? po.freightPerGram : settings.freightPerGram) || 0;
-  const weight = Math.max(0, Number(line.weightGrams) || 0);
-  return Math.round((unit * exRate + weight * freight) * qty);
+  const index = (po.lines || []).indexOf(line);
+  return index < 0 ? 0 : require('../public/purchase-costs')(po, settings).lines[index].amount;
 }
 function canonicalCasualCategory(raw) {
   const key = normCasualCategory(raw);
