@@ -2848,7 +2848,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
     const textModel=process.env.PROCUREMENT_OPENAI_TEXT_MODEL||'gpt-4.1-mini';
     const checkModel=process.env.PROCUREMENT_OPENAI_CHECK_MODEL||'gpt-4.1-mini';
-    let preflightBlocked=false,photoStyling=styling;
+    let preflightBlocked=false,safetyBlocked=false,photoStyling=styling;
     try {
       const fitPreflight=types.length?await openaiPilot.preflightFit({key:process.env.OPENAI_API_KEY,group:g,source,styling,model:checkModel}):{status:'not-required',reason:'SEO-only job'};
       const fresh=loadStore(),current=fresh.pos[req.params.id],item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
@@ -2864,8 +2864,9 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       saveStore(fresh);
     } catch(e) {
       preflightBlocked=true;
+      safetyBlocked=openaiPilot.isSafetyBlock(e);
       const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.slice().reverse().find(x=>x.groupKey===key);
-      if(item){item.errors.push({type:'preflight',error:'Could not check the original fit: '+e.message+'. No image call was made.'});saveStore(fresh);}
+      if(item){item.errors.push({type:'preflight',error:'Could not check the original fit: '+e.message+'. No image call was made.',...(e.api?{api:e.api}:{})});if(safetyBlocked)item.skippedViews=types;saveStore(fresh);}
     }
     if(!preflightBlocked)for(const type of types){
       try {
@@ -2920,11 +2921,13 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         break;
         }
       }catch(e){
+        safetyBlocked=openaiPilot.isSafetyBlock(e);
         const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.slice().reverse().find(x=>x.groupKey===key);
-        if(item){item.errors.push({type,error:e.message});saveStore(fresh);}
+        if(item){item.errors.push({type,error:e.message,...(e.api?{api:e.api}:{})});if(safetyBlocked)item.skippedViews=types.slice(types.indexOf(type)+1);saveStore(fresh);}
+        if(safetyBlocked)break;
       }
     }
-    if (!preflightBlocked&&needsSeo) try {
+    if (!preflightBlocked&&!safetyBlocked&&needsSeo) try {
       const generated=await openaiPilot.generateSeo({key:process.env.OPENAI_API_KEY,group:g,source,model:textModel});
       const fresh=loadStore(),current=fresh.pos[req.params.id];
       const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
@@ -2947,11 +2950,12 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);item.seo={model:textModel,usage:generated.usage||null};
       saveStore(fresh);
     }catch(e){
+      safetyBlocked=openaiPilot.isSafetyBlock(e);
       const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.slice().reverse().find(x=>x.groupKey===key);
-      if(item){item.errors.push({type:'seo',error:e.message});saveStore(fresh);}
+      if(item){item.errors.push({type:'seo',error:e.message,...(e.api?{api:e.api}:{})});saveStore(fresh);}
     }
     const done=loadStore(),donePo=done.pos[req.params.id],record=donePo.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
-    record.status=record.errors.length?(record.views.length||record.seo?'partial':'failed'):'drafts-ready';
+    record.status=safetyBlocked?'blocked':record.errors.length?(record.views.length||record.seo?'partial':'failed'):'drafts-ready';
     record.completedAt=new Date().toISOString();saveStore(done);
   }catch(e){
     if (!res.headersSent) res.status(500).json({success:false,error:e.message});
