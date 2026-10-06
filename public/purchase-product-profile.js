@@ -9,7 +9,7 @@
     var back = hasBack ? ['back'] : [];
     if (kind) return { kind:kind, productOnly:true, views:['front'].concat(back, ['detail']) };
     var audience = String(group.audience || '').toLowerCase();
-    var models = audience === 'unisex' ? ['female','model-side-female','male','model-side-male']
+    var models = audience === 'unisex' ? ['female','male']
       : ['women','men'].indexOf(audience) >= 0 ? ['model-front','model-side'] : [];
     return { kind:'clothing', productOnly:false, views:models.length ? ['front'].concat(back, models) : [] };
   };
