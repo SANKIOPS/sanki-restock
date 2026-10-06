@@ -22,11 +22,23 @@ test('Fair is the default casting for both genders while saved complexion overri
 
 test('pilot limits views to supported front and audience model without a fabricated back',()=>{
   assert.deepEqual(pilot.pilotTypes(group),['front','model-front','model-side']);
-  assert.deepEqual(pilot.pilotTypes({...group,audience:'Unisex'}),['front','female','model-side-female','male','model-side-male']);
+  assert.deepEqual(pilot.pilotTypes({...group,audience:'Unisex'}),['front','female','male']);
   assert.deepEqual(pilot.pilotTypes(group,true),['front','back','model-front','model-side']);
   assert.deepEqual(pilot.pilotTypes({...group,audience:''}),[]);
   assert.match(pilot.imagePrompt(group,'front'),/Do not invent/);
   assert.match(pilot.imagePrompt(group,'back'),/real photo of the back/);
+});
+
+test('Unisex paid requests and rendered model slots contain only the two front views',()=>{
+ const g={...group,audience:'Unisex'};
+ assert.deepEqual(pilot.pilotTypes(g,true),['front','back','female','male']);
+ for(const type of ['female','male'])assert.match(pilot.imagePrompt(g,type),/front-facing full-body/);
+ const vm=require('node:vm'),html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
+ const start=html.indexOf("[['original','1 · Original references"),end=html.indexOf('.forEach(function(t)',start);
+ const context={np:g,productOnly:false,modelLabel:'Indian'};vm.createContext(context);
+ const slots=vm.runInContext(html.slice(start,end),context);
+ assert.deepEqual(Array.from(slots,s=>s[0]),['original','front','back','female','male']);
+ assert.equal(slots.filter(s=>['female','male'].includes(s[0])).length,2);
 });
 
 test('missing unisex side views show their own last failure and styling changes preserve the other gender',()=>{
