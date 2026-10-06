@@ -4,6 +4,27 @@ const pilot=require('../modules/procurement-openai-pilot');
 const group={key:'971|black',colour:'Black',productType:'T-Shirt',audience:'Women',fit:'Muscle Fit',sizeLabels:['FS']};
 const source={buf:Buffer.from('test-image'),mime:'image/jpeg'};
 
+test('safety failures retain structured diagnostics without retaining the full provider body',async()=>{
+ const provider={message:'The request was rejected.',code:'moderation_blocked',type:'image_generation_user_error',moderation_details:{moderation_stage:'input',categories:['sexual'],internal:'must-not-be-saved'},secret:'must-not-be-saved'};
+ let calls=0;
+ await assert.rejects(pilot.generateImage({key:'test-only',group,source,type:'front',fetchImpl:async()=>{calls++;return {ok:false,status:400,headers:{get:()=> 'req_test123'},json:async()=>({error:provider})};}}),error=>{
+  assert.equal(pilot.isSafetyBlock(error),true);
+  assert.deepEqual(error.api,{status:400,code:'moderation_blocked',type:'image_generation_user_error',requestId:'req_test123',moderationDetails:{stage:'input',categories:['sexual']}});
+  assert.equal(JSON.stringify(error.api).includes('must-not-be-saved'),false);return true;
+ });
+ assert.equal(calls,1);
+ assert.equal(pilot.isSafetyBlock(new Error('OpenAI API: Your request was rejected by the safety system.')),true);
+ assert.equal(pilot.isSafetyBlock(new Error('OpenAI API: Rate limit exceeded.')),false);
+});
+
+test('review UI recognizes saved legacy safety failures and keeps ordinary failures distinct',()=>{
+ const vm=require('node:vm'),html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8'),context={};vm.createContext(context);
+ vm.runInContext(html.slice(html.indexOf('    function generationSafetyBlocked('),html.indexOf('    function studioCard(')),context);
+ assert.equal(context.generationSafetyBlocked({status:'failed',errors:[{type:'female',error:'OpenAI API: Your request was rejected by the safety system.'}]}),true);
+ assert.equal(context.generationSafetyBlocked({status:'blocked',errors:[]}),true);
+ assert.equal(context.generationSafetyBlocked({status:'partial',errors:[{error:'Visual check uncertain'}]}),false);
+});
+
 test('Fair is the default casting for both genders while saved complexion overrides are retained',()=>{
   assert.equal(pilot.normalizeStyling({},group).femaleComplexion,'Fair');
   assert.equal(pilot.normalizeStyling({},group).maleComplexion,'Fair');
@@ -278,9 +299,9 @@ test('one-click generation has a confirmed two-attempt cap and requests only mis
   assert.match(html,/retry:!!used\[item\.np\.key\]/);
   assert.match(html,/Hard limit: up to .* billed image calls and .* billed visual checks/);
   assert.match(html,/maxImageAttempts:2/);
-  assert.match(html,/other products continued/);
+  assert.match(html,/Remaining products in this batch were not started/);
   assert.match(server,/const neededTypes=allowedTypes\.filter\(type=>!/);
-  assert.match(server,/if \(!preflightBlocked&&needsSeo\) try \{/);
+  assert.match(server,/if \(!preflightBlocked&&!safetyBlocked&&needsSeo\) try \{/);
   assert.match(server,/if\(\(req\.body\|\|\{\}\)\.maxImageAttempts!==2\) return res\.status\(409\)/);
   assert.match(server,/Purchases page is out of date\. Refresh the page/);
   assert.match(server,/const maxImageAttempts=2/);
