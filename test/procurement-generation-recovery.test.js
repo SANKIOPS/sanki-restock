@@ -43,3 +43,35 @@ test('free progress UI uses only a GET, preserves visible SEO edits and refreshe
  let readEdits=false,rendered=false;const context={receiveId:'PO-0005',lastReceive:{po:{openaiPilot:{attempts:[record]}}},studio:{styleSaves:{},images:{},rejected:{}},readSeoFields:()=>readEdits=true,readJson:r=>r.json(),rerenderCard:()=>rendered=true,alert:m=>{throw new Error(m);},fetch:async(url,options)=>{requests.push({url,options});return {json:async()=>({success:true,pilot:{status:'interrupted'},images:[{type:'front',url:'/saved.jpg'}],rejectedImages:[]})};}};
  vm.createContext(context);vm.runInContext(fn,context);await context.refreshGenerationProgress({key},0,button);assert.equal(readEdits,true);assert.equal(rendered,true);assert.equal(record.status,'interrupted');assert.equal(requests[0].options,undefined);assert.match(requests[0].url,/openai-pilot-status/);assert.equal(button.disabled,false);
 });
+
+test('one safety-blocked image stops remaining article views and retains earlier saved photos',async()=>{
+ const before=seed({status:'partial'}),original=pilot.generateImage,submitted=[];
+ pilot.generateImage=async({type})=>{submitted.push(type);throw Object.assign(new Error('OpenAI API: Your request was rejected by the safety system.'),{api:{status:400,code:'moderation_blocked',requestId:'req_blocked',moderationDetails:{stage:'input',categories:['sexual']}}});};
+ try{
+  const r=await fetch(base+'/api/procurement/pos/PO-0005/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:key,retry:true,regenerateTypes:['front','model-front','model-side'],skipSeo:true,maxImageAttempts:2,styling:pilot.normalizeStyling({},group)})});
+  assert.equal(r.status,202);let result;
+  for(let n=0;n<100;n++){await new Promise(resolve=>setTimeout(resolve,5));result=await get();if(result.pilot.status!=='running')break;}
+  assert.equal(result.pilot.status,'blocked');assert.deepEqual(submitted,['front']);
+  assert.deepEqual(result.pilot.skippedViews,['model-front','model-side']);
+  assert.equal(result.pilot.imageCalls.length,1);assert.equal(result.pilot.errors.length,1);
+  assert.equal(result.pilot.errors[0].api.requestId,'req_blocked');assert.equal(result.pilot.errors[0].api.moderationDetails.stage,'input');
+  assert.deepEqual(saved().aiImages,before.aiImages);assert.equal(saved().lines[0].qty,3);
+  await get();assert.deepEqual(submitted,['front'],'Checking progress must never retry a blocked request');
+ }finally{pilot.generateImage=original;}
+});
+
+test('a blocked article stops the browser batch before the next product is submitted',async()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8'),requests=[],button={isConnected:true},status={textContent:''},message={textContent:''};
+ const groups=['first','second'].map(key=>({key,photoUrl:'/reference.jpg',designName:key,productType:'Lower'}));
+ const context={lastReceive:{po:{status:'received'},newProducts:groups},receiveId:'PO-TEST',openaiPilotConfig:{configured:true},studio:{styleSaves:{},images:{},rejected:{},selected:{}},
+  el:id=>id==='generatePoImagesBtn'?button:id==='poGenerationStatus'?status:{querySelector:()=>message},missingPaidDrafts:()=>({images:['front']}),productNeedsSavedWeight:()=>false,paidTypesFor:()=>['front','female','male'],garmentCat:()=> 'lower',paidStylingOf:()=>({fit:'Auto'}),readJson:r=>r.json(),rerenderCard:()=>{},updateStudioSelection:()=>{},setTimeout:cb=>cb(),alert:msg=>{throw new Error(msg);},
+  fetch:async(url,options)=>{requests.push({url,options});return {json:async()=>options?{success:true,pilot:{status:'running'}}:{success:true,pilot:{status:'blocked',errors:[{type:'front',error:'Blocked'}]},images:[],rejectedImages:[]}};}};
+ vm.createContext(context);
+ vm.runInContext(html.slice(html.indexOf('    function generationSafetyBlocked('),html.indexOf('    function studioCard(')),context);
+ vm.runInContext(html.slice(html.indexOf('    async function generatePaidGroups('),html.indexOf('    async function regeneratePaidImages(')),context);
+ await context.generatePaidGroups('all',null,true);
+ assert.equal(requests.filter(x=>x.options?.method==='POST').length,1);
+ assert.equal(JSON.parse(requests[0].options.body).groupKey,'first');
+ assert.match(status.textContent,/Remaining products in this batch were not started/);
+ assert.equal(button.disabled,false);
+});

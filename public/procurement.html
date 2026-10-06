@@ -2492,6 +2492,10 @@
           Object.assign(queuedAttempt,result.pilot);
           studio.images[item.np.key]=result.images||[];studio.rejected[item.np.key]=result.rejectedImages||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
           rerenderCard(item.i);finished++;
+          if(generationSafetyBlocked(result.pilot)){
+            report('Stopped: the image provider blocked this article. Review its source photo and prompt before generating again. Remaining products in this batch were not started.',item);
+            return;
+          }
           if(result.pilot.status==='failed'||result.pilot.status==='partial'){
             attention.push(item.np.designName||item.np.colour||item.np.key);
             report('Article '+finished+' needs review: '+(result.pilot.errors||[]).map(function(e){return e.error;}).join('; '),item);
@@ -2503,7 +2507,7 @@
             report('This article needs review: '+articleError.message+'. Continuing with the rest of the PO.',item);
           }
         }
-        report('Processed '+pending.length+' product(s). '+(attention.length?attention.length+' need review ('+attention.join(', ')+'); other products continued.':'Review and approve the drafts below.'),active);
+        report('Processed '+finished+' product(s). '+(attention.length?attention.length+' need review ('+attention.join(', ')+').':'Review and approve the drafts below.'),active);
       }catch(e){report('Stopped after '+finished+' article(s): '+e.message,active);}
       finally{if(btn&&btn.isConnected)btn.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);updateStudioSelection();}
     }
@@ -2540,7 +2544,7 @@
         if(result.seo&&result.seo.seo)studio.seo[np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
         rerenderCard(i);
         var errors=(result.pilot.errors||[]).map(function(error){return error.type+': '+error.error;});
-        note(errors.length?'Some views failed and their earlier images were kept: '+errors.join('; '):'Replacement drafts are ready. Review and approve each new image.');
+        note(generationSafetyBlocked(result.pilot)?'Blocked by the image provider — review required. Remaining views were stopped; saved photos were kept. Review the source photo and prompt before generating again.':errors.length?'Some views failed and their earlier images were kept: '+errors.join('; '):'Replacement drafts are ready. Review and approve each new image.');
       }catch(e){note('Regeneration stopped: '+e.message);alert(e.message);}
       finally{if(button.isConnected){button.disabled=false;button.textContent=label;}}
     }
@@ -2559,6 +2563,9 @@
         rerenderCard(i);
       }).catch(function(error){alert(error.message);}).finally(function(){if(button.isConnected){button.disabled=false;button.textContent=label;}});
     }
+    function generationSafetyBlocked(attempt){
+      return !!attempt&&(attempt.status==='blocked'||(attempt.errors||[]).some(function(error){return ['moderation_blocked','safety_violation'].indexOf((error.api||{}).code)>=0||/request was rejected by the safety system|moderation[_ -]blocked|safety[_ -]violation/i.test(String(error.error||''));}));
+    }
     function studioCard(np,i){
       var imgs=studio.images[np.key]||[];
       var byType={}; imgs.forEach(function(x){ byType[x.type]=x; });
@@ -2574,6 +2581,7 @@
       var attemptNote=lastAttempt&&lastAttempt.errors&&lastAttempt.errors.length
         ? 'Previous paid attempt '+esc(lastAttempt.status||'needs review')+': '+esc(lastAttempt.errors.map(function(e){return e.type+': '+e.error;}).join('; '))
         :lastAttempt?'Previous paid attempt: '+esc(lastAttempt.status||'running'):'';
+      if(generationSafetyBlocked(lastAttempt))attemptNote='Blocked by the image provider — review required. No automatic retry. Review the source photo and prompt before generating again.'+((lastAttempt.skippedViews||[]).length?' Remaining views were not requested.':'')+'<details><summary>Request details</summary>'+esc((lastAttempt.errors||[]).map(function(error){return error.type+': '+error.error+((error.api||{}).requestId?' · Request ID: '+error.api.requestId:'');}).join('; '))+'</details>';
       if(lastAttempt&&(lastAttempt.warnings||[]).length)attemptNote+=' · '+esc(lastAttempt.warnings.join('; '));
       var head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
