@@ -192,9 +192,25 @@ async function readApiResponse(response) {
   const body = await response.json().catch(()=>({}));
   if (!response.ok) {
     const detail = String(body.error && body.error.message || `HTTP ${response.status}`);
-    throw new Error(`OpenAI API: ${detail.slice(0,180)}`);
+    const error = new Error(`OpenAI API: ${detail.slice(0,180)}`);
+    const provider = body.error || {};
+    error.api = {status:response.status};
+    for (const field of ['code','type']) if(typeof provider[field]==='string')error.api[field]=provider[field].slice(0,100);
+    const requestId=response.headers?.get?.('x-request-id') || detail.match(/\breq_[a-zA-Z0-9]+\b/)?.[0];
+    if(requestId)error.api.requestId=String(requestId).slice(0,150);
+    if(provider.moderation_details && typeof provider.moderation_details==='object') {
+      const details=provider.moderation_details;
+      error.api.moderationDetails={};
+      if(['input','output','unknown'].includes(details.moderation_stage))error.api.moderationDetails.stage=details.moderation_stage;
+      if(Array.isArray(details.categories))error.api.moderationDetails.categories=details.categories.filter(x=>typeof x==='string').slice(0,12).map(x=>x.slice(0,80));
+    }
+    throw error;
   }
   return body;
+}
+
+function isSafetyBlock(error) {
+  return ['moderation_blocked','safety_violation'].includes(error?.api?.code) || /request was rejected by the safety system|moderation[_ -]blocked|safety[_ -]violation/i.test(String(error?.message||''));
 }
 
 function repairGuidance(fields,group,styling,type) {
@@ -396,4 +412,4 @@ async function extractInvoice({key, buffer, mime='image/jpeg', model='gpt-4.1-mi
   return {...JSON.parse(responseText(body)),model,usage:body.usage||null};
 }
 
-module.exports={productProfile,IMAGE_TYPES,MODEL_VIEWS,stylingChanges,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,canAutoAcceptAdvisoryCheck,canAutoAcceptConfirmedColourCheck,generateSeo,extractInvoice,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
+module.exports={productProfile,IMAGE_TYPES,MODEL_VIEWS,stylingChanges,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,isSafetyBlock,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,canAutoAcceptAdvisoryCheck,canAutoAcceptConfirmedColourCheck,generateSeo,extractInvoice,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
