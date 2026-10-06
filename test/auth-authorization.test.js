@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { apiRuleFor, apiAllowedForUser } = require('../auth');
 const { visibleFor } = require('../modules/module-registry');
+const { userCanAccessPath, allowedPagesForUser } = require('../modules/auth-users');
 
 function user(...roles) {
   return { username: 'test-user', role: roles[0], roles };
@@ -102,11 +103,29 @@ test('shared authenticated endpoints remain available to all roles', () => {
   assert.equal(apiAllowedForUser(user('accounting'), '/api/modules'), true);
 });
 
-test('Stylists see only the Stock Search module', () => {
+test('Stylists browse Stock Search and Inventory Dashboard without cleaning access', () => {
   assert.deepEqual(
     visibleFor(user('stocksearch')).map(module => module.key),
-    ['stock-search']
+    ['stock-search', 'inventory-dashboard']
   );
+  assert.deepEqual(allowedPagesForUser(user('stocksearch')).sort(), ['/inventory.html', '/rack-locations.html']);
+  assert.equal(userCanAccessPath(user('stocksearch'), '/inventory.html'), true);
+  assert.equal(userCanAccessPath(user('stocksearch'), '/inventory-care.html'), false);
+});
+
+test('Stylist catalogue access supports galleries and temporary photo search but excludes stock writes', () => {
+  for (const roles of [['stocksearch'], ['stocksearch', 'claimant']]) {
+    const stylist = user(...roles);
+    for (const route of ['/api/inventory-categorization/catalog', '/api/inventory-categorization/catalog/olive-tee', '/api/inventory-categorization/image-search/diagnostics', '/api/inventory-categorization/image-search/job-1']) {
+      assert.equal(apiAllowedForUser(stylist, route, 'GET'), true, route);
+      assert.equal(apiAllowedForUser(stylist, route, 'POST'), false, route);
+    }
+    assert.equal(apiAllowedForUser(stylist, '/api/inventory-categorization/image-search', 'POST'), true);
+    for (const route of ['/api/inventory-care', '/api/inventory-care/batches', '/api/stock-movements', '/api/inventory-costs/set', '/api/inventory-categorization/apply', '/api/inventory-categorization/preview', '/api/inventory/adjust']) {
+      assert.equal(apiAllowedForUser(stylist, route, 'POST'), false, route);
+      assert.equal(apiAllowedForUser(stylist, route, 'GET'), false, route);
+    }
+  }
 });
 
 test('Stock Search UI exposes edit and sync controls only after Owner confirmation', () => {
@@ -125,7 +144,7 @@ test('Stylists page permission cannot be broadened from the admin editor', () =>
   const usersSource = fs.readFileSync(path.join(__dirname, '..', 'modules', 'auth-users.js'), 'utf8');
   const adminSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'admin-users.html'), 'utf8');
   assert.match(usersSource, /role === 'stocksearch'[\s\S]*?fixed to read-only Stock Search/);
-  assert.match(adminSource, /r\.id === 'stocksearch'[\s\S]*?Locked — Stock Search only, view-only/);
+  assert.match(adminSource, /r\.id === 'stocksearch'[\s\S]*?Locked — Stock Search & Inventory Dashboard, view-only/);
 });
 
 test('safe PWA update assets remain public so expired sessions can recover', () => {
