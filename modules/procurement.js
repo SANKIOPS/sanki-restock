@@ -3256,7 +3256,7 @@ router.post('/api/procurement/commit', async (req, res) => {
       // so their reviewed images remain valid and can be repaired in place.
       const mergedSameArticle=(po.variantMergeHistory||[]).some(item=>item&&item.groupKey===np.key&&item.type==='duplicate-variant-merge');
       if(mergedSameArticle)for(const image of ((po.aiImages||{})[np.key]||[]))if(image&&image.url)image.sourceFingerprint=currentFingerprint;
-      const approved = ((po.aiImages || {})[np.key] || []).filter(x => x.approved && imageCheckAccepted(x) && (!x.sourceFingerprint || x.sourceFingerprint===currentFingerprint) && x.type !== 'original' && x.url !== group?.photoUrl);
+      const approved = ((po.aiImages || {})[np.key] || []).filter(x => (group?.audience!=='Unisex'||required.includes(x.type)) && x.approved && imageCheckAccepted(x) && (!x.sourceFingerprint || x.sourceFingerprint===currentFingerprint) && x.type !== 'original' && x.url !== group?.photoUrl);
       const missingTypes=required.filter(type=>!approved.some(x=>x.type===type&&readStoredPhoto(x.url)));
       // Historical ENOSPC incidents could remove an older flat-front file while
       // leaving its approval record behind. If both approved model views still
@@ -3376,7 +3376,7 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
       // the current group fingerprint instead of being treated as missing.
       const mergedSameArticle=(po.variantMergeHistory||[]).some(item=>item&&item.groupKey===np.key&&item.type==='duplicate-variant-merge');
       if(mergedSameArticle)for(const image of ((po.aiImages||{})[np.key]||[]))if(image&&image.url)image.sourceFingerprint=fingerprint;
-      const approved=((po.aiImages||{})[np.key]||[]).filter(x=>x.approved&&imageCheckAccepted(x)&&(!x.sourceFingerprint||x.sourceFingerprint===fingerprint)&&x.type!=='original'&&x.url!==group.photoUrl&&readStoredPhoto(x.url));
+      const approved=((po.aiImages||{})[np.key]||[]).filter(x=>(group.audience!=='Unisex'||required.includes(x.type))&&x.approved&&imageCheckAccepted(x)&&(!x.sourceFingerprint||x.sourceFingerprint===fingerprint)&&x.type!=='original'&&x.url!==group.photoUrl&&readStoredPhoto(x.url));
       const missingTypes=required.filter(type=>!approved.some(x=>x.type===type));
       const modelTypes=new Set(approved.map(x=>x.type));
       const recoverable=missingTypes.length===1&&missingTypes[0]==='front'&&(modelTypes.has('female')||modelTypes.has('male')||modelTypes.has('model-front'))&&(modelTypes.has('model-side-female')||modelTypes.has('model-side-male')||modelTypes.has('model-side'));
@@ -3436,7 +3436,7 @@ router.post('/api/procurement/pos/:id/repair-shopify-images', async (req, res) =
       const detail = (await detailResponse.json()).product || {};
       if ((detail.images || []).length) { alreadyHadPhotos.push({ groupKey: group.key, productId, count: detail.images.length }); continue; }
       const seoDraft = (po.seoDraft || []).find(item => item.key === group.key), alt = seoDraft?.seo?.imageAlt || '';
-      const approved = ((po.aiImages || {})[group.key] || []).filter(image => image && image.approved && imageCheckAccepted(image) && image.type !== 'original' && image.url !== group.photoUrl && readStoredPhoto(image.url));
+      const approved = ((po.aiImages || {})[group.key] || []).filter(image => image && (group.audience!=='Unisex'||openaiPilot.pilotTypes(group,!!(po.backRefs||{})[group.key]).includes(image.type)) && image.approved && imageCheckAccepted(image) && image.type !== 'original' && image.url !== group.photoUrl && readStoredPhoto(image.url));
       if (!approved.length) { unavailable.push({ groupKey: group.key, productId, reason: 'No readable approved saved photos remain. Restore or regenerate this product’s listing views.' }); continue; }
       for (const image of approved) {
         const src = readStoredPhoto(image.url);
