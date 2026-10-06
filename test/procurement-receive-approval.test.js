@@ -18,7 +18,7 @@ async function recalculate(audience, secondAudience = audience) {
     {key, audience:secondAudience, fit:'Regular Fit', qty:2, weightGrams:120}
   ], seoDraft:[{key, seo, seoApproved:true}]};
   let handler, result;
-  const context = {router:{post:(route, fn)=>{handler=fn;}}, loadStore:()=>({pos:{'PO-0006':po}}),
+  const context = {PurchaseProductProfile:require('../public/purchase-product-profile'),router:{post:(route, fn)=>{handler=fn;}}, loadStore:()=>({pos:{'PO-0006':po}}),
     saveStore:()=>{}, isLockedPo:()=>false, expandArticleWeights:(lines, weights)=>weights,
     num:Number, groupKey:line=>line.key, publicPo:p=>p, canManagePurchases:()=>true, stripPreviewForRole:p=>p,
     computePreview:async()=>({newProducts:[{key, productType:'Shirt', colour:'White', photoUrl:'/original.png', variants:[{sizeLabel:'M',qty:2,price:1299},{sizeLabel:'L',qty:2,price:1299}]}]}),
