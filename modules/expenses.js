@@ -3925,8 +3925,14 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   if(!allowed.includes(b.action))return res.status(400).json({success:false,error:'Choose a valid resolution.'});
   if(b.action==='unmatch_suggestion'){
     const reason=String(b.reason||'').trim();
-    if(!reason)return res.status(400).json({success:false,error:'Enter a reason for unmatching this suggested pair.'});
-    if(!['possible_match','amount_mismatch'].includes(row.status)||!row.bank||!row.app)return res.status(400).json({success:false,error:'Only a suggested bank and ledger pair can be unmatched.'});
+    if(!reason)return res.status(400).json({success:false,error:'Enter a reason for unmatching these transactions.'});
+    const confirmedMatch=row.status==='resolved'&&row.resolution&&row.resolution.action==='accept_match',reviewableMatch=['possible_match','amount_mismatch','matched'].includes(row.status);
+    if((!reviewableMatch&&!confirmedMatch)||!row.bank||!row.app)return res.status(400).json({success:false,error:'Only a matched or suggested bank and ledger pair can be unmatched.'});
+    if(confirmedMatch){
+      delete draft.resolutions[b.rowId];
+      const appId=row.app.id,stillLinked=Object.values(draft.resolutions||{}).some(r=>r.appId===appId||(r.appIds||[]).includes(appId));
+      if(!stillLinked){const override=(s.bankDateOverrides||{})[appId];if(override&&String(override.reconciliationDraft||'')===String(draft.id))delete s.bankDateOverrides[appId];const group=(s.bankReconciliationLinks||{})[appId];if(group&&String(group.reconciliationDraft||'')===String(draft.id))delete s.bankReconciliationLinks[appId];}
+    }
     draft.matchingExclusions=draft.matchingExclusions||{};draft.matchingExclusions[b.rowId]={appId:row.app.id,reason,by:req.user.username,at:new Date().toISOString()};draft.decisionAudit=Array.isArray(draft.decisionAudit)?draft.decisionAudit:[];draft.decisionAudit.push({action:'unmatch_suggestion',rowId:b.rowId,appId:row.app.id,reason,by:req.user.username,at:new Date().toISOString()});
     audit(s,req,'BANK_RECONCILIATION_SUGGESTION_UNMATCHED','bank_reconciliation',draft.id,{nature:draft.nature,account:draft.account,bankRowId:b.rowId,appId:row.app.id,note:reason});saveStore(s);return res.json(draftReconciliation(s,draft));
   }
