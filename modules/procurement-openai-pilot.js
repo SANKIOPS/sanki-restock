@@ -1,5 +1,6 @@
 // Metered, explicitly started PO generation. Every retry is separately confirmed.
 const IMAGE_TYPES = ['front', 'back', 'female', 'male', 'model-front', 'model-side', 'model-side-female', 'model-side-male', 'detail'];
+const productProfile = require('../public/purchase-product-profile');
 const SEO_FIELDS = ['displayName', 'title', 'metaTitle', 'metaDescription', 'imageAlt', 'bodyHtml'];
 const UPPER_TYPES = new Set(['shirt','t-shirt','t-shirt hood','sando','hoodie','jacket','top','sweatshirt','sweater']);
 const LOWER_TYPES = new Set(['jeans','trouser','trousers','lower','lowers','shorts','jogger','jorts','denim joggers','cargo','skirt']);
@@ -94,12 +95,7 @@ function stylingPrompt(group,styling) {
 }
 
 function pilotTypes(group,hasBackReference=false) {
-  const audience = String(group.audience || '').toLowerCase();
-  const finish=hasBackReference?['back']:[];
-  if (audience === 'women') return ['front',...finish,'model-front','model-side'];
-  if (audience === 'men') return ['front',...finish,'model-front','model-side'];
-  if (audience === 'unisex') return ['front',...finish,'female','model-side-female','male','model-side-male'];
-  return []; // Unspecified or conflicting audience must be corrected, not guessed.
+  return productProfile(group, hasBackReference).views;
 }
 
 function castDescription(group,gender,styling) {
@@ -125,7 +121,7 @@ function retailFacts(group) {
   const rawFit=String(group.fit||'').trim();
   return {
     productType:womenTop && /^t[ -]?shirt(?: hood)?$/i.test(rawType)?(/ hood$/i.test(rawType)?'Hooded Top':'Top'):rawType,
-    fit:womenTop && /^muscle\s*fit$/i.test(rawFit)?'':rawFit
+    fit:productProfile(group).productOnly || womenTop && /^muscle\s*fit$/i.test(rawFit)?'':rawFit
   };
 }
 
@@ -137,6 +133,7 @@ function seoCopyNeedsReview(seo,group) {
 }
 
 function imagePrompt(group, type, styling, hasContinuityReference=false) {
+  if (productProfile(group).productOnly) return accessoryPrompt(group, type);
   // Do not feed unverified category or fit labels to the image model. They can
   // anchor an edit to a T-shirt even when the uploaded reference is a sweater.
   const featuredCategory=garmentCategory(group);
@@ -166,6 +163,19 @@ function imagePrompt(group, type, styling, hasContinuityReference=false) {
   return `Create exactly ONE photorealistic ${angle} photograph of ONE ${cast} wearing this exact garment. ${genderGuard} Art direction: ${artDirection}. ${poseInstruction} The output is a single continuous full-frame scene with one camera view and one pose, not two photos. Never make a split image, side-by-side comparison, diptych, triptych, collage, contact sheet, inset, second panel, mirrored figure or duplicated person. Follow the saved outfit styling only where it does not contradict the actual featured garment in the original photo: ${stylingPrompt(group,resolvedStyle)} Keep the garment fully visible and face unobstructed, in the ${setting}. ${continuity} Do not invent unseen garment details. ${common}`;
 }
 
+function accessoryPrompt(group, type) {
+  if (!['front','back','detail'].includes(type)) throw new Error('This accessory uses product-only views; model photographs are not supported.');
+  const kind = productProfile(group).kind;
+  const identity = {
+    perfume:'Preserve the exact bottle shape, glass colour, liquid appearance, cap, label, brand marks and readable printed wording. Keep its original packaging when it is shown as part of this product. Never invent scent notes, volume, ingredients or label text.',
+    belt:'Preserve the full belt length and width, colour, texture, visible holes, edge stitching, buckle shape, finish and visible branding. Show the complete belt in the front view; never substitute a supporting trouser or clothing item.',
+    bag:'Preserve the exact bag silhouette, proportions, colour, material appearance, straps, handles, closures, pockets, hardware and visible branding. Keep all supplied straps and attachments; never replace this bag with a styling accessory.'
+  }[kind];
+  const detail = kind === 'belt' ? 'the actual buckle, holes and visible stitching' : kind === 'bag' ? 'the actual visible closure, handles and hardware' : 'the actual visible label and cap';
+  const view = type === 'detail' ? 'a close-up of '+detail : type === 'back' ? 'the back shown in the supplied real back reference' : 'the complete product from the front';
+  return `Create one photorealistic product-only catalogue photograph of ${view} on a warm ivory studio background with natural shadows and even margins. The ORIGINAL PRODUCT PHOTO is the sole authority. ${identity} Remove people, body parts, unrelated products and the source background. No model, outfit, collage or added watermark. Preserve existing product labels; do not add text. Do not invent unseen details or a back view without a real back reference.`;
+}
+
 function seoSchema() {
   return {type:'object',additionalProperties:false,required:[...SEO_FIELDS,'tags'],properties:{
     ...Object.fromEntries(SEO_FIELDS.map(k=>[k,{type:'string'}])),
@@ -188,6 +198,7 @@ async function readApiResponse(response) {
 }
 
 function repairGuidance(fields,group,styling,type) {
+  if (productProfile(group).productOnly) return accessoryPrompt(group, type);
   const style=normalizeStyling(styling,group);
   const category=garmentCategory(group);
   const modelView=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
@@ -332,7 +343,8 @@ async function verifyImage({key,group,source,generated,continuitySource=null,typ
   const pairRule=category==='lower'
     ? `For pairMatch judge only the SUPPORTING TOP (${style.pair}); the trousers/lower garment are the featured product and must never be judged as the pair. If the supporting top is unclear, return uncertain.`
     : 'For pairMatch judge the supporting TROUSER CUT by leg silhouette: straight, baggy or tailored. Off-white, beige or another neutral trouser COLOUR is not evidence that straight trousers are wrong. If the trouser silhouette is hidden, return uncertain, never fail.';
-  const prompt=`Independently inspect three images in this order: original product photo, generated candidate, then optional matching model-front photo. Compare visible evidence to ${JSON.stringify(checks)}. For EACH named finding return status pass, fail, or uncertain plus one short evidence sentence. Do not list generic complaints or mix criteria. Product garment must retain visible colour, construction and silhouette; if the purchase title or fit conflicts with the original photograph, the photograph wins. The confirmed productColour is authoritative when the original is dark, washed out or colour-ambiguous: if the candidate and matching front agree with productColour, lighting-related shade variation in the original is not a garmentMatch failure. Fail colour only for a clearly different hue from the confirmed productColour. For a women's top, an internal 'muscle fit' label and selected fitted/slim silhouette are not by themselves a contradiction; compare the actual shoulder seam and cut. ${fitRule} Fail only for a clearly changed garment cut; if the source does not establish the cut, return uncertain. singleFrame means one continuous photo/one person, not a diptych. Front angle is front-facing; three-quarter means body visibly rotated about 45 degrees rather than only a different crop. ${pairRule} For shoeMatch judge visible SHOE SHAPE: loafers are loafers whether black or brown. Do not infer leather material from pixels; black loafers do NOT fail 'leather loafers'. For tuckMatch use only a clearly visible waist or hem; if hidden, uncertain, not fail. Check bag style/colour only when a bag is requested; if None, any bag fails. Check shades, cap, chain and watch against selected presence/absence; do not mention a missing cap if None was selected. modelMatch checks visible model count and apparent requested gender: if the candidate clearly depicts a man when a woman was requested, or a woman when a man was requested, return fail regardless of whether the outfit matches. If the face and body are clearly visible and consistent with the requested adult gender, pass; ordinary variation in height, build or styling is not uncertainty. If appearance is genuinely ambiguous or obscured, return uncertain, not pass. Do not infer nationality from a face or penalize a complexion difference that lighting could explain. When a matching front is supplied, outfitContinuity requires the same visible model, featured garment, supporting outfit, shoes and accessories. For product-only views set all model-only findings to pass. If evidence is ambiguous, choose uncertain over fail. Report a failure only when the actual visual evidence contradicts the specific choice; do not judge one field by another field's colour or material.`;
+  let prompt=`Independently inspect three images in this order: original product photo, generated candidate, then optional matching model-front photo. Compare visible evidence to ${JSON.stringify(checks)}. For EACH named finding return status pass, fail, or uncertain plus one short evidence sentence. Do not list generic complaints or mix criteria. Product garment must retain visible colour, construction and silhouette; if the purchase title or fit conflicts with the original photograph, the photograph wins. The confirmed productColour is authoritative when the original is dark, washed out or colour-ambiguous: if the candidate and matching front agree with productColour, lighting-related shade variation in the original is not a garmentMatch failure. Fail colour only for a clearly different hue from the confirmed productColour. For a women's top, an internal 'muscle fit' label and selected fitted/slim silhouette are not by themselves a contradiction; compare the actual shoulder seam and cut. ${fitRule} Fail only for a clearly changed garment cut; if the source does not establish the cut, return uncertain. singleFrame means one continuous photo/one person, not a diptych. Front angle is front-facing; three-quarter means body visibly rotated about 45 degrees rather than only a different crop. ${pairRule} For shoeMatch judge visible SHOE SHAPE: loafers are loafers whether black or brown. Do not infer leather material from pixels; black loafers do NOT fail 'leather loafers'. For tuckMatch use only a clearly visible waist or hem; if hidden, uncertain, not fail. Check bag style/colour only when a bag is requested; if None, any bag fails. Check shades, cap, chain and watch against selected presence/absence; do not mention a missing cap if None was selected. modelMatch checks visible model count and apparent requested gender: if the candidate clearly depicts a man when a woman was requested, or a woman when a man was requested, return fail regardless of whether the outfit matches. If the face and body are clearly visible and consistent with the requested adult gender, pass; ordinary variation in height, build or styling is not uncertainty. If appearance is genuinely ambiguous or obscured, return uncertain, not pass. Do not infer nationality from a face or penalize a complexion difference that lighting could explain. When a matching front is supplied, outfitContinuity requires the same visible model, featured garment, supporting outfit, shoes and accessories. For product-only views set all model-only findings to pass. If evidence is ambiguous, choose uncertain over fail. Report a failure only when the actual visual evidence contradicts the specific choice; do not judge one field by another field's colour or material.`;
+  if (productProfile(group).productOnly) prompt = `Compare IMAGE 2, the generated candidate, against IMAGE 1, the original ${productProfile(group).kind} reference. For garmentMatch verify the actual featured product identity, proportions, colour, branding and every visible label, cap, buckle, strap, closure or hardware detail. Existing product packaging is permitted when present in the original; it is not supporting clothing. Printed text must match the reference; uncertain or unreadable label evidence must be uncertain, never guessed. For detail views compare only the visible close-up area; a faithful close-up does not need to show the full product. For back views use only the supplied real back photograph. For productOnly require no people, body parts or unrelated products. singleFrame requires one continuous photo, without panels or a collage. Return detectedModelGender not-applicable and set all model-only findings to pass. For EACH named finding return pass, fail or uncertain and a brief evidence sentence. ${accessoryPrompt(group,type)}`;
   const productOnlyRule=isModel?'For productOnly return pass; supporting clothing is allowed in model photographs.':'For productOnly, require ONLY the featured product, with no person, visible mannequin, body parts, supporting clothing or invented matching garments. A lower garment plus an invented matching top must fail, even if the trousers look correct. For garmentMatch, compare the featured product, never the supporting clothing from the source.';
   const content=[{type:'input_text',text:prompt+' '+productOnlyRule+' The original may show a person; judge productOnly solely from IMAGE 2, the generated candidate. Never report the person in IMAGE 1 as a person in IMAGE 2.'},
     {type:'input_text',text:'IMAGE 1 — ORIGINAL REFERENCE. Use this only to identify the featured garment.'},
@@ -351,10 +363,10 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
   const retail=retailFacts(group);
   const facts = {brand:'SANKI',productType:retail.productType,colour:group.colour,
     audience:group.audience,fit:retail.fit,sizes:group.sizeLabels};
-  const namingRule=String(group.audience||'').toLowerCase()==='women'&&!isWinter(group)
+  const namingRule=productProfile(group).productOnly ? 'Describe only the photographed accessory: its visible shape, colour, label, buckle, straps or hardware. Preserve readable brand wording, but never infer perfume scent, ingredients, volume, leather composition or unseen features. Do not describe an outfit or garment fit.' : String(group.audience||'').toLowerCase()==='women'&&!isWinter(group)
     ?'For women’s non-winter uppers, write "top", "knit top", "polo top", "crew-neck top" or another PHOTO-SUPPORTED style. Never say "muscle fit"; do not call an ordinary women’s top a generic T-shirt. "Polo T-shirt" is acceptable only when a polo collar is unmistakably visible.'
     :'For winter garments, preserve the bill’s confirmed product type (such as sweater, hoodie or jacket); do not relabel it as a top.';
-  const prompt = `Inspect the actual garment photo FIRST and use these confirmed facts: ${JSON.stringify(facts)}. Write distinctive, accurate storefront and SEO/AEO/GEO listing copy. The internal vendor design name and category are not customer-facing descriptions. Describe only visible neckline, collar, trim, pattern and silhouette; distinguish each colourway. ${namingRule} If fit is omitted, do not invent one. In displayName return only a concise visible STYLE descriptor, such as "V-Neck Button-Detail Knit"; do not include SANKI, colour, fit, audience, size, product type, vendor code or SKU because the server adds those in a fixed catalogue order. Use "Button-Detail" consistently for a button placket, button trim or button details. Alt text must literally describe the photographed garment, not make a generic streetwear claim. Do not infer fabric composition, origin, availability, COD or unseen details. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
+  const prompt = `Inspect the actual product photo FIRST and use these confirmed facts: ${JSON.stringify(facts)}. Write distinctive, accurate storefront and SEO/AEO/GEO listing copy. The internal vendor design name and category are not customer-facing descriptions. Describe only visible neckline, collar, trim, pattern and silhouette; distinguish each colourway. ${namingRule} If fit is omitted, do not invent one. In displayName return only a concise visible STYLE descriptor, such as "V-Neck Button-Detail Knit"; do not include SANKI, colour, fit, audience, size, product type, vendor code or SKU because the server adds those in a fixed catalogue order. Use "Button-Detail" consistently for a button placket, button trim or button details. Alt text must literally describe the photographed garment, not make a generic streetwear claim. Do not infer fabric composition, origin, availability, COD or unseen details. Never use vendor codes or SKU in customer copy. Do not repeat the product type. Meta title <= 60 characters and meta description <= 155 characters. Tags should be 5-8 factual terms. bodyHtml may use only simple <p> tags.`;
   const response = await fetchImpl('https://api.openai.com/v1/responses',{
     method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,store:false,max_output_tokens:900,input:[{role:'user',content:[
@@ -384,4 +396,4 @@ async function extractInvoice({key, buffer, mime='image/jpeg', model='gpt-4.1-mi
   return {...JSON.parse(responseText(body)),model,usage:body.usage||null};
 }
 
-module.exports={IMAGE_TYPES,MODEL_VIEWS,stylingChanges,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,canAutoAcceptAdvisoryCheck,canAutoAcceptConfirmedColourCheck,generateSeo,extractInvoice,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
+module.exports={productProfile,IMAGE_TYPES,MODEL_VIEWS,stylingChanges,pilotTypes,garmentCategory,normalizeStyling,stylingPrompt,imagePrompt,generateImage,repairGuidance,preflightFit,stylingForPhoto,verifyImage,evaluateImageCheck,shouldRetryImageCheck,canAutoAcceptAdvisoryCheck,canAutoAcceptConfirmedColourCheck,generateSeo,extractInvoice,responseText,castDescription,retailFacts,seoCopyNeedsReview,isWinter};
