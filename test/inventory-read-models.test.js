@@ -95,3 +95,17 @@ test('targeted SKU reads quote search terms, paginate, and exclude partial SKU m
   const stock=await inventory.snapshotSkus(['sa1'],client);assert.equal(stock.items.length,1);assert.equal(stock.items[0].sku,'SA1');assert.equal(queries[0].variables.query,'sku:"SA1"');assert.equal(queries[1].variables.after,'next');
   const selected=await inventory.snapshotItems(['gid://shopify/InventoryItem/SA1'],client);assert.equal(selected.items.length,1);assert.deepEqual(queries[2].variables.ids,['gid://shopify/InventoryItem/SA1']);assert.ok(!queries[2].query.includes('inventoryItems('));
 });
+
+test('Shopify selling prices are retained per SKU and replace old physical catalogue prices without changing quantities',async()=>{
+  const queries=[];
+  const node=(sku,price)=>({id:'item-'+sku,sku,tracked:true,variant:{id:'variant-'+sku,title:sku,price,inventoryPolicy:'DENY',product:{handle:'tee',title:'Tee'}},inventoryLevels:{nodes:[{location:{id:'d',name:'Display'},quantities:Object.entries(live().items[0].levels[0]).filter(([k])=>k!=='locationId').map(([name,quantity])=>({name,quantity}))}],pageInfo:{hasNextPage:false,endCursor:null}}});
+  const nodes=[node('SA1','1299.50'),node('SA2','1499.00'),node('SA3','0.00'),node('SA4',null),node('SA5','')];
+  const client={store:'test.myshopify.com',request:async(url,options)=>{queries.push(JSON.parse(options.body).query);return{ok:true,status:200,json:async()=>({data:{inventoryItems:{nodes,pageInfo:{hasNextPage:false,endCursor:null}}}})};}};
+  const snapshot=await inventory.fetchSnapshot(client);
+  assert.ok(queries[0].includes('variant{id title price inventoryPolicy'));
+  assert.deepEqual(snapshot.items.map(i=>i.price),[1299.5,1499,0,null,null]);
+  const products=inventory.catalog(snapshot,[{handle:'tee',variants:[{sku:'SA1',price:99},{sku:'SA4',price:99}]}],new Map());
+  assert.deepEqual(products[0].variants.map(v=>v.price),[1299.5,1499,0,null,null]);
+  assert.equal(products[0].totalQty,5);
+  assert.equal(products[0].availableQty,5);
+});
