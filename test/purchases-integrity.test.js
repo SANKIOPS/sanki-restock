@@ -109,6 +109,13 @@ test('each collapsed Fresh batch uses its own plan budget, including zero',async
   fs.writeFileSync(process.env.CASUALS_PATH,JSON.stringify({settings,candidates:[],batches,activeBatch:'B0'}));
   const result=await send('/api/casuals/batches',null,'GET');assert.equal(result.status,200);assert.deepEqual(result.batches.map(b=>b.budget),[200000,56000,0]);
 });
+test('legacy numeric target sizes remain visible and selectable after the sourcing size run changes',async()=>{
+  const chart={'28':{Waist:71,Hip:99,Inseam:76,Thigh:60,'Bottom hem':40}};
+  fs.writeFileSync(process.env.SIZE_TRACKER_PATH,JSON.stringify({targets:{Trouser:{wideleg:chart}},tolerance:1.5}));
+  const config=await send('/api/sizetracker/config',null,'GET');assert.ok(config.categories.find(c=>c.key==='Trouser').sizes.includes('28'));
+  const result=await send('/api/sizetracker/compare',{category:'Trouser',vendor:{L:chart['28']},wanted:['28'],tolerance:1.5});
+  assert.equal(result.status,200);assert.equal(result.toSource[0].desired,'28');assert.equal(result.toSource[0].china,'L');
+});
 test('costs allocate PO charges and rounding once; line/category/header totals reconcile',()=>{
   const po={exRate:15.3,freightPerGram:.35,localTransportYuan:2.2,otherCostsYuan:1.1,lines:[{qty:1,perPcsYuan:20.13,weightGrams:131},{qty:3,perPcsYuan:30.12,weightGrams:233},{qty:0,perPcsYuan:999,weightGrams:999}]};
   const result=costs(po);assert.equal(result.total,Math.round((20.13+3*30.12+3.3)*15.3+(131+3*233)*.35));assert.equal(result.lines.reduce((s,l)=>s+l.amount,0),result.total);assert.equal(result.lines[2].amount,0);

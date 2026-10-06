@@ -67,7 +67,8 @@ function buildConfig(store = loadStore()) {
       ...Object.fromEntries(Object.keys((store.targets || {})[spec.key] || {}).map(key =>
         [key, (MEASUREMENT_FITS[spec.key] || {})[key] || (spec.fits.find(f => f.key === key) || {}).label || key]))
     }).map(([key, label]) => ({ key, label })),
-    sizes: spec.sizes.map(s => s.key),
+    sizes: [...new Set([...spec.sizes.map(s => s.key),
+      ...Object.values((store.targets || {})[spec.key] || {}).flatMap(chart => Object.keys(chart || {}))])],
     fields: fieldsFor(spec.key)
   }));
 }
