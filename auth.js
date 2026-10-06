@@ -147,8 +147,14 @@ function apiAllowedForUser(user, p, method='GET') {
   const ownerOnlyStockAction = p.startsWith('/api/racks') || p === '/api/stock-search/refresh';
   if (ownerOnlyStockAction) return userRoles.includes('owner');
   if (userRoles.includes('admin') || userRoles.includes('owner')) return true;
-  if (userRoles.length === 1 && userRoles[0] === 'stocksearch') {
-    return method === 'GET' && ['/api/auth/me', '/api/modules', '/api/stock-search'].includes(p);
+  if (userRoles.includes('stocksearch')) {
+    // Catalogue browsing and temporary photo searches do not change stock.
+    const read = method === 'GET' && (
+      ['/api/auth/me', '/api/modules', '/api/stock-search', '/api/inventory-categorization/catalog'].includes(p) ||
+      /^\/api\/inventory-categorization\/(catalog|image-search)\/[^/]+$/.test(p)
+    );
+    if (read || method === 'POST' && p === '/api/inventory-categorization/image-search') return true;
+    if (userRoles.length === 1) return false;
   }
   // Accounting may review purchase figures and record vendor invoice data,
   // but cannot change PO quantities, inventory, or purchase settings.
