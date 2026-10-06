@@ -33,6 +33,7 @@
 //   GET  /api/procurement/pos/:id
 // ═══════════════════════════════════════════════════════════════
 const express = require('express');
+const purchaseCosts = require('../public/purchase-costs');
 const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
@@ -162,6 +163,7 @@ function atomicWrite(fp, data) {
   try { fs.writeFileSync(tmp, data); fs.renameSync(tmp, fp); }
   finally { try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {} }
 }
+const storeSnapshots = new WeakMap();
 function loadStore() {
   let s;
   try { s = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')); } catch { s = {}; }
@@ -216,6 +218,7 @@ function loadStore() {
     });
   });
   if (repairedInvalidSerials || repairedPurchaseMetadata) atomicWrite(STORE_PATH, JSON.stringify(s));
+  storeSnapshots.set(s, JSON.parse(JSON.stringify(s)));
   return s;
 }
 function reclaimRejectedPhotoStorage(s) {
@@ -240,15 +243,36 @@ function reclaimRejectedPhotoStorage(s) {
   return {removed,freed};
 }
 function saveStore(s) {
-  try { atomicWrite(STORE_PATH, JSON.stringify(s)); }
+  const baseline = storeSnapshots.get(s);
+  const next = baseline ? loadStore() : s;
+  const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+  if (baseline) for (const key of new Set([...Object.keys(baseline), ...Object.keys(s)])) {
+    if (equal(baseline[key], s[key])) continue;
+    // Merge independent POs/settings after an await. A changed record itself
+    // must be reloaded rather than overwriting a newer quantity or approval.
+    if (['pos','settings','combinedVendorInvoices'].includes(key)) {
+      next[key] = next[key] || {};
+      for (const id of new Set([...Object.keys(baseline[key] || {}), ...Object.keys(s[key] || {})])) {
+        const before = (baseline[key] || {})[id], after = (s[key] || {})[id];
+        if (equal(before, after)) continue;
+        if (!equal(next[key][id], before) && !equal(next[key][id], after))
+          throw new Error('Purchase data changed while saving ('+key+': '+id+'). Reopen the PO and review the latest data.');
+        if (after === undefined) delete next[key][id]; else next[key][id] = after;
+      }
+    } else {
+      if (!equal(next[key], baseline[key]) && !equal(next[key], s[key]))
+        throw new Error('Purchase data changed while saving ('+key+'). Reload before retrying.');
+      if (s[key] === undefined) delete next[key]; else next[key] = s[key];
+    }
+  }
+  try { atomicWrite(STORE_PATH, JSON.stringify(next)); }
   catch(error){
     if(error&&error.code==='ENOSPC'){
-      reclaimRejectedPhotoStorage(s);
-      atomicWrite(STORE_PATH, JSON.stringify(s));
-      return;
-    }
-    throw error;
+      reclaimRejectedPhotoStorage(next);
+      atomicWrite(STORE_PATH, JSON.stringify(next));
+    } else throw error;
   }
+  storeSnapshots.set(s, JSON.parse(JSON.stringify(s)));
 }
 
 // ── small helpers ────────────────────────────────────────────────
@@ -532,7 +556,7 @@ function genSeo(g) {
     ? (/ hood$/i.test(g.productType || '') ? 'Hooded Top' : 'Top') // Basic copy cannot verify a polo collar; only photo-based AI copy may say that.
     : (g.productType || '');
   const colour      = titleCase(g.colour || '');
-  const fit         = audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(g.fit || '') ? '' : titleCase(g.fit || '');
+  const fit         = openaiPilot.productProfile(g).productOnly || audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(g.fit || '') ? '' : titleCase(g.fit || '');
   const fitBase     = fit.replace(/\s*fit$/i, '').trim();   // strip trailing "Fit" so we never double it
   const sizeList    = (g.sizeLabels || []).map(l => (g.sizeCodeOf ? g.sizeCodeOf(l) : l)).join(', ');
   const nm          = nameForTitle ? nameForTitle + ' ' : '';
@@ -616,7 +640,7 @@ function canonicalSeoNaming(seo, group, preferredStyle = '') {
   const winter = /^winter$/i.test(group.season || '') || /^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(group.productType || '');
   const productType = audience === 'Women' && !winter && /^t[ -]?shirt(?: hood)?$/i.test(group.productType || '') ? (/ hood$/i.test(group.productType || '') ? 'Hooded Top' : 'Top') : titleCase(group.productType || 'Product');
   const colour = titleCase(group.colour || '');
-  const fit = audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(group.fit || '') ? '' : titleCase(group.fit || '').replace(/\s*fit$/i, '').trim();
+  const fit = openaiPilot.productProfile(group).productOnly || audience === 'Women' && !winter && /\bmuscle\s*fit\b/i.test(group.fit || '') ? '' : titleCase(group.fit || '').replace(/\s*fit$/i, '').trim();
   const style = normalizeSeoStyle(preferredStyle, group) || normalizeSeoStyle(seo.displayName || seo.title, group) || normalizeSeoStyle(group.designName, group);
   const audienceSuffix = audience === 'Women' ? 'for Women' : audience === 'Men' ? 'for Men' : 'Unisex';
   const descriptiveType = [style, productType].filter(Boolean).join(' ').replace(/\b(Top|T-Shirt|Shirt|Trouser|Jeans)\s+\1\b/ig, '$1');
@@ -781,6 +805,9 @@ function pendingSerialMax(store) {
 
 // Compute a full preview for a set of intake lines (no writes).
 async function computePreview(store, body) {
+  return computePreviewWithCatalogue(store, body, await loadCatalogue(!!body.refresh));
+}
+function computePreviewWithCatalogue(store, body, cat) {
   const settings = { ...store.settings };
   if (body.exRate != null && body.exRate !== '')       settings.exRate = num(body.exRate);
   if (body.freightPerGram != null && body.freightPerGram !== '') settings.freightPerGram = num(body.freightPerGram);
@@ -793,7 +820,6 @@ async function computePreview(store, body) {
     ? num(body.transportTotal) / totalQty : 0;
   const costOpts = { origin, transportPerPc };
 
-  const cat = await loadCatalogue(!!body.refresh);
   const sizeCodeOf = (label) => store.sizes[label] || label;
 
   // Serial cursor starts from the live Shopify max, but also clears any serials
@@ -986,7 +1012,7 @@ async function addExistingInventory(ea, warehouseLocationId) {
     location_id: Number(warehouseLocationId),
     inventory_item_id: Number(ea.inventoryItemId),
     available_adjustment: Number(ea.qty)
-  });
+  }, { maxRetries: 0 }); // An uncertain increment must never be sent twice.
   const lvl = d.inventory_level;
   return { sku: ea.sku, added: ea.qty, newAvailable: lvl ? lvl.available : null };
 }
@@ -1681,8 +1707,24 @@ router.post('/api/procurement/preview', async (req, res) => {
 // The product hasn't arrived, so there is no weight / freight / final landed
 // cost yet. But SKUs ARE assigned here (and reserved via pendingSerialMax) so
 // photos / AI images can be prepared against a real SKU during the lead time.
+let advanceSaveTail = Promise.resolve();
+const activePurchasePostings = new Set();
+// Persist only this locked PO after an external await; other purchases and
+// settings may have been saved while Shopify was responding.
+function persistPostingPo(po) {
+  const latest = loadStore();
+  latest.pos[po.id] = po;
+  saveStore(latest);
+}
 router.post('/api/procurement/advance', async (req, res) => {
+  const previous = advanceSaveTail;
+  let releaseSave;
+  advanceSaveTail = new Promise(resolve => { releaseSave = resolve; });
+  await previous;
   try {
+    // Finish network reads before loading the allocation state. From the fresh
+    // store read through SKU/PO allocation and save there is no async gap.
+    const catalogue = await loadCatalogue(true);
     const s = loadStore();
     const b = req.body || {};
     if (!(b.lines || []).length) return res.status(400).json({ success: false, error: 'Add at least one line before saving.' });
@@ -1700,7 +1742,7 @@ router.post('/api/procurement/advance', async (req, res) => {
     // is 0 at this stage, so any landed figure is provisional and unused here).
     const origin = b.origin === 'india' ? 'india' : 'china';
     const transportTotal = origin === 'india' ? num(b.transportTotal) : 0;
-    const preview = await computePreview(s, { lines: b.lines, vendor: b.vendor, exRate: b.exRate, origin, transportTotal });
+    const preview = computePreviewWithCatalogue(s, { lines: b.lines, vendor: b.vendor, exRate: b.exRate, origin, transportTotal }, catalogue);
     const lines = preview.lines.map(l => ({
       designName: l.designName, productType: l.productType, colour: l.colour,
       sizeLabel: l.sizeLabel, chinaSize: l.chinaSize, fit: l.fit, audience: l.audience,
@@ -1759,10 +1801,11 @@ router.post('/api/procurement/advance', async (req, res) => {
     saveStore(s);
     // Stage 1 must NEVER expose SEO — those drafts are for the admin at stage 2
     // only. Strip seoDraft from the advance-save response entirely.
-    const out = publicPo(s.pos[poId], req);
+    const out = { ...publicPo(s.pos[poId], req) };
     delete out.seoDraft;
     res.json({ success: true, poId, po: out, lines: out.lines });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  finally { releaseSave(); }
 });
 
 // ── Stage 2a: receive an advance PO — attach weights, compute the preview ──
@@ -3142,9 +3185,13 @@ router.post('/api/procurement/pos/:id/approve-po', async (req, res) => {
 
 // The gated write. Body carries the user-approved plan (edited SEO allowed).
 router.post('/api/procurement/commit', async (req, res) => {
+  const poId = String((req.body || {}).poId || '');
+  let ownsLock = false;
   try {
     if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) return res.status(400).json({ success: false, error: 'Shopify env not configured' });
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
+    if (activePurchasePostings.has(poId)) return res.status(409).json({ success:false, error:'Shopify posting is already running for this purchase. Check its progress before retrying.' });
+    activePurchasePostings.add(poId); ownsLock = true;
     const s = loadStore(), b = req.body || {}, po = s.pos[b.poId];
     if (!b.approve || !po) return res.status(400).json({ success: false, error: 'A saved, approved purchase is required.' });
     if (po.status !== 'received') return res.status(409).json({ success: false, error: 'Purchase must be received and not already posted or partially posted.' });
@@ -3154,8 +3201,9 @@ router.post('/api/procurement/commit', async (req, res) => {
     // Shopify product/variant or adjust existing stock.
     const receivedLines = (po.lines || []).filter(line => num(line.qty) > 0);
     if (!receivedLines.length) return res.status(400).json({ success: false, error: 'No received pieces to post.' });
+    const preflightSnapshot = JSON.stringify(po);
     const preview = await computePreview(s, { lines: receivedLines, vendor: po.vendor, exRate: po.exRate,
-      freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal });
+      freightPerGram: po.freightPerGram, origin: po.origin, transportTotal: po.transportTotal, refresh:true });
     if (preview.counts.errors || preview.counts.ambiguous) return res.status(400).json({ success: false, error: 'Fix SKU or product-group errors before posting.' });
     const conflicts = preview.newProducts.flatMap(p => (p.variantConflicts || []).map(c => `${p.designCode || p.designName} / ${p.colour} / ${c.size}: ${c.skus.join(', ')}`));
     if (conflicts.length) return res.status(400).json({ success: false, error: 'Different SKUs have the same product, colour and size. Decide whether they are one article or separate products before posting: ' + conflicts.join('; ') });
@@ -3196,29 +3244,40 @@ router.post('/api/procurement/commit', async (req, res) => {
     }
     // Reserve the PO before the first external write. Any uncertain/partial
     // result needs manual reconciliation, never a blind retry that duplicates stock.
+    const currentStore = loadStore();
+    if (JSON.stringify(currentStore.pos[poId]) !== preflightSnapshot || String(currentStore.settings.warehouseLocationId || '') !== warehouseLocationId)
+      return res.status(409).json({ success:false, error:'This purchase changed during the posting check. Reopen it and review the latest quantities, images and approvals before posting.' });
     const results = { created: [], adjusted: [], errors: [] };
+    po.postingAttemptId = require('crypto').randomUUID();
     po.status = 'posting_partial';
     po.postingStartedAt = new Date().toISOString();
     po.results = results;
     po.newProducts = preview.newProducts;
     po.existingAdds = preview.existingAdds;
     po.warehouseLocationId = warehouseLocationId;
-    saveStore(s);
+    persistPostingPo(po);
     for (const np of preview.newProducts) {
       try {
-        const result = await createDraftProduct(np, warehouseLocationId);
-        results.created.push(result);
-        saveStore(s);
+        results.pendingOperation = { kind:'create', groupKey:np.key, attemptId:po.postingAttemptId, at:new Date().toISOString() };
+        persistPostingPo(po);
+        const result = await createDraftProduct(np, warehouseLocationId, { noCreateRetries:true,
+          onCreated: created => { results.created.push({ ...created, groupKey:np.key }); persistPostingPo(po); } });
+        Object.assign(results.created[results.created.length - 1], result);
+        delete results.pendingOperation;
+        persistPostingPo(po);
         const stockError = (result.variants || []).find(v => v.stockError);
         if (stockError) throw new Error('Product created, but stock failed for ' + stockError.sku + ': ' + stockError.stockError);
       } catch (e) { results.errors.push({ kind: 'create', product: np.seo.title, error: e.message }); break; }
     }
     if (!results.errors.length) for (const ea of preview.existingAdds) {
       try {
+        results.pendingOperation = { kind:'adjust', sku:ea.sku, qty:ea.qty, attemptId:po.postingAttemptId, at:new Date().toISOString() };
+        persistPostingPo(po);
         const result = await addExistingInventory(ea, warehouseLocationId);
         if (result.error) throw new Error(result.error);
         results.adjusted.push(result);
-        saveStore(s);
+        delete results.pendingOperation;
+        persistPostingPo(po);
       } catch (e) { results.errors.push({ kind: 'adjust', sku: ea.sku, error: e.message }); break; }
     }
     po.newProducts = preview.newProducts;
@@ -3228,12 +3287,13 @@ router.post('/api/procurement/commit', async (req, res) => {
       po.status = 'posted';
       po.postedAt = new Date().toISOString();
     }
-    saveStore(s);
+    persistPostingPo(po);
     _catalogue = null;
     if (results.errors.length) return res.status(409).json({ success: false, poId: po.id, results,
       error: 'Shopify posting stopped after an error. This PO is locked as partially posted; inspect Shopify and the saved results before any retry. ' + results.errors[0].error });
     res.json({ success: true, poId: po.id, results });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  finally { if (ownsLock) activePurchasePostings.delete(poId); }
 });
 
 // Continue an interrupted product-creation phase without duplicating anything
@@ -3241,7 +3301,7 @@ router.post('/api/procurement/commit', async (req, res) => {
 // only when none of its received SKUs exists. A partly present design is held
 // for manual reconciliation because creating only its missing sizes would
 // split one article across two Shopify products.
-const activePostingContinuations = new Set();
+const activePostingContinuations = activePurchasePostings;
 router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
   let ownsLock = false;
   try {
@@ -3251,7 +3311,11 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     const s=loadStore(), po=s.pos[req.params.id];
     if(!po) return res.status(404).json({success:false,error:'PO not found'});
     if(po.status!=='posting_partial') return res.status(409).json({success:false,error:'Only an interrupted posting can be continued.'});
+    const continuationSnapshot = JSON.stringify(po);
     if(((po.results&&po.results.errors)||[]).length) return res.status(409).json({success:false,error:'This posting has a saved Shopify error. Reconcile that error before continuing.'});
+    if (po.results && po.results.pendingOperation) return res.status(409).json({success:false,error:'A Shopify write was interrupted with an uncertain result. Reconcile the saved operation in Shopify before continuing.', pendingOperation:po.results.pendingOperation});
+    if ((po.existingAdds || []).some(add => !((po.results || {}).adjusted || []).some(done => done.sku === add.sku)))
+      return res.status(409).json({success:false,error:'This interrupted posting has unconfirmed restock quantities. Reconcile the stock adjustments before marking this PO posted.'});
     const received=(po.lines||[]).filter(line=>num(line.qty)>0), missingImageGroups=[];
     const cat=await loadCatalogue(true), byGroup=new Map();
     received.filter(line=>line.classification!=='EXISTING').forEach(line=>{
@@ -3288,18 +3352,30 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
       if(!approved.length)return res.status(409).json({success:false,error:'No readable approved listing photos remain for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+'. No Shopify write was made.',groupKey:np.key});
       np.seo=seo; np.images=approved.map(x=>({url:x.url,alt:seo.imageAlt}));
     }
+    if (JSON.stringify(loadStore().pos[po.id]) !== continuationSnapshot)
+      return res.status(409).json({success:false,error:'This purchase changed during the continuation check. Reopen it and review the latest data before retrying.'});
     const results=po.results||(po.results={created:[],adjusted:[],errors:[]});
     po.newProducts=(po.newProducts||[]).filter(np=>!pending.some(created=>created.key===np.key)).concat(pending);
-    po.postingResumedAt=new Date().toISOString(); saveStore(s);
+    po.postingResumedAt=new Date().toISOString(); persistPostingPo(po);
     for(const np of pending){
-      try{const result=await createDraftProduct(np,String(po.warehouseLocationId||s.settings.warehouseLocationId||''),{noCreateRetries:true,onCreated:created=>{results.created.push(created);saveStore(s);}});Object.assign(results.created[results.created.length-1],result);saveStore(s);const stockError=(result.variants||[]).find(v=>v.stockError);if(stockError)throw new Error('Product created, but stock failed for '+stockError.sku+': '+stockError.stockError);}
-      catch(e){results.errors.push({kind:'create',product:np.seo.title,error:e.message});saveStore(s);return res.status(409).json({success:false,error:'Continuation stopped after a Shopify error. '+e.message,results});}
+      try {
+        results.pendingOperation = {kind:'create',groupKey:np.key,attemptId:crypto.randomUUID(),at:new Date().toISOString()};
+        persistPostingPo(po);
+        const result=await createDraftProduct(np,String(po.warehouseLocationId||s.settings.warehouseLocationId||''),{
+          noCreateRetries:true,onCreated:created=>{results.created.push({...created,groupKey:np.key});persistPostingPo(po);}
+        });
+        Object.assign(results.created[results.created.length-1],result);
+        delete results.pendingOperation;persistPostingPo(po);
+        const stockError=(result.variants||[]).find(v=>v.stockError);
+        if(stockError)throw new Error('Product created, but stock failed for '+stockError.sku+': '+stockError.stockError);
+      }
+      catch(e){results.errors.push({kind:'create',product:np.seo.title,error:e.message});persistPostingPo(po);return res.status(409).json({success:false,error:'Continuation stopped after a Shopify error. '+e.message,results});}
     }
     _catalogue=null;
     const verified=await loadCatalogue(true), stillMissing=received.filter(line=>line.classification!=='EXISTING'&&!verified.skuMap[String(line.sku||'').toUpperCase()]).map(line=>line.sku);
     if(stillMissing.length)return res.status(409).json({success:false,error:'Shopify verification still found missing received SKUs. The PO remains locked.',stillMissing,results});
     po.newProducts=(po.newProducts||[]).filter(np=>!pending.some(created=>created.key===np.key)).concat(pending);
-    po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key),missingImageGroups}; saveStore(s);
+    po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key),missingImageGroups}; persistPostingPo(po);
     res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),missingImageGroups,results});
   }catch(e){res.status(500).json({success:false,error:e.message});}
   finally{if(ownsLock)activePostingContinuations.delete(req.params.id);}
@@ -3734,7 +3810,7 @@ router.get('/api/procurement/pos/:id', (req, res) => {
 // the Casuals "on order" planning quantities folded in as queued (pending).
 // Per garment type we roll up pieces + ₹ landed value, drillable to each buy.
 const SUMMARY_DONE_STATUSES    = ['posted'];
-const SUMMARY_PENDING_STATUSES = ['advance', 'received', 'awaiting_approval'];
+const SUMMARY_PENDING_STATUSES = ['advance', 'received', 'awaiting_approval', 'posting_partial'];
 // ₹ landed per piece for a PO line, honouring the PO's own rates/origin.
 function summaryLinePerPc(po, line, settings) {
   const lineSettings = {
@@ -3763,8 +3839,9 @@ router.get('/api/procurement/summary', (req, res) => {
     (po.lines || []).forEach(line => {
       const qty = num(line.qty);
       if (qty <= 0) return;
-      const perPc = summaryLinePerPc(po, line, s.settings);
-      const cost  = Math.round(perPc * qty);
+      const lineCost = purchaseCosts(po, s.settings).lines[po.lines.indexOf(line)];
+      const perPc = lineCost.perPiece;
+      const cost = lineCost.amount;
       const c = catOf(line.productType || 'Uncategorised');
       c[bucket].pieces += qty; c[bucket].cost += cost;
       totals[bucket].pieces += qty; totals[bucket].cost += cost;
