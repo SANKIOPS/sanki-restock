@@ -1997,7 +1997,7 @@
       if(me.canManage && !posted){
         h+='<details class="panel po-fold" id="studioPanel"><summary>Listing images &amp; SEO <span class="po-fold-summary">Generate, review and approve products for Shopify</span></summary><div class="po-fold-body"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
            '<p class="sub">Work product by product: confirm its audience and presets, generate its images, generate its SEO names, review, then approve the product. No back view is invented without a real back photo.</p>'+
-           (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn" id="generatePoImagesBtn">Generate images for complete PO</button><button type="button" class="btn ghost" id="generatePoSeoBtn">Generate SEO for complete PO</button><button type="button" class="btn ghost" id="approvePoBtn">Approve complete PO</button> <button type="button" class="btn ghost" id="stopPoImagesBtn">Stop all image generation</button><span class="muted">Bulk actions skip completed products and keep every product’s saved rules.</span></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
+           (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn" id="generatePoImagesBtn">Generate images for complete PO</button><button type="button" class="btn ghost" id="generatePoSeoBtn">Generate SEO for complete PO</button><button type="button" class="btn ghost" id="approvePoBtn">Approve complete PO</button> <button type="button" class="btn ghost" id="stopPoImagesBtn">Stop all image generation</button><span class="muted">Bulk actions skip completed products and keep every product’s saved rules.</span></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div><div class="muted" id="poApprovalStatus" role="status" style="margin-bottom:8px"></div>':'')+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div></details>';
       }
       h+='<div id="receiveHost"></div>';
@@ -2312,6 +2312,7 @@
     var studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };     // keyed by product group key
     var openaiPilotConfig=null;
     var imageGenerationRun=null;
+    var productApprovalRun=null,studioLoadSequence=0;
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
     // ── Fit / length (saved per product and used in paid model shots) ──
@@ -2379,16 +2380,18 @@
       var seo=studio.seo[np.key], copy=seo&&seo.seo||{};
       var winter=/^winter$/i.test(np.season||'')||/^(hoodie|sweatshirt|sweater|cardigan|pullover|jacket|coat)$/i.test(np.productType||'');
       var badWomenCopy=np.audience==='Women'&&!winter&&(/\bmuscle\s*fit\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' '))||/\b(?<!polo\s)t[ -]?shirts?\b/i.test([copy.title,copy.metaTitle,copy.metaDescription,copy.imageAlt].join(' ')));
-      return !!(okImg && seo && seo.approved && copy.displayName && copy.title && copy.metaTitle && copy.metaDescription && copy.imageAlt &&
+      return !!(okImg && seo && seo.approved && !seo.dirty && copy.displayName && copy.title && copy.metaTitle && copy.metaDescription && copy.imageAlt &&
         !badWomenCopy && !/(t[ -]?shirt|shirt|trouser|jeans|lower|shorts)\s+\1/i.test(copy.title));
     }
     // Load the NEW-product groups for a PO and render the studio into the PO
     // detail view — works at the advance stage (no receive/weights needed).
-    function initStudioFor(id){
+    function initStudioFor(id,options){
+      options=options||{};
       receiveId=id;
-      fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/studio?refresh='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(function(d){
-        if(receiveId!==id)return;
-        if(!d.success){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
+      var loadSequence=++studioLoadSequence;
+      return fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/studio?refresh='+Date.now(),{cache:'no-store'}).then(readJson).then(function(d){
+        if(receiveId!==id||loadSequence!==studioLoadSequence)return null;
+        if(!d.success)throw new Error(d.error||'Could not refresh the purchase.');
         lastReceive=d;                          // studio funcs read lastReceive.newProducts
         studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };
         var po=d.po||{};
@@ -2408,7 +2411,13 @@
         fetch('/api/procurement/openai-pilot-status').then(readJson).then(function(status){
           if(receiveId!==id||lastReceive!==d)return;openaiPilotConfig=status;renderStudio();
         }).catch(function(){ /* Generation endpoint will explain configuration errors. */ });
-      }).catch(function(e){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
+        return d;
+      }).catch(function(e){
+        if(receiveId!==id||loadSequence!==studioLoadSequence)return null;
+        if(options.strict)throw e;
+        if(el('studioHost'))el('studioHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>';
+        return null;
+      });
     }
     function renderStudio(){
       var d=lastReceive; if(!d||!el('studioHost')) return;
@@ -2422,6 +2431,7 @@
       var generatePoSeo=el('generatePoSeoBtn');if(generatePoSeo)generatePoSeo.onclick=function(){generateSeoForPo(false);};
       updateStudioSelection();
       refreshPostGate();
+      if(productApprovalRun&&receiveId===productApprovalRun.poId)lockApprovalControls(productApprovalRun);
     }
     function updateStudioSelection(){
       var groups=(lastReceive&&lastReceive.newProducts)||[],n=groups.filter(function(np){return studio.selected[np.key];}).length;
@@ -2604,7 +2614,7 @@
     }
     function refreshGenerationProgress(np,i,button){
       var poId=receiveId,label=button.textContent;
-      readSeoFields(np,i);
+      rememberSeoEdits(np,i);
       button.disabled=true;button.textContent='Checking progress…';
       return (studio.styleSaves[np.key]||Promise.resolve()).then(function(){
         return fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/openai-pilot-status?groupKey='+encodeURIComponent(np.key)).then(readJson);
@@ -2776,7 +2786,7 @@
       if(!seo){
         seoBlock='<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)"><button class="btn sm" data-genseo="'+i+'">Generate SEO names (paid)</button> <span class="muted" style="font-size:12px">Generate this after reviewing the product images.</span></div>';
       } else {
-        var g=seo.seo||{};
+        var g=seo.editDraft||seo.seo||{};
         seoBlock='<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)">'+
           '<div class="muted" style="font-size:12px;margin-bottom:8px">'+((seo.source==='openai-pilot'||seo.source==='openai')?'AI-written SEO draft · review it, then approve images + SEO':seo.approved?'Approved manual listing copy':'Basic placeholder copy from purchase details · Generate images + SEO to replace it with image-judged copy')+'</div>'+
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
@@ -2802,43 +2812,107 @@
     }
     function readSeoFields(np,i){
       var host=el('scard'+i),entry=studio.seo[np.key];if(!host||!entry||!entry.seo)return null;
-      ['displayName','title','metaTitle','metaDescription','imageAlt'].forEach(function(field){var input=host.querySelector('[data-seo="'+field+'"]');if(input)entry.seo[field]=input.value.trim();});
-      return entry;
+      var draft=Object.assign({},entry,{seo:JSON.parse(JSON.stringify(entry.editDraft||entry.seo))});
+      ['displayName','title','metaTitle','metaDescription','imageAlt'].forEach(function(field){var input=host.querySelector('[data-seo="'+field+'"]');if(input)draft.seo[field]=input.value.trim();});
+      return draft;
     }
-    function saveSeoRequest(np,i,approve){
+    function rememberSeoEdits(np,i){
+      var draft=readSeoFields(np,i),entry=studio.seo[np.key];
+      if(draft&&entry&&JSON.stringify(draft.seo)!==JSON.stringify(entry.seo)){
+        entry.editDraft=draft.seo;entry.dirty=true;entry.approved=false;
+        entry.savedMessage='Unsaved SEO edits — save and approve before posting.';
+      }
+      return draft;
+    }
+    function saveSeoRequest(np,i,approve,scope){
       var entry=readSeoFields(np,i);if(!entry)return Promise.reject(new Error('Generate and review the SEO names first.'));
-      return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/seo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,seo:entry.seo,seoApproved:!!approve})}).then(readJson).then(function(result){
-        if(!result.success)throw new Error(result.error||'Save failed.');entry.approved=!!approve;return entry;
+      var poId=scope?scope.poId:receiveId,studioRef=scope?scope.studioRef:studio;
+      if(scope)assertApprovalScope(scope);
+      return fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/seo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,seo:entry.seo,seoApproved:!!approve})}).then(readJson).then(function(result){
+        if(!result.success)throw new Error(result.error||'Save failed.');
+        if(receiveId!==poId||studio!==studioRef)return entry;
+        var current=studioRef.seo[np.key],saved=(result.seoDraft||[]).find(function(d){return d.key===np.key;});
+        var changedAgain=current.editDraft&&JSON.stringify(current.editDraft)!==JSON.stringify(entry.seo);
+        current.seo=JSON.parse(JSON.stringify(saved&&saved.seo||entry.seo));
+        current.approved=!!approve&&!changedAgain;
+        if(!changedAgain){delete current.editDraft;current.dirty=false;}
+        return current;
       });
     }
-    function approveProduct(np,i,button){
+    function approvalScopeCurrent(run){return receiveId===run.poId&&studio===run.studioRef&&lastReceive===run.receiveRef;}
+    function assertApprovalScope(run){if(!approvalScopeCurrent(run))throw new Error('The open PO changed before approval. Reopen '+run.poId+' and review it before trying again.');}
+    function lockApprovalControls(run){
+      if(receiveId!==run.poId)return;
+      var host=el('poDetailHost');if(!host)return;
+      Array.prototype.forEach.call(host.querySelectorAll('input,select,textarea,button'),function(control){
+        if(control===run.button)return;
+        if(!run.controls.has(control))run.controls.set(control,!!control.disabled);
+        control.disabled=true;
+      });
+    }
+    function beginProductApproval(button,label){
+      if(productApprovalRun){alert('Approval is already in progress. Wait for its result before starting another approval.');return null;}
+      var run={poId:receiveId,studioRef:studio,receiveRef:lastReceive,button:button,label:button.textContent,disabled:!!button.disabled,controls:new Map(),saved:false};
+      productApprovalRun=run;button.disabled=true;button.textContent=label;lockApprovalControls(run);refreshPostGate();
+      var status=el('poApprovalStatus');if(status)status.textContent='Checking '+run.poId+'…';
+      return run;
+    }
+    function finishProductApproval(run){
+      run.controls.forEach(function(disabled,control){control.disabled=disabled;});
+      run.button.disabled=run.disabled;run.button.textContent=run.label;
+      if(productApprovalRun===run)productApprovalRun=null;
+      if(receiveId===run.poId)refreshPostGate();
+    }
+    function approvalStatus(run,message){
+      if(receiveId!==run.poId||(!approvalScopeCurrent(run)&&studio!==run.refreshedStudio))return;
+      var status=el('poApprovalStatus');if(status)status.textContent=message;
+    }
+    async function refreshApprovedPo(run,count){
+      if(!approvalScopeCurrent(run))return;
+      try{
+        var refreshed=await initStudioFor(run.poId,{strict:true});
+        if(!refreshed||receiveId!==run.poId||lastReceive!==refreshed)return;
+        run.refreshedStudio=studio;
+        approvalStatus(run,'Approved '+count+' product(s) on '+run.poId+'. All required images and SEO were checked.');
+      }catch(error){
+        throw new Error('Approval was saved for '+run.poId+', but its display could not refresh: '+error.message+'. Reopen the PO to check its saved approval.');
+      }
+    }
+    async function approveProduct(np,i,button){
       if(!studio.seo[np.key]||!studio.seo[np.key].seo){alert('Generate and review the SEO names first.');return;}
       if(!confirm('Save the visible SEO edits and approve all checked images + SEO for this product?'))return;
-      button.disabled=true;button.textContent='Saving and approving…';
-      (studio.styleSaves[np.key]||Promise.resolve()).then(function(){return saveSeoRequest(np,i,false);}).then(function(){
-        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/approve-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})}).then(readJson);
-      }).then(function(result){
-          if(!result.success)throw new Error(result.error||'Could not approve product.');
-          studio.images[np.key]=result.images||[];
-          studio.seo[np.key]={seo:result.seo.seo,approved:true,source:result.seo.source||'openai',savedMessage:'Approved ✓'};
-          rerenderCard(i);
-        }).catch(function(error){button.disabled=false;button.textContent='Approve images + SEO';alert(error.message);});
+      var run=beginProductApproval(button,'Saving and approving…');if(!run)return;
+      try{
+        rememberSeoEdits(np,i);
+        await (run.studioRef.styleSaves[np.key]||Promise.resolve());assertApprovalScope(run);
+        await saveSeoRequest(np,i,false,run);assertApprovalScope(run);
+        var result=await fetch('/api/procurement/pos/'+encodeURIComponent(run.poId)+'/approve-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key})}).then(readJson);
+        if(!result.success)throw new Error(result.error||'Could not approve product.');
+        run.saved=true;
+        if(!approvalScopeCurrent(run))return;
+        await refreshApprovedPo(run,1);
+      }catch(error){approvalStatus(run,error.message);alert(error.message);}
+      finally{finishProductApproval(run);}
     }
-    function approveWholePo(button){
+    async function approveWholePo(button){
       if(!confirm('Save the visible SEO edits and approve every completed product in this PO? If any product is incomplete, nothing will be approved and the missing items will be listed.'))return;
-      button.disabled=true;button.textContent='Checking PO…';
-      var products=(lastReceive&&lastReceive.newProducts)||[],seoDrafts=[];
-      products.forEach(function(np,i){var entry=readSeoFields(np,i);if(entry&&entry.seo)seoDrafts.push({groupKey:np.key,seo:JSON.parse(JSON.stringify(entry.seo))});});
-      return Promise.all(products.map(function(np){return studio.styleSaves[np.key]||Promise.resolve();})).then(function(){
-        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/approve-po',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seoDrafts:seoDrafts})});
-      })
-        .then(readJson).then(function(result){if(!result.success)throw new Error(result.error||'Could not approve PO.');initStudioFor(receiveId);})
-        .catch(function(error){button.disabled=false;button.textContent='Approve complete PO';alert(error.message);});
+      var run=beginProductApproval(button,'Checking PO…');if(!run)return;
+      try{
+        var products=(run.receiveRef&&run.receiveRef.newProducts)||[],seoDrafts=[];
+        products.forEach(function(np,i){var entry=rememberSeoEdits(np,i);if(entry&&entry.seo)seoDrafts.push({groupKey:np.key,seo:entry.seo});});
+        await Promise.all(products.map(function(np){return run.studioRef.styleSaves[np.key]||Promise.resolve();}));assertApprovalScope(run);
+        var result=await fetch('/api/procurement/pos/'+encodeURIComponent(run.poId)+'/approve-po',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({seoDrafts:seoDrafts})}).then(readJson);
+        if(!result.success)throw new Error(result.error||'Could not approve PO.');
+        run.saved=true;
+        if(!approvalScopeCurrent(run))return;
+        await refreshApprovedPo(run,Number(result.approvedProducts)||0);
+      }catch(error){approvalStatus(run,error.message);alert(error.message);}
+      finally{finishProductApproval(run);}
     }
     function refreshPostGate(){
       var d=lastReceive, btn=el('postBtn'); if(!btn) return;
       var pend=(d.newProducts||[]).filter(function(np){ return !studioReadyFor(np); }).length;
-      btn.disabled=pend>0;
+      btn.disabled=pend>0||!!(productApprovalRun&&receiveId===productApprovalRun.poId);
       var note=el('studioNote');
       if(note) note.innerHTML = pend>0
         ? '<span style="color:#b42318">'+pend+' product(s) still need all required approved views and approved SEO before posting.</span>'
@@ -2846,6 +2920,10 @@
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
+      Array.prototype.forEach.call(host.querySelectorAll('[data-seo]'),function(input){input.oninput=function(){
+        rememberSeoEdits(np,i);refreshPostGate();
+        var note=host.querySelector('[data-seonote="'+i+'"]');if(note)note.textContent='Unsaved SEO edits — save and approve before posting.';
+      };});
       var preview=host.querySelector('[data-preview-prompts]');if(preview)preview.onclick=function(){previewImagePrompts(np,i,preview);};
       var progress=host.querySelector('[data-check-generation]');if(progress)progress.onclick=function(){refreshGenerationProgress(np,i,progress);};
       var lastAttempt=((((lastReceive||{}).po||{}).openaiPilot||{}).attempts||[]).slice().reverse().find(function(x){return x.groupKey===np.key;});
@@ -2975,6 +3053,7 @@
       Array.prototype.forEach.call(host.querySelectorAll('[data-sty]'),function(sel){ sel.onchange=function(){ var field=sel.getAttribute('data-sty');stylingOf(np)[field]=sel.value;saveStudioStyling(np).then(function(){rerenderCard(i);}).catch(function(e){alert(e.message);}); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-styck]'),function(cb){ cb.onchange=function(){ stylingOf(np)[cb.getAttribute('data-styck')]=cb.checked;saveStudioStyling(np).then(function(){rerenderCard(i);}).catch(function(e){alert(e.message);}); }; });
       Array.prototype.forEach.call(host.querySelectorAll('[data-backup]'),function(inp){ inp.onchange=function(){ uploadBackPhoto(np,i,inp.files&&inp.files[0]); }; });
+      if(productApprovalRun&&receiveId===productApprovalRun.poId)lockApprovalControls(productApprovalRun);
     }
     function uploadBackPhoto(np,i,file){
       if(!file) return;
@@ -3080,7 +3159,7 @@
     function saveSeo(np,i,approve){
       var seo=studio.seo[np.key];if(!seo)return;
       var host=el('scard'+i),note=host&&host.querySelector('[data-seonote="'+i+'"]');if(note)note.textContent='Saving…';
-      saveSeoRequest(np,i,approve).then(function(){seo.savedMessage=approve?'SEO approved ✓':'Saved ✓';rerenderCard(i);})
+      saveSeoRequest(np,i,approve).then(function(){seo.savedMessage=seo.dirty?'Unsaved SEO edits — save and approve before posting.':approve?'SEO approved ✓':'Saved ✓';rerenderCard(i);})
         .catch(function(error){seo.savedMessage='';rerenderCard(i);alert(error.message);});
     }
 
@@ -3134,10 +3213,12 @@
       el('ppConfirm').onclick=function(){ close(); doPost(id); };
     }
     function postToShopify(id){
+      if(productApprovalRun||(lastReceive.newProducts||[]).some(function(np){return !studioReadyFor(np);})){alert('Wait for approval to finish and approve every product’s current images and SEO before posting.');return;}
       if(!el('warehouse').value){ alert('Choose and Save a warehouse location first (tab ①).'); return; }
       showPostPreview(id);
     }
     function doPost(id){
+      if(id!==receiveId||productApprovalRun||(lastReceive.newProducts||[]).some(function(np){return !studioReadyFor(np);})){alert('The PO or its approval changed. Reopen the posting preview after approving the current images and SEO.');return;}
       var btn=el('postBtn'); btn.disabled=true; btn.textContent='Posting…';
       var payload=collectApproved(); payload.approve=true; payload.poId=id; payload.warehouseLocationId=el('warehouse').value;
       fetch('/api/procurement/commit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
