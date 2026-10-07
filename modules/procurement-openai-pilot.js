@@ -141,15 +141,15 @@ function imagePrompt(group, type, styling, hasContinuityReference=false) {
     ? 'The featured product is the LOWER garment visible in the reference, not the supporting top. Reproduce its waistband, rise, hip and leg silhouette, length, hem, visible seams, colour, pattern and surface texture. Never substitute a shirt, top or jacket for the lower garment, add a matching top, or turn it into a coordinated set.'
     : featuredCategory==='upper'?'First inspect it and reproduce the same garment category and construction: neckline/collar, sleeve length, shoulder seams, silhouette, hem, colour, pattern and visible knit or surface texture. Preserve every one of those visible details exactly: never change a long sleeve to a short sleeve, alter the neckline, substitute a different garment category, or make a loose garment slim.'
     : 'Identify the featured item in the original and reproduce its visible shape, construction, proportions, colour, pattern and texture. Preserve an actual set only if that set is the featured product in the reference; do not invent extra items.';
-  const common = `The ORIGINAL PRODUCT PHOTO is the sole authority for the featured garment. ${construction} Preserve all visible details and proportions exactly. Ignore any contradictory purchase title, product type or fit setting; do not guess unseen details. Change only the setting, pose and supporting outfit, never the featured garment. Do not invent a logo, fabric composition, unseen back, pockets or details. One featured product, no collage, text or watermark.`;
+  const common = `The ORIGINAL PRODUCT PHOTO is the sole authority for the featured garment. ${construction} Preserve all visible details and proportions exactly, including existing printed artwork, logos and lettering on the garment. Ignore any contradictory purchase title, product type or fit setting; do not guess unseen details. Change only the setting, pose and supporting outfit, never the featured garment. Do not invent a logo, fabric composition, unseen back, pockets or details. One featured product, no collage, added captions or added watermark.`;
   const productOnly='Isolate ONLY the featured product from the original reference. Remove the person, skin, other clothing, accessories, packaging and source background. No supporting outfit or invented matching garment; no visible mannequin or body parts. Show the complete product with even margins. ';
   if (type === 'front') return `Create a clean, photorealistic product-only front catalogue photo on a warm ivory studio background. ${productOnly}${String(group.audience).toLowerCase()==='women'&&featuredCategory==='upper'?'Show the original silhouette of the fully opaque garment on an invisible female-form mannequin, with no visible skin or mannequin parts; do not add bust shaping or make a loose garment fitted. ':''}${common}`;
   if (type === 'back') return `Create a clean, photorealistic product-only BACK catalogue photo on a warm ivory studio background. The reference is a real photo of the back of this garment. Preserve only details actually visible in that back reference; do not copy front artwork onto the back or invent unseen details. ${productOnly}${common}`;
   if (type === 'detail') return `Create a photorealistic close-up detail photo of the garment's FRONT, showing only details clearly visible in the reference. No model or invented stitching, labels or fabric composition. ${common}`;
   const gender=type==='female'||type==='model-side-female'?'female':type==='male'||type==='model-side-male'?'male':String(group.audience).toLowerCase()==='women'?'female':'male';
   const genderGuard=gender==='female'
-    ?'The single model MUST be an adult woman. Never depict a man or masculine-presenting model.'
-    :'The single model MUST be an adult man. Never depict a woman or feminine-presenting model.';
+    ?'Show one adult woman in a fully clothed catalogue outfit.'
+    :'Show one adult man in a fully clothed catalogue outfit.';
   const cast=castDescription(group,gender,styling);
   const setting=String(group.line||group.collection||'').toLowerCase().includes('casual')?'pale limestone colonnade of a refined heritage estate, natural daylight, understated global old-money mood':'restrained neutral editorial setting';
   const isThreeQuarter=type==='model-side'||type.startsWith('model-side-');
@@ -238,7 +238,19 @@ function repairGuidance(fields,group,styling,type) {
   return [...new Set(fields||[])].map(field=>guidance[field]).filter(Boolean).join(' ');
 }
 
-async function generateImage({key, group, source, continuitySource=null, type, styling, repairFields=[], model='gpt-image-1.5', fetchImpl=global.fetch}) {
+function requestSignal(timeout,signal) {
+  const timed=AbortSignal.timeout(timeout);
+  if(!signal)return timed;
+  if(typeof AbortSignal.any==='function')return AbortSignal.any([signal,timed]);
+  const controller=new AbortController();
+  const abort=event=>controller.abort(event.target.reason);
+  if(signal.aborted)controller.abort(signal.reason);
+  else {signal.addEventListener('abort',abort,{once:true});timed.addEventListener('abort',abort,{once:true});
+    controller.signal.addEventListener('abort',()=>{signal.removeEventListener('abort',abort);timed.removeEventListener('abort',abort);},{once:true});}
+  return controller.signal;
+}
+
+async function generateImage({key, group, source, continuitySource=null, type, styling, repairFields=[], signal, model='gpt-image-1.5', fetchImpl=global.fetch}) {
   if (!IMAGE_TYPES.includes(type)) throw new Error('Unsupported pilot image view.');
   const form = new FormData();
   form.append('model', model);
@@ -252,7 +264,7 @@ async function generateImage({key, group, source, continuitySource=null, type, s
   form.append('quality','medium');
   form.append('size','1024x1536');
   const response = await fetchImpl('https://api.openai.com/v1/images/edits', {
-    method:'POST', headers:{Authorization:`Bearer ${key}`}, body:form, signal:AbortSignal.timeout(180000)
+    method:'POST', headers:{Authorization:`Bearer ${key}`}, body:form, signal:requestSignal(180000,signal)
   });
   const body = await readApiResponse(response);
   const encoded = body.data && body.data[0] && body.data[0].b64_json;
@@ -260,7 +272,7 @@ async function generateImage({key, group, source, continuitySource=null, type, s
   return {buffer:Buffer.from(encoded,'base64'),usage:body.usage || null,model};
 }
 
-async function preflightFit({key,group,source,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
+async function preflightFit({key,group,source,styling,signal,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
   const style=normalizeStyling(styling,group);
   const category=garmentCategory(group);
   if(category==='other'||style.fit==='Auto')return {status:'not-required',reason:''};
@@ -269,7 +281,7 @@ async function preflightFit({key,group,source,styling,model='gpt-4.1-mini',fetch
     ? `Look ONLY at the original featured LOWER garment photograph. The user selected the length ${style.fit} for the model image. Is that length visibly compatible with the actual garment? Judge the waistband-to-hem extent and visible leg length; do not use shoulder seams, the supporting top, or the purchase title. The photograph is the authority. Return conflict ONLY for a clear visual contradiction, such as full-length trousers selected as Shorts / half, or shorts selected as Full length. A crop, fold, obstruction or camera angle alone is not proof. If the hem or length cannot be observed, return uncertain.`
     : `Look ONLY at the original garment photograph. The user selected ${style.fit} for the model image. Is that choice visibly compatible with the actual shoulder seam and cut of the garment in the photo? Ignore the purchase category and title; they may call a long-sleeve knit a T-shirt. A hanger, fold or camera angle alone does not prove a garment is oversized. Treat a vendor label such as 'muscle fit' as unreliable; the photo is the authority. 'Fitted' and 'Slim fit' describe a close natural-shoulder silhouette, not a rigid measurement. Return conflict ONLY for a clear, obvious visual contradiction (for example, unmistakably dropped shoulder and broad boxy cut versus fitted). If not observable, return uncertain. Do not compare any generated image or supporting trousers.`;
   const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
-    body:JSON.stringify({model,store:false,max_output_tokens:180,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'}]}],text:{format:{type:'json_schema',name:'sanki_fit_preflight',strict:true,schema}}}),signal:AbortSignal.timeout(90000)});
+    body:JSON.stringify({model,store:false,max_output_tokens:180,input:[{role:'user',content:[{type:'input_text',text:prompt},{type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'}]}],text:{format:{type:'json_schema',name:'sanki_fit_preflight',strict:true,schema}}}),signal:requestSignal(90000,signal)});
   const body=await readApiResponse(response),result=JSON.parse(responseText(body));
   if(!['compatible','conflict','uncertain'].includes(result.status))throw new Error('Invalid fit preflight response.');
   return {status:result.status,reason:String(result.reason||'').slice(0,220),model,usage:body.usage||null};
@@ -345,7 +357,7 @@ function canAutoAcceptConfirmedColourCheck(check,confirmedColour) {
   return /colou?r mismatch|different colou?r/.test(issue)&&new RegExp(`(?:candidate|model)[^.;]{0,100}\\b${escaped}\\b|(?:appear|look|are|is)\\s+(?:\\w+\\s+){0,3}\\b${escaped}\\b[^.;]{0,20}(?:in|on)\\s+(?:the\\s+)?(?:candidate|model)`).test(issue);
 }
 
-async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
+async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,signal,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
   const style=normalizeStyling(styling,group),side=type==='model-side'||type.startsWith('model-side-');
   const category=garmentCategory(group);
   const isModel=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
@@ -370,12 +382,12 @@ async function verifyImage({key,group,source,generated,continuitySource=null,typ
   if(continuitySource)content.push({type:'input_text',text:'IMAGE 3 — MATCHING MODEL FRONT. Use only for outfit continuity.'},{type:'input_image',image_url:`data:${continuitySource.mime};base64,${continuitySource.buf.toString('base64')}`,detail:'high'});
   const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,store:false,max_output_tokens:2200,input:[{role:'user',content}],text:{format:{type:'json_schema',name:'sanki_image_check',strict:true,schema:imageCheckSchema()}}}),
-    signal:AbortSignal.timeout(90000)});
+    signal:requestSignal(90000,signal)});
   const body=await readApiResponse(response),check=JSON.parse(responseText(body));
   return {...evaluateImageCheck(check,type,style,group),model,usage:body.usage||null};
 }
 
-async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=global.fetch}) {
+async function generateSeo({key, group, source, signal, model='gpt-4.1-mini', fetchImpl=global.fetch}) {
   const retail=retailFacts(group);
   const facts = {brand:'SANKI',productType:retail.productType,colour:group.colour,
     audience:group.audience,fit:retail.fit,sizes:group.sizeLabels};
@@ -389,7 +401,7 @@ async function generateSeo({key, group, source, model='gpt-4.1-mini', fetchImpl=
       {type:'input_text',text:prompt},
       {type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`}
     ]}],text:{format:{type:'json_schema',name:'sanki_listing_copy',strict:true,schema:seoSchema()}}}),
-    signal:AbortSignal.timeout(90000)
+    signal:requestSignal(90000,signal)
   });
   const body = await readApiResponse(response);
   const seo = JSON.parse(responseText(body));
