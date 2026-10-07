@@ -2,6 +2,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createLookup } = require('../modules/inventory-barcode');
+test('registered barcode route resolves at its full URL when mounted at the app root', async () => {
+  const express = require('express'), app = express(), router = express.Router();
+  require('../modules/inventory-barcode').register(router);
+  app.use(router);
+  const server = app.listen(0, '127.0.0.1');
+  await require('node:events').once(server, 'listening');
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/inventory-categorization/barcode?barcode=`);
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await response.json(), { success: false, error: 'Enter a valid barcode.' });
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
 const variant = (barcode, sku = 'SKU1', id = 'v1') => ({ id, barcode, sku, product: { handle: 'tee', title: 'Tee' } });
 const page = (nodes, hasNextPage = false, endCursor = null) => ({ productVariants: { nodes, pageInfo: { hasNextPage, endCursor } } });
 test('barcode lookup preserves leading zeroes and verifies exact Shopify matches', async () => {
