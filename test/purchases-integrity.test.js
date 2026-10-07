@@ -158,7 +158,7 @@ test('one automatic design MRP spans colours and sizes; manual overrides survive
   assert.equal((await send('/api/procurement/pos/'+id+'/mark-received')).status,200);
   const studio=await send('/api/procurement/pos/'+id+'/studio',null,'GET');
   for(const group of studio.newProducts){
-    assert.equal((await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,maxImageAttempts:2})).status,202);
+    assert.equal((await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,maxImageAttempts:2,generationVersion:3,generationEpoch:0})).status,202);
     for(let i=0;i<100;i++){if(load().pos[id].openaiPilot.attempts.slice(-1)[0].status!=='running')break;await new Promise(r=>setTimeout(r,10));}
   }
   assert.equal((await send('/api/procurement/pos/'+id+'/approve-po')).status,200);
@@ -174,12 +174,12 @@ for(const type of ['Shirt','T-Shirt Hood','Perfumes','Belts','Bag','Unisex'])tes
   assert.equal((await send('/api/procurement/pos/'+id+'/mark-received')).status,200);
   assert.equal((await send('/api/procurement/commit',{poId:id,approve:true})).status,400);assert.equal(writes.length,0);
   const studio=await send('/api/procurement/pos/'+id+'/studio',null,'GET');const group=studio.newProducts[0];
-  const generated=await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,maxImageAttempts:2});assert.equal(generated.status,202,JSON.stringify(generated));
+  const generated=await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,maxImageAttempts:2,generationVersion:3,generationEpoch:0});assert.equal(generated.status,202,JSON.stringify(generated));
   let po;for(let i=0;i<100;i++){po=load().pos[id];if(po.openaiPilot?.attempts[0]?.status!=='running')break;await new Promise(r=>setTimeout(r,10));}
   assert.equal(po.openaiPilot.attempts[0].status,'drafts-ready',JSON.stringify(po.openaiPilot));assert.deepEqual(po.aiImages[group.key].map(im=>im.type),profile(group).views);
   if(type==='Unisex'){
     assert.equal(po.aiImages[group.key].length,3,'product front and two model fronts only');
-    const rejected=await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,retry:true,regenerateTypes:['model-side-female']});
+    const rejected=await send('/api/procurement/pos/'+id+'/openai-pilot',{groupKey:group.key,retry:true,generationVersion:3,generationEpoch:0,regenerateTypes:['model-side-female']});
     assert.equal(rejected.status,400);assert.match(rejected.error,/supported/);
     fs.writeFileSync(path.join(sandbox,'procurement-photos','legacy-side.jpg'),'legacy-side-image');
     const store=load();store.pos[id].aiImages[group.key].push(...['model-side-female','model-side-male'].map(t=>({...po.aiImages[group.key][1],type:t,approved:true,url:'/api/procurement/photo/legacy-side.jpg'})));save(store);

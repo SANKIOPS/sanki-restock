@@ -48,6 +48,13 @@ const { invoiceAmounts, allocateAmount, finalizedByPo } = require('./lg-invoices
 const { buildRecoveryPlan, publicRecoveryPlan } = require('./procurement-shopify-recovery');
 
 const router = express.Router();
+router.use('/api/procurement/pos/:id', (req,res,next)=>{
+  if(req.method==='POST' && paidPilotInFlight.has(req.params.id) &&
+    /^\/(?:image-styling|back-ref|line-photo|line-edits|group-audience|receive|receipt-|discard-|split-|merge-|images|qa-review|codex-batch|mark-received)/.test(req.path))
+    return res.status(409).json({success:false,error:'Image generation is running for this PO. Stop it or wait for completion before changing its product details or reviewing images.'});
+  next();
+});
+
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
@@ -228,6 +235,7 @@ function reclaimRejectedPhotoStorage(s) {
     for(const url of Object.values(po.backRefs||{}))add(url);
     for(const line of po.lines||[]){add(line&&line.photoUrl);add(line&&line.rawPhotoUrl);}
     for(const image of po.imageRejectionHistory||[])add(image&&image.url);
+    for(const record of po.referenceImageHistory||[])for(const image of record.images||[])add(image&&image.url);
   }
   let removed=0,freed=0;
   for(const po of Object.values(s.pos||{}))for(const rejected of Object.values(po.qaRejected||{})){
@@ -1182,7 +1190,8 @@ try {
 // "Product back" shot is generated from the true reverse instead of guessing.
 // The image itself is uploaded via /api/procurement/photo first; we just store
 // its URL against the group on the PO.
-router.post('/api/procurement/pos/:id/back-ref', (req, res) => {
+router.post('/api/procurement/pos/:id/back-ref', async (req, res) => {
+  try {
   if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
   const s = loadStore();
   const po = s.pos[req.params.id];
@@ -1192,16 +1201,25 @@ router.post('/api/procurement/pos/:id/back-ref', (req, res) => {
   if (isLockedPo(po)) return res.status(409).json({ success: false, error: 'Posted purchases cannot change image references.' });
   if (!(po.lines||[]).some(line=>groupKey(line)===b.groupKey)) return res.status(404).json({ success:false,error:'Product group not found.' });
   if (b.url && (!String(b.url).startsWith('/api/procurement/photo/') || !readStoredPhoto(b.url))) return res.status(400).json({ success:false,error:'Upload a readable back photo first.' });
+  const snapshot=JSON.stringify(po),group=(await newGroupsOf(s,po)).find(group=>group.key===b.groupKey);
+  if(!group)return res.status(404).json({success:false,error:'Product group not found.'});
+  if(JSON.stringify(loadStore().pos[req.params.id])!==snapshot||paidPilotInFlight.has(req.params.id))return res.status(409).json({success:false,error:'The PO changed while saving its back reference. Reopen it and try again.'});
   po.backRefs = po.backRefs || {};
   if (po.backRefs[b.groupKey] !== (b.url || '')) {
-    // A draft created from a different back reference must not remain approvable.
-    po.aiImages=po.aiImages||{};
-    po.aiImages[b.groupKey]=(po.aiImages[b.groupKey]||[]).filter(image=>image.type!=='back');
+    const before=codexBatch.fingerprint(group,po.backRefs[b.groupKey]),after=codexBatch.fingerprint(group,b.url||'');
+    po.aiImages=po.aiImages||{};po.qaRejected=po.qaRejected||{};
+    const active=po.aiImages[b.groupKey]||[],held=po.qaRejected[b.groupKey]||[];
+    const backImages=active.concat(held).filter(image=>image.type==='back');
+    if(backImages.length){po.referenceImageHistory=po.referenceImageHistory||[];po.referenceImageHistory.push({groupKey:b.groupKey,at:new Date().toISOString(),reason:'back-reference-changed',images:backImages});}
+    po.aiImages[b.groupKey]=active.filter(image=>image.type!=='back');
+    po.qaRejected[b.groupKey]=held.filter(image=>image.type!=='back');
+    for(const image of po.aiImages[b.groupKey].concat(po.qaRejected[b.groupKey]))if(image.sourceFingerprint===before)image.sourceFingerprint=after;
   }
   if (b.url) po.backRefs[b.groupKey] = String(b.url);
   else delete po.backRefs[b.groupKey];
   saveStore(s);
   res.json({ success: true, groupKey: b.groupKey, url: po.backRefs[b.groupKey] || '' });
+  }catch(error){res.status(409).json({success:false,error:error.message});}
 });
 
 // ── AI image helpers (Gemini) ────────────────────────────────────
@@ -1218,9 +1236,10 @@ function savePhotoBuffer(buf, ext) {
 }
 // Read a stored /api/procurement/photo/<file> URL back into a buffer + mime.
 function readStoredPhoto(url) {
+  if(typeof url!=='string'||!url.startsWith('/api/procurement/photo/'))return null;
   const name = path.basename(String(url || ''));
   const fp = path.join(PHOTO_DIR, name);
-  if (!fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp)) return null;
+  if (!name || !fp.startsWith(PHOTO_DIR) || !fs.existsSync(fp) || !fs.statSync(fp).isFile()) return null;
   const ext = path.extname(name).toLowerCase();
   const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
   return { buf: fs.readFileSync(fp), mime };
@@ -2604,6 +2623,41 @@ const paidPilotInFlight = new Set();
 const paidPilotWorkerId = crypto.randomUUID();
 const paidPilotWorkerStartedAt = Date.now();
 const activePaidAttemptIds = new Set();
+const paidJobs = new Map();
+const imageWorkflow = require('./procurement-image-workflow');
+// Freeze product edits while their paid job is active; no billed result should
+// be discarded because a dropdown or reference was changed mid-request.
+function attemptRecord(po,id){return (po?.openaiPilot?.attempts||[]).find(attempt=>attempt.id===id);}
+function jobStopped(po,id,signal){return signal.aborted || !!attemptRecord(po,id)?.cancelRequestedAt;}
+router.post('/api/procurement/stop-image-generation', (req,res)=>{
+  if(!canStartPaidPilot(req))return res.status(403).json({success:false,error:'Paid image-generation access required.'});
+  const store=loadStore(),at=new Date().toISOString(),by=String(req.user?.username||req.user?.role||'user');
+  store.settings=store.settings||{};
+  store.settings.imageGenerationEpoch=imageWorkflow.epochOf(store)+1;
+  let stopped=0;
+  for(const po of Object.values(store.pos||{}))for(const attempt of po.openaiPilot?.attempts||[])if(attempt.status==='running'){
+    attempt.cancelRequestedAt=at;attempt.cancelledBy=by;stopped++;
+    if(!activePaidAttemptIds.has(attempt.id)){attempt.status='cancelled';attempt.completedAt=at;}
+  }
+  saveStore(store);
+  for(const controller of paidJobs.values())controller.abort(new DOMException('Image generation stopped by user.','AbortError'));
+  res.json({success:true,stopped,generationEpoch:store.settings.imageGenerationEpoch,
+    message:'Stopped app jobs and invalidated queued requests. Already submitted provider calls may still be billed. Saved photos were kept.'});
+});
+router.get('/api/procurement/pos/:id/image-prompts', async(req,res)=>{
+  try{
+    if(!canManagePurchases(req))return res.status(403).json({success:false,error:'Purchases access required.'});
+    const store=loadStore(),po=store.pos[req.params.id],key=String(req.query.groupKey||'');
+    if(!po)return res.status(404).json({success:false,error:'PO not found.'});
+    const group=(await newGroupsOf(store,po)).find(group=>group.key===key);
+    if(!group)return res.status(404).json({success:false,error:'Product group not found.'});
+    const style=openaiPilot.normalizeStyling(po.imageStyling?.[key],group),back=!!readStoredPhoto(po.backRefs?.[key]);
+    res.set('Cache-Control','no-store');
+    res.json({success:true,model:process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5',styling:style,
+      views:openaiPilot.pilotTypes(group,back).map(type=>({type,prompt:openaiPilot.imagePrompt(group,type,style,type.startsWith('model-side'))})),
+      note:'Current base prompts. A source-fit check may fall back to Auto; a corrective attempt adds only the failed visual findings. Opening this preview does not generate images.'});
+  }catch(error){res.status(500).json({success:false,error:error.message});}
+});
 function refreshImageStylingCheck(image,styling,group) {
   if(image.source!=='openai-pilot'||!image.styling||!openaiPilot.MODEL_VIEWS.includes(image.type))return;
   const changes=openaiPilot.stylingChanges(image.requestedStyling||image.styling,styling,group,image.type);
@@ -2657,14 +2711,21 @@ function holdUncheckedImages(po,groups) {
   let changed=false;
   for(const group of groups){
     const images=(po.aiImages||{})[group.key]||[];
-    for(const image of images){const before=JSON.stringify(image);refreshImageStylingCheck(image,(po.imageStyling||{})[group.key],group);if(before!==JSON.stringify(image))changed=true;}
+    for(const image of images){
+      const before=JSON.stringify(image),fingerprint=codexBatch.fingerprint(group,(po.backRefs||{})[group.key]);
+      refreshImageStylingCheck(image,(po.imageStyling||{})[group.key],group);
+      if(image.sourceFingerprint&&image.sourceFingerprint!==fingerprint){
+        image.approved=false;image.qa={...(image.qa||{}),status:'needs-review',sourceChanged:true,issues:['The original product reference changed. Generate this view again from the current reference.']};
+      }
+      if(before!==JSON.stringify(image))changed=true;
+    }
     const unchecked=images.filter(image=>image.url&&(!image.qa||image.qa.status==='pass'&&!imageCheckAccepted(image)));
     if(!unchecked.length)continue;
     po.qaRejected=po.qaRejected||{};po.qaRejected[group.key]=po.qaRejected[group.key]||[];
     for(const image of unchecked)po.qaRejected[group.key].push({...image,approved:false,
       qa:{...(image.qa||{}),status:'needs-review',failed:[],uncertain:['verification'],issues:['This legacy image has no product-only verification. Inspect it against the original before accepting or reject it.']},
       sourceFingerprint:codexBatch.fingerprint(group,(po.backRefs||{})[group.key]),
-      styling:openaiPilot.normalizeStyling((po.imageStyling||{})[group.key],group),at:new Date().toISOString()});
+      styling:image.styling||openaiPilot.normalizeStyling((po.imageStyling||{})[group.key],group),at:new Date().toISOString()});
     po.aiImages[group.key]=images.filter(image=>!unchecked.includes(image));
     for(const seo of po.seoDraft||[])if(seo.key===group.key)seo.seoApproved=false;
     changed=true;
@@ -2739,6 +2800,7 @@ router.get('/api/procurement/openai-pilot-status', (req,res) => {
   if (!canManagePurchases(req)) return res.status(403).json({success:false,error:'Purchases access required.'});
   res.json({success:true,configured:!!process.env.OPENAI_API_KEY,
     imageModel:process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5',
+    generationVersion:imageWorkflow.VERSION,generationEpoch:imageWorkflow.epochOf(loadStore()),
     maxGroups:Math.min(1000,Math.max(1,Number(process.env.PROCUREMENT_OPENAI_MAX_GROUPS)||30))});
 });
 router.get('/api/procurement/pos/:id/openai-pilot-status', (req,res) => {
@@ -2798,7 +2860,13 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const s=loadStore(),po=s.pos[req.params.id],key=String((req.body||{}).groupKey||'');
     if (!po || isLockedPo(po)) return res.status(400).json({success:false,error:'Editable PO required.'});
     if(expireStalePaidAttempts(po))saveStore(s);
+    if((req.body||{}).generationVersion!==imageWorkflow.VERSION || (req.body||{}).generationEpoch!==imageWorkflow.epochOf(s))
+      return res.status(409).json({success:false,error:'Generation was stopped or this page is out of date. Refresh Purchases and confirm a new generation. No paid call was made.'});
+    const startSnapshot=JSON.stringify(po),startEpoch=imageWorkflow.epochOf(s);
     const g=(await newGroupsOf(s,po)).find(x=>x.key===key);
+    const latest=loadStore();
+    if(JSON.stringify(latest.pos[req.params.id])!==startSnapshot || imageWorkflow.epochOf(latest)!==startEpoch)
+      return res.status(409).json({success:false,error:'The PO or generation settings changed while preparing. Reopen the PO; no paid call was made.'});
     const source=g&&readStoredPhoto(g.photoUrl);
     if (!g || !source) return res.status(400).json({success:false,error:'Product group with original photo required.'});
     if (!['Men','Women','Unisex'].includes(g.audience)) return res.status(400).json({success:false,error:'Set Men, Women or Unisex before paid image generation.'});
@@ -2813,6 +2881,8 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     const fingerprint=codexBatch.fingerprint(g,(po.backRefs||{})[key]);
     const allowedTypes=openaiPilot.pilotTypes(g,!!backSource);
     const savedImages=((po.aiImages||{})[key]||[]);
+    for(const image of savedImages)refreshImageStylingCheck(image,(po.imageStyling||{})[key],g);
+    const usable=image=>image.type && image.url && readStoredPhoto(image.url) && imageCheckAccepted(image) && (!image.sourceFingerprint||image.sourceFingerprint===fingerprint);
     const heldImages=((po.qaRejected||{})[key]||[]).filter(image=>image&&image.url&&!image.supersededBy);
     const requestedRegeneration=(req.body||{}).regenerateTypes;
     if(requestedRegeneration!==undefined && (!Array.isArray(requestedRegeneration)||!requestedRegeneration.length||requestedRegeneration.length>allowedTypes.length||new Set(requestedRegeneration).size!==requestedRegeneration.length||requestedRegeneration.some(type=>!allowedTypes.includes(type)))) {
@@ -2820,15 +2890,18 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     }
     const regenerateTypes=requestedRegeneration||[];
     const sideToFront={ 'model-side':'model-front', 'model-side-female':'female', 'model-side-male':'male' };
-    const invalidTypes=allowedTypes.filter(type=>savedImages.some(x=>x.type===type&&x.url&&!imageCheckAccepted(x)));
-    const neededTypes=allowedTypes.filter(type=>!savedImages.some(x=>x.type===type&&x.url&&imageCheckAccepted(x)));
+    const invalidTypes=allowedTypes.filter(type=>savedImages.some(x=>x.type===type&&x.url&&!usable(x)));
+    const neededTypes=allowedTypes.filter(type=>!savedImages.some(x=>x.type===type&&x.url&&usable(x)));
     const existingSeo=(po.seoDraft||[]).find(x=>x.key===key);
     // A deterministic draft made when corrections were saved is NOT AI-written.
     // Preserve approved manual copy; replace unapproved placeholders with AI copy.
     const needsSeo=(req.body||{}).skipSeo!==true&&!regenerateTypes.length&&!(existingSeo&&existingSeo.seo&&(existingSeo.seoApproved||existingSeo.source==='openai-pilot'));
     const types=regenerateTypes.length?regenerateTypes:neededTypes;
+    const confirmedTypes=(req.body||{}).confirmedTypes;
+    if(confirmedTypes!==undefined&&(!Array.isArray(confirmedTypes)||new Set(confirmedTypes).size!==confirmedTypes.length||confirmedTypes.some(type=>!allowedTypes.includes(type))||types.some(type=>!confirmedTypes.includes(type))))
+      return res.status(409).json({success:false,error:'Required views changed since the paid confirmation. Refresh the PO and confirm the current views. No paid call was made.'});
     const replaceTypes=new Set(regenerateTypes.concat(invalidTypes));
-    if(types.some(type=>sideToFront[type]&&!types.includes(sideToFront[type])&&!savedImages.some(image=>image.type===sideToFront[type]&&image.url&&imageCheckAccepted(image)))) {
+    if(types.some(type=>sideToFront[type]&&!types.includes(sideToFront[type])&&!savedImages.some(image=>image.type===sideToFront[type]&&image.url&&usable(image)))) {
       return res.status(409).json({success:false,error:'Generate a visually checked front model image before its three-quarter view.'});
     }
     if (!types.length&&!needsSeo) return res.status(409).json({success:false,error:'All image and SEO drafts already exist. Review and approve them; no paid retry was started.'});
@@ -2843,15 +2916,18 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
     activeAttemptId=crypto.randomUUID();
     const attempt={id:activeAttemptId,workerId:paidPilotWorkerId,groupKey:key,sourceFingerprint:fingerprint,styling,regenerateTypes,maxImageAttempts,startedAt:new Date().toISOString(),status:'running',retry,views:[],errors:[]};
     activePaidAttemptIds.add(activeAttemptId);
+    const controller=new AbortController(),signal=controller.signal;
+    paidJobs.set(activeAttemptId,controller);
     po.openaiPilot.attempts.push(attempt);saveStore(s);
     res.status(202).json({success:true,groupKey:key,pilot:attempt});
     const imageModel=process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5';
     const textModel=process.env.PROCUREMENT_OPENAI_TEXT_MODEL||'gpt-4.1-mini';
     const checkModel=process.env.PROCUREMENT_OPENAI_CHECK_MODEL||'gpt-4.1-mini';
-    let preflightBlocked=false,safetyBlocked=false,photoStyling=styling;
+    let preflightBlocked=false,safetyBlocked=false,jobFailure=null,photoStyling=styling;
     try {
-      const fitPreflight=types.length?await openaiPilot.preflightFit({key:process.env.OPENAI_API_KEY,group:g,source,styling,model:checkModel}):{status:'not-required',reason:'SEO-only job'};
-      const fresh=loadStore(),current=fresh.pos[req.params.id],item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
+      const fitPreflight=types.length?await openaiPilot.preflightFit({key:process.env.OPENAI_API_KEY,group:g,source,styling,signal,model:checkModel}):{status:'not-required',reason:'SEO-only job'};
+      const fresh=loadStore(),current=fresh.pos[req.params.id],item=attemptRecord(current,activeAttemptId);
+      if(jobStopped(current,activeAttemptId,signal))throw new DOMException('Image generation stopped by user.','AbortError');
       item.fitPreflight=fitPreflight;
       const freshGroup=(await newGroupsOf(fresh,current)).find(x=>x.key===key);
       if(!freshGroup||codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint||JSON.stringify(openaiPilot.normalizeStyling((current.imageStyling||{})[key],freshGroup))!==JSON.stringify(styling)) {
@@ -2864,16 +2940,17 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       saveStore(fresh);
     } catch(e) {
       preflightBlocked=true;
-      safetyBlocked=openaiPilot.isSafetyBlock(e);
-      const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.slice().reverse().find(x=>x.groupKey===key);
+      safetyBlocked=openaiPilot.isSafetyBlock(e);jobFailure=imageWorkflow.failureOf(e);
+      const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.find(x=>x.id===activeAttemptId);
       if(item){item.errors.push({type:'preflight',error:'Could not check the original fit: '+e.message+'. No image call was made.',...(e.api?{api:e.api}:{})});if(safetyBlocked)item.skippedViews=types;saveStore(fresh);}
     }
     if(!preflightBlocked)for(const type of types){
+      if(jobStopped(loadStore().pos[req.params.id],activeAttemptId,signal))break;
       try {
-        if (!replaceTypes.has(type)&&((po.aiImages||{})[key]||[]).some(x=>x.type===type && x.url)) continue;
+        if (!replaceTypes.has(type)&&((po.aiImages||{})[key]||[]).some(x=>x.type===type && usable(x))) continue;
         const matchingFrontType=type==='model-side'?'model-front':type==='model-side-female'?'female':type==='model-side-male'?'male':'';
         const currentForReference=matchingFrontType?loadStore().pos[req.params.id]:null;
-        if(matchingFrontType&&types.includes(matchingFrontType)&&!currentForReference.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key).views.some(view=>view.type===matchingFrontType)) {
+        if(matchingFrontType&&types.includes(matchingFrontType)&&!attemptRecord(currentForReference,activeAttemptId).views.some(view=>view.type===matchingFrontType)) {
           throw new Error('The new front model view did not pass its visual check. Three-quarter generation was skipped so it cannot reuse an older outfit.');
         }
         const matchingFront=matchingFrontType&&((currentForReference?.aiImages||{})[key]||[]).find(image=>image.type===matchingFrontType&&image.url&&imageCheckAccepted(image));
@@ -2882,53 +2959,75 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
         const priorHeld=heldImages.slice().reverse().find(image=>image.type===type&&image.url&&!image.supersededBy);
         let repairFields=regenerateTypes.includes(type)&&priorHeld&&Array.isArray(priorHeld.qa&&priorHeld.qa.failed)?priorHeld.qa.failed:[];
         for(let imageAttempt=1;imageAttempt<=maxImageAttempts;imageAttempt++){
-        const before=loadStore(),started=before.pos[req.params.id].openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
+        const before=loadStore(),started=attemptRecord(before.pos[req.params.id],activeAttemptId);
+        if(jobStopped(before.pos[req.params.id],activeAttemptId,signal))break;
         started.imageCalls=started.imageCalls||[];
         started.imageCalls.push({type,attempt:imageAttempt,startedAt:new Date().toISOString()});saveStore(before);
-        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,continuitySource,type,styling:photoStyling,repairFields,model:imageModel});
+        const generated=await openaiPilot.generateImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,continuitySource,type,styling:photoStyling,repairFields,signal,model:imageModel});
+        // Save a returned paid result before any checking call or catalogue
+        // read. Cancellation, check outages and changed references keep it held.
+        const saved=savePhotoBuffer(generated.buffer,'.png');
+        const captured=loadStore(),capturedPo=captured.pos[req.params.id],capturedAttempt=attemptRecord(capturedPo,activeAttemptId);
+        capturedPo.qaRejected=capturedPo.qaRejected||{};
+        capturedPo.qaRejected[key]=capturedPo.qaRejected[key]||[];
+        capturedPo.qaRejected[key].push({type,url:saved.url,qa:{status:'unavailable',failed:[],uncertain:['verification'],issues:['Visual check did not complete. Inspect this saved image against the original.']},sourceFingerprint:fingerprint,styling:photoStyling,requestedStyling:styling,attemptId:activeAttemptId,at:new Date().toISOString()});
+        Object.assign(capturedAttempt.imageCalls[capturedAttempt.imageCalls.length-1],{completedAt:new Date().toISOString(),url:saved.url,usage:generated.usage||null});
+        saveStore(captured);
+        if(jobStopped(capturedPo,activeAttemptId,signal))break;
         let check;
-        try {check=await openaiPilot.verifyImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,generated:generated.buffer,continuitySource,type,styling:photoStyling,model:checkModel});}
-        catch(e){check={status:'unavailable',failed:['verification'],issues:['Visual check unavailable: '+e.message.slice(0,140)]};}
-        const fresh=loadStore(),current=fresh.pos[req.params.id];
+        try {check=await openaiPilot.verifyImage({key:process.env.OPENAI_API_KEY,group:g,source:type==='back'?backSource:source,generated:generated.buffer,continuitySource,type,styling:photoStyling,signal,model:checkModel});}
+        catch(e){
+          check={status:'unavailable',failed:[],uncertain:['verification'],issues:['Visual check unavailable: '+e.message.slice(0,140)]};
+          safetyBlocked=openaiPilot.isSafetyBlock(e);jobFailure=imageWorkflow.failureOf(e);
+          const failed=loadStore(),failedAttempt=attemptRecord(failed.pos[req.params.id],activeAttemptId);
+          failedAttempt.errors.push({type:'verification',error:e.message,...(e.api?{api:e.api}:{})});saveStore(failed);
+        }
+        let fresh=loadStore(),current=fresh.pos[req.params.id];
+        const held=current.qaRejected[key].find(image=>image.url===saved.url);held.qa=check;saveStore(fresh);
+        if(jobStopped(current,activeAttemptId,signal))break;
+        const validationSnapshot=JSON.stringify(current);
         const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
-        if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; result was discarded.');
-        if(JSON.stringify(openaiPilot.normalizeStyling((current.imageStyling||{})[key],freshGroup))!==JSON.stringify(styling)) throw new Error('Styling changed during generation; result was discarded. Regenerate with the saved settings.');
+        fresh=loadStore();current=fresh.pos[req.params.id];
+        if(jobStopped(current,activeAttemptId,signal))break;
+        if(JSON.stringify(current)!==validationSnapshot)throw new Error('Product changed while checking the generated image. The paid image was saved for review.');
+        if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; result was kept in saved review drafts.');
+        if(JSON.stringify(openaiPilot.normalizeStyling((current.imageStyling||{})[key],freshGroup))!==JSON.stringify(styling)) throw new Error('Styling changed during generation; result was kept in saved review drafts. Regenerate with the saved settings.');
         current.aiImages=current.aiImages||{};const images=current.aiImages[key]||[];
         const prior=images.find(x=>x.type===type);
-        if(replaceTypes.has(type) && prior?.url!==savedImages.find(image=>image.type===type)?.url) throw new Error('This view changed during regeneration; result was discarded.');
+        if(replaceTypes.has(type) && prior?.url!==savedImages.find(image=>image.type===type)?.url) throw new Error('This view changed during regeneration; result was kept in saved review drafts.');
         if(prior && prior.url && !replaceTypes.has(type)) throw new Error('An image already exists for this view; generated draft was not attached.');
-        const saved=savePhotoBuffer(generated.buffer,'.png');
         if(check.status!=='pass') {
           current.qaRejected=current.qaRejected||{};
           current.qaRejected[key]=Array.isArray(current.qaRejected[key])?current.qaRejected[key]:[];
-          current.qaRejected[key].push({type,url:saved.url,qa:check,sourceFingerprint:fingerprint,styling:photoStyling,requestedStyling:styling,at:new Date().toISOString()});
           current.qaRejected[key]=current.qaRejected[key].slice(-12);
-          const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
-          const canRepair=openaiPilot.shouldRetryImageCheck(check,imageAttempt,maxImageAttempts);
+          const item=attemptRecord(current,activeAttemptId);
+          const canRepair=!jobFailure&&openaiPilot.shouldRetryImageCheck(check,imageAttempt,maxImageAttempts);
           if(!canRepair)item.errors.push({type,error:'Visual check after '+imageAttempt+' image attempt(s): '+(check.issues.join('; ')||check.failed.join(', '))+'. Earlier image kept; inspect the held draft.'});
           saveStore(fresh);
           if(canRepair){repairFields=check.failed;continue;}
           break;
         }
+        current.qaRejected[key]=current.qaRejected[key].filter(image=>image.url!==saved.url);
         const rec={type,label:(AI_IMAGE_SPECS.find(x=>x.type===type)||{}).label||type,url:saved.url,approved:false,source:'openai-pilot',qa:check,
           sourceFingerprint:fingerprint,styling:['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type)?photoStyling:null,requestedStyling:styling};
         const idx=images.findIndex(x=>x.type===type);if(idx>=0)images[idx]=rec;else images.push(rec);
         for(const held of ((current.qaRejected||{})[key]||[]))if(held.type===type&&!held.supersededBy){held.supersededBy=rec.url;held.supersededAt=new Date().toISOString();}
         invalidateDependentSides(images,type);
         current.aiImages[key]=images;
-        const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);item.views.push({type,model:imageModel,attempts:imageAttempt,usage:generated.usage||null});
+        const item=attemptRecord(current,activeAttemptId);item.views.push({type,model:imageModel,attempts:imageAttempt,usage:generated.usage||null});
         saveStore(fresh);
         break;
         }
       }catch(e){
-        safetyBlocked=openaiPilot.isSafetyBlock(e);
-        const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.slice().reverse().find(x=>x.groupKey===key);
+        safetyBlocked=openaiPilot.isSafetyBlock(e);jobFailure=imageWorkflow.failureOf(e);
+        const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.find(x=>x.id===activeAttemptId);
         if(item){item.errors.push({type,error:e.message,...(e.api?{api:e.api}:{})});if(safetyBlocked)item.skippedViews=types.slice(types.indexOf(type)+1);saveStore(fresh);}
-        if(safetyBlocked)break;
+        break;
       }
+      if(jobFailure)break;
     }
-    if (!preflightBlocked&&!safetyBlocked&&needsSeo) try {
-      const generated=await openaiPilot.generateSeo({key:process.env.OPENAI_API_KEY,group:g,source,model:textModel});
+    if (!preflightBlocked&&!jobFailure&&!jobStopped(loadStore().pos[req.params.id],activeAttemptId,signal)&&needsSeo) try {
+      const generated=await openaiPilot.generateSeo({key:process.env.OPENAI_API_KEY,group:g,source,signal,model:textModel});
       const fresh=loadStore(),current=fresh.pos[req.params.id];
       const freshGroup=current&&(await newGroupsOf(fresh,current)).find(x=>x.key===key);
       if(!freshGroup || codexBatch.fingerprint(freshGroup,(current.backRefs||{})[key])!==fingerprint) throw new Error('Product details changed during generation; SEO was discarded.');
@@ -2947,24 +3046,26 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
       current.seoDraft=current.seoDraft||[];
       const rec={key,designCode:g.designCode,colour:g.colour,productType:g.productType,styleDescriptor:seo.styleDescriptor,seo,seoApproved:false,source:'openai-pilot'};
       const idx=current.seoDraft.findIndex(x=>x.key===key);if(idx>=0)current.seoDraft[idx]=rec;else current.seoDraft.push(rec);
-      const item=current.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);item.seo={model:textModel,usage:generated.usage||null};
+      const item=attemptRecord(current,activeAttemptId);item.seo={model:textModel,usage:generated.usage||null};
       saveStore(fresh);
     }catch(e){
-      safetyBlocked=openaiPilot.isSafetyBlock(e);
-      const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.slice().reverse().find(x=>x.groupKey===key);
+      safetyBlocked=openaiPilot.isSafetyBlock(e);jobFailure=imageWorkflow.failureOf(e);
+      const fresh=loadStore(),item=((fresh.pos[req.params.id]||{}).openaiPilot||{}).attempts?.find(x=>x.id===activeAttemptId);
       if(item){item.errors.push({type:'seo',error:e.message,...(e.api?{api:e.api}:{})});saveStore(fresh);}
     }
-    const done=loadStore(),donePo=done.pos[req.params.id],record=donePo.openaiPilot.attempts.slice().reverse().find(x=>x.groupKey===key);
-    record.status=safetyBlocked?'blocked':record.errors.length?(record.views.length||record.seo?'partial':'failed'):'drafts-ready';
+    const done=loadStore(),donePo=done.pos[req.params.id],record=attemptRecord(donePo,activeAttemptId);
+    record.failure=jobFailure;
+    if(jobFailure)record.skippedViews=types.filter(type=>!record.imageCalls?.some(call=>call.type===type));
+    record.status=jobStopped(donePo,activeAttemptId,signal)?'cancelled':safetyBlocked?'blocked':jobFailure?'stopped':record.errors.length?(record.views.length||record.seo?'partial':'failed'):'drafts-ready';
     record.completedAt=new Date().toISOString();saveStore(done);
   }catch(e){
     if (!res.headersSent) res.status(500).json({success:false,error:e.message});
     else {
-      const s=loadStore(),record=(((s.pos[req.params.id]||{}).openaiPilot||{}).attempts||[]).slice().reverse().find(x=>x.status==='running');
-      if(record){record.errors.push({type:'job',error:e.message});record.status='failed';record.completedAt=new Date().toISOString();saveStore(s);}
+      const s=loadStore(),record=(((s.pos[req.params.id]||{}).openaiPilot||{}).attempts||[]).find(x=>x.id===activeAttemptId);
+      if(record){record.errors.push({type:'job',error:e.message});record.status=record.cancelRequestedAt?'cancelled':'failed';record.completedAt=new Date().toISOString();saveStore(s);}
     }
   }
-  finally{activePaidAttemptIds.delete(activeAttemptId);paidPilotInFlight.delete(lockKey);}
+  finally{paidJobs.delete(activeAttemptId);activePaidAttemptIds.delete(activeAttemptId);paidPilotInFlight.delete(lockKey);}
 });
 router.post('/api/procurement/pos/:id/codex-batch', async (req, res) => {
   try {

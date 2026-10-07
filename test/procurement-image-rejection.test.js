@@ -96,7 +96,7 @@ test('a fresh per-slot generation can be retried again in the same open page',as
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const fn=html.slice(html.indexOf('    async function regeneratePaidImages('),html.indexOf('    function studioCard('));
   const payloads=[],po={status:'received',openaiPilot:{attempts:[]}},button={textContent:'Generate',isConnected:true};
-  const context={lastReceive:{po},studio:{images:{},rejected:{},seo:{},styleSaves:{}},receiveId:'PO-0012',
+  const context={imageGenerationRun:null,openaiPilotConfig:{generationEpoch:0},lastReceive:{po},studio:{images:{},rejected:{},seo:{},styleSaves:{}},receiveId:'PO-0012',
     paidTypesFor:()=>['front'],productNeedsSavedWeight:()=>false,garmentCat:()=> 'lower',paidStylingOf:()=>({fit:'Auto'}),
     confirm:()=>true,alert:message=>{throw new Error(message);},el:()=>({querySelector:()=>({textContent:''})}),
     rerenderCard:()=>{},readJson:response=>response.json(),setTimeout:callback=>callback(),
@@ -104,7 +104,7 @@ test('a fresh per-slot generation can be retried again in the same open page',as
       if(options){const body=JSON.parse(options.body);payloads.push(body);return {success:true,pilot:{groupKey:key,status:'running',startedAt:String(payloads.length)}};}
       return {success:true,pilot:{groupKey:key,status:'drafts-ready'},images:[image('front','/fresh.png')],rejectedImages:[]};
     }})};
-  vm.createContext(context);vm.runInContext(fn,context);
+  vm.createContext(context);vm.runInContext(html.slice(html.indexOf('    function generationCanContinue('),html.indexOf('    async function generatePaidGroups(')),context);vm.runInContext(fn,context);
   const np={key,photoUrl:'/original-jogger.png',colour:'Black'};
   await context.regeneratePaidImages(np,0,['front'],button);
   await context.regeneratePaidImages(np,0,['front'],button);
