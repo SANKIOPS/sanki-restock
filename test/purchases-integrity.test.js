@@ -1,5 +1,6 @@
 const test=require('node:test'), assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=require('node:vm');
+const listingPhoto=require('./listing-photo-fixture');
 const sandbox=fs.mkdtempSync(path.join(os.tmpdir(),'sanki-purchases-integrity-'));
 process.env.DATA_PATH=path.join(sandbox,'data.json');
 process.env.PROCUREMENT_PATH=path.join(sandbox,'procurement.json');
@@ -36,7 +37,7 @@ shopifyClient.request=async(url,opt={})=>{
 };
 const realFetch=global.fetch;
 global.fetch=(url,opt)=>{if(!String(url).startsWith('http://127.0.0.1:'))throw new Error('Real external API calls are forbidden in this test');return realFetch(url,opt);};
-pilot.generateImage=async({type})=>({buffer:Buffer.from('synthetic-'+type),model:'mock'});
+pilot.generateImage=async({type})=>({buffer:listingPhoto,model:'mock'});
 pilot.verifyImage=async()=>({status:'pass',productOnlyVerified:true,failed:[],uncertain:[],issues:[]});
 pilot.preflightFit=async()=>({status:'not-required'});
 pilot.generateSeo=async({group})=>({seo:procurement.genSeo(group),model:'mock'});
@@ -48,7 +49,7 @@ const line=(name,type='Shirt')=>({designName:name,productType:type,colour:'Black
 const advance=(billNo,lines=[line(billNo)])=>send('/api/procurement/advance',{vendor:'SYNTHETIC',billNo,line:'casuals',lines});
 const restockPo=()=>({id:'PO-RESTOCK',status:'received',vendor:'TEST',lines:[{...line('Existing','Trouser'),sku:'SA116XLZ9128',qty:3,weightGrams:200,classification:'EXISTING'}]});
 function seedRestock(){const po=restockPo();seed({[po.id]:po});products=[{id:7,variants:[{id:70,sku:po.lines[0].sku,inventory_item_id:700}]}];return po;}
-test.before(async()=>{fs.mkdirSync(path.join(sandbox,'procurement-photos'),{recursive:true});fs.writeFileSync(path.join(sandbox,'procurement-photos','source.jpg'),'synthetic-reference');server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base='http://127.0.0.1:'+server.address().port;});
+test.before(async()=>{fs.mkdirSync(path.join(sandbox,'procurement-photos'),{recursive:true});fs.writeFileSync(path.join(sandbox,'procurement-photos','source.jpg'),listingPhoto);server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base='http://127.0.0.1:'+server.address().port;});
 test.after(()=>{global.fetch=realFetch;server.closeAllConnections();server.close();fs.rmSync(sandbox,{recursive:true,force:true});});
 
 test('simultaneous advance saves retain both bills, unique PO IDs and reserved SKUs',async()=>{

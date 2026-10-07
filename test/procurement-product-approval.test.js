@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=require('node:vm');
+const listingPhoto=require('./listing-photo-fixture');
 const sandbox=fs.mkdtempSync(path.join(os.tmpdir(),'sanki-approval-'));
 process.env.DATA_PATH=path.join(sandbox,'data.json');process.env.PROCUREMENT_PATH=path.join(sandbox,'procurement.json');
 process.env.SHOPIFY_STORE='approval-test.myshopify.com';process.env.SHOPIFY_ACCESS_TOKEN='test-only';
@@ -21,7 +22,7 @@ const makePo=()=>{
  }
  return po;
 };
-function seed(change){const po=makePo();if(change)change(po);fs.writeFileSync(process.env.PROCUREMENT_PATH,JSON.stringify({pos:{[po.id]:po}}));fs.mkdirSync(path.join(sandbox,'procurement-photos'),{recursive:true});for(const images of Object.values(po.aiImages))for(const image of images)fs.writeFileSync(path.join(sandbox,'procurement-photos',path.basename(image.url)),'test-image');for(let i=0;i<2;i++)fs.writeFileSync(path.join(sandbox,'procurement-photos','source-'+i+'.jpg'),'test-reference');return po;}
+function seed(change){const po=makePo();if(change)change(po);fs.writeFileSync(process.env.PROCUREMENT_PATH,JSON.stringify({pos:{[po.id]:po}}));fs.mkdirSync(path.join(sandbox,'procurement-photos'),{recursive:true});for(const images of Object.values(po.aiImages))for(const image of images)fs.writeFileSync(path.join(sandbox,'procurement-photos',path.basename(image.url)),listingPhoto);for(let i=0;i<2;i++)fs.writeFileSync(path.join(sandbox,'procurement-photos','source-'+i+'.jpg'),listingPhoto);return po;}
 const saved=()=>JSON.parse(fs.readFileSync(process.env.PROCUREMENT_PATH)).pos['PO-TEST'];
 async function send(route='approve-po',body={},role='admin'){const r=await fetch(base+'/api/procurement/pos/PO-TEST/'+route,{method:'POST',headers:{'Content-Type':'application/json','x-test-role':role},body:JSON.stringify(body)});return {status:r.status,...await r.json()};}
 const noApproval=po=>{assert.ok(Object.values(po.aiImages).flat().every(x=>!x.approved));assert.ok(po.seoDraft.every(x=>!x.seoApproved));};
@@ -59,14 +60,14 @@ test('permissions, locked purchases and unknown or duplicate edit groups cannot 
  for(const seoDrafts of [[{groupKey:'not-a-product',seo:{}}],[{groupKey:'cotton|white',seo:{}},{groupKey:'cotton|white',seo:{}}]]){seed();assert.equal((await send('approve-po',{seoDrafts})).status,409);noApproval(saved());}
 });
 test('bulk UI captures visible SEO and waits for styling before submitting approval',async()=>{
- const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8'),fn=html.slice(html.indexOf('    function approveWholePo('),html.indexOf('    function refreshPostGate('));
+ const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8'),fn=html.slice(html.indexOf('    function rememberSeoEdits('),html.indexOf('    function refreshPostGate('));
  let release;const pending=new Promise(r=>release=r),requests=[],alerts=[],button={disabled:false,textContent:'Approve complete PO'};
- const context={lastReceive:{newProducts:[{key:'cotton|white'}]},receiveId:'PO-TEST',studio:{styleSaves:{'cotton|white':pending}},confirm:()=>true,alert:m=>alerts.push(m),readSeoFields:()=>({seo:{metaDescription:'Visible edited SEO'}}),readJson:r=>r.json(),initStudioFor:()=>{},fetch:async(url,options)=>{requests.push(JSON.parse(options.body));return {json:async()=>({success:true})};}};
+ const context={productApprovalRun:null,el:()=>null,refreshPostGate:()=>{},lastReceive:{newProducts:[{key:'cotton|white'}]},receiveId:'PO-TEST',studio:{seo:{'cotton|white':{seo:{metaDescription:'Saved SEO'},approved:true}},styleSaves:{'cotton|white':pending}},confirm:()=>true,alert:m=>alerts.push(m),readSeoFields:()=>({seo:{metaDescription:'Visible edited SEO'}}),readJson:r=>r.json(),initStudioFor:()=>{},fetch:async(url,options)=>{requests.push(JSON.parse(options.body));return {json:async()=>({success:true})};}};
  vm.createContext(context);vm.runInContext(fn,context);const operation=context.approveWholePo(button);await new Promise(r=>setImmediate(r));assert.equal(requests.length,0);release();await operation;await new Promise(r=>setImmediate(r));assert.equal(requests[0].seoDrafts[0].seo.metaDescription,'Visible edited SEO');assert.equal(alerts.length,0);
 });
 test('failed styling saves stop bulk approval and re-enable its button',async()=>{
- const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8'),fn=html.slice(html.indexOf('    function approveWholePo('),html.indexOf('    function refreshPostGate('));
+ const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8'),fn=html.slice(html.indexOf('    function rememberSeoEdits('),html.indexOf('    function refreshPostGate('));
  const button={disabled:false,textContent:'Approve complete PO'},alerts=[];let requested=false;
- const context={lastReceive:{newProducts:[{key:'cotton|white'}]},receiveId:'PO-TEST',studio:{styleSaves:{'cotton|white':Promise.reject(new Error('Styling save failed'))}},confirm:()=>true,alert:m=>alerts.push(m),readSeoFields:()=>null,readJson:r=>r.json(),initStudioFor:()=>{},fetch:async()=>{requested=true;}};
+ const context={productApprovalRun:null,el:()=>null,refreshPostGate:()=>{},lastReceive:{newProducts:[{key:'cotton|white'}]},receiveId:'PO-TEST',studio:{seo:{},styleSaves:{'cotton|white':Promise.reject(new Error('Styling save failed'))}},confirm:()=>true,alert:m=>alerts.push(m),readSeoFields:()=>null,readJson:r=>r.json(),initStudioFor:()=>{},fetch:async()=>{requested=true;}};
  vm.createContext(context);vm.runInContext(fn,context);await context.approveWholePo(button);assert.equal(requested,false);assert.equal(button.disabled,false);assert.equal(alerts[0],'Styling save failed');
 });

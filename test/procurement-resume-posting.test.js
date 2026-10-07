@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const listingPhoto=require('./listing-photo-fixture');
 const {fingerprint} = require('../modules/procurement-codex-batch');
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-resume-posting-'));
 process.env.DATA_PATH = path.join(sandbox, 'data.json');
@@ -28,7 +29,7 @@ function seed(change) {
   fs.writeFileSync(process.env.PROCUREMENT_PATH,JSON.stringify({settings:{warehouseLocationId:'55'},pos:{[po.id]:po}}));
   products=[{id:7,status:'draft',variants:[{id:70,sku:'SA111XLZ9028',inventory_item_id:700}]}];
   writes=[];failCreate=false;failStock=false;holdCreate=null;
-  for(const type of ['front','model-front','model-side'])fs.writeFileSync(path.join(sandbox,'procurement-photos',type+'.jpg'),'saved-'+type);
+  for(const type of ['front','model-front','model-side'])fs.writeFileSync(path.join(sandbox,'procurement-photos',type+'.jpg'),listingPhoto);
 }
 function response(body,status=200){return {ok:status<400,status,headers:{get:()=>null},json:async()=>body,text:async()=>JSON.stringify(body)};}
 shopifyClient.request=async(url,options={})=>{
