@@ -5,3 +5,77 @@
 .inventory-pagination{display:flex;align-items:center;justify-content:center;gap:18px;padding:16px 22px;border-top:1px solid var(--line)}.inventory-pagination[hidden]{display:none}.inventory-pagination button{border:1px solid var(--green);background:var(--ivory);color:var(--green);border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}.inventory-pagination button:disabled{opacity:.4;cursor:default}.metadata-review{display:block;margin-top:5px;color:#8a552c;font-size:11px}@media(max-width:700px){.inventory-pagination{flex-wrap:wrap;gap:10px;font-size:12px}}
 
 .inventory-price,.sku-price{text-align:right;white-space:nowrap}.inventory-price{min-width:110px}@media(max-width:850px){.sku-card .sku-price{grid-column:2/-1}}
+
+
+/* Fit the catalogue to its available space, including the fixed sidebar. */
+.inventory-list{container:inventory-list / inline-size}
+.inventory-list .table-wrap{overflow-x:hidden}
+.inventory-list table{min-width:0;table-layout:fixed}
+.inventory-list th,.inventory-list td{padding:12px 9px;overflow-wrap:anywhere}
+.inventory-list th:nth-child(1){width:24%}
+.inventory-list th:nth-child(2),.inventory-list th:nth-child(3){width:8%}
+.inventory-list th:nth-child(4){width:7%}
+.inventory-list th:nth-child(5){width:5%}
+.inventory-list th:nth-child(6){width:10%}
+.inventory-list th:nth-child(7),.inventory-list th:nth-child(8){width:7%}
+.inventory-list th:nth-child(9){width:11%}
+.inventory-list th:nth-child(10){width:13%}
+.inventory-list .article-cell{min-width:0}
+.inventory-list .article-cell>span{min-width:0}
+.inventory-list .pill{display:inline-block;max-width:100%;white-space:normal}
+.inventory-list .inventory-price,.inventory-list .sku-price{min-width:0;white-space:normal}
+.inventory-list .expanded-row>td{padding:0}
+.inventory-list .sku-card>*{min-width:0;overflow-wrap:anywhere}
+.inventory-list .gallery-strip{flex-wrap:wrap;overflow-x:visible}
+@container inventory-list (max-width:1050px){
+ .inventory-list .bulk-cost{grid-template-columns:minmax(0,1fr)}
+ .inventory-list .attention-sku{grid-template-columns:minmax(0,1.5fr) repeat(3,minmax(0,1fr));overflow-wrap:anywhere}
+ .inventory-list .attention-product-head>div{min-width:0;overflow-wrap:anywhere}
+ .inventory-list .table-wrap{max-height:none}
+ .inventory-list table,.inventory-list tbody{display:block;width:100%}
+ .inventory-list thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .inventory-list tr[data-handle]{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));margin:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--ivory)}
+ .inventory-list tr[data-handle]>td{display:block;grid-column:span 4;border:0;padding:10px 14px}
+ .inventory-list tr[data-handle]>td::before{display:block;margin-bottom:4px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+ .inventory-list tr[data-handle]>td:nth-child(1){grid-column:1/-1;border-bottom:1px solid var(--line);padding:14px}
+ .inventory-list tr[data-handle]>td:nth-child(2)::before{content:'Category'}
+ .inventory-list tr[data-handle]>td:nth-child(3)::before{content:'Product type'}
+ .inventory-list tr[data-handle]>td:nth-child(4)::before{content:'Fit'}
+ .inventory-list tr[data-handle]>td:nth-child(5)::before{content:'Gender'}
+ .inventory-list tr[data-handle]>td:nth-child(6){grid-column:span 8}
+ .inventory-list tr[data-handle]>td:nth-child(6)::before{content:'Collection'}
+ .inventory-list tr[data-handle]>td:nth-child(n+7){grid-column:span 3;border-top:1px solid var(--line);background:#f3f7f1;font-weight:700}
+ .inventory-list tr[data-handle]>td:nth-child(7)::before{content:'Display available'}
+ .inventory-list tr[data-handle]>td:nth-child(8)::before{content:'Warehouse available'}
+ .inventory-list tr[data-handle]>td:nth-child(9)::before{content:'Total owned'}
+ .inventory-list tr[data-handle]>td:nth-child(10)::before{content:'Price (₹)'}
+ .inventory-list .catalog-note{font-weight:400}
+ .inventory-list .expanded-row,.inventory-list .expanded-row>td,.inventory-list .attention-row,.inventory-list .attention-row>td{display:block;width:100%}
+ .inventory-list .product-expansion{padding:16px}
+ .inventory-list .sku-card{grid-template-columns:56px repeat(4,minmax(0,1fr));gap:12px}
+ .inventory-list .sku-card>img,.inventory-list .sku-card>.image-placeholder{grid-column:1;grid-row:1/3}
+ .inventory-list .sku-card>div:nth-child(2){grid-column:2/-1}
+ .inventory-list .sku-card>div:nth-child(3){grid-column:2;grid-row:2}
+ .inventory-list .sku-card>.warehouse{grid-column:3;grid-row:2}
+ .inventory-list .sku-card>.total{grid-column:4;grid-row:2}
+ .inventory-list .sku-card>.sku-price{grid-column:5;grid-row:2}
+ .inventory-list .sku-card>.care-breakdown{grid-column:1/-1}
+}
+@container inventory-list (max-width:480px){
+ .inventory-list .attention-sku{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .inventory-list .attention-sku>div{grid-column:1/-1}
+ .inventory-list .cost-entry{align-items:stretch;flex-direction:column}
+ .inventory-list .cost-entry label{min-width:0}
+ .inventory-list .filters{grid-template-columns:repeat(2,minmax(0,1fr));padding:12px}
+ .inventory-list .panel-head{padding:16px;gap:12px;align-items:flex-start}
+ .inventory-list tr[data-handle]{grid-template-columns:repeat(2,minmax(0,1fr));margin:12px}
+ .inventory-list tr[data-handle]>td:nth-child(n+2){grid-column:span 1;padding:10px}
+ .inventory-list tr[data-handle]>td:nth-child(6){grid-column:span 1}
+ .inventory-list tr[data-handle]>td:nth-child(7){grid-column:1}
+ .inventory-list .sku-card{grid-template-columns:56px repeat(3,minmax(0,1fr))}
+ .inventory-list .sku-card>img,.inventory-list .sku-card>.image-placeholder{grid-row:1}
+ .inventory-list .sku-card>div:nth-child(3){grid-column:1/3;grid-row:2}
+ .inventory-list .sku-card>.warehouse{grid-column:3/-1;grid-row:2}
+ .inventory-list .sku-card>.total{grid-column:1/3;grid-row:3}
+ .inventory-list .sku-card>.sku-price{grid-column:3/-1;grid-row:3}
+}
