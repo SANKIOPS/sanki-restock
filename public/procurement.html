@@ -2472,7 +2472,7 @@
       function report(message,item){
         if(receiveId!==poId)return;
         if(status)status.textContent=message;
-        if(item){var card=el('scard'+item.i),local=card&&card.querySelector('[data-pilot-message]');if(local)local.textContent=message;}
+        if(item){var card=el('scard'+item.i),local=card&&card.querySelector('[data-pilot-message]');if(local){var details=local.querySelector&&local.querySelector('details');local.textContent=message;if(details)local.appendChild(details);}}
       }
       po.openaiPilot=po.openaiPilot||{attempts:[]};
       var groups=d&&d.newProducts||[],attempts=po.openaiPilot.attempts,used={};
@@ -2571,7 +2571,7 @@
       if(!confirm('Generate fresh '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(['upper','lower'].indexOf(garmentCat(np.productType))>=0&&paidStylingOf(np).fit!=='Auto'?1:0)+' original fit/length check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
       var run={poId:poId,studioRef:studio,receiveRef:lastReceive,epoch:(openaiPilotConfig||{}).generationEpoch,stopped:false};imageGenerationRun=run;
       var label=button.textContent;
-      function note(message){if(receiveId!==poId||studio!==run.studioRef)return;var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node)node.textContent=message;}
+      function note(message){if(receiveId!==poId||studio!==run.studioRef)return;var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node){var details=node.querySelector('details');node.textContent=message;if(details)node.appendChild(details);}}
       button.disabled=true;button.textContent='Regenerating…';
       try{
         await (studio.styleSaves[np.key]||Promise.resolve());
