@@ -1486,12 +1486,12 @@ function rolesOfReq(req) {
 function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
-const PRASHANT_3448_TRANSFER_DESTINATIONS=new Set(['Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919']);
+const PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181']);
 function isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification){
   if(fromNature!=='SANKI'||toNature!=='SANKI'||classification!=='internal_transfer')return false;
-  if(fromAccount==='Axis Bank 3448'&&PRASHANT_3448_TRANSFER_DESTINATIONS.has(toAccount))return true;
-  const pair=new Set([fromAccount,toAccount]);
-  return (pair.has('Axis Bank 3448')&&pair.has('Counter Cash'))||(pair.has('Prashant Axis 3645')&&pair.has('IndusInd Bank 8181'));
+  const allowed=transferAccountsForNature('SANKI').filter(account=>!OWNER_ONLY_ACCOUNTS.includes(account));
+  return fromAccount!==toAccount&&allowed.includes(fromAccount)&&allowed.includes(toAccount)&&
+    (PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS.has(fromAccount)||PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS.has(toAccount));
 }
 function canLogCreditCardExpense(req){return isAdmin(req)||isPrashant(req);}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
@@ -1737,7 +1737,7 @@ router.get('/api/expenses/config', (req, res) => {
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
     reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
     ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH]:(allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : [])])),
-    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'?['Axis Bank 3448','Counter Cash','Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919']:[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
+    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     vendorPaymentAccountsByNature: Object.fromEntries(NATURES.map(n => [n, vendorPaymentAccountsForReq(req,n)])),
     claimantAccountOwners: isOwner(req)?Object.fromEntries(Object.entries(CLAIMANT_ACCOUNTS).flatMap(([username,accounts])=>accounts.map(account=>[account,username]))):{},
@@ -3127,7 +3127,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
   const prashantAllowed=isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification);
-  if(!isOwner(req)&&!prashantAllowed)return res.status(403).json({success:false,error:'Prashant can record approved internal-transfer routes: Axis Bank 3448 to assigned accounts, Axis Bank 3448 ↔ Counter Cash, and Prashant Axis 3645 ↔ IndusInd Bank 8181.'});
+  if(!isOwner(req)&&!prashantAllowed)return res.status(403).json({success:false,error:'Prashant can record SANKI internal transfers involving Axis Bank 3448, Tiana 0425, Prashant Axis 3645 or IndusInd Bank 8181 and another available business account.'});
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
   if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
   if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });
@@ -4001,6 +4001,10 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
   if(b.action==='create_internal_transfer'){
     const otherAccount=String(b.otherAccount||'').trim(),amount=num(row.bank&&row.bank.debit||row.bank&&row.bank.credit),available=transferAccountsForNature(draft.nature);
     if(!row.bank||!(amount>0)||!otherAccount||otherAccount===draft.account||!available.some(x=>x.toLowerCase()===otherAccount.toLowerCase()))return res.status(400).json({success:false,error:'Choose the other account for this bank-confirmed internal transfer.'});
+    const account=allowedTransferAccount(draft.nature,draft.account),other=allowedTransferAccount(draft.nature,otherAccount),fromAccount=num(row.bank.debit)>0?account:other,toAccount=num(row.bank.debit)>0?other:account;
+    if(!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))return res.status(403).json({success:false,error:'One of these accounts is restricted to the Owner.'});
+    if(!isOwner(req)&&isPrashant(req)&&!isPrashantApprovedTransfer(draft.nature,draft.nature,fromAccount,toAccount,'internal_transfer'))return res.status(403).json({success:false,error:'Choose an internal transfer involving 3448, 0425, 3645 or 8181 and another available business account.'});
+    b.otherAccount=other;
   }
   const chargeCategory=b.action==='paytm_settlement'?'PAYTM CHARGES':String(b.chargeCategory||'BANK CHARGES').trim();
   if(['create_split_adjustment','split_allocation'].includes(b.action)&&!['BANK CHARGES','PAYTM CHARGES'].includes(chargeCategory))return res.status(400).json({success:false,error:'Choose Bank Charges or Paytm Charges.'});
