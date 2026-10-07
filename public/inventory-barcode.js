@@ -8,11 +8,13 @@
   clear.setAttribute('aria-label', 'Clear search'); clear.title = 'Clear search';
   search.parentNode.appendChild(clear);
   var scan = document.createElement('button');
-  scan.type = 'button'; scan.className = 'inventory-scan-button'; scan.textContent = 'Scan barcode';
-  search.parentNode.insertAdjacentElement('afterend', scan);
+  scan.type = 'button'; scan.className = 'inventory-scan-button';
+  scan.setAttribute('aria-label', 'Scan barcode'); scan.title = 'Scan barcode';
+  scan.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1v3m14-4h3a1 1 0 0 1 1 1v3M3 17v3a1 1 0 0 0 1 1h3m10 0h3a1 1 0 0 0 1-1v-3M7 7v10m3-10v10m4-10v10m3-10v10"/></svg>';
+  search.parentNode.appendChild(scan);
   var message = document.createElement('p');
   message.className = 'inventory-barcode-message'; message.setAttribute('role', 'status'); message.hidden = true;
-  scan.insertAdjacentElement('afterend', message);
+  search.parentNode.insertAdjacentElement('afterend', message);
   var dialog = document.createElement('dialog');
   dialog.className = 'inventory-barcode-dialog'; dialog.setAttribute('aria-labelledby', 'barcodeTitle');
   dialog.innerHTML = '<div class="barcode-heading"><h2 id="barcodeTitle">Scan a product barcode</h2><button type="button" class="barcode-close" aria-label="Close barcode scanner">×</button></div><p>Point the camera at the barcode on the product label. We’ll find its SKU in Shopify.</p><video muted autoplay playsinline aria-label="Barcode camera preview"></video><p class="barcode-status" role="status" aria-live="polite"></p><button type="button" class="barcode-retry">Start camera</button><form><label for="barcodeValue">Or enter a barcode / use a handheld scanner</label><div class="barcode-entry"><input id="barcodeValue" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="200"><button type="submit">Find SKU</button></div></form><button type="button" class="barcode-cancel">Cancel</button>';
