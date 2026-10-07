@@ -252,6 +252,8 @@ function requestSignal(timeout,signal) {
 
 async function generateImage({key, group, source, continuitySource=null, type, styling, repairFields=[], signal, model='gpt-image-1.5', fetchImpl=global.fetch}) {
   if (!IMAGE_TYPES.includes(type)) throw new Error('Unsupported pilot image view.');
+  source = await require('./procurement-image-source').normalizeSource(source);
+  if (continuitySource) continuitySource = await require('./procurement-image-source').normalizeSource(continuitySource);
   const form = new FormData();
   form.append('model', model);
   const sourceExt = source.mime==='image/png'?'.png':source.mime==='image/webp'?'.webp':'.jpg';
@@ -276,6 +278,7 @@ async function preflightFit({key,group,source,styling,signal,model='gpt-4.1-mini
   const style=normalizeStyling(styling,group);
   const category=garmentCategory(group);
   if(category==='other'||style.fit==='Auto')return {status:'not-required',reason:''};
+  source = await require('./procurement-image-source').normalizeSource(source);
   const schema={type:'object',additionalProperties:false,required:['status','reason'],properties:{status:{type:'string',enum:['compatible','conflict','uncertain']},reason:{type:'string'}}};
   const prompt=category==='lower'
     ? `Look ONLY at the original featured LOWER garment photograph. The user selected the length ${style.fit} for the model image. Is that length visibly compatible with the actual garment? Judge the waistband-to-hem extent and visible leg length; do not use shoulder seams, the supporting top, or the purchase title. The photograph is the authority. Return conflict ONLY for a clear visual contradiction, such as full-length trousers selected as Shorts / half, or shorts selected as Full length. A crop, fold, obstruction or camera angle alone is not proof. If the hem or length cannot be observed, return uncertain.`
@@ -358,6 +361,9 @@ function canAutoAcceptConfirmedColourCheck(check,confirmedColour) {
 }
 
 async function verifyImage({key,group,source,generated,continuitySource=null,type,styling,signal,model='gpt-4.1-mini',fetchImpl=global.fetch}) {
+  source = await require('./procurement-image-source').normalizeSource(source);
+  if (continuitySource) continuitySource = await require('./procurement-image-source').normalizeSource(continuitySource);
+  const candidate = await require('./procurement-image-source').normalizeSource({ buf: generated });
   const style=normalizeStyling(styling,group),side=type==='model-side'||type.startsWith('model-side-');
   const category=garmentCategory(group);
   const isModel=['female','male','model-front','model-side','model-side-female','model-side-male'].includes(type);
@@ -378,7 +384,7 @@ async function verifyImage({key,group,source,generated,continuitySource=null,typ
     {type:'input_text',text:'IMAGE 1 — ORIGINAL REFERENCE. Use this only to identify the featured garment.'},
     {type:'input_image',image_url:`data:${source.mime};base64,${source.buf.toString('base64')}`,detail:'high'},
     {type:'input_text',text:'IMAGE 2 — GENERATED CANDIDATE. This is the image being evaluated for productOnly and all other findings.'},
-    {type:'input_image',image_url:`data:image/png;base64,${generated.toString('base64')}`,detail:'high'}];
+    {type:'input_image',image_url:`data:${candidate.mime};base64,${candidate.buf.toString('base64')}`,detail:'high'}];
   if(continuitySource)content.push({type:'input_text',text:'IMAGE 3 — MATCHING MODEL FRONT. Use only for outfit continuity.'},{type:'input_image',image_url:`data:${continuitySource.mime};base64,${continuitySource.buf.toString('base64')}`,detail:'high'});
   const response=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,store:false,max_output_tokens:2200,input:[{role:'user',content}],text:{format:{type:'json_schema',name:'sanki_image_check',strict:true,schema:imageCheckSchema()}}}),
@@ -388,6 +394,7 @@ async function verifyImage({key,group,source,generated,continuitySource=null,typ
 }
 
 async function generateSeo({key, group, source, signal, model='gpt-4.1-mini', fetchImpl=global.fetch}) {
+  source = await require('./procurement-image-source').normalizeSource(source);
   const retail=retailFacts(group);
   const facts = {brand:'SANKI',productType:retail.productType,colour:group.colour,
     audience:group.audience,fit:retail.fit,sizes:group.sizeLabels};
@@ -411,6 +418,8 @@ async function generateSeo({key, group, source, signal, model='gpt-4.1-mini', fe
 }
 
 async function extractInvoice({key, buffer, mime='image/jpeg', model='gpt-4.1-mini', fetchImpl=global.fetch}) {
+  const source = await require('./procurement-image-source').normalizeSource({ buf: buffer, mime });
+  buffer = source.buf; mime = source.mime;
   const productTypes=['','Shirt','T-Shirt','T-Shirt Hood','Jeans','Trouser','Lower','Shorts','Jogger','Coord Set','Jorts','Sando','Bag','Denim Joggers','Top','Perfumes','Belts'];
   const colours=['','Black','Blue','Brown','Cream','Green','Grey','Maroon','Orange','Pink','Purple','Red','White','Yellow','Beige','Sky Blue','Olive','Khaki','Golden','Silver'];
   const sizes=['','FS','S','M','L','XL','XXL','3XL','4XL','24','26','28','30','32','34','36','38','40','42','44'];

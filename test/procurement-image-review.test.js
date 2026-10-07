@@ -64,10 +64,13 @@ test('restoring styling cannot clear a changed-front continuity failure',async()
   const side=saved().aiImages[key].find(image=>image.type==='model-side');assert.equal(side.qa.status,'needs-review');assert.match(side.qa.issues[0],/Matching front image changed/);
 });
 test('verification clearly identifies original, candidate and continuity images',async()=>{
+  const photo=colour=>require('sharp')({create:{width:8,height:12,channels:3,background:colour}}).png().toBuffer();
+  const [original,candidate,continuity]=await Promise.all(['#223344','#445566','#667788'].map(photo));
   const findings=Object.fromEntries(['garmentMatch','productOnly','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'].map(field=>[field,{status:'pass',evidence:'Matches'}]));
-  await pilot.verifyImage({key:'test-only',group,type:'front',source:{mime:'image/jpeg',buf:Buffer.from('original-person')},generated:Buffer.from('product-only'),continuitySource:{mime:'image/jpeg',buf:Buffer.from('continuity')},fetchImpl:async(url,options)=>{
+  await pilot.verifyImage({key:'test-only',group,type:'front',source:{mime:'image/jpeg',buf:original},generated:candidate,continuitySource:{mime:'image/jpeg',buf:continuity},fetchImpl:async(url,options)=>{
     const body=JSON.parse(options.body),content=body.input[0].content;
     assert.match(content[0].text,/judge productOnly solely from IMAGE 2/);assert.match(content[1].text,/ORIGINAL REFERENCE/);assert.match(content[3].text,/GENERATED CANDIDATE/);assert.match(content[5].text,/MATCHING MODEL FRONT/);assert.equal(body.max_output_tokens,2200);
+    for(const [index,buf] of [[2,original],[4,candidate],[6,continuity]])assert.equal(content[index].image_url,'data:image/png;base64,'+buf.toString('base64'));
     return {ok:true,json:async()=>({output_text:JSON.stringify({detectedModelGender:'not-applicable',...findings})})};
   }});
 });

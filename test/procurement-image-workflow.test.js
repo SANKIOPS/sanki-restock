@@ -24,6 +24,7 @@ const start=(extra={})=>request(endpoint('openai-pilot'),{groupKey:key,skipSeo:t
 async function finished(){for(let n=0;n<200;n++){const r=await request(endpoint('openai-pilot-status?groupKey='+encodeURIComponent(key)));if(r.pilot?.status!=='running')return r;await new Promise(r=>setTimeout(r,5));}throw new Error('Mock job did not finish');}
 test.before(async()=>{
  fs.mkdirSync(path.join(sandbox,'procurement-photos'),{recursive:true});for(const name of ['source','saved','back'])fs.writeFileSync(path.join(sandbox,'procurement-photos',name+'.jpg'),'test-reference');
+ fs.writeFileSync(path.join(sandbox,'procurement-photos','source.jpg'),await require('sharp')({create:{width:8,height:12,channels:3,background:'#123456'}}).jpeg().toBuffer());
  pilot.preflightFit=async options=>{calls.preflight++;return preflight(options);};pilot.generateImage=async options=>{calls.images.push(options.type);return generate(options);};pilot.verifyImage=async options=>{calls.checks++;return verify(options);};pilot.generateSeo=async()=>{calls.seo++;throw new Error('Unexpected SEO call');};
  shopifyClient.request=async()=>({ok:true,status:200,headers:{get:()=>null},json:async()=>({products:[]})});
  const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={role:req.headers['test-role']||'admin',username:'tester'};next();});app.use(router);

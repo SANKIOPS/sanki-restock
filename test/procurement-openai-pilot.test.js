@@ -3,6 +3,7 @@ const fs=require('node:fs'),path=require('node:path');
 const pilot=require('../modules/procurement-openai-pilot');
 const group={key:'971|black',colour:'Black',productType:'T-Shirt',audience:'Women',fit:'Muscle Fit',sizeLabels:['FS']};
 const source={buf:Buffer.from('test-image'),mime:'image/jpeg'};
+test.before(async()=>{source.buf=await require('sharp')({create:{width:8,height:12,channels:3,background:'#123456'}}).jpeg().toBuffer();});
 
 test('safety failures retain structured diagnostics without retaining the full provider body',async()=>{
  const provider={message:'The request was rejected.',code:'moderation_blocked',type:'image_generation_user_error',moderation_details:{moderation_stage:'input',categories:['sexual'],internal:'must-not-be-saved'},secret:'must-not-be-saved'};
@@ -227,7 +228,7 @@ test('historical drafts held only for uncertain adult-gender detection can be ac
 });
 
 test('three-quarter image uses matching front and garment references to preserve the outfit',async()=>{
-  const matchingFront={buf:Buffer.from('front-model'),mime:'image/png'};
+  const matchingFront={buf:source.buf,mime:'image/png'};
   await pilot.generateImage({key:'test-only',group,source,continuitySource:matchingFront,type:'model-side',styling:{pair:'Tailored trousers'},fetchImpl:async(url,options)=>{
     assert.equal(url,'https://api.openai.com/v1/images/edits');
     assert.equal(options.body.getAll('image[]').length,2);
@@ -354,9 +355,9 @@ test('visual checks reject mismatched outfit, accessories, angle or continuity',
 
 test('independent visual check sends original, candidate and matching model front without retry',async()=>{
   let calls=0;
-  const continuitySource={buf:Buffer.from('matching-front'),mime:'image/png'};
+  const continuitySource={buf:source.buf,mime:'image/png'};
   const allTrue={detectedModelGender:'woman',...Object.fromEntries(['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'].map(field=>[field,{status:'pass',evidence:'Visible match'}]))};
-  const out=await pilot.verifyImage({key:'test-only',group,source,generated:Buffer.from('candidate'),continuitySource,type:'model-side',styling:{pair:'Baggy trousers',bagStyle:'None',sunglasses:false},fetchImpl:async(url,options)=>{
+  const out=await pilot.verifyImage({key:'test-only',group,source,generated:source.buf,continuitySource,type:'model-side',styling:{pair:'Baggy trousers',bagStyle:'None',sunglasses:false},fetchImpl:async(url,options)=>{
     calls++;assert.equal(url,'https://api.openai.com/v1/responses');
     const body=JSON.parse(options.body);
     assert.equal(body.store,false);
@@ -379,7 +380,7 @@ test('lower-garment generation and checks keep trousers as the product, not the 
   assert.match(prompt,/supporting top/);
   assert.match(prompt,/Never replace, redesign or evaluate the featured lower garment as supporting clothing/);
   const allTrue={detectedModelGender:'woman',...Object.fromEntries(['garmentMatch','singleFrame','angleMatch','fitMatch','pairMatch','shoeMatch','tuckMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch','modelMatch','outfitContinuity'].map(field=>[field,{status:'pass',evidence:'Visible match'}]))};
-  await pilot.verifyImage({key:'test-only',group:lower,source,generated:Buffer.from('candidate'),type:'model-front',styling:{pair:'Plain white tee'},fetchImpl:async(url,options)=>{
+  await pilot.verifyImage({key:'test-only',group:lower,source,generated:source.buf,type:'model-front',styling:{pair:'Plain white tee'},fetchImpl:async(url,options)=>{
     const text=JSON.parse(options.body).input[0].content[0].text;
     assert.match(text,/"featuredGarmentCategory":"lower"/);
     assert.match(text,/Never use shoulder seams to judge a lower garment/);

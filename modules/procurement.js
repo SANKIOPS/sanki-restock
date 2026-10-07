@@ -2651,12 +2651,14 @@ router.get('/api/procurement/pos/:id/image-prompts', async(req,res)=>{
     if(!po)return res.status(404).json({success:false,error:'PO not found.'});
     const group=(await newGroupsOf(store,po)).find(group=>group.key===key);
     if(!group)return res.status(404).json({success:false,error:'Product group not found.'});
+    const reference=await require('./procurement-image-source').normalizeSource(readStoredPhoto(group.photoUrl));
     const style=openaiPilot.normalizeStyling(po.imageStyling?.[key],group),back=!!readStoredPhoto(po.backRefs?.[key]);
     res.set('Cache-Control','no-store');
     res.json({success:true,model:process.env.PROCUREMENT_OPENAI_IMAGE_MODEL||'gpt-image-1.5',styling:style,
+      referenceFormat:{original:reference.originalFormat,prepared:reference.format,converted:reference.converted},
       views:openaiPilot.pilotTypes(group,back).map(type=>({type,prompt:openaiPilot.imagePrompt(group,type,style,type.startsWith('model-side'))})),
-      note:'Current base prompts. A source-fit check may fall back to Auto; a corrective attempt adds only the failed visual findings. Opening this preview does not generate images.'});
-  }catch(error){res.status(500).json({success:false,error:error.message});}
+      note:(reference.converted?'Reference format '+reference.originalFormat.toUpperCase()+' → '+reference.format.toUpperCase()+' (automatic conversion; original kept). ':'')+'Current base prompts. A source-fit check may fall back to Auto; a corrective attempt adds only the failed visual findings. Opening this preview does not generate images.'});
+  }catch(error){res.status(error.api?.code==='invalid_source_image'?400:500).json({success:false,error:error.message});}
 });
 function refreshImageStylingCheck(image,styling,group) {
   if(image.source!=='openai-pilot'||!image.styling||!openaiPilot.MODEL_VIEWS.includes(image.type))return;
