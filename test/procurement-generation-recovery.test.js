@@ -16,7 +16,7 @@ let server,base;
 function seed(attempt={}){const styling=pilot.normalizeStyling({},group);const po={id:'PO-0005',status:'received',vendor:'TEST',line:'casuals',lines:[{sku:'SA15Z1FS',designName:'Top',colour:'Green',productType:'Shirt',audience:'Women',fit:'Regular Fit',sizeLabel:'FS',qty:3,weightGrams:200,perPcsYuan:55,photoUrl}],aiImages:{[key]:[{type:'front',url:'/api/procurement/photo/saved.jpg',approved:true,sourceFingerprint:fingerprint(group),qa:{status:'pass',productOnlyVerified:true}}]},imageStyling:{[key]:styling},seoDraft:[{key,seo:genSeo(group),seoApproved:false}],openaiPilot:{attempts:[{groupKey:key,status:'running',startedAt:new Date(Date.now()-5*60*1000).toISOString(),views:[{type:'front'}],imageCalls:[{type:'front',attempt:1}],errors:[],...attempt}]}};fs.writeFileSync(process.env.PROCUREMENT_PATH,JSON.stringify({pos:{[po.id]:po}}));return po;}
 const saved=()=>JSON.parse(fs.readFileSync(process.env.PROCUREMENT_PATH)).pos['PO-0005'];
 async function get(route='openai-pilot-status?groupKey='+encodeURIComponent(key)){const r=await fetch(base+'/api/procurement/pos/PO-0005/'+route);return {status:r.status,...await r.json()};}
-async function start(){const r=await fetch(base+'/api/procurement/pos/PO-0005/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:key,retry:true,regenerateTypes:['front'],skipSeo:true,maxImageAttempts:2,styling:pilot.normalizeStyling({},group)})});return {status:r.status,...await r.json()};}
+async function start(){const r=await fetch(base+'/api/procurement/pos/PO-0005/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:key,retry:true,regenerateTypes:['front'],skipSeo:true,maxImageAttempts:2,generationVersion:3,generationEpoch:0,styling:pilot.normalizeStyling({},group)})});return {status:r.status,...await r.json()};}
 test.before(async()=>{fs.mkdirSync(path.join(sandbox,'procurement-photos'),{recursive:true});for(const name of ['source','saved'])fs.writeFileSync(path.join(sandbox,'procurement-photos',name+'.jpg'),'test-only-reference');server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base='http://127.0.0.1:'+server.address().port;});
 test.after(()=>{server.closeAllConnections();server.close();fs.rmSync(sandbox,{recursive:true,force:true});});
 
@@ -48,7 +48,7 @@ test('one safety-blocked image stops remaining article views and retains earlier
  const before=seed({status:'partial'}),original=pilot.generateImage,submitted=[];
  pilot.generateImage=async({type})=>{submitted.push(type);throw Object.assign(new Error('OpenAI API: Your request was rejected by the safety system.'),{api:{status:400,code:'moderation_blocked',requestId:'req_blocked',moderationDetails:{stage:'input',categories:['sexual']}}});};
  try{
-  const r=await fetch(base+'/api/procurement/pos/PO-0005/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:key,retry:true,regenerateTypes:['front','model-front','model-side'],skipSeo:true,maxImageAttempts:2,styling:pilot.normalizeStyling({},group)})});
+  const r=await fetch(base+'/api/procurement/pos/PO-0005/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:key,retry:true,regenerateTypes:['front','model-front','model-side'],skipSeo:true,maxImageAttempts:2,generationVersion:3,generationEpoch:0,styling:pilot.normalizeStyling({},group)})});
   assert.equal(r.status,202);let result;
   for(let n=0;n<100;n++){await new Promise(resolve=>setTimeout(resolve,5));result=await get();if(result.pilot.status!=='running')break;}
   assert.equal(result.pilot.status,'blocked');assert.deepEqual(submitted,['front']);
@@ -63,12 +63,12 @@ test('one safety-blocked image stops remaining article views and retains earlier
 test('a blocked article stops the browser batch before the next product is submitted',async()=>{
  const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8'),requests=[],button={isConnected:true},status={textContent:''},message={textContent:''};
  const groups=['first','second'].map(key=>({key,photoUrl:'/reference.jpg',designName:key,productType:'Lower'}));
- const context={lastReceive:{po:{status:'received'},newProducts:groups},receiveId:'PO-TEST',openaiPilotConfig:{configured:true},studio:{styleSaves:{},images:{},rejected:{},selected:{}},
+ const context={imageGenerationRun:null,lastReceive:{po:{status:'received'},newProducts:groups},receiveId:'PO-TEST',openaiPilotConfig:{configured:true},studio:{styleSaves:{},images:{},rejected:{},selected:{}},
   el:id=>id==='generatePoImagesBtn'?button:id==='poGenerationStatus'?status:{querySelector:()=>message},missingPaidDrafts:()=>({images:['front']}),productNeedsSavedWeight:()=>false,paidTypesFor:()=>['front','female','male'],garmentCat:()=> 'lower',paidStylingOf:()=>({fit:'Auto'}),readJson:r=>r.json(),rerenderCard:()=>{},updateStudioSelection:()=>{},setTimeout:cb=>cb(),alert:msg=>{throw new Error(msg);},
   fetch:async(url,options)=>{requests.push({url,options});return {json:async()=>options?{success:true,pilot:{status:'running'}}:{success:true,pilot:{status:'blocked',errors:[{type:'front',error:'Blocked'}]},images:[],rejectedImages:[]}};}};
  vm.createContext(context);
  vm.runInContext(html.slice(html.indexOf('    function generationSafetyBlocked('),html.indexOf('    function studioCard(')),context);
- vm.runInContext(html.slice(html.indexOf('    async function generatePaidGroups('),html.indexOf('    async function regeneratePaidImages(')),context);
+ vm.runInContext(html.slice(html.indexOf('    function generationCanContinue('),html.indexOf('    async function regeneratePaidImages(')),context);
  await context.generatePaidGroups('all',null,true);
  assert.equal(requests.filter(x=>x.options?.method==='POST').length,1);
  assert.equal(JSON.parse(requests[0].options.body).groupKey,'first');

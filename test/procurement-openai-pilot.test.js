@@ -272,7 +272,7 @@ test('purchase studio uses a product-wise image, SEO and approval flow',()=>{
   const generateFlow=html.slice(generateStart,generateEnd);
   assert.match(generateFlow,/data-confirm-paid-images/);
   assert.match(generateFlow,/Confirm paid generation/);
-  assert.match(generateFlow,/generatePaidGroups\(mode,singleKey,true\)/);
+  assert.match(generateFlow,/generatePaidGroups\(mode,singleKey,true,/);
   assert.doesNotMatch(generateFlow,/confirm\('Generate the missing images/);
   assert.ok(generateFlow.indexOf('data-confirm-paid-images')<generateFlow.indexOf('await Promise.all(selected.map'), 'in-card confirmation must be shown before asynchronous styling saves');
   assert.match(server,/router\.post\('\/api\/procurement\/pos\/:id\/approve-product'/);
@@ -301,12 +301,12 @@ test('one-click generation has a confirmed two-attempt cap and requests only mis
   assert.match(html,/maxImageAttempts:2/);
   assert.match(html,/Remaining products in this batch were not started/);
   assert.match(server,/const neededTypes=allowedTypes\.filter\(type=>!/);
-  assert.match(server,/if \(!preflightBlocked&&!safetyBlocked&&needsSeo\) try \{/);
+  assert.match(server,/if \(!preflightBlocked&&!jobFailure&&!jobStopped/);
   assert.match(server,/if\(\(req\.body\|\|\{\}\)\.maxImageAttempts!==2\) return res\.status\(409\)/);
   assert.match(server,/Purchases page is out of date\. Refresh the page/);
   assert.match(server,/const maxImageAttempts=2/);
   assert.match(server,/All image and SEO drafts already exist/);
-  assert.match(server,/\.attempts\.slice\(\)\.reverse\(\)\.find\(x=>x\.groupKey===key\)/);
+  assert.match(server,/attemptRecord\(current,activeAttemptId\)/);
 });
 
 test('existing image views can be regenerated separately or together without rewriting SEO',()=>{
@@ -322,7 +322,7 @@ test('existing image views can be regenerated separately or together without rew
   assert.match(html,/Regenerate this view/);
   assert.match(server,/const needsSeo=\(req\.body\|\|\{\}\)\.skipSeo!==true&&!regenerateTypes\.length/);
   assert.match(server,/approved:false,source:'openai-pilot'/);
-  assert.match(server,/This view changed during regeneration; result was discarded/);
+  assert.match(server,/This view changed during regeneration; result was kept in saved review drafts/);
 });
 
 test('visual checks reject mismatched outfit, accessories, angle or continuity',()=>{
