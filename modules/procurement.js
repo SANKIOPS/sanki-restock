@@ -971,11 +971,11 @@ async function shopifyPost(pathUrl, payload, options = {}) {
 async function createDraftProduct(np, warehouseLocationId, recoveryOptions = {}) {
   const imgs = Array.isArray(np.images) ? np.images : [];
   if (!imgs.length) throw new Error('No readable approved listing photos were supplied. Shopify product creation was cancelled.');
-  const attachments = imgs.map(im => {
-    const src = readStoredPhoto(im.url);
+  const attachments = await Promise.all(imgs.map(async im => {
+    const src = await readListingPhoto(im.url);
     if (!src) throw new Error('Approved listing photo is no longer readable: ' + String(im.url || '(missing URL)') + '. Shopify product creation was cancelled.');
     return { attachment: src.buf.toString('base64'), alt: (im.alt || np.seo.imageAlt || '').slice(0, 512) };
-  });
+  }));
   const sizes = np.variants.map(v => v.sizeCode);
   const payload = {
     product: {
@@ -1013,6 +1013,8 @@ async function createDraftProduct(np, warehouseLocationId, recoveryOptions = {})
   // Attach the approved AI images (base64) so the listing is born with photos.
   // Shopify can't fetch our private URLs, so we upload each as an attachment.
   payload.product.images = attachments;
+  if (recoveryOptions.poId) assertNoImageGeneration(loadStore().pos[recoveryOptions.poId], 'posting to Shopify');
+  if (recoveryOptions.beforeCreate) recoveryOptions.beforeCreate();
   const created = await shopifyPost('products.json', payload, recoveryOptions.noCreateRetries ? {maxRetries:0} : {}).then(d => d.product);
   const uploadedCount = Array.isArray(created.images) ? created.images.length : 0;
   if (recoveryOptions.onCreated) recoveryOptions.onCreated({productId:String(created.id), handle:created.handle,
@@ -1243,6 +1245,25 @@ function readStoredPhoto(url) {
   const ext = path.extname(name).toLowerCase();
   const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
   return { buf: fs.readFileSync(fp), mime };
+}
+// Existence is insufficient: a truncated/empty file must never pass approval
+// or reach Shopify. Decode the actual bytes; conversion leaves originals intact.
+async function readListingPhoto(url) {
+  const source = readStoredPhoto(url);
+  if (!source) return null;
+  try { return await require('./procurement-image-source').normalizeSource(source); }
+  catch {
+    const error = new Error('Saved listing photo is damaged or cannot be decoded: ' + String(url) + '. Restore or replace this image before approving or posting.');
+    error.status = 409;
+    throw error;
+  }
+}
+async function validateListingPhotos(images) {
+  for (const image of images) if (!await readListingPhoto(image.url)) {
+    const error = new Error('Approved listing photo is no longer readable: ' + String(image.url) + '. Restore the saved image before posting.');
+    error.status = 409;
+    throw error;
+  }
 }
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 // Gemini's image model returns 503 ("overloaded / high demand") and 429 (rate)
@@ -2625,6 +2646,13 @@ const paidPilotWorkerStartedAt = Date.now();
 const activePaidAttemptIds = new Set();
 const paidJobs = new Map();
 const imageWorkflow = require('./procurement-image-workflow');
+function assertNoImageGeneration(po, action) {
+  if (po && (paidPilotInFlight.has(po.id) || (po.openaiPilot?.attempts || []).some(attempt => attempt.status === 'running'))) {
+    const error = new Error('Wait for this PO’s image generation to finish or stop it before ' + action + '.');
+    error.status = 409;
+    throw error;
+  }
+}
 // Freeze product edits while their paid job is active; no billed result should
 // be discarded because a dropdown or reference was changed mid-request.
 function attemptRecord(po,id){return (po?.openaiPilot?.attempts||[]).find(attempt=>attempt.id===id);}
@@ -2856,6 +2884,7 @@ router.post('/api/procurement/pos/:id/openai-pilot', async (req,res) => {
   let activeAttemptId;
   if (!canStartPaidPilot(req)) return res.status(403).json({success:false,error:'Paid image-generation access required.'});
   if (!process.env.OPENAI_API_KEY) return res.status(503).json({success:false,error:'Set OPENAI_API_KEY in Railway before starting the paid pilot.'});
+  if (activePurchasePostings.has(lockKey) || activeDraftRecoveries.has(lockKey)) return res.status(409).json({success:false,error:'Shopify posting or recovery is running for this PO. Wait for it to finish before generating images.'});
   if (paidPilotInFlight.has(lockKey)) return res.status(409).json({success:false,error:'Another paid generation is running for this PO.'});
   paidPilotInFlight.add(lockKey);
   try {
@@ -3246,20 +3275,26 @@ async function productApprovalContext(id) {
   // overwrite a newer purchase with the snapshot that began approval.
   const s = loadStore(), po = s.pos[id];
   if (!po || JSON.stringify(po) !== snapshot) throw new Error('The purchase changed while checking approval. Reopen it and try again.');
-  if (paidPilotInFlight.has(id) || ((po.openaiPilot || {}).attempts || []).some(attempt => attempt.status === 'running')) throw new Error('Wait for this PO’s image generation to finish before approving.');
-  return { s, po, products: preview.newProducts || [] };
+  assertNoImageGeneration(po, 'approving');
+  return { s, po, snapshot, products: preview.newProducts || [] };
 }
-function productApprovalDrafts(po, product) {
+function assertApprovalUnchanged(id, snapshot) {
+  const current = loadStore().pos[id];
+  if (!current || JSON.stringify(current) !== snapshot) throw new Error('The purchase changed while checking approval. Reopen it and try again.');
+  assertNoImageGeneration(current, 'approving');
+}
+async function productApprovalDrafts(po, product) {
   const key = product.key, group = studioSourceGroup(po, product);
   if ((product.variantConflicts || []).length) throw new Error('Resolve the duplicate colour and size rows before approving.');
   const required = openaiPilot.pilotTypes(group, !!(po.backRefs || {})[key]);
   if (!required.length) throw new Error('Select Women, Men or Unisex before approving this product.');
   const images = ((po.aiImages || {})[key] || []);
   const fingerprint = codexBatch.fingerprint(group, (po.backRefs || {})[key]);
-  const checked = images.filter(image => {
+  const checked = [];
+  for (const image of images) {
     refreshImageStylingCheck(image, (po.imageStyling || {})[key], group);
-    return required.includes(image.type) && image.url && image.url !== group.photoUrl && readStoredPhoto(image.url) && imageCheckAccepted(image) && (!image.sourceFingerprint || image.sourceFingerprint === fingerprint);
-  });
+    if (required.includes(image.type) && image.url && image.url !== group.photoUrl && imageCheckAccepted(image) && (!image.sourceFingerprint || image.sourceFingerprint === fingerprint) && await readListingPhoto(image.url)) checked.push(image);
+  }
   const missing = required.filter(type => !checked.some(image => image.type === type));
   if (missing.length) {
     const stylingChanged = images.filter(image => missing.includes(image.type) && image.qa?.stylingChanged).map(image => image.type);
@@ -3283,10 +3318,12 @@ router.post('/api/procurement/pos/:id/approve-product', async (req, res) => {
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
     const key = String((req.body || {}).groupKey || '');
     if (!key) return res.status(400).json({ success: false, error: 'Choose a product first.' });
-    const { s, po, products } = await productApprovalContext(req.params.id);
+    const { s, po, snapshot, products } = await productApprovalContext(req.params.id);
     const product = products.find(item => item.key === key);
     if (!product) throw new Error('Product group not found.');
-    const approved = applyProductApproval(productApprovalDrafts(po, product));
+    const drafts = await productApprovalDrafts(po, product);
+    assertApprovalUnchanged(req.params.id, snapshot);
+    const approved = applyProductApproval(drafts);
     saveStore(s);
     res.json({ success: true, ...approved });
   } catch (e) { res.status(409).json({ success: false, error: e.message }); }
@@ -3295,7 +3332,7 @@ router.post('/api/procurement/pos/:id/approve-product', async (req, res) => {
 router.post('/api/procurement/pos/:id/approve-po', async (req, res) => {
   try {
     if (!canManagePurchases(req)) return res.status(403).json({ success: false, error: 'Purchases access required.' });
-    const { s, po, products } = await productApprovalContext(req.params.id);
+    const { s, po, snapshot, products } = await productApprovalContext(req.params.id);
     const edits = (req.body || {}).seoDrafts;
     if (edits != null) {
       if (!Array.isArray(edits)) throw new Error('SEO edits must be a list.');
@@ -3313,10 +3350,11 @@ router.post('/api/procurement/pos/:id/approve-po', async (req, res) => {
     }
     const blockers = [], drafts = [];
     for (const product of products) {
-      try { drafts.push(productApprovalDrafts(po, product)); }
+      try { drafts.push(await productApprovalDrafts(po, product)); }
       catch (e) { blockers.push((product.designName || product.designCode || product.key) + ' · ' + product.colour + ': ' + e.message); }
     }
     if (blockers.length) return res.status(409).json({ success: false, error: 'Complete these products first — ' + blockers.join(' | ') });
+    assertApprovalUnchanged(req.params.id, snapshot);
     drafts.forEach(applyProductApproval);
     saveStore(s);
     res.json({ success: true, approvedProducts: products.length, po: publicPo(po, req) });
@@ -3335,6 +3373,7 @@ router.post('/api/procurement/commit', async (req, res) => {
     const s = loadStore(), b = req.body || {}, po = s.pos[b.poId];
     if (!b.approve || !po) return res.status(400).json({ success: false, error: 'A saved, approved purchase is required.' });
     if (po.status !== 'received') return res.status(409).json({ success: false, error: 'Purchase must be received and not already posted or partially posted.' });
+    assertNoImageGeneration(po, 'posting to Shopify');
     const warehouseLocationId = String(s.settings.warehouseLocationId || '');
     if (!warehouseLocationId) return res.status(400).json({ success: false, error: 'Warehouse location not set — save it in Settings first.' });
     // Zero-quantity bill lines stay in the PO for audit, but never create a
@@ -3381,10 +3420,12 @@ router.post('/api/procurement/commit', async (req, res) => {
       }
       np.seo = seo;
       np.images = readableApproved.map(x => ({ url: x.url, alt: seo.imageAlt }));
+      await validateListingPhotos(np.images);
     }
     // Reserve the PO before the first external write. Any uncertain/partial
     // result needs manual reconciliation, never a blind retry that duplicates stock.
     const currentStore = loadStore();
+    assertNoImageGeneration(currentStore.pos[poId], 'posting to Shopify');
     if (JSON.stringify(currentStore.pos[poId]) !== preflightSnapshot || String(currentStore.settings.warehouseLocationId || '') !== warehouseLocationId)
       return res.status(409).json({ success:false, error:'This purchase changed during the posting check. Reopen it and review the latest quantities, images and approvals before posting.' });
     const results = { created: [], adjusted: [], errors: [] };
@@ -3400,7 +3441,7 @@ router.post('/api/procurement/commit', async (req, res) => {
       try {
         results.pendingOperation = { kind:'create', groupKey:np.key, attemptId:po.postingAttemptId, at:new Date().toISOString() };
         persistPostingPo(po);
-        const result = await createDraftProduct(np, warehouseLocationId, { noCreateRetries:true,
+        const result = await createDraftProduct(np, warehouseLocationId, { noCreateRetries:true, poId,
           onCreated: created => { results.created.push({ ...created, groupKey:np.key }); persistPostingPo(po); } });
         Object.assign(results.created[results.created.length - 1], result);
         delete results.pendingOperation;
@@ -3432,7 +3473,7 @@ router.post('/api/procurement/commit', async (req, res) => {
     if (results.errors.length) return res.status(409).json({ success: false, poId: po.id, results,
       error: 'Shopify posting stopped after an error. This PO is locked as partially posted; inspect Shopify and the saved results before any retry. ' + results.errors[0].error });
     res.json({ success: true, poId: po.id, results });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ success: false, error: e.message }); }
   finally { if (ownsLock) activePurchasePostings.delete(poId); }
 });
 
@@ -3451,6 +3492,7 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     const s=loadStore(), po=s.pos[req.params.id];
     if(!po) return res.status(404).json({success:false,error:'PO not found'});
     if(po.status!=='posting_partial') return res.status(409).json({success:false,error:'Only an interrupted posting can be continued.'});
+    assertNoImageGeneration(po, 'continuing Shopify posting');
     const continuationSnapshot = JSON.stringify(po);
     if(((po.results&&po.results.errors)||[]).length) return res.status(409).json({success:false,error:'This posting has a saved Shopify error. Reconcile that error before continuing.'});
     if (po.results && po.results.pendingOperation) return res.status(409).json({success:false,error:'A Shopify write was interrupted with an uncertain result. Reconcile the saved operation in Shopify before continuing.', pendingOperation:po.results.pendingOperation});
@@ -3491,7 +3533,9 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
       if(!required.length||(missingTypes.length&&!recoverable))return res.status(409).json({success:false,error:(changedReference?'Previously approved images no longer match the current product reference for ':'Missing readable approved image(s) for ')+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+': '+(missingTypes.join(', ')||'required listing views')+'. No Shopify write was made. '+(changedReference?'Review the changed product details before generating replacements.':'Restore or regenerate the missing views, then retry.'),groupKey:np.key,missingTypes});
       if(!approved.length)return res.status(409).json({success:false,error:'No readable approved listing photos remain for '+(np.designName||np.designCode||'Trouser')+' · '+(np.colour||'')+'. No Shopify write was made.',groupKey:np.key});
       np.seo=seo; np.images=approved.map(x=>({url:x.url,alt:seo.imageAlt}));
+      await validateListingPhotos(np.images);
     }
+    assertNoImageGeneration(loadStore().pos[po.id], 'continuing Shopify posting');
     if (JSON.stringify(loadStore().pos[po.id]) !== continuationSnapshot)
       return res.status(409).json({success:false,error:'This purchase changed during the continuation check. Reopen it and review the latest data before retrying.'});
     const results=po.results||(po.results={created:[],adjusted:[],errors:[]});
@@ -3502,7 +3546,7 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
         results.pendingOperation = {kind:'create',groupKey:np.key,attemptId:crypto.randomUUID(),at:new Date().toISOString()};
         persistPostingPo(po);
         const result=await createDraftProduct(np,String(po.warehouseLocationId||s.settings.warehouseLocationId||''),{
-          noCreateRetries:true,onCreated:created=>{results.created.push({...created,groupKey:np.key});persistPostingPo(po);}
+          noCreateRetries:true,poId:po.id,onCreated:created=>{results.created.push({...created,groupKey:np.key});persistPostingPo(po);}
         });
         Object.assign(results.created[results.created.length-1],result);
         delete results.pendingOperation;persistPostingPo(po);
@@ -3517,7 +3561,7 @@ router.post('/api/procurement/pos/:id/resume-posting', async (req, res) => {
     po.newProducts=(po.newProducts||[]).filter(np=>!pending.some(created=>created.key===np.key)).concat(pending);
     po.status='posted'; po.postedAt=new Date().toISOString(); po.postingReconciliation={at:po.postedAt,by:(req.user&&req.user.username)||'system',alreadyPresent,createdGroups:pending.map(np=>np.key),missingImageGroups}; persistPostingPo(po);
     res.json({success:true,poId:po.id,alreadyPresent,created:pending.map(np=>np.key),missingImageGroups,results});
-  }catch(e){res.status(500).json({success:false,error:e.message});}
+  }catch(e){res.status(e.status || 500).json({success:false,error:e.message});}
   finally{if(ownsLock)activePostingContinuations.delete(req.params.id);}
 });
 
@@ -3531,6 +3575,7 @@ router.post('/api/procurement/pos/:id/repair-shopify-images', async (req, res) =
     const s = loadStore(), po = s.pos[req.params.id];
     if (!po) return res.status(404).json({ success: false, error: 'PO not found.' });
     if (po.status !== 'posted') return res.status(409).json({ success: false, error: 'This repair is only for a posted PO.' });
+    assertNoImageGeneration(po, 'repairing Shopify photos');
     const groups = await newGroupsOf(s, po), cat = await loadCatalogue(true);
     const repaired = [], alreadyHadPhotos = [], unavailable = [];
     for (const group of groups) {
@@ -3545,8 +3590,10 @@ router.post('/api/procurement/pos/:id/repair-shopify-images', async (req, res) =
       const seoDraft = (po.seoDraft || []).find(item => item.key === group.key), alt = seoDraft?.seo?.imageAlt || '';
       const approved = ((po.aiImages || {})[group.key] || []).filter(image => image && (group.audience!=='Unisex'||openaiPilot.pilotTypes(group,!!(po.backRefs||{})[group.key]).includes(image.type)) && image.approved && imageCheckAccepted(image) && image.type !== 'original' && image.url !== group.photoUrl && readStoredPhoto(image.url));
       if (!approved.length) { unavailable.push({ groupKey: group.key, productId, reason: 'No readable approved saved photos remain. Restore or regenerate this product’s listing views.' }); continue; }
+      await validateListingPhotos(approved);
       for (const image of approved) {
-        const src = readStoredPhoto(image.url);
+        const src = await readListingPhoto(image.url);
+        assertNoImageGeneration(loadStore().pos[po.id], 'repairing Shopify photos');
         await shopifyPost(`products/${productId}/images.json`, { image: { attachment: src.buf.toString('base64'), alt: alt.slice(0, 512) } });
       }
       const verifyResponse = await shopifyClient.request(`https://${SHOPIFY_STORE}/admin/api/${API}/products/${productId}.json?fields=id,images`);
@@ -3559,7 +3606,7 @@ router.post('/api/procurement/pos/:id/repair-shopify-images', async (req, res) =
     po.shopifyImageRepairHistory.push({ at: new Date().toISOString(), by: (req.user && req.user.username) || 'system', repaired, alreadyHadPhotos, unavailable });
     saveStore(s); _catalogue = null;
     res.json({ success: true, repaired, alreadyHadPhotos, unavailable });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ success: false, error: e.message }); }
 });
 
 // This catalogue is always fresh and retains duplicate SKU matches instead of
@@ -3647,10 +3694,19 @@ async function executeDraftRecovery(id, plan, warehouse, run) {
       const latest = loadStore(), current = buildRecoveryPlan(latest.pos[id], catalogue,
         {groupKey, sizes:latest.sizes || {}, readPhoto:readStoredPhoto, inventoryMode:plan.inventoryMode, includeRestocks:plan.includeRestocks, priceMode:plan.priceMode, calculatePrice:recoveryPriceCalculator(latest,latest.pos[id])}).products.find(candidate => candidate.key === product.key);
       if (JSON.stringify(current) !== JSON.stringify(product)) throw new Error('The saved listing or photos changed for ' + product.label + '. Refresh the preview.');
-      // Keep the uncertain group durable until creation, stock and verification finish.
-      run.currentGroup = product.key; run.phase = 'creating'; persistDraftRecovery(id, run);
+      assertNoImageGeneration(latest.pos[id], 'recovering Shopify drafts');
+      await validateListingPhotos(product.images);
+      assertNoImageGeneration(loadStore().pos[id], 'recovering Shopify drafts');
       const result = await createDraftProduct({...product, images:product.images, seo:{...product.seo,
-        tags:Array.isArray(product.seo.tags) ? product.seo.tags : []}}, warehouse, {noCreateRetries:true,
+        tags:Array.isArray(product.seo.tags) ? product.seo.tags : []}}, warehouse, {noCreateRetries:true,poId:id,
+        beforeCreate:()=>{
+          const latest=loadStore(), checked=buildRecoveryPlan(latest.pos[id],catalogue,
+            {groupKey,sizes:latest.sizes || {},readPhoto:readStoredPhoto,inventoryMode:plan.inventoryMode,includeRestocks:plan.includeRestocks,priceMode:plan.priceMode,calculatePrice:recoveryPriceCalculator(latest,latest.pos[id])}).products.find(candidate=>candidate.key===product.key);
+          if(JSON.stringify(checked)!==JSON.stringify(product))throw new Error('The saved listing or photos changed for '+product.label+'. Refresh the preview.');
+          // Reserve only after local decoding and the final data check; an
+          // uncertain external creation remains durable until verification.
+          run.currentGroup=product.key;run.phase='creating';persistDraftRecovery(id,run);
+        },
         onCreated:created => {run.phase = 'setting-stock'; run.created.push({...created, groupKey:product.key}); persistDraftRecovery(id,run,{...created,groupKey:product.key});}});
       Object.assign(run.created[run.created.length - 1], result);
       run.phase = 'verifying'; persistDraftRecovery(id, run); _catalogue = null;
@@ -3679,10 +3735,16 @@ router.post('/api/procurement/pos/:id/shopify-recovery', async (req, res) => {
     activeDraftRecoveries.add(id); ownsLock = true;
     const s = loadStore(), po = s.pos[id], b = req.body || {};
     if (!po) return res.status(404).json({success:false,error:'PO not found.'});
+    assertNoImageGeneration(po, 'recovering Shopify drafts');
+    const recoverySnapshot = JSON.stringify(po);
     if (b.approve !== true || !b.fingerprint) return res.status(400).json({success:false,error:'Review the recovery preview before recreating drafts.'});
     const plan = await recoveryPlan(s, po, b.inventoryMode, b.includeRestocks === true, b.priceMode || 'saved');
     if (plan.fingerprint !== b.fingerprint) return res.status(409).json({success:false,error:'The saved receipt, photos or Shopify products changed. Refresh the recovery preview; no products were created.'});
     const pending = plan.products.filter(product => product.status === 'ready');
+    for (const product of pending) await validateListingPhotos(product.images);
+    const latest = loadStore();
+    assertNoImageGeneration(latest.pos[id], 'recovering Shopify drafts');
+    if (JSON.stringify(latest.pos[id]) !== recoverySnapshot) return res.status(409).json({success:false,error:'The purchase changed during the recovery check. Refresh the recovery preview; no products were created.'});
     const warehouse = String(po.warehouseLocationId || s.settings.warehouseLocationId || '');
     if (!warehouse) return res.status(409).json({success:false,error:'The original warehouse location is missing. No products were created.'});
     if (!pending.length) return res.json({success:true,created:[],plan:publicRecoveryPlan(plan)});

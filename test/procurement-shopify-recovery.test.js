@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm');
+const listingPhoto=require('./listing-photo-fixture');
 const {buildRecoveryPlan, publicRecoveryPlan} = require('../modules/procurement-shopify-recovery');
 const key = '6916|green';
 const groupKey = line => [line.designCode, line.colour].join('|').toLowerCase();
@@ -90,7 +91,7 @@ process.env.SHOPIFY_ACCESS_TOKEN='fake-test-token';
 const express=require('express');
 const {router}=require('../modules/procurement');
 const {shopifyClient}=require('../modules/shopify-client');
-fs.writeFileSync(path.join(sandbox,'procurement-photos','approved.jpg'),'saved-photo');
+fs.writeFileSync(path.join(sandbox,'procurement-photos','approved.jpg'),listingPhoto);
 const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={role:req.headers['x-test-role']||'admin',username:'tester'};next();});app.use(router);
 let server,base,products=[],writes=[],failCreate=false,failStock=false,holdCreate;
 function seed() {
@@ -127,7 +128,7 @@ test('endpoint restores only missing drafts, saved photos and quantities; re-run
   const create=writes.find(write=>write.url.endsWith('/products.json'));
   assert.equal(create.maxRetries,0);assert.equal(create.payload.product.status,'draft');
   assert.deepEqual(create.payload.product.variants.map(v=>v.sku),['NEW30','NEW32']);
-  assert.equal(create.payload.product.images[0].attachment,Buffer.from('saved-photo').toString('base64'));
+  assert.equal(create.payload.product.images[0].attachment,listingPhoto.toString('base64'));
   assert.deepEqual(writes.filter(write=>write.url.endsWith('/inventory_levels/set.json')).map(write=>write.payload.available),[1,2]);
   assert.ok(writes.every(write=>!write.url.endsWith('/inventory_levels/adjust.json')));
   const saved=JSON.parse(fs.readFileSync(process.env.PROCUREMENT_PATH)).pos['PO-0099'];

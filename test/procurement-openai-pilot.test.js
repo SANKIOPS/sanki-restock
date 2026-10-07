@@ -253,7 +253,7 @@ test('purchase studio uses a product-wise image, SEO and approval flow',()=>{
   assert.match(html,/id="approvePoBtn">Approve complete PO/);
   assert.match(html,/data-approve-product/);
   assert.match(html,/Approve images \+ SEO/);
-  assert.match(html,/saveSeoRequest\(np,i,false\)/);
+  assert.match(html,/saveSeoRequest\(np,i,false,run\)/);
   assert.match(html,/Saved ✓/);
   assert.match(html,/Generate SEO names \(paid\)/);
   assert.match(html,/generatePaidGroups\('single',np\.key\)/);
