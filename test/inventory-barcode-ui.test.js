@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 class Element extends EventTarget {
   constructor() { super(); this.value = ''; this.hidden = false; this.disabled = false; this.open = false; this.children = []; }
-  setAttribute() {}
+  setAttribute(key, value) { this[key] = value; }
   appendChild(el) { this.children.push(el); }
   insertAdjacentElement() {}
   focus() {}
@@ -40,7 +40,7 @@ function setup({ media, fetcher } = {}) {
   let callback, stops = 0;
   window.ZXingBrowser = { BrowserMultiFormatReader: class { async decodeFromStream(stream, video, cb) { callback = cb; return { stop() { stops++; } }; } } };
   vm.runInNewContext(fs.readFileSync(require.resolve('../public/inventory-barcode.js'), 'utf8'), { document, window, navigator: { mediaDevices: { getUserMedia: media || (() => Promise.reject(Object.assign(new Error(), { name: 'NotFoundError' }))) } }, Event, CustomEvent, AbortController, fetch: fetcher || (async () => ({ ok: true, json: async () => ({ success: true, match: { sku: 'SKU1', handle: 'tee' } }) })) });
-  return { search, reset, window, parts, clear: parent.children[0], scan: elements.find(e => e.textContent === 'Scan barcode'), dialog: elements.find(e => e.tag === 'dialog'), callback: () => callback, stops: () => stops };
+  return { search, reset, window, parts, clear: parent.children[0], scan: elements.find(e => e['aria-label'] === 'Scan barcode'), dialog: elements.find(e => e.tag === 'dialog'), callback: () => callback, stops: () => stops };
 }
 test('clear button empties the query and emits input so the existing list updates', () => {
   const ui = setup(); let inputs = 0;
