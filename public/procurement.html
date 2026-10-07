@@ -1997,7 +1997,7 @@
       if(me.canManage && !posted){
         h+='<details class="panel po-fold" id="studioPanel"><summary>Listing images &amp; SEO <span class="po-fold-summary">Generate, review and approve products for Shopify</span></summary><div class="po-fold-body"><h2 style="margin-top:0">Listing images &amp; copy — new products</h2>'+
            '<p class="sub">Work product by product: confirm its audience and presets, generate its images, generate its SEO names, review, then approve the product. No back view is invented without a real back photo.</p>'+
-           (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn" id="generatePoImagesBtn">Generate images for complete PO</button><button type="button" class="btn ghost" id="generatePoSeoBtn">Generate SEO for complete PO</button><button type="button" class="btn ghost" id="approvePoBtn">Approve complete PO</button><span class="muted">Bulk actions skip completed products and keep every product’s saved rules.</span></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
+           (canStartPaidImages()?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button type="button" class="btn" id="generatePoImagesBtn">Generate images for complete PO</button><button type="button" class="btn ghost" id="generatePoSeoBtn">Generate SEO for complete PO</button><button type="button" class="btn ghost" id="approvePoBtn">Approve complete PO</button> <button type="button" class="btn ghost" id="stopPoImagesBtn">Stop all image generation</button><span class="muted">Bulk actions skip completed products and keep every product’s saved rules.</span></div><div class="muted" id="poGenerationStatus" style="margin-bottom:8px"></div>':'')+
            '<div id="studioHost"><p class="muted">Loading new products…</p></div></div></details>';
       }
       h+='<div id="receiveHost"></div>';
@@ -2311,6 +2311,7 @@
     // ══════════ AI STUDIO ══════════
     var studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };     // keyed by product group key
     var openaiPilotConfig=null;
+    var imageGenerationRun=null;
     var receiveId=null;
     var IMG_TYPES=[['female','Female model'],['male','Male model'],['front','Product front'],['back','Product back']];
     // ── Fit / length (saved per product and used in paid model shots) ──
@@ -2339,12 +2340,14 @@
     function stylingOf(np){ return studio.styling[np.key]=Object.assign({fit:'Auto',pair:'Auto',aesthetic:'Auto',tuck:'Auto',chain:'None',shoes:'Auto',capStyle:'None',bagStyle:'None',bagColour:'Auto',modelOrigin:'Indian',femaleComplexion:'Fair',maleComplexion:'Fair',sunglasses:false,watch:false},studio.styling[np.key]||{}); }
     function paidStylingOf(np){ var s=stylingOf(np); return {fit:s.fit,pair:s.pair,aesthetic:s.aesthetic,tuck:s.tuck,chain:s.chain,shoes:s.shoes,capStyle:s.capStyle,bagStyle:s.bagStyle,bagColour:s.bagColour||'Auto',modelOrigin:s.modelOrigin||'Indian',femaleComplexion:s.femaleComplexion,maleComplexion:s.maleComplexion,sunglasses:!!s.sunglasses,watch:!!s.watch}; }
     function saveStudioStyling(np){
-      function note(message){var card=(lastReceive&&lastReceive.newProducts||[]).findIndex(function(x){return x.key===np.key;}),node=el('scard'+card)&&el('scard'+card).querySelector('[data-style-message]');if(node)node.textContent=message;}
-      var previous=studio.styleSaves[np.key]||Promise.resolve();
+      function note(message){if(receiveId!==poId||studio!==studioRef)return;var card=(lastReceive&&lastReceive.newProducts||[]).findIndex(function(x){return x.key===np.key;}),node=el('scard'+card)&&el('scard'+card).querySelector('[data-style-message]');if(node)node.textContent=message;}
+      var poId=receiveId,studioRef=studio;
+      var previous=studioRef.styleSaves[np.key]||Promise.resolve();
       var chosen=paidStylingOf(np);
       note('Saving styling…');
       var saved=previous.catch(function(){}).then(function(){
-        return fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/image-styling',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,styling:chosen})}).then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not save styling.');if(r.images)studio.images[np.key]=r.images;return r;});
+        if(receiveId!==poId||studio!==studioRef)throw new Error('PO changed before styling was saved. Reopen the original PO.');
+        return fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/image-styling',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,styling:chosen})}).then(readJson).then(function(r){if(!r.success)throw new Error(r.error||'Could not save styling.');if(receiveId===poId&&studio===studioRef&&r.images)studioRef.images[np.key]=r.images;return r;});
       }).then(function(r){note('Styling saved for this product.');return r;},function(e){note('Styling not saved: '+e.message);throw e;});
       studio.styleSaves[np.key]=saved;
       return saved;
@@ -2384,6 +2387,7 @@
     function initStudioFor(id){
       receiveId=id;
       fetch('/api/procurement/pos/'+encodeURIComponent(id)+'/studio?refresh='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(function(d){
+        if(receiveId!==id)return;
         if(!d.success){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(d.error)+'</div>'; return; }
         lastReceive=d;                          // studio funcs read lastReceive.newProducts
         studio={ images:{}, rejected:{}, seo:{}, styling:{}, styleSaves:{}, backRefs:{}, selected:{} };
@@ -2402,7 +2406,7 @@
         // of requiring another mutating “Save weights” request.
         if(po.status==='received') renderReceive(d,id);
         fetch('/api/procurement/openai-pilot-status').then(readJson).then(function(status){
-          openaiPilotConfig=status;renderStudio();
+          if(receiveId!==id||lastReceive!==d)return;openaiPilotConfig=status;renderStudio();
         }).catch(function(){ /* Generation endpoint will explain configuration errors. */ });
       }).catch(function(e){ if(el('studioHost')) el('studioHost').innerHTML='<div class="banner err">'+esc(e.message)+'</div>'; });
     }
@@ -2413,6 +2417,7 @@
       host.innerHTML=html;
       (d.newProducts||[]).forEach(function(np,i){ wireStudioCard(np,i); });
       var approvePo=el('approvePoBtn');if(approvePo)approvePo.onclick=function(){approveWholePo(approvePo);};
+      var stopImages=el('stopPoImagesBtn');if(stopImages)stopImages.onclick=function(){stopImageGeneration(stopImages);};
       var generatePoImages=el('generatePoImagesBtn');if(generatePoImages)generatePoImages.onclick=function(){generatePaidGroups('all');};
       var generatePoSeo=el('generatePoSeoBtn');if(generatePoSeo)generatePoSeo.onclick=function(){generateSeoForPo(false);};
       updateStudioSelection();
@@ -2433,9 +2438,39 @@
     function productNeedsSavedWeight(np){
       return (np.variants||[]).some(function(variant){return Number(variant.qty)>0&&!(Number(variant.weightGrams)>0);});
     }
-    async function generatePaidGroups(mode,singleKey,confirmed){
+    function generationCanContinue(run){return !run.stopped&&receiveId===run.poId&&studio===run.studioRef&&lastReceive===run.receiveRef;}
+    async function stopImageGeneration(button){
+      if(imageGenerationRun)imageGenerationRun.stopped=true;
+      var label=button.textContent;button.disabled=true;button.textContent='Stopping…';
+      try{
+        var result=await fetch('/api/procurement/stop-image-generation',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(readJson);
+        if(!result.success)throw new Error(result.error||'Could not stop server jobs.');
+        if(openaiPilotConfig)openaiPilotConfig.generationEpoch=result.generationEpoch;
+        var status=el('poGenerationStatus');if(status)status.textContent=result.message;
+        // A stop is never followed by a start. A fresh explicit confirmation
+        // is required even in another tab that had queued an older request.
+        if(receiveId)initStudioFor(receiveId);
+      }catch(error){alert('Server stop could not be confirmed: '+error.message+'. Check generation progress.');}
+      finally{if(button.isConnected){button.disabled=false;button.textContent=label;}}
+    }
+    async function previewImagePrompts(np,i,button){
+      var poId=receiveId,studioRef=studio;button.disabled=true;
+      try{
+        await (studioRef.styleSaves[np.key]||Promise.resolve());
+        var result=await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/image-prompts?groupKey='+encodeURIComponent(np.key)).then(readJson);
+        if(receiveId!==poId||studio!==studioRef)return;
+        if(!result.success)throw new Error(result.error||'Could not load prompts.');
+        var node=el('scard'+i).querySelector('[data-image-prompts]');
+        node.innerHTML='<p class="muted">'+esc(result.note)+'</p>'+result.views.map(function(view){return '<details><summary>'+esc(view.type)+'</summary><p style="white-space:pre-wrap">'+esc(view.prompt)+'</p></details>';}).join('');
+      }catch(error){alert(error.message);}
+      finally{if(button.isConnected)button.disabled=false;}
+    }
+    async function generatePaidGroups(mode,singleKey,confirmed,confirmation){
+      if(imageGenerationRun){alert('An image batch is already running. Stop it or check its progress.');return;}
+      var poId=receiveId;
       var btn=mode==='single'?null:el(mode==='all'?'generatePoImagesBtn':'generateSelectedBtn'),status=el('poGenerationStatus'),d=lastReceive,po=d&&d.po||{};
       function report(message,item){
+        if(receiveId!==poId)return;
         if(status)status.textContent=message;
         if(item){var card=el('scard'+item.i),local=card&&card.querySelector('[data-pilot-message]');if(local)local.textContent=message;}
       }
@@ -2457,6 +2492,10 @@
       if(!pending.length){report('All required product images already exist. Review them, then generate the SEO names.',selected[0]);return;}
       var imageCalls=pending.reduce(function(total,x){return total+missingPaidDrafts(x.np).images.length;},0);
       var preflightCalls=pending.filter(function(x){return missingPaidDrafts(x.np).images.length>0&&['upper','lower'].indexOf(garmentCat(x.np.productType))>=0&&paidStylingOf(x.np).fit!=='Auto';}).length;
+      var scope=JSON.stringify(pending.map(function(item){return {key:item.np.key,views:missingPaidDrafts(item.np).images,styling:paidStylingOf(item.np)};}));
+      if(confirmed&&confirmation&&(confirmation.poId!==poId||confirmation.scope!==scope)){
+        report('The selected products or styling changed. Confirm the current image views before generating.',pending[0]);return;
+      }
       var skipped=selected.length-pending.length;
       if(!confirmed){
         var confirmCard=el('scard'+pending[0].i),confirmHost=confirmCard&&confirmCard.querySelector('[data-pilot-message]');
@@ -2464,10 +2503,13 @@
         confirmHost.innerHTML='<span style="color:#92400e">Generate '+imageCalls+' missing image view(s)? Maximum '+(imageCalls*2)+' billed image calls and '+(imageCalls*2)+' billed visual checks, plus up to '+preflightCalls+' original-fit check(s). SEO is separate.</span> '+
           '<button type="button" class="btn sm" data-confirm-paid-images>Confirm paid generation</button> '+
           '<button type="button" class="btn ghost sm" data-cancel-paid-images>Cancel</button>';
-        confirmHost.querySelector('[data-confirm-paid-images]').onclick=function(){generatePaidGroups(mode,singleKey,true);};
+        confirmHost.querySelector('[data-confirm-paid-images]').onclick=function(){generatePaidGroups(mode,singleKey,true,{poId:poId,scope:scope});};
         confirmHost.querySelector('[data-cancel-paid-images]').onclick=function(){report('Cancelled — no paid call was made.',pending[0]);};
         return;
       }
+      var run={poId:poId,studioRef:studio,receiveRef:lastReceive,epoch:(openaiPilotConfig||{}).generationEpoch,stopped:false};
+      run.types={};run.styles={};pending.forEach(function(item){run.types[item.np.key]=missingPaidDrafts(item.np).images;run.styles[item.np.key]=paidStylingOf(item.np);});
+      imageGenerationRun=run;
       btn.disabled=true;var finished=0;
       var active=null,attention=[];
       try {
@@ -2475,26 +2517,32 @@
         try { await Promise.all(selected.map(function(x){return studio.styleSaves[x.np.key]||Promise.resolve();})); }
         catch(e){ throw new Error('Styling was not saved: '+e.message+'. No paid call was made.'); }
         for(var item of pending){
+          if(!generationCanContinue(run))return;
           active=item;
           try {
           report('Generating article '+(finished+1)+' of '+pending.length+' · '+(item.np.colour||item.np.designName||'product')+'… This can take several minutes.',item);
-          var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,retry:!!used[item.np.key],skipSeo:true,maxImageAttempts:2,styling:paidStylingOf(item.np)})}).then(readJson);
+          var start=await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:item.np.key,retry:!!used[item.np.key],skipSeo:true,maxImageAttempts:2,generationVersion:3,generationEpoch:run.epoch,confirmedTypes:run.types[item.np.key],styling:run.styles[item.np.key]})}).then(readJson);
           if(!start.success)throw new Error(start.error||'Could not start generation.');
-          var queuedAttempt={groupKey:item.np.key};attempts.push(queuedAttempt);used[item.np.key]=true;
+          var queuedAttempt=start.pilot||{groupKey:item.np.key,status:'running'};attempts.push(queuedAttempt);used[item.np.key]=true;
           var result;
           for(var poll=0;poll<900;poll++){
             await new Promise(function(resolve){setTimeout(resolve,5000);});
-            result=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot-status?groupKey='+encodeURIComponent(item.np.key)).then(readJson);
+            if(!generationCanContinue(run))return;
+            result=await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/openai-pilot-status?groupKey='+encodeURIComponent(item.np.key)).then(readJson);
             if(!result.success)throw new Error(result.error||'Could not read generation progress.');
             if(result.pilot.status!=='running')break;
           }
           if(result.pilot.status==='running')throw new Error('Generation is still running. Reopen this PO to inspect saved drafts.');
+          if(!generationCanContinue(run))return;
           Object.assign(queuedAttempt,result.pilot);
           studio.images[item.np.key]=result.images||[];studio.rejected[item.np.key]=result.rejectedImages||[];used[item.np.key]=true;studio.selected[item.np.key]=false;
           rerenderCard(item.i);finished++;
           if(generationSafetyBlocked(result.pilot)){
             report('Stopped: the image provider blocked this article. Review its source photo and prompt before generating again. Remaining products in this batch were not started.',item);
             return;
+          }
+          if(result.pilot.failure||['stopped','cancelled','interrupted'].indexOf(result.pilot.status)>=0){
+            report('Generation stopped. '+(result.pilot.failure?result.pilot.failure.action:'Check saved drafts before explicitly generating again.')+' Remaining products were not started.',item);return;
           }
           if(result.pilot.status==='failed'||result.pilot.status==='partial'){
             attention.push(item.np.designName||item.np.colour||item.np.key);
@@ -2504,14 +2552,16 @@
           report('Images saved for '+(item.np.colour||'this product')+'. Review them, then click Generate SEO names.',item);
           }catch(articleError){
             attention.push(item.np.designName||item.np.colour||item.np.key);
-            report('This article needs review: '+articleError.message+'. Continuing with the rest of the PO.',item);
+            report('Stopped: '+articleError.message+'. Check progress and saved drafts before retrying. Remaining products were not started.',item);return;
           }
         }
         report('Processed '+finished+' product(s). '+(attention.length?attention.length+' need review ('+attention.join(', ')+').':'Review and approve the drafts below.'),active);
       }catch(e){report('Stopped after '+finished+' article(s): '+e.message,active);}
-      finally{if(btn&&btn.isConnected)btn.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);updateStudioSelection();}
+      finally{if(imageGenerationRun===run)imageGenerationRun=null;if(btn&&btn.isConnected)btn.disabled=!!(openaiPilotConfig&&!openaiPilotConfig.configured);updateStudioSelection();}
     }
     async function regeneratePaidImages(np,i,types,button){
+      if(imageGenerationRun){alert('An image batch is already running. Stop it or check its progress.');return;}
+      var poId=receiveId;
       var po=(lastReceive&&lastReceive.po)||{}, current=studio.images[np.key]||[];
       var held=studio.rejected[np.key]||[];
       var allowed=paidTypesFor(np), chosen=types.filter(function(type){return allowed.indexOf(type)>=0;});
@@ -2519,13 +2569,15 @@
       if(po.status!=='received'||productNeedsSavedWeight(np)){alert('Receive and save the weight for this product before regeneration.');return;}
       if(!np.photoUrl){alert('Upload the original front reference first.');return;}
       if(!confirm('Generate fresh '+chosen.length+' view(s) for '+(np.designName||np.colour||'this product')+'? Hard limit: up to '+(chosen.length*2)+' billed image calls and '+(chosen.length*2)+' billed visual checks, plus '+(['upper','lower'].indexOf(garmentCat(np.productType))>=0&&paidStylingOf(np).fit!=='Auto'?1:0)+' original fit/length check. This includes at most one corrective retry per view, not a fixed currency price. Earlier images remain if checking fails. No SEO or Shopify changes. Continue?'))return;
+      var run={poId:poId,studioRef:studio,receiveRef:lastReceive,epoch:(openaiPilotConfig||{}).generationEpoch,stopped:false};imageGenerationRun=run;
       var label=button.textContent;
-      function note(message){var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node)node.textContent=message;}
+      function note(message){if(receiveId!==poId||studio!==run.studioRef)return;var card=el('scard'+i),node=card&&card.querySelector('[data-pilot-message]');if(node)node.textContent=message;}
       button.disabled=true;button.textContent='Regenerating…';
       try{
         await (studio.styleSaves[np.key]||Promise.resolve());
+        if(!generationCanContinue(run))return;
         var attempted=(((po.openaiPilot||{}).attempts)||[]).some(function(attempt){return attempt.groupKey===np.key;});
-        var start=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,retry:attempted,regenerateTypes:chosen,skipSeo:true,maxImageAttempts:2,styling:paidStylingOf(np)})}).then(readJson);
+        var start=await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/openai-pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupKey:np.key,retry:attempted,regenerateTypes:chosen,skipSeo:true,maxImageAttempts:2,generationVersion:3,generationEpoch:run.epoch,confirmedTypes:chosen,styling:paidStylingOf(np)})}).then(readJson);
         if(!start.success)throw new Error(start.error||'Could not start regeneration.');
         po.openaiPilot=po.openaiPilot||{attempts:[]};
         var queuedAttempt=start.pilot||{groupKey:np.key,status:'running'};
@@ -2534,19 +2586,21 @@
         var result;
         for(var poll=0;poll<900;poll++){
           await new Promise(function(resolve){setTimeout(resolve,5000);});
-          result=await fetch('/api/procurement/pos/'+encodeURIComponent(receiveId)+'/openai-pilot-status?groupKey='+encodeURIComponent(np.key)).then(readJson);
+          if(!generationCanContinue(run))return;
+          result=await fetch('/api/procurement/pos/'+encodeURIComponent(poId)+'/openai-pilot-status?groupKey='+encodeURIComponent(np.key)).then(readJson);
           if(!result.success)throw new Error(result.error||'Could not read regeneration progress.');
           if(result.pilot.status!=='running')break;
         }
         if(result.pilot.status==='running')throw new Error('Regeneration is still running. Reopen this PO to inspect saved drafts.');
+        if(!generationCanContinue(run))return;
         Object.assign(queuedAttempt,result.pilot);
         studio.images[np.key]=result.images||[];studio.rejected[np.key]=result.rejectedImages||[];
         if(result.seo&&result.seo.seo)studio.seo[np.key]={seo:result.seo.seo,approved:!!result.seo.seoApproved,source:result.seo.source||'product-details'};
         rerenderCard(i);
         var errors=(result.pilot.errors||[]).map(function(error){return error.type+': '+error.error;});
-        note(generationSafetyBlocked(result.pilot)?'Blocked by the image provider — review required. Remaining views were stopped; saved photos were kept. Review the source photo and prompt before generating again.':errors.length?'Some views failed and their earlier images were kept: '+errors.join('; '):'Replacement drafts are ready. Review and approve each new image.');
+        note(result.pilot.status==='cancelled'?'Image generation stopped. Saved photos were kept.':result.pilot.failure?result.pilot.failure.action+' Remaining views were stopped; saved photos were kept.':generationSafetyBlocked(result.pilot)?'Blocked by the image provider — review required. Remaining views were stopped; saved photos were kept. Review the source photo and prompt before generating again.':errors.length?'Some views failed and their earlier images were kept: '+errors.join('; '):'Replacement drafts are ready. Review and approve each new image.');
       }catch(e){note('Regeneration stopped: '+e.message);alert(e.message);}
-      finally{if(button.isConnected){button.disabled=false;button.textContent=label;}}
+      finally{if(imageGenerationRun===run)imageGenerationRun=null;if(button.isConnected){button.disabled=false;button.textContent=label;}}
     }
     function refreshGenerationProgress(np,i,button){
       var poId=receiveId,label=button.textContent;
@@ -2581,14 +2635,21 @@
       var attemptNote=lastAttempt&&lastAttempt.errors&&lastAttempt.errors.length
         ? 'Previous paid attempt '+esc(lastAttempt.status||'needs review')+': '+esc(lastAttempt.errors.map(function(e){return e.type+': '+e.error;}).join('; '))
         :lastAttempt?'Previous paid attempt: '+esc(lastAttempt.status||'running'):'';
-      if(generationSafetyBlocked(lastAttempt))attemptNote='Blocked by the image provider — review required. No automatic retry. Review the source photo and prompt before generating again.'+((lastAttempt.skippedViews||[]).length?' Remaining views were not requested.':'')+'<details><summary>Request details</summary>'+esc((lastAttempt.errors||[]).map(function(error){return error.type+': '+error.error+((error.api||{}).requestId?' · Request ID: '+error.api.requestId:'');}).join('; '))+'</details>';
+      if(lastAttempt&&lastAttempt.failure)attemptNote='Generation stopped — '+esc(lastAttempt.failure.action);
+      if(lastAttempt&&lastAttempt.status==='cancelled')attemptNote='Image generation stopped by user. Saved drafts were kept. No automatic retry.';
+      if(generationSafetyBlocked(lastAttempt))attemptNote='Blocked by the image provider — review required. No automatic retry. Review the source photo and prompt before generating again.'+((lastAttempt.skippedViews||[]).length?' Remaining views were not requested.':'');
+      if(lastAttempt&&(lastAttempt.errors||[]).length)attemptNote+='<details><summary>Request details</summary>'+esc((lastAttempt.errors||[]).map(function(error){
+        var api=error.api||{},moderation=api.moderationDetails||{};
+        return error.type+': '+error.error+(api.requestId?' · Request ID: '+api.requestId:'')+(moderation.stage?' · Moderation stage: '+moderation.stage:'')+((moderation.categories||[]).length?' · Provider categories: '+moderation.categories.join(', '):'');
+      }).join('; '))+'</details>';
       if(lastAttempt&&(lastAttempt.warnings||[]).length)attemptNote+=' · '+esc(lastAttempt.warnings.join('; '));
       var head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
         '<div style="display:flex;align-items:center;gap:10px">'+thumb+
         '<div><b>'+esc(np.designName||np.designCode||'Product '+(i+1))+'</b> <span class="muted">— '+esc(np.productType)+' · '+esc(np.colour)+'</span><div class="muted" style="font-size:12px;margin-top:2px"><b>SKU:</b> '+esc(productSkus.join(', ')||'Not assigned')+'</div>'+
         (np.ambiguous?' <span class="pill err">no vendor code</span>':'')+'</div></div>'+
-        '<div style="display:flex;gap:6px;flex-wrap:wrap">'+(canStartPaidImages()?'<button type="button" class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+((missing.images||[]).length?'Generate product images (paid)':'Images generated — review below')+'</button> '+(existingPaidViews.length?'<button type="button" class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+(hasPaidAttempt?'<button type="button" class="btn ghost sm" data-check-generation>Check generation progress (free)</button>':'')+'<button type="button" class="btn ghost sm" data-discard-product style="color:#b42318;border-color:#fca5a5">Did not arrive — remove from posting</button></div></div>'+
+        '<div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn ghost sm" data-preview-prompts>View image prompts (free)</button>'+(canStartPaidImages()?'<button type="button" class="btn sm" data-openai-pilot="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled title="Set OPENAI_API_KEY in Railway first"':'')+'>'+((missing.images||[]).length?'Generate product images (paid)':'Images generated — review below')+'</button> '+(existingPaidViews.length?'<button type="button" class="btn ghost sm" data-regen-product="'+i+'"'+(openaiPilotConfig&&!openaiPilotConfig.configured?' disabled':'')+'>Regenerate product images</button> ':''):'')+(hasPaidAttempt?'<button type="button" class="btn ghost sm" data-check-generation>Check generation progress (free)</button>':'')+'<button type="button" class="btn ghost sm" data-discard-product style="color:#b42318;border-color:#fca5a5">Did not arrive — remove from posting</button></div></div>'+
         '<div data-pilot-message role="status" style="font-size:12px;min-height:18px;margin:6px 0;color:var(--emerald-d)">'+attemptNote+'</div>'+
+        '<div data-image-prompts></div>'+
         (hasPaidAttempt&&missingNote?'<div class="muted" style="font-size:11px;margin-bottom:6px">'+esc(missingNote)+'</div>':'');
       var conflictNotice=(np.variantConflicts||[]).length?'<div class="banner err">Cannot post this product yet: different SKUs share the same colour and size. '+
         np.variantConflicts.map(function(c){return esc(c.size)+': '+esc((c.skus||[]).join(', '));}).join('; ')+
@@ -2785,9 +2846,10 @@
     }
     function wireStudioCard(np,i){
       var host=el('scard'+i); if(!host) return;
+      var preview=host.querySelector('[data-preview-prompts]');if(preview)preview.onclick=function(){previewImagePrompts(np,i,preview);};
       var progress=host.querySelector('[data-check-generation]');if(progress)progress.onclick=function(){refreshGenerationProgress(np,i,progress);};
       var lastAttempt=((((lastReceive||{}).po||{}).openaiPilot||{}).attempts||[]).slice().reverse().find(function(x){return x.groupKey===np.key;});
-      if(lastAttempt&&lastAttempt.status==='running')Array.prototype.forEach.call(host.querySelectorAll('[data-openai-pilot],[data-regen-product],[data-regen],[data-regen-held]'),function(button){button.disabled=true;button.title='Generation is in progress. Use Check generation progress (free).';});
+      if(((((lastReceive||{}).po||{}).openaiPilot||{}).attempts||[]).some(function(attempt){return attempt.status==='running';}))Array.prototype.forEach.call(host.querySelectorAll('select,input,[data-openai-pilot],[data-regen-product],[data-regen],[data-regen-held],[data-paid-regen],[data-reject-image],[data-accept-held],[data-restore-image-styling],[data-approve-product],[data-discard-product]'),function(button){button.disabled=true;button.title='Generation is in progress. Use Check generation progress (free).';});
       var pick=host.querySelector('[data-selectproduct]');if(pick)pick.onchange=function(){studio.selected[np.key]=pick.checked;updateStudioSelection();};
       var pilot=host.querySelector('[data-openai-pilot]'); if(pilot) pilot.onclick=function(){generatePaidGroups('single',np.key);};
       var approve=host.querySelector('[data-approve-product]');if(approve)approve.onclick=function(){approveProduct(np,i,approve);};
@@ -2856,8 +2918,8 @@
       Array.prototype.forEach.call(host.querySelectorAll('[data-regen-held]'),function(button){button.onclick=function(){regeneratePaidImages(np,i,[button.getAttribute('data-type')],button);};});
       var cr=host.querySelector('[data-codexreturn]'); if(cr) cr.onchange=function(){
         var file=cr.files&&cr.files[0]; if(!file)return;
-        var batchId=prompt('Paste the Codex batch ID for this product:'),type=prompt('View: front, model-front, model-side, model-back, or detail');
-        if(!batchId || ['front','model-front','model-side','model-back','detail'].indexOf(type)<0){cr.value='';return;}
+        var batchId=prompt('Paste the Codex batch ID for this product:'),type=prompt('View: '+paidTypesFor(np).join(', '));
+        if(!batchId || paidTypesFor(np).indexOf(type)<0){cr.value='';return;}
         var fd=new FormData();fd.append('photo',file);
         fetch('/api/procurement/photo',{method:'POST',body:fd}).then(readJson).then(function(u){
           if(!u.success)throw new Error(u.error||'Upload failed.');
