@@ -9,7 +9,8 @@
 
 /* Fit the catalogue to its available space, including the fixed sidebar. */
 .inventory-list{container:inventory-list / inline-size}
-.inventory-list .table-wrap{overflow-x:hidden}
+.inventory-list .table-wrap{overflow-x:hidden;overflow-anchor:none}
+.inventory-list tr[data-handle]:focus-visible{outline:2px solid var(--green);outline-offset:-3px}
 .inventory-list table{min-width:0;table-layout:fixed}
 .inventory-list th,.inventory-list td{padding:12px 9px;overflow-wrap:anywhere}
 .inventory-list th:nth-child(1){width:24%}
