@@ -10,6 +10,14 @@ function user(...roles) {
   return { username: 'test-user', role: roles[0], roles };
 }
 
+test('barcode lookup is readable by inventory viewers, including Stylists', () => {
+  for (const role of ['stocksearch', 'sales', 'warehouse', 'inventory']) {
+    assert.equal(apiAllowedForUser(user(role), '/api/inventory-categorization/barcode', 'GET'), true, role);
+    assert.equal(apiAllowedForUser(user(role), '/api/inventory-categorization/barcode', 'POST'), false, role);
+  }
+  assert.equal(apiAllowedForUser(user('accounting'), '/api/inventory-categorization/barcode'), false);
+});
+
 test('admin retains access to every API, including unknown future routes', () => {
   assert.equal(apiAllowedForUser(user('admin'), '/api/future-feature'), true);
 });

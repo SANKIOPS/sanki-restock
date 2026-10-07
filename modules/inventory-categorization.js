@@ -5,6 +5,7 @@ const path = require('path');
 const { ShopifyClient, shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
+require('./inventory-barcode').register(router);
 const inventoryState = require('./inventory-state');
 const DATA = require(path.join(__dirname, '..', 'public', 'inventory-data.json'));
 const STORE = process.env.SHOPIFY_STORE || '';

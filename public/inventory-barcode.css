@@ -1,0 +1,18 @@
+.finder .search input{min-width:0}
+.inventory-search-clear{flex:none;border:0;background:transparent;color:var(--green);font-size:26px;width:40px;border-radius:8px;cursor:pointer}
+.inventory-search-clear:hover{background:#e7f2ed}
+.inventory-search-clear:focus-visible,.inventory-scan-button:focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+.inventory-scan-button{margin-top:12px;padding:10px 14px;border:1px solid #ded8c8;border-radius:8px;background:var(--ivory);color:var(--green);font-weight:700;cursor:pointer}
+.inventory-barcode-message{margin:10px 0 0;font-size:13px}
+.inventory-barcode-dialog{width:min(520px,calc(100% - 28px));max-height:calc(100dvh - 32px);overflow:auto;border:1px solid var(--line);border-radius:18px;padding:22px;background:var(--ivory);color:var(--ink);box-shadow:0 20px 80px #0004}
+.inventory-barcode-dialog::backdrop{background:#042b23aa}
+.barcode-heading{display:flex;align-items:center;gap:12px;justify-content:space-between}.barcode-heading h2{margin:0;font-size:21px}
+.inventory-barcode-dialog p{margin:12px 0;color:var(--muted)}
+.inventory-barcode-dialog video{width:100%;max-height:260px;aspect-ratio:4/3;object-fit:contain;background:#17342e;border-radius:10px}
+.inventory-barcode-dialog button{border:1px solid var(--line);border-radius:8px;background:var(--green);color:var(--ivory);padding:10px 14px;cursor:pointer;font-weight:700}
+.inventory-barcode-dialog button:disabled{opacity:.5;cursor:wait}
+.inventory-barcode-dialog .barcode-close{background:#eee8da;color:var(--ink);font-size:24px;padding:1px 10px}
+.inventory-barcode-dialog form{margin:18px 0}.inventory-barcode-dialog label{display:block;margin-bottom:8px;font-weight:700}
+.barcode-entry{display:flex;gap:8px}.barcode-entry input{min-width:0;flex:1;padding:10px;border:1px solid var(--line);border-radius:8px;color:var(--ink);font-size:16px}.barcode-entry button{flex:none}
+.inventory-barcode-dialog .barcode-cancel{background:transparent;color:var(--green)}
+@media(max-width:400px){.inventory-barcode-dialog{padding:16px}.barcode-entry{flex-wrap:wrap}.barcode-entry button{width:100%}}

@@ -113,6 +113,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/stock-search',          roles: ['admin', 'inventory', 'warehouse', 'stocksearch'] },
   { prefix: '/api/showroom/',             roles: ['admin', 'inventory', 'warehouse'] },
   { prefix: '/api/inventory-costs/',      roles: ['admin', 'inventory'] },
+  { path: '/api/inventory-categorization/barcode', roles: ['admin', 'inventory', 'warehouse', 'sales'] },
   { prefix: '/api/inventory-categorization/catalog', roles: ['admin', 'inventory', 'warehouse', 'sales'] },
   { prefix: '/api/inventory-categorization/image-search', roles: ['admin', 'inventory', 'warehouse', 'sales'] },
   { prefix: '/api/inventory-categorization/', roles: ['admin'] },
@@ -147,10 +148,11 @@ function apiAllowedForUser(user, p, method='GET') {
   const ownerOnlyStockAction = p.startsWith('/api/racks') || p === '/api/stock-search/refresh';
   if (ownerOnlyStockAction) return userRoles.includes('owner');
   if (userRoles.includes('admin') || userRoles.includes('owner')) return true;
+  if (p === '/api/inventory-categorization/barcode' && method !== 'GET') return false;
   if (userRoles.includes('stocksearch')) {
     // Catalogue browsing and temporary photo searches do not change stock.
     const read = method === 'GET' && (
-      ['/api/auth/me', '/api/modules', '/api/stock-search', '/api/inventory-categorization/catalog'].includes(p) ||
+      ['/api/auth/me', '/api/modules', '/api/stock-search', '/api/inventory-categorization/catalog', '/api/inventory-categorization/barcode'].includes(p) ||
       /^\/api\/inventory-categorization\/(catalog|image-search)\/[^/]+$/.test(p)
     );
     if (read || method === 'POST' && p === '/api/inventory-categorization/image-search') return true;
