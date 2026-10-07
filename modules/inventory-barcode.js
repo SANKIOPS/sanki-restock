@@ -31,7 +31,7 @@ function register(router) {
   const { graphql } = require('./inventory-state');
   const client = new ShopifyClient({ minIntervalMs: 250 });
   const lookup = createLookup((query, variables) => graphql(query, variables, client));
-  router.get('/barcode', async (req, res) => {
+  router.get('/api/inventory-categorization/barcode', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try { res.json({ success: true, match: await lookup(req.query.barcode) }); }
     catch (e) { res.status(e.status || 502).json({ success: false, error: e.status ? e.message : 'Could not reach Shopify. Try scanning again.' }); }
