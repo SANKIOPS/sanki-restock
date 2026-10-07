@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
@@ -143,6 +144,40 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
     throw new Error(`unexpected next() for ${method} ${routePath}`);
   });
   return { status, body: result };
+}
+
+function invokeThroughRouter(method, routePath, { body = {}, query = {}, role = 'claimant', username = '' } = {}) {
+  const req = {
+    method, path: routePath, url: routePath, originalUrl: routePath, baseUrl: '', body, query,
+    headers: { 'user-agent':'SANKI Test Mobile', 'x-forwarded-for':'203.0.113.10' },
+    get(name) { return this.headers[String(name).toLowerCase()] || ''; },
+    ip: '203.0.113.10',
+    user: { username: username||(role === 'claimant' ? 'arshpreet' : (role === 'admin' ? 'prashant' : role + '-user')), role, roles: [role] }
+  };
+  let status = 200, result, completed = false, failure;
+  const headers = {};
+  const res = {
+    statusCode: 200, headersSent: false,
+    status(code) { status = code; this.statusCode = code; return this; },
+    setHeader(name,value) { headers[String(name).toLowerCase()] = value; },
+    getHeader(name) { return headers[String(name).toLowerCase()]; },
+    removeHeader(name) { delete headers[String(name).toLowerCase()]; },
+    json(value) { result = value; completed = true; this.headersSent = true; return this; },
+    send(value) { result = value; completed = true; this.headersSent = true; return this; },
+    end(value) { result = value; completed = true; this.headersSent = true; return this; }
+  };
+  router.handle(req,res,error=>{failure=error;completed=true;});
+  if(failure)throw failure;
+  assert.equal(completed,true,`router completed: ${method} ${routePath}`);
+  return { status, body: result };
+}
+
+function invokeThroughRouterAsync(method, routePath, { body = {}, query = {}, role = 'claimant', username = '' } = {}) {
+  return new Promise((resolve,reject)=>{
+    const req={method,path:routePath,url:routePath,originalUrl:routePath,baseUrl:'',body,query,headers:{'user-agent':'SANKI Test Mobile','x-forwarded-for':'203.0.113.10'},get(name){return this.headers[String(name).toLowerCase()]||'';},ip:'203.0.113.10',user:{username:username||(role==='claimant'?'arshpreet':(role==='admin'?'prashant':role+'-user')),role,roles:[role]}};
+    let status=200,done=false;const finish=value=>{if(done)return;done=true;resolve({status,body:value});},headers={},res={statusCode:200,headersSent:false,status(code){status=code;this.statusCode=code;return this;},setHeader(name,value){headers[String(name).toLowerCase()]=value;},getHeader(name){return headers[String(name).toLowerCase()];},removeHeader(name){delete headers[String(name).toLowerCase()];},json(value){this.headersSent=true;finish(value);return this;},send(value){this.headersSent=true;finish(value);return this;},end(value){this.headersSent=true;finish(value);return this;}};
+    router.handle(req,res,error=>{if(error)reject(error);else finish(undefined);});
+  });
 }
 
 test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
@@ -3220,6 +3255,63 @@ test('Prashant requests Owner approval before final bank reconciliation is poste
   const blocked=runApproval('owner',{draftId:id});assert.equal(blocked.status,409);assert.equal(blocked.body.approvalRequired,true);assert.equal(blocked.nextCalled,false);
   const approved=runApproval('owner',{draftId:id,approveRequestId:approval.id},{success:true,reconciledThrough:'2099-01-01'});assert.equal(approved.status,200);assert.equal(approved.nextCalled,true);
   saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok(saved.bankReconciliationDrafts[id],'the middleware leaves final posting to the protected finalize route');assert.equal(saved.bankReconciliationApprovals[approval.id].status,'approved');assert.ok(saved.auditLog.some(x=>x.action==='BANK_RECONCILIATION_FINALIZATION_APPROVED'&&x.subjectId===id));
+});
+
+test('Owner approval preserves a new Axis cutoff-date transaction and imports it exactly once',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),backup=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(backup),account='Axis Owner Approval Test',id='BRD-OWNER-CUTOFF-LATE',priorImport='BST-OWNER-CUTOFF-PRIOR';
+  try{
+    stored.transfers=Array.isArray(stored.transfers)?stored.transfers:[];stored.transfers.push({id:'TR-OWNER-CUTOFF-LATE',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Arshpreet Test',amount:10000,date:'2026-10-01',bankReference:'NEW-ARSH',createdAt:'2026-10-01T21:00:00.000Z'},{id:'TR-OWNER-CUTOFF-PRIOR-CASH',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:account,amount:23000,date:'2026-10-01',bankReference:'CASH-DEPOSIT',createdAt:'2026-10-01T22:00:00.000Z'});
+    stored.adjustments=Array.isArray(stored.adjustments)?stored.adjustments:[];stored.adjustments.push({id:'ADJ-OWNER-CUTOFF-OLD-FEE',nature:'SANKI',account,date:'2026-10-01',amount:-5.9,note:'Axis automatic transfer charge ₹5.90',automaticAxisTransferCharge:true,reconciliationDraft:'BRD-OLDER',bankRowId:'bank-0',createdAt:'2026-10-01T20:35:00.000Z'});
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-10-01',transactions:{prior:{id:'BTX-OWNER-CASH',date:'2026-10-01',description:'THIRD PARTY CASH DEP',reference:'CASH-DEPOSIT',debit:0,credit:23000,balance:220000,firstSeenImport:priorImport,lastSeenImport:priorImport}},imports:[{id:priorImport,from:'2026-10-01',to:'2026-10-01',rows:1,reconciliationRows:[{id:'bank-0',linkedRecordIds:['TR-OWNER-CUTOFF-PRIOR-CASH']}]}],lastReconciliation:{through:'2026-10-01',closingBalance:220000,ledgerClosingBalance:220000,balanceDifference:0}};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,createdBy:'prashant',createdAt:'2026-10-06T10:00:00.000Z',transactions:[{date:'2026-10-01',description:'THIRD PARTY CASH DEP',reference:'CASH-DEPOSIT',debit:0,credit:23000,balance:220000},{date:'2026-10-01',description:'IMPS ARSHPREET SINGH ARO',reference:'NEW-ARSH',debit:10005.9,credit:0,balance:209994.1}],summary:{from:'2026-10-01',to:'2026-10-02',openingBalance:197000,closingBalance:209994.1,totalDebits:10005.9,totalCredits:23000,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5'};
+    stored.bankReconciliationApprovals={};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const preview=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:id,account}});assert.equal(preview.status,200);assert.equal(preview.body.balanceDifference,0);assert.equal(preview.body.rows.find(x=>x.id==='bank-1').app.id,'TR-OWNER-CUTOFF-LATE');
+    const requested=invokeThroughRouter('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:id}});assert.equal(requested.status,202);const approval=requested.body.approval;
+    const approved=invokeThroughRouter('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId:id,approveRequestId:approval.id}});assert.equal(approved.status,200,JSON.stringify(approved.body));assert.equal(approved.body.balanceDifference,0);
+    const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),book=after.bankStatements[account],latest=book.imports.at(-1),transactions=Object.values(book.transactions);
+    assert.equal(after.bankReconciliationDrafts[id],undefined);assert.equal(after.bankReconciliationApprovals[approval.id].status,'approved');assert.equal(transactions.filter(x=>x.reference==='CASH-DEPOSIT').length,1);assert.equal(transactions.filter(x=>x.reference==='NEW-ARSH').length,1);assert.equal(book.transactions.prior.firstSeenImport,priorImport);
+    assert.equal(latest.rows,1);assert.equal(latest.from,'2026-10-01');assert.ok(Array.isArray(latest.reconciliationRows),JSON.stringify(book.imports));assert.equal(latest.reconciliationRows.length,1);assert.equal(latest.reconciliationRows[0].ledger.id,'TR-OWNER-CUTOFF-LATE');assert.equal(book.lastReconciliation.ledgerClosingBalance,209994.1);assert.equal(book.lastReconciliation.closingBalance,209994.1);assert.equal(book.lastReconciliation.balanceDifference,0);
+    const fees=after.adjustments.filter(x=>x.reconciliationDraft===id&&x.automaticAxisTransferCharge);assert.equal(fees.length,1);assert.equal(fees[0].amount,-5.9);assert.equal(fees[0].bankRowId,'bank-1');
+  }finally{fs.writeFileSync(expenseFile,backup);}
+});
+
+test('a genuinely missing historical bank row remains finalizable after a later cutoff',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),backup=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(backup),account='Historical Gap Bank Test',id='BRD-HISTORICAL-GAP';
+  try{
+    stored.openingBalances=stored.openingBalances||{};stored.openingBalances[account]=1000;stored.transfers=Array.isArray(stored.transfers)?stored.transfers:[];stored.transfers.push({id:'TR-HISTORICAL-GAP',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Historical Vendor',amount:100,date:'2026-10-01',bankReference:'HISTORICAL-100'});
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-10-05',transactions:{},imports:[],lastReconciliation:{through:'2026-10-05',closingBalance:900,ledgerClosingBalance:900,balanceDifference:0}};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,createdBy:'owner-user',createdAt:'2026-10-07T10:00:00.000Z',transactions:[{date:'2026-10-01',description:'Historical transfer',reference:'HISTORICAL-100',debit:100,credit:0,balance:900}],summary:{from:'2026-10-01',to:'2026-10-01',openingBalance:1000,closingBalance:900,totalDebits:100,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const finalized=invokeThroughRouter('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId:id}});assert.equal(finalized.status,200,JSON.stringify(finalized.body));
+    const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),book=after.bankStatements[account];assert.equal(Object.values(book.transactions).filter(x=>x.reference==='HISTORICAL-100').length,1);assert.equal(book.imports.at(-1).rows,1);assert.equal(book.imports.at(-1).from,'2026-10-01');assert.equal(book.reconciledThrough,'2026-10-05');
+  }finally{fs.writeFileSync(expenseFile,backup);}
+});
+
+test('a failed Owner finalization leaves the reviewed draft unchanged',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),backup=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(backup),account='Axis Owner Approval Failure Test',id='BRD-OWNER-FAILURE';
+  try{
+    stored.transfers=Array.isArray(stored.transfers)?stored.transfers:[];stored.transfers.push({id:'TR-OWNER-FAILURE',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Failure Test',amount:100,date:'2026-10-02',bankReference:'FAIL-100',createdAt:'2026-10-02T10:00:00.000Z'});
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-10-01',transactions:{},imports:[],lastReconciliation:{through:'2026-10-01',closingBalance:500,ledgerClosingBalance:500,balanceDifference:0}};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,createdBy:'prashant',createdAt:'2026-10-06T10:00:00.000Z',transactions:[{date:'2026-10-02',description:'TRANSFER FAILURE TEST',reference:'FAIL-100',debit:100,credit:0,balance:399}],summary:{from:'2026-10-02',to:'2026-10-02',openingBalance:500,closingBalance:399,totalDebits:100,totalCredits:0,validated:false},resolutions:{},matchingPolicy:'balanced_date_amount_v5'};
+    stored.bankReconciliationApprovals={};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const requested=invokeThroughRouter('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:id}});assert.equal(requested.status,202);const beforeApproval=JSON.stringify(JSON.parse(fs.readFileSync(expenseFile,'utf8')).bankReconciliationDrafts[id]);
+    const failed=invokeThroughRouter('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId:id,approveRequestId:requested.body.approval.id}});assert.equal(failed.status,409);assert.match(failed.body.error,/differs from the bank by ₹1\.00/);
+    const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(JSON.stringify(after.bankReconciliationDrafts[id]),beforeApproval);assert.equal(after.bankReconciliationApprovals[requested.body.approval.id].status,'pending');
+  }finally{fs.writeFileSync(expenseFile,backup);}
+});
+
+test('the next approval safely restores a draft shortened by the previous cutoff bug',async()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),backup=fs.readFileSync(expenseFile,'utf8'),stored=JSON.parse(backup),account='Axis Legacy Approval Recovery Test',id='BRD-LEGACY-TRIMMED',source=path.join(tempDir,'bank-statement-drafts','legacy-trimmed.xlsx');
+  try{
+    const workbook=XLSX.utils.book_new(),sheet=XLSX.utils.json_to_sheet([{Date:'2026-10-01',Narration:'First transfer',Reference:'LEGACY-100',Debit:100,Credit:'',Balance:900},{Date:'2026-10-02',Narration:'Second transfer',Reference:'LEGACY-50',Debit:50,Credit:'',Balance:850}]);XLSX.utils.book_append_sheet(workbook,sheet,'Statement');XLSX.writeFile(workbook,source);
+    stored.transfers=Array.isArray(stored.transfers)?stored.transfers:[];stored.transfers.push({id:'TR-LEGACY-100',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Recovery Test A',amount:100,date:'2026-10-01',bankReference:'LEGACY-100'},{id:'TR-LEGACY-50',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Recovery Test B',amount:50,date:'2026-10-02',bankReference:'LEGACY-50'});
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={reconciledThrough:'2026-09-30',transactions:{},imports:[],lastReconciliation:{through:'2026-09-30',closingBalance:1000,ledgerClosingBalance:1000,balanceDifference:0}};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,createdBy:'prashant',createdAt:'2026-10-06T10:00:00.000Z',temporaryFile:source,originalName:'legacy-trimmed.xlsx',fileHash:crypto.createHash('sha256').update(fs.readFileSync(source)).digest('hex'),transactions:[{date:'2026-10-02',description:'Second transfer',reference:'LEGACY-50',debit:50,credit:0,balance:850}],summary:{from:'2026-10-02',to:'2026-10-02',openingBalance:1000,closingBalance:850,totalDebits:50,totalCredits:0,validated:true},originalStatementPeriod:{from:'2026-10-01',to:'2026-10-02'},resolutions:{},matchingPolicy:'balanced_date_amount_v5'};
+    stored.bankReconciliationApprovals={};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const requested=await invokeThroughRouterAsync('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:id}});assert.equal(requested.status,202,JSON.stringify(requested.body));
+    const repaired=JSON.parse(fs.readFileSync(expenseFile,'utf8')).bankReconciliationDrafts[id];assert.equal(repaired.transactions.length,2);assert.equal(repaired.summary.totalDebits,150);assert.equal(repaired.summary.closingBalance,850);assert.equal(repaired.originalStatementPeriod,undefined);assert.equal(repaired.approvalTrimRecovery.restored.rows,2);
+    const approved=await invokeThroughRouterAsync('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId:id,approveRequestId:requested.body.approval.id}});assert.equal(approved.status,200,JSON.stringify(approved.body));assert.equal(approved.body.balanceDifference,0);
+    const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),book=after.bankStatements[account];assert.equal(Object.values(book.transactions).length,2);assert.equal(book.lastReconciliation.closingBalance,850);assert.equal(book.lastReconciliation.ledgerClosingBalance,850);
+  }finally{fs.writeFileSync(expenseFile,backup);}
 });
 
 test('a store repair failure cannot hide the persisted financial records', () => {
