@@ -74,10 +74,10 @@ test('product-only verification fails an added matching top even when the trouse
 });
 
 test('fresh generation sends the original reference, not the rejected shirt',async()=>{
-  const original=Buffer.from('original-jogger');
+  const original=await require('sharp')({create:{width:8,height:12,channels:3,background:'#334422'}}).jpeg().toBuffer();
   await pilot.generateImage({key:'test-only',group:{productType:'Jogger',audience:'Women'},source:{buf:original,mime:'image/jpeg'},type:'front',
     fetchImpl:async(url,options)=>{
-      assert.equal(await options.body.get('image').text(),'original-jogger');
+      assert.deepEqual(Buffer.from(await options.body.get('image').arrayBuffer()),original);
       assert.match(options.body.get('prompt'),/LOWER garment/);
       return {ok:true,json:async()=>({data:[{b64_json:Buffer.from('new-draft').toString('base64')}]})};
     }});
@@ -96,9 +96,11 @@ test('a fresh per-slot generation can be retried again in the same open page',as
   const html=fs.readFileSync(path.join(__dirname,'../public/procurement.html'),'utf8');
   const fn=html.slice(html.indexOf('    async function regeneratePaidImages('),html.indexOf('    function studioCard('));
   const payloads=[],po={status:'received',openaiPilot:{attempts:[]}},button={textContent:'Generate',isConnected:true};
+  const details={textContent:'Request details: Invalid image data'},preserved=[];
+  const messageNode={textContent:'',querySelector:()=>details,appendChild:node=>preserved.push(node)};
   const context={imageGenerationRun:null,openaiPilotConfig:{generationEpoch:0},lastReceive:{po},studio:{images:{},rejected:{},seo:{},styleSaves:{}},receiveId:'PO-0012',
     paidTypesFor:()=>['front'],productNeedsSavedWeight:()=>false,garmentCat:()=> 'lower',paidStylingOf:()=>({fit:'Auto'}),
-    confirm:()=>true,alert:message=>{throw new Error(message);},el:()=>({querySelector:()=>({textContent:''})}),
+    confirm:()=>true,alert:message=>{throw new Error(message);},el:()=>({querySelector:()=>messageNode}),
     rerenderCard:()=>{},readJson:response=>response.json(),setTimeout:callback=>callback(),
     fetch:async(url,options)=>({json:async()=>{
       if(options){const body=JSON.parse(options.body);payloads.push(body);return {success:true,pilot:{groupKey:key,status:'running',startedAt:String(payloads.length)}};}
@@ -110,6 +112,7 @@ test('a fresh per-slot generation can be retried again in the same open page',as
   await context.regeneratePaidImages(np,0,['front'],button);
   assert.equal(payloads[0].retry,false);assert.equal(payloads[1].retry,true);
   assert.ok(payloads.every(body=>body.skipSeo&&body.maxImageAttempts===2));
+  assert.ok(preserved.length>0);assert.ok(preserved.every(node=>node===details));
 });
 
 test('rejection endpoint is free, persists its audit, and blocks unauthorized, stale, posted and in-flight actions',async t=>{
