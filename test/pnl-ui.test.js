@@ -6,19 +6,24 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { buildReport } = require('../modules/pnl-report');
 const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'pnl.js'), 'utf8');
+test('P&L collapse release versions script and styles to avoid stale cached assets', () => {
+  const html=fs.readFileSync(path.join(__dirname,'..','public','pnl.html'),'utf8');
+  assert.match(html, /href="\/pnl\.css\?v=20261008-collapsed-heads"/);
+  assert.match(html, /src="\/pnl\.js\?v=20261008-collapsed-heads"/);
+});
 function sample(missing = false) {
   return buildReport({ orders: { orders: { O: { id: 'O', name: '<unsafe invoice>', channel: 'POS', financialStatus: 'paid', taxesIncluded: true, total: 2999, processedAt: '2026-10-01', lineItems: [{ id: 'L', sku: 'SKU', qty: 1, price: 2999 }] } } }, opening: missing ? {} : { lots: [{ sku: 'SKU', qty: 10, unitCost: 999, verified: true }] } }, { from: '2026-10-01', to: '2026-10-08' });
 }
 function harness(fetcher) {
-  const elements = new Map(), listeners = {}, tabs = ['statement', 'tax', 'collections', 'trends', 'policy'].map(id => ({ dataset: { tab: id }, listeners: {}, setAttribute() {}, addEventListener(name, fn) { this.listeners[name] = fn; } }));
+  const elements = new Map(), listeners = {}, groupRows = new Map(), tabs = ['statement', 'tax', 'collections', 'trends', 'policy'].map(id => ({ dataset: { tab: id }, listeners: {}, setAttribute() {}, addEventListener(name, fn) { this.listeners[name] = fn; } }));
   function element(id) {
     if (!elements.has(id)) elements.set(id, { id, value: '', innerHTML: '', textContent: '', hidden: false, disabled: false, open: false, listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; }, showModal() { this.open = true; }, close() { this.open = false; } });
     return elements.get(id);
   }
   element('channel').value = 'All';
-  const document = { getElementById: element, body: { classList: { add() {}, remove() {} } }, querySelectorAll(selector) { return selector === '[data-tab]' ? tabs : selector === '.view' ? tabs.map(t => element(t.dataset.tab)) : []; }, addEventListener(name, fn) { listeners[name] = fn; } };
+  const document = { getElementById: element, body: { classList: { add() {}, remove() {} } }, querySelectorAll(selector) { const group=selector.match(/^\[data-expense-group="(\w+)"\]$/)?.[1]; return group ? groupRows.get(group)||[] : selector === '[data-tab]' ? tabs : selector === '.view' ? tabs.map(t => element(t.dataset.tab)) : []; }, addEventListener(name, fn) { listeners[name] = fn; } };
   vm.runInNewContext(source, { document, fetch: fetcher, AbortController, URLSearchParams, Date, location: {}, window: { print() {} } });
-  return { element, tabs, clickFilter(filter) { listeners.click({ target: { closest: () => ({ dataset: { filter } }) } }); }, refresh() { element('filters').listeners.submit({ preventDefault() {} }); } };
+  return { element, tabs, groupRows, clickHead(head) { listeners.click({ target: { closest: selector => selector==='[data-group-toggle]' ? head : null } }); }, clickFilter(filter) { listeners.click({ target: { closest: selector => selector==='[data-filter]' ? { dataset: { filter } } : null } }); }, refresh() { element('filters').listeners.submit({ preventDefault() {} }); } };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 test('P&L UI renders typed totals, escaped references, tabs and SKU drill-down', async () => {
@@ -53,4 +58,24 @@ test('shared Till date control uses accounting start rather than silently defaul
   const ui = harness(async url => { requested = url; return { ok: true, status: 200, json: async () => sample() }; }); await settle();
   ui.element('from').disabled = true; ui.element('from').value = ''; ui.refresh(); await settle();
   assert.equal(new URL(requested, 'http://localhost').searchParams.get('from'), '2026-08-22');
+});
+
+test('major expense heads start collapsed and toggle only their own category rows', async () => {
+  const result=sample();
+  result.categories=[{id:'fixed/Rent',group:'fixed',category:'Rent',count:1,amount:100},{id:'running/Utilities',group:'running',category:'Utilities',count:1,amount:50}];
+  const ui=harness(async()=>({ok:true,status:200,json:async()=>result})); await settle();
+  const html=ui.element('statement').innerHTML;
+  assert.equal((html.match(/data-group-toggle=/g)||[]).length,4);
+  assert.equal((html.match(/aria-expanded="false"/g)||[]).length,4);
+  assert.match(html, /aria-controls="expense-category-fixed-0"/);
+  assert.match(html, /id="expense-category-fixed-0" data-expense-group="fixed" hidden/);
+  assert.match(html, /id="expense-category-running-0" data-expense-group="running" hidden/);
+  assert.match(html, /data-group-toggle="marketing" aria-expanded="false" disabled/);
+  const fixed=[{hidden:true}],running=[{hidden:true}];
+  ui.groupRows.set('fixed',fixed);ui.groupRows.set('running',running);
+  const head={dataset:{groupToggle:'fixed'},expanded:'false',getAttribute(){return this.expanded;},setAttribute(name,value){assert.equal(name,'aria-expanded');this.expanded=value;}};
+  ui.clickHead(head);assert.equal(head.expanded,'true');assert.equal(fixed[0].hidden,false);assert.equal(running[0].hidden,true);assert.equal(ui.element('details').open,false);
+  ui.clickHead(head);assert.equal(head.expanded,'false');assert.equal(fixed[0].hidden,true);
+  ui.clickFilter('category:fixed/Rent');assert.equal(ui.element('details').open,true);
+  ui.refresh();await settle();assert.equal((ui.element('statement').innerHTML.match(/aria-expanded="false"/g)||[]).length,4);
 });
