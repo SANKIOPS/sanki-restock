@@ -59,6 +59,15 @@ test('accounting can use P&L and expense APIs but cannot adjust stock', () => {
   assert.equal(apiAllowedForUser(accounting, '/api/inventory/adjust'), false);
 });
 
+test('detailed P&L and exports protect payroll from unrelated reporting roles', () => {
+  for (const endpoint of ['/api/pl/report', '/api/pl/report/export']) {
+    for (const role of ['admin', 'owner', 'accounting']) assert.equal(apiAllowedForUser(user(role), endpoint, 'GET'), true, role);
+    for (const role of ['revenue', 'sales', 'claimant', 'personal_claimant', 'samast_accounting', 'warehouse']) assert.equal(apiAllowedForUser(user(role), endpoint, 'GET'), false, role);
+  }
+  assert.equal(userCanAccessPath(user('accounting'), '/pnl.html'), true);
+  assert.equal(userCanAccessPath(user('revenue'), '/pnl.html'), false);
+});
+
 test('accounting can reconcile combined vendor invoices without editing purchase costs', () => {
   const accounting = user('accounting');
   assert.equal(apiAllowedForUser(accounting, '/api/procurement/history'), true);
