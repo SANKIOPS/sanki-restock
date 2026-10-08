@@ -2637,6 +2637,7 @@ app.use(require('./modules/expenses').router);
 app.use(require('./modules/telegram').router);
 app.use(require('./modules/seo-control').router);
 app.use(require('./modules/salary').router);
+app.use(require('./modules/incentives').router);
 app.use(require('./modules/pl').router);
 app.use(require('./modules/inventory-categorization').router);
 app.use(require('./modules/module-registry').router);

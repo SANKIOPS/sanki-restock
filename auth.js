@@ -98,6 +98,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/model-calendar', roles: ['admin', 'accounting', 'owner', 'model_calendar'] },
   { prefix: '/api/seo-control',     roles: ['owner'] },
   { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
+  { prefix: '/api/incentives',             roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
   { prefix: '/api/expenses',              roles: ['admin', 'accounting', 'samast_accounting', 'claimant', 'personal_claimant', 'owner'] },
   { prefix: '/api/telegram/',             roles: ['admin', 'accounting', 'claimant', 'owner'] },
@@ -141,6 +142,7 @@ function apiRuleFor(p) {
 
 function apiAllowedForUser(user, p, method='GET') {
   if(isPrashantUser(user)&&p.startsWith('/api/salary/'))return true;
+  if(isPrashantUser(user)&&p.startsWith('/api/incentives'))return true;
   if(isPrashantUser(user)&&((method==='POST'&&p==='/api/expenses/upload')||(method==='GET'&&p==='/api/expenses/config')))return true;
   const userRoles = rolesOf(user);
   // Rack assignment, catalogue refresh and RIS synchronization are Owner-only.
@@ -248,6 +250,7 @@ function gate(req, res, next) {
   if (isAssetPath(p)) return next();                 // shared JS/CSS/images
   if (p === '/') return res.redirect(302, landingFor(user.role));
   if(isPrashantUser(user)&&p==='/salary.html')return next();
+  if(isPrashantUser(user)&&p==='/incentives.html')return next();
   if (userCanAccessPath(user, p)) return next();     // union across all roles
   // Any other page/route this role isn't allowed → send to their home.
   return res.redirect(302, landingFor(user.role));
