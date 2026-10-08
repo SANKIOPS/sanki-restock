@@ -33,3 +33,4 @@ data/
 # Local development/assistant configuration.
 .claude/
 .railway/
+.test-tmp/

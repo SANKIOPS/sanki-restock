@@ -29,7 +29,7 @@ function matchRows(store,statement){
     used.add(match.statement.id+'/'+match.row.id);
     const replacement=statement.kind!=='unbilled'&&match.statement.kind==='unbilled';
     row[replacement?'replaces':'duplicateOf']={statementId:match.statement.id,rowId:match.row.id};
-    if(replacement)for(const key of ['merchant','classification','type','category','nature','channel'])if(!row[key]&&match.row[key])row[key]=match.row[key];
+    if(replacement)for(const key of ['merchant','classification','type','category','nature','channel','expenseRefundReceiptId','refundLinkDecision','refundLinkReason'])if(!row[key]&&match.row[key])row[key]=match.row[key];
   }
   return statement;
 }
@@ -40,7 +40,7 @@ function syncPostings(store,expenses){
     const card=store.cards[st.cardId];if(!card)continue;
     for(const row of (st.rows||[]).filter(r=>activeRow(r)&&expenseClasses.includes(r.classification))){
       const merchant=merchantName(row.merchant||row.narration,card.issuingBank||card.name);
-      expenses.reconciliationExpenses.push({id:'CCE-'+st.id+'-'+row.id,nature:row.nature,date:row.date,amount:row.classification==='refund'?-number(row.amount):number(row.amount),account:card.name+' '+card.last4,category:row.category,type:row.type||(/marketing|advertis/i.test(row.category||'')?'marketing':/fee|charge|subscription/i.test(row.category||'')?'running':'variable'),vendor:merchant,particulars:row.narration,channel:row.channel||'',creditCardId:card.id,ownerOnly:!!card.ownerOnly,creditCardStatementId:st.id,creditCardRowId:row.id,classification:row.classification,unbilled:st.kind==='unbilled',source:'credit_card_statement',createdBy:st.finalizedBy,createdAt:st.finalizedAt});
+      expenses.reconciliationExpenses.push({id:'CCE-'+st.id+'-'+row.id,nature:row.nature,date:row.date,amount:row.classification==='refund'?-number(row.amount):number(row.amount),account:card.name+' '+card.last4,category:row.category,type:row.type||(/marketing|advertis/i.test(row.category||'')?'marketing':/fee|charge|subscription/i.test(row.category||'')?'running':'variable'),vendor:merchant,particulars:row.narration,channel:row.channel||'',expenseRefundReceiptId:row.expenseRefundReceiptId||'',creditCardId:card.id,ownerOnly:!!card.ownerOnly,creditCardStatementId:st.id,creditCardRowId:row.id,classification:row.classification,unbilled:st.kind==='unbilled',source:'credit_card_statement',createdBy:st.finalizedBy,createdAt:st.finalizedAt});
       const master=row.nature==='SANKI'?expenses.vendors:(expenses.vendorsByNature[row.nature]=expenses.vendorsByNature[row.nature]||{});
       const key=Object.keys(master).find(k=>String(master[k].name||'').toLowerCase()===merchant.toLowerCase())||merchant.toLowerCase();
       const saved=master[key]||{name:merchant,notes:''};saved.tags=Array.from(new Set([...(saved.tags||[]),'Credit-card merchant']));master[key]=saved;
