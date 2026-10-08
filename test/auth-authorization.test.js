@@ -215,6 +215,8 @@ test('Prashant can administer salary without gaining access to unrelated modules
   assert.equal(apiAllowedForUser(p,'/api/salary/row/2026-09','POST'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/payments/SALB-001-001','PATCH'),true);
   assert.equal(apiAllowedForUser(p,'/api/salary/import/2026-09/preview','POST'),true);
+  assert.equal(apiAllowedForUser(p,'/api/incentives?from=2026-10-01','GET'),true);
+  assert.equal(apiAllowedForUser(p,'/api/incentives/approve-day','POST'),true);
   assert.equal(apiAllowedForUser(p,'/api/admin/users','GET'),false);
   assert.equal(apiAllowedForUser(p,'/api/owner/summary','GET'),false);
 });
