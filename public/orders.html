@@ -227,6 +227,7 @@
             field('Packing status','<select id="f_pack">'+selOpts(['pending','packed','booked','dispatched','delivered','rto','cancelled'], d.packingStatus)+'</select>')+
             field('Order confirmation','<select id="f_conf">'+selOpts(['pending','confirmed','unreachable','cancelled'], d.orderConfirmation)+'</select>')+
           '</div>'+
+          field('Actual delivery date','<input type="date" id="f_delivered" value="'+esc(d.deliveredAt ? (d.deliveredAt.length === 10 ? d.deliveredAt : new Date(Date.parse(d.deliveredAt)+19800000).toISOString().slice(0,10)) : '')+'"><small>Required for delivered orders; use the delivery date, not today’s edit date.</small>')+
           '<div class="row2">'+
             field('Payment mode','<select id="f_pay">'+['','Prepaid','COD'].map(function(v){return opt(v,d.paymentMode);}).join('')+'</select>')+
             field('Due amount (COD)','<input id="f_due" type="number" value="'+(d.dueAmount!=null?d.dueAmount:'')+'" placeholder="0" />')+
@@ -244,6 +245,7 @@
           courier: document.getElementById('f_courier').value,
           trackingUrl: document.getElementById('f_track').value,
           packingStatus: document.getElementById('f_pack').value,
+          deliveredAt: document.getElementById('f_delivered').value || undefined,
           orderConfirmation: document.getElementById('f_conf').value,
           paymentMode: document.getElementById('f_pay').value,
           dueAmount: document.getElementById('f_due').value,

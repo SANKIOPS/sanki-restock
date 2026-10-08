@@ -32,6 +32,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const { shopifyClient } = require('./shopify-client');
+const { validDate, day: accountingDay } = require('./pnl-report');
 
 const router = express.Router();
 
@@ -45,7 +46,7 @@ const ACCOUNTING_BOUNDARY_PATH = path.join(path.dirname(ORDERS_PATH), 'accountin
 // Increment this whenever the accounting ledger needs a fresh historical order
 // scan. Incremental Shopify syncs only see recently updated orders, so an order
 // omitted by an older importer would otherwise remain missing forever.
-const ACCOUNTING_ORDER_BACKFILL_VERSION = 1;
+const ACCOUNTING_ORDER_BACKFILL_VERSION = 2;
 function accountingStartAt() {
   try { return String(JSON.parse(fs.readFileSync(ACCOUNTING_BOUNDARY_PATH, 'utf8')).startAt || ''); }
   catch { return ''; }
@@ -57,7 +58,8 @@ const ORDER_FIELDS = [
   'source_name', 'financial_status', 'fulfillment_status', 'currency',
   'subtotal_price', 'total_discounts', 'total_tax', 'total_price', 'total_shipping_price_set',
   'discount_codes', 'payment_gateway_names', 'customer', 'email', 'contact_email', 'phone',
-  'shipping_address', 'billing_address', 'note', 'line_items', 'refunds'
+  'shipping_address', 'billing_address', 'note', 'line_items', 'refunds',
+  'taxes_included', 'shipping_lines', 'fulfillments'
 ].join(',');
 
 // ── JSON store (atomic write) ────────────────────────────────────
@@ -155,17 +157,35 @@ function addressObj(a) {
     country: a.country || ''
   };
 }
-function normalizeOrder(o) {
+function normalizeOrder(o, previous = {}) {
   const cust = o.customer || {};
   const ship = o.shipping_address || {};
   const custName = [cust.first_name, cust.last_name].filter(Boolean).join(' ').trim()
     || ship.name || '';
   const email = cust.email || o.email || o.contact_email || '';
   const lineItems = (o.line_items || []).map(li => ({
+    id: String(li.id || ''), taxable: li.taxable !== false,
     sku: li.sku || '', title: li.title || '', variantTitle: li.variant_title || '',
-    qty: li.quantity || 0, price: num(li.price)
+    qty: li.quantity || 0, price: num(li.price),
+    discount: (li.discount_allocations || []).reduce((sum, d) => sum + num(d.amount), 0),
+    taxLines: (li.tax_lines || []).map(t => ({ title: t.title, rate: num(t.rate), price: num(t.price) }))
   }));
   const refunds = refundComponents(o);
+  const fulfillments = o.fulfillments || [];
+  const delivered = fulfillments.filter(f => f.status !== 'cancelled' && f.shipment_status === 'delivered');
+  const deliveredQty = new Map();
+  delivered.forEach(f => (f.line_items || []).forEach(l => deliveredQty.set(String(l.id), (deliveredQty.get(String(l.id)) || 0) + num(l.quantity))));
+  const deliveryComplete = lineItems.length > 0 && lineItems.every(l => (deliveredQty.get(l.id) || 0) >= l.qty);
+  // updated_at can change for unrelated edits, so it is not evidence of
+  // actual delivery. Otherwise the confirmed dispatch date is required.
+  const deliveryDates = delivered.map(f => f.delivered_at || f.deliveredAt).filter(Boolean);
+  const completedAt = previous.completedAt || (deliveryComplete && deliveryDates.length === delivered.length ? deliveryDates.sort().at(-1) : null);
+  const creditNotes = (o.refunds || []).map(r => ({
+    id: String(r.id), date: r.created_at,
+    amount: (r.transactions || []).filter(t => t.kind === 'refund' && (!t.status || t.status === 'success')).reduce((sum, t) => sum + num(t.amount), 0),
+    lineItems: (r.refund_line_items || []).map(l => ({ lineItemId: String(l.line_item_id || l.line_item?.id || ''), sku: l.line_item?.sku || '', qty: num(l.quantity), subtotal: num(l.subtotal), tax: l.total_tax != null ? num(l.total_tax) : null, restockType: l.restock_type || 'no_restock' })),
+    adjustmentAmount: (r.order_adjustments || []).reduce((sum, a) => sum + num(a.amount) + num(a.tax_amount), 0)
+  }));
   return {
     id: String(o.id),
     name: o.name || ('#' + (o.order_number || '')),
@@ -173,6 +193,9 @@ function normalizeOrder(o) {
     createdAt: o.created_at || null,
     updatedAt: o.updated_at || null,
     processedAt: o.processed_at || null,
+    completedAt, pnlSchemaVersion: 1,
+    taxesIncluded: typeof o.taxes_included === 'boolean' ? o.taxes_included : null,
+    shippingTax: Array.isArray(o.shipping_lines) ? o.shipping_lines.reduce((sum, l) => sum + (l.tax_lines || []).reduce((n, t) => n + num(t.price), 0), 0) : null,
     cancelledAt: o.cancelled_at || null,
     channel: channelOf(o.source_name),
     sourceName: o.source_name || '',
@@ -190,11 +213,13 @@ function normalizeOrder(o) {
     shipping: shippingTotal(o),
     total: num(o.total_price),
     refundAmount: refundTotal(o),
+    refunds: creditNotes,
     refundTransactions: refunds.transactions,
     storeCreditIssued: refunds.storeCreditIssued,
     moneyRefunded: refunds.moneyRefunded,
     financialStatus: o.financial_status || '',
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
+    deliveryComplete,
     paymentGateways: o.payment_gateway_names || [],
     paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
     paymentTransactionSchemaVersion: 2,
@@ -244,7 +269,7 @@ async function runSync(opts = {}) {
       order._paymentTransactions = await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
     }));
     let imported = 0;
-    raw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o); imported++; });
+    raw.forEach(o => { store.orders[String(o.id)] = normalizeOrder(o, store.orders[String(o.id)]); imported++; });
     const boundary=accountingStartAt(),missingPaymentDetails=Object.values(store.orders).filter(order=>String(order.createdAt||'')>=boundary&&order.paymentTransactionSchemaVersion!==2);
     await Promise.all(missingPaymentDetails.map(async order => {
       const transactions=await shopifyFetchAll(`https://${SHOPIFY_STORE}/admin/api/2024-01/orders/${order.id}/transactions.json?limit=250`);
@@ -277,6 +302,7 @@ function mergedList(store) {
     return Object.assign({}, o, {
       dispatch: {
         courier: d.courier || '',
+        deliveredAt: d.deliveredAt || '',
         trackingUrl: d.trackingUrl || '',
         packingStatus: d.packingStatus || 'pending',
         orderConfirmation: d.orderConfirmation || 'pending',
@@ -366,10 +392,14 @@ router.post('/api/orders-ledger/:id/dispatch', (req, res) => {
   if (!store.orders[id]) return res.status(404).json({ success: false, error: 'Order not found' });
   const b = req.body || {};
   const cur = store.dispatch[id] || {};
+  const deliveredAt = b.deliveredAt || cur.deliveredAt || null;
+  if (b.deliveredAt && (!validDate(String(b.deliveredAt)) || b.deliveredAt > accountingDay(new Date().toISOString()) || b.deliveredAt < accountingDay(store.orders[id].createdAt))) return res.status(400).json({ success: false, error: 'Use a valid actual delivery date between the order date and today.' });
+  if (b.packingStatus === 'delivered' && !deliveredAt && !store.orders[id].completedAt) return res.status(400).json({ success: false, error: 'Enter the actual delivery date. P&L must not use the date this form was edited.' });
   const next = {
     courier:           b.courier != null ? String(b.courier).trim() : (cur.courier || ''),
     trackingUrl:       b.trackingUrl != null ? String(b.trackingUrl).trim() : (cur.trackingUrl || ''),
     packingStatus:     PACKING_STATES.includes(b.packingStatus) ? b.packingStatus : (cur.packingStatus || 'pending'),
+    deliveredAt,
     orderConfirmation: CONFIRM_STATES.includes(b.orderConfirmation) ? b.orderConfirmation : (cur.orderConfirmation || 'pending'),
     paymentMode:       b.paymentMode != null ? String(b.paymentMode).trim() : (cur.paymentMode || ''),
     paidAmount:        b.paidAmount != null && b.paidAmount !== '' ? num(b.paidAmount) : (cur.paidAmount != null ? cur.paidAmount : null),
@@ -394,4 +424,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync };
+module.exports = { router, startAutoSync, runSync, normalizeOrder };
