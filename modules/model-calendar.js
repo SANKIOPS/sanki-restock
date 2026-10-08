@@ -16,7 +16,7 @@ function businessDate(now=new Date()){
 function calendar(s){return s.modelCalendar||(s.modelCalendar={revision:0,contracts:[],shoots:[]});}
 function expenseFor(s,c){return c.expenseId&&s.expenses&&s.expenses[c.expenseId];}
 function contractShoots(mc,c){return mc.shoots.filter(x=>x.contractId===c.id);}
-function contractIsCancelled(mc,c){const shoots=contractShoots(mc,c);return shoots.length>0&&shoots.every(x=>x.status==='cancelled');}
+function contractIsCancelled(mc,c){return contractShoots(mc,c).every(x=>x.status==='cancelled');}
 function requireActiveContract(mc,c){if(contractIsCancelled(mc,c))fail('This model package is cancelled. Restore or schedule a shoot before changing its package or expense.');}
 function financial(s,c){
  const e=expenseFor(s,c),usable=e&&!e.accountingExcluded&&!['rejected','deleted'].includes(e.status)&&['SANKI','A3'].includes(e.nature||'SANKI');
