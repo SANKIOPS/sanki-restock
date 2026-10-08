@@ -24,7 +24,7 @@ function formComponent(mode = 'voucher', extra = {}) {
   const fields = Object.fromEntries(Object.entries({ '.rf_mode': mode, '.rf_receiver': 'company', '.rf_component_amount': '1512',
     '.rf_account': 'Axis Bank 3448', '.rf_issuer': 'Test Merchant', '.rf_reference': '00001234',
     '.rf_expiry': '2026-12-31', '.rf_existing': 'OLD-BANK-RECEIPT', ...extra }).map(([key, value]) => [key, { value }]));
-  for (const key of ['.rf_account_field', '.rf_issuer_field', '.rf_expiry_field', '.rf_existing_field']) fields[key] = {};
+  for (const key of ['.rf_account_field', '.rf_issuer_field', '.rf_expiry_field', '.rf_existing_field', '.rf_credit_hint']) fields[key] = {};
   return { fields, querySelector: selector => fields[selector] };
 }
 function uiHarness(component = formComponent()) {
@@ -73,10 +73,12 @@ test('mode switching clears bank options for a voucher and restores them for mon
   assert.equal(component.fields['.rf_account'].innerHTML, '');
   assert.equal(component.fields['.rf_account_field'].hidden, true);
   assert.equal(component.fields['.rf_issuer_field'].hidden, false);
+  assert.equal(component.fields['.rf_credit_hint'].hidden, false);
   component.fields['.rf_mode'].value = 'bank'; ui.accounts(component);
   assert.match(component.fields['.rf_account'].innerHTML, /Axis Bank 3448/);
   assert.equal(component.fields['.rf_account_field'].hidden, false);
   assert.equal(component.fields['.rf_issuer_field'].hidden, true);
+  assert.equal(component.fields['.rf_credit_hint'].hidden, true);
 });
 
 test('voucher, store and vendor credit preview cannot display a stale bank destination', () => {
@@ -108,4 +110,21 @@ test('saved non-cash refund row prioritizes its merchant even with obsolete bank
     sources: [], components: [{ mode: 'voucher', amount: 1512, account: 'Axis Bank 3448', issuer: 'Merchant', reference: '00001234' }],
     reasonType: 'return', reason: 'Returned', displayStatus: 'received', status: 'received', proofs: [] });
   assert.match(html, /Credit with Merchant/); assert.match(html, /00001234/); assert.doesNotMatch(html, /Axis Bank 3448/);
+});
+
+test('voucher option explicitly names coupons and gift cards without changing the mode identity', () => {
+  assert.match(source, /voucher: 'Voucher \/ Coupon \/ Gift card'/);
+  const component = uiHarness().componentFromForm(formComponent('voucher'));
+  assert.equal(component.mode, 'voucher'); assert.equal(component.account, '');
+  const preview = uiHarness().previewComponent({ ...component, issuer: 'Merchant' });
+  assert.match(preview, /Voucher \/ Coupon \/ Gift card:.*Credit with Merchant/);
+  assert.match(preview, /no bank\/cash movement/);
+});
+
+test('coupon form explains code, accepting merchant, validity and non-cash treatment', () => {
+  assert.match(source, /<label>Merchant \/ app accepting this credit<\/label>/);
+  assert.match(source, /<label>Transaction ID \/ voucher, coupon or gift-card code<\/label>/);
+  assert.match(source, /<label>Valid until — optional<\/label>/);
+  assert.match(source, /enter its code above.*non-cash credit with the merchant.*not a deposit into a bank or cash account/);
+  assert.match(source, /\.rf_credit_hint'\)\.hidden = !credit/);
 });
