@@ -59,7 +59,7 @@ const MODULES = [
   { key: 'size-tracker', title: 'Size Tracker',           desc: 'Match vendor (China) size charts to SANKI target sizes before every PO', icon: '📏', href: '/size-tracker.html',      section: 'Purchases', status: 'live',   roles: ['admin', 'procurement'] },
 
   { key: 'owner',        title: 'Money Picture',         desc: 'Your private owner view — OD, investment, balances and business result', icon: '👑', href: '/owner.html', section: 'Accounts', status: 'hidden', roles: ['owner'], ownerOnly: true },
-  { key: 'pl',           title: 'Accounting',            desc: 'Live P&L — Sales & COGS split POS / Website / Combined', icon: '💰', href: '/accounting.html',            section: 'Accounts',  status: 'hidden', roles: ['admin', 'accounting', 'revenue', 'owner'] },
+  { key: 'pl', title: 'P&L', desc: 'Net sales, SKU costs and paid business expenses', icon: '💰', href: '/pnl.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
   { key: 'balance-sheet',title: 'Balance Sheet',          desc: 'Assets, liabilities and recorded net position as of a selected date', icon: '⚖️', href: '/balance-sheet.html', section: 'Accounts', status: 'hidden', roles: ['admin','owner'] },
   { key: 'rentals', title: 'Rental income', desc: 'Tenant rents, receipts and security deposits', icon: '🏠', href: '/rentals.html', section: 'Accounts', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'expenses',     title: 'Ledgers',               desc: 'Expenses, payments, account movements and reconciliations', icon: '🧾', href: '/expenses.html',    section: 'Accounts',  status: 'live',   roles: ['admin', 'accounting', 'samast_accounting', 'personal_claimant', 'claimant', 'owner'] },

@@ -25,6 +25,9 @@ let salarySummary;
 try { salarySummary = require('./salary').summaryForPL; } catch { salarySummary = null; }
 
 const router = express.Router();
+// New management P&L is read-only and deliberately separate from legacy
+// percentage-based P&L/unit-economics endpoints.
+router.use(require('./pnl-routes').createRouter());
 
 const DATA_DIR = process.env.DATA_PATH
   ? path.dirname(process.env.DATA_PATH)
