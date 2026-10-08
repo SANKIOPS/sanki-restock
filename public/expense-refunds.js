@@ -4,6 +4,29 @@
   var data, draft, preview, filter = { nature: 'SANKI', from: '', to: '', status: '', search: '' }, busy = false, revision = 0, labelled = 0, frozen = [];
   var labels = { cash: 'Cash', upi: 'UPI', bank: 'Bank transfer', card: 'Credit-card reversal', voucher: 'Voucher', store_credit: 'Store credit', vendor_credit: 'Vendor credit', credit_note: 'Credit note — unpaid bill' };
   var endpoint = '/api/expenses/expense-refunds';
+  function moneyMode(mode) { return ['cash', 'upi', 'bank', 'card'].includes(mode); }
+  function creditMode(mode) { return ['voucher', 'store_credit', 'vendor_credit'].includes(mode); }
+  function componentFromForm(component) {
+    function value(selector) { return component.querySelector(selector).value; }
+    var mode = value('.rf_mode'), receiver = value('.rf_receiver'), money = moneyMode(mode), credit = creditMode(mode);
+    return { mode: mode, amount: Number(value('.rf_component_amount')), receiver: receiver,
+      account: money ? value('.rf_account') : '', issuer: credit ? value('.rf_issuer') : '',
+      reference: value('.rf_reference'), expiryDate: credit ? value('.rf_expiry') : '',
+      externalMovementId: money && receiver !== 'payer' ? value('.rf_existing') : '' };
+  }
+  function componentDestination(component) {
+    if (creditMode(component.mode)) return 'Credit with ' + (component.issuer || 'the vendor');
+    return component.mode === 'credit_note' ? 'Unpaid bill' : component.account;
+  }
+  function previewComponent(component) {
+    var effect = creditMode(component.mode) ? ' · non-cash credit for future purchases; no bank/cash movement' + (component.receiver === 'payer' ? ' · held by original payer; reimbursement/recovery adjusts' : '') :
+      component.mode === 'credit_note' ? ' · payable reduced; no receipt' :
+      component.externalMovementId ? ' · existing receipt linked; no new account movement' :
+      component.receiver === 'payer' ? ' · original payer; reimbursement/recovery adjusts, not company cash' :
+      component.mode === 'card' ? ' · card outstanding reduced' : ' · company account credited';
+    return '<p>' + esc(labels[component.mode]) + ': ' + amount(component.amount) + ' → ' + esc(componentDestination(component)) +
+      (component.reference ? ' · Reference: ' + esc(component.reference) : '') + effect + '</p>';
+  }
   function node(id) { return document.getElementById(id); }
   function options(values, selected) { return values.map(function (v) { var key = typeof v === 'string' ? v : v.value, label = typeof v === 'string' ? v : v.label; return '<option value="' + esc(key) + '"' + (key === selected ? ' selected' : '') + '>' + esc(label) + '</option>'; }).join(''); }
   function post(path, body) { return api(endpoint + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
@@ -49,7 +72,7 @@
   }
   function action(label, kind, id, extras) { return '<button class="btn mini ghost" data-rf-action="' + kind + '" data-id="' + esc(id) + '" ' + (extras || '') + '>' + label + '</button>'; }
   function recordRow(r) {
-    var components = r.components.map(function (c) { return '<div>' + esc(labels[c.mode]) + ' · ' + amount(c.amount) + '<br><span class="muted">' + esc(c.account || c.issuer || 'Bill adjustment') + (c.receiver === 'payer' ? ' · original payer' : '') + (c.reference ? ' · ' + esc(c.reference) : '') + '</span></div>'; }).join('') || 'Awaiting receipt — no ledger posting';
+    var components = r.components.map(function (c) { return '<div>' + esc(labels[c.mode]) + ' · ' + amount(c.amount) + '<br><span class="muted">' + esc(componentDestination(c)) + (c.receiver === 'payer' ? ' · original payer' : '') + (c.reference ? ' · ' + esc(c.reference) : '') + '</span></div>'; }).join('') || 'Awaiting receipt — no ledger posting';
     var history = '<p>' + esc(r.reasonType.replaceAll('_', ' ')) + ' · ' + esc(r.reason) + '</p><p class="hint">Logged by ' + esc(r.createdBy) + ' · ' + esc(r.createdAt) + (r.parentId ? ' · pending return ' + esc(r.parentId) : '') + '</p>';
     history += proofGallery(r.proofs || [], 'Refund');
     r.components.forEach(function (c) {
@@ -122,14 +145,13 @@
     labelFields(node('rf_allocations'));
   }
   function accounts(component) {
-    var mode = component.querySelector('.rf_mode').value, receiver = component.querySelector('.rf_receiver').value;
+    var mode = component.querySelector('.rf_mode').value, receiver = component.querySelector('.rf_receiver').value, credit = creditMode(mode), money = moneyMode(mode);
     var originals = draft.sources.flatMap(function (a) { var s = data.sources.find(function (x) { return x.key === a.key; }); return s ? s.payments : []; });
-    var values = receiver === 'payer' ? Array.from(new Set(originals.filter(function (p) { return p.personal; }).map(function (p) { return p.account; }))) : mode === 'card' ? (cfg.creditCards || []).map(function (c) { return c.name; }) : (cfg.accountsByNature[filter.nature] || []);
+    var values = !money ? [] : receiver === 'payer' ? Array.from(new Set(originals.filter(function (p) { return p.personal; }).map(function (p) { return p.account; }))) : mode === 'card' ? (cfg.creditCards || []).map(function (c) { return c.name; }) : (cfg.accountsByNature[filter.nature] || []);
     if (mode === 'cash') values = values.filter(function (a) { return /cash/i.test(a); });
     if (['bank', 'upi'].includes(mode)) values = values.filter(function (a) { return !/cash/i.test(a); });
     var selected = component.querySelector('.rf_account').value;
     component.querySelector('.rf_account').innerHTML = options(values, selected);
-    var credit = ['voucher', 'store_credit', 'vendor_credit'].includes(mode), money = ['cash', 'upi', 'bank', 'card'].includes(mode);
     component.querySelector('.rf_account_field').hidden = !money;
     component.querySelector('.rf_issuer_field').hidden = !credit; component.querySelector('.rf_expiry_field').hidden = !credit;
     component.querySelector('.rf_existing_field').hidden = !money || receiver === 'payer';
@@ -149,7 +171,7 @@
   function body() {
     document.querySelectorAll('.rf_allocation_amount').forEach(function (n) { draft.sources[Number(n.dataset.index)].amount = Number(n.value); });
     return Object.assign({}, draft, { status: node('rf_form_status').value, date: node('rf_date').value, reasonType: node('rf_reason_type').value, reason: node('rf_reason').value.trim(),
-      components: Array.from(document.querySelectorAll('#rf_components .rf-component')).map(function (c) { function value(selector) { return c.querySelector(selector).value; } return { mode: value('.rf_mode'), amount: Number(value('.rf_component_amount')), receiver: value('.rf_receiver'), account: value('.rf_account'), issuer: value('.rf_issuer'), reference: value('.rf_reference'), expiryDate: value('.rf_expiry'), externalMovementId: value('.rf_existing') }; }) });
+      components: Array.from(document.querySelectorAll('#rf_components .rf-component')).map(componentFromForm) });
   }
   async function doPreview() {
     if (busy) return; lockForm(true); message('Checking source allocations and accounting effects…', true);
@@ -160,8 +182,8 @@
       if (rev !== revision) throw new Error('The form changed during review. Review it again before saving.');
       if (!result.success) throw new Error(result.error);
       preview = payload;
-      var p = result.preview, pending = payload.status === 'pending';
-      node('rf_preview').innerHTML = '<div class="rf-preview"><h3 style="margin-top:0">Review before confirming</h3><p><b>' + amount(p.amount || p.already && p.already.amount) + '</b> · ' + esc(payload.date) + ' · ' + esc(payload.reason) + '</p>' + (pending ? '<p>Return pending: no cash, bank, vendor balance or P&amp;L posting yet.</p>' : '<p>Bill / expense reduction: ' + amount(result.impact.billCredit) + '</p>' + payload.components.map(function (c) { return '<p>' + esc(labels[c.mode]) + ': ' + amount(c.amount) + ' → ' + esc(c.account || c.issuer || 'Unpaid bill') + (c.externalMovementId ? ' · existing receipt linked; no new account movement' : c.receiver === 'payer' ? ' · original payer; reimbursement/recovery adjusts, not company cash' : ['voucher', 'store_credit', 'vendor_credit'].includes(c.mode) ? ' · non-cash credit wallet' : c.mode === 'credit_note' ? ' · payable reduced; no receipt' : c.mode === 'card' ? ' · card outstanding reduced' : ' · company account credited') + '</p>'; }).join('')) + '<p class="hint">The original bill and payment history are preserved. Server checks run again when you confirm.</p></div>';
+      var p = result.preview, pending = payload.status === 'pending', reviewed = p.already || p;
+      node('rf_preview').innerHTML = '<div class="rf-preview"><h3 style="margin-top:0">Review before confirming</h3><p><b>' + amount(reviewed.amount) + '</b> · ' + esc(payload.date) + ' · ' + esc(payload.reason) + '</p>' + (pending ? '<p>Return pending: no cash, bank, vendor balance or P&amp;L posting yet.</p>' : '<p>Bill / expense reduction: ' + amount(result.impact.billCredit) + '</p>' + reviewed.components.map(previewComponent).join('')) + '<p class="hint">The original bill and payment history are preserved. Server checks run again when you confirm.</p></div>';
       node('rf_save').disabled = false; message('Review is valid. Confirm below to record it.', true);
     } catch (error) { message(error.message, false); }
     finally { lockForm(false); node('rf_save').disabled = !preview; }
