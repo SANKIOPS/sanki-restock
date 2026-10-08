@@ -8,7 +8,7 @@
  const kindLabel=s=>({shoot:'Per shoot',day:'Per day shoot',monthly:'Monthly package'}[s]);
  const active=c=>state.shoots.filter(s=>s.contractId===c.id&&s.status!=='cancelled');
  const packageShoots=c=>state.shoots.filter(s=>s.contractId===c.id);
- const cancelledPackage=c=>packageShoots(c).length>0&&active(c).length===0;
+  const cancelledPackage=c=>active(c).length===0;
  function message(s,error=false){$('message').textContent=s;$('message').className=error?'error':'';}
  async function api(url,body,method='POST'){const r=await fetch(url,body===undefined?undefined:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let d;try{d=await r.json()}catch{throw Error('The app could not complete this request. Please reload.')}if(!r.ok||!d.success)throw Error(d.error||'Request failed');return d;}
  async function load(quiet=false){if(busy)return;const seq=++requestSeq;try{const d=await api('/api/model-calendar');if(seq!==requestSeq||busy)return;state=d;loaded=true;render();if(!quiet)message('Payment status is read from linked SANKI expenses.')}catch(e){message(e.message,true)}}
