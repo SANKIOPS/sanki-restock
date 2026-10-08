@@ -5,7 +5,7 @@ process.env.DATA_PATH=path.join(dir,'data.json');
 fs.writeFileSync(path.join(dir,'expenses.json'),JSON.stringify({expenses:{}}));
 // Tests must not send notifications or read the production store.
 require.cache[require.resolve('../modules/telegram')]={id:require.resolve('../modules/telegram'),filename:require.resolve('../modules/telegram'),loaded:true,exports:{}};
-const express=require('express'),{router}=require('../modules/expenses'),{apiAllowedForUser}=require('../auth'),{financial}=require('../modules/model-calendar');
+const express=require('express'),{router}=require('../modules/expenses'),{apiAllowedForUser}=require('../auth'),{financial,businessDate}=require('../modules/model-calendar');
 let server,base;
 test.before(async()=>{const app=express();app.use(express.json());app.use((req,res,next)=>{const role=req.headers['x-test-role']||'owner';req.user={username:'model-calendar-test',role,roles:[role]};next()});app.use(router);server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s))});base='http://127.0.0.1:'+server.address().port;});
 test.after(async()=>{if(server){server.closeAllConnections();await new Promise(r=>server.close(r))}fs.rmSync(dir,{recursive:true,force:true})});
@@ -18,11 +18,11 @@ test('booking → linked expense → proof-gated partial and full payment → co
  const noProof=expenseBody(c);delete noProof.billPhoto;assert.equal((await call('POST','/api/expenses',noProof)).status,400);
  const submitted=await call('POST','/api/expenses',expenseBody(c));assert.equal(submitted.status,200);const id=submitted.expense.id;
  assert.equal((await call('POST','/api/expenses',expenseBody(c))).status,409);
- const pay={amount:7500,account:'Counter Cash',paymentType:'Cash',paymentProof:'/test-pay.jpg',date:'2026-09-13'};
+ const pay={amount:7500,account:'Services',paymentType:'Cash',paymentProof:'/test-pay.jpg',date:'2026-09-13'};
  assert.equal((await call('POST','/api/expenses/'+id+'/pay',pay)).status,400);
  assert.equal((await call('POST','/api/expenses/'+id+'/approve',{})).status,200);
  assert.equal((await call('POST','/api/expenses/'+id+'/pay',{amount:7500,account:'Counter Cash',paymentType:'Cash'})).status,400);
- assert.equal((await call('POST','/api/expenses/'+id+'/pay',pay)).status,200);
+ const partial=await call('POST','/api/expenses/'+id+'/pay',pay);assert.equal(partial.status,200,partial.error);
  s=await get();let f=s.contracts.find(x=>x.id===c.id).finance;assert.equal(f.paid,7500);assert.equal(f.due,12500);assert.equal(f.covered,1);assert.equal(f.paymentStatus,'partially_paid');assert.equal(s.shoots.find(x=>x.id===shoot.id).status,'scheduled');
  assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id+'/unlink-expense',{revision:s.revision})).status,400);
  assert.equal((await call('POST','/api/expenses/'+id+'/pay',{...pay,amount:12500})).status,200);
@@ -52,6 +52,36 @@ test('excluded and rejected expenses cannot make models appear paid',()=>{
  const c={expenseId:'EX-1',amount:10000,includedShoots:4};for(const e of [{status:'rejected',nature:'SANKI'},{status:'paid',nature:'PERSONAL'},{status:'paid',nature:'SANKI',accountingExcluded:true}]){const f=financial({expenses:{'EX-1':{...e,amount:10000,paidAmount:10000}}},c);assert.equal(f.paid,0);assert.ok(f.warning)}
 });
 
+test('future shoots accept advance payment but cannot be completed early',async()=>{
+ let s=await get();s=await call('POST','/api/model-calendar/bookings',{revision:s.revision,date:'2099-12-20',contract:{name:'Future Model',kind:'day',month:'2099-12',amount:5000}});assert.equal(s.status,200);
+ const c=s.contracts.at(-1),shoot=s.shoots.at(-1);assert.equal(shoot.status,'scheduled');
+ const early=await call('POST','/api/model-calendar/shoots/'+shoot.id,{revision:s.revision,date:shoot.date,status:'completed',notes:'Too early'});assert.equal(early.status,400);assert.match(early.error,/future shoot/i);
+ const submitted=await call('POST','/api/expenses',expenseBody(c));assert.equal(submitted.status,200);const id=submitted.expense.id;
+ assert.equal((await call('POST','/api/expenses/'+id+'/approve',{})).status,200);
+ const advance=await call('POST','/api/expenses/'+id+'/pay',{amount:5000,account:'Services',paymentType:'Cash',paymentProof:'/advance.jpg',date:businessDate()});assert.equal(advance.status,200,advance.error);
+ s=await get();assert.equal(s.shoots.find(x=>x.id===shoot.id).status,'scheduled');assert.equal(s.contracts.find(x=>x.id===c.id).finance.paymentStatus,'paid');
+});
+
+test('cancelled packages reject financial changes and only unused cancelled shoots can be removed',async()=>{
+ let s=await get();s=await call('POST','/api/model-calendar/bookings',{revision:s.revision,date:'2099-11-10',contract:{name:'Cancelled Model',kind:'day',month:'2099-11',amount:2500}});const c=s.contracts.at(-1),shoot=s.shoots.at(-1);
+ assert.equal((await call('DELETE','/api/model-calendar/shoots/'+shoot.id,{revision:s.revision})).status,400);
+ const availableBody=expenseBody(c);delete availableBody.modelCalendarContractId;const available=await call('POST','/api/expenses',availableBody);assert.equal(available.status,200);
+ s=await call('POST','/api/model-calendar/shoots/'+shoot.id,{revision:s.revision,date:shoot.date,status:'cancelled',notes:'Shoot cancelled'});assert.equal(s.status,200);
+ assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id,{revision:s.revision,...c})).status,400);
+ assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id+'/link-expense',{revision:s.revision,expenseId:available.expense.id})).status,400);
+ assert.equal((await call('POST','/api/expenses',expenseBody(c))).status,400);
+ const removed=await call('DELETE','/api/model-calendar/shoots/'+shoot.id,{revision:s.revision});assert.equal(removed.status,200);assert.equal(removed.shoots.some(x=>x.id===shoot.id),false);assert.equal(removed.contracts.some(x=>x.id===c.id),false);
+
+ s=await get();s=await call('POST','/api/model-calendar/bookings',{revision:s.revision,date:'2099-10-10',contract:{name:'Audited Cancellation',kind:'day',month:'2099-10',amount:3000}});const linked=s.contracts.at(-1),linkedShoot=s.shoots.at(-1),created=await call('POST','/api/expenses',expenseBody(linked));assert.equal(created.status,200);
+ s=await get();s=await call('POST','/api/model-calendar/shoots/'+linkedShoot.id,{revision:s.revision,date:linkedShoot.date,status:'cancelled',notes:'Cancelled after expense'});assert.equal(s.status,200);
+ const blocked=await call('DELETE','/api/model-calendar/shoots/'+linkedShoot.id,{revision:s.revision});assert.equal(blocked.status,400);assert.match(blocked.error,/linked expense/i);
+});
+
+test('calendar UI hides package and financial actions for cancelled packages',()=>{
+ const ui=fs.readFileSync(path.join(__dirname,'../public/model-calendar.js'),'utf8'),html=fs.readFileSync(path.join(__dirname,'../public/model-calendar.html'),'utf8');
+ assert.match(ui,/const actions=cancelled\?'':/);assert.match(ui,/No expense or payment is due for this cancelled package/);assert.match(ui,/completed\.disabled=future/);assert.match(html,/Remove cancelled shoot/);
+});
+
 test('central auth gate protects the model API',()=>{for(const role of ['owner','admin','accounting'])assert.equal(apiAllowedForUser({roles:[role]},'/api/model-calendar'),true);for(const role of ['claimant','sales','samast_accounting'])assert.equal(apiAllowedForUser({roles:[role]},'/api/model-calendar/bookings'),false);});
 
 test('Model Calendar role manages bookings and views payments without expense authority',async()=>{
@@ -66,14 +96,14 @@ test('Model Calendar role manages bookings and views payments without expense au
  s=await call('POST','/api/model-calendar/bookings',{revision:s.revision,date:'2026-09-18',contract},role);assert.equal(s.status,200);
  const c=s.contracts.at(-1),shoot=s.shoots.at(-1);
  s=await call('POST','/api/model-calendar/contracts/'+c.id,{...contract,amount:15000,revision:s.revision},role);assert.equal(s.status,200);assert.equal(s.contracts.at(-1).amount,15000);
- s=await call('POST','/api/model-calendar/shoots/'+shoot.id,{revision:s.revision,date:'2026-09-19',status:'completed',notes:'Shoot done'},role);assert.equal(s.status,200);
+ s=await call('POST','/api/model-calendar/shoots/'+shoot.id,{revision:s.revision,date:'2026-09-19',status:'completed',notes:'Shoot done'},role);assert.equal(s.status,200);const completed=s.shoots.find(x=>x.id===shoot.id);assert.equal(completed.completedBy,'model-calendar-test');assert.ok(completed.completedAt);assert.deepEqual(completed.statusHistory.at(-1).from,'scheduled');
  for(const action of ['link-expense','unlink-expense'])assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id+'/'+action,{revision:s.revision,expenseId:'EX-00001'},role)).status,403);
  assert.equal((await call('POST','/api/expenses',expenseBody({...c,amount:15000}),role)).status,403);
  assert.equal((await get()).permissions.canManageExpenses,true);
  const created=await call('POST','/api/expenses',expenseBody({...c,amount:15000}));assert.equal(created.status,200);
  const id=created.expense.id;
  assert.equal((await call('POST','/api/expenses/'+id+'/approve',{})).status,200);
- assert.equal((await call('POST','/api/expenses/'+id+'/pay',{amount:5000,account:'Counter Cash',paymentType:'Cash',paymentProof:'/test-pay.jpg',date:'2026-09-19'})).status,200);
+ const rolePayment=await call('POST','/api/expenses/'+id+'/pay',{amount:5000,account:'Services',paymentType:'Cash',paymentProof:'/test-pay.jpg',date:'2026-09-19'});assert.equal(rolePayment.status,200,rolePayment.error);
  s=await call('GET','/api/model-calendar',undefined,role);const linked=s.contracts.find(x=>x.id===c.id);assert.equal(linked.finance.paid,5000);assert.equal(linked.finance.due,10000);
  assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id,{...contract,amount:16000,revision:s.revision},role)).status,400);
 });
