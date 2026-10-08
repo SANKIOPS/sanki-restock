@@ -66,6 +66,7 @@ const MODULES = [
   { key: 'model-calendar', title: 'Model Calendar', desc: 'Schedule models, track packages and linked expense payments', icon: '📅', href: '/model-calendar.html', section: 'Marketing', status: 'live', roles: ['admin', 'accounting', 'owner', 'model_calendar'] },
   { key: 'seo-control', title: 'SEO', desc: 'SEO, AEO and GEO tasks, cadence, evidence and progress', icon: '◎', href: '/seo-control.html', section: 'SEO', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the P&L', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
+  { key: 'incentives',   title: 'Sales incentives',      desc: 'POS salesperson incentives from eligible cash, UPI and card receipts', icon: '🎯', href: '/incentives.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
 
   { key: 'showroom',     title: 'Showroom Replenishment', desc: 'Refill the showroom front from the back',           icon: '🛍️', href: '/showroom-replenishment.html',   section: 'Store Ops', status: 'hidden', roles: ['admin', 'inventory', 'warehouse'] },
   { key: 'racks',        title: 'Rack Locations',        desc: 'Where every SKU sits on the racks',                  icon: '🗄️', href: '/rack-locations.html',           section: 'Store Ops', status: 'hidden', roles: ['admin', 'warehouse'] },
@@ -90,7 +91,7 @@ function visibleFor(user) {
   // union'd across all of the user's roles. A module shows when its page path
   // is in that allow-list. Admin sees everything not hidden.
   const allowed = (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
-  const canSee = (m) => m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))) || (m.key==='salary'&&String(user&&user.username||'').trim().toLowerCase()==='prashant'));
+  const canSee = (m) => m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))) || (['salary','incentives'].includes(m.key)&&String(user&&user.username||'').trim().toLowerCase()==='prashant'));
   return MODULES
     .filter(m => m.status !== 'hidden')
     .filter(canSee)
