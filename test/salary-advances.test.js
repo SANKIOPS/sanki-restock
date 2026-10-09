@@ -178,6 +178,34 @@ test('salary advances require owner approval and proof-backed posting, then reco
   const tooMuch=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:6000},role:'owner'}); assert.equal(tooMuch.status,400);
 });
 
+test('recent activity API keeps complete history despite register filters and never changes ledger data',()=>{
+  const employee=invoke('POST','/api/salary/employees',{body:{name:'Activity Register Employee',salary:20000}}).body.employee;
+  const old=postAdvance(employee,{amount:1234,date:'2098-01-01'}),newer=postAdvance(employee,{amount:456,date:'2098-02-01'}),cancelled=postAdvance(employee,{amount:789,date:'2098-02-02'});
+  assert.equal(invoke('POST','/api/salary/advances/:id/cancel',{params:{id:cancelled.id},body:{reason:'Recorded for the wrong date'},role:'owner'}).status,200);
+  const salaryPath=path.join(tempDir,'salary.json'),before=fs.readFileSync(salaryPath,'utf8');
+  const view=invoke('GET','/api/salary/advances',{query:{employee:employee.id,month:'2098-02',status:'Outstanding',account:'Axis Bank 3448',summaryMonth:'2098-02'}}).body;
+  assert.deepEqual(view.advances.map(x=>x.id),[newer.id]);
+  const activity=view.activityAdvances.filter(x=>x.empId===employee.id);
+  assert.deepEqual(activity.map(x=>x.id).sort(),[old.id,newer.id,cancelled.id].sort());
+  assert.equal(activity.find(x=>x.id===old.id).outstanding,1234);
+  assert.equal(activity.find(x=>x.id===cancelled.id).status,'Cancelled');
+  assert.equal(view.requests.filter(x=>x.empId===employee.id&&x.status==='Posted').length,3);
+  assert.equal(view.summary.find(x=>x.empId===employee.id).outstanding,1690);
+  assert.equal(fs.readFileSync(salaryPath,'utf8'),before,'reading the activity does not alter payments, approvals, deductions or audit');
+});
+
+test('recent activity stays within the selected salary entity and preserves salary authorization',()=>{
+  const owner={username:'owner',roles:['owner']};
+  const employee=telegramApi('POST','/api/salary/employees',owner,{entity:'SAMAST',body:{name:'Samast Activity Employee',salary:10000}}).employee;
+  const paid=telegramApi('POST','/api/salary/advances',owner,{entity:'SAMAST',body:{empId:employee.id,amount:432.1,date:'2098-02-10',account:'Kirti Nagar Cash',payingNature:'SAMAST',proofs:['/api/expenses/photo/samast-activity.jpg']}});
+  assert.equal(paid.status,200);
+  const samast=telegramApi('GET','/api/salary/advances',owner,{entity:'SAMAST'}),sanki=telegramApi('GET','/api/salary/advances',owner,{entity:'SANKI'});
+  assert.equal(samast.activityAdvances.some(x=>x.employeeName==='Samast Activity Employee'&&x.amount===432.1),true);
+  assert.equal(sanki.activityAdvances.some(x=>x.employeeName==='Samast Activity Employee'),false);
+  assert.equal(samast.requests.some(x=>x.employeeName==='Activity Register Employee'),false);
+  assert.equal(invoke('GET','/api/salary/advances',{role:'claimant'}).status,403);
+});
+
 test('advance recovery starts from its actual payout month, not a proposed recovery month',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Historical Recovery',salary:30000}}).body.employee;
   const made=postAdvance(emp,{amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'});
