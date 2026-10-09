@@ -10,8 +10,10 @@ const INCENTIVES_PATH = process.env.INCENTIVES_PATH || path.join(DATA_DIR, 'ince
 const RATE = 0.02;
 const DAILY_THRESHOLD = 10000;
 const SALESPERSONS = [
-  { name:'Shivam', aliases:['shivam'] },
-  { name:'Krishnakant', aliases:['krishnakant', 'krishna kant', 'krishna'] }
+  { name:'Shivam', aliases:['shivam'], incentiveEligible:true },
+  { name:'Krishnakant', aliases:['krishnakant', 'krishna kant', 'krishna'], incentiveEligible:true },
+  { name:'Isha', aliases:['isha'], incentiveEligible:false },
+  { name:'Nandini', aliases:['nandini'], incentiveEligible:false }
 ];
 const PAYING_ACCOUNTS = ['Axis Bank 3448', 'Prashant Axis 3645', 'IndusInd Bank 8181', 'Counter Cash', 'Prashant Cash', 'Gagan Sir Cash'];
 
@@ -32,6 +34,7 @@ function normalizedWords(value){
   return String(value || '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 }
 function compact(value){ return normalizedWords(value).replace(/\s/g, ''); }
+function incentiveEligible(name){ return SALESPERSONS.some(person=>person.name===name&&person.incentiveEligible); }
 function escapeRegExp(value){ return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function levenshtein(a,b){
   a=compact(a);b=compact(b);const row=Array.from({length:b.length+1},(_,i)=>i);
@@ -89,13 +92,17 @@ function buildRecords(orders, state){
       if(!validDate(date))return;
       const mapped=rows.map(tx=>{const automaticMode=classifyGateway(tx.gateway),effectiveMode=(review.gatewayModes || {})[String(tx.id)] || automaticMode;return {id:String(tx.id || ''),gateway:String(tx.gateway || ''),amount:money(tx.amount),automaticMode,effectiveMode};});
       const sum=mode=>money(mapped.filter(tx=>tx.effectiveMode===mode).reduce((total,tx)=>total+tx.amount,0)),cash=sum('cash'),upiCard=sum('upi_card'),storeCredit=sum('store_credit'),otherExcluded=sum('excluded'),unknown=sum('unknown'),eligible=money(cash+upiCard),totalReceived=money(mapped.reduce((total,tx)=>total+tx.amount,0));
-      const issues=[];if(!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
-      let exclusionReason='';if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
-      const status=issues.length?'needs_review':(noSalesperson||eligible<=0?'excluded':'ready');
+      const recordOnlySalespersons=salespersons.filter(name=>!incentiveEligible(name)),recordOnly=!noSalesperson&&salespersons.length>0&&recordOnlySalespersons.length===salespersons.length;
+      // Record-only orders cannot create a payable, so tender review is not
+      // required for them. Mixed orders retain every normal receipt check.
+      const issues=[];if(!recordOnly&&!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(!recordOnly&&unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
+      const portions=splitMoney(eligible,salespersons.length),recordOnlyAmount=noSalesperson?0:money(salespersons.reduce((total,name,index)=>total+(!incentiveEligible(name)?portions[index]:0),0)),incentiveEligibleAmount=noSalesperson?0:money(eligible-recordOnlyAmount);
+      let exclusionReason='';if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(recordOnlySalespersons.length)exclusionReason=recordOnlySalespersons.join(' + ')+': former employee — record only; no incentive payable on their share.';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
+      const status=recordOnly?'record_only':issues.length?'needs_review':(noSalesperson||eligible<=0?'excluded':'ready');
       records.push({
         id:String(order.id)+'|'+date,orderId:String(order.id),orderNumber:String(order.name || order.number || order.id),customerName:String(order.customer&&order.customer.name || ''),receiptDate:date,
-        salespersons,noSalesperson,salespersonSuggestions:parsed.suggestions,matchConfidence:Array.isArray(review.salespersons)?'reviewed':parsed.confidence,transactionReference:parsed.reference,
-        billAmount:money(order.total),totalReceived,cashAmount:cash,upiCardAmount:upiCard,storeCreditAmount:storeCredit,otherExcludedAmount:otherExcluded,unknownAmount:unknown,eligibleAmount:eligible,
+        salespersons,noSalesperson,recordOnly,recordOnlySalespersons,salespersonSuggestions:parsed.suggestions,matchConfidence:Array.isArray(review.salespersons)?'reviewed':parsed.confidence,transactionReference:parsed.reference,
+        billAmount:money(order.total),totalReceived,cashAmount:cash,upiCardAmount:upiCard,storeCreditAmount:storeCredit,otherExcludedAmount:otherExcluded,unknownAmount:unknown,eligibleTenderAmount:eligible,eligibleAmount:incentiveEligibleAmount,recordOnlyAmount,
         refundAmount:money(order.refundAmount),orderNote:String(order.note || ''),transactions:mapped,reviewStatus:status,reviewIssues:issues,exclusionReason,reviewedAt:review.reviewedAt || '',reviewedBy:review.reviewedBy || ''
       });
     });
@@ -106,16 +113,17 @@ function buildRecords(orders, state){
 function calculate(orders,state){
   const records=buildRecords(orders,state),dailyMap=new Map();
   records.forEach(record=>{
-    record.shares=[];if(record.reviewStatus!=='ready'||!record.salespersons.length)return;
-    const amounts=splitMoney(record.eligibleAmount,record.salespersons.length);
+    record.shares=[];if(!['ready','record_only'].includes(record.reviewStatus)||!record.salespersons.length)return;
+    const amounts=splitMoney(record.eligibleTenderAmount,record.salespersons.length);
     record.salespersons.forEach((salesperson,index)=>{
-      const key=record.receiptDate+'|'+salesperson,share={salesperson,eligibleAmount:amounts[index],incentive:0,qualifies:false,approvalStatus:'not_eligible'};record.shares.push(share);
-      if(!dailyMap.has(key))dailyMap.set(key,{key,date:record.receiptDate,salesperson,eligibleAmount:0,incentive:0,qualifies:false,records:[],unresolved:false});
-      const day=dailyMap.get(key);day.eligibleAmount=money(day.eligibleAmount+share.eligibleAmount);day.records.push({record,share});
+      const recordOnly=!incentiveEligible(salesperson),key=record.receiptDate+'|'+salesperson,share={salesperson,recordOnly,receiptAmount:amounts[index],eligibleAmount:recordOnly?0:amounts[index],incentive:0,qualifies:false,approvalStatus:recordOnly?'record_only':'not_eligible'};record.shares.push(share);
+      if(!dailyMap.has(key))dailyMap.set(key,{key,date:record.receiptDate,salesperson,recordOnly,eligibleAmount:0,recordOnlyAmount:0,incentive:0,qualifies:false,records:[],unresolved:false});
+      const day=dailyMap.get(key);day.eligibleAmount=money(day.eligibleAmount+share.eligibleAmount);day.recordOnlyAmount=money(day.recordOnlyAmount+(recordOnly?share.receiptAmount:0));day.records.push({record,share});
     });
   });
   const unresolvedDates=new Set(records.filter(row=>row.reviewStatus==='needs_review').map(row=>row.receiptDate));
   dailyMap.forEach(day=>{
+    if(day.recordOnly){day.approval=null;day.approvalStatus='record_only';return;}
     day.qualifies=day.eligibleAmount>=DAILY_THRESHOLD;day.incentive=day.qualifies?money(day.eligibleAmount*RATE):0;day.unresolved=unresolvedDates.has(day.date);
     const approval=(state.approvals || {})[day.key];
     day.approval=approval || null;day.approvalStatus=!day.qualifies?'not_eligible':!approval?'pending':(money(approval.eligibleAmount)===day.eligibleAmount&&money(approval.incentive)===day.incentive?'approved':'needs_reapproval');
@@ -130,7 +138,9 @@ function ledgerView(state){
     Object.values(state.approvals || {}).filter(item=>item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'earned',description:'Approved incentive · eligible receipts ₹'+money(item.eligibleAmount).toFixed(2),reference:item.id,credit:money(item.incentive),debit:0,proofs:[],by:item.approvedBy,at:item.approvedAt}));
     (state.payments || []).filter(item=>item.active!==false&&item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'payment',description:'Incentive payment from '+item.account,reference:item.reference||item.id,credit:0,debit:money(item.amount),proofs:item.proofs||[],by:item.createdBy,at:item.createdAt,note:item.note||''}));
     entries.sort((a,b)=>a.date.localeCompare(b.date)||String(a.at||'').localeCompare(String(b.at||''))||a.id.localeCompare(b.id));let balance=0;entries.forEach(entry=>{balance=money(balance+entry.credit-entry.debit);entry.balance=balance;});
-    return {salesperson:person.name,earned:money(entries.reduce((n,x)=>n+x.credit,0)),paid:money(entries.reduce((n,x)=>n+x.debit,0)),balance,entries};
+    // Preserve any historical entries, but former employees have no current
+    // payable and cannot receive a new approval or payment through this book.
+    return {salesperson:person.name,recordOnly:!person.incentiveEligible,earned:money(entries.reduce((n,x)=>n+x.credit,0)),paid:money(entries.reduce((n,x)=>n+x.debit,0)),balance,payableBalance:person.incentiveEligible?balance:0,entries};
   });
 }
 
@@ -141,11 +151,11 @@ function buildView(orders,state,filters={}){
   if(status)records=records.filter(row=>status==='approved'?row.shares.some(share=>share.approvalStatus==='approved'):row.reviewStatus===status);
   const days=calculated.daily.filter(day=>(!from||day.date>=from)&&(!to||day.date<=to)&&(!salesperson||day.salesperson===salesperson));
   const orderIds=new Set(records.map(row=>row.orderId)),uniqueOrders=calculated.records.filter(row=>orderIds.has(row.orderId)).filter((row,index,list)=>list.findIndex(item=>item.orderId===row.orderId)===index),ledgers=ledgerView(state);
-  const periodApprovals=Object.values(state.approvals || {}).filter(item=>(!from||item.date>=from)&&(!to||item.date<=to)&&(!salesperson||item.salesperson===salesperson));
+  const periodApprovals=Object.values(state.approvals || {}).filter(item=>incentiveEligible(item.salesperson)&&(!from||item.date>=from)&&(!to||item.date<=to)&&(!salesperson||item.salesperson===salesperson));
   const periodPayments=(state.payments || []).filter(item=>item.active!==false&&(!from||item.date>=from)&&(!to||item.date<=to)&&(!salesperson||item.salesperson===salesperson));
   return {
-    success:true,configuration:{rate:RATE,dailyThreshold:DAILY_THRESHOLD,salespersons:SALESPERSONS.map(person=>person.name),payingAccounts:PAYING_ACCOUNTS},filters:{from,to,salesperson,status},records:records.slice().sort((a,b)=>b.receiptDate.localeCompare(a.receiptDate)||b.orderNumber.localeCompare(a.orderNumber,undefined,{numeric:true})),days:days.slice().sort((a,b)=>b.date.localeCompare(a.date)||a.salesperson.localeCompare(b.salesperson)),ledgers,
-    summary:{orders:orderIds.size,totalBilling:money(uniqueOrders.reduce((n,row)=>n+row.billAmount,0)),totalReceived:money(records.reduce((n,row)=>n+row.totalReceived,0)),eligibleReceived:money(records.filter(row=>row.reviewStatus==='ready').reduce((n,row)=>n+row.eligibleAmount,0)),storeCreditExcluded:money(records.reduce((n,row)=>n+row.storeCreditAmount,0)),refundsReturns:money(uniqueOrders.reduce((n,row)=>n+row.refundAmount,0)),incentiveEarned:money(days.reduce((n,day)=>n+day.incentive,0)),approvedIncentive:money(periodApprovals.reduce((n,item)=>n+money(item.incentive),0)),paidInPeriod:money(periodPayments.reduce((n,item)=>n+money(item.amount),0)),outstanding:money(ledgers.reduce((n,ledger)=>n+ledger.balance,0)),needsReview:records.filter(row=>row.reviewStatus==='needs_review').length}
+    success:true,configuration:{rate:RATE,dailyThreshold:DAILY_THRESHOLD,salespersons:SALESPERSONS.map(person=>person.name),salespersonDetails:SALESPERSONS.map(person=>({name:person.name,incentiveEligible:person.incentiveEligible,recordOnly:!person.incentiveEligible})),payingAccounts:PAYING_ACCOUNTS},filters:{from,to,salesperson,status},records:records.slice().sort((a,b)=>b.receiptDate.localeCompare(a.receiptDate)||b.orderNumber.localeCompare(a.orderNumber,undefined,{numeric:true})),days:days.slice().sort((a,b)=>b.date.localeCompare(a.date)||a.salesperson.localeCompare(b.salesperson)),ledgers,
+    summary:{orders:orderIds.size,totalBilling:money(uniqueOrders.reduce((n,row)=>n+row.billAmount,0)),totalReceived:money(records.reduce((n,row)=>n+row.totalReceived,0)),eligibleReceived:money(records.filter(row=>row.reviewStatus==='ready').reduce((n,row)=>n+row.eligibleAmount,0)),recordOnlyReceipts:money(records.reduce((n,row)=>n+row.recordOnlyAmount,0)),storeCreditExcluded:money(records.reduce((n,row)=>n+row.storeCreditAmount,0)),refundsReturns:money(uniqueOrders.reduce((n,row)=>n+row.refundAmount,0)),incentiveEarned:money(days.reduce((n,day)=>n+day.incentive,0)),approvedIncentive:money(periodApprovals.reduce((n,item)=>n+money(item.incentive),0)),paidInPeriod:money(periodPayments.reduce((n,item)=>n+money(item.amount),0)),outstanding:money(ledgers.reduce((n,ledger)=>n+ledger.payableBalance,0)),needsReview:records.filter(row=>row.reviewStatus==='needs_review').length}
   };
 }
 
@@ -164,12 +174,13 @@ function createRouter(deps={}){
   });
   route('post','/api/incentives/approve-day',(req,res)=>{
     const body=req.body||{},date=String(body.date||''),salesperson=String(body.salesperson||'');if(!validDate(date)||!SALESPERSONS.some(person=>person.name===salesperson)){const error=new Error('Choose a valid incentive date and salesperson.');error.status=400;throw error;}
+    if(!incentiveEligible(salesperson)){const error=new Error(salesperson+' is a former employee — record only. Incentives cannot be approved.');error.status=409;throw error;}
     const state=stateLoader(),orders=ordersLoader(),calculated=calculate(orders,state),day=calculated.daily.find(item=>item.date===date&&item.salesperson===salesperson);if(!day||!day.qualifies){const error=new Error(salesperson+' has not reached ₹'+DAILY_THRESHOLD.toLocaleString('en-IN')+' in eligible receipts on '+date+'.');error.status=409;throw error;}if(day.unresolved){const error=new Error('Review every uncertain POS order on '+date+' before approving incentives.');error.status=409;throw error;}
     const id=date+'|'+salesperson,before=state.approvals[id]||null;state.approvals[id]={id,date,salesperson,eligibleAmount:day.eligibleAmount,incentive:day.incentive,rate:RATE,threshold:DAILY_THRESHOLD,note:text(body.note,500),approvedAt:new Date().toISOString(),approvedBy:req.user.username};state.revision++;audit(state,req,'INCENTIVE_DAY_APPROVED',{id,before,after:state.approvals[id]});stateSaver(state);res.json(buildView(orders,state,body.filters||{}));
   });
   route('post','/api/incentives/payments',(req,res)=>{
     const state=stateLoader(),body=req.body||{},salesperson=String(body.salesperson||''),amount=money(body.amount),date=String(body.date||''),account=String(body.account||''),proofs=Array.isArray(body.proofs)?body.proofs.map(x=>text(x,500)).filter(Boolean):[];
-    const ledger=ledgerView(state).find(item=>item.salesperson===salesperson);if(!ledger){const error=new Error('Choose a valid salesperson.');error.status=400;throw error;}if(!validDate(date)||!(amount>0)){const error=new Error('Enter a valid payment date and amount.');error.status=400;throw error;}if(!PAYING_ACCOUNTS.includes(account)){const error=new Error('Choose an approved paying account.');error.status=400;throw error;}if(!proofs.length){const error=new Error('Attach at least one payment proof.');error.status=400;throw error;}if(amount>ledger.balance+.005){const error=new Error('Payment exceeds the approved outstanding incentive of ₹'+ledger.balance.toFixed(2)+'.');error.status=409;throw error;}
+    const ledger=ledgerView(state).find(item=>item.salesperson===salesperson);if(!ledger){const error=new Error('Choose a valid salesperson.');error.status=400;throw error;}if(ledger.recordOnly){const error=new Error(salesperson+' is a former employee — record only. Incentive payments are not allowed.');error.status=409;throw error;}if(!validDate(date)||!(amount>0)){const error=new Error('Enter a valid payment date and amount.');error.status=400;throw error;}if(!PAYING_ACCOUNTS.includes(account)){const error=new Error('Choose an approved paying account.');error.status=400;throw error;}if(!proofs.length){const error=new Error('Attach at least one payment proof.');error.status=400;throw error;}if(amount>ledger.payableBalance+.005){const error=new Error('Payment exceeds the approved outstanding incentive of ₹'+ledger.payableBalance.toFixed(2)+'.');error.status=409;throw error;}
     state.paymentSeq=Number(state.paymentSeq||0)+1;const payment={id:'INCP-'+String(state.paymentSeq).padStart(5,'0'),salesperson,amount,date,account,reference:text(body.reference,100),proofs,note:text(body.note,500),createdAt:new Date().toISOString(),createdBy:req.user.username,active:true};state.payments.push(payment);state.revision++;audit(state,req,'INCENTIVE_PAYMENT_RECORDED',{payment});stateSaver(state);res.json(buildView(ordersLoader(),state,body.filters||{}));
   });
   return router;
