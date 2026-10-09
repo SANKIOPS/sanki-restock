@@ -43,8 +43,9 @@
     rows.push('<tr class="section"><td colspan="5">Paid operating expenses</td></tr>');
     for(const [group,label] of [['fixed','Fixed'],['running','Running'],['variable','Variable'],['marketing','Marketing']]){
       const categories=report.categories.filter(c=>c.group===group),amount=categories.reduce((s,c)=>s+c.amount,0);
-      rows.push('<tr><td>'+drill(label+' expenses','group:'+group)+'</td>'+num(amount)+'<td colspan="3"></td></tr>');
-      for(const category of categories)rows.push('<tr><td class="indent">'+drill(category.category+' ('+category.count+')','category:'+category.id)+'</td>'+num(category.amount)+'<td colspan="3"></td></tr>');
+      const controls=categories.map((c,index)=>'expense-category-'+group+'-'+index).join(' ');
+      rows.push('<tr class="expense-head"><td><button class="group-toggle" data-group-toggle="'+group+'" aria-expanded="false"'+(controls?' aria-controls="'+controls+'"':' disabled')+'><span class="group-arrow" aria-hidden="true">▸</span>'+label+' expenses</button></td>'+num(amount)+'<td colspan="3"></td></tr>');
+      categories.forEach((category,index)=>rows.push('<tr id="expense-category-'+group+'-'+index+'" data-expense-group="'+group+'" hidden><td class="indent">'+drill(category.category+' ('+category.count+')','category:'+category.id)+'</td>'+num(category.amount)+'<td colspan="3"></td></tr>'));
     }
     statementRow('Total paid operating expenses','expenses','total');statementRow('Management profit / loss','netProfit','total grand','all');
     el('statement').innerHTML='<p class="note muted">'+escape(report.policy.channels)+'</p>'+table(['Particulars','Selected period','Previous period','Change','% of net sales'],rows.join(''));
@@ -85,7 +86,16 @@
   function skuDetails(entry){
     return entry.details?.some(d=>d.sku)?'<details><summary>SKU / purchase allocations</summary>'+entry.details.filter(d=>d.sku).map(d=>'<div class="allocation">'+escape(d.sku)+' · '+escape(d.qty)+' unit(s)'+(d.allocations||[]).map(a=>'<br>'+escape(a.purchaseId)+' · '+a.qty+' × '+fmt(a.unitCost)+' = '+fmt(a.amount)).join('')+'</div>').join('')+'</details>':'';
   }
-  document.addEventListener('click',event=>{const button=event.target.closest('[data-filter]');if(button)showDetails(button.dataset.filter);});
+  document.addEventListener('click',event=>{
+    const head=event.target.closest('[data-group-toggle]');
+    if(head){
+      const expanded=head.getAttribute('aria-expanded')!=='true';
+      head.setAttribute('aria-expanded',String(expanded));
+      document.querySelectorAll('[data-expense-group="'+head.dataset.groupToggle+'"]').forEach(row=>row.hidden=!expanded);
+      return;
+    }
+    const button=event.target.closest('[data-filter]');if(button)showDetails(button.dataset.filter);
+  });
   el('filters').addEventListener('submit',event=>{event.preventDefault();load();});
   document.querySelectorAll('[data-period]').forEach(button=>button.addEventListener('click',()=>period(button.dataset.period)));
   document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));document.querySelectorAll('.view').forEach(view=>view.hidden=view.id!==button.dataset.tab);}));
