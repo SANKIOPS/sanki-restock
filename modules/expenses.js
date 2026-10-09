@@ -2112,6 +2112,11 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
   if (!canApproveExpenseNature(req, e)) return res.status(403).json({ success: false, error: 'You cannot approve this accounting entity.' });
+  // A review confirmation is approval-only. A retry or stale review must
+  // never fall through to the legacy approval/undo toggle.
+  if (req.body && req.body.expectedStatus === 'pending' && e.status !== 'pending') {
+    return res.status(409).json({ success:false, error:'This expense is no longer pending. Refresh the expense list to see its current approval status.' });
+  }
   if (e.status === 'approved' || e.status === 'partially_paid' || e.status === 'paid') {
     // Un-approve (only if not yet paid).
     if (e.status === 'paid' || e.status === 'partially_paid') return res.status(400).json({ success: false, error: 'Payments already recorded — cannot un-approve.' });

@@ -771,16 +771,44 @@ test('Admin or Owner can assign a category directly in the pending expense list'
   assert.match(html, /New category created and assigned/);
 });
 
-test('approving an uncategorized expense opens a mobile-safe category review dialog', () => {
+test('every pending expense opens a vendor and category review dialog before approval', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="approveDlg"/);
-  assert.match(html, /if\(!e\.ledger\)/);
-  assert.match(html, /Assign category and approve/);
+  assert.match(html, /if\(e\.status==='pending'\)/);
+  assert.match(html, /Confirm and approve/);
+  assert.match(html, /id="approveVendor"[^>]*role="combobox"/);
+  assert.match(html, /bindVendorPicker\('approveVendor'\)/);
   assert.match(html, /approveCategory/);
-  assert.match(html, /return api\('\/api\/expenses\/'\+approveId\+'\/approve'/);
+  assert.match(html, /return api\('\/api\/expenses\/'\+id\+'\/approve'/);
   assert.match(html, /list="approvalLedgerList"/);
-  assert.match(html, /type a new category name to create it/);
+  assert.match(html, /Category changes follow the existing Admin \/ Owner permissions/);
   assert.match(html, /New category created and assigned/);
+});
+
+test('approvers can select existing vendors while logging and correct them through audited pending review',()=>{
+  const target='Vendor picker SANKI target',samast='Vendor picker SAMAST target';
+  assert.equal(invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'SANKI',name:target}}).status,200);
+  assert.equal(invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'SAMAST',name:samast}}).status,200);
+  for(const role of ['claimant','accounting','samast_accounting','admin','owner']){
+    const cfg=invoke('GET','/api/expenses/config',{role}).body;
+    assert.ok(cfg.vendorsByNature.SANKI.includes(target));assert.ok(cfg.vendorsByNature.SAMAST.includes(samast));
+    if(role!=='owner')assert.deepEqual(cfg.vendorsByNature.PERSONAL,[]);
+  }
+  for(const [role,nature,vendor] of [['accounting','SANKI',target],['samast_accounting','SAMAST',samast]]){
+    const logged=invoke('POST','/api/expenses',{role,body:{nature,vendor,particulars:'Vendor picker test',amount:100,paymentType:'Cash',billPhoto:'/api/expenses/photo/vendor-picker-bill.jpg'}});
+    assert.equal(logged.status,200,JSON.stringify(logged.body));assert.equal(logged.body.expense.vendor,vendor);
+    const id=logged.body.expense.id,category=invoke('GET','/api/expenses/config',{role:'owner'}).body.ledgersByNature[nature][0];
+    assert.equal(invoke('POST','/api/expenses/:id',{role:'admin',params:{id},body:{ledger:category.name,type:category.type}}).status,200);
+    const typo=invoke('POST','/api/expenses/:id',{role,params:{id},body:{vendor:'Vendor picker typo'}});assert.equal(typo.status,200);
+    const corrected=invoke('POST','/api/expenses/:id',{role,params:{id},body:{vendor}});assert.equal(corrected.status,200,JSON.stringify(corrected.body));
+    assert.equal(corrected.body.expense.ledger,category.name);assert.ok(corrected.body.expense.auditHistory.at(-1).changes.some(c=>c.field==='vendor'&&c.after===vendor));
+    assert.equal(invoke('POST','/api/expenses/:id/approve',{role:role==='accounting'?'samast_accounting':'accounting',params:{id}}).status,403);
+    const approved=invoke('POST','/api/expenses/:id/approve',{role,params:{id},body:{expectedStatus:'pending'}});assert.equal(approved.status,200,JSON.stringify(approved.body));assert.equal(approved.body.expense.vendor,vendor);
+    const beforeRetry=fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8');
+    const retry=invoke('POST','/api/expenses/:id/approve',{role,params:{id},body:{expectedStatus:'pending'}});assert.equal(retry.status,409);assert.match(retry.body.error,/no longer pending/);
+    assert.equal(fs.readFileSync(path.join(tempDir,'expenses.json'),'utf8'),beforeRetry,'retry cannot undo approval or alter the audit history');
+    assert.equal(invoke('POST','/api/expenses/:id/approve',{role:'claimant',params:{id}}).status,403);
+  }
 });
 
 test('payment dialog lists stored accounts and lets Admin or Owner add one', () => {
