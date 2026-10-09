@@ -438,7 +438,8 @@ test('owner-requested Kalu correction removes only the two later payment records
 
 test('vendor ledger UI uses In and Out with status-coloured running balances',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
-  assert.match(html,/<th>Date<\/th><th>Particulars<\/th><th>Type<\/th><th>Expense \/ transaction reference<\/th><th class="r">In<\/th><th class="r">Out<\/th><th class="r">Balance<\/th>/);
+  assert.match(html,/<th>Date<\/th>'\+entityHead\+'<th>Particulars<\/th><th>Type<\/th><th>Expense \/ transaction reference<\/th><th class="r">In<\/th><th class="r">Out<\/th><th class="r">Balance<\/th>/);
+  assert.match(html,/entityHead=showEntity\?'<th>Entity<\/th>'/);
   assert.match(html,/function vendorBalanceHtml\(value\)/);
   assert.match(html,/n<0\?'<span class="pos">/);
   assert.match(html,/<span class="neg"><b>'\+fmt\(n\)\+'<\/b> due<\/span>/);
@@ -460,6 +461,40 @@ test('vendor ledger API returns chronological In and Out rows with a period open
     assert.equal(full.ledgerRows[0].reference,'EX-LEDGER-FORMAT-1');assert.equal(full.ledgerRows[1].reference,'BANK-ADVANCE-25');assert.equal(full.ledgerRows[2].reference,'EX-LEDGER-FORMAT-1/PAY-001');
     const period=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI',from:'2097-01-03',to:'2097-01-03',search:'Ledger Format Test'}}).body;
     assert.equal(period.vendors[0].ledgerOpeningBalance,175);assert.equal(period.vendors[0].ledgerRows[0].out,50);assert.equal(period.vendors[0].ledgerClosingBalance,225);assert.equal(period.totalDue,225);assert.equal(period.totalAdvance,0);
+  }finally{fs.writeFileSync(expenseFile,original);}
+});
+
+test('shared vendor identity combines All while entity filters retain separate balances',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),store=JSON.parse(original),vendor='Cross Entity Shared Test';
+  try{
+    store.vendors=store.vendors||{};store.vendors[vendor.toLowerCase()]={name:vendor,notes:'SANKI membership'};
+    store.vendorsByNature=store.vendorsByNature||{};store.vendorsByNature.SAMAST=store.vendorsByNature.SAMAST||{};store.vendorsByNature.SAMAST[vendor.toLowerCase()]={name:vendor,notes:'SAMAST membership'};
+    store.expenses=store.expenses||{};
+    store.expenses['EX-SHARED-SANKI']={id:'EX-SHARED-SANKI',date:'2097-02-01',nature:'SANKI',status:'partially_paid',approvedAt:'2097-02-01T10:00:00.000Z',vendor,particulars:'SANKI bill',ledger:'FLOWERS',amount:100,paidAmount:40,payments:[{id:'PAY-001',date:'2097-02-02',amount:40,account:'Counter Cash'}]};
+    store.expenses['EX-SHARED-SAMAST']={id:'EX-SHARED-SAMAST',date:'2097-02-01',nature:'SAMAST',status:'partially_paid',approvedAt:'2097-02-01T10:00:00.000Z',vendor,particulars:'SAMAST bill',ledger:'General Expenses-A3',amount:300,paidAmount:50,payments:[{id:'PAY-001',date:'2097-02-03',amount:50,account:'Samast Cash'}]};
+    fs.writeFileSync(expenseFile,JSON.stringify(store));
+    const all=invoke('GET','/api/expenses/vendors',{role:'owner',query:{from:'2097-02-01',to:'2097-02-03',search:'Cross Entity Shared Test'}}).body.vendors;
+    assert.equal(all.length,1);assert.deepEqual(all[0].entities,['SAMAST','SANKI']);assert.equal(all[0].ledgerClosingBalance,310);assert.deepEqual(all[0].entityBalances.map(x=>[x.nature,x.ledgerClosingBalance]),[['SAMAST',250],['SANKI',60]]);assert.ok(all[0].ledgerRows.every(x=>['SANKI','SAMAST'].includes(x.nature)));
+    const sanki=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI',from:'2097-02-01',to:'2097-02-03',search:'Cross Entity Shared Test'}}).body.vendors[0];
+    const samast=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SAMAST',from:'2097-02-01',to:'2097-02-03',search:'Cross Entity Shared Test'}}).body.vendors[0];
+    assert.equal(sanki.ledgerClosingBalance,60);assert.equal(samast.ledgerClosingBalance,250);
+    const reused=invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'PERSONAL',name:'cross entity shared test'}});assert.equal(reused.body.name,vendor);assert.equal(reused.body.reusedSharedVendor,true);
+    const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;assert.ok(config.vendorsByNature.PERSONAL.includes(vendor));
+    const renamed=invoke('POST','/api/expenses/vendors/manage/edit',{role:'owner',body:{nature:'SANKI',name:vendor,newName:'Cross Entity Final Name'}});assert.equal(renamed.status,200);assert.deepEqual(renamed.body.entities,['PERSONAL','SAMAST','SANKI']);
+    const afterRename=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(afterRename.expenses['EX-SHARED-SANKI'].vendor,'Cross Entity Final Name');assert.equal(afterRename.expenses['EX-SHARED-SAMAST'].vendor,'Cross Entity Final Name');
+    const renamedAll=invoke('GET','/api/expenses/vendors',{role:'owner',query:{from:'2097-02-01',to:'2097-02-03',search:'Cross Entity Final Name'}}).body.vendors;assert.equal(renamedAll.length,1);assert.equal(renamedAll[0].ledgerClosingBalance,310);
+  }finally{fs.writeFileSync(expenseFile,original);}
+});
+
+test('only the confirmed Geeta spelling pair shares an identity',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),store=JSON.parse(original);
+  try{
+    store.vendors=store.vendors||{};store.vendors['geeta pujan bhandar']={name:'Geeta Pujan Bhandar'};
+    store.vendorsByNature=store.vendorsByNature||{};store.vendorsByNature.SAMAST=store.vendorsByNature.SAMAST||{};store.vendorsByNature.SAMAST['geeta poojan bhandar']={name:'Geeta Poojan Bhandar'};
+    store.vendors['santosh garbage collector']={name:'Santosh Garbage Collector'};store.vendorsByNature.SAMAST['garbage collector']={name:'Garbage collector'};
+    fs.writeFileSync(expenseFile,JSON.stringify(store));
+    const geeta=invoke('GET','/api/expenses/vendors',{role:'owner',query:{search:'Geeta'}}).body.vendors;assert.equal(geeta.length,1);assert.equal(geeta[0].name,'Geeta Pujan Bhandar');assert.deepEqual(geeta[0].entities,['SAMAST','SANKI']);
+    const garbage=invoke('GET','/api/expenses/vendors',{role:'owner',query:{search:'Garbage'}}).body.vendors;assert.equal(garbage.length,2,'a weaker fuzzy name must remain two vendors until explicitly reviewed');
   }finally{fs.writeFileSync(expenseFile,original);}
 });
 

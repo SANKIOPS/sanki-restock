@@ -242,6 +242,7 @@ function blankStore() {
     receivables: {},
     vendors: {},
     vendorsByNature: { SAMAST: {}, PERSONAL: {} },
+    vendorDirectory: {},              // global vendor identity; entity maps below are membership indexes
     accounts: DEFAULT_ACCOUNTS.slice(),
     people: DEFAULT_PEOPLE.slice(),      // claimants
     openingBalances: {},                 // { [account]: opening ₹ }
@@ -537,6 +538,57 @@ function vendorReferenceSummary(s,nature,name){
 function mergeVendorMasterMetadata(records,name){
   const rows=records.filter(Boolean),merged=Object.assign({},...rows),notes=Array.from(new Set(rows.map(x=>String(x.notes||'').trim()).filter(Boolean))),tags=Array.from(new Set(rows.flatMap(x=>Array.isArray(x.tags)?x.tags:[]).map(x=>String(x||'').trim()).filter(Boolean)));
   merged.name=name;merged.notes=notes.join(' · ');if(tags.length)merged.tags=tags;return merged;
+}
+const SHARED_VENDOR_DIRECTORY_MIGRATION_KEY='shared-vendor-directory-cross-entity-v1';
+const SHARED_VENDOR_NAME_OVERRIDES={
+  'geeta pujan bhandar':{key:'geeta pujan bhandar',name:'Geeta Pujan Bhandar'},
+  'geeta poojan bhandar':{key:'geeta pujan bhandar',name:'Geeta Pujan Bhandar'}
+};
+function sharedVendorIdentityKey(value){
+  const identity=vendorIdentityKey(value),override=SHARED_VENDOR_NAME_OVERRIDES[identity];
+  return override&&override.key||identity;
+}
+function sharedVendorPreferredName(value){
+  const cleaned=cleanVendorName(value),override=SHARED_VENDOR_NAME_OVERRIDES[vendorIdentityKey(cleaned)];
+  return override&&override.name||cleaned;
+}
+function vendorMasterPairs(s){
+  return [['SANKI',s.vendors=s.vendors||{}]].concat(Object.entries(s.vendorsByNature=s.vendorsByNature||{}).map(([nature,master])=>[normalizedNature(nature),master||{}]));
+}
+function syncSharedVendorDirectory(s){
+  const previous=s.vendorDirectory||{},next={};
+  vendorMasterPairs(s).forEach(([nature,master])=>Object.values(master||{}).forEach(record=>{
+    const rawName=cleanVendorName(record&&record.name);if(!rawName)return;
+    const key=sharedVendorIdentityKey(rawName),prior=previous[key]||{},current=next[key]||{};
+    const name=SHARED_VENDOR_NAME_OVERRIDES[vendorIdentityKey(rawName)]?.name||prior.name||current.name||rawName;
+    const notes=Array.from(new Set([current.notes,prior.notes,record.notes].map(x=>String(x||'').trim()).filter(Boolean))).join(' · ');
+    const tags=Array.from(new Set([].concat(current.tags||[],prior.tags||[],record.tags||[]).map(x=>String(x||'').trim()).filter(Boolean)));
+    const aliases=Array.from(new Set([].concat(current.aliases||[],prior.aliases||[],rawName).map(cleanVendorName).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    const entities=Array.from(new Set([].concat(current.entities||[],nature))).sort((a,b)=>a.localeCompare(b));
+    next[key]={name,notes,tags,aliases,entities};
+  }));
+  const changed=JSON.stringify(previous)!==JSON.stringify(next);s.vendorDirectory=next;return changed;
+}
+function sharedVendorRecord(s,name){
+  syncSharedVendorDirectory(s);return (s.vendorDirectory||{})[sharedVendorIdentityKey(name)]||null;
+}
+function registerVendorForNature(s,nature,name,metadata){
+  const n=normalizedNature(nature),cleaned=cleanVendorName(name);if(!cleaned)return'';
+  syncSharedVendorDirectory(s);
+  const key=sharedVendorIdentityKey(cleaned),existing=(s.vendorDirectory||{})[key],canonical=sharedVendorPreferredName(existing&&existing.name||cleaned),master=vendorMasterForNature(s,n);
+  const matches=Object.entries(master).filter(([,record])=>sharedVendorIdentityKey(record&&record.name)===key),merged=mergeVendorMasterMetadata(matches.map(([,record])=>record).concat(metadata||{}),canonical);
+  matches.forEach(([masterKey])=>delete master[masterKey]);master[key]={...merged,name:canonical,sharedKey:key};
+  syncSharedVendorDirectory(s);return canonical;
+}
+function applySharedVendorDirectoryMigration(s){
+  s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[SHARED_VENDOR_DIRECTORY_MIGRATION_KEY]){syncSharedVendorDirectory(s);return false;}
+  const snapshots=vendorMasterPairs(s).flatMap(([nature,master])=>Object.values(master||{}).map(record=>({nature,name:record&&record.name,metadata:record}))).filter(x=>cleanVendorName(x.name));
+  s.vendorDirectory={};snapshots.forEach(row=>registerVendorForNature(s,row.nature,row.name,row.metadata));syncSharedVendorDirectory(s);
+  const crossEntity=Object.entries(s.vendorDirectory||{}).filter(([,record])=>(record.entities||[]).length>1).map(([key,record])=>({key,name:record.name,entities:record.entities,aliases:record.aliases}));
+  const result={appliedAt:new Date().toISOString(),globalVendorCount:Object.keys(s.vendorDirectory||{}).length,crossEntity,preservedTransactionDetails:true};
+  s.oneTimeMigrations[SHARED_VENDOR_DIRECTORY_MIGRATION_KEY]=result;
+  audit(s,null,'SHARED_VENDOR_DIRECTORY_CREATED','vendor','global',{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'ALL',after:result,note:'Created one global vendor identity while retaining entity-specific transactions and balances. Geeta Poojan Bhandar was linked to Geeta Pujan Bhandar; no weaker spelling matches were combined.'});
+  return true;
 }
 function applyReviewedVendorDecisions20261009(s){
   s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[REVIEWED_VENDOR_MIGRATION_KEY])return false;
@@ -909,6 +961,7 @@ function loadStore() {
     if(applyArunJiiVendorMerge(s))saveStore(s);
     if(applyShayamMondalVendorMerge(s))saveStore(s);
     if(applyReviewedVendorDecisions20261009(s))saveStore(s);
+    if(applySharedVendorDirectoryMigration(s))saveStore(s);
     if(applySep11PrashantReimbursementDateCorrection(s))saveStore(s);
     if(applySep13ShopifyCashComponentCorrections(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
@@ -1123,9 +1176,8 @@ function createTelegramPersonalExpense(input) {
   if(sourceKey){const duplicate=Object.values(s.expenses||{}).find(e=>e.telegramSourceKey===sourceKey);if(duplicate)return {success:true,duplicate:true,expense:duplicate};}
   const now=new Date().toISOString(),date=String(b.date||now.slice(0,10)).slice(0,10),paymentType=/cash/i.test(account)?'Cash':'UPI';
   s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0');
-  const vendor=String(b.vendor||particulars).trim(),ledger=PERSONAL_CATEGORIES.includes(b.ledger)?b.ledger:'Miscellaneous Personal';
+  const vendor=registerVendorForNature(s,'PERSONAL',String(b.vendor||particulars).trim(),{notes:'Added from Owner Telegram capture'}),ledger=PERSONAL_CATEGORIES.includes(b.ledger)?b.ledger:'Miscellaneous Personal';
   s.expenses[id]={id,date,particulars,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger,vendor,claimant:username,account,channel:'Shared',bill:'printed',fundedBy:'claimant',paymentType,qrPhoto:'',billPhoto:proof,purchasePaymentProof:proof,exceptionEvidence:'',exceptionReason:'',billNote:'Captured from owner Telegram payment screenshot',paidAlready:true,personalPaidAmount:amount,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:proof,status:'paid',paidAmount:amount,payments:[{id:'PAY-001',amount,date,account,paymentType,proof,note:'Owner payment captured from Telegram',paidBy:username,paidAt:now,personalFunds:true}],createdAt:now,createdBy:username,approvedAt:now,approvedBy:username,paidAt:now,paidBy:username,telegramSourceKey:sourceKey,telegramNeedsReview:b.needsReview!==false,telegramNarration:String(b.rawNarration||particulars).trim(),telegramOcrText:String(b.ocrText||'').slice(0,4000)};
-  s.vendorsByNature=s.vendorsByNature||{};s.vendorsByNature.PERSONAL=s.vendorsByNature.PERSONAL||{};if(!s.vendorsByNature.PERSONAL[vendor.toLowerCase()])s.vendorsByNature.PERSONAL[vendor.toLowerCase()]={name:vendor,notes:'Added from Owner Telegram capture'};
   audit(s,null,'CREATED','expense',id,{nature:'PERSONAL',user:username,after:s.expenses[id],note:'Telegram capture'});saveStore(s);return {success:true,expense:s.expenses[id]};
 }
 function createTelegramPersonalReceipt(input) {
@@ -1164,13 +1216,13 @@ function createTelegramBusinessPaidExpense(input) {
   if(!account)return{success:false,error:'Select one of your assigned paying accounts.'};
   const categories=telegramBusinessCategories(),ledger=categories.find(x=>x.toLowerCase()===String(b.ledger||'').trim().toLowerCase());
   if(!ledger)return{success:false,error:'Select a valid expense category.',needsCategory:true};
-  const particulars=String(b.particulars||b.vendor||'').trim(),vendor=String(b.vendor||particulars).trim();
+  const particulars=String(b.particulars||b.vendor||'').trim(),vendor=registerVendorForNature(s,nature,String(b.vendor||particulars).trim(),{notes:'Added from Telegram capture'});
   if(!vendor)return{success:false,error:'Vendor / payee is required.'};
   const sourceKey=String(b.sourceKey||'').trim();if(sourceKey){const duplicate=Object.values(s.expenses||{}).find(e=>e.telegramSourceKey===sourceKey);if(duplicate)return{success:true,duplicate:true,expense:duplicate};}
   const now=new Date().toISOString(),date=String(b.date||now.slice(0,10)).slice(0,10),paymentType=/cash/i.test(account)?'Cash':'UPI';s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0');
   const payment={id:'PAY-001',amount,date,account,paymentType,proof,note:'New paid expense captured through Telegram',paidBy:actor,paidAt:now,personalFunds:false};
   const expense={id,date,particulars,amount,isInstallment:false,requestedAmount:amount,nature,type:defaultType(ledger),ledger,vendor,claimant:actor,account,channel:'Shared',bill:'printed',fundedBy:'company',paymentType,qrPhoto:'',billPhoto:proof,purchasePaymentProof:'',exceptionEvidence:'',exceptionReason:'',billNote:'Payment proof captured through Telegram',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:proof,status:'paid',paidAmount:amount,payments:[payment],createdAt:now,createdBy:actor,approvedAt:now,approvedBy:actor,paidAt:now,paidBy:actor,telegramSourceKey:sourceKey,telegramOcrText:String(b.ocrText||'').slice(0,4000)};
-  s.expenses[id]=expense;s.vendorsByNature=s.vendorsByNature||{};if(nature==='SANKI')s.vendors[vendor.toLowerCase()]=s.vendors[vendor.toLowerCase()]||{name:vendor,notes:'Added from Telegram capture'};else{s.vendorsByNature[nature]=s.vendorsByNature[nature]||{};s.vendorsByNature[nature][vendor.toLowerCase()]=s.vendorsByNature[nature][vendor.toLowerCase()]||{name:vendor,notes:'Added from Telegram capture'};}
+  s.expenses[id]=expense;
   audit(s,null,'CREATED','expense',id,{nature,user:actor,device:'Telegram',after:expense,note:'Screenshot-first paid expense'});audit(s,null,'APPROVED','expense',id,{nature,user:actor,device:'Telegram',after:{status:'paid',approvedBy:actor,amount}});audit(s,null,'PAYMENT_RECORDED','expense',id,{nature,user:actor,device:'Telegram',account,paymentId:payment.id,after:payment});saveStore(s);return{success:true,expense};
 }
 function telegramExpense(id){const e=loadStore().expenses[id];return e?JSON.parse(JSON.stringify(e)):null;}
@@ -1178,7 +1230,7 @@ function telegramResolveAccount(nature,requested){const q=String(requested||'').
 function telegramResolveTransferAccount(requested,preferredNature){const raw=String(requested||'').trim(),tag=raw.match(/^(SANKI|SAMAST|PERSONAL)\s+(.+)$/i),explicit=tag&&normalizedNature(tag[1]),q=String(tag?tag[2]:raw).trim().toLowerCase(),digits=q.replace(/\D/g,''),matches=[];NATURES.forEach(nature=>transferAccountsForNature(nature).forEach(account=>{if(account.toLowerCase()===q||(digits&&account.replace(/\D/g,'').endsWith(digits)))matches.push({nature,account});}));const wanted=explicit||preferredNature&&normalizedNature(preferredNature),scoped=wanted?matches.filter(x=>x.nature===wanted):matches;return scoped.length===1?scoped[0]:null;}
 function telegramRecordTransfer(actor,body){const b=body||{},s=loadStore();let from=telegramResolveTransferAccount(b.fromAccount),to=telegramResolveTransferAccount(b.toAccount);if(from&&!to)to=telegramResolveTransferAccount(b.toAccount,from.nature);if(to&&!from)from=telegramResolveTransferAccount(b.fromAccount,to.nature);const amount=num(b.amount),proof=String(b.proof||'').trim();if(!from||!to)return{success:false,error:'One account was not recognized or is ambiguous. Add SANKI, SAMAST or PERSONAL before a shared account when needed.'};if(from.nature===to.nature&&from.account.toLowerCase()===to.account.toLowerCase())return{success:false,error:'Source and destination accounts must be different.'};if(!(amount>0))return{success:false,error:'Transfer amount must be greater than 0.'};if(!proof)return{success:false,error:'Transfer proof is required.'};const classification=String(b.classification||(from.nature===to.nature?'internal_transfer':'inter_entity_loan'));s.transferSeq=(s.transferSeq||0)+1;const now=new Date().toISOString(),transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:from.nature,fromNature:from.nature,toNature:to.nature,classification,fromAccount:from.account,toAccount:to.account,amount,date:String(b.date||now.slice(0,10)).slice(0,10),proof,note:String(b.note||'').trim(),createdBy:String(actor||'admin'),createdAt:now,device:'Telegram'};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,null,'TRANSFER_RECORDED','transfer',transfer.id,{user:transfer.createdBy,device:'Telegram',nature:from.nature,account:from.account,after:transfer});saveStore(s);return{success:true,transfer};}
 function telegramRecordNamitaTransfer(actor,body){const b=body||{},s=loadStore(),q=String(b.fromAccount||''),digits=q.replace(/\D/g,''),personal=companyAccountsForNature('PERSONAL'),personalMatches=personal.filter(a=>digits&&a.replace(/\D/g,'').endsWith(digits)),fromPersonal=personal.find(a=>a.toLowerCase()===q.toLowerCase())||(personalMatches.length===1?personalMatches[0]:''),fallback=telegramResolveTransferAccount(q),from=fromPersonal?{nature:'PERSONAL',account:fromPersonal}:fallback,toAccount=/cash/i.test(String(b.toAccount||''))?'Namita Cash':'Namita 5464',amount=num(b.amount),proof=String(b.proof||'').trim();if(!from)return{success:false,error:'The source account was not recognized.'};if(!(amount>0))return{success:false,error:'Transfer amount must be greater than 0.'};if(!proof)return{success:false,error:'Transfer proof is required.'};s.transferSeq=(s.transferSeq||0)+1;const now=new Date().toISOString(),classification=from.nature==='PERSONAL'?'internal_transfer':'owner_withdrawal',transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:from.nature,fromNature:from.nature,toNature:'PERSONAL',classification,fromAccount:from.account,toAccount,amount,date:String(b.date||now.slice(0,10)).slice(0,10),proof,note:String(b.note||'Namita funds').trim(),createdBy:String(actor||'owner'),createdAt:now,device:'Telegram'};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,null,'TRANSFER_RECORDED','transfer',transfer.id,{user:transfer.createdBy,device:'Telegram',nature:from.nature,account:from.account,after:transfer});saveStore(s);return{success:true,transfer};}
-function telegramApproveExpense(id,actor,changes){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};const before=JSON.parse(JSON.stringify(e)),c=changes||{};['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}if(c.nature)e.nature=normalizedNature(c.nature);if(e.ledger&&(e.ledger!==before.ledger||normalizedNature(e.nature)!==normalizedNature(before.nature))&&sankiCategories.active(s)&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase()))return{success:false,error:'Select an approved subcategory.',needsCategory:true,expense:e};if(e.ledger&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase())){s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};}const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};const n=normalizedNature(e.nature);s.vendors=s.vendors||{};s.vendorsByNature=s.vendorsByNature||{};if(n==='SANKI'){s.vendors[e.vendor.toLowerCase()]=s.vendors[e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}else{s.vendorsByNature[n]=s.vendorsByNature[n]||{};s.vendorsByNature[n][e.vendor.toLowerCase()]=s.vendorsByNature[n][e.vendor.toLowerCase()]||{name:e.vendor,notes:''};}e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';if(e.paidAlready)e.reimbursementStatus='pending';e.approvedAt=new Date().toISOString();e.approvedBy=actor;audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};}
+function telegramApproveExpense(id,actor,changes){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};const before=JSON.parse(JSON.stringify(e)),c=changes||{};['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}if(c.nature)e.nature=normalizedNature(c.nature);if(e.ledger&&(e.ledger!==before.ledger||normalizedNature(e.nature)!==normalizedNature(before.nature))&&sankiCategories.active(s)&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase()))return{success:false,error:'Select an approved subcategory.',needsCategory:true,expense:e};if(e.ledger&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase())){s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};}const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};e.vendor=registerVendorForNature(s,e.nature,e.vendor,{notes:''});e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';if(e.paidAlready)e.reimbursementStatus='pending';e.approvedAt=new Date().toISOString();e.approvedBy=actor;audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};}
 function telegramRejectExpense(id,actor,reason){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'Only a pending expense can be rejected.'};e.status='rejected';e.rejectReason=String(reason||'Rejected from Telegram');e.rejectedAt=new Date().toISOString();e.rejectedBy=actor;audit(s,null,'REJECTED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,reason:e.rejectReason}});saveStore(s);notifyExpenseUser(e,'rejected');return{success:true,expense:e};}
 function telegramRecordPayment(id,actor,b){const s=loadStore(),e=s.expenses[id],body=b||{};if(!e)return{success:false,error:'Expense not found.'};if(!['approved','partially_paid'].includes(e.status)||e.paidAlready)return{success:false,error:'This expense is not awaiting a vendor payment.'};const proof=String(body.proof||'');if(!proof)return{success:false,error:'Payment screenshot is required.'};const account=telegramResolveAccount(e.nature,body.account);if(!account)return{success:false,error:'Paying account was not recognized.',needsAccount:true};const issues=reconciliationIssues(s,normalizedNature(e.nature),account);if(issues.length)return{success:false,error:'This account has a reconciliation warning. Complete this payment in the app.',appRequired:true};const outstanding=expenseRefunds.expenseDue(s,e),amount=body.amount!=null?num(body.amount):outstanding;if(!(amount>0)||amount>outstanding)return{success:false,error:'Payment must be between ₹0 and '+outstanding+'.'};e.account=account;e.paidAmount=num(e.paidAmount)+amount;e.paymentProof=proof;e.payments=Array.isArray(e.payments)?e.payments:[];e.payments.push({id:nextExpensePaymentId(s,e),amount,date:String(body.date||indiaBusinessDate()).slice(0,10),account,paymentType:'UPI',proof,note:'Recorded through Telegram',paidBy:actor,paidAt:new Date().toISOString()});e.status=expenseRefunds.expenseDue(s,e)<=0?'paid':'partially_paid';e.paidAt=new Date().toISOString();e.paidBy=actor;audit(s,null,'PAYMENT_RECORDED','expense',id,{user:actor,device:'Telegram',nature:e.nature,account,paymentId:e.payments.at(-1).id,after:e.payments.at(-1)});saveStore(s);notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',amount);return{success:true,expense:e,payment:e.payments.at(-1)};}
 // Runs an existing synchronous accounting route for a linked Telegram user.
@@ -1816,7 +1868,9 @@ router.get('/api/expenses/config', (req, res) => {
   const ownerView = isOwner(req);
   const pendingReqs = (s.requests || []).filter(r => r.status === 'pending' && approvalNatures(req).includes(normalizedNature(r.nature)));
   const visiblePendingReqs = isAdmin(req) ? pendingReqs : (canApprove(req) ? pendingReqs.filter(r => r.kind === 'vendor') : []);
-  const vendorsByNature = { SANKI: Object.values(s.vendors).map(v => v.name), SAMAST: Object.values(((s.vendorsByNature || {}).SAMAST) || {}).map(v => v.name), PERSONAL: ownerView ? Object.values(((s.vendorsByNature || {}).PERSONAL) || {}).map(v => v.name) : [] };
+  syncSharedVendorDirectory(s);
+  const sharedVendorsFor=nature=>Object.values(s.vendorDirectory||{}).filter(v=>(v.entities||[]).includes(nature)).map(v=>v.name);
+  const vendorsByNature = { SANKI: sharedVendorsFor('SANKI'), SAMAST: sharedVendorsFor('SAMAST'), PERSONAL: ownerView ? sharedVendorsFor('PERSONAL') : [] };
   // Only approved master vendors are reusable. A name typed by a claimant is
   // promoted into this list only when the related expense is approved.
   Object.keys(vendorsByNature).forEach(n => vendorsByNature[n].sort((a, b) => a.localeCompare(b)));
@@ -2139,13 +2193,7 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   e.vendor=cleanVendorName(e.vendor);
   // A claimant may type a new vendor directly. Approval confirms the corrected
   // name and promotes it into the reusable vendor list.
-  if (normalizedNature(e.nature) === 'SANKI') {
-    if (!Object.values(s.vendors).some(v=>vendorIdentityKey(v&&v.name)===vendorIdentityKey(e.vendor))) s.vendors[vendorIdentityKey(e.vendor)] = { name: e.vendor, notes: '' };
-  } else {
-    const nature = normalizedNature(e.nature);
-    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature[nature] = s.vendorsByNature[nature] || {};
-    if (!Object.values(s.vendorsByNature[nature]).some(v=>vendorIdentityKey(v&&v.name)===vendorIdentityKey(e.vendor))) s.vendorsByNature[nature][vendorIdentityKey(e.vendor)] = { name: e.vendor, notes: '' };
-  }
+  e.vendor=registerVendorForNature(s,e.nature,e.vendor,{notes:''});
   const totalDue = num(e.amount);
   e.status = e.paidAmount >= totalDue ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
   if (e.paidAlready) { e.reimbursementStatus = 'pending'; e.vendorPaymentCompleted = e.paidAmount >= totalDue; }
@@ -2986,53 +3034,60 @@ router.get('/api/expenses/vendors', (req, res) => {
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const search=String(req.query.search||'').trim().toLowerCase(), category=String(req.query.category||'').trim().toLowerCase(), source=String(req.query.source||'expense'), from=String(req.query.from||''), to=String(req.query.to||'');
   const books = {};
-  cardExpenseRecords(s).forEach(e=>{const n=normalizedNature(e.nature),master=vendorMasterForNature(s,n),key=vendorIdentityKey(e.vendor);if(!Object.values(master).some(v=>vendorIdentityKey(v.name)===key))master[key]={name:e.vendor,tags:['Credit-card merchant']};});
+  cardExpenseRecords(s).forEach(e=>registerVendorForNature(s,e.nature,e.vendor,{tags:['Credit-card merchant']}));syncSharedVendorDirectory(s);
   const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
+  const directory=s.vendorDirectory||{};
+  const ensureBook=(n,name,metadata)=>{
+    const sharedKey=sharedVendorIdentityKey(name),key=n+'|'+sharedKey,shared=directory[sharedKey]||{},saved=metadata||{},existing=books[key];
+    if(existing){existing.notes=Array.from(new Set([existing.notes,saved.notes,shared.notes].map(x=>String(x||'').trim()).filter(Boolean))).join(' · ');existing.tags=Array.from(new Set([].concat(existing.tags||[],saved.tags||[],shared.tags||[])));return existing;}
+    return books[key]={sharedKey,name:shared.name||sharedVendorPreferredName(saved.name||name),nature:n,billed:0,paid:0,outstanding:0,count:0,notes:saved.notes||shared.notes||'',tags:Array.from(new Set([].concat(saved.tags||[],shared.tags||[]))),entries:[],ledgerItems:[]};
+  };
   const addLedgerEntry=(book,entry,entryType)=>{
     const baseParticulars=String(entry.particulars||entry.supplier||entry.ledger||entry.billNo||entry.id||'Vendor entry');
     if(entryType==='Vendor advance'){
       const gross=num(entry.grossPaymentAmount),isOverpayment=gross>0&&entry.batchPaymentId;
-      book.ledgerItems.push({date:String(entry.date||''),particulars:String(entry.note||(isOverpayment?'Payment to vendor':'Advance paid to vendor'))+(entry.account?' · '+entry.account:''),type:entry.creditOnly?'Refund credit':isOverpayment?'Payment':entryType,reference:String(entry.bankReference||entry.transactionReference||entry.paymentReference||entry.id||''),in:roundMoney(isOverpayment?gross:entry.amount),out:0,entryId:entry.id||'',kind:isOverpayment?'payment':'advance',order:20});
+      book.ledgerItems.push({nature:book.nature,date:String(entry.date||''),particulars:String(entry.note||(isOverpayment?'Payment to vendor':'Advance paid to vendor'))+(entry.account?' · '+entry.account:''),type:entry.creditOnly?'Refund credit':isOverpayment?'Payment':entryType,reference:String(entry.bankReference||entry.transactionReference||entry.paymentReference||entry.id||''),in:roundMoney(isOverpayment?gross:entry.amount),out:0,entryId:entry.id||'',kind:isOverpayment?'payment':'advance',order:20});
       return;
     }
-    book.ledgerItems.push({date:String(entry.date||''),particulars:baseParticulars,type:entryType,reference:String(entry.id||entry.billNo||''),in:0,out:roundMoney(entry.amount),entryId:entry.id||'',kind:'expense',source:entry.source||'',order:10});
-    (entry.payments||[]).forEach(payment=>{if(grossPaymentBatches.has(payment.batchPaymentId))return;book.ledgerItems.push({date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',kind:'payment',source:entry.source||'',order:20});});
+    book.ledgerItems.push({nature:book.nature,date:String(entry.date||''),particulars:baseParticulars,type:entryType,reference:String(entry.id||entry.billNo||''),in:0,out:roundMoney(entry.amount),entryId:entry.id||'',kind:'expense',source:entry.source||'',order:10});
+    (entry.payments||[]).forEach(payment=>{if(grossPaymentBatches.has(payment.batchPaymentId))return;book.ledgerItems.push({nature:book.nature,date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',kind:'payment',source:entry.source||'',order:20});});
   };
   const natures=nature?[nature]:approvalNatures(req);
-  natures.forEach(n=>{const master=n==='SANKI'?s.vendors:(((s.vendorsByNature||{})[n])||{});Object.values(master).forEach(v=>{const key=n+'|'+vendorIdentityKey(v.name),existing=books[key];if(existing){existing.notes=Array.from(new Set([existing.notes,v.notes].map(x=>String(x||'').trim()).filter(Boolean))).join(' · ');return;}books[key]={name:cleanVendorName(v.name),nature:n,billed:0,paid:0,outstanding:0,count:0,notes:v.notes||'',tags:v.tags||[],entries:[],ledgerItems:[]};});});
+  natures.forEach(n=>{const master=vendorMasterForNature(s,n);Object.values(master).forEach(v=>ensureBook(n,v.name,v));});
   Object.values(s.expenses).concat(cardExpenseRecords(s)).forEach(e => {
     if(e.expenseRefundReceiptId||expenseRefunds.records(s).filter(expenseRefunds.received).some(r=>r.components.some(c=>c.externalMovementId===e.id)))return;
-    const n=normalizedNature(e.nature),key=n+'|'+vendorIdentityKey(e.vendor);
-    if (!canViewExpense(req,e)||!natures.includes(n)||!e.vendor||!books[key]||!['approved','partially_paid','paid'].includes(e.status)) return;
+    const n=normalizedNature(e.nature);
+    if (!canViewExpense(req,e)||!natures.includes(n)||!e.vendor||!['approved','partially_paid','paid'].includes(e.status)) return;
+    const b=ensureBook(n,e.vendor);
     if(category&&!String(e.ledger||'').toLowerCase().includes(category))return;
-    addLedgerEntry(books[key],e,'Expense');
+    addLedgerEntry(b,e,'Expense');
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
-    const b=books[key];b.billed+=e.amount;b.paid+=num(e.paidAmount);b.count+=1;b.entries.push(e);
+    b.billed+=e.amount;b.paid+=num(e.paidAmount);b.count+=1;b.entries.push(e);
   });
   (s.vendorOpeningPayables||[]).forEach(e=>{
-    const n=normalizedNature(e.nature),key=n+'|'+vendorIdentityKey(e.vendor);
+    const n=normalizedNature(e.nature);
     if(!natures.includes(n)||!e.vendor)return;
     if(category&&!String(e.ledger||'Opening payable').toLowerCase().includes(category))return;
     const master=vendorMasterForNature(s,n),saved=Object.values(master).find(v=>vendorIdentityKey(v&&v.name)===vendorIdentityKey(e.vendor));
-    const b=books[key]||(books[key]={name:saved&&saved.name||e.vendor,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:saved&&saved.notes||'',entries:[],ledgerItems:[]});
+    const b=ensureBook(n,e.vendor,saved);
     addLedgerEntry(b,e,'Opening payable');
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
     b.billed+=num(e.amount);b.paid+=num(e.paidAmount);b.count+=1;b.entries.push(e);
   });
   (s.vendorAdvances||[]).forEach(e=>{
     if(e.accountingExcluded)return;
-    const n=normalizedNature(e.nature),key=n+'|'+vendorIdentityKey(e.vendor);
+    const n=normalizedNature(e.nature);
     if(!natures.includes(n)||!e.vendor)return;
     if(category&&!String('Vendor advance').toLowerCase().includes(category))return;
     const master=vendorMasterForNature(s,n),saved=Object.values(master).find(v=>vendorIdentityKey(v&&v.name)===vendorIdentityKey(e.vendor)),remaining=Math.max(0,num(e.remainingAmount));
-    const b=books[key]||(books[key]={name:saved&&saved.name||e.vendor,nature:n,billed:0,paid:0,outstanding:0,count:0,notes:saved&&saved.notes||'',entries:[],ledgerItems:[]});
+    const b=ensureBook(n,e.vendor,saved);
     addLedgerEntry(b,e,'Vendor advance');
     if(from&&String(e.date||'')<from)return;if(to&&String(e.date||'')>to)return;
     b.paid+=remaining;b.count+=1;b.entries.push(Object.assign({},e,{source:'vendor_advance_credit',originalAmount:num(e.amount),amount:0,paidAmount:remaining,status:remaining>0?'credit_available':'applied'}));
   });
   expenseRefunds.vendorLedgerRows(s).forEach(row=>{
-    const b=books[row.nature+'|'+vendorIdentityKey(row.vendor)];if(!b||!natures.includes(row.nature)||(category&&!String(row.category||'').toLowerCase().includes(category)))return;
-    b.ledgerItems.push(row);
+    if(!natures.includes(row.nature)||(category&&!String(row.category||'').toLowerCase().includes(category)))return;
+    const b=ensureBook(row.nature,row.vendor);b.ledgerItems.push(Object.assign({nature:row.nature},row));
     if((from&&row.date<from)||(to&&row.date>to))return;
     if(row.kind==='expense_return')b.billed-=row.in;
     if(row.kind==='expense_refund'){
@@ -3040,14 +3095,24 @@ router.get('/api/expenses/vendors', (req, res) => {
       if(r&&row.expenseId)b.paid-=row.out;
     }
   });
-  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementLedgerPayables(s,true).forEach(p=>{const key='SANKI|'+vendorIdentityKey(p.vendor),b=books[key]||(books[key]={name:cleanVendorName(p.vendor),nature:'SANKI',billed:0,paid:0,outstanding:0,count:0,notes:'Advanced Purchases mediator',entries:[],ledgerItems:[]});addLedgerEntry(b,p,'Procurement expense');if(from&&String(p.date||'')<from)return;if(to&&String(p.date||'')>to)return;b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
-  const list = Object.values(books).map(b => {
+  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementLedgerPayables(s,true).forEach(p=>{const b=ensureBook('SANKI',p.vendor,{notes:'Advanced Purchases mediator'});addLedgerEntry(b,p,'Procurement expense');if(from&&String(p.date||'')<from)return;if(to&&String(p.date||'')>to)return;b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
+  const finalizeBook=b=>{
     const all=b.ledgerItems.slice().sort((a,c)=>String(a.date).localeCompare(String(c.date))||num(a.order)-num(c.order)||String(a.reference).localeCompare(String(c.reference)));
     const opening=roundMoney(all.filter(x=>from&&x.date<from).reduce((n,x)=>n+num(x.out)-num(x.in),0));
     const period=all.filter(x=>(!from||x.date>=from)&&(!to||x.date<=to));let balance=opening;
     const ledgerRows=period.map(x=>{balance=roundMoney(balance+num(x.out)-num(x.in));return Object.assign({},x,{balance});});
-    return {name:b.name,nature:b.nature,count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,tags:b.tags||[],entries:b.entries.sort((a,c)=>String(c.date+c.id).localeCompare(String(a.date+a.id))),ledgerOpeningBalance:opening,ledgerRows,ledgerClosingBalance:balance,ledgerTransactionCount:ledgerRows.length};
-  }).filter(b=>(!category||b.ledgerTransactionCount>0)&&(!search||fuzzyIncludes(b.name,search)||b.ledgerRows.some(x=>fuzzyIncludes(x.particulars,search)||fuzzyIncludes(x.type,search)||String(x.reference||'').toLowerCase().includes(search)||String(x.in||'').includes(search)||String(x.out||'').includes(search)))).sort((a,b)=>a.name.localeCompare(b.name));
+    return {sharedKey:b.sharedKey,name:b.name,nature:b.nature,entities:b.entities||[b.nature],entityBalances:b.entityBalances||[],count:b.count,billed:round0(b.billed),paid:round0(b.paid),outstanding:round0(b.billed-b.paid),notes:b.notes,tags:b.tags||[],entries:b.entries.sort((a,c)=>String(c.date+c.id).localeCompare(String(a.date+a.id))),ledgerOpeningBalance:opening,ledgerRows,ledgerClosingBalance:balance,ledgerTransactionCount:ledgerRows.length};
+  };
+  let list;
+  if(nature){list=Object.values(books).map(b=>{const final=finalizeBook(b);final.entityBalances=[{nature:b.nature,count:final.count,ledgerTransactionCount:final.ledgerTransactionCount,ledgerClosingBalance:final.ledgerClosingBalance}];return final;});}
+  else{
+    const sharedBooks={};Object.values(books).forEach(b=>{
+      const key=b.sharedKey||sharedVendorIdentityKey(b.name),shared=directory[key]||{},g=sharedBooks[key]||(sharedBooks[key]={sharedKey:key,name:shared.name||b.name,nature:'',entities:[],entityBalances:[],billed:0,paid:0,count:0,notes:'',tags:[],entries:[],ledgerItems:[]}),entity=finalizeBook(b);
+      g.entities.push(b.nature);g.entityBalances.push({nature:b.nature,count:entity.count,ledgerTransactionCount:entity.ledgerTransactionCount,ledgerClosingBalance:entity.ledgerClosingBalance});g.billed+=b.billed;g.paid+=b.paid;g.count+=b.count;g.notes=Array.from(new Set([g.notes,b.notes].filter(Boolean))).join(' · ');g.tags=Array.from(new Set([].concat(g.tags,b.tags||[])));g.entries.push(...b.entries);g.ledgerItems.push(...b.ledgerItems);
+    });
+    list=Object.values(sharedBooks).map(b=>{b.entities=Array.from(new Set(b.entities)).sort((a,c)=>a.localeCompare(c));b.entityBalances.sort((a,c)=>a.nature.localeCompare(c.nature));return finalizeBook(b);});
+  }
+  list=list.filter(b=>(!category||b.ledgerTransactionCount>0)&&(!search||fuzzyIncludes(b.name,search)||(b.entities||[]).some(x=>fuzzyIncludes(x,search))||b.ledgerRows.some(x=>fuzzyIncludes(x.particulars,search)||fuzzyIncludes(x.type,search)||String(x.reference||'').toLowerCase().includes(search)||String(x.in||'').includes(search)||String(x.out||'').includes(search)))).sort((a,b)=>a.name.localeCompare(b.name));
   const totalDue=roundMoney(list.reduce((n,b)=>n+Math.max(0,num(b.ledgerClosingBalance)),0)),totalAdvance=roundMoney(list.reduce((n,b)=>n+Math.max(0,-num(b.ledgerClosingBalance)),0));
   res.json({ success: true, vendors: list, totalOutstanding: list.reduce((n, b) => n + b.outstanding, 0), totalDue, totalAdvance });
 });
@@ -3058,15 +3123,10 @@ router.post('/api/expenses/vendors', (req, res) => {
   if (!approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot edit this accounting entity.' });
   const name = cleanVendorName((req.body || {}).name);
   if (!name) return res.status(400).json({ success: false, error: 'Vendor name required.' });
-  if (nature === 'SANKI') {
-    if (!Object.values(s.vendors).some(v=>vendorIdentityKey(v&&v.name)===vendorIdentityKey(name))) s.vendors[vendorIdentityKey(name)] = { name, notes: '' };
-  } else {
-    s.vendorsByNature = s.vendorsByNature || {}; s.vendorsByNature[nature] = s.vendorsByNature[nature] || {};
-    if (!Object.values(s.vendorsByNature[nature]).some(v=>vendorIdentityKey(v&&v.name)===vendorIdentityKey(name))) s.vendorsByNature[nature][vendorIdentityKey(name)] = { name, notes: '' };
-  }
-  audit(s,req,'VENDOR_ADDED','vendor',name,{nature,after:{name}});
+  const canonicalName=registerVendorForNature(s,nature,name,{notes:''});
+  audit(s,req,'VENDOR_ADDED','vendor',canonicalName,{nature,after:{name:canonicalName,sharedKey:sharedVendorIdentityKey(canonicalName)},note:canonicalName===name?'Added to the shared vendor directory.':'Linked to the existing shared vendor identity.'});
   saveStore(s);
-  res.json({ success: true });
+  res.json({ success: true, name:canonicalName, reusedSharedVendor:canonicalName!==name });
 });
 
 function vendorMasterForNature(s, nature) {
@@ -3076,42 +3136,48 @@ function vendorMasterForNature(s, nature) {
   return s.vendorsByNature[n] = s.vendorsByNature[n] || {};
 }
 function vendorLinkedExpenses(s, nature, name) {
-  const n = normalizedNature(nature), key = String(name || '').trim().toLowerCase();
-  return Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === n && String(e.vendor || '').trim().toLowerCase() === key);
+  const n = normalizedNature(nature), key = sharedVendorIdentityKey(name);
+  return Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === n && sharedVendorIdentityKey(e.vendor) === key);
 }
 router.post('/api/expenses/vendors/manage/edit', (req, res) => {
   if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can edit vendor ledgers.' });
-  const s=loadStore(), b=req.body||{}, nature=normalizedNature(b.nature), oldName=String(b.name||'').trim(), newName=String(b.newName||'').trim();
+  const s=loadStore(), b=req.body||{}, nature=normalizedNature(b.nature), oldName=cleanVendorName(b.name), newName=cleanVendorName(b.newName);
   if(!oldName||!newName) return res.status(400).json({success:false,error:'Current and new vendor names are required.'});
-  const master=vendorMasterForNature(s,nature),oldKey=oldName.toLowerCase(),newKey=newName.toLowerCase(),current=master[oldKey];
+  syncSharedVendorDirectory(s);const oldKey=sharedVendorIdentityKey(oldName),newKey=sharedVendorIdentityKey(newName),current=(s.vendorDirectory||{})[oldKey];
   if(!current) return res.status(404).json({success:false,error:'Vendor ledger not found.'});
-  if(newKey!==oldKey&&master[newKey]) return res.status(409).json({success:false,error:'That vendor ledger already exists. Use Merge instead.'});
-  const linked=vendorLinkedExpenses(s,nature,oldName),before={name:current.name,notes:current.notes||''};
-  linked.forEach(e=>{e.vendor=newName;});delete master[oldKey];master[newKey]={...current,name:newName};
-  expenseRefunds.records(s).filter(r=>r.nature===nature).forEach(r=>{if(expenseRefunds.sameVendor(r.vendor,oldName)){r.originalVendor=r.originalVendor||r.vendor;r.vendor=newName;}r.components.forEach(c=>{if(expenseRefunds.sameVendor(c.issuer,oldName)){c.originalIssuer=c.originalIssuer||c.issuer;c.issuer=newName;}});});
-  (s.vendorAdvances||[]).filter(a=>a.creditOnly&&normalizedNature(a.nature)===nature).forEach(a=>{if(expenseRefunds.sameVendor(a.vendor,oldName))a.vendor=newName;if(expenseRefunds.sameVendor(a.issuer,oldName)){a.originalIssuer=a.originalIssuer||a.issuer;a.issuer=newName;}});
-  audit(s,req,'VENDOR_RENAMED','vendor',oldName,{nature,before,after:{name:newName,linkedExpenses:linked.map(e=>e.id)}});
-  saveStore(s);res.json({success:true,name:newName,updatedExpenses:linked.length});
+  if(newKey!==oldKey&&(s.vendorDirectory||{})[newKey]) return res.status(409).json({success:false,error:'That shared vendor already exists. Use Merge instead.'});
+  const entities=(current.entities||[]).slice(),linked=[];
+  Object.values(s.expenses||{}).forEach(e=>{if(sharedVendorIdentityKey(e.vendor)===oldKey){linked.push(e.id);e.vendor=newName;}});
+  (s.vendorOpeningPayables||[]).forEach(x=>{if(sharedVendorIdentityKey(x.vendor)===oldKey)x.vendor=newName;});
+  (s.vendorAdvances||[]).forEach(x=>{if(sharedVendorIdentityKey(x.vendor)===oldKey)x.vendor=newName;if(x.creditOnly&&sharedVendorIdentityKey(x.issuer)===oldKey){x.originalIssuer=x.originalIssuer||x.issuer;x.issuer=newName;}});
+  expenseRefunds.records(s).forEach(r=>{if(sharedVendorIdentityKey(r.vendor)===oldKey){r.originalVendor=r.originalVendor||r.vendor;r.vendor=newName;}(r.components||[]).forEach(c=>{if(sharedVendorIdentityKey(c.issuer)===oldKey){c.originalIssuer=c.originalIssuer||c.issuer;c.issuer=newName;}});});
+  Object.values(s.bankReconciliationDrafts||{}).forEach(d=>Object.values(d.resolutions||{}).forEach(r=>{if(sharedVendorIdentityKey(r.vendor)===oldKey)r.vendor=newName;}));
+  vendorMasterPairs(s).forEach(([,master])=>{const records=Object.entries(master).filter(([,record])=>sharedVendorIdentityKey(record&&record.name)===oldKey);if(!records.length)return;records.forEach(([key])=>delete master[key]);master[newKey]=mergeVendorMasterMetadata(records.map(([,record])=>record),newName);});
+  delete s.vendorDirectory[oldKey];syncSharedVendorDirectory(s);if(s.vendorDirectory[newKey])s.vendorDirectory[newKey].name=newName;
+  audit(s,req,'VENDOR_RENAMED','vendor',oldName,{nature:'ALL',before:{name:oldName,entities},after:{name:newName,entities,linkedExpenses:linked},note:'Renamed the shared vendor identity across every entity; transaction amounts and balances were preserved.'});
+  saveStore(s);res.json({success:true,name:newName,updatedExpenses:linked.length,entities});
 });
 router.post('/api/expenses/vendors/manage/merge', (req, res) => {
   if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can merge vendor ledgers.' });
-  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),sourceName=String(b.sourceName||'').trim(),targetName=String(b.targetName||'').trim();
-  if(!sourceName||!targetName||sourceName.toLowerCase()===targetName.toLowerCase()) return res.status(400).json({success:false,error:'Select two different vendor ledgers.'});
-  const master=vendorMasterForNature(s,nature),sourceKey=sourceName.toLowerCase(),targetKey=targetName.toLowerCase(),source=master[sourceKey],target=master[targetKey];
-  if(!source) return res.status(404).json({success:false,error:'Source vendor ledger not found.'});
-  if(!target) return res.status(404).json({success:false,error:'Target vendor ledger not found.'});
-  const result=mergeVendorRecords(s,nature,[sourceName],target.name,{req});
-  saveStore(s);res.json(Object.assign({name:target.name},result));
+  const s=loadStore(),b=req.body||{},sourceName=cleanVendorName(b.sourceName),targetName=cleanVendorName(b.targetName);syncSharedVendorDirectory(s);
+  const sourceKey=sharedVendorIdentityKey(sourceName),targetKey=sharedVendorIdentityKey(targetName),source=(s.vendorDirectory||{})[sourceKey],target=(s.vendorDirectory||{})[targetKey];
+  if(!sourceName||!targetName||sourceKey===targetKey) return res.status(400).json({success:false,error:'Select two different vendor ledgers.'});
+  if(!source) return res.status(404).json({success:false,error:'Source shared vendor not found.'});
+  if(!target) return res.status(404).json({success:false,error:'Target shared vendor not found.'});
+  const entities=Array.from(new Set([].concat(source.entities||[],target.entities||[]))),sourceNames=Array.from(new Set([source.name].concat(source.aliases||[]))),results=[];
+  entities.forEach(entity=>{const referenced=sourceNames.some(name=>vendorReferenceSummary(s,entity,name).total),master=vendorMasterForNature(s,entity),hasSource=Object.values(master).some(record=>sharedVendorIdentityKey(record&&record.name)===sourceKey);if(!hasSource&&!referenced)return;registerVendorForNature(s,entity,target.name,target);results.push(mergeVendorRecords(s,entity,sourceNames,target.name,{req,skipAudit:true}));});
+  syncSharedVendorDirectory(s);audit(s,req,'VENDOR_MERGED','vendor',source.name,{nature:'ALL',before:{source:source.name,entities:source.entities},after:{name:target.name,entities:(s.vendorDirectory[targetKey]||{}).entities},note:'Merged the shared vendor identity across every entity; transaction amounts, dates, references, proofs and payment accounts were preserved.'});
+  saveStore(s);res.json({success:true,name:target.name,sourceName:source.name,entities,updatedExpenses:results.reduce((sum,result)=>sum+num(result.updatedExpenses),0),results});
 });
 router.post('/api/expenses/vendors/manage/delete', (req, res) => {
   if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can delete vendor ledgers.' });
   const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),name=String(b.name||'').trim(),reason=String(b.reason||'').trim();
   if(!name) return res.status(400).json({success:false,error:'Vendor name is required.'});
   if(!reason) return res.status(400).json({success:false,error:'Reason for deletion is required.'});
-  const master=vendorMasterForNature(s,nature),key=name.toLowerCase(),current=master[key];if(!current)return res.status(404).json({success:false,error:'Vendor ledger not found.'});
+  const master=vendorMasterForNature(s,nature),key=sharedVendorIdentityKey(name),entry=Object.entries(master).find(([,record])=>sharedVendorIdentityKey(record&&record.name)===key),current=entry&&entry[1];if(!current)return res.status(404).json({success:false,error:'Vendor ledger not found.'});
   const linked=vendorLinkedExpenses(s,nature,name);if(linked.length)return res.status(409).json({success:false,error:'This ledger has '+linked.length+' linked expense(s). Merge or rename it so accounting history is preserved.'});
-  if(expenseRefunds.records(s).some(r=>expenseRefunds.active(r)&&r.nature===nature&&(expenseRefunds.sameVendor(r.vendor,name)||r.components.some(c=>expenseRefunds.sameVendor(c.issuer,name)))))return res.status(409).json({success:false,error:'This vendor has linked refunds or credits. Merge or rename it to preserve their history and redemption links.'});
-  delete master[key];audit(s,req,'VENDOR_DELETED','vendor',name,{nature,before:current,note:reason});saveStore(s);res.json({success:true});
+  if(expenseRefunds.records(s).some(r=>expenseRefunds.active(r)&&r.nature===nature&&(sharedVendorIdentityKey(r.vendor)===key||r.components.some(c=>sharedVendorIdentityKey(c.issuer)===key))))return res.status(409).json({success:false,error:'This vendor has linked refunds or credits. Merge or rename it to preserve their history and redemption links.'});
+  delete master[entry[0]];syncSharedVendorDirectory(s);audit(s,req,'VENDOR_DELETED','vendor',name,{nature,before:current,note:reason});saveStore(s);res.json({success:true});
 });
 
 // ── Running cash balances per account ────────────────────────────
@@ -4565,7 +4631,7 @@ function applyFinalizedOpeningVendorPayables(draft,username){
     const index=Number(String(rowId).replace('bank-','')),bankTx=storedByDraftIndex.get(index);
     const amount=num(r.openingPayableAmount),now=new Date().toISOString();s.adjSeq=num(s.adjSeq)+1;
     const adjustment={id:'ADJ-'+String(s.adjSeq).padStart(4,'0'),nature:draft.nature,account:draft.account,amount:-amount,date:bank.date,note:(r.reason||'Pre-system opening vendor payable')+' [Opening vendor payable '+draft.id+']',reconciliationDraft:draft.id,bankRowId:rowId,createdBy:username,createdAt:now};s.adjustments.push(adjustment);
-    const payableNature=normalizedNature(r.openingNature||draft.nature),master=vendorMasterForNature(s,payableNature),vendor=String(r.vendor||'Opening vendor').trim();master[vendor.toLowerCase()]=master[vendor.toLowerCase()]||{name:vendor,notes:''};
+    const payableNature=normalizedNature(r.openingNature||draft.nature),vendor=registerVendorForNature(s,payableNature,String(r.vendor||'Opening vendor').trim(),{notes:''});
     s.vendorOpeningPayables=Array.isArray(s.vendorOpeningPayables)?s.vendorOpeningPayables:[];const payable={id:'VOP-'+String(s.adjSeq).padStart(5,'0'),nature:payableNature,vendor,date:bank.date,preSystemDates:r.preSystemDates||'',amount,paidAmount:amount,status:'paid',ledger:'Opening payable (pre-system)',particulars:r.reason||'Pre-system vendor dues paid after books started',account:draft.account,adjustmentId:adjustment.id,bankTransactionId:bankTx&&bankTx.id||'',bankRowId:rowId,reconciliationDraft:draft.id,source:'opening_vendor_payable',createdBy:username,createdAt:now,payments:[{id:'PAY-OPENING',date:bank.date,amount,account:draft.account,proof:'',paidBy:username,reference:bankTx&&bankTx.id||''}]};s.vendorOpeningPayables.push(payable);
     s.bankDateOverrides=s.bankDateOverrides||{};if(r.appId){const linked=view.rows.find(x=>x.app&&x.app.id===r.appId),existing=s.bankDateOverrides[r.appId]||{};s.bankDateOverrides[r.appId]={bankDate:bank.date,originalDate:existing.originalDate||linked&&linked.app&&(linked.app.originalDate||linked.app.date)||'',bankTransactionId:bankTx&&bankTx.id||'',reconciliationDraft:draft.id,remark:r.remark||r.reason||'',by:username,at:now};}
     audit(s,null,'OPENING_VENDOR_PAYABLE_PAID','vendor',vendor,{user:username,device:'Web',nature:payableNature,account:draft.account,after:payable,note:r.reason,draftId:draft.id});
@@ -5031,7 +5097,7 @@ router.post('/api/expenses/requests', (req, res) => {
   const exists = kind === 'ledger'
     ? pickableLedgers(s).some(l => l.name.toLowerCase() === name.toLowerCase())
     : kind === 'vendor'
-      ? !!s.vendors[name.toLowerCase()]
+      ? !!sharedVendorRecord(s,name)
       : (s.accounts || []).some(a => a.toLowerCase() === name.toLowerCase());
   if (exists) return res.json({ success: true, already: true });
   // De-dupe pending requests.
@@ -5091,8 +5157,7 @@ router.post('/api/expenses/requests/:id/decide', (req, res) => {
     } else if (r.kind === 'vendor') {
       const editedName = String((req.body || {}).name || r.name).trim();
       if (!editedName) return res.status(400).json({ success: false, error: 'Vendor name required.' });
-      s.vendors[editedName.toLowerCase()] = { name: editedName, notes: String((r.meta && r.meta.details) || '') };
-      r.name = editedName;
+      r.name = registerVendorForNature(s,normalizedNature(r.nature||'SANKI'),editedName,{notes:String((r.meta && r.meta.details) || '')});
     } else {
       if (!(s.accounts || []).some(a => a.toLowerCase() === r.name.toLowerCase())) s.accounts.push(r.name);
     }
@@ -5190,7 +5255,7 @@ const expenseRefundDeps = {
   accountVisible:(req,account)=>accountVisibleToReq(req,account)&&(!creditCardByAccount(account)||!creditCardByAccount(account).ownerOnly||isOwner(req)),
   expenses:s=>Object.values(s.expenses||{}).concat(cardExpenseRecords(s)),canView:canViewExpense,today:indiaBusinessDate,
   claimant:reimbursementClaimantForExpense,card:resolveCreditCard,cardName:creditCardName,companyAccount:allowedCompanyAccount,
-  ensureVendor:(s,n,name)=>{const master=vendorMasterForNature(s,n),key=vendorIdentityKey(name);if(!Object.values(master).some(v=>vendorIdentityKey(v.name)===key))master[key]={name:cleanVendorName(name),tags:['Refund credit issuer']};},
+  ensureVendor:(s,n,name)=>registerVendorForNature(s,n,name,{tags:['Refund credit issuer']}),
   closedThrough:(s,n,a)=>String(((s.bankStatements||{})[bankStatementBookKey(n,a)]||{}).reconciledThrough||((s.cashReconciliations||[]).filter(r=>r.status==='approved'&&r.account===a).map(r=>r.verifiedThrough).sort().at(-1))||''),
   receiptUsed:(s,id)=>require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0,
   movementLocked:(s,id)=>unpayBlockedReferences(s).has(id)||(s.reconciliationExpenses||[]).some(e=>e.expenseRefundReceiptId===id)||require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0||(s.receipts||[]).some(r=>r.id===id&&(s.cashReconciliations||[]).some(x=>x.status==='approved'&&x.account===r.account&&x.verifiedThrough>=r.date))
