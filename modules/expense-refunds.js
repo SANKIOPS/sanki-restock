@@ -317,5 +317,41 @@ function manualCardRefunds(store, cardId, cardName) {
   return (store.receipts || []).filter(r => !r.accountingExcluded && r.creditCardRefund && r.account === cardName && !(store.reconciliationExpenses || []).some(e => e.creditCardId === cardId && e.expenseRefundReceiptId === r.id));
 }
 
+// Both the refund screen and ordinary vendor payment use this validation and
+// application. Preparing is read-only so a split payment can validate every
+// money/credit leg before applying any of them or saving the store.
+function prepareRedemption(store, record, payload, context) {
+  if (!received(record)) fail('Refund credit not found.');
+  context.checkRecord(record);
+  const component = record.components.find(c => c.id === payload.componentId && c.vendorAdvanceId);
+  const credit = component && (store.vendorAdvances || []).find(a => a.id === component.vendorAdvanceId && !a.accountingExcluded && a.creditOnly);
+  const expense = store.expenses[payload.expenseId], value = amount(payload.amount), date = text(payload.date), reason = text(payload.reason);
+  if (!credit || !expense) fail('Select an accessible credit and approved expense.');
+  context.checkExpense(expense);
+  if (expense.status === 'rejected' || !expense.approvedAt && !['approved', 'partially_paid', 'paid'].includes(expense.status)) fail('The expense must be approved before credit redemption.');
+  if (nature(expense.nature) !== record.nature || !sameVendor(expense.vendor, credit.issuer)) fail('Credit can only settle an expense in the same entity with its named issuer/merchant.');
+  if (!validDate(date) || date < record.date || date < expense.date || date > context.today || !reason) fail('Enter a valid redemption date and reason.');
+  if (credit.expiryDate && date > credit.expiryDate) fail('This credit has expired. It cannot be redeemed; its history remains available for review.');
+  const key = text(payload.requestId);
+  if (!/^[a-zA-Z0-9-]{8,100}$/.test(key)) fail('Refresh the redemption form and retry.');
+  const prior = (credit.applications || []).find(a => a.requestId === key);
+  if (prior) {
+    if (prior.expenseId !== expense.id || prior.amount !== value || prior.date !== date) fail('That request was already used for another redemption.', 409);
+  } else if (value > credit.remainingAmount || value > expenseDue(store, expense)) fail('Redemption cannot exceed the available credit or the unpaid bill amount.');
+  return { record, component, credit, expense, value, date, reason, key, prior };
+}
+function applyRedemption(store, plan, context) {
+  if (plan.prior) return plan.prior;
+  const { component, credit, expense, value, date, reason, key } = plan;
+  const application = { id: component.id + '-USE-' + String((credit.applications || []).length + 1).padStart(3, '0'),
+    expenseId: expense.id, amount: value, date, reason, appliedBy: context.username, appliedAt: new Date().toISOString(), requestId: key, refundCredit: true,
+    refundId: plan.record.id, creditReference: component.reference, creditMode: component.mode, issuer: credit.issuer };
+  if (context.batchPaymentId) application.batchPaymentId = context.batchPaymentId;
+  credit.remainingAmount = money(credit.remainingAmount - value); credit.applications = [...(credit.applications || []), application];
+  expense.vendorAdvanceApplications = [...(expense.vendorAdvanceApplications || []), { ...application, vendorAdvanceId: credit.id }];
+  expense.paidAmount = money(Number(expense.paidAmount || 0) + value); expense.status = expenseDue(store, expense) <= 0 ? 'paid' : 'partially_paid';
+  return application;
+}
+
 module.exports = { MONEY_MODES, CREDIT_MODES, MODES, REASONS, money, cents, active, received, validDate, init, records,
-  expenseTotals, expenseDue, reimbursementPosition, decorateExpense, catalog, prepare, post, viewRecord, billCreditEntries, vendorLedgerRows, sameVendor, hasSource, hasCreditApplication, protectsMovement, manualCardRefunds };
+  expenseTotals, expenseDue, reimbursementPosition, decorateExpense, catalog, prepare, post, viewRecord, billCreditEntries, vendorLedgerRows, sameVendor, hasSource, hasCreditApplication, protectsMovement, manualCardRefunds, prepareRedemption, applyRedemption };

@@ -3,9 +3,7 @@ const refunds = require('./expense-refunds');
 const reject = (message, status = 400) => { const error = new Error(message); error.status = status; throw error; };
 const clone = value => JSON.parse(JSON.stringify(value));
 
-function register(router, deps) {
-  function authorized(req) { if (!deps.isAdmin(req)) reject('Only Admin or Owner can manage expense refunds and returns.', 403); }
-  function checkRecord(req, record, store) {
+function checkRecordAccess(req, record, store, deps) {
     if (!deps.natures(req).includes(record.nature)) reject('You cannot access refunds for this entity.', 403);
     if (record.components.some(c => c.account && !deps.accountVisible(req, c.account))) reject('A receiving account is restricted to the Owner.', 403);
     const expenses = deps.expenses(store);
@@ -16,7 +14,10 @@ function register(router, deps) {
       const accounts = [...(source.paymentAllocations || []).map(p => p.account), advance && !advance.creditOnly && advance.account].filter(a => a && a !== 'Refund credit');
       if (accounts.some(a => !deps.accountVisible(req, a))) reject('The original paying account is restricted.', 403);
     });
-  }
+}
+function register(router, deps) {
+  function authorized(req) { if (!deps.isAdmin(req)) reject('Only Admin or Owner can manage expense refunds and returns.', 403); }
+  const checkRecord = (req, record, store) => checkRecordAccess(req, record, store, deps);
   function context(req, store, date = '') {
     const expenses = deps.expenses(store).filter(e => deps.canView(req, e) && deps.natures(req).includes(deps.nature(e.nature)));
     return { today: deps.today(), username: req.user.username, expenses,
@@ -154,27 +155,14 @@ function register(router, deps) {
   }));
   router.post('/api/expenses/expense-refunds/:id/redeem', handler((req, res) => {
     const store = deps.loadStore(), record = refunds.records(store).find(r => r.id === req.params.id && refunds.received(r));
-    if (!record) reject('Refund credit not found.'); checkRecord(req, record, store);
-    const component = record.components.find(c => c.id === req.body.componentId && c.vendorAdvanceId);
-    const credit = component && store.vendorAdvances.find(a => a.id === component.vendorAdvanceId && !a.accountingExcluded);
-    const expense = store.expenses[req.body.expenseId], value = refunds.money(req.body.amount), date = String(req.body.date || ''), reason = String(req.body.reason || '').trim();
-    if (!credit || !expense || !deps.canView(req, expense) || !deps.natures(req).includes(deps.nature(expense.nature))) reject('Select an accessible credit and approved expense.');
-    if (expense.ownerOnly && !deps.isOwner(req)) reject('The receiving expense is restricted to the Owner.', 403);
-    if (!expense.approvedAt && !['approved', 'partially_paid', 'paid'].includes(expense.status)) reject('The expense must be approved before credit redemption.');
-    if (deps.nature(expense.nature) !== record.nature || !refunds.sameVendor(expense.vendor, credit.issuer)) reject('Credit can only settle an expense in the same entity with its named issuer/merchant.');
-    if (!refunds.validDate(date) || date < record.date || date < expense.date || date > deps.today() || !reason) reject('Enter a valid redemption date and reason.');
-    if (credit.expiryDate && date > credit.expiryDate) reject('This credit has expired. It cannot be redeemed; its history remains available for review.');
-    const key = String(req.body.requestId || '');
-    if (!/^[a-zA-Z0-9-]{8,100}$/.test(key)) reject('Refresh the redemption form and retry.');
-    const prior = (credit.applications || []).find(a => a.requestId === key);
-    if (prior) { if (prior.expenseId !== expense.id || prior.amount !== value || prior.date !== date) reject('That request was already used for another redemption.', 409); return res.json({ success: true, already: true, view: view(req, store, { nature: record.nature }) }); }
-    if (!(value > 0) || Math.abs(refunds.cents(value) - Number(req.body.amount) * 100) > .00001 || value > credit.remainingAmount || value > refunds.expenseDue(store, expense)) reject('Redemption cannot exceed the available credit or the unpaid bill amount.');
-    const application = { id: component.id + '-USE-' + String((credit.applications || []).length + 1).padStart(3, '0'), expenseId: expense.id, amount: value, date, reason,
-      appliedBy: req.user.username, appliedAt: new Date().toISOString(), requestId: key, refundCredit: true };
-    credit.remainingAmount = refunds.money(credit.remainingAmount - value); credit.applications = [...(credit.applications || []), application];
-    expense.vendorAdvanceApplications = [...(expense.vendorAdvanceApplications || []), { ...application, vendorAdvanceId: credit.id }];
-    expense.paidAmount = refunds.money(Number(expense.paidAmount || 0) + value); expense.status = refunds.expenseDue(store, expense) <= 0 ? 'paid' : 'partially_paid';
-    deps.audit(store, req, 'EXPENSE_REFUND_CREDIT_REDEEMED', 'expense_refund', record.id, { nature: record.nature, after: application, note: reason + ' · no bank/cash movement' });
+    const plan = refunds.prepareRedemption(store, record, req.body, { today: deps.today(),
+      checkRecord: r => checkRecord(req, r, store), checkExpense: expense => {
+        if (!deps.canView(req, expense) || !deps.natures(req).includes(deps.nature(expense.nature))) reject('Select an accessible credit and approved expense.');
+        if (expense.ownerOnly && !deps.isOwner(req)) reject('The receiving expense is restricted to the Owner.', 403);
+      } });
+    if (plan.prior) return res.json({ success: true, already: true, view: view(req, store, { nature: record.nature }) });
+    const application = refunds.applyRedemption(store, plan, { username: req.user.username });
+    deps.audit(store, req, 'EXPENSE_REFUND_CREDIT_REDEEMED', 'expense_refund', record.id, { nature: record.nature, after: application, note: plan.reason + ' · no bank/cash movement' });
     deps.saveStore(store); res.json({ success: true, view: view(req, store, { nature: record.nature }) });
   }));
   router.post('/api/expenses/expense-refunds/:id/redemptions/:useId/void', handler((req, res) => {
@@ -230,4 +218,4 @@ function register(router, deps) {
     deps.saveStore(store); res.json({ success: true, view: view(req, store, { nature: receipt.nature }) });
   }));
 }
-module.exports = { register };
+module.exports = { register, checkRecordAccess };

@@ -1614,7 +1614,10 @@ test('All Expenses exposes a clear same-vendor consolidated payment selector', (
   assert.match(html,/Enter the actual amount paid/);
   assert.match(html,/<div id="payCreditSummary"[^>]*><\/div><label class="payment-entry">/);
   assert.match(html,/payMode==='vendor'\?'\/api\/expenses\/vendor-payments\/batch'/);
-  assert.doesNotMatch(html,/payAmount'\)\.max=/);
+  // Vendor payments may include an overpayment; reimbursements intentionally
+  // cap the amount at the employee balance. Check the relevant form only.
+  const vendorPaymentForm=html.slice(html.indexOf('// ── PAY dialog'),html.indexOf('window.openReimburse ='));
+  assert.doesNotMatch(vendorPaymentForm,/payAmount'\)\.max=/);
 });
 
 test('one consolidated payment partially allocates across selected bills oldest first', () => {

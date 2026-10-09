@@ -248,17 +248,19 @@
   <!-- payment dialog -->
   <dialog id="payDlg"><div class="dlg">
     <h3 id="payTitle">Record payment</h3>
-    <div class="fld"><label id="payAcctLabel">Pay from account</label><select id="payAcct"></select>
+    <div class="fld" id="paySettlementWrap" style="display:none"><label for="paySettlementMode">Settle this expense using</label><select id="paySettlementMode"><option value="money">Bank / cash / card payment</option><option value="credit">Voucher / coupon / gift card or merchant credit only</option><option value="split">Merchant credit + bank / cash / card payment</option></select></div>
+    <div id="payCouponWrap" style="display:none;margin:12px 0;padding:12px;background:#eef8f2;border:1px solid #b6d8c8;border-radius:10px"><div class="fld"><label for="payRefundCredit">Available credit with this merchant</label><select id="payRefundCredit"></select></div><div class="fld" style="margin-top:10px"><label for="payCouponAmount">Coupon / credit actually used ₹</label><input id="payCouponAmount" type="number" min="0.01" step="0.01"></div><p class="hint" id="payCouponHint">Credit settles the bill without a bank/cash movement. Only record the amount actually accepted by the merchant; coupon terms still apply.</p></div>
+    <div class="fld" id="payAcctWrap"><label id="payAcctLabel">Pay from account</label><select id="payAcct"></select>
       <button type="button" class="btn mini ghost" id="payAddAcct" style="margin-top:7px">＋ Add paying account</button>
       <button type="button" class="btn mini ghost" id="payClaimantSwitch" style="display:none;margin-top:7px">Paid personally by Arshpreet · 1919</button></div>
     <div class="grid" style="margin-top:10px">
       <div class="fld"><label id="payAmountLabel">Amount ₹</label><input type="number" id="payAmount" min="0.01" step="0.01"><div class="hint" id="payAmountHint" style="display:none"></div></div>
       <div class="fld"><label>Date</label><input type="date" id="payDate"></div>
-      <div class="fld"><label>Payment type</label><select id="payType"><option>UPI</option><option>Cash</option><option value="Credit">Credit Card</option></select></div>
-      <div class="fld"><label>Note (optional)</label><input id="payNote"></div>
+      <div class="fld" id="payTypeWrap"><label>Payment type</label><select id="payType"><option>UPI</option><option>Cash</option><option value="Credit">Credit Card</option></select></div>
+      <div class="fld"><label id="payNoteLabel">Note (optional)</label><input id="payNote"></div>
     </div>
     <div id="payBatchWrap" class="fld" style="display:none;margin-top:10px"><label>Include other approved expenses for this vendor</label><div id="payBatchList" class="payment-history"></div><div class="hint">Enter the actual amount paid. Selected bills are settled oldest first, and any excess becomes vendor advance.</div></div>
-    <div class="fld" style="margin-top:10px"><label id="payProofLabel">Payment proof(s) — at least one required</label><input type="file" id="payFile" accept="image/*" multiple /></div>
+    <div class="fld" id="payProofWrap" style="margin-top:10px"><label id="payProofLabel">Payment proof(s) — at least one required</label><input type="file" id="payFile" accept="image/*" multiple /></div>
     <div class="fld" id="payOverrideWrap" style="display:none;margin-top:10px"><label>Urgent payment override reason — required</label><input id="payOverrideReason" placeholder="Why must this payment proceed before reconciliation is fixed?"><div class="hint">The reason is recorded permanently with the payment.</div></div>
     <img id="payPrev" class="prev" style="display:none" />
     <div class="row-actions">
@@ -461,12 +463,13 @@
 
   <script src="/sidebar.js"></script>
   <script src="/expense-refunds.js?v=ff5f31cc038e"></script>
+  <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
     var fmtBank = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, historicalReimburseIds=[], approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null, listRequestSeq=0;
+    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, payRefundCredits=[], payRequestId='', paySubmitting=false, payCandidatesReady=false, payOpenRevision=0, historicalReimburseIds=[], approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null, listRequestSeq=0;
     function updatePaytmChargeSplit(){if(!bankReconForm||el('brKind').value!=='paytm')return;var row=bankReconRow(bankReconForm.rowId),net=Number(row&&row.bank&&row.bank.credit||0),gross=Number(el('brGross').value||0),hidden=Number(el('brHiddenCharge').value||0);el('brPaytmNet').value=net;el('brPaytmCharge').value=Math.max(0,Number((gross-net-hidden).toFixed(2)));saveBankReconForm();}
     el('brHiddenCharge').addEventListener('input',updatePaytmChargeSplit);el('brGross').addEventListener('input',updatePaytmChargeSplit);el('brPaytmCharge').addEventListener('input',saveBankReconForm);el('brChargeCategory').addEventListener('change',saveBankReconForm);
 
@@ -918,7 +921,7 @@
     }
     function paymentHistory(e){
       var payments=(e.payments||[]).map(function(p){var ref=e.id+'/'+(p.id||'PAYMENT'),gross=Number(p.grossPaymentAmount)||Number(p.amount)||0,advance=Number(p.vendorAdvanceAmount)||0,breakdown=advance?'<br><span class="muted">'+fmt(p.expenseAllocationAmount||p.amount)+' applied to this expense · '+fmt(advance)+' vendor advance</span>':'',unpay=cfg.canApprove&&(!cfg.approvalNatures||cfg.approvalNatures.indexOf(e.nature||'SANKI')>=0)?(p.unpayBlockedReason?'<button type="button" class="btn mini ghost" disabled>Unpay</button><br><span class="muted">'+esc(p.unpayBlockedReason)+'</span>':'<button type="button" class="btn mini ghost" onclick="unpayExpense(\''+e.id+'\',\''+esc(p.id||'')+'\')">Unpay</button>'):'';return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'<br><span class="muted">Transaction ref: '+esc(ref)+'</span>'+breakdown+'</span><span><b>'+fmt(gross)+'</b><br>'+unpay+'</span>'+proofGallery(p.proofs||[p.proof], 'Payment')+'</div>';});
-      var advances=(e.vendorAdvanceApplications||[]).map(function(a){return '<div class="payment-entry"><span>'+esc(a.date||e.date||'')+' · Vendor advance applied<br><span class="muted">Advance ref: '+esc(a.vendorAdvanceId||'—')+' · no new bank debit</span></span><b>'+fmt(a.amount)+'</b></div>';});
+      var advances=(e.vendorAdvanceApplications||[]).filter(function(a){return !a.accountingExcluded;}).map(function(a){return '<div class="payment-entry"><span>'+esc(a.date||e.date||'')+' · '+(a.refundCredit?'Coupon / merchant credit used':'Vendor advance applied')+'<br><span class="muted">'+(a.refundCredit?'Credit ref: '+esc(a.creditReference||a.vendorAdvanceId||'—')+(a.issuer?' · '+esc(a.issuer):''):'Advance ref: '+esc(a.vendorAdvanceId||'—'))+' · no new bank debit</span></span><b>'+fmt(a.amount)+'</b></div>';});
       if(!payments.length&&!advances.length)return '<span class="muted">No payment recorded yet.</span>';return '<div class="payment-history">'+payments.concat(advances).join('')+'</div>';
     }
     function proofGallery(urls,label){return Array.from(new Set((urls||[]).filter(Boolean))).map(function(url,i){return '<span class="claim-proof"><img class="thumb" src="'+esc(url)+'" onclick="window.open(this.src)" alt="'+esc(label)+' proof">'+esc(label)+' '+(i+1)+'</span>';}).join('');}
@@ -929,7 +932,7 @@
       var displayedAmount=e.payingAccountAmount!=null?e.payingAccountAmount:approvedNow;
       var claimantName=e.claimant||e.createdBy||'—';
       var payingAccounts=Array.from(new Set((e.payments||[]).map(function(p){return p.account;}).filter(Boolean)));
-      if(!payingAccounts.length&&(e.vendorAdvanceApplications||[]).length)payingAccounts.push('Vendor advance');else if(!payingAccounts.length&&e.paidAmount>0&&e.account) payingAccounts.push(e.account);
+      if(!payingAccounts.length&&(e.vendorAdvanceApplications||[]).some(function(a){return !a.accountingExcluded;}))payingAccounts.push((e.vendorAdvanceApplications||[]).filter(function(a){return !a.accountingExcluded;}).every(function(a){return a.refundCredit;})?'Coupon / merchant credit':'Vendor advance / merchant credit');else if(!payingAccounts.length&&e.paidAmount>0&&e.account) payingAccounts.push(e.account);
       var payingAccountLabel=payingAccounts.length?payingAccounts.join(', '):'Not paid';
       var latestPayment=(e.payments||[])[(e.payments||[]).length-1],latestReference=latestPayment?(e.id+'/'+(latestPayment.id||'PAYMENT')):'';
       var recordedPaymentWithProof=(e.payments||[]).slice().reverse().find(function(p){return !!p.proof||(p.proofs||[]).length;});
@@ -1135,16 +1138,44 @@
     };
 
     // ── PAY dialog ──
+    function newVendorPaymentRequest(){return window.crypto.randomUUID?window.crypto.randomUUID():'payment-'+Date.now()+'-'+Math.random().toString(36).slice(2);}
+    function resetPaymentCredits(){
+      payOpenRevision++;payRequestId=newVendorPaymentRequest();payRefundCredits=[];paySubmitting=false;payCandidatesReady=false;
+      el('paySettlementMode').value='money';el('paySettlementWrap').style.display='none';el('payCouponWrap').style.display='none';el('payCouponAmount').value='';el('payRefundCredit').innerHTML='';
+      ['payAcctWrap','payTypeWrap','payProofWrap'].forEach(function(id){el(id).style.display='';});
+      el('payAcct').disabled=false;el('payNote').required=false;el('payNoteLabel').textContent='Note (optional)';el('payAmount').oninput=null;el('payAmount').min='0.01';el('payAmountLabel').textContent='Amount ₹';
+    }
+    function selectedPaymentBills(){return Array.prototype.map.call(document.querySelectorAll('.batch-expense:checked'),function(x){return {due:Number(x.getAttribute('data-due'))||0,date:x.getAttribute('data-date')||''};});}
+    function selectedPaymentCredit(){var key=el('payRefundCredit').value;return payRefundCredits.find(function(c){return expensePaymentCredits.key(c)===key;});}
+    function paymentCreditState(){
+      var bills=selectedPaymentBills(),box=el('payApplyVendorCredit');
+      return expensePaymentCredits.selection({mode:el('paySettlementMode').value,credit:selectedPaymentCredit(),couponAmount:el('payCouponAmount').value,date:el('payDate').value,today:today(),
+        bills:bills.reduce(function(n,b){return n+b.due;},0),billDates:bills.map(function(b){return b.date;}),advance:payVendorCreditAvailable,applyAdvance:!!(box&&box.checked),bankAmount:el('payAmount').value});
+    }
+    function renderPaymentCreditOptions(resetCoupon){
+      var prior=el('payRefundCredit').value,date=el('payDate').value,available=payRefundCredits.filter(function(c){return expensePaymentCredits.eligible(c,date);});
+      if(!available.some(function(c){return expensePaymentCredits.key(c)===prior;}))prior=available.length?expensePaymentCredits.key(available[0]):'';
+      el('payRefundCredit').innerHTML='<option value="">Select merchant credit</option>'+payRefundCredits.map(function(c){var valid=expensePaymentCredits.eligible(c,date),key=expensePaymentCredits.key(c);return '<option value="'+esc(key)+'"'+(key===prior?' selected':'')+(!valid?' disabled':'')+'>'+esc((expensePaymentCredits.labels[c.mode]||c.mode)+' · '+c.reference+' · '+c.issuer)+' · available '+fmt(c.remainingAmount)+(c.expiryDate?' · expires '+esc(c.expiryDate):'')+(!valid?' · unavailable on this date':'')+'</option>';}).join('');
+      if(resetCoupon){var credit=selectedPaymentCredit(),due=selectedPaymentBills().reduce(function(n,b){return n+b.due;},0);el('payCouponAmount').value=credit?Math.min(due,Number(credit.remainingAmount)):'';}
+    }
     function updateVendorPaymentSelection(resetAmount){
       var boxes=document.querySelectorAll('.batch-expense:checked'),gross=0;Array.prototype.forEach.call(boxes,function(x){gross+=Number(x.getAttribute('data-due'))||0;});
-      var creditBox=el('payApplyVendorCredit'),useCredit=!!(creditBox&&creditBox.checked),creditApplied=useCredit?Math.min(payVendorCreditAvailable,gross):0,net=Math.round((gross-creditApplied)*100)/100;
-      el('payBatchWrap').setAttribute('data-apply-vendor-credit',useCredit?'true':'false');el('payAmount').min=net===0?'0':'1';el('payAmount').removeAttribute('max');
-      if(resetAmount)el('payAmount').value=net;
-      var bankPayment=Number(el('payAmount').value)||0,newAdvance=Math.max(0,Math.round((bankPayment-net)*100)/100),summary=el('payCreditSummary');if(summary)summary.textContent='Selected bills '+fmt(gross)+' · Existing vendor advance '+fmt(creditApplied)+' · Bank/cash payment '+fmt(bankPayment)+(newAdvance?' · New vendor advance '+fmt(newAdvance):'');
-      el('payProofLabel').textContent=bankPayment===0?'Payment proof not required — vendor advance fully settles the selected bills':'Company payment proof — required';
-      el('payGo').textContent=bankPayment===0?'Apply vendor advance':(boxes.length>1?'Pay selected together':'Save payment');el('payGo').disabled=bankPayment>0&&!payUrls.length;
+      var mode=el('paySettlementMode').value,coupon=mode!=='money',state=paymentCreditState(),creditBox=el('payApplyVendorCredit'),useCredit=!coupon&&!!(creditBox&&creditBox.checked),creditApplied=state.advance,net=state.net;
+      if(creditBox)creditBox.disabled=coupon;
+      el('payCouponWrap').style.display=coupon?'':'none';el('payAcctWrap').style.display=mode==='credit'?'none':'';el('payTypeWrap').style.display=mode==='credit'?'none':'';
+      el('payNote').required=coupon;el('payNoteLabel').textContent=coupon?'Credit redemption reason — required':'Note (optional)';
+      el('payAmountLabel').textContent=coupon?'Actual bank / cash / card amount ₹':'Amount ₹';el('payAmount').readOnly=mode==='credit';
+      el('payBatchWrap').setAttribute('data-apply-vendor-credit',useCredit?'true':'false');el('payAmount').min=net===0||mode==='credit'?'0':'0.01';el('payAmount').removeAttribute('max');
+      if(mode==='credit')el('payAmount').value=0;else if(resetAmount)el('payAmount').value=net;
+      var bankPayment=Number(el('payAmount').value)||0,newAdvance=Math.max(0,Math.round((bankPayment-net)*100)/100),summary=el('payCreditSummary');
+      if(summary)summary.textContent=state.error||( 'Selected bills '+fmt(gross)+(coupon?' · Coupon / merchant credit '+fmt(state.couponAmount):' · Existing vendor advance '+fmt(creditApplied))+' · Bank/cash/card payment '+fmt(bankPayment)+(mode==='credit'&&net>0?' · Still unpaid '+fmt(net):'')+(newAdvance?' · New vendor advance (money) '+fmt(newAdvance):''));
+      var credit=selectedPaymentCredit();el('payCouponHint').textContent='Credit settles the bill without a bank/cash movement. Only record what the merchant accepted; coupon terms still apply.'+(coupon&&credit?' After this use: '+fmt(state.remainingCredit)+' credit remains.':'');
+      el('payProofWrap').style.display=coupon&&bankPayment===0?'none':'';el('payProofLabel').textContent=bankPayment===0?'Payment proof not required — non-cash settlement':'Company payment proof — required';
+      el('payGo').textContent=coupon?(bankPayment>0?'Save credit + payment':'Apply merchant credit'):(bankPayment===0?'Apply vendor advance':(boxes.length>1?'Pay selected together':'Save payment'));
+      el('payGo').disabled=paySubmitting||!payCandidatesReady||!!state.error||(coupon&&!el('payNote').value.trim())||(bankPayment>0&&!payUrls.length)||(bankPayment===0&&!coupon&&!creditApplied);
     }
     window.openPay = function(id, preselectedIds){
+      resetPaymentCredits();var openRevision=payOpenRevision;
       payId = id; payUrls=[]; payMode='vendor';payVendorCreditAvailable=0;
       var e=expensesById[id]||{};
       el('payTitle').textContent='Record vendor payment'; el('payAcctLabel').textContent='Pay from account';
@@ -1160,19 +1191,21 @@
       el('payBatchWrap').style.display='none';el('payBatchWrap').setAttribute('data-apply-vendor-credit','false');el('payBatchList').innerHTML='';el('payAmount').oninput=null;
       el('payDlg').showModal();
       api('/api/expenses/'+id+'/payment-candidates').then(function(d){
-        if(!d.success||payMode!=='vendor'||payId!==id)return;var otherExpenses=d.expenses||[];payVendorCreditAvailable=Number(d.availableVendorCredit)||0;
-        var currentDue=Math.max(0,(e.amount||0)-(e.paidAmount||0));
+        if(payMode!=='vendor'||payId!==id||openRevision!==payOpenRevision)return;if(!d.success){el('payMsg').textContent=d.error||'Could not load vendor balances and credits. Reopen the payment form to retry.';return;}payCandidatesReady=true;var otherExpenses=d.expenses||[];payVendorCreditAvailable=Number(d.availableVendorCredit)||0;payRefundCredits=d.refundCredits||[];
+        var currentDue=e.balanceDue!=null?Number(e.balanceDue):Math.max(0,(e.amount||0)-(e.paidAmount||0));
         el('payBatchWrap').style.display='';
         var wanted=Array.isArray(preselectedIds)?preselectedIds:[id];
         var creditHtml=payVendorCreditAvailable?'<label class="payment-entry" style="background:#eef8f2"><span><input type="checkbox" id="payApplyVendorCredit" checked> Apply available vendor advance <span class="muted">(oldest credit first)</span></span><b>− '+fmt(payVendorCreditAvailable)+'</b></label>':'';
-        el('payBatchList').innerHTML=creditHtml+'<div id="payCreditSummary" class="hint" style="margin:6px 0 10px"></div><label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(id)+'" data-due="'+currentDue+'" checked disabled> '+esc(e.date||'')+' · '+esc(e.id)+' · '+esc(e.particulars||'')+'</span><b>'+fmt(currentDue)+'</b></label>'+otherExpenses.map(function(x){return '<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(x.id)+'" data-due="'+x.balanceDue+'"'+(wanted.indexOf(x.id)>=0?' checked':'')+'> '+esc(x.date||'')+' · '+esc(x.id)+' · '+esc(x.particulars||'')+'</span><b>'+fmt(x.balanceDue)+'</b></label>';}).join('');
+        el('payBatchList').innerHTML=creditHtml+'<div id="payCreditSummary" class="hint" style="margin:6px 0 10px"></div><label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(id)+'" data-date="'+esc(e.date||'')+'" data-due="'+currentDue+'" checked disabled> '+esc(e.date||'')+' · '+esc(e.id)+' · '+esc(e.particulars||'')+'</span><b>'+fmt(currentDue)+'</b></label>'+otherExpenses.map(function(x){return '<label class="payment-entry"><span><input type="checkbox" class="batch-expense" value="'+esc(x.id)+'" data-date="'+esc(x.date||'')+'" data-due="'+x.balanceDue+'"'+(wanted.indexOf(x.id)>=0?' checked':'')+'> '+esc(x.date||'')+' · '+esc(x.id)+' · '+esc(x.particulars||'')+'</span><b>'+fmt(x.balanceDue)+'</b></label>';}).join('');
+        el('paySettlementWrap').style.display=payRefundCredits.length?'':'none';renderPaymentCreditOptions(true);
         Array.prototype.forEach.call(document.querySelectorAll('.batch-expense'),function(box){box.addEventListener('change',function(){updateVendorPaymentSelection(true);});});
         if(el('payApplyVendorCredit'))el('payApplyVendorCredit').addEventListener('change',function(){updateVendorPaymentSelection(true);});
         el('payAmount').oninput=function(){updateVendorPaymentSelection(false);};updateVendorPaymentSelection(true);
-      });
+      }).catch(function(error){if(openRevision===payOpenRevision&&payMode==='vendor'){el('payMsg').textContent=error&&error.message||'Could not load vendor balances. Reopen the payment form to retry.';}});
     };
     window.openPurchasePay = function(id){ openPay(id); payMode='procurement'; el('payTitle').textContent='Pay logistics mediator · '+id; };
     window.openClaimantPay = function(id){
+      resetPaymentCredits();
       var e=expensesById[id]||{},accounts=ashpreetPaymentAccounts(e);if(!accounts.length){setMsg('Ashpreet’s account is not available to your role.',false);return;}
       payId=id;payUrls=[];payMode='claimant';
       el('payAmountLabel').textContent='Amount ₹';el('payAmountHint').style.display='none';el('payAmount').removeAttribute('max');
@@ -1197,6 +1230,7 @@
       }).catch(function(err){setMsg(err&&err.message||'Could not unpay this expense.',false);}).finally(function(){delete unpayPending[key];});
     };
     window.openReimburse = function(id,split){
+      resetPaymentCredits();
       payId=id; payUrls=[]; payMode='reimburse'; var e=expensesById[id]||{};
       el('payClaimantSwitch').style.display='none';
       var due=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));
@@ -1210,6 +1244,7 @@
     window.openBatchReimburse = function(){
       var selected=Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;});
       if(selected.length<2){setMsg('Select at least two pending expenses.',false);return;}
+      resetPaymentCredits();
       payId=selected[0];payUrls=[];payMode='batch-reimburse';
       el('payClaimantSwitch').style.display='none';
       var total=selected.reduce(function(n,id){var e=expensesById[id]||{};return n+Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));},0);
@@ -1221,6 +1256,13 @@
       el('payDate').value=today();el('payType').value='UPI';el('payNote').value='';el('payFile').value='';el('payPrev').style.display='none';el('payGo').disabled=true;el('payMsg').textContent='';el('payDlg').showModal();
     };
     el('payCancel').addEventListener('click', function(){ el('payDlg').close(); });
+    el('payDlg').addEventListener('cancel',function(event){if(paySubmitting)event.preventDefault();});
+    el('paySettlementMode').addEventListener('change',function(){renderPaymentCreditOptions(true);updateVendorPaymentSelection(true);});
+    el('payRefundCredit').addEventListener('change',function(){renderPaymentCreditOptions(true);updateVendorPaymentSelection(true);});
+    el('payCouponAmount').addEventListener('input',function(){updateVendorPaymentSelection(true);});
+    el('payDate').addEventListener('change',function(){if(payMode==='vendor'){renderPaymentCreditOptions(false);updateVendorPaymentSelection(true);}});
+    el('payNote').addEventListener('input',function(){if(payMode==='vendor')updateVendorPaymentSelection(false);});
+    ['input','change'].forEach(function(event){el('payDlg').addEventListener(event,function(){if(!paySubmitting)payRequestId=newVendorPaymentRequest();});});
     el('payType').addEventListener('change',function(){
       if(payMode!=='vendor'&&payMode!=='procurement')return;
       populatePaymentSource((expensesById[payId]||{}).nature||'SANKI',true);
@@ -1236,22 +1278,32 @@
     });
     el('payFile').addEventListener('change', function(){
       if(!this.files[0]) return;
+      var uploadRevision=payOpenRevision;
       el('payMsg').textContent='uploading…';
       uploadFiles(this.files,(expensesById[payId]||{}).nature).then(function(urls){
+        if(uploadRevision!==payOpenRevision)return;
         payUrls=urls; el('payGo').disabled=!urls.length&&Number(el('payAmount').value)>0;
         if(urls.length){ el('payPrev').src=urls[0]; el('payPrev').style.display=''; el('payMsg').textContent=urls.length+' proof file(s) ready.'; }
+        if(payMode==='vendor')updateVendorPaymentSelection(false);
       });
     });
     el('payGo').addEventListener('click', function(){
+      if(paySubmitting)return;
+      if(payMode==='vendor'&&!payCandidatesReady){el('payMsg').textContent='Wait for the vendor balances to load, or reopen this form to retry.';return;}
+      var creditState=payMode==='vendor'?paymentCreditState():null;
+      if(creditState&&creditState.error){el('payMsg').textContent=creditState.error;return;}
+      if(creditState&&creditState.refundCredit&&!el('payNote').value.trim()){el('payMsg').textContent='Enter the credit redemption reason.';return;}
       var applyVendorCredit=payMode==='vendor'&&el('payBatchWrap').getAttribute('data-apply-vendor-credit')==='true',bankAmount=Number(el('payAmount').value)||0;
       if(!payUrls.length&&bankAmount>0){ el('payMsg').textContent='At least one payment proof is required.'; return; }
       var selected=payMode==='vendor'?Array.prototype.map.call(document.querySelectorAll('.batch-expense:checked'),function(x){return x.value;}):(payMode==='batch-reimburse'?Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;}):[]);
       var endpoint=payMode==='batch-reimburse'?'/api/expenses/reimbursements/batch':(payMode==='vendor'?'/api/expenses/vendor-payments/batch':(payMode==='procurement'?'/api/expenses/procurement-payables/'+payId+'/pay':'/api/expenses/'+payId+(payMode==='reimburse'?'/reimburse':payMode==='claimant'?'/claimant-pay':'/pay')));
+      if(creditState&&creditState.refundCredit&&!confirm('Apply '+fmt(creditState.couponAmount)+' from '+selectedPaymentCredit().reference+' with '+selectedPaymentCredit().issuer+' on '+el('payDate').value+'?\nActual bank/cash/card payment: '+fmt(bankAmount)+'. The coupon does not create a bank/cash movement.'))return;
+      paySubmitting=true;var paymentControls=Array.prototype.map.call(el('payDlg').querySelectorAll('input,select,button'),function(control){var disabled=control.disabled;control.disabled=true;return [control,disabled];});
       api(endpoint, { method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ expenseIds:selected,paymentProof:payUrls[0],paymentProofs:payUrls, account:el('payAcct').value,amount:el('payAmount').value,applyVendorCredit:applyVendorCredit,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
-        if(d.success){ el('payDlg').close(); if((payMode==='reimburse'||payMode==='batch-reimburse')&&tab==='reimbursements') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg(payMode==='batch-reimburse'?'Selected expenses reimbursed together.':payMode==='claimant'?'Ashpreet’s payment recorded; reimbursement is now due.':'Payment and proof saved.', true); }
+        body:JSON.stringify({ expenseIds:selected,paymentProof:payUrls[0],paymentProofs:payUrls, account:bankAmount>0?el('payAcct').value:'',amount:el('payAmount').value,applyVendorCredit:applyVendorCredit,refundCredit:creditState&&creditState.refundCredit||undefined,requestId:payMode==='vendor'?payRequestId:undefined,date:el('payDate').value,paymentType:el('payType').value,note:el('payNote').value,reconciliationOverrideReason:el('payOverrideReason').value }) }).then(function(d){
+        if(d.success){ el('payDlg').close(); if((payMode==='reimburse'||payMode==='batch-reimburse')&&tab==='reimbursements') loadReimbursements(); else if(tab==='vendors') loadVendors(); else if(tab==='pending'||payMode==='procurement') loadPendingPayments(); else loadList(); setMsg(d.refundCreditApplied?'Merchant credit '+fmt(d.refundCreditApplied)+' applied · actual bank/cash/card payment '+fmt(d.total)+'.':payMode==='batch-reimburse'?'Selected expenses reimbursed together.':payMode==='claimant'?'Ashpreet’s payment recorded; reimbursement is now due.':'Payment and proof saved.', true); }
         else {el('payMsg').textContent = d.error||'Could not pay.';if(d.requiresOverride){el('payOverrideWrap').style.display='';el('payOverrideReason').focus();}}
-      });
+      }).catch(function(error){el('payMsg').textContent=error&&error.message||'Could not record payment. Retry without changing the form; it cannot post the same request twice.';}).finally(function(){paySubmitting=false;paymentControls.forEach(function(entry){entry[0].disabled=entry[1];});if(payMode==='vendor')updateVendorPaymentSelection(false);});
     });
 
     window.openHistoricalReimbursement=function(ids){

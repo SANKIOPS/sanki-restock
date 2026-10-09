@@ -34,6 +34,7 @@ const Jimp = require('jimp');
 const { START_DATE: PAYTM_START_DATE, parsePaytmReport, summarizePayouts } = require('./paytm-report');
 const { registerPaytmReports } = require('./paytm-reports-routes');
 const expenseRefunds = require('./expense-refunds');
+const expenseRefundRoutes = require('./expense-refunds-routes');
 const { LINK_TOLERANCE_CENTS, transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements, matchPayoutBank } = require('./paytm-accounting');
 const { shopifyClient } = require('./shopify-client');
 
@@ -2121,8 +2122,20 @@ router.get('/api/expenses/:id/payment-candidates', (req, res) => {
   const vendorAdvances=(s.vendorAdvances||[]).filter(a=>!a.creditOnly&&!a.accountingExcluded&&normalizedNature(a.nature)===nature&&vendorKey(a.vendor)===vendor&&num(a.remainingAmount)>0)
     .sort((a,b)=>String((a.date||'')+(a.id||'')).localeCompare(String((b.date||'')+(b.id||''))));
   const availableVendorCredit=roundMoney(vendorAdvances.reduce((sum,a)=>sum+num(a.remainingAmount),0));
+  // Refund coupons are separate from money advances, and retain the refund
+  // workflow's source-account and Owner-only access checks.
+  const refundCredits=[];
+  if(isAdmin(req)&&!(source.ownerOnly&&!isOwner(req)))expenseRefunds.records(s).filter(expenseRefunds.received).forEach(record=>{
+    if(record.nature!==nature)return;
+    try{expenseRefundRoutes.checkRecordAccess(req,record,s,expenseRefundDeps);}catch{return;}
+    record.components.filter(c=>c.vendorAdvanceId&&expenseRefunds.sameVendor(source.vendor,c.issuer)).forEach(c=>{
+      const credit=(s.vendorAdvances||[]).find(a=>a.id===c.vendorAdvanceId&&a.creditOnly&&!a.accountingExcluded&&num(a.remainingAmount)>0);
+      if(credit)refundCredits.push({refundId:record.id,componentId:c.id,mode:c.mode,issuer:c.issuer,reference:c.reference,
+        date:record.date,expiryDate:c.expiryDate||'',remainingAmount:roundMoney(credit.remainingAmount)});
+    });
+  });
   res.json({ success:true, source:{ id:source.id, nature, vendor:source.vendor }, expenses, availableVendorCredit,
-    vendorAdvances:vendorAdvances.map(a=>({id:a.id,date:a.date,amount:roundMoney(a.amount),remainingAmount:roundMoney(a.remainingAmount)})) });
+    vendorAdvances:vendorAdvances.map(a=>({id:a.id,date:a.date,amount:roundMoney(a.amount),remainingAmount:roundMoney(a.remainingAmount)})),refundCredits });
 });
 
 // One bank/cash transaction may settle several approved bills for the same
@@ -2138,15 +2151,51 @@ function recordBatchVendorPayment(req, res) {
   const first = expenses[0], nature = normalizedNature(first.nature), vendor = vendorKey(first.vendor);
   if (expenses.some(e => !canApproveExpenseNature(req,e))) return res.status(403).json({ success:false, error:'You cannot pay one of the selected accounting entities.' });
   if (expenses.some(e => normalizedNature(e.nature)!==nature || vendorKey(e.vendor)!==vendor)) return res.status(400).json({ success:false, error:'Combined payments must use the same entity and vendor.' });
+  const refundCredit=b.refundCredit||null,date=String(b.date||indiaBusinessDate()).slice(0,10),requestId=String(b.requestId||'');
+  if(refundCredit&&!isAdmin(req))return res.status(403).json({success:false,error:'Only Admin or Owner can redeem refund coupons and credits.'});
+  if(refundCredit&&expenses.some(e=>e.ownerOnly&&!isOwner(req)))return res.status(403).json({success:false,error:'The receiving expense is restricted to the Owner.'});
+  if((requestId||refundCredit)&&!/^[a-zA-Z0-9-]{8,90}$/.test(requestId))return res.status(400).json({success:false,error:'Refresh the payment form and retry.'});
+  const requestFingerprint=crypto.createHash('sha256').update(JSON.stringify({expenseIds:ids.slice().sort(),amount:b.amount==null?null:Number(b.amount),
+    account:String(b.account||''),creditCardId:String(b.creditCardId||''),date,paymentType:b.paymentType||'',applyVendorCredit:b.applyVendorCredit===true,
+    refundCredit:refundCredit?{refundId:refundCredit.refundId,componentId:refundCredit.componentId,amount:Number(refundCredit.amount)}:null,
+    note:String(b.note||'').trim(),proofs:proofList(b.paymentProofs,b.paymentProof),override:String(b.reconciliationOverrideReason||'').trim()})).digest('hex');
+  const previous=requestId&&(s.vendorPaymentRequests||{})[requestId];
+  if(previous){
+    if(previous.fingerprint!==requestFingerprint)return res.status(409).json({success:false,error:'This payment request was already used with different details. Refresh before recording another payment.'});
+    if(previous.result.total>0&&!(b.paymentType==='Credit'?resolveCreditCard(req,b.creditCardId||b.account):allowedVendorPaymentAccount(req,nature,String(b.account||'').trim())))
+      return res.status(403).json({success:false,error:'The original paying account is no longer accessible to your role.'});
+    if(refundCredit){const record=expenseRefunds.records(s).find(r=>r.id===refundCredit.refundId);if(!record)return res.status(409).json({success:false,error:'The linked refund is no longer available.'});expenseRefundRoutes.checkRecordAccess(req,record,s,expenseRefundDeps);}
+    return res.json({...previous.result,expenses,already:true});
+  }
   if (expenses.some(e => !['approved','partially_paid'].includes(e.status) || expenseRefunds.expenseDue(s,e)<=0)) return res.status(400).json({ success:false, error:'Every selected expense must be an approved unpaid vendor balance.' });
   const combinedOutstanding = roundMoney(expenses.reduce((n,e)=>n+expenseRefunds.expenseDue(s,e),0));
+  const orderedExpenses=expenses.slice().sort((a,b)=>String((a.date||'')+a.id).localeCompare(String((b.date||'')+b.id)));
+  const refundCreditPlans=[];let refundCreditApplied=0;
+  if(refundCredit){
+    const record=expenseRefunds.records(s).find(r=>r.id===refundCredit.refundId&&expenseRefunds.received(r));
+    const value=Number(refundCredit.amount),component=record&&(record.components||[]).find(c=>c.id===refundCredit.componentId);
+    const wallet=component&&(s.vendorAdvances||[]).find(a=>a.id===component.vendorAdvanceId&&!a.accountingExcluded&&a.creditOnly);
+    if(!wallet||!Number.isFinite(value)||value<=0||Math.abs(value*100-expenseRefunds.cents(value))>.00001||value>wallet.remainingAmount||value>combinedOutstanding)
+      return res.status(400).json({success:false,error:'Select an available coupon/credit and an amount no greater than its balance or the selected unpaid bills.'});
+    let left=roundMoney(value);
+    orderedExpenses.forEach((expense,index)=>{
+      const amount=roundMoney(Math.min(left,expenseRefunds.expenseDue(s,expense)));if(!(amount>0))return;
+      const plan=expenseRefunds.prepareRedemption(s,record,{componentId:component.id,expenseId:expense.id,amount,date,reason:b.note,requestId:requestId+'-C'+index},{today:indiaBusinessDate(),
+        checkRecord:r=>expenseRefundRoutes.checkRecordAccess(req,r,s,expenseRefundDeps),checkExpense:e=>{
+          if(!canViewExpense(req,e)||!canApproveExpenseNature(req,e)||e.ownerOnly&&!isOwner(req)){const error=new Error('The receiving expense is restricted.');error.status=403;throw error;}
+        }});
+      refundCreditPlans.push(plan);left=roundMoney(left-amount);
+    });
+    refundCreditApplied=roundMoney(value);
+  }
   const matchingAdvances=(s.vendorAdvances||[]).filter(a=>!a.creditOnly&&!a.accountingExcluded&&normalizedNature(a.nature)===nature&&vendorKey(a.vendor)===vendor&&num(a.remainingAmount)>0)
     .sort((a,b)=>String((a.date||'')+(a.id||'')).localeCompare(String((b.date||'')+(b.id||''))));
   const availableVendorCredit=roundMoney(matchingAdvances.reduce((sum,a)=>sum+num(a.remainingAmount),0));
-  const vendorCreditApplied=b.applyVendorCredit===true?roundMoney(Math.min(availableVendorCredit,combinedOutstanding)):0;
-  const amountNeededForBills=roundMoney(combinedOutstanding-vendorCreditApplied);
+  const vendorCreditApplied=b.applyVendorCredit===true?roundMoney(Math.min(availableVendorCredit,combinedOutstanding-refundCreditApplied)):0;
+  const amountNeededForBills=roundMoney(combinedOutstanding-refundCreditApplied-vendorCreditApplied);
   const requestedTotal=b.amount!=null?roundMoney(num(b.amount)):amountNeededForBills;
-  if (requestedTotal < 0 || (!(requestedTotal > 0) && !(vendorCreditApplied > 0))) return res.status(400).json({ success:false, error:'Payment or vendor-credit amount must be greater than 0.' });
+  if (requestedTotal < 0 || (!(requestedTotal > 0) && !(vendorCreditApplied > 0) && !(refundCreditApplied > 0))) return res.status(400).json({ success:false, error:'Payment or vendor-credit amount must be greater than 0.' });
+  if(refundCredit&&b.amount!=null&&(!Number.isFinite(Number(b.amount))||Math.abs(Number(b.amount)*100-expenseRefunds.cents(b.amount))>.00001))return res.status(400).json({success:false,error:'Enter the actual bank/cash amount with at most two decimal places.'});
   const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
   if (requestedTotal>0&&!proofs.length) return res.status(400).json({ success:false, error:'Payment proof is required — no proof, no payment.' });
   const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI'),card=requestedTotal>0&&paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
@@ -2156,9 +2205,12 @@ function recordBatchVendorPayment(req, res) {
   const claimantPayer=vendorAccount&&vendorAccount.claimant||'';
   const reconIssues = requestedTotal>0?(card||claimantPayer?[]:reconciliationIssues(s, nature, account)):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });
-  const date = String(b.date || indiaBusinessDate()).slice(0,10), paidBy = (req.user&&req.user.username)||'admin';
+  const paidBy = (req.user&&req.user.username)||'admin';
   const batchPaymentId = 'BPAY-' + Date.now().toString(36).toUpperCase();
-  const orderedExpenses=expenses.slice().sort((a,b)=>String((a.date||'')+a.id).localeCompare(String((b.date||'')+b.id)));
+  refundCreditPlans.forEach(plan=>{
+    const application=expenseRefunds.applyRedemption(s,plan,{username:paidBy,batchPaymentId});
+    audit(s,req,'EXPENSE_REFUND_CREDIT_REDEEMED','expense_refund',plan.record.id,{nature,after:application,note:plan.reason+' · normal vendor payment · no bank/cash movement for credit'});
+  });
   let creditRemaining=vendorCreditApplied;const vendorCreditAllocations=[];
   orderedExpenses.forEach(e=>{
     let expenseRemaining=roundMoney(expenseRefunds.expenseDue(s,e));
@@ -2207,13 +2259,16 @@ function recordBatchVendorPayment(req, res) {
   }
   vendorCreditAllocations.forEach(x=>audit(s,req,'VENDOR_ADVANCE_APPLIED','expense',x.expense.id,{nature:x.expense.nature,account:'Vendor advance',paymentId:x.advance.id,after:{batchPaymentId,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount,status:x.expense.status}}));
   allocations.forEach(x=>audit(s,req,claimantPayer?'CLAIMANT_PAYMENT_ALLOCATED':'PAYMENT_ALLOCATED','expense',x.expense.id,{nature:x.expense.nature,account,paymentId:x.expense.payments.at(-1).id,after:{batchPaymentId,amount:x.amount,linkedExpenseIds:allocatedIds,status:x.expense.status,claimantPayer,reimbursementDue:claimantPayer?x.amount:0}}));
-  saveStore(s);
-  const notificationAmounts={};allocations.concat(vendorCreditAllocations).forEach(x=>{notificationAmounts[x.expense.id]=roundMoney(num(notificationAmounts[x.expense.id])+x.amount);});
-  Object.keys(notificationAmounts).forEach(id=>{const e=s.expenses[id];notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',notificationAmounts[id]);});
-  res.json({ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, availableVendorCredit, vendorCreditApplied,
+  const result={ success:true, batchPaymentId, total:requestedTotal, combinedOutstanding, availableVendorCredit, vendorCreditApplied,refundCreditApplied,
+    refundCreditAllocations:refundCreditPlans.map(x=>({expenseId:x.expense.id,refundId:x.record.id,componentId:x.component.id,amount:x.value,remainingCredit:x.credit.remainingAmount})),
     vendorAdvanceCreated:newVendorAdvance?roundMoney(newVendorAdvance.amount):0,newVendorAdvance,
     vendorCreditAllocations:vendorCreditAllocations.map(x=>({expenseId:x.expense.id,vendorAdvanceId:x.advance.id,amount:x.amount,remainingVendorCredit:x.advance.remainingAmount})),
-    allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:expenseRefunds.expenseDue(s,x.expense)})), expenses });
+    allocations:allocations.map(x=>({expenseId:x.expense.id,amount:x.amount,status:x.expense.status,balanceDue:expenseRefunds.expenseDue(s,x.expense)})), expenses };
+  if(requestId){const {expenses:resultExpenses,...storedResult}=result;s.vendorPaymentRequests=s.vendorPaymentRequests||{};s.vendorPaymentRequests[requestId]={fingerprint:requestFingerprint,result:storedResult};}
+  saveStore(s);
+  const notificationAmounts={};allocations.concat(vendorCreditAllocations,refundCreditPlans.map(p=>({expense:p.expense,amount:p.value}))).forEach(x=>{notificationAmounts[x.expense.id]=roundMoney(num(notificationAmounts[x.expense.id])+x.amount);});
+  Object.keys(notificationAmounts).forEach(id=>{const e=s.expenses[id];notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',notificationAmounts[id]);});
+  res.json(result);
 }
 // Keep the legacy direct-call route and expose an unambiguous live route.
 router.post('/api/expenses/batch-pay', recordBatchVendorPayment);
@@ -5080,7 +5135,7 @@ if(startupExpenseFileExists&&applyCashCounterMissingEntries(startupExpenseStore)
 if(startupExpenseFileExists&&applyAxis3448PaytmBankTruthSettlements(startupExpenseStore))saveStore(startupExpenseStore);
 if(Object.values(startupExpenseStore.bankReconciliationDrafts||{}).reduce((count,draft)=>count+(draft.originalStatementPeriod?0:applyReviewedBankDates(startupExpenseStore,draft)),0)>0)saveStore(startupExpenseStore);
 
-require('./expense-refunds-routes').register(router,{
+const expenseRefundDeps = {
   loadStore,saveStore,audit,isAdmin,isOwner,natures:approvalNatures,nature:normalizedNature,
   accountVisible:(req,account)=>accountVisibleToReq(req,account)&&(!creditCardByAccount(account)||!creditCardByAccount(account).ownerOnly||isOwner(req)),
   expenses:s=>Object.values(s.expenses||{}).concat(cardExpenseRecords(s)),canView:canViewExpense,today:indiaBusinessDate,
@@ -5089,7 +5144,8 @@ require('./expense-refunds-routes').register(router,{
   closedThrough:(s,n,a)=>String(((s.bankStatements||{})[bankStatementBookKey(n,a)]||{}).reconciledThrough||((s.cashReconciliations||[]).filter(r=>r.status==='approved'&&r.account===a).map(r=>r.verifiedThrough).sort().at(-1))||''),
   receiptUsed:(s,id)=>require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0,
   movementLocked:(s,id)=>unpayBlockedReferences(s).has(id)||(s.reconciliationExpenses||[]).some(e=>e.expenseRefundReceiptId===id)||require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0||(s.receipts||[]).some(r=>r.id===id&&(s.cashReconciliations||[]).some(x=>x.status==='approved'&&x.account===r.account&&x.verifiedThrough>=r.date))
-});
+};
+expenseRefundRoutes.register(router,expenseRefundDeps);
 router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
 
 // Keep API failures machine-readable so the page can display the real failure
