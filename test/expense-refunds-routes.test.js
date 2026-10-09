@@ -13,8 +13,113 @@ const read = () => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const write = s => fs.writeFileSync(filename, JSON.stringify(s));
 async function api(route, body, options = {}) { await new Promise(resolve => server.listening ? resolve() : server.once('listening', resolve)); const res = await fetch('http://127.0.0.1:' + server.address().port + route, { method: body === undefined ? 'GET' : options.method || 'POST', headers: { 'Content-Type': 'application/json', 'x-role': options.role || 'owner' }, body: body === undefined ? undefined : JSON.stringify(body) }); return { status: res.status, ...await res.json() }; }
 function expense(id = 'EX-TEST', amount = 100, paid = amount) { return { id, date: '2026-10-01', nature: 'SANKI', vendor: 'Refund Supplier', ledger: 'Flowers', type: 'variable', channel: 'Shared', amount, paidAmount: paid, status: paid === amount ? 'paid' : 'approved', approvedAt: '2026-10-01T12:00:00Z', createdBy: 'shivam', claimant: 'shivam', payments: paid ? [{ id: 'PAY-001', date: '2026-10-01', amount: paid, account }] : [], personalPaidAmount: 0, reimbursementAmount: 0 }; }
-async function seed(e = expense()) { await api('/api/expenses/config'); const s = read(); Object.assign(s, { expenses: { [e.id]: e }, expenseRefunds: [], expenseRefundSeq: 0, receipts: [], vendorAdvances: [], reconciliationExpenses: [], bankStatements: {}, bankDateOverrides: {}, bankReconciliationDrafts: {}, cashReconciliations: [], openingBalances: { [account]: 0 }, vendors: { 'refund supplier': { name: 'Refund Supplier' } }, auditLog: [] }); write(s); fs.writeFileSync(path.join(temp, 'credit-cards.json'), JSON.stringify({ cards: {}, statements: {} })); return s; }
+async function seed(e = expense()) { await api('/api/expenses/config'); const s = read(); Object.assign(s, { expenses: { [e.id]: e }, expenseRefunds: [], expenseRefundSeq: 0, receipts: [], vendorAdvances: [], vendorPaymentRequests: {}, transfers: [], reconciliationExpenses: [], bankStatements: {}, bankDateOverrides: {}, bankReconciliationDrafts: {}, cashReconciliations: [], openingBalances: { [account]: 0 }, vendors: { 'refund supplier': { name: 'Refund Supplier' } }, auditLog: [] }); write(s); fs.writeFileSync(path.join(temp, 'credit-cards.json'), JSON.stringify({ cards: {}, statements: {} })); return s; }
 function input(amount = 100, extra = {}) { return { requestId: 'request-test-0001', sources: [{ key: 'expense:EX-TEST', amount }], status: 'received', date: '2026-10-07', reasonType: 'return', reason: 'Goods returned and money received', components: [{ mode: 'bank', amount, account }], ...extra }; }
+
+async function seedPaymentCoupon(credit = 1512, bill = 2000, mode = 'voucher') {
+  await seed(expense('EX-TEST', credit));
+  const refund = await api(base, input(credit, { components: [{ mode, amount: credit, issuer: 'Refund Supplier', reference: 'COUPON-' + credit, expiryDate: '2026-12-31' }] }));
+  assert.equal(refund.success, true, refund.error);
+  const s = read(); s.expenses['EX-NEXT'] = { ...expense('EX-NEXT', bill, 0), date: '2026-10-08' }; write(s);
+  return { expenseIds: ['EX-NEXT'], refundCredit: { refundId: refund.refund.id, componentId: 'PART-001', amount: credit },
+    amount: bill - credit, account, paymentProof: '/api/expenses/photo/split-coupon-test.jpg', paymentType: 'UPI',
+    date: '2026-10-08', note: 'Coupon actually accepted on replacement order', requestId: 'normal-coupon-payment-0001' };
+}
+
+test('normal payment candidates offer separate same-merchant coupons without widening access', async () => {
+  await seedPaymentCoupon();
+  const candidates = await api('/api/expenses/EX-NEXT/payment-candidates');
+  assert.equal(candidates.refundCredits.length, 1); assert.equal(candidates.availableVendorCredit, 0);
+  assert.equal(candidates.refundCredits[0].reference, 'COUPON-1512'); assert.equal(candidates.refundCredits[0].remainingAmount, 1512);
+  assert.deepEqual((await api('/api/expenses/EX-NEXT/payment-candidates', undefined, { role: 'accounting' })).refundCredits, []);
+  let s = read(); s.expenses['EX-NEXT'].vendor = 'Different Merchant'; write(s);
+  assert.deepEqual((await api('/api/expenses/EX-NEXT/payment-candidates')).refundCredits, []);
+  s = read(); s.expenses['EX-NEXT'].vendor = 'Refund Supplier'; s.expenses['EX-NEXT'].nature = 'SAMAST'; write(s);
+  assert.deepEqual((await api('/api/expenses/EX-NEXT/payment-candidates')).refundCredits, []);
+  s = read(); s.expenses['EX-NEXT'].nature = 'SANKI'; s.expenses['EX-TEST'].ownerOnly = true; write(s);
+  assert.deepEqual((await api('/api/expenses/EX-NEXT/payment-candidates', undefined, { role: 'admin' })).refundCredits, []);
+});
+
+test('normal split payment consumes coupon and debits only real money, retries once and uses existing undo', async () => {
+  const body = await seedPaymentCoupon();
+  const paid = await api('/api/expenses/vendor-payments/batch', body); assert.equal(paid.success, true, paid.error);
+  let s = read(); const bill = s.expenses['EX-NEXT'], wallet = s.vendorAdvances[0];
+  assert.equal(paid.refundCreditApplied, 1512); assert.equal(paid.total, 488); assert.equal(bill.paidAmount, 2000); assert.equal(bill.status, 'paid');
+  assert.equal(bill.payments.length, 1); assert.equal(bill.payments[0].amount, 488); assert.equal(wallet.remainingAmount, 0);
+  assert.equal(s.receipts.length, 0); assert.equal(s.expenses['EX-TEST'].payments[0].amount, 1512);
+  const use = wallet.applications[0]; assert.equal(use.creditReference, 'COUPON-1512'); assert.equal(use.refundCredit, true);
+  assert.equal(use.batchPaymentId, bill.payments[0].batchPaymentId);
+  assert.ok(s.auditLog.some(x => x.action === 'EXPENSE_REFUND_CREDIT_REDEEMED'));
+  const list = await api('/api/expenses/list?id=EX-NEXT'); assert.equal(list.expenses[0].netExpenseAmount, 2000); assert.equal(list.expenses[0].balanceDue, 0);
+  const ledger = await api('/api/expenses/account-ledger?nature=SANKI&account=' + encodeURIComponent(account));
+  const rows = ledger.entries || ledger.rows; assert.equal(rows.find(e => e.id === 'EX-NEXT/PAY-001').debit, 488);
+  assert.equal(rows.some(e => e.id === wallet.id || e.kind === 'expense_refund'), false);
+  assert.equal((await api('/api/expenses/vendor-payments/batch', body)).already, true);
+  assert.equal(read().expenses['EX-NEXT'].payments.length, 1); assert.equal(read().vendorAdvances[0].applications.length, 1);
+  assert.equal((await api('/api/expenses/vendor-payments/batch', { ...body, amount: 500 })).status, 409);
+  const reversed = await api(base + '/' + body.refundCredit.refundId + '/redemptions/' + use.id + '/void', { reason: 'Correct the coupon use, keep real bank payment' });
+  assert.equal(reversed.success, true, reversed.error); s = read();
+  assert.equal(s.vendorAdvances[0].remainingAmount, 1512); assert.equal(s.expenses['EX-NEXT'].paidAmount, 488);
+  assert.equal(s.expenses['EX-NEXT'].payments[0].amount, 488); assert.equal(s.expenses['EX-NEXT'].status, 'partially_paid');
+});
+
+test('coupon-only full or partial payments require no bank account/proof and preserve unused credit', async () => {
+  for (const bill of [1000, 2000]) {
+    const body = await seedPaymentCoupon(1512, bill); body.amount = 0; body.refundCredit.amount = 1000; body.account = ''; delete body.paymentProof;
+    const paid = await api('/api/expenses/vendor-payments/batch', body); assert.equal(paid.success, true, paid.error);
+    const s = read(); assert.equal(s.vendorAdvances[0].remainingAmount, 512); assert.equal(s.expenses['EX-NEXT'].paidAmount, 1000);
+    assert.equal((s.expenses['EX-NEXT'].payments || []).length, 0); assert.equal(s.receipts.length, 0);
+    assert.equal(s.expenses['EX-NEXT'].status, bill === 1000 ? 'paid' : 'partially_paid');
+  }
+});
+
+test('normal multi-bill coupon allocation is oldest first and cannot overconsume coupon or advances', async () => {
+  const body = await seedPaymentCoupon(1512, 2000); let s = read();
+  s.expenses['EX-OLDER'] = { ...expense('EX-OLDER', 500, 0), date: '2026-10-07' };
+  s.vendorAdvances.push({ id: 'CASH-ADVANCE', nature: 'SANKI', vendor: 'Refund Supplier', amount: 200, remainingAmount: 200, date: '2026-10-01', applications: [] }); write(s);
+  Object.assign(body, { expenseIds: ['EX-NEXT', 'EX-OLDER'], applyVendorCredit: true, amount: 788 });
+  const paid = await api('/api/expenses/vendor-payments/batch', body); assert.equal(paid.success, true, paid.error);
+  assert.equal(paid.refundCreditApplied, 1512); assert.equal(paid.vendorCreditApplied, 200);
+  assert.deepEqual(paid.refundCreditAllocations.map(a => a.amount), [500, 1012]);
+  s = read(); assert.equal(s.expenses['EX-OLDER'].status, 'paid'); assert.equal(s.expenses['EX-NEXT'].status, 'paid');
+  assert.equal(s.vendorAdvances[0].applications.length, 2); assert.equal(s.vendorAdvances[0].remainingAmount, 0);
+  assert.equal(s.vendorAdvances[1].remainingAmount, 0); assert.notEqual(s.vendorAdvances[0].applications[0].id, s.vendorAdvances[0].applications[1].id);
+});
+
+test('split coupon payment validates every leg before mutation', async () => {
+  const body = await seedPaymentCoupon();
+  for (const patch of [{ paymentProof: '' }, { account: 'Not an authorized account' }, { note: '' },
+    { refundCredit: { ...body.refundCredit, amount: 1512.001 } }, { refundCredit: { ...body.refundCredit, amount: 1513 } },
+    { refundCredit: { ...body.refundCredit, refundId: 'RF-MISSING' } }, { date: '2026-10-06' }, { amount: 488.001 }, { requestId: '' }]) {
+    const before = read(); const result = await api('/api/expenses/vendor-payments/batch', { ...body, ...patch }); assert.ok(result.status >= 400, JSON.stringify(patch));
+    const after = read(); assert.deepEqual(after.vendorAdvances, before.vendorAdvances); assert.deepEqual(after.expenses, before.expenses);
+    assert.deepEqual(after.vendorPaymentRequests, before.vendorPaymentRequests); assert.deepEqual(after.auditLog, before.auditLog);
+  }
+});
+
+test('normal coupon flow preserves expiry, merchant/entity and Owner-only restrictions server-side', async () => {
+  const body = await seedPaymentCoupon();
+  assert.equal((await api('/api/expenses/vendor-payments/batch', body, { role: 'accounting' })).status, 403);
+  for (const update of ['expiry', 'merchant', 'entity', 'source-private', 'target-private', 'voided', 'excluded']) {
+    const fresh = await seedPaymentCoupon(); const s = read(); let role = 'owner';
+    if (update === 'expiry') s.vendorAdvances[0].expiryDate = '2026-10-07';
+    if (update === 'merchant') s.expenses['EX-NEXT'].vendor = 'Other Merchant';
+    if (update === 'entity') s.expenses['EX-NEXT'].nature = 'SAMAST';
+    if (update === 'source-private') { s.expenses['EX-TEST'].ownerOnly = true; role = 'admin'; }
+    if (update === 'target-private') { s.expenses['EX-NEXT'].ownerOnly = true; role = 'admin'; }
+    if (update === 'voided') s.expenseRefunds[0].status = 'voided';
+    if (update === 'excluded') s.vendorAdvances[0].accountingExcluded = true;
+    write(s); const result = await api('/api/expenses/vendor-payments/batch', fresh, { role }); assert.ok(result.status >= 400, update + ': ' + JSON.stringify(result));
+    assert.equal(read().vendorAdvances[0].remainingAmount, 1512); assert.equal(read().expenses['EX-NEXT'].paidAmount, 0);
+  }
+});
+
+test('store credit and vendor credit also work through the ordinary payment procedure', async () => {
+  for (const mode of ['store_credit', 'vendor_credit']) {
+    const body = await seedPaymentCoupon(100, 150, mode); const result = await api('/api/expenses/vendor-payments/batch', body);
+    assert.equal(result.success, true, result.error); assert.equal(result.refundCreditApplied, 100); assert.equal(read().expenses['EX-NEXT'].payments[0].amount, 50);
+  }
+});
 test('real router posts once, previews read-only, P&L/account/vendor/list agree', async () => { await seed(); const original = read().expenses; const preview = await api(base + '/preview', input()); assert.equal(preview.success, true); assert.equal(read().expenseRefunds.length, 0); const saved = await api(base, input()); assert.equal(saved.success, true, saved.error); for(const k of ['amount','paidAmount','date','vendor'])assert.equal(read().expenses['EX-TEST'][k],original['EX-TEST'][k]);assert.equal(read().expenses['EX-TEST'].payments[0].amount,original['EX-TEST'].payments[0].amount); assert.equal(expensesModule.summaryForPL('2026-10-01', '2026-10-08').Shared.variable, 0); const ledger = await api('/api/expenses/account-ledger?nature=SANKI&account=' + encodeURIComponent(account)); assert.equal(ledger.success, true); const entries = ledger.entries || ledger.rows; assert.equal(entries.filter(e => e.kind === 'expense_refund').length, 1); assert.equal((await api('/api/expenses/vendors?nature=SANKI')).vendors.find(v => v.name === 'Refund Supplier').ledgerClosingBalance, 0); const list = await api('/api/expenses/list?id=EX-TEST'); assert.equal(list.expenses[0].netExpenseAmount, 0); assert.equal(list.expenses[0].payments[0].amount, 100); const retry = await api(base, input()); assert.equal(retry.already, true); assert.equal(read().receipts.length, 1); });
 test('permission and source-identity checks cannot be bypassed through API', async () => { await seed(); assert.equal((await api(base, input(), { role: 'accounting' })).status, 403); let s = read(); s.expenses['EX-TEST'].ownerOnly = true; write(s); assert.equal((await api(base, input(), { role: 'admin' })).status, 403); assert.equal((await api(base, undefined, { role: 'admin' })).sources.length, 0); assert.equal(read().receipts.length, 0); });
 test('finalized receiving dates reject new postings but allow linking existing evidence', async () => { await seed(); let s = read(); s.bankStatements[account] = { reconciledThrough: '2026-10-07' }; write(s); assert.equal((await api(base, input())).status, 409); s.receipts.push({ id: 'REC-OLD', nature: 'SANKI', date: '2026-10-07', account, amount: 100, receiptType: 'refund' }); write(s); const result = await api(base, input(100, { components: [{ mode: 'bank', amount: 100, account, externalMovementId: 'REC-OLD' }] })); assert.equal(result.success, true, result.error); assert.equal(read().receipts.length, 1); assert.equal((await api(base)).existingMovements.length, 0); });
@@ -122,4 +227,52 @@ test('vendor rename preserves voucher issuer and unused credit merchant cannot b
   const s = read(); assert.equal(s.vendorAdvances[0].issuer, 'Final Voucher Merchant'); assert.equal(s.vendorAdvances[0].vendor, 'Final Voucher Merchant');
   assert.equal(s.expenseRefunds[0].components[0].issuer, 'Final Voucher Merchant');
   assert.equal(s.expenseRefunds[0].components[0].originalIssuer, 'Voucher Merchant');
+});
+
+test('split coupon payments preserve cash and credit-card accounting, not just UPI', async () => {
+  for (const type of ['Cash', 'Credit']) {
+    const body = await seedPaymentCoupon();
+    body.paymentType = type; body.account = type === 'Cash' ? 'Counter Cash' : 'Test Card 1234';
+    if (type === 'Credit') {
+      body.creditCardId = 'CC-1';
+      fs.writeFileSync(path.join(temp, 'credit-cards.json'), JSON.stringify({ cards: { 'CC-1': { id: 'CC-1', name: 'Test Card', last4: '1234', openingOutstanding: 0, active: true } }, statements: {}, payments: [], audit: [] }));
+    }
+    const paid = await api('/api/expenses/vendor-payments/batch', body); assert.equal(paid.success, true, paid.error);
+    const bill = read().expenses['EX-NEXT']; assert.equal(bill.paidAmount, 2000); assert.equal(bill.payments[0].amount, 488);
+    assert.equal(bill.payments[0].account, body.account); assert.equal(read().vendorAdvances[0].remainingAmount, 0);
+    assert.equal(read().receipts.length, 0);
+    if (type === 'Credit') {
+      assert.equal(bill.payments[0].creditCardId, 'CC-1');
+      assert.equal((await api('/api/expenses/credit-cards')).cards[0].outstanding, 488);
+      assert.equal((await api('/api/expenses/vendor-payments/batch', { ...body, creditCardId: 'CC-2' })).status, 409);
+    } else {
+      const ledger = await api('/api/expenses/account-ledger?nature=SANKI&account=' + encodeURIComponent(body.account));
+      assert.equal((ledger.entries || ledger.rows).find(e => e.id === 'EX-NEXT/PAY-001').debit, 488);
+    }
+    assert.equal((await api('/api/expenses/vendor-payments/batch', body)).already, true);
+    assert.equal(read().expenses['EX-NEXT'].payments.length, 1);
+  }
+});
+
+test('a genuine bank reconciliation warning cannot partly redeem a split coupon payment', async () => {
+  const body = await seedPaymentCoupon(), s = read();
+  s.transfers = [{ id: 'TR-WARNING', nature: 'SANKI', date: '2026-10-08', fromAccount: account, toAccount: 'Axis Bank 3448', amount: 10 }]; write(s);
+  const before = read(), failed = await api('/api/expenses/vendor-payments/batch', body);
+  assert.equal(failed.status, 409); assert.equal(failed.requiresOverride, true);
+  const after = read(); assert.deepEqual(after.vendorAdvances, before.vendorAdvances); assert.deepEqual(after.expenses, before.expenses);
+  assert.deepEqual(after.vendorPaymentRequests, before.vendorPaymentRequests); assert.deepEqual(after.auditLog, before.auditLog);
+  // Credit-only settlement changes no bank/cash movement, leaving the warning
+  // intact rather than suppressing it or adding an override.
+  const creditOnly = await api('/api/expenses/vendor-payments/batch', { ...body, amount: 0, account: '', paymentProof: '' });
+  assert.equal(creditOnly.success, true, creditOnly.error); assert.equal(read().expenses['EX-NEXT'].paidAmount, 1512);
+  assert.equal(read().expenses['EX-NEXT'].payments.length, 0); assert.deepEqual(read().transfers, before.transfers);
+});
+
+test('normal money-only payment retries are idempotent without a coupon', async () => {
+  await seed(expense('EX-NEXT', 100, 0));
+  const body = { expenseIds: ['EX-NEXT'], amount: 100, account, date: '2026-10-08', paymentType: 'UPI', paymentProof: '/api/expenses/photo/money-only.jpg', requestId: 'normal-money-payment-0001' };
+  const paid = await api('/api/expenses/vendor-payments/batch', body); assert.equal(paid.success, true, paid.error);
+  assert.equal((await api('/api/expenses/vendor-payments/batch', body)).already, true);
+  assert.equal(read().expenses['EX-NEXT'].payments.length, 1); assert.equal(read().expenses['EX-NEXT'].paidAmount, 100);
+  assert.equal((await api('/api/expenses/vendor-payments/batch', { ...body, amount: 101 })).status, 409);
 });
