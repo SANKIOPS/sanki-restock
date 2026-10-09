@@ -81,6 +81,9 @@
     .payment-choice label { display:flex; align-items:center; gap:8px; min-height:44px; margin:0; padding:10px 12px; border:1px solid #d1d5db; border-radius:8px; background:#fff; text-transform:none; letter-spacing:0; font-size:13px; cursor:pointer; }
     .payment-choice input { width:18px; height:18px; min-width:18px; margin:0; padding:0; accent-color:var(--blue); }
     .combo-wrap { position:relative; }
+    .vendor-input { display:flex; gap:4px; }
+    .vendor-input input { min-width:0; flex:1; }
+    .vendor-input button { flex:0 0 38px; padding:5px; }
     .combo-menu { display:none; position:absolute; z-index:30; left:0; right:0; top:100%; max-height:220px; overflow:auto; margin-top:3px; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px rgba(15,23,42,.16); }
     .combo-menu.open { display:block; }
     .combo-option { padding:10px 12px; cursor:pointer; border-bottom:1px solid #f1f5f9; font-size:14px; }
@@ -285,10 +288,11 @@
   <dialog id="approveDlg"><div class="dlg">
     <h3>Review and approve expense</h3>
     <div id="approveSummary" class="sub" style="margin-bottom:12px"></div>
-    <div class="fld"><label>Category (required)</label><input id="approveCategory" list="approvalLedgerList" placeholder="Type to search or create a category" autocomplete="off"><datalist id="approvalLedgerList"></datalist><div class="hint">Choose an existing suggestion, or type a new category name to create it.</div></div>
+    <div class="fld combo-wrap" style="margin-bottom:12px"><label for="approveVendor">Vendor (required)</label><div class="vendor-input"><input id="approveVendor" placeholder="Search or enter a vendor" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="approveVendorSuggestions"><button type="button" class="btn ghost" id="approveVendorDropdown" aria-label="Show vendors for approval">▾</button></div><div id="approveVendorSuggestions" class="combo-menu" role="listbox" aria-label="Approval vendor suggestions"></div><div class="hint">Select an existing vendor or correct the submitted name before approving.</div></div>
+    <div class="fld"><label for="approveCategory">Category (required)</label><input id="approveCategory" list="approvalLedgerList" placeholder="Type to search an approved category" autocomplete="off"><datalist id="approvalLedgerList"></datalist><div class="hint">Category changes follow the existing Admin / Owner permissions.</div></div>
     <div class="fld" style="margin-top:10px"><label>Type</label><select id="approveType"></select></div>
     <div class="row-actions">
-      <button class="btn primary" id="approveGo">Assign category and approve</button>
+      <button class="btn primary" id="approveGo">Confirm and approve</button>
       <button class="btn ghost" id="approveCancel">Cancel</button>
     </div>
     <div class="msg" id="approveMsg"></div>
@@ -646,7 +650,7 @@
           '<div class="hint" id="ledgerHint"></div></div>':'')+
         (cfg.isAdmin?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
         '<div class="fld"><label>Accounting entity / nature</label><select id="f_nature">'+opts(cfg.natures,selectedNature)+'</select><div class="hint">Choose SANKI, SAMAST (Kirti Nagar), or owner-private PERSONAL.</div></div>'+
-        '<div class="fld combo-wrap"><label>Vendor</label><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" aria-autocomplete="list" aria-controls="vendorSuggestions"><div id="vendorSuggestions" class="combo-menu" role="listbox"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
+        '<div class="fld combo-wrap"><label for="f_vendor">Vendor</label><div class="vendor-input"><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="vendorSuggestions"><button type="button" class="btn ghost" id="vendorDropdown" aria-label="Show vendors for expense">▾</button></div><div id="vendorSuggestions" class="combo-menu" role="listbox" aria-label="Expense vendor suggestions"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
         '<div class="fld full"><label>Have you already paid for this expense?</label><select id="f_paidalready"><option value="false">No — company must pay the vendor</option><option value="true">Yes — I paid personally</option></select></div>'+
         '<div class="fld"><label>Is this an installment / contract?</label><select id="f_installment"><option value="false">No</option><option value="true">Yes</option></select></div>'+
         '<div class="fld" id="totalAgreedWrap" style="display:none"><label>Total agreed amount ₹</label><input type="number" id="f_totalamount" min="1" step="1" placeholder="e.g. 10000"></div>'+
@@ -680,8 +684,7 @@
       el('f_paymenttype').addEventListener('change', toggleQrPhoto);
       el('f_paidalready').addEventListener('change', togglePaymentFlow);
       el('f_installment').addEventListener('change', toggleInstallment);
-      el('f_vendor').addEventListener('input',renderVendorSuggestions);
-      el('f_vendor').addEventListener('focus',renderVendorSuggestions);
+      bindVendorPicker('f_vendor');
       el('f_nature').addEventListener('change',function(){selectedNature=this.value;el('f_vendor').value='';if(el('ledgerList'))el('ledgerList').innerHTML=categorySuggestions(selectedNature);if(el('f_ledger'))el('f_ledger').value='';renderVendorSuggestions();});
       document.removeEventListener('click',closeVendorSuggestions,true);
       document.addEventListener('click',closeVendorSuggestions,true);
@@ -733,22 +736,48 @@
         el('seAmount').value='';el('seProof').value='';el('seReference').value='';el('seNote').value='';
       }).catch(function(e){btn.disabled=false;el('seState').textContent='';setMsg(e.message||'Could not upload proof.',false);});
     }
-    function renderVendorSuggestions(){
-      var input=el('f_vendor'), menu=el('vendorSuggestions'), q=input.value.trim().toLowerCase();
-      var nature=el('f_nature')?el('f_nature').value:selectedNature;
-      var matches=(cfg.vendorsByNature&&cfg.vendorsByNature[nature]||cfg.vendors).filter(function(v){return !q||v.toLowerCase().includes(q);}).slice(0,20);
+    var vendorPickers={f_vendor:{menu:'vendorSuggestions',button:'vendorDropdown'},approveVendor:{menu:'approveVendorSuggestions',button:'approveVendorDropdown'},editVendor:{menu:'editVendorSuggestions',button:'editVendorDropdown'}};
+    function vendorPickerNature(inputId){return inputId==='approveVendor'?(expensesById[approveId]||{}).nature||selectedNature:inputId==='editVendor'?el('editNature').value:el('f_nature')?el('f_nature').value:selectedNature;}
+    function hideVendorSuggestions(inputId){var picker=vendorPickers[inputId],input=el(inputId),menu=picker&&el(picker.menu);if(menu)menu.classList.remove('open');if(input)input.setAttribute('aria-expanded','false');}
+    function renderVendorSuggestions(inputId,showAll){
+      inputId=typeof inputId==='string'?inputId:'f_vendor';
+      var picker=vendorPickers[inputId],input=el(inputId),menu=picker&&el(picker.menu);if(!cfg||!input||!menu)return;
+      Object.keys(vendorPickers).forEach(function(id){if(id!==inputId)hideVendorSuggestions(id);});
+      var q=showAll?'':input.value.trim().toLowerCase(),nature=vendorPickerNature(inputId);
+      var vendors=cfg.vendorsByNature?cfg.vendorsByNature[nature]||[]:(nature==='SANKI'?cfg.vendors||[]:[]);
+      var matches=vendors.filter(function(v){return !q||v.toLowerCase().includes(q);}).slice(0,20);
       if(!matches.length){
-        menu.innerHTML='<div class="combo-option" role="option" aria-disabled="true"><b>No existing match.</b><br><span class="muted">“'+esc(input.value.trim())+'” will be submitted as a new vendor.</span></div>';
-        menu.classList.add('open'); return;
+        menu.innerHTML='<div class="combo-option" role="option" aria-disabled="true"><b>No existing match.</b><br><span class="muted">'+(input.value.trim()?'“'+esc(input.value.trim())+'” will be submitted as a new vendor.':'Type a vendor name; new names enter the reusable list only after approval.')+'</span></div>';
+        menu.classList.add('open');input.setAttribute('aria-expanded','true');return;
       }
       menu.innerHTML=matches.map(function(v){return '<div class="combo-option" role="option" tabindex="0" data-vendor="'+esc(v)+'">'+esc(v)+'</div>';}).join('');
-      menu.classList.add('open');
+      menu.classList.add('open');input.setAttribute('aria-expanded','true');
       Array.prototype.forEach.call(menu.querySelectorAll('.combo-option'),function(o){
-        o.addEventListener('mousedown',function(ev){ev.preventDefault();input.value=this.dataset.vendor;menu.classList.remove('open');});
-        o.addEventListener('keydown',function(ev){if(ev.key==='Enter'){input.value=this.dataset.vendor;menu.classList.remove('open');input.focus();}});
+        function choose(){input.value=o.dataset.vendor;input.focus();hideVendorSuggestions(inputId);}
+        o.addEventListener('mousedown',function(ev){ev.preventDefault();});
+        o.addEventListener('click',choose);
+        o.addEventListener('keydown',function(ev){if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();choose();}else if(ev.key==='Escape'){input.focus();hideVendorSuggestions(inputId);}});
       });
     }
-    function closeVendorSuggestions(ev){if(el('vendorSuggestions')&&!el('vendorSuggestions').contains(ev.target)&&ev.target!==el('f_vendor'))el('vendorSuggestions').classList.remove('open');}
+    function bindVendorPicker(inputId){
+      var input=el(inputId),picker=vendorPickers[inputId];if(!input||!picker||input.dataset.vendorPickerBound)return;
+      if(!el(picker.menu)){
+        var field=input.parentElement,wrap=document.createElement('div'),button=document.createElement('button'),menu=document.createElement('div');field.classList.add('combo-wrap');
+        var label=field.querySelector('label');if(label)label.setAttribute('for',inputId);
+        wrap.className='vendor-input';field.insertBefore(wrap,input);wrap.appendChild(input);button.id=picker.button;button.type='button';button.className='btn ghost';button.textContent='▾';button.setAttribute('aria-label','Show vendors for expense editing');wrap.appendChild(button);
+        menu.id=picker.menu;menu.className='combo-menu';menu.setAttribute('role','listbox');menu.setAttribute('aria-label','Edit vendor suggestions');field.appendChild(menu);
+      }
+      input.dataset.vendorPickerBound='true';input.setAttribute('autocomplete','off');input.setAttribute('role','combobox');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-controls',picker.menu);input.setAttribute('aria-expanded','false');
+      input.addEventListener('input',function(){renderVendorSuggestions(inputId);});input.addEventListener('focus',function(){renderVendorSuggestions(inputId);});
+      input.addEventListener('keydown',function(ev){if(ev.key==='Escape')hideVendorSuggestions(inputId);else if(ev.key==='ArrowDown'){ev.preventDefault();renderVendorSuggestions(inputId);var first=el(picker.menu).querySelector('[data-vendor]');if(first)first.focus();}});
+      el(picker.button).addEventListener('click',function(){input.focus();renderVendorSuggestions(inputId,true);});
+    }
+    function closeVendorSuggestions(ev){Object.keys(vendorPickers).forEach(function(id){var picker=vendorPickers[id],menu=el(picker.menu);if(menu&&!menu.contains(ev.target)&&ev.target!==el(id)&&ev.target!==el(picker.button))hideVendorSuggestions(id);});}
+    bindVendorPicker('approveVendor');bindVendorPicker('editVendor');
+    el('editNature').addEventListener('change',function(){hideVendorSuggestions('editVendor');});
+    el('editDlg').addEventListener('close',function(){hideVendorSuggestions('editVendor');});
+    el('approveDlg').addEventListener('close',function(){hideVendorSuggestions('approveVendor');});
+    document.addEventListener('click',closeVendorSuggestions,true);
     var telegramLinkedUsers=[],telegramAccounts={};
     function loadTelegramUsers(){Promise.all([api('/api/admin/users'),api('/api/telegram/status')]).then(function(results){var d=results[0],status=results[1],s=el('telegramUser');var bot=status.botUsername?'@'+status.botUsername:'configured bot';el('telegramBotStatus').textContent=!status.configured?'Telegram bot token is not configured.':(status.connectedToThisApp?'✅ '+bot+' is connected to this production app.':(status.webhookSet?'⚠️ '+bot+' is currently connected somewhere else. Do not reconnect until that integration is confirmed.':'⚪ '+bot+' has no active webhook.'));telegramLinkedUsers=(status.linkedUsernames||[]).map(function(u){return String(u).toLowerCase();});telegramAccounts={};(status.linkedAccounts||[]).forEach(function(a){telegramAccounts[String(a.username).toLowerCase()]=a;});s.innerHTML=(d.users||[]).map(function(u){var a=telegramAccounts[u.username.toLowerCase()],n=a?a.count:0;return '<option value="'+esc(u.username)+'">'+(n?'✅ ':'⚪ ')+esc(u.username)+' ('+esc((u.roles||[]).join(', '))+')'+(n?' — '+n+' Telegram'+(n===1?'':'s'):'')+'</option>';}).join('')||'<option value="">No users found</option>';s.onchange=showTelegramUserStatus;showTelegramUserStatus();});}
     function showTelegramUserStatus(){var username=el('telegramUser').value,a=telegramAccounts[username.toLowerCase()],n=a?a.count:0;el('telegramUserStatus').textContent=username+(n?' has '+n+' linked Telegram account'+(n===1?'':'s')+'. Every relevant notification is sent to all of them.':' is not linked yet. Generate a link and send it to this user.');var box=el('telegramConnections');box.innerHTML=!n?'':(a.connections||[]).map(function(c,i){return '<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><span>✅ '+esc(c.label||('Telegram '+(i+1)))+'</span><button class="btn ghost mini" data-unlink-chat="'+esc(c.chatId)+'">Disconnect this account</button></div>';}).join('');Array.prototype.forEach.call(box.querySelectorAll('[data-unlink-chat]'),function(b){b.addEventListener('click',function(){unlinkTelegram(this.getAttribute('data-unlink-chat'));});});}
@@ -1097,33 +1126,48 @@
       api('/api/expenses/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ledger:match?match.name:ledger,type:match?match.type:(expensesById[id]&&expensesById[id].type)||'variable'}) })
         .then(function(d){ if(d.success){ setMsg((match?'Category assigned.':'New category created and assigned.')+' You can approve the expense now.',true); loadConfig().then(loadList); } else setMsg(d.error||'Could not assign category.',false); });
     };
+    var approveSubmitting=false;
     window.approve = function(id){
+      if(approveSubmitting)return;
       var e=expensesById[id]||{};
       el('payAmountLabel').textContent='Amount ₹';el('payAmountHint').style.display='none';
-      if(!e.ledger){
+      if(e.status==='pending'){
         approveId=id;
         el('approveSummary').textContent=id+' · '+(e.particulars||'Expense')+' · '+fmt(e.amount);
-        el('approveCategory').value='';
-        el('approveType').innerHTML=opts(cfg.types); el('approveType').value=e.type||'variable';
-        el('approveMsg').textContent=''; el('approveDlg').showModal(); return;
+        el('approveVendor').value=e.vendor||'';hideVendorSuggestions('approveVendor');
+        el('approveCategory').value=e.ledger||'';el('approveCategory').setAttribute('list','approvalLedgerList_'+(e.nature||'SANKI'));el('approveCategory').disabled=!cfg.isAdmin;
+        el('approveType').innerHTML=opts(cfg.types);el('approveType').value=e.type||'variable';el('approveType').disabled=!cfg.isAdmin;
+        el('approveGo').disabled=!cfg.isAdmin&&!e.ledger;el('approveCancel').disabled=false;
+        el('approveMsg').textContent=!cfg.isAdmin&&!e.ledger?'An Admin or Owner must assign the category before you can approve.':'';
+        el('approveDlg').showModal();return;
       }
       api('/api/expenses/'+id+'/approve', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(function(d){
         if(d.success) loadList(); else setMsg(d.error||'Could not approve.', false);
       });
     };
     el('approveCancel').addEventListener('click',function(){el('approveDlg').close();});
+    el('approveDlg').addEventListener('cancel',function(ev){if(approveSubmitting)ev.preventDefault();});
     el('approveGo').addEventListener('click',function(){
-      var ledger=String(el('approveCategory').value||'').trim(), type=el('approveType').value;
+      if(approveSubmitting)return;
+      var id=approveId,e=expensesById[id]||{},vendor=String(el('approveVendor').value||'').trim(),ledger=String(el('approveCategory').value||'').trim(),type=el('approveType').value,patch={};
+      if(!vendor){el('approveMsg').textContent='Please enter or select a vendor.';return;}
       if(!ledger){el('approveMsg').textContent='Please select a category.';return;}
-      el('approveGo').disabled=true; el('approveMsg').textContent='Saving category…';
-      api('/api/expenses/'+approveId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ledger:ledger,type:type})}).then(function(saved){
-        if(!saved.success) throw new Error(saved.error||'Could not assign category.');
-        return api('/api/expenses/'+approveId+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(vendor!==String(e.vendor||'').trim())patch.vendor=vendor;
+      if(ledger!==String(e.ledger||'').trim()){if(!cfg.isAdmin){el('approveMsg').textContent='Only an Admin or Owner can change the category.';return;}patch.ledger=ledger;}
+      if(cfg.isAdmin&&type!==e.type)patch.type=type;
+      approveSubmitting=true;el('approveGo').disabled=true;el('approveCancel').disabled=true;el('approveMsg').textContent='Reviewing and approving…';
+      // Corrections use the existing validated, audited edit route. Approval
+      // only follows a successful save; an unchanged review never rewrites it.
+      var save=Object.keys(patch).length?api('/api/expenses/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}):Promise.resolve({success:true});
+      save.then(function(saved){
+        if(!saved.success)throw new Error(saved.error||'Could not save the reviewed vendor/category.');
+        if(saved.expense)expensesById[id]=saved.expense;
+        return api('/api/expenses/'+id+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedStatus:'pending'})});
       }).then(function(done){
-        el('approveGo').disabled=false;
+        approveSubmitting=false;el('approveGo').disabled=false;el('approveCancel').disabled=false;
         if(!done.success){el('approveMsg').textContent=done.error||'Could not approve.';return;}
-        el('approveDlg').close(); setMsg('Expense approved.',true); loadList();
-      }).catch(function(err){el('approveGo').disabled=false;el('approveMsg').textContent=err.message||'Could not approve.';});
+        el('approveDlg').close();setMsg('Expense approved.',true);loadConfig().then(loadList);
+      }).catch(function(err){approveSubmitting=false;el('approveGo').disabled=false;el('approveCancel').disabled=false;el('approveMsg').textContent=err.message||'Could not approve.';});
     });
     window.rejectExpense = function(id){
       var reason=prompt('Reason for rejection:'); if(reason===null) return;
