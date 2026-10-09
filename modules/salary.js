@@ -838,7 +838,10 @@ router.get('/api/salary/ledgers',guard,(req,res)=>{
 // Salary advances are recoverable employee balances, not salary/P&L expenses.
 router.get('/api/salary/advances', guard, (req, res) => {
   const s = load(), q = req.query || {};
-  let rows = Object.values(s.advances || {}).map(a=>advanceView(a,s));
+  // Recent activity needs the complete entity-local history: register filters
+  // must not hide an older undeducted advance or a recent cancellation.
+  const activityAdvances = Object.values(s.advances || {}).map(a=>advanceView(a,s)).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
+  let rows = activityAdvances.slice();
   if (q.employee) rows = rows.filter(a => a.empId === q.employee);
   if (q.month) rows = rows.filter(a => String(a.date || '').slice(0, 7) === q.month);
   if (q.status) rows = rows.filter(a => a.status === q.status);
@@ -850,7 +853,7 @@ router.get('/api/salary/advances', guard, (req, res) => {
     const payroll=payrollRows.get(e.id),transactions=all.map(a=>advanceView(a,s)).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),employeeRequests=requests.filter(r=>r.empId===e.id&&r.status!=='Posted'),activityDates=transactions.map(x=>x.date).concat(employeeRequests.map(x=>x.payoutDate||x.date)).filter(Boolean).sort().reverse();return { empId: e.id, name: e.name, thisMonth: all.filter(a => String(a.date).slice(0, 7) === (q.summaryMonth || new Date().toISOString().slice(0, 7))).reduce((n, a) => n + num(a.amount), 0), total: round2(total), recovered: round2(recovered), outstanding: round2(total - recovered), companyOwes:round2(Math.max(0,payroll&&payroll.balance||0)),lastActivity:activityDates[0]||'',transactions,requests:employeeRequests };
   }).filter(x => x.total || x.recovered || x.companyOwes || x.requests.length);
   const totals = summary.reduce((t, x) => ({ total: t.total + x.total, recovered: t.recovered + x.recovered, outstanding: t.outstanding + x.outstanding }), { total: 0, recovered: 0, outstanding: 0 });
-  res.json({ success: true, advances: rows, summary, totals, requests, editRequests:Object.values(s.advanceEditRequests||{}).filter(x=>x.status==='Pending owner approval'), sourceSheet:(s.advanceSourceSheets||[]).at(-1)||null, sourceSheetPostingAccounts:SOURCE_SHEET_POSTING_ACCOUNTS, permissions:{canRequest:canRequestOrPostAdvance(req),canDirectPost:isOwner(req),canApprove:isOwner(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canRequestOrPostAdvance(req),canCancel:isOwner(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
+  res.json({ success: true, advances: rows, activityAdvances, summary, totals, requests, editRequests:Object.values(s.advanceEditRequests||{}).filter(x=>x.status==='Pending owner approval'), sourceSheet:(s.advanceSourceSheets||[]).at(-1)||null, sourceSheetPostingAccounts:SOURCE_SHEET_POSTING_ACCOUNTS, permissions:{canRequest:canRequestOrPostAdvance(req),canDirectPost:isOwner(req),canApprove:isOwner(req),canPostProof:canRequestOrPostAdvance(req),canEdit:canRequestOrPostAdvance(req),canCancel:isOwner(req)}, audit: (s.advanceAudit || []).slice().reverse().slice(0, 500), requestAudit:(s.advanceRequestAudit||[]).slice().reverse().slice(0,500) });
 });
 router.post('/api/salary/advances/source-sheet',guard,receiveSalarySheet,(req,res)=>{
   if(!canApproveAdvance(req))return res.status(403).json({success:false,error:'Only a salary manager can save an advances source sheet.'});
