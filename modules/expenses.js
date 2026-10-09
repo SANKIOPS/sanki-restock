@@ -4,6 +4,7 @@ const { purchaseBillingAmount } = require('./purchase-payment-status');
 const { finalizedByPo } = require('./lg-invoices');
 const { calculateReconciliationOpening, finalizedMovementCoverageIds, pendingCarryForwardCandidates } = require('./reconciliation-opening');
 const { recoverReversalSourceMetadata } = require('./reconciliation-source-metadata');
+const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -523,6 +524,49 @@ function mergeVendorRecords(s,nature,sourceNames,targetName,options){
   if(!(options&&options.skipAudit))sources.forEach(sourceName=>audit(s,options&&options.req||null,'VENDOR_MERGED','vendor',sourceName,{user:options&&options.user,device:options&&options.device,nature:n,before:{source:sourceName,target,balance:before},after:{name:target,linkedExpenses:changedExpenses,balance:after},note:options&&options.note||'Vendor aliases consolidated without changing transaction amounts, dates, references, proofs or payment accounts'}));
   return result;
 }
+const REVIEWED_VENDOR_MIGRATION_KEY='apply-reviewed-vendor-decisions-2026-10-09-v1';
+function vendorReferenceSummary(s,nature,name){
+  const n=normalizedNature(nature),identity=vendorIdentityKey(name),same=value=>vendorIdentityKey(value)===identity;
+  const expenses=Object.values(s.expenses||{}).filter(x=>normalizedNature(x.nature)===n&&same(x.vendor)).map(x=>x.id);
+  const openingPayables=(s.vendorOpeningPayables||[]).filter(x=>normalizedNature(x.nature)===n&&same(x.vendor)).map(x=>x.id);
+  const advances=(s.vendorAdvances||[]).filter(x=>normalizedNature(x.nature)===n&&(same(x.vendor)||(x.creditOnly&&same(x.issuer)))).map(x=>x.id);
+  const refunds=expenseRefunds.records(s).filter(x=>x.nature===n&&(same(x.vendor)||(x.components||[]).some(c=>same(c.issuer)))).map(x=>x.id);
+  const draftResolutions=[];Object.values(s.bankReconciliationDrafts||{}).forEach(d=>{if(normalizedNature(d.nature)!==n)return;Object.entries(d.resolutions||{}).forEach(([rowId,r])=>{if(same(r.vendor))draftResolutions.push(d.id+'/'+rowId);});});
+  return{expenses,openingPayables,advances,refunds,draftResolutions,total:expenses.length+openingPayables.length+advances.length+refunds.length+draftResolutions.length};
+}
+function mergeVendorMasterMetadata(records,name){
+  const rows=records.filter(Boolean),merged=Object.assign({},...rows),notes=Array.from(new Set(rows.map(x=>String(x.notes||'').trim()).filter(Boolean))),tags=Array.from(new Set(rows.flatMap(x=>Array.isArray(x.tags)?x.tags:[]).map(x=>String(x||'').trim()).filter(Boolean)));
+  merged.name=name;merged.notes=notes.join(' · ');if(tags.length)merged.tags=tags;return merged;
+}
+function applyReviewedVendorDecisions20261009(s){
+  s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[REVIEWED_VENDOR_MIGRATION_KEY])return false;
+  const now=new Date().toISOString(),removalChecks=new Map(),results=[],summary={requested:{Rename:0,Merge:0,Remove:0},applied:{Rename:0,Merge:0,Remove:0},alreadyApplied:0,missing:0,skippedLinkedRemovals:0,updatedExpenses:0,updatedOpeningPayables:0,updatedAdvances:0,updatedRefunds:0,updatedDraftResolutions:0};
+  REVIEWED_VENDOR_DECISIONS_20261009.forEach(d=>{summary.requested[d.action]+=1;if(d.action==='Remove')removalChecks.set(d.entity+'|'+vendorIdentityKey(d.current),vendorReferenceSummary(s,d.entity,d.current));});
+  REVIEWED_VENDOR_DECISIONS_20261009.forEach(decision=>{
+    const nature=normalizedNature(decision.entity),current=cleanVendorName(decision.current),finalName=cleanVendorName(decision.final),sourceIdentity=vendorIdentityKey(current),targetIdentity=vendorIdentityKey(finalName),master=vendorMasterForNature(s,nature),sourceEntries=Object.entries(master).filter(([,x])=>vendorIdentityKey(x&&x.name)===sourceIdentity),beforeRefs=vendorReferenceSummary(s,nature,current),sourcePresent=sourceEntries.length>0||beforeRefs.total>0;
+    if(decision.action==='Remove'){
+      const linked=removalChecks.get(nature+'|'+sourceIdentity)||beforeRefs;
+      if(linked.total){summary.skippedLinkedRemovals+=1;results.push({nature,action:'Remove',current,result:'skipped_linked',linked});audit(s,null,'VENDOR_REMOVAL_SKIPPED_LINKED','vendor',current,{user:'gaganlambasanki',device:'Owner-reviewed workbook migration',nature,before:{name:current,linked},after:{name:current},note:'Removal from the reviewed workbook was blocked because the vendor gained or retained linked accounting records.'});return;}
+      if(!sourceEntries.length){summary.alreadyApplied+=1;results.push({nature,action:'Remove',current,result:'already_absent'});return;}
+      sourceEntries.forEach(([key])=>delete master[key]);summary.applied.Remove+=1;results.push({nature,action:'Remove',current,result:'removed'});audit(s,null,'VENDOR_DELETED','vendor',current,{user:'gaganlambasanki',device:'Owner-reviewed workbook migration',nature,before:{name:current},after:null,note:'Removed as unused in the owner-reviewed vendor workbook after a fresh zero-link safety check.'});return;
+    }
+    if(!sourcePresent){const targetPresent=Object.values(master).some(x=>vendorIdentityKey(x&&x.name)===targetIdentity)||vendorReferenceSummary(s,nature,finalName).total>0;if(targetPresent){summary.alreadyApplied+=1;results.push({nature,action:decision.action,current,final:finalName,result:'already_applied'});}else{summary.missing+=1;results.push({nature,action:decision.action,current,final:finalName,result:'source_not_found'});}return;}
+    let updatedExpenses=0,updatedOpeningPayables=0,updatedAdvances=0,updatedRefunds=0,updatedDraftResolutions=0;
+    const sameSource=value=>vendorIdentityKey(value)===sourceIdentity;
+    Object.values(s.expenses||{}).forEach(x=>{if(normalizedNature(x.nature)===nature&&sameSource(x.vendor)){x.vendor=finalName;updatedExpenses+=1;}});
+    (s.vendorOpeningPayables||[]).forEach(x=>{if(normalizedNature(x.nature)===nature&&sameSource(x.vendor)){x.vendor=finalName;updatedOpeningPayables+=1;}});
+    (s.vendorAdvances||[]).forEach(x=>{if(normalizedNature(x.nature)!==nature)return;let changed=false;if(sameSource(x.vendor)){x.vendor=finalName;changed=true;}if(x.creditOnly&&sameSource(x.issuer)){x.originalIssuer=x.originalIssuer||x.issuer;x.issuer=finalName;changed=true;}if(changed)updatedAdvances+=1;});
+    expenseRefunds.records(s).filter(x=>x.nature===nature).forEach(x=>{let changed=false;if(sameSource(x.vendor)){x.originalVendor=x.originalVendor||x.vendor;x.vendor=finalName;changed=true;}(x.components||[]).forEach(c=>{if(sameSource(c.issuer)){c.originalIssuer=c.originalIssuer||c.issuer;c.issuer=finalName;changed=true;}});if(changed)updatedRefunds+=1;});
+    Object.values(s.bankReconciliationDrafts||{}).forEach(d=>{if(normalizedNature(d.nature)!==nature)return;Object.values(d.resolutions||{}).forEach(r=>{if(sameSource(r.vendor)){r.vendor=finalName;updatedDraftResolutions+=1;}});});
+    const targetEntries=Object.entries(master).filter(([,x])=>vendorIdentityKey(x&&x.name)===targetIdentity),allEntries=Array.from(new Map(targetEntries.concat(sourceEntries).map(([key,value])=>[key,[key,value]])).values());allEntries.forEach(([key])=>delete master[key]);master[targetIdentity]=mergeVendorMasterMetadata(allEntries.map(([,value])=>value),finalName);
+    const changed=updatedExpenses+updatedOpeningPayables+updatedAdvances+updatedRefunds+updatedDraftResolutions>0||sourceEntries.some(([,x])=>cleanVendorName(x&&x.name)!==finalName)||sourceIdentity!==targetIdentity;
+    if(changed)summary.applied[decision.action]+=1;else summary.alreadyApplied+=1;
+    summary.updatedExpenses+=updatedExpenses;summary.updatedOpeningPayables+=updatedOpeningPayables;summary.updatedAdvances+=updatedAdvances;summary.updatedRefunds+=updatedRefunds;summary.updatedDraftResolutions+=updatedDraftResolutions;
+    const result={nature,action:decision.action,current,final:finalName,result:changed?'applied':'already_applied',updatedExpenses,updatedOpeningPayables,updatedAdvances,updatedRefunds,updatedDraftResolutions};results.push(result);
+    if(changed)audit(s,null,decision.action==='Merge'?'VENDOR_MERGED':'VENDOR_RENAMED','vendor',current,{user:'gaganlambasanki',device:'Owner-reviewed workbook migration',nature,before:{name:current,linked:beforeRefs},after:{name:finalName,linked:vendorReferenceSummary(s,nature,finalName)},note:'Applied from the owner-reviewed vendor workbook. Transaction amounts, dates, references, proofs and payment accounts were not modified.'});
+  });
+  s.oneTimeMigrations[REVIEWED_VENDOR_MIGRATION_KEY]={appliedAt:now,source:'SANKI_All_Vendor_Duplicate_Reviewed.xlsx · Vendor Review A9:M193',preservedTransactionDetails:true,entityScoped:true,summary,results};return true;
+}
 function applyKaluFlowersFruitsVendorMerge(s){
   const key='merge-sanki-vijay-vijay-kumar-kalu-flower-into-kalu-flowers-fruits-v1';s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[key])return false;
   const result=mergeVendorRecords(s,'SANKI',['Vijay','Vijay Kumar','Kalu flower'],'Kalu Flowers & Fruits',{user:'prashant',device:'System migration',note:'Admin-authorized consolidation of the three SANKI vendor aliases; SAMAST Vijay Kumar remains separate'});
@@ -864,6 +908,7 @@ function loadStore() {
     if(applyKaluFlowersFruitsVendorMerge(s))saveStore(s);
     if(applyArunJiiVendorMerge(s))saveStore(s);
     if(applyShayamMondalVendorMerge(s))saveStore(s);
+    if(applyReviewedVendorDecisions20261009(s))saveStore(s);
     if(applySep11PrashantReimbursementDateCorrection(s))saveStore(s);
     if(applySep13ShopifyCashComponentCorrections(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
@@ -5158,7 +5203,7 @@ router.use((error,req,res,next)=>{
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 
-module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyOwnerConfirmedEx00132GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
+module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyReviewedVendorDecisions20261009, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyOwnerConfirmedEx00132GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
 // A background job must never replace unreadable financial data with blankStore().
 function loadRentalStore(){const raw=JSON.parse(fs.readFileSync(EXP_PATH,'utf8'));if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('Invalid accounts store');return loadStore();}
 const rentalJobs=require('./rental-register').register(router,{loadStore:loadRentalStore,saveStore,isOwner,audit});
