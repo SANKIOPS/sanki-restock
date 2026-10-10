@@ -11,7 +11,7 @@
   <main class="wrap">
     <header class="page-head">
       <div><p class="eyebrow">ACCOUNTS · BELOW SALARY</p><h1>Sales incentives</h1><p class="muted">POS incentives from payment-date cash, UPI and card-machine receipts. Store credit is excluded.</p></div>
-      <div class="rule-pill"><b>2%</b><span>after ₹10,000/day<br>on the whole eligible amount</span></div>
+      <div class="rule-pill"><b>2%</b><span>after ₹10,000/day<br>later receipts retain order qualification</span></div>
     </header>
 
     <section class="card filters" aria-label="Incentive period filters">
@@ -26,7 +26,7 @@
     <section id="summary" class="stats" aria-label="Incentive summary"></section>
 
     <section class="card section-card">
-      <div class="section-head"><div><h2>Daily qualification</h2><p class="muted">The threshold is evaluated separately for each salesperson and receipt date. Shared orders contribute an equal share to each person. Isha, Nandini and Simran are former employees: their shares are recorded only, never payable or reassigned.</p></div></div>
+      <div class="section-head"><div><h2>Daily qualification</h2><p class="muted">The ₹10,000 threshold applies to each salesperson's daily eligible receipts, with 2% on the whole qualifying amount. Once an order qualifies for that salesperson, later cash, UPI or card-machine collections against the same order earn 2% without meeting the threshold again, on the date received. Uncollected balances and store credit earn nothing. Shared orders contribute an equal share to each person. Isha, Nandini and Simran are former employees: their shares are recorded only, never payable or reassigned.</p></div></div>
       <div id="days" class="day-list"></div>
     </section>
 
@@ -53,6 +53,6 @@
     <input id="paymentPerson" type="hidden"><label>Amount ₹<input id="paymentAmount" type="number" min="0.01" step="0.01" required></label><label>Payment date<input id="paymentDate" type="date" required></label><label>Paying account<select id="paymentAccount"></select></label><label>Reference<input id="paymentReference" maxlength="100"></label><label class="full">Payment proof<input id="paymentProof" type="file" accept="image/*,.pdf" multiple required></label><label class="full">Note<textarea id="paymentNote" maxlength="500"></textarea></label><p class="form-error full" id="paymentError"></p><button class="primary full" type="submit">Record payment</button>
   </div></form></dialog>
 
-  <script src="/sidebar.js"></script><script src="/incentives.js?v=20261010-record-only"></script>
+  <script src="/sidebar.js"></script><script src="/incentives.js?v=20261010-qualified-receipts"></script>
 </body>
 </html>
