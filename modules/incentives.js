@@ -13,7 +13,8 @@ const SALESPERSONS = [
   { name:'Shivam', aliases:['shivam'], incentiveEligible:true },
   { name:'Krishnakant', aliases:['krishnakant', 'krishna kant', 'krishna'], incentiveEligible:true },
   { name:'Isha', aliases:['isha'], incentiveEligible:false },
-  { name:'Nandini', aliases:['nandini'], incentiveEligible:false }
+  { name:'Nandini', aliases:['nandini'], incentiveEligible:false },
+  { name:'Simran', aliases:['simran'], incentiveEligible:false }
 ];
 const PAYING_ACCOUNTS = ['Axis Bank 3448', 'Prashant Axis 3645', 'IndusInd Bank 8181', 'Counter Cash', 'Prashant Cash', 'Gagan Sir Cash'];
 
