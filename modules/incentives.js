@@ -117,26 +117,50 @@ function calculate(orders,state){
     record.shares=[];if(!['ready','record_only'].includes(record.reviewStatus)||!record.salespersons.length)return;
     const amounts=splitMoney(record.eligibleTenderAmount,record.salespersons.length);
     record.salespersons.forEach((salesperson,index)=>{
-      const recordOnly=!incentiveEligible(salesperson),key=record.receiptDate+'|'+salesperson,share={salesperson,recordOnly,receiptAmount:amounts[index],eligibleAmount:recordOnly?0:amounts[index],incentive:0,qualifies:false,approvalStatus:recordOnly?'record_only':'not_eligible'};record.shares.push(share);
-      if(!dailyMap.has(key))dailyMap.set(key,{key,date:record.receiptDate,salesperson,recordOnly,eligibleAmount:0,recordOnlyAmount:0,incentive:0,qualifies:false,records:[],unresolved:false});
+      const recordOnly=!incentiveEligible(salesperson),key=record.receiptDate+'|'+salesperson,share={salesperson,recordOnly,receiptAmount:amounts[index],eligibleAmount:recordOnly?0:amounts[index],incentive:0,qualifies:false,qualificationDate:'',inheritedQualification:false,approvalStatus:recordOnly?'record_only':'not_eligible'};record.shares.push(share);
+      if(!dailyMap.has(key))dailyMap.set(key,{key,date:record.receiptDate,salesperson,recordOnly,eligibleAmount:0,recordOnlyAmount:0,incentiveBaseAmount:0,carriedQualifiedAmount:0,thresholdMet:false,qualificationSources:[],qualificationReviewDates:[],incentive:0,qualifies:false,records:[],unresolved:false});
       const day=dailyMap.get(key);day.eligibleAmount=money(day.eligibleAmount+share.eligibleAmount);day.recordOnlyAmount=money(day.recordOnlyAmount+(recordOnly?share.receiptAmount:0));day.records.push({record,share});
     });
   });
-  const unresolvedDates=new Set(records.filter(row=>row.reviewStatus==='needs_review').map(row=>row.receiptDate));
-  dailyMap.forEach(day=>{
+  const unresolvedDates=new Set(records.filter(row=>row.reviewStatus==='needs_review').map(row=>row.receiptDate)),qualifiedOrders=new Map();
+  const daily=Array.from(dailyMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||a.salesperson.localeCompare(b.salesperson));
+  // Policy (2026-10-10): once this order/person participates in a qualifying
+  // day, later cash/UPI/card receipts retain that qualification. Only money
+  // actually received earns 2%, on its receipt date (50,000 now + 7,500 later
+  // means 1,000 now + 150 later). Never transfer qualification to other orders,
+  // backdate later collections, or bypass review of the qualifying source day.
+  daily.forEach(day=>{
     if(day.recordOnly){day.approval=null;day.approvalStatus='record_only';return;}
-    day.qualifies=day.eligibleAmount>=DAILY_THRESHOLD;day.incentive=day.qualifies?money(day.eligibleAmount*RATE):0;day.unresolved=unresolvedDates.has(day.date);
+    day.thresholdMet=day.eligibleAmount>=DAILY_THRESHOLD;day.unresolved=unresolvedDates.has(day.date);
+    day.records.forEach(({record,share})=>{
+      const orderKey=JSON.stringify([record.orderId,share.salesperson]);let prior=qualifiedOrders.get(orderKey);
+      // A later independently qualifying, reviewed day can become the source
+      // instead of keeping future collections blocked on a provisional day.
+      if(prior&&day.thresholdMet&&!unresolvedDates.has(day.date)&&unresolvedDates.has(prior.date))prior=null;
+      share.qualifies=share.eligibleAmount>0&&(day.thresholdMet||Boolean(prior));
+      if(!share.qualifies)return;
+      share.qualificationDate=prior?prior.date:day.date;share.inheritedQualification=Boolean(prior);
+      share.incentive=money(share.eligibleAmount*RATE);day.incentiveBaseAmount=money(day.incentiveBaseAmount+share.eligibleAmount);
+      if(prior){
+        day.carriedQualifiedAmount=money(day.carriedQualifiedAmount+share.eligibleAmount);
+        day.qualificationSources.push({orderId:record.orderId,orderNumber:record.orderNumber,qualificationDate:prior.date,qualifyingDailyAmount:prior.eligibleAmount,receivedAmount:share.eligibleAmount});
+        if(!day.thresholdMet&&unresolvedDates.has(prior.date)&&!day.qualificationReviewDates.includes(prior.date))day.qualificationReviewDates.push(prior.date);
+      }
+      if(day.thresholdMet&&!prior)qualifiedOrders.set(orderKey,{date:day.date,eligibleAmount:day.eligibleAmount});
+    });
+    day.qualifies=day.incentiveBaseAmount>0;day.incentive=money(day.incentiveBaseAmount*RATE);day.unresolved=day.unresolved||day.qualificationReviewDates.length>0;
     const approval=(state.approvals || {})[day.key];
-    day.approval=approval || null;day.approvalStatus=!day.qualifies?'not_eligible':!approval?'pending':(money(approval.eligibleAmount)===day.eligibleAmount&&money(approval.incentive)===day.incentive?'approved':'needs_reapproval');
-    day.records.forEach(({share})=>{share.qualifies=day.qualifies;share.incentive=day.qualifies?money(share.eligibleAmount*RATE):0;share.approvalStatus=day.approvalStatus;});
+    const sameApproval=approval&&money(approval.eligibleAmount)===day.eligibleAmount&&money(approval.incentiveBaseAmount==null?approval.eligibleAmount:approval.incentiveBaseAmount)===day.incentiveBaseAmount&&money(approval.incentive)===day.incentive&&(!approval.qualificationSources||JSON.stringify(approval.qualificationSources)===JSON.stringify(day.qualificationSources));
+    day.approval=approval || null;day.approvalStatus=!day.qualifies?'not_eligible':!approval?'pending':sameApproval?'approved':'needs_reapproval';
+    day.records.forEach(({share})=>{share.approvalStatus=share.qualifies?day.approvalStatus:'not_eligible';});
   });
-  return {records,daily:Array.from(dailyMap.values()).sort((a,b)=>a.date.localeCompare(b.date)||a.salesperson.localeCompare(b.salesperson))};
+  return {records,daily};
 }
 
 function ledgerView(state){
   return SALESPERSONS.map(person=>{
     const entries=[];
-    Object.values(state.approvals || {}).filter(item=>item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'earned',description:'Approved incentive · eligible receipts ₹'+money(item.eligibleAmount).toFixed(2),reference:item.id,credit:money(item.incentive),debit:0,proofs:[],by:item.approvedBy,at:item.approvedAt}));
+    Object.values(state.approvals || {}).filter(item=>item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'earned',description:'Approved incentive · qualifying receipts ₹'+money(item.incentiveBaseAmount==null?item.eligibleAmount:item.incentiveBaseAmount).toFixed(2)+(item.carriedQualifiedAmount?' · previously qualified orders ₹'+money(item.carriedQualifiedAmount).toFixed(2):''),reference:item.id,credit:money(item.incentive),debit:0,proofs:[],by:item.approvedBy,at:item.approvedAt,qualificationSources:item.qualificationSources||[]}));
     (state.payments || []).filter(item=>item.active!==false&&item.salesperson===person.name).forEach(item=>entries.push({id:item.id,date:item.date,type:'payment',description:'Incentive payment from '+item.account,reference:item.reference||item.id,credit:0,debit:money(item.amount),proofs:item.proofs||[],by:item.createdBy,at:item.createdAt,note:item.note||''}));
     entries.sort((a,b)=>a.date.localeCompare(b.date)||String(a.at||'').localeCompare(String(b.at||''))||a.id.localeCompare(b.id));let balance=0;entries.forEach(entry=>{balance=money(balance+entry.credit-entry.debit);entry.balance=balance;});
     // Preserve any historical entries, but former employees have no current
@@ -176,8 +200,8 @@ function createRouter(deps={}){
   route('post','/api/incentives/approve-day',(req,res)=>{
     const body=req.body||{},date=String(body.date||''),salesperson=String(body.salesperson||'');if(!validDate(date)||!SALESPERSONS.some(person=>person.name===salesperson)){const error=new Error('Choose a valid incentive date and salesperson.');error.status=400;throw error;}
     if(!incentiveEligible(salesperson)){const error=new Error(salesperson+' is a former employee — record only. Incentives cannot be approved.');error.status=409;throw error;}
-    const state=stateLoader(),orders=ordersLoader(),calculated=calculate(orders,state),day=calculated.daily.find(item=>item.date===date&&item.salesperson===salesperson);if(!day||!day.qualifies){const error=new Error(salesperson+' has not reached ₹'+DAILY_THRESHOLD.toLocaleString('en-IN')+' in eligible receipts on '+date+'.');error.status=409;throw error;}if(day.unresolved){const error=new Error('Review every uncertain POS order on '+date+' before approving incentives.');error.status=409;throw error;}
-    const id=date+'|'+salesperson,before=state.approvals[id]||null;state.approvals[id]={id,date,salesperson,eligibleAmount:day.eligibleAmount,incentive:day.incentive,rate:RATE,threshold:DAILY_THRESHOLD,note:text(body.note,500),approvedAt:new Date().toISOString(),approvedBy:req.user.username};state.revision++;audit(state,req,'INCENTIVE_DAY_APPROVED',{id,before,after:state.approvals[id]});stateSaver(state);res.json(buildView(orders,state,body.filters||{}));
+    const state=stateLoader(),orders=ordersLoader(),calculated=calculate(orders,state),day=calculated.daily.find(item=>item.date===date&&item.salesperson===salesperson);if(calculated.records.some(row=>row.receiptDate===date&&row.reviewStatus==='needs_review')){const error=new Error('Review every uncertain POS order on '+date+' before approving incentives.');error.status=409;throw error;}if(!day||!day.qualifies){const error=new Error(salesperson+' has neither reached ₹'+DAILY_THRESHOLD.toLocaleString('en-IN')+' in eligible receipts on '+date+' nor received a balance for an already-qualified order.');error.status=409;throw error;}if(day.unresolved){const error=new Error('Review uncertain POS orders on the qualifying date(s) '+day.qualificationReviewDates.join(', ')+' before approving this later collection.');error.status=409;throw error;}
+    const id=date+'|'+salesperson,before=state.approvals[id]||null;state.approvals[id]={id,date,salesperson,eligibleAmount:day.eligibleAmount,incentiveBaseAmount:day.incentiveBaseAmount,carriedQualifiedAmount:day.carriedQualifiedAmount,thresholdMet:day.thresholdMet,qualificationSources:day.qualificationSources,incentive:day.incentive,rate:RATE,threshold:DAILY_THRESHOLD,note:text(body.note,500),approvedAt:new Date().toISOString(),approvedBy:req.user.username};state.revision++;audit(state,req,'INCENTIVE_DAY_APPROVED',{id,before,after:state.approvals[id]});stateSaver(state);res.json(buildView(orders,state,body.filters||{}));
   });
   route('post','/api/incentives/payments',(req,res)=>{
     const state=stateLoader(),body=req.body||{},salesperson=String(body.salesperson||''),amount=money(body.amount),date=String(body.date||''),account=String(body.account||''),proofs=Array.isArray(body.proofs)?body.proofs.map(x=>text(x,500)).filter(Boolean):[];
