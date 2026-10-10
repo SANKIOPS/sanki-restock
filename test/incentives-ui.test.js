@@ -55,4 +55,5 @@ test('salesperson filters and manual review list both former names with explicit
     assert.match(html,new RegExp('name="reviewPerson" value="'+name+'"> '+name+' — former, record only'));
   }
   assert.match(html,/<option value="record_only">Former employee — record only<\/option>/);
+  assert.match(html,/<script src="\/incentives\.js\?v=20261010-record-only"><\/script>/,'record-only UI must load a versioned script instead of a previously cached renderer');
 });
