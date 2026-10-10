@@ -10,7 +10,7 @@ const source=fs.readFileSync(path.join(__dirname,'..','public','incentives.js'),
 
 function sale(id,note,amount){return{id:String(id),name:'#'+id,channel:'POS',note,total:amount,createdAt:'2026-10-01T12:00:00+05:30',customer:{name:'Customer'},paymentTransactions:[{id:String(id),gateway:'Cash',kind:'sale',status:'success',amount,processedAt:'2026-10-01T12:00:00+05:30'}]};}
 function emptyState(){return{reviews:{},approvals:{},payments:[]};}
-async function render(view){
+async function render(view,options={}){
   const elements=new Map(),requests=[];
   function element(id){
     if(!elements.has(id))elements.set(id,{id,value:'',innerHTML:'',textContent:'',dataset:{},classList:{toggle(){}},querySelectorAll(selector){
@@ -20,7 +20,7 @@ async function render(view){
     return elements.get(id);
   }
   const document={getElementById:element,querySelectorAll(){return[];}};
-  vm.runInNewContext(source,{document,fetch:async(url,options)=>{requests.push({url,options});return{json:async()=>view};},console,Intl,Date,confirm:()=>{throw new Error('Unexpected approval confirmation');}},{filename:'incentives.js'});
+  vm.runInNewContext(source,{document,fetch:async(url,options)=>{requests.push({url,options});return{json:async()=>view};},console,Intl,Date,confirm:options.confirm||(()=>{throw new Error('Unexpected approval confirmation');})},{filename:'incentives.js'});
   await new Promise(resolve=>setImmediate(resolve));
   return{elements,requests};
 }
@@ -58,5 +58,29 @@ test('salesperson filters and manual review list all former names with explicit 
     assert.match(html,new RegExp('name="reviewPerson" value="'+name+'"> '+name+' — former, record only'));
   }
   assert.match(html,/<option value="record_only">Former employee — record only<\/option>/);
-  assert.match(html,/<script src="\/incentives\.js\?v=20261010-record-only"><\/script>/,'record-only UI must load a versioned script instead of a previously cached renderer');
+  assert.match(html,/<script src="\/incentives\.js\?v=20261010-qualified-receipts"><\/script>/,'qualification UI must load a versioned script instead of a previously cached renderer');
+  assert.match(html,/same order earn 2% without meeting the threshold again, on the date received/);
+});
+
+function partialSale(){
+  const row=sale(2864,'Shivam',57500);row.paymentTransactions=[{...row.paymentTransactions[0],id:'first',amount:50000},{...row.paymentTransactions[0],id:'balance',amount:7500,processedAt:'2026-10-02T12:00:00+05:30'}];return row;
+}
+
+test('later collection UI explains inherited qualification and offers normal approval below threshold',async()=>{
+  const unrelated=sale(67,'Shivam',1000);unrelated.paymentTransactions[0].processedAt='2026-10-02T12:00:00+05:30';
+  const view=buildView([partialSale(),unrelated],emptyState(),{from:'2026-10-02',to:'2026-10-02'});let confirmation='';
+  const {elements,requests}=await render(view,{confirm:message=>{confirmation=message;return false;}});
+  assert.match(elements.get('days').innerHTML,/Previously qualified orders: ₹7,500 · no new daily threshold required/);
+  assert.match(elements.get('days').innerHTML,/Incentive applies to ₹7,500 of ₹8,500 received/);
+  assert.match(elements.get('days').innerHTML,/data-approve="2026-10-02\|Shivam"/);
+  assert.match(elements.get('orders').innerHTML,/<b>Shivam<\/b>: ₹150 · order qualified on 2026-10-01/);
+  assert.match(elements.get('orders').innerHTML,/<b>Shivam<\/b>: ₹0 · below threshold/);
+  elements.get('days').buttons[0].onclick();assert.match(confirmation,/from ₹7,500 qualifying receipts/);assert.match(confirmation,/Includes ₹7,500 received against previously qualified orders/);assert.doesNotMatch(confirmation,/₹8,500 qualifying receipts/);assert.equal(requests.length,1,'cancelled approval must not submit');
+});
+
+test('later collection UI identifies the unresolved qualifying date and disables approval',async()=>{
+  const unknown=sale(68,'Shivam',100);unknown.paymentTransactions[0].gateway='Unknown tender';
+  const view=buildView([partialSale(),unknown],emptyState(),{from:'2026-10-02',to:'2026-10-02'}),{elements}=await render(view);
+  assert.match(elements.get('days').innerHTML,/Review qualifying date\(s\) 2026-10-01 before approval/);
+  assert.match(elements.get('days').innerHTML,/data-approve="2026-10-02\|Shivam" disabled/);
 });
