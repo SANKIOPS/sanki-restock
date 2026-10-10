@@ -99,3 +99,63 @@ test('incentive page includes agreed reporting and review fields',()=>{
   for(const label of ['Order / customer','Payment mode','Store credit','Refund / return','Exclusion reason','Shopify order note','Review status','Approved','Separate incentive ledgers'])assert.match(html,new RegExp(label));
   assert.doesNotMatch(html,/Payroll month/i);
 });
+
+test('former salesperson names are recognised case-insensitively without substring matches',()=>{
+  for(const [note,names] of [['654321\nISHA',['Isha']],['654321 naNDini',['Nandini']],['654321\nIsha + NANDINI',['Isha','Nandini']],['654321\nShivam + Isha',['Shivam','Isha']]]){
+    const parsed=parseSalespeople(note);assert.deepEqual(parsed.salespersons,names);assert.equal(parsed.confidence,'confirmed');
+  }
+  assert.ok(!parseSalespeople('654321\nNisha').salespersons.includes('Isha'));
+  assert.deepEqual(parseSalespeople('654321\nIshaa').salespersons,[]);
+});
+
+test('former employee receipts remain in the report but never qualify or need repeated review',()=>{
+  const orders=[order(20,{note:'123456\nIsha',total:25000,transactions:[tx(20,25000,'Cash')]}),order(21,{note:'123457\nNandini',total:18000,transactions:[tx(21,18000,'UPI')]})];
+  const current=state(),before=JSON.stringify(current),view=buildView(orders,current);
+  assert.equal(view.summary.orders,2);assert.equal(view.summary.totalReceived,43000);assert.equal(view.summary.eligibleReceived,0);assert.equal(view.summary.recordOnlyReceipts,43000);assert.equal(view.summary.incentiveEarned,0);assert.equal(view.summary.outstanding,0);assert.equal(view.summary.needsReview,0);
+  for(const row of view.records){assert.equal(row.reviewStatus,'record_only');assert.equal(row.matchConfidence,'confirmed');assert.deepEqual(row.reviewIssues,[]);assert.equal(row.eligibleAmount,0);assert.match(row.exclusionReason,/former employee/);assert.equal(row.shares[0].incentive,0);assert.equal(row.shares[0].approvalStatus,'record_only');}
+  for(const day of view.days){assert.equal(day.qualifies,false);assert.equal(day.incentive,0);assert.equal(day.unresolved,false);assert.equal(day.approvalStatus,'record_only');}
+  assert.deepEqual(buildView(orders,current),view);assert.equal(JSON.stringify(current),before);
+});
+
+test('record-only orders do not block active daily approval even with missing or unknown tenders',()=>{
+  const orders=[order(22,{total:12000,transactions:[tx(22,12000,'Cash')]}),order(23,{note:'654321\nIsha',transactions:[tx(23,10000,'Unmapped tender')]}),order(24,{note:'Nandini'})];
+  let current=state({revision:0,audit:[]});const router=createRouter({loadOrders:()=>orders,loadState:()=>current,saveState:value=>{current=value;}});
+  const view=buildView(orders,current);assert.equal(view.summary.needsReview,0);assert.equal(view.days.find(day=>day.salesperson==='Shivam').unresolved,false);
+  assert.equal(invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson:'Shivam'}).status,200);assert.equal(current.approvals['2026-10-01|Shivam'].incentive,240);
+});
+
+test('shared active and former sales preserve equal shares without reallocating former incentives',()=>{
+  const rows=[order(25,{note:'123456\nShivam + Isha',total:24000,transactions:[tx(25,24000,'Card Machine')]})],view=buildView(rows,state()),row=view.records[0];
+  assert.equal(row.reviewStatus,'ready');assert.equal(row.eligibleTenderAmount,24000);assert.equal(row.eligibleAmount,12000);assert.equal(row.recordOnlyAmount,12000);assert.equal(view.summary.eligibleReceived,12000);assert.equal(view.summary.incentiveEarned,240);
+  assert.deepEqual(row.shares.map(share=>[share.salesperson,share.receiptAmount,share.eligibleAmount,share.incentive,share.recordOnly]),[['Shivam',12000,12000,240,false],['Isha',12000,0,0,true]]);
+  const below=calculate([order(26,{note:'Shivam + Nandini',transactions:[tx(26,18000,'Cash')]})],state()).daily.find(day=>day.salesperson==='Shivam');assert.equal(below.eligibleAmount,9000);assert.equal(below.qualifies,false);assert.equal(below.incentive,0);
+});
+
+test('mixed former and active orders still require genuine tender review',()=>{
+  const view=buildView([order(27,{note:'Krishna + Nandini',transactions:[tx(27,24000,'Unmapped tender')]})],state());
+  assert.equal(view.records[0].reviewStatus,'needs_review');assert.match(view.records[0].reviewIssues[0],/Classify/);assert.equal(view.summary.needsReview,1);assert.equal(view.summary.incentiveEarned,0);
+});
+
+test('former names are filterable and manually reviewable without becoming payable',()=>{
+  let current=state({revision:0,audit:[]});const orders=[order(28,{note:'Nandni',transactions:[tx(28,22000,'Cash')]})],router=createRouter({loadOrders:()=>orders,loadState:()=>current,saveState:value=>{current=value;}});
+  assert.equal(parseSalespeople('Nandni').suggestions[0].name,'Nandini');
+  const reviewed=invoke(router,'post','/api/incentives/reviews/:orderId',{salespersons:['Nandini'],reason:'Confirmed former salesperson'}, {orderId:'28'});assert.equal(reviewed.status,200);assert.equal(reviewed.payload.summary.needsReview,0);assert.equal(reviewed.payload.records[0].reviewStatus,'record_only');
+  const filtered=buildView(orders,current,{salesperson:'Nandini',status:'record_only'});assert.equal(filtered.records.length,1);assert.equal(filtered.summary.incentiveEarned,0);
+  assert.deepEqual(filtered.configuration.salespersonDetails.filter(person=>person.recordOnly).map(person=>person.name),['Isha','Nandini']);assert.ok(filtered.configuration.salespersons.includes('Isha'));
+});
+
+test('server rejects incentive approval and payment for former staff without changing state',()=>{
+  for(const salesperson of ['Isha','Nandini']){
+    const id='2026-10-01|'+salesperson,current=state({revision:4,audit:[],paymentSeq:0,approvals:{[id]:{id,date:'2026-10-01',salesperson,eligibleAmount:25000,incentive:500}}}),before=JSON.stringify(current);
+    let saves=0;const router=createRouter({loadOrders:()=>[order(29,{note:salesperson,transactions:[tx(29,25000,'Cash')]})],loadState:()=>current,saveState:()=>{saves++;}});
+    const approved=invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson});assert.equal(approved.status,409);assert.match(approved.payload.error,/record only/);
+    const paid=invoke(router,'post','/api/incentives/payments',{salesperson,amount:100,date:'2026-10-02',account:'Counter Cash',proofs:['/proof.jpg']});assert.equal(paid.status,409);assert.match(paid.payload.error,/not allowed/);assert.equal(saves,0);assert.equal(JSON.stringify(current),before);
+    const ledger=ledgerView(current).find(item=>item.salesperson===salesperson);assert.equal(ledger.recordOnly,true);assert.equal(ledger.payableBalance,0);assert.equal(ledger.entries.length,1);assert.equal(ledger.balance,500);
+    const view=buildView([],current);assert.equal(view.summary.approvedIncentive,0);assert.equal(view.summary.outstanding,0);
+  }
+});
+
+test('former-only store credits and refunds remain visible without incentive liability',()=>{
+  const view=buildView([order(30,{note:'Isha + Nandini',total:20000,refundAmount:1000,transactions:[tx(30,20000,'Store credit')]})],state());
+  assert.equal(view.summary.storeCreditExcluded,20000);assert.equal(view.summary.refundsReturns,1000);assert.equal(view.records[0].reviewStatus,'record_only');assert.equal(view.summary.needsReview,0);assert.equal(view.summary.incentiveEarned,0);
+});
