@@ -101,24 +101,27 @@ test('incentive page includes agreed reporting and review fields',()=>{
 });
 
 test('former salesperson names are recognised case-insensitively without substring matches',()=>{
-  for(const [note,names] of [['654321\nISHA',['Isha']],['654321 naNDini',['Nandini']],['654321\nIsha + NANDINI',['Isha','Nandini']],['654321\nShivam + Isha',['Shivam','Isha']]]){
+  for(const [note,names] of [['654321\nISHA',['Isha']],['654321 naNDini',['Nandini']],['654321\nIsha + NANDINI',['Isha','Nandini']],['654321\nShivam + Isha',['Shivam','Isha']],['654321\nSIMRAN',['Simran']],['654321 siMRan',['Simran']],['654321\nIsha + NANDINI + Simran',['Isha','Nandini','Simran']]]){
     const parsed=parseSalespeople(note);assert.deepEqual(parsed.salespersons,names);assert.equal(parsed.confidence,'confirmed');
   }
   assert.ok(!parseSalespeople('654321\nNisha').salespersons.includes('Isha'));
   assert.deepEqual(parseSalespeople('654321\nIshaa').salespersons,[]);
+  assert.ok(!parseSalespeople('654321\nSimranjeet').salespersons.includes('Simran'));
+  assert.deepEqual(parseSalespeople('654321\nSimrn').salespersons,[]);
+  assert.equal(parseSalespeople('654321\nSimrn').suggestions[0].name,'Simran');
 });
 
 test('former employee receipts remain in the report but never qualify or need repeated review',()=>{
-  const orders=[order(20,{note:'123456\nIsha',total:25000,transactions:[tx(20,25000,'Cash')]}),order(21,{note:'123457\nNandini',total:18000,transactions:[tx(21,18000,'UPI')]})];
+  const orders=[order(20,{note:'123456\nIsha',total:25000,transactions:[tx(20,25000,'Cash')]}),order(21,{note:'123457\nNandini',total:18000,transactions:[tx(21,18000,'UPI')]}),order(31,{note:'123458\nSimran',total:30000,transactions:[tx(31,30000,'Card Machine')]})];
   const current=state(),before=JSON.stringify(current),view=buildView(orders,current);
-  assert.equal(view.summary.orders,2);assert.equal(view.summary.totalReceived,43000);assert.equal(view.summary.eligibleReceived,0);assert.equal(view.summary.recordOnlyReceipts,43000);assert.equal(view.summary.incentiveEarned,0);assert.equal(view.summary.outstanding,0);assert.equal(view.summary.needsReview,0);
+  assert.equal(view.summary.orders,3);assert.equal(view.summary.totalReceived,73000);assert.equal(view.summary.eligibleReceived,0);assert.equal(view.summary.recordOnlyReceipts,73000);assert.equal(view.summary.incentiveEarned,0);assert.equal(view.summary.outstanding,0);assert.equal(view.summary.needsReview,0);
   for(const row of view.records){assert.equal(row.reviewStatus,'record_only');assert.equal(row.matchConfidence,'confirmed');assert.deepEqual(row.reviewIssues,[]);assert.equal(row.eligibleAmount,0);assert.match(row.exclusionReason,/former employee/);assert.equal(row.shares[0].incentive,0);assert.equal(row.shares[0].approvalStatus,'record_only');}
   for(const day of view.days){assert.equal(day.qualifies,false);assert.equal(day.incentive,0);assert.equal(day.unresolved,false);assert.equal(day.approvalStatus,'record_only');}
   assert.deepEqual(buildView(orders,current),view);assert.equal(JSON.stringify(current),before);
 });
 
 test('record-only orders do not block active daily approval even with missing or unknown tenders',()=>{
-  const orders=[order(22,{total:12000,transactions:[tx(22,12000,'Cash')]}),order(23,{note:'654321\nIsha',transactions:[tx(23,10000,'Unmapped tender')]}),order(24,{note:'Nandini'})];
+  const orders=[order(22,{total:12000,transactions:[tx(22,12000,'Cash')]}),order(23,{note:'654321\nIsha',transactions:[tx(23,10000,'Unmapped tender')]}),order(24,{note:'Nandini'}),order(32,{note:'Simran',transactions:[tx(32,10000,'Unmapped tender')]}),order(33,{note:'Simran'})];
   let current=state({revision:0,audit:[]});const router=createRouter({loadOrders:()=>orders,loadState:()=>current,saveState:value=>{current=value;}});
   const view=buildView(orders,current);assert.equal(view.summary.needsReview,0);assert.equal(view.days.find(day=>day.salesperson==='Shivam').unresolved,false);
   assert.equal(invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson:'Shivam'}).status,200);assert.equal(current.approvals['2026-10-01|Shivam'].incentive,240);
@@ -141,11 +144,11 @@ test('former names are filterable and manually reviewable without becoming payab
   assert.equal(parseSalespeople('Nandni').suggestions[0].name,'Nandini');
   const reviewed=invoke(router,'post','/api/incentives/reviews/:orderId',{salespersons:['Nandini'],reason:'Confirmed former salesperson'}, {orderId:'28'});assert.equal(reviewed.status,200);assert.equal(reviewed.payload.summary.needsReview,0);assert.equal(reviewed.payload.records[0].reviewStatus,'record_only');
   const filtered=buildView(orders,current,{salesperson:'Nandini',status:'record_only'});assert.equal(filtered.records.length,1);assert.equal(filtered.summary.incentiveEarned,0);
-  assert.deepEqual(filtered.configuration.salespersonDetails.filter(person=>person.recordOnly).map(person=>person.name),['Isha','Nandini']);assert.ok(filtered.configuration.salespersons.includes('Isha'));
+  assert.deepEqual(filtered.configuration.salespersonDetails.filter(person=>person.recordOnly).map(person=>person.name),['Isha','Nandini','Simran']);assert.ok(filtered.configuration.salespersons.includes('Isha'));
 });
 
 test('server rejects incentive approval and payment for former staff without changing state',()=>{
-  for(const salesperson of ['Isha','Nandini']){
+  for(const salesperson of ['Isha','Nandini','Simran']){
     const id='2026-10-01|'+salesperson,current=state({revision:4,audit:[],paymentSeq:0,approvals:{[id]:{id,date:'2026-10-01',salesperson,eligibleAmount:25000,incentive:500}}}),before=JSON.stringify(current);
     let saves=0;const router=createRouter({loadOrders:()=>[order(29,{note:salesperson,transactions:[tx(29,25000,'Cash')]})],loadState:()=>current,saveState:()=>{saves++;}});
     const approved=invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson});assert.equal(approved.status,409);assert.match(approved.payload.error,/record only/);
@@ -156,6 +159,19 @@ test('server rejects incentive approval and payment for former staff without cha
 });
 
 test('former-only store credits and refunds remain visible without incentive liability',()=>{
-  const view=buildView([order(30,{note:'Isha + Nandini',total:20000,refundAmount:1000,transactions:[tx(30,20000,'Store credit')]})],state());
+  const view=buildView([order(30,{note:'Isha + Nandini + Simran',total:20000,refundAmount:1000,transactions:[tx(30,20000,'Store credit')]})],state());
   assert.equal(view.summary.storeCreditExcluded,20000);assert.equal(view.summary.refundsReturns,1000);assert.equal(view.records[0].reviewStatus,'record_only');assert.equal(view.summary.needsReview,0);assert.equal(view.summary.incentiveEarned,0);
+});
+
+test('Simran shares stay record-only without increasing the active salesperson share',()=>{
+  const view=buildView([order(34,{note:'654321\nShivam + Nandini + Simran',total:30000,transactions:[tx(34,30000,'UPI')]})],state());
+  assert.equal(view.summary.eligibleReceived,10000);assert.equal(view.summary.recordOnlyReceipts,20000);assert.equal(view.summary.incentiveEarned,200);
+  const simran=view.records[0].shares.find(share=>share.salesperson==='Simran');assert.equal(simran.receiptAmount,10000);assert.equal(simran.eligibleAmount,0);assert.equal(simran.incentive,0);assert.equal(simran.recordOnly,true);
+  const mixedUnknown=buildView([order(35,{note:'Shivam + Simran',transactions:[tx(35,24000,'Unmapped tender')]})],state());assert.equal(mixedUnknown.records[0].reviewStatus,'needs_review');assert.equal(mixedUnknown.summary.incentiveEarned,0);
+});
+
+test('a confirmed Simran spelling correction stays filterable and non-payable',()=>{
+  let current=state({revision:0,audit:[]});const orders=[order(36,{note:'Simrn',transactions:[tx(36,22000,'Cash')]})],router=createRouter({loadOrders:()=>orders,loadState:()=>current,saveState:value=>{current=value;}});
+  const reviewed=invoke(router,'post','/api/incentives/reviews/:orderId',{salespersons:['Simran'],reason:'Confirmed former salesperson'},{orderId:'36'});assert.equal(reviewed.status,200);
+  const filtered=buildView(orders,current,{salesperson:'Simran',status:'record_only'});assert.equal(filtered.records.length,1);assert.equal(filtered.records[0].matchConfidence,'reviewed');assert.equal(filtered.summary.recordOnlyReceipts,22000);assert.equal(filtered.summary.needsReview,0);assert.equal(filtered.summary.incentiveEarned,0);assert.equal(filtered.summary.outstanding,0);
 });

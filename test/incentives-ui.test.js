@@ -26,31 +26,34 @@ async function render(view){
 }
 
 test('record-only UI labels former sales and offers no approval or payment action',async()=>{
-  const view=buildView([sale(1,'Isha',25000),sale(2,'Nandini',30000)],emptyState()),{elements,requests}=await render(view);
+  const view=buildView([sale(1,'Isha',25000),sale(2,'Nandini',30000),sale(4,'Simran',35000)],emptyState()),{elements,requests}=await render(view);
   assert.match(elements.get('days').innerHTML,/Former employee · no incentive payable/);assert.doesNotMatch(elements.get('days').innerHTML,/data-approve=/);
   assert.match(elements.get('orders').innerHTML,/Edit record/);assert.match(elements.get('orders').innerHTML,/not payable/);assert.doesNotMatch(elements.get('orders').innerHTML,/below threshold|<b>2%<\/b>/);
-  assert.match(elements.get('ledgers').innerHTML,/sales records only/);assert.doesNotMatch(elements.get('ledgers').innerHTML,/data-pay="(?:Isha|Nandini)"/);
+  assert.match(elements.get('ledgers').innerHTML,/sales records only/);assert.doesNotMatch(elements.get('ledgers').innerHTML,/data-pay="(?:Isha|Nandini|Simran)"/);
+  assert.match(elements.get('orders').innerHTML,/<b>Simran<\/b>: ₹0 · not payable/);
   assert.equal(requests.length,1);assert.ok(!requests[0].options);
 });
 
 test('mixed sale UI retains active approval while excluding former share',async()=>{
-  const view=buildView([sale(3,'Shivam + Isha',24000)],emptyState()),{elements}=await render(view);
-  assert.match(elements.get('days').innerHTML,/data-approve="2026-10-01\|Shivam"/);assert.doesNotMatch(elements.get('days').innerHTML,/data-approve="2026-10-01\|Isha"/);
-  assert.match(elements.get('orders').innerHTML,/<b>Shivam<\/b>: ₹240/);assert.match(elements.get('orders').innerHTML,/<b>Isha<\/b>: ₹0 · not payable/);
+  for(const name of ['Isha','Nandini','Simran']){
+    const view=buildView([sale(3,'Shivam + '+name,24000)],emptyState()),{elements}=await render(view);
+    assert.match(elements.get('days').innerHTML,/data-approve="2026-10-01\|Shivam"/);assert.doesNotMatch(elements.get('days').innerHTML,new RegExp('data-approve="2026-10-01\\|'+name+'"'));
+    assert.match(elements.get('orders').innerHTML,/<b>Shivam<\/b>: ₹240/);assert.match(elements.get('orders').innerHTML,new RegExp('<b>'+name+'<\\/b>: ₹0 · not payable'));
+  }
 });
 
 test('historical former entries stay visible without a payment button; active payment still opens',async()=>{
   const current=emptyState();
-  for(const salesperson of ['Shivam','Isha'])current.approvals['2026-10-01|'+salesperson]={id:'2026-10-01|'+salesperson,date:'2026-10-01',salesperson,eligibleAmount:12000,incentive:240};
+  for(const salesperson of ['Shivam','Isha','Nandini','Simran'])current.approvals['2026-10-01|'+salesperson]={id:'2026-10-01|'+salesperson,date:'2026-10-01',salesperson,eligibleAmount:12000,incentive:240};
   const view=buildView([],current),{elements}=await render(view),html=elements.get('ledgers').innerHTML;
-  assert.match(html,/historical entries preserved/);assert.match(html,/data-pay="Shivam"/);assert.doesNotMatch(html,/data-pay="Isha"/);
+  assert.match(html,/historical entries preserved/);assert.match(html,/data-pay="Shivam"/);assert.doesNotMatch(html,/data-pay="(?:Isha|Nandini|Simran)"/);
   elements.get('ledgers').buttons.find(button=>button.dataset.pay==='Shivam').onclick();
   assert.equal(elements.get('paymentPerson').value,'Shivam');assert.equal(elements.get('paymentAmount').value,'240.00');assert.equal(elements.get('paymentDialog').open,true);
 });
 
-test('salesperson filters and manual review list both former names with explicit record-only labels',()=>{
+test('salesperson filters and manual review list all former names with explicit record-only labels',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','incentives.html'),'utf8');
-  for(const name of ['Isha','Nandini']){
+  for(const name of ['Isha','Nandini','Simran']){
     assert.match(html,new RegExp('<option value="'+name+'">'+name+' — former, record only</option>'));
     assert.match(html,new RegExp('name="reviewPerson" value="'+name+'"> '+name+' — former, record only'));
   }
