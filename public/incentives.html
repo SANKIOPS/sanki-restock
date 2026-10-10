@@ -17,7 +17,7 @@
     <section class="card filters" aria-label="Incentive period filters">
       <div class="presets"><button data-range="7" class="active">Last 7 days</button><button data-range="10">Last 10 days</button></div>
       <label>From<input id="from" type="date"></label><label>To<input id="to" type="date"></label>
-      <label>Salesperson<select id="salesperson"><option value="">All</option><option>Shivam</option><option>Krishnakant</option><option value="Isha">Isha — former, record only</option><option value="Nandini">Nandini — former, record only</option></select></label>
+      <label>Salesperson<select id="salesperson"><option value="">All</option><option>Shivam</option><option>Krishnakant</option><option value="Isha">Isha — former, record only</option><option value="Nandini">Nandini — former, record only</option><option value="Simran">Simran — former, record only</option></select></label>
       <label>Status<select id="status"><option value="">All</option><option value="needs_review">Needs review</option><option value="ready">Ready</option><option value="record_only">Former employee — record only</option><option value="excluded">Excluded</option><option value="approved">Approved</option></select></label>
       <button class="primary" id="apply">View</button>
     </section>
@@ -26,7 +26,7 @@
     <section id="summary" class="stats" aria-label="Incentive summary"></section>
 
     <section class="card section-card">
-      <div class="section-head"><div><h2>Daily qualification</h2><p class="muted">The threshold is evaluated separately for each salesperson and receipt date. Shared orders contribute an equal share to each person. Isha and Nandini are former employees: their shares are recorded only, never payable or reassigned.</p></div></div>
+      <div class="section-head"><div><h2>Daily qualification</h2><p class="muted">The threshold is evaluated separately for each salesperson and receipt date. Shared orders contribute an equal share to each person. Isha, Nandini and Simran are former employees: their shares are recorded only, never payable or reassigned.</p></div></div>
       <div id="days" class="day-list"></div>
     </section>
 
@@ -43,7 +43,7 @@
 
   <dialog id="reviewDialog"><form id="reviewForm" method="dialog"><div class="dialog-head"><div><h2>Review POS order</h2><p id="reviewOrder" class="muted"></p></div><button type="button" data-close aria-label="Close">×</button></div><div class="dialog-body">
     <input id="reviewOrderId" type="hidden">
-    <fieldset><legend>Salesperson</legend><label class="check"><input type="checkbox" name="reviewPerson" value="Shivam"> Shivam</label><label class="check"><input type="checkbox" name="reviewPerson" value="Krishnakant"> Krishnakant</label><label class="check"><input type="checkbox" name="reviewPerson" value="Isha"> Isha — former, record only</label><label class="check"><input type="checkbox" name="reviewPerson" value="Nandini"> Nandini — former, record only</label><label class="check"><input id="noSalesperson" type="checkbox"> No eligible salesperson</label></fieldset>
+    <fieldset><legend>Salesperson</legend><label class="check"><input type="checkbox" name="reviewPerson" value="Shivam"> Shivam</label><label class="check"><input type="checkbox" name="reviewPerson" value="Krishnakant"> Krishnakant</label><label class="check"><input type="checkbox" name="reviewPerson" value="Isha"> Isha — former, record only</label><label class="check"><input type="checkbox" name="reviewPerson" value="Nandini"> Nandini — former, record only</label><label class="check"><input type="checkbox" name="reviewPerson" value="Simran"> Simran — former, record only</label><label class="check"><input id="noSalesperson" type="checkbox"> No eligible salesperson</label></fieldset>
     <div id="gatewayReview"></div>
     <label>Review reason<textarea id="reviewReason" maxlength="500" placeholder="What was checked or corrected?"></textarea></label>
     <p class="form-error" id="reviewError"></p><button class="primary" type="submit">Save review decision</button>
