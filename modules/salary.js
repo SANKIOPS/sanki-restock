@@ -599,19 +599,22 @@ function paidLeaveAllowanceForMonth(e,ym,presentDays){
 function ensureMonth(s, ym) { if (!s.months[ym]) s.months[ym] = { finalized: false, rows: {}, attendance: {} }; return s.months[ym]; }
 function advanceRecovered(a) { return round2((a.recoveries || []).reduce((n, x) => n + num(x.amount), 0)); }
 function advanceOutstanding(a) { return round2(Math.max(0, num(a.amount) - advanceRecovered(a))); }
+function recoveryMonth(r) { return String(r && (r.ym || r.payrollMonth) || '').slice(0, 7); }
+function advanceRecoveryStartMonth(a) { return String(a && (a.recoveryStartMonth || a.payoutDate || a.date) || '').slice(0, 7); }
+function advanceEligibleForMonth(a, ym) { const start=advanceRecoveryStartMonth(a); return /^\d{4}-\d{2}$/.test(start) && start <= ym; }
 function advanceStatus(a) { const r = advanceRecovered(a); return r <= 0 ? 'Outstanding' : (r + .001 >= num(a.amount) ? 'Recovered' : 'Partially recovered'); }
 function advanceView(a,s) {
   let remaining=round2(num(a.amount));
-  const recoveries=(a.recoveries||[]).map((r,index)=>Object.assign({ _index:index },r)).sort((x,y)=>String((x.ym||'')+(x.at||'')+x._index).localeCompare(String((y.ym||'')+(y.at||'')+y._index))).map(r=>{
+  const recoveries=(a.recoveries||[]).map((r,index)=>Object.assign({ _index:index },r)).sort((x,y)=>String(recoveryMonth(x)+(x.at||'')+x._index).localeCompare(String(recoveryMonth(y)+(y.at||'')+y._index))).map(r=>{
     remaining=round2(Math.max(0,remaining-num(r.amount)));
     const recordedOn=String(r.recordedOn||r.at||'').slice(0,10);
-    const payrollMonth=r.payrollMonth||r.ym||'',salaryPayment=s&&(s.salaryPayments||[]).filter(p=>p.active!==false&&p.empId===a.empId&&p.ym===payrollMonth&&p.date).sort((x,y)=>String(x.date).localeCompare(String(y.date)))[0];
-    const view=Object.assign({},r,{payrollMonth,recordedOn,deductionDate:r.deductionDate||(salaryPayment&&salaryPayment.date)||'',deductedFrom:payrollMonth?payrollMonth+' salary':'Salary deduction',salaryPaymentReference:salaryPayment&&(salaryPayment.reference||salaryPayment.batchId||salaryPayment.id)||'',reference:r.reference||('SALARY-RECOVERY-'+String(r.ym||'UNKNOWN')),remainingAfter:remaining});
+    const payrollMonth=recoveryMonth(r),salaryPayment=s&&(s.salaryPayments||[]).filter(p=>p.active!==false&&p.empId===a.empId&&p.ym===payrollMonth&&p.date).sort((x,y)=>String(x.date).localeCompare(String(y.date)))[0];
+    const view=Object.assign({},r,{payrollMonth,recordedOn,deductionDate:r.deductionDate||(salaryPayment&&salaryPayment.date)||'',deductedFrom:payrollMonth?payrollMonth+' salary':'Salary deduction',salaryPaymentReference:salaryPayment&&(salaryPayment.reference||salaryPayment.batchId||salaryPayment.id)||'',reference:r.reference||('SALARY-RECOVERY-'+String(payrollMonth||'UNKNOWN')),remainingAfter:remaining});
     delete view._index;return view;
   });
   return Object.assign({}, a, { recoveries, recovered: advanceRecovered(a), outstanding: advanceOutstanding(a), status: a.active === false ? 'Cancelled' : advanceStatus(a) });
 }
-function monthRecovery(s, empId, ym) { return round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === empId).reduce((n, a) => n + (a.recoveries || []).filter(r => r.ym === ym).reduce((m, r) => m + num(r.amount), 0), 0)); }
+function monthRecovery(s, empId, ym) { return round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === empId).reduce((n, a) => n + (a.recoveries || []).filter(r => recoveryMonth(r) === ym).reduce((m, r) => m + num(r.amount), 0), 0)); }
 function auditAdvance(s, req, action, advanceId, details) { s.advanceAudit = s.advanceAudit || []; s.advanceAudit.push({ at: new Date().toISOString(), by: req.user && req.user.username || 'admin', action, advanceId, details: details || {} }); }
 function auditAdvanceRequest(s, req, action, requestId, details) { s.advanceRequestAudit = s.advanceRequestAudit || []; s.advanceRequestAudit.push({ at:new Date().toISOString(), by:req.user&&req.user.username||'system', action, requestId, details:details||{} }); }
 
@@ -648,7 +651,7 @@ function computeMonth(s, ym) {
         ...(x.historicalCloseAdjustment?[{kind:'historical_payroll_unverified',amount:x.historicalCloseAdjustment,description:'Unverified historical offset — not evidence of payment. Owner must review actual 3645/cash payments.'}]:[])
       ],
       outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
-      advanceDueBeforeDeduction:round2(Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===e.id&&String(a.recoveryStartMonth||a.date||'').slice(0,7)<=ym).reduce((n,a)=>n+advanceOutstanding(a)+(a.recoveries||[]).filter(r=>r.ym===ym).reduce((m,r)=>m+num(r.amount),0),0)),
+      advanceDueBeforeDeduction:round2(Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===e.id&&advanceEligibleForMonth(a,ym)).reduce((n,a)=>n+advanceOutstanding(a)+(a.recoveries||[]).filter(r=>recoveryMonth(r)===ym).reduce((m,r)=>m+num(r.amount),0),0)),
       paid:x.paid, legacyPaid:x.legacyPaid, transactionPaid:x.transactionPaid, balance:round2(netPayable-x.paid), carryForwardAdvance:round2(Math.max(0,-(netPayable-x.paid))),carryForwardPayable:round2(Math.max(0,netPayable-x.paid)),remarks:x.row.remarks||''
     };
   });
@@ -1023,10 +1026,10 @@ router.post('/api/salary/recoveries/:ym', guard, (req, res) => {
   const employeeAdvances=Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===b.empId);
   const previous=monthRecovery(s,b.empId,ym);
   if(round2(previous)!==round2(amount)&&!reason)return res.status(400).json({success:false,error:'Explain why this advance deduction amount was changed.'});
-  employeeAdvances.forEach(a=>{a.recoveries=(a.recoveries||[]).filter(r=>r.ym!==ym);});
-  // recoveryStartMonth is the payroll authority. This intentionally supports
-  // owner-approved imports paid later but recovered in an earlier payroll run.
-  const eligible = employeeAdvances.filter(a => a.recoveryStartMonth <= ym).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
+  employeeAdvances.forEach(a=>{a.recoveries=(a.recoveries||[]).filter(r=>recoveryMonth(r)!==ym);});
+  // recoveryStartMonth is the payroll authority for current records. Older
+  // records did not always have it, so use the actual payout/date month there.
+  const eligible = employeeAdvances.filter(a => advanceEligibleForMonth(a,ym)).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
   const available = eligible.reduce((n, a) => n + advanceOutstanding(a), 0);
   if (amount > available + .001) return res.status(400).json({ success: false, error: 'Recovery cannot exceed the eligible outstanding advance of ₹' + round2(available) + '.' });
   let left = amount; eligible.forEach(a => { if (left <= 0) return; const take = Math.min(left, advanceOutstanding(a)); if (take > 0) { const at=new Date().toISOString();a.recoveries.push({ ym, payrollMonth:ym, amount: round2(take), by: req.user && req.user.username || 'admin', at, recordedOn:at.slice(0,10), reference:'SALARY-RECOVERY-'+ym,note:reason }); left = round2(left - take); } });
