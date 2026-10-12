@@ -47,6 +47,39 @@ function catalog(s, asOf = '') {
   return loans(s).filter(l => !asOf || l.date <= asOf).map(l => Object.assign({}, l, position(s, l, asOf)))
     .sort((a, b) => String(b.date + b.id).localeCompare(String(a.date + a.id)));
 }
+// A lender may have several agreements. Group only exact normalized names in
+// the same borrowing entity; never net principal against that party's bills.
+function lenderBooks(entries, { from = '', search = '' } = {}) {
+  const groups = new Map(), normalize = v => text(v).normalize('NFKC').replace(/\s+/g, ' ').toLowerCase();
+  for (const loan of entries) {
+    const key = normalize(loan.nature) + '|' + normalize(loan.source);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, name: loan.source, nature: loan.nature, partyType: 'loan', borrowed: 0, repaid: 0, outstanding: 0, loans: [] };
+      groups.set(key, group);
+    }
+    group.borrowed = money(group.borrowed + loan.borrowed);
+    group.repaid = money(group.repaid + loan.repaid);
+    group.outstanding = money(group.outstanding + loan.outstanding);
+    group.loans.push(loan);
+  }
+  const query = normalize(search);
+  return [...groups.values()].filter(group => !query || normalize([group.name, group.nature, ...group.loans.flatMap(l =>
+    [l.id, l.note, l.bankReference, l.loanTerms && l.loanTerms.lenderReference, ...(l.payments || []).flatMap(p => [p.id, p.note, p.bankReference])])].join(' ')).includes(query))
+    .map(group => {
+      const events = group.loans.flatMap(l => [{ id: l.id, loanId: l.id, date: l.date, account: l.account, note: l.note,
+        reference: l.bankReference || l.id, received: l.borrowed, repaid: 0 }].concat((l.payments || []).map(p => ({
+        id: p.id, loanId: l.id, date: p.date, account: p.account, note: p.note || '', reference: p.bankReference || p.id, received: 0, repaid: p.amount }))));
+      events.sort((a, b) => a.date.localeCompare(b.date) || (a.repaid > 0) - (b.repaid > 0) || a.id.localeCompare(b.id));
+      const openingPrincipal = money(events.filter(e => from && e.date < from).reduce((n, e) => n + e.received - e.repaid, 0));
+      let balance = openingPrincipal;
+      const ledgerRows = events.filter(e => !from || e.date >= from).map(e => {
+        balance = money(balance + e.received - e.repaid); return { ...e, balance };
+      });
+      return { ...group, openingPrincipal, ledgerRows, periodReceived: money(ledgerRows.reduce((n, e) => n + e.received, 0)),
+        periodRepaid: money(ledgerRows.reduce((n, e) => n + e.repaid, 0)) };
+    }).sort((a, b) => a.name.localeCompare(b.name) || a.nature.localeCompare(b.nature));
+}
 function protectsMovement(s, id) {
   return (s.receipts || []).some(r => isLoan(r) && r.id === id) || (s.loanRepayments || []).some(p => p.id === id);
 }
@@ -107,5 +140,5 @@ function addRepayment(s, candidate) {
   const p = Object.assign({ id: 'LOANPAY-' + String(s.loanRepaymentSeq).padStart(5, '0') }, candidate);
   s.loanRepayments = s.loanRepayments || []; s.loanRepayments.push(p); return p;
 }
-module.exports = { TYPE, CATEGORY, isLoan, loans, repayments, catalog, position, protectsMovement,
+module.exports = { TYPE, CATEGORY, isLoan, loans, repayments, catalog, position, lenderBooks, protectsMovement,
   amount, validDate, date, prepareReceipt, prepareRepayment, addRepayment };
