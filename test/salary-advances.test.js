@@ -2,12 +2,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const XLSX = require('xlsx');
 
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-salary-'));
+const tempDir = fs.mkdtempSync(path.join(__dirname, '.tmp-salary-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
+fs.writeFileSync(path.join(tempDir, 'expenses.json'), '{}');
 const { router, telegramApi, _july2026Import, _providedAdvanceImport, _finalJuly2026Payroll, _finalAugust2026Advances, _julyImportedMarks, _findImportedEmployee, _ensureHistoricalGuard, _repairGuardSunnyCollision, _removeHistoricalAdvancesV16, _salarySheetChanges, _applySalarySheetChanges, _advanceSheetRows, _applyAdvanceSheetRows, _advanceSourceSheet, _finalAugustPlan, _applyFinalAugustPlan, _repairFinalAugustImportedRoster, _linkFinalAugustSourceSheetRows, _applyGuardAugustIncrement, _computeMonth } = require('../modules/salary');
 test.after(() => fs.rmSync(tempDir, { recursive:true, force:true }));
 
@@ -422,19 +422,44 @@ test('payroll presents a prominent salary payment action without offering zero-b
   assert.match(html,/openSalaryPay\(id\)/);
 });
 
-test('Prashant Axis 3645 is available for advances and full or partial salary payments',()=>{
+test('Axis Bank 3448 pays full or partial salary while separate 3645 advance access is preserved',()=>{
   const config=invoke('GET','/api/salary/employees').body;
-  assert.ok(config.salaryPayingAccounts.includes('Prashant Axis 3645'));
+  assert.ok(config.salaryPayingAccounts.includes('Axis Bank 3448'));
+  assert.ok(!config.salaryPayingAccounts.includes('Prashant Axis 3645'));
+  assert.deepEqual(config.retiredSalaryPayingAccounts,['Prashant Axis 3645']);
+  assert.equal(config.advancePayingAccounts.filter(x=>x.name==='Axis Bank 3448').length,1);
   assert.ok(config.salaryPayingAccounts.includes('IndusInd Bank 8181'));
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Axis Salary Employee',salary:20000}}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2098-09'},body:{empId:emp.id,paidDays:30}});
-  const partial=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-09',date:'2098-09-30',account:'Prashant Axis 3645',proof:'/axis-partial.jpg',items:[{empId:emp.id,amount:5000,modificationReason:'Fraction salary payment'}]}});
+  const partial=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-09',date:'2098-09-30',account:'Axis Bank 3448',proof:'/axis-partial.jpg',items:[{empId:emp.id,amount:5000,modificationReason:'Fraction salary payment'}]}});
   assert.equal(partial.status,200);assert.equal(partial.body.total,5000);
-  const fullBalance=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-09',date:'2098-09-30',account:'Prashant Axis 3645',proof:'/axis-balance.jpg',items:[{empId:emp.id,amount:15000}]}});
+  const fullBalance=invoke('POST','/api/salary/payments/batch',{body:{ym:'2098-09',date:'2098-09-30',account:'Axis Bank 3448',proof:'/axis-balance.jpg',items:[{empId:emp.id,amount:15000}]}});
   assert.equal(fullBalance.status,200);assert.equal(fullBalance.body.total,15000);
   const advance=invoke('POST','/api/salary/advances',{role:'owner',username:'owner',body:{empId:emp.id,amount:1000,date:'2098-10-01',account:'Prashant Axis 3645',recoveryStartMonth:'2098-10',proof:'/axis-advance.jpg'}});
   assert.equal(advance.status,200);assert.equal(advance.body.advance.account,'Prashant Axis 3645');
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(html,/ed\.salaryPayingAccounts/);
+});
+
+test('retired 3645 cannot post a new salary while 3448 still requires proof and a partial-payment reason',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Retired Salary Source Test',salary:12000}}).body.employee,ym='2099-11',who={role:'claimant',username:'prashant'};
+  invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:30}});
+  const body={ym,date:'2099-11-30',account:'Prashant Axis 3645',proof:'/api/expenses/photo/salary-3448.jpg',items:[{empId:emp.id,amount:6000,modificationReason:'First half'}]},before=fs.readFileSync(path.join(tempDir,'salary.json'),'utf8');
+  const blocked=invoke('POST','/api/salary/payments/batch',{...who,body});assert.equal(blocked.status,400);assert.match(blocked.body.error,/no longer used for new salary payments/);assert.equal(fs.readFileSync(path.join(tempDir,'salary.json'),'utf8'),before);
+  body.account='Axis Bank 3448';assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body:{...body,proof:''}}).status,400);assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body:{...body,items:[{empId:emp.id,amount:6000}]}}).status,400);
+  assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body}).status,200);
+  const payment=invoke('GET','/api/salary/payments/:ym',{params:{ym}}).body.payments.find(item=>item.empId===emp.id);assert.equal(payment.account,'Axis Bank 3448');assert.equal(payment.amount,6000);assert.equal(payment.proof,body.proof);assert.equal(payment.createdBy,'prashant');
+});
+
+test('historical 3645 salary corrections retain the old source but new 3448 records cannot switch into it',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Legacy Salary Correction Test',salary:30000}}).body.employee,ym='2099-12';
+  invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:30}});
+  const body={ym,date:'2099-12-30',account:'Axis Bank 3448',proof:'/legacy.jpg',items:[{empId:emp.id,amount:5000,modificationReason:'Partial'}]},created=invoke('POST','/api/salary/payments/batch',{body}),id=created.body.batchId+'-001';assert.equal(created.status,200);
+  // Synthetic fixture represents an already-recorded historical 3645 payment.
+  const file=path.join(tempDir,'salary.json'),saved=JSON.parse(fs.readFileSync(file,'utf8'));saved.salaryPayments.find(item=>item.id===id).account='Prashant Axis 3645';fs.writeFileSync(file,JSON.stringify(saved));
+  const correction={amount:4500,date:body.date,account:'Prashant Axis 3645',proofs:['/legacy.jpg'],reason:'Correct historical amount from the original receipt'},edited=invoke('PATCH','/api/salary/payments/:id',{params:{id},body:correction,role:'owner'});assert.equal(edited.status,200);assert.equal(edited.body.payment.account,'Prashant Axis 3645');
+  assert.equal(invoke('POST','/api/salary/payments/batch',{body}).status,200);const newer=invoke('GET','/api/salary/payments/:ym',{params:{ym}}).body.payments.find(item=>item.empId===emp.id&&item.id!==id),before=fs.readFileSync(file,'utf8');
+  assert.equal(invoke('PATCH','/api/salary/payments/:id',{params:{id:newer.id},body:{...correction,amount:5000},role:'owner'}).status,400);assert.equal(fs.readFileSync(file,'utf8'),before);
+  const audit=invoke('GET','/api/salary/payments/:ym',{params:{ym}}).body.audit.find(item=>item.paymentId===id);assert.equal(audit.before.account,'Prashant Axis 3645');assert.equal(audit.after.account,'Prashant Axis 3645');assert.equal(audit.reason,correction.reason);
 });
 
 test('expense entry records only dated advances, leaving salary payments on payroll',()=>{
@@ -462,7 +487,7 @@ test('Owner Telegram salary advance uses the existing dated advance route, not p
   const list=telegramApi('GET','/api/salary/employees',owner,{entity:'SANKI'});
   assert.equal(list.status,200);assert.ok(list.employees.some(e=>e.id===employee.id));
   assert.ok(list.advancePayingAccounts.some(x=>x.name==='Axis Bank 3448'&&x.nature==='SANKI'));
-  assert.ok(!list.salaryPayingAccounts.includes('Axis Bank 3448'),'3448 is available for advances without changing salary-payment accounts');
+  assert.ok(list.salaryPayingAccounts.includes('Axis Bank 3448'),'3448 is available for both salary and advances');
   assert.equal(telegramApi('GET','/api/salary/employees',outsider,{entity:'SANKI'}).status,403);
   const body={empId:employee.id,amount:1250,date:'2099-07-03',account:'Prashant Axis 3645',proofs:['/api/expenses/photo/telegram-advance.jpg']};
   const paid=telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body});
@@ -583,7 +608,7 @@ test('positive and negative balances carry forward once and payroll respects emp
   assert.equal(february.some(x=>x.id===leaverWithBalance.id),false,'a former employee does not appear on a later salary sheet even with an old balance');
   assert.equal(invoke('GET','/api/salary/month/:ym',{params:{ym:'2027-01'}}).body.rows.some(x=>x.id===leaverWithBalance.id),true,'the last employed month stays in history');
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-07'},body:{empId:joiner.id,paidDays:1}}).status,400);
-  const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Axis Bank 3448',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
+  const invalidAccount=invoke('POST','/api/salary/payments/batch',{body:{ym:'2026-06',date:'2026-06-30',account:'Tiana 0425',proof:'/proof.jpg',items:[{empId:carryEmp.id,amount:1}]}});
   assert.equal(invalidAccount.status,400);assert.match(invalidAccount.body.error,/authorized salary paying account/);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','salary.js'),'utf8');assert.match(html,/Salary paying account \/ cash/);assert.match(source,/Extra salary paid earlier/);assert.match(source,/Salary left unpaid earlier/);assert.match(html,/positive balances remain payable/);
 });
@@ -606,7 +631,7 @@ test('Prashant can pay August salary with proof; a changed amount requires a not
   const row=month.rows.find(x=>x.balance>1000&&x.paid===0);
   assert.ok(row,'an August salary is payable');
   const amount=Math.round((row.balance-100)*100)/100;
-  const body={ym:'2026-08',date:'2026-09-16',account:'Prashant Axis 3645',proof:'/august-proof.jpg',items:[{empId:row.id,amount}]};
+  const body={ym:'2026-08',date:'2026-09-16',account:'Axis Bank 3448',proof:'/august-proof.jpg',items:[{empId:row.id,amount}]};
   assert.equal(invoke('POST','/api/salary/payments/batch',{...who,body}).status,400);
   body.items[0].modificationReason='Paying the remaining ₹100 separately';
   const result=invoke('POST','/api/salary/payments/batch',{...who,body});
@@ -618,7 +643,7 @@ test('Prashant can pay August salary with proof; a changed amount requires a not
 test('owner can correct a proof-backed salary payment and correction is audited',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Correction employee',salary:30000},role:'owner'}).body.employee;
   invoke('POST','/api/salary/row/:ym',{params:{ym:'2099-01'},body:{empId:emp.id,paidDays:30},role:'owner'});
-  const made=invoke('POST','/api/salary/payments/batch',{body:{ym:'2099-01',date:'2099-01-31',account:'Prashant Axis 3645',proof:'/first.jpg',items:[{empId:emp.id,amount:10000,modificationReason:'First tranche'}]},role:'owner'});
+  const made=invoke('POST','/api/salary/payments/batch',{body:{ym:'2099-01',date:'2099-01-31',account:'Axis Bank 3448',proof:'/first.jpg',items:[{empId:emp.id,amount:10000,modificationReason:'First tranche'}]},role:'owner'});
   assert.equal(made.status,200);
   const id=made.body.batchId+'-001';
   const edited=invoke('PATCH','/api/salary/payments/:id',{params:{id},body:{amount:9000,date:'2099-01-30',account:'Gagan Sir Cash',proofs:['/corrected.jpg'],reference:'CASH-1',reason:'Actual cash receipt'},role:'owner'});
@@ -733,7 +758,7 @@ test('Prashant can edit salary and record proof-backed payments from authorized 
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Prashant Payment Access Test',salary:20000,joiningDate:'2099-02-01'}}).body.employee,ym='2099-02';
   assert.equal(invoke('POST','/api/salary/row/:ym',{params:{ym},body:{empId:emp.id,paidDays:20}}).status,200);
   const who={role:'claimant',username:'prashant'},accounts=invoke('GET','/api/salary/employees',who).body.salaryPayingAccounts;
-  assert.deepEqual(accounts,['Prashant Axis 3645','IndusInd Bank 8181','Prashant Cash','Gagan Sir Cash','Counter Cash']);
+  assert.deepEqual(accounts,['Axis Bank 3448','IndusInd Bank 8181','Prashant Cash','Gagan Sir Cash','Counter Cash']);
   assert.equal(invoke('POST','/api/salary/row/:ym',{...who,params:{ym},body:{empId:emp.id,paidDays:15}}).status,200);
   assert.equal(invoke('PATCH','/api/salary/final-amount/:ym/:empId',{...who,params:{ym,empId:emp.id},body:{amount:10000,reason:'Confirmed final amount'}}).status,200);
   assert.equal(invoke('GET','/api/salary/month/:ym',{...who,params:{ym}}).body.permissions.canModifyPayroll,true);
