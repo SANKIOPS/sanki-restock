@@ -580,6 +580,26 @@ function registerVendorForNature(s,nature,name,metadata){
   matches.forEach(([masterKey])=>delete master[masterKey]);master[key]={...merged,name:canonical,sharedKey:key};
   syncSharedVendorDirectory(s);return canonical;
 }
+const APPROVED_EXPENSE_VENDOR_REPAIR_KEY='restore-approved-expense-vendors-to-directory-v1';
+function applyApprovedExpenseVendorDirectoryRepair(s){
+  s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[APPROVED_EXPENSE_VENDOR_REPAIR_KEY])return false;
+  const approvedStatuses=new Set(['approved','partially_paid','paid']),missing=new Map();
+  Object.values(s.expenses||{}).forEach(expense=>{
+    const name=cleanVendorName(expense&&expense.vendor);if(!name||!approvedStatuses.has(expense.status))return;
+    const nature=normalizedNature(expense.nature),key=sharedVendorIdentityKey(name),master=vendorMasterForNature(s,nature);
+    if(Object.values(master).some(record=>sharedVendorIdentityKey(record&&record.name)===key))return;
+    const bucketKey=nature+'|'+key,current=missing.get(bucketKey)||{nature,name,expenseIds:[]};
+    current.expenseIds.push(expense.id);missing.set(bucketKey,current);
+  });
+  if(!missing.size){syncSharedVendorDirectory(s);s.oneTimeMigrations[APPROVED_EXPENSE_VENDOR_REPAIR_KEY]={appliedAt:new Date().toISOString(),repaired:[]};return true;}
+  const repaired=Array.from(missing.values()).map(item=>{
+    const name=registerVendorForNature(s,item.nature,item.name,{});
+    return{...item,name};
+  });
+  s.oneTimeMigrations[APPROVED_EXPENSE_VENDOR_REPAIR_KEY]={appliedAt:new Date().toISOString(),repaired,preservedTransactionDetails:true};
+  audit(s,null,'APPROVED_EXPENSE_VENDORS_RESTORED','vendor','approved-expense-history',{user:'system',device:'Store repair',nature:'ALL',after:{vendors:repaired},note:'Restored approved transaction-backed vendors to the reusable vendor directory without changing expenses, payments or balances.'});
+  return true;
+}
 function applySharedVendorDirectoryMigration(s){
   s.oneTimeMigrations=s.oneTimeMigrations||{};if(s.oneTimeMigrations[SHARED_VENDOR_DIRECTORY_MIGRATION_KEY]){syncSharedVendorDirectory(s);return false;}
   const snapshots=vendorMasterPairs(s).flatMap(([nature,master])=>Object.values(master||{}).map(record=>({nature,name:record&&record.name,metadata:record}))).filter(x=>cleanVendorName(x.name));
@@ -962,6 +982,7 @@ function loadStore() {
     if(applyShayamMondalVendorMerge(s))saveStore(s);
     if(applyReviewedVendorDecisions20261009(s))saveStore(s);
     if(applySharedVendorDirectoryMigration(s))saveStore(s);
+    if(applyApprovedExpenseVendorDirectoryRepair(s))saveStore(s);
     if(applySep11PrashantReimbursementDateCorrection(s))saveStore(s);
     if(applySep13ShopifyCashComponentCorrections(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
