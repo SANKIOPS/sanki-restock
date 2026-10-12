@@ -602,6 +602,14 @@ function advanceOutstanding(a) { return round2(Math.max(0, num(a.amount) - advan
 function recoveryMonth(r) { return String(r && (r.ym || r.payrollMonth) || '').slice(0, 7); }
 function advanceRecoveryStartMonth(a) { return String(a && (a.recoveryStartMonth || a.payoutDate || a.date) || '').slice(0, 7); }
 function advanceEligibleForMonth(a, ym) { const start=advanceRecoveryStartMonth(a); return /^\d{4}-\d{2}$/.test(start) && start <= ym; }
+function nextPayrollMonth(ym) {
+  const match=String(ym||'').match(/^(\d{4})-(\d{2})$/);if(!match)return '';
+  const year=Number(match[1]),month=Number(match[2]);return month===12?(year+1)+'-01':String(year)+'-'+String(month+1).padStart(2,'0');
+}
+// Salaries are normally paid in the following month. An advance actually paid
+// before that salary is settled may therefore be recovered from the preceding
+// payroll month when the salary manager explicitly records the deduction.
+function advanceEligibleForPayroll(a,ym){const start=advanceRecoveryStartMonth(a),cutoff=nextPayrollMonth(ym);return /^\d{4}-\d{2}$/.test(start)&&!!cutoff&&start<=cutoff;}
 function advanceStatus(a) { const r = advanceRecovered(a); return r <= 0 ? 'Outstanding' : (r + .001 >= num(a.amount) ? 'Recovered' : 'Partially recovered'); }
 function advanceView(a,s) {
   let remaining=round2(num(a.amount));
@@ -651,7 +659,7 @@ function computeMonth(s, ym) {
         ...(x.historicalCloseAdjustment?[{kind:'historical_payroll_unverified',amount:x.historicalCloseAdjustment,description:'Unverified historical offset — not evidence of payment. Owner must review actual 3645/cash payments.'}]:[])
       ],
       outstandingAdvance: round2(Object.values(s.advances || {}).filter(a => a.active !== false && a.empId === e.id).reduce((n, a) => n + advanceOutstanding(a), 0)),
-      advanceDueBeforeDeduction:round2(Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===e.id&&advanceEligibleForMonth(a,ym)).reduce((n,a)=>n+advanceOutstanding(a)+(a.recoveries||[]).filter(r=>recoveryMonth(r)===ym).reduce((m,r)=>m+num(r.amount),0),0)),
+      advanceDueBeforeDeduction:round2(Object.values(s.advances||{}).filter(a=>a.active!==false&&a.empId===e.id&&advanceEligibleForPayroll(a,ym)).reduce((n,a)=>n+advanceOutstanding(a)+(a.recoveries||[]).filter(r=>recoveryMonth(r)===ym).reduce((m,r)=>m+num(r.amount),0),0)),
       paid:x.paid, legacyPaid:x.legacyPaid, transactionPaid:x.transactionPaid, balance:round2(netPayable-x.paid), carryForwardAdvance:round2(Math.max(0,-(netPayable-x.paid))),carryForwardPayable:round2(Math.max(0,netPayable-x.paid)),remarks:x.row.remarks||''
     };
   });
@@ -1027,9 +1035,10 @@ router.post('/api/salary/recoveries/:ym', guard, (req, res) => {
   const previous=monthRecovery(s,b.empId,ym);
   if(round2(previous)!==round2(amount)&&!reason)return res.status(400).json({success:false,error:'Explain why this advance deduction amount was changed.'});
   employeeAdvances.forEach(a=>{a.recoveries=(a.recoveries||[]).filter(r=>recoveryMonth(r)!==ym);});
-  // recoveryStartMonth is the payroll authority for current records. Older
-  // records did not always have it, so use the actual payout/date month there.
-  const eligible = employeeAdvances.filter(a => advanceEligibleForMonth(a,ym)).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
+  // A salary is commonly settled during the following month. Include advances
+  // paid in that immediately following month so an authorised deduction can be
+  // applied to the salary being paid, while still excluding later advances.
+  const eligible = employeeAdvances.filter(a => advanceEligibleForPayroll(a,ym)).sort((a,b)=>String(a.date+a.id).localeCompare(String(b.date+b.id)));
   const available = eligible.reduce((n, a) => n + advanceOutstanding(a), 0);
   if (amount > available + .001) return res.status(400).json({ success: false, error: 'Recovery cannot exceed the eligible outstanding advance of ₹' + round2(available) + '.' });
   let left = amount; eligible.forEach(a => { if (left <= 0) return; const take = Math.min(left, advanceOutstanding(a)); if (take > 0) { const at=new Date().toISOString();a.recoveries.push({ ym, payrollMonth:ym, amount: round2(take), by: req.user && req.user.username || 'admin', at, recordedOn:at.slice(0,10), reference:'SALARY-RECOVERY-'+ym,note:reason }); left = round2(left - take); } });
