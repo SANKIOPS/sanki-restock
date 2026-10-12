@@ -2310,7 +2310,7 @@ app.post('/api/showroom/reconcile/exact', async (req, res) => {
       nodes(ids: $ids) {
         ... on InventoryItem {
           id
-          inventoryLevels(first: 10) {
+          inventoryLevels(first: 2) {
             nodes {
               location { id }
               quantities(names: ["on_hand"]) { name quantity }
@@ -2319,8 +2319,8 @@ app.post('/api/showroom/reconcile/exact', async (req, res) => {
         }
       }
     }`;
-    for (let index = 0; index < inventoryIds.length; index += 50) {
-      const data = await graphql(quantityQuery, { ids: inventoryIds.slice(index, index + 50) });
+    for (let index = 0; index < inventoryIds.length; index += 75) {
+      const data = await graphql(quantityQuery, { ids: inventoryIds.slice(index, index + 75) });
       for (const node of data.nodes || []) {
         if (!node || !node.id) continue;
         const itemId = String(node.id).split('/').pop();
