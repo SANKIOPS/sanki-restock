@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'../modules/expenses.js'),'utf8');
+// Source-fragment assertions must work with both Windows and Unix checkouts.
+const source=fs.readFileSync(path.join(__dirname,'../modules/expenses.js'),'utf8').replace(/\r\n/g,'\n');
 function route(items,combinedInvoices={}){
   const start=source.indexOf("router.post('/api/expenses/procurement-payables/batch'"),end=source.indexOf('\n});',start)+4;
   let fn,saves=0;const store={procurementAccounting:{paymentsByPo:{}}},calls=[];
