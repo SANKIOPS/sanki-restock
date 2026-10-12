@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Meta Ads · SANKI Business OS</title>
+  <link rel="stylesheet" href="/meta-ads.css">
+</head>
+<body>
+<main>
+  <header class="page-header">
+    <div><p class="eyebrow">SANKI · MARKETING</p><h1>Meta Ads</h1><p class="muted">Campaigns, audiences, creatives and results in one record.</p></div>
+    <div class="actions"><button id="refresh">Refresh</button><button id="export" disabled>Export CSV</button><button class="primary" id="add" disabled>+ Add ad set</button></div>
+  </header>
+  <p class="record-note">Tracking records. Changes here do not publish ads or change settings in Meta.</p>
+  <section class="stats" id="stats" aria-label="Configured campaign summary"></section>
+  <div id="message" role="status" aria-live="polite">Loading marketing records…</div>
+  <section class="workspace" aria-label="Marketing records">
+    <div class="tabs" role="tablist" aria-label="Record views">
+      <button role="tab" id="tab-campaigns" data-tab="campaigns" aria-controls="recordView" aria-selected="false">Campaigns <span></span></button>
+      <button role="tab" id="tab-adSets" data-tab="adSets" aria-controls="recordView" aria-selected="true">Ad sets <span></span></button>
+      <button role="tab" id="tab-ads" data-tab="ads" aria-controls="recordView" aria-selected="false">Creatives <span></span></button>
+      <button role="tab" id="tab-results" data-tab="results" aria-controls="recordView" aria-selected="false">Results <span></span></button>
+      <button role="tab" id="tab-changes" data-tab="changes" aria-controls="recordView" aria-selected="false">Changes <span></span></button>
+    </div>
+    <div class="filters">
+      <label>Campaign<select id="campaignFilter"><option value="">All campaigns</option></select></label>
+      <label>Collection<select id="collectionFilter"><option value="">All collections</option><option>Femme</option><option>Homme</option><option>Studio</option><option>Other</option></select></label>
+      <label>Status<select id="statusFilter"><option value="">All current records</option><option value="reported_running">Reported running</option><option value="delivery_unconfirmed">Delivery unconfirmed</option><option value="active">Verified active</option><option value="paused">Paused</option><option value="draft">Draft</option><option value="archived">Archived</option></select></label>
+      <label>Destination<select id="destinationFilter"><option value="">All destinations</option><option>Instagram profile</option><option>WhatsApp</option><option>Google Maps</option><option>Website</option><option>Messenger</option><option>Other</option></select></label>
+      <label class="search">Search<input type="search" id="search" placeholder="Name, model, location, interest…"></label>
+    </div>
+    <div id="resultFilters" class="period-filter" hidden><label>Period start on / after<input type="date" id="periodStartFilter"></label><label>Period end on / before<input type="date" id="periodEndFilter"></label><p>Each row is one reporting period. Overlapping rows are not added together.</p></div>
+    <div class="view-heading"><div><h2 id="viewTitle">Ad sets</h2><p id="viewHelp" class="muted"></p></div><span id="rowCount" class="muted"></span></div>
+    <section id="recordView" role="tabpanel" aria-labelledby="tab-adSets">
+      <div class="table-wrap" tabindex="0" aria-label="Scrollable marketing table"><table id="records"><thead></thead><tbody></tbody></table></div>
+      <div id="empty" class="empty" hidden></div>
+    </section>
+  </section>
+  <p class="footnote">Budgets are configured daily amounts, not actual spend. “Pending” means unconfirmed; a blank metric is not zero. Reported running statuses come from your record and need a delivery check in Meta.</p>
+</main>
+<dialog id="editor">
+  <form id="recordForm">
+    <header><div><p class="eyebrow">MARKETING RECORD</p><h2 id="editorTitle">Add ad set</h2></div><button type="button" data-close aria-label="Close editor">×</button></header>
+    <div id="formFields"></div>
+    <label id="reasonWrap">Reason for this change<textarea name="reason" maxlength="1000" placeholder="What changed, and why?"></textarea></label>
+    <p class="form-error" role="alert"></p>
+    <footer><button type="button" id="archive" class="danger" hidden>Archive record</button><div class="actions"><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save record</button></div></footer>
+  </form>
+</dialog>
+<script src="/sidebar.js"></script>
+<script src="/meta-ads.js"></script>
+</body>
+</html>

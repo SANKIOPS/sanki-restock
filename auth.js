@@ -97,6 +97,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/owner/',                roles: ['owner'] },
   { prefix: '/api/model-calendar', roles: ['admin', 'accounting', 'owner', 'model_calendar'] },
   { prefix: '/api/seo-control',     roles: ['owner'] },
+  { prefix: '/api/marketing/meta',  roles: ['owner'] },
   { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/incentives',             roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
@@ -146,6 +147,7 @@ function apiAllowedForUser(user, p, method='GET') {
   if(isPrashantUser(user)&&p.startsWith('/api/incentives'))return true;
   if(isPrashantUser(user)&&((method==='POST'&&p==='/api/expenses/upload')||(method==='GET'&&p==='/api/expenses/config')))return true;
   const userRoles = rolesOf(user);
+  if (p === '/api/marketing/meta' || p.startsWith('/api/marketing/meta/')) return userRoles.includes('owner');
   // Rack assignment, catalogue refresh and RIS synchronization are Owner-only.
   // Search itself stays available to the dedicated view-only Stylists role.
   const ownerOnlyStockAction = p.startsWith('/api/racks') || p === '/api/stock-search/refresh';
@@ -225,7 +227,7 @@ function gate(req, res, next) {
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.
-  if ((p === '/owner.html' || p === '/rentals.html' || p.startsWith('/api/owner/')) && !rolesOf(user).includes('owner')) {
+  if ((p === '/owner.html' || p === '/rentals.html' || p === '/meta-ads.html' || p.startsWith('/api/owner/')) && !rolesOf(user).includes('owner')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
     return res.redirect(302, landingFor(user.role));
   }
