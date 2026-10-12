@@ -96,7 +96,11 @@ function buildRecords(orders, state){
       const recordOnlySalespersons=salespersons.filter(name=>!incentiveEligible(name)),recordOnly=!noSalesperson&&salespersons.length>0&&recordOnlySalespersons.length===salespersons.length;
       // Record-only orders cannot create a payable, so tender review is not
       // required for them. Mixed orders retain every normal receipt check.
-      const issues=[];if(!recordOnly&&!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(!recordOnly&&unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
+      // Once an owner has explicitly confirmed that an order has no eligible
+      // salesperson, payment-sync and tender-classification gaps cannot create
+      // an incentive liability. Preserve the warning data in the order itself,
+      // but do not force the already-reviewed exclusion back into Needs review.
+      const issues=[];if(!recordOnly&&!noSalesperson&&!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(!recordOnly&&!noSalesperson&&unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
       const portions=splitMoney(eligible,salespersons.length),recordOnlyAmount=noSalesperson?0:money(salespersons.reduce((total,name,index)=>total+(!incentiveEligible(name)?portions[index]:0),0)),incentiveEligibleAmount=noSalesperson?0:money(eligible-recordOnlyAmount);
       let exclusionReason='';if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(recordOnlySalespersons.length)exclusionReason=recordOnlySalespersons.join(' + ')+': former employee — record only; no incentive payable on their share.';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
       const status=recordOnly?'record_only':issues.length?'needs_review':(noSalesperson||eligible<=0?'excluded':'ready');

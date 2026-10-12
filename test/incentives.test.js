@@ -127,6 +127,22 @@ test('record-only orders do not block active daily approval even with missing or
   assert.equal(invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson:'Shivam'}).status,200);assert.equal(current.approvals['2026-10-01|Shivam'].incentive,240);
 });
 
+test('confirmed no-salesperson orders with unsynced payments do not block same-day approval',()=>{
+  const orders=[
+    order(2765,{note:'903362\nKrishna',total:11694,transactions:[tx(2765,11694,'UPI')]}),
+    order(2767,{note:'',total:4998}),
+    order(2768,{note:'',total:4998})
+  ];
+  let current=state({revision:2,audit:[],reviews:{
+    '2767':{salespersons:[],noSalesperson:true,gatewayModes:{},reason:'Confirmed no eligible salesperson',reviewedAt:'2026-10-12T10:00:00.000Z',reviewedBy:'owner'},
+    '2768':{salespersons:[],noSalesperson:true,gatewayModes:{},reason:'Confirmed no eligible salesperson',reviewedAt:'2026-10-12T10:01:00.000Z',reviewedBy:'owner'}
+  }});
+  const before=buildView(orders,current),excluded=before.records.filter(row=>['2767','2768'].includes(row.orderId));
+  assert.equal(before.summary.needsReview,0);assert.deepEqual(excluded.map(row=>row.reviewStatus),['excluded','excluded']);assert.ok(excluded.every(row=>row.reviewIssues.length===0));
+  const router=createRouter({loadOrders:()=>orders,loadState:()=>current,saveState:value=>{current=value;}}),approved=invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson:'Krishnakant'});
+  assert.equal(approved.status,200);assert.equal(current.approvals['2026-10-01|Krishnakant'].eligibleAmount,11694);assert.equal(current.approvals['2026-10-01|Krishnakant'].incentive,233.88);
+});
+
 test('shared active and former sales preserve equal shares without reallocating former incentives',()=>{
   const rows=[order(25,{note:'123456\nShivam + Isha',total:24000,transactions:[tx(25,24000,'Card Machine')]})],view=buildView(rows,state()),row=view.records[0];
   assert.equal(row.reviewStatus,'ready');assert.equal(row.eligibleTenderAmount,24000);assert.equal(row.eligibleAmount,12000);assert.equal(row.recordOnlyAmount,12000);assert.equal(view.summary.eligibleReceived,12000);assert.equal(view.summary.incentiveEarned,240);
