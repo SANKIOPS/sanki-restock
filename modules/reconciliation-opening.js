@@ -67,7 +67,7 @@ function finalizedMovementCoverageIds(store = {}, book = {}) {
   // IDs are absent from report.linkedRecordIds, but their finalized same-book
   // origin still proves that their amount is already in the prior closing.
   ['transfers', 'receipts', 'adjustments', 'vendorAdvances', 'paytmSettlements',
-    'bankTruthMovements', 'paytmPayoutPostings', 'salesRefunds'].forEach(name => {
+    'bankTruthMovements', 'paytmPayoutPostings', 'salesRefunds', 'loanRepayments'].forEach(name => {
     (store[name] || []).forEach(record => {
       if (!hasFinalizedProvenance(record)) return;
       addLedger(record);
