@@ -62,7 +62,7 @@ function uiHarness(data,{owner=false}={}){
   const nodes=new Map(),calls=[];
   function node(id){
     if(!nodes.has(id)){
-      const item={id,value:'',open:false,dataset:{},children:[],classList:{toggle(){},add(){},remove(){}},addEventListener(){},insertAdjacentHTML(){},querySelector(){return null;},scrollIntoView(){this.scrolled=true;},focus(){this.focused=true;},querySelectorAll(selector){if(selector==='[data-advance-employee]')return [...this.innerHTML.matchAll(/data-advance-employee="([^"]+)"/g)].map(m=>({dataset:{advanceEmployee:m[1]}}));return [];}};
+      const item={id,value:'',open:false,dataset:{},style:{},children:[],classList:{toggle(){},add(){},remove(){}},showModal(){this.open=true;},close(){this.open=false;},addEventListener(){},insertAdjacentHTML(){},querySelector(){return null;},scrollIntoView(){this.scrolled=true;},focus(){this.focused=true;},querySelectorAll(selector){if(selector==='[data-advance-employee]')return [...this.innerHTML.matchAll(/data-advance-employee="([^"]+)"/g)].map(m=>({dataset:{advanceEmployee:m[1]}}));return [];}};
       let content='';Object.defineProperty(item,'innerHTML',{get(){return content;},set(value){content=String(value);for(const tag of content.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)){const child=node(tag[1]);child.open=/\sopen(?:\s|>)/.test(tag[0]);}}});
       nodes.set(id,item);
     }
@@ -120,4 +120,22 @@ test('employee history shortcut expands and focuses the right register employee 
 
 test('all salary inline scripts and the browser helper parse',()=>{
   assert.doesNotThrow(()=>new vm.Script(inline));assert.doesNotThrow(()=>new vm.Script(helper));assert.match(html,/src="\/salary-advance-activity\.js\?v=20261009-1"/);
+});
+
+test('salary single and batch sources remain separate from advance accounts and the row has no Link 3645 shortcut',async()=>{
+  const data={success:true,advances:[],activityAdvances:[],requests:[],summary:[],totals:{outstanding:0},editRequests:[]},{context,node,calls}=uiHarness(data);await flush();
+  context.setSalaryAccounts({salaryPayingAccounts:['Axis Bank 3448','IndusInd Bank 8181','Counter Cash'],retiredSalaryPayingAccounts:['Prashant Axis 3645']});
+  context.state.accounts=['Prashant Axis 3645','Axis Bank 3448','Tiana 0425'];
+  const payroll={rows:[{id:'E1',name:'Employee One',balance:42500,netPayable:42500,paid:0,paidDays:30}],totals:{},permissions:{canModifyPayroll:true}};context.state.data=payroll;context.state.view='payroll';context.renderPayroll(payroll);context.openSalaryPay('E1');
+  assert.match(node('one_account').innerHTML,/^<option>Axis Bank 3448<\/option>/);assert.doesNotMatch(node('one_account').innerHTML,/3645|Tiana/);
+  const batch=node('host').innerHTML.match(/<select id="sp_account">([\s\S]*?)<\/select>/)[1];assert.match(batch,/Axis Bank 3448/);assert.doesNotMatch(batch,/3645|Tiana/);assert.doesNotMatch(node('host').innerHTML,/>Link 3645<|onclick="openSalaryExistingLink/);assert.match(node('host').innerHTML,/>Pay<\/button>/);
+  assert.equal(calls.some(item=>item.options&&item.options.method&&item.options.method!=='GET'),false);
+});
+
+test('salary correction offers 3645 only for its existing historical payment',async()=>{
+  const data={success:true,advances:[],activityAdvances:[],requests:[],summary:[],totals:{outstanding:0},editRequests:[]},{context,node}=uiHarness(data);await flush();
+  context.setSalaryAccounts({salaryPayingAccounts:['Axis Bank 3448','Counter Cash'],retiredSalaryPayingAccounts:['Prashant Axis 3645']});
+  context.state.payments=[{id:'OLD',account:'Prashant Axis 3645',amount:5000,date:'2026-09-12'},{id:'NEW',account:'Axis Bank 3448',amount:5000,date:'2026-10-12'}];context.state.data={permissions:{canModifyPayroll:true}};
+  context.openSalaryPaymentCorrection('OLD');assert.equal(node('edit_account').value,'Prashant Axis 3645');assert.match(node('edit_account').innerHTML,/Prashant Axis 3645 — historical payment only/);
+  context.openSalaryPaymentCorrection('NEW');assert.equal(node('edit_account').value,'Axis Bank 3448');assert.doesNotMatch(node('edit_account').innerHTML,/3645/);
 });
