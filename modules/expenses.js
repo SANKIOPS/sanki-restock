@@ -2786,9 +2786,14 @@ router.get('/api/expenses/pending-payments', (req, res) => {
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   const vendor = String(req.query.vendor || '').trim().toLowerCase();
   const from = String(req.query.from || ''), to = String(req.query.to || ''), bucket = String(req.query.bucket || '');
+  const source = String(req.query.source || '');
+  if (!['', 'expense', 'sourcing', 'loan'].includes(source)) return res.status(400).json({ success: false, error: 'Choose vendors, sourcing vendors or lenders / loan parties.' });
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
+  const asOf = to || indiaBusinessDate();
+  if ((!source || source === 'loan') && !expenseLoans.validDate(asOf)) return res.status(400).json({ success: false, error: 'Choose a valid as-of date for loan liabilities.' });
   const today = new Date().toISOString().slice(0, 10);
   const expenses = Object.values(s.expenses || {}).filter(e => {
+    if (source === 'sourcing' || source === 'loan') return false;
     if (!canApproveExpenseNature(req, e)) return false;
     if (nature && normalizedNature(e.nature) !== nature) return false;
     if (vendor && !String(e.vendor || '').toLowerCase().includes(vendor)) return false;
@@ -2808,13 +2813,21 @@ router.get('/api/expenses/pending-payments', (req, res) => {
   })).sort((a, b) => b.daysPending - a.daysPending || String(a.approvedAt || '').localeCompare(String(b.approvedAt || '')));
   // Only finalized LG bills become purchase payables here; their child POs
   // remain linked for allocation but never appear as duplicate pending rows.
-  const purchases = (!nature || nature === 'SANKI') ? procurementLedgerPayables(s, false).filter(p => p.source === 'procurement_lg'
+  const purchases = (!source || source === 'sourcing') && (!nature || nature === 'SANKI') && approvalNatures(req).includes('SANKI') ? procurementLedgerPayables(s, false).filter(p => p.source === 'procurement_lg'
     && (!vendor || String(p.vendor + ' ' + p.billNo).toLowerCase().includes(vendor))
     && (!from || p.date >= from) && (!to || p.date <= to)
     && (bucket !== 'approved' || p.paidAmount === 0)
     && (bucket !== 'partial' || p.paidAmount > 0)
     && bucket !== 'credit') : [];
-  res.json({ success: true, expenses, purchases, mediator: procurementAccounting(s).mediator, totalOutstanding: round0(expenses.reduce((n, e) => n + e.balanceDue, 0) + purchases.reduce((n, p) => n + p.balanceDue, 0)) });
+  // Unpaid principal is a carried-forward liability, not an expense dated in
+  // this month. From filters bills; loan position always follows the To date.
+  const loans = (!source || source === 'loan') ? visibleLoanCatalog(s, req, nature ? [nature] : approvalNatures(req), asOf)
+    .filter(l => l.outstanding > 0 && bucket !== 'credit' && (bucket !== 'approved' || !l.repaid) && (bucket !== 'partial' || l.repaid > 0)) : [];
+  const lenders = expenseLoans.lenderBooks(loans, { search: vendor });
+  const filteredLoans = lenders.flatMap(l => l.loans);
+  const loanOutstanding = roundMoney(filteredLoans.reduce((n, l) => n + l.outstanding, 0));
+  res.json({ success: true, source, asOf, expenses, purchases, loans: filteredLoans, lenders, loanOutstanding,
+    mediator: procurementAccounting(s).mediator, totalOutstanding: roundMoney(expenses.reduce((n, e) => n + e.balanceDue, 0) + purchases.reduce((n, p) => n + p.balanceDue, 0) + loanOutstanding) });
 });
 
 // Advanced Purchases remains read-only here. Accounting owns only the mediator
@@ -3061,6 +3074,15 @@ router.get('/api/expenses/vendors', (req, res) => {
   const nature = req.query.nature ? normalizedNature(req.query.nature) : '';
   if (nature && !approvalNatures(req).includes(nature)) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   const search=String(req.query.search||'').trim().toLowerCase(), category=String(req.query.category||'').trim().toLowerCase(), source=String(req.query.source||'expense'), from=String(req.query.from||''), to=String(req.query.to||'');
+  if (!['expense', 'sourcing', 'loan'].includes(source)) return res.status(400).json({ success: false, error: 'Choose vendors, sourcing vendors or lenders / loan parties.' });
+  if (source === 'loan') {
+    const asOf = to || indiaBusinessDate();
+    if (!expenseLoans.validDate(asOf) || (from && (!expenseLoans.validDate(from) || from > asOf))) return res.status(400).json({ success: false, error: 'Choose a valid loan ledger date range.' });
+    const lenders = expenseLoans.lenderBooks(visibleLoanCatalog(s, req, nature ? [nature] : approvalNatures(req), asOf), { from, search });
+    const loans = lenders.flatMap(l => l.loans), sum = key => roundMoney(loans.reduce((n, l) => n + num(l[key]), 0));
+    return res.json({ success: true, source, asOf, from, vendors: [], lenders, loans,
+      totals: { borrowed: sum('borrowed'), repaid: sum('repaid'), outstanding: sum('outstanding') }, totalDue: sum('outstanding'), totalAdvance: 0 });
+  }
   const books = {};
   cardExpenseRecords(s).forEach(e=>registerVendorForNature(s,e.nature,e.vendor,{tags:['Credit-card merchant']}));syncSharedVendorDirectory(s);
   const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
@@ -3123,7 +3145,7 @@ router.get('/api/expenses/vendors', (req, res) => {
       if(r&&row.expenseId)b.paid-=row.out;
     }
   });
-  if(source==='sourcing'&&(!nature||nature==='SANKI')){Object.keys(books).forEach(k=>delete books[k]);procurementLedgerPayables(s,true).forEach(p=>{const b=ensureBook('SANKI',p.vendor,{notes:'Advanced Purchases mediator'});addLedgerEntry(b,p,'Procurement expense');if(from&&String(p.date||'')<from)return;if(to&&String(p.date||'')>to)return;b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
+  if(source==='sourcing'){Object.keys(books).forEach(k=>delete books[k]);if((!nature||nature==='SANKI')&&natures.includes('SANKI'))procurementLedgerPayables(s,true).forEach(p=>{const b=ensureBook('SANKI',p.vendor,{notes:'Advanced Purchases mediator'});addLedgerEntry(b,p,'Procurement expense');if(from&&String(p.date||'')<from)return;if(to&&String(p.date||'')>to)return;b.billed+=p.amount;b.paid+=p.paidAmount;b.count+=1;b.entries.push(p);});}
   const finalizeBook=b=>{
     const all=b.ledgerItems.slice().sort((a,c)=>String(a.date).localeCompare(String(c.date))||num(a.order)-num(c.order)||String(a.reference).localeCompare(String(c.reference)));
     const opening=roundMoney(all.filter(x=>from&&x.date<from).reduce((n,x)=>n+num(x.out)-num(x.in),0));
@@ -3476,13 +3498,18 @@ function assertLoanOpenPeriod(s,nature,account,date){
   if(through&&date<=through){const error=new Error('This date is already finalized through '+through+'. Review the closed reconciliation before adding or correcting a loan movement.');error.status=409;throw error;}
 }
 // A dedicated linked ledger prevents independent cash edits from changing debt.
+function visibleLoanCatalog(s, req, natures, asOf) {
+  return expenseLoans.catalog(s, asOf).filter(l => natures.includes(normalizedNature(l.nature)) && accountVisibleToReq(req, l.account))
+    .map(l => Object.assign({}, l, { payments: l.payments.map(p => accountVisibleToReq(req, p.account) ? p :
+      { id: p.id, date: p.date, amount: p.amount, account: 'Owner-restricted account' }) }));
+}
 router.get('/api/expenses/loans',(req,res)=>{
   if(!canApprove(req))return res.status(403).json({success:false,error:'Accounting approvers only.'});
   const s=loadStore(),selected=String(req.query.nature||'').trim(),asOf=String(req.query.asOf||indiaBusinessDate());
   if(!expenseLoans.validDate(asOf))return res.status(400).json({success:false,error:'Choose a valid as-of date.'});
   const natures=selected?[normalizedNature(selected)]:approvalNatures(req);
   if(natures.some(n=>!approvalNatures(req).includes(n)))return res.status(403).json({success:false,error:'You cannot view this accounting entity.'});
-  const loans=expenseLoans.catalog(s,asOf).filter(l=>natures.includes(normalizedNature(l.nature))&&accountVisibleToReq(req,l.account)).map(l=>Object.assign({},l,{payments:l.payments.map(p=>accountVisibleToReq(req,p.account)?p:{id:p.id,date:p.date,amount:p.amount,account:'Owner-restricted account'})}));
+  const loans=visibleLoanCatalog(s,req,natures,asOf);
   const sum=key=>roundMoney(loans.reduce((n,l)=>n+num(l[key]),0));
   res.json({success:true,asOf,loans,totals:{borrowed:sum('borrowed'),repaid:sum('repaid'),outstanding:sum('outstanding')},canVoid:isOwner(req)});
 });

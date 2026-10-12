@@ -95,6 +95,89 @@ test('loan register groups neither unrelated receipts nor payments to the wrong 
   reset();const a=borrow().body.receipt,b=borrow({source:'Another Person',reference:'SECOND-LOAN',requestId:'loan-test-request-2',amount:500,loanTerms:{lenderKind:'person'}}).body.receipt;repay(b.id,{amount:200});assert.equal(loans.position(store(),a).outstanding,500000);assert.equal(loans.position(store(),b).outstanding,300);
   const r=invoke('GET','/api/expenses/loans',{query:{nature:'SANKI',asOf:'2098-12-31'}});assert.equal(r.body.totals.outstanding,500300);assert.equal(r.body.loans.length,2);
 });
+
+test('vendor groups and payable source filters keep loan principal separate from vendor bills',()=>{
+  reset({expenses:{'EX-LENDER-BILL':{id:'EX-LENDER-BILL',nature:'SANKI',vendor:'Example Company',date:day,approvedAt:day,status:'approved',amount:200,paidAmount:0,paymentType:'UPI',ledger:'Flowers'}}});
+  const loan=borrow().body.receipt;repay(loan.id);
+  const query={nature:'SANKI',from:day,to:'2098-10-12'};
+  const normal=invoke('GET','/api/expenses/vendors',{query:{...query,source:'expense'}}).body;
+  assert.equal(normal.vendors.find(v=>v.name==='Example Company').ledgerClosingBalance,200);
+  const lenders=invoke('GET','/api/expenses/vendors',{query:{...query,source:'loan'}}).body;
+  assert.equal(lenders.vendors.length,0);assert.equal(lenders.lenders.length,1);assert.equal(lenders.totalDue,400000);assert.equal(lenders.totalAdvance,0);assert.equal(lenders.lenders[0].loans[0].id,loan.id);
+  const vendorPayables=invoke('GET','/api/expenses/pending-payments',{query:{...query,source:'expense'}}).body;
+  assert.equal(vendorPayables.expenses.length,1);assert.equal(vendorPayables.loans.length,0);assert.equal(vendorPayables.purchases.length,0);assert.equal(vendorPayables.totalOutstanding,200);
+  const loanPayables=invoke('GET','/api/expenses/pending-payments',{query:{...query,source:'loan'}}).body;
+  assert.equal(loanPayables.expenses.length,0);assert.equal(loanPayables.purchases.length,0);assert.equal(loanPayables.loanOutstanding,400000);assert.equal(loanPayables.totalOutstanding,400000);
+  const all=invoke('GET','/api/expenses/pending-payments',{query}).body;assert.equal(all.totalOutstanding,400200);assert.equal(all.loans.length,1);
+  assert.equal(position().liabilities.loans,400000,'classification changes no posted principal');
+});
+
+test('older unpaid loans carry forward while future, repaid and voided loans do not become payable',()=>{
+  reset();const old=borrow({amount:500000.25}).body.receipt;
+  const future=borrow({date:'2098-11-01',reference:'FUTURE',requestId:'future-loan-request',loanTerms:{lenderKind:'person'}});assert.equal(future.status,200);
+  const paid=borrow({amount:500,source:'Paid Lender',reference:'SETTLED',requestId:'settled-loan-request'}).body.receipt;assert.equal(repay(paid.id,{amount:500,reference:'REPAID',requestId:'settled-pay-request'}).status,200);
+  const voided=borrow({amount:100,source:'Voided Lender',reference:'VOIDED',requestId:'voided-loan-request'}).body.receipt;assert.equal(invoke('POST','/api/expenses/loans/:id/void',{role:'owner',params:{id:voided.id},body:{reason:'Synthetic incorrect lender'}}).status,200);
+  const q={source:'loan',from:'2098-10-12',to:'2098-10-12'};
+  const payable=invoke('GET','/api/expenses/pending-payments',{query:q}).body;assert.deepEqual(payable.loans.map(l=>l.id),[old.id]);assert.equal(payable.totalOutstanding,500000.25);
+  const view=invoke('GET','/api/expenses/vendors',{query:q}).body,group=view.lenders.find(l=>l.name==='Example Company');
+  assert.equal(group.openingPrincipal,500000.25);assert.equal(group.ledgerRows.length,0);assert.equal(group.outstanding,500000.25);assert.equal(view.loans.some(l=>l.id===future.body.receipt.id||l.id===voided.id),false);
+});
+
+test('lenders support partial repayment filters, search, empty results and real as-of positions',()=>{
+  reset();const a=borrow().body.receipt,b=borrow({source:'Other Lender',amount:200.25,reference:'SECOND',requestId:'second-loan-request'}).body.receipt;repay(b.id,{amount:100.10});
+  const q={source:'loan',to:'2098-10-12'};
+  assert.deepEqual(invoke('GET','/api/expenses/pending-payments',{query:{...q,bucket:'partial'}}).body.loans.map(l=>l.id),[b.id]);
+  assert.deepEqual(invoke('GET','/api/expenses/pending-payments',{query:{...q,bucket:'approved'}}).body.loans.map(l=>l.id),[a.id]);
+  assert.equal(invoke('GET','/api/expenses/pending-payments',{query:{...q,bucket:'credit'}}).body.loans.length,0);
+  assert.equal(invoke('GET','/api/expenses/pending-payments',{query:{...q,vendor:'other lender'}}).body.totalOutstanding,100.15);
+  assert.equal(invoke('GET','/api/expenses/vendors',{query:{...q,search:'DEMO-AGREEMENT'}}).body.lenders.length,2);
+  assert.equal(invoke('GET','/api/expenses/vendors',{query:{...q,search:'nothing matching'}}).body.lenders.length,0);
+  assert.equal(invoke('GET','/api/expenses/pending-payments',{query:{...q,to:day,vendor:'Other Lender'}}).body.loanOutstanding,200.25);
+  assert.equal(invoke('GET','/api/expenses/vendors',{query:{source:'loan',to:'2098-02-30'}}).status,400);
+  assert.equal(invoke('GET','/api/expenses/pending-payments',{query:{source:'loan',to:'2098-02-30'}}).status,400);
+  for(const route of ['/api/expenses/vendors','/api/expenses/pending-payments'])assert.equal(invoke('GET',route,{query:{source:'invalid'}}).status,400);
+});
+
+test('lender classification respects private entities and redacts restricted repayment evidence',()=>{
+  reset();const loan=borrow().body.receipt;
+  assert.equal(repay(loan.id,{account:'Services',reference:'PRIVATE-PAYMENT',note:'Private account note',proof:'/private-proof.jpg'},'owner').status,200);
+  assert.equal(borrow({nature:'PERSONAL',account:'ICICI Bank 0992',source:'Private Lender',reference:'PRIVATE-LOAN',requestId:'private-request'},'owner').status,200);
+  for(const route of ['/api/expenses/vendors','/api/expenses/pending-payments']){
+    const q={source:'loan',to:'2098-12-31'},r=invoke('GET',route,{query:q});assert.equal(r.status,200);assert.equal(r.body.loans.length,1);
+    const payment=r.body.loans[0].payments[0];assert.equal(payment.account,'Owner-restricted account');assert.equal(payment.amount,100000);
+    const json=JSON.stringify(r.body);for(const secret of ['PRIVATE-PAYMENT','Private account note','private-proof','Private Lender'])assert.equal(json.includes(secret),false,secret);
+    assert.equal(invoke('GET',route,{query:{...q,nature:'PERSONAL'}}).status,403);assert.equal(invoke('GET',route,{query:q,role:'claimant'}).status,403);
+    const owner=invoke('GET',route,{query:q,role:'owner'}).body;assert.equal(owner.loans.length,2);
+  }
+});
+
+test('sourcing view never falls back to ordinary expenses in another entity',()=>{
+  reset({expenses:{SAM:{id:'SAM',nature:'SAMAST',vendor:'Samast vendor',date:day,status:'approved',amount:100,paidAmount:0}}});
+  const q={source:'sourcing',nature:'SAMAST',to:'2098-12-31'};
+  assert.equal(invoke('GET','/api/expenses/vendors',{query:q,role:'owner'}).body.vendors.length,0);
+  const pending=invoke('GET','/api/expenses/pending-payments',{query:q,role:'owner'}).body;
+  assert.equal(pending.expenses.length,0);assert.equal(pending.purchases.length,0);assert.equal(pending.loans.length,0);assert.equal(pending.totalOutstanding,0);
+});
+
+test('multiple lender agreements combine only within the same entity and preserve period history',()=>{
+  const receipt=(id,source,nature,amount,date)=>({id,source,nature,date,receiptType:loans.TYPE,amount});
+  const s={receipts:[receipt('A','Example Company','SANKI',1000,'2026-09-01'),receipt('B',' EXAMPLE   COMPANY ','SANKI',500,'2026-10-02'),receipt('C','Example Company','SAMAST',700,'2026-09-01'),receipt('D','Example Companx','SANKI',20,'2026-09-01')],loanRepayments:[{id:'P1',loanId:'A',amount:100,date:'2026-09-10'},{id:'P2',loanId:'A',amount:200,date:'2026-10-03'}]};
+  const groups=loans.lenderBooks(loans.catalog(s,'2026-10-31'),{from:'2026-10-01'});assert.equal(groups.length,3);
+  const g=groups.find(g=>g.nature==='SANKI'&&g.loans.length===2);assert.equal(g.borrowed,1500);assert.equal(g.outstanding,1200);assert.equal(g.openingPrincipal,900);assert.equal(g.periodReceived,500);assert.equal(g.periodRepaid,200);assert.equal(g.ledgerRows.at(-1).balance,1200);
+  assert.equal(groups.find(g=>g.nature==='SAMAST').outstanding,700);assert.equal(groups.find(g=>g.name==='Example Companx').loans.length,1,'no fuzzy merge of legally different parties');
+});
+
+test('lender UI uses the protected loan repayment action and escapes party metadata',()=>{
+  const l={id:'REC-UI',source:'<Lender>',nature:'SANKI',date:day,borrowed:500,repaid:200,outstanding:300,status:'partially_repaid',loanTerms:{lenderKind:'company',dueDate:'2098-11-10',lenderReference:'<Agreement>'},payments:[]};
+  const data={from:day,lenders:[{name:l.source,nature:l.nature,borrowed:500,repaid:200,outstanding:300,openingPrincipal:200,periodReceived:100,periodRepaid:0,loans:[l]}],loans:[l]};
+  const rendered=ui.renderParties(data);assert.match(rendered,/&lt;Lender&gt;/);assert.match(rendered,/&lt;Agreement&gt;/);assert.match(rendered,/Opening principal/);assert.match(rendered,/Record principal repayment/);assert.doesNotMatch(rendered,/openPay|Vendor advances|Void incorrect record/);
+  const page=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');assert.match(page,/id="pf_source".*value="expense".*value="sourcing".*value="loan"/);assert.match(page,/data-vsource="loan"/);assert.match(page,/ExpenseLoans\.bindParties/);
+});
+
+test('same-day loan receipt precedes its repayment in the displayed running balance',()=>{
+  const l={id:'REC-1',source:'Lender',nature:'SANKI',date:day,borrowed:500,repaid:200,outstanding:300,status:'partially_repaid',payments:[{id:'LOANPAY-1',date:day,amount:200}]};
+  const html=ui.render({totals:l,loans:[l],canVoid:false});assert.ok(html.indexOf('>REC-1<')<html.indexOf('>LOANPAY-1<'));assert.doesNotMatch(html,/₹-200/);
+});
 test('personal borrowed principal cannot be allocated as rental income',()=>{
   const s={rentalSourceImport:require('../modules/rental-source.json').id,rentals:{tenancies:require('./fixtures/legacy-rentals')()},receipts:[{id:'BORROW',nature:'PERSONAL',receiptType:loans.TYPE,amount:500000,date:'2026-10-01',account:'ICICI Bank 0992'},{id:'RENT',nature:'PERSONAL',receiptType:'other_income',amount:10000,date:'2026-10-01',account:'IndusInd Bank 7883'}]};
   const view=require('../modules/rental-register').snapshot(s,'2026-10-12');assert.equal(view.receipts.some(r=>r.id==='BORROW'),false);assert.equal(view.receipts.some(r=>r.id==='RENT'),true);

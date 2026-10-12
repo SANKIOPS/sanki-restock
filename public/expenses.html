@@ -468,7 +468,7 @@
   <script src="/sidebar.js"></script>
   <script src="/expense-refunds.js?v=ff5f31cc038e"></script>
   <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
-  <script src="/expense-loans.js?v=180866306d3d"></script>
+  <script src="/expense-loans.js?v=lender-groups-20261012"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
@@ -1006,22 +1006,36 @@
     });
     function renderPendingPayments(){
       el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-pdays="7">Last 7 days</button><button class="btn mini ghost" data-pdays="30">Last 30 days</button><button class="btn mini ghost" data-pdays="month">This month</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="pf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="pf_from"></div><div class="fld"><label>To</label><input type="date" id="pf_to" value="'+today()+'"></div><div class="fld"><label>Payables</label><select id="pf_bucket"><option value="">All</option><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option></select></div><div class="fld"><label>Vendor</label><input id="pf_vendor" placeholder="Search vendor"></div><button class="btn ghost mini" id="pf_go">Filter</button></div><div class="filters"><div class="fld"><label>Outstanding total</label><select id="pf_total_bucket"><option value="approved">Approved / pending payment</option><option value="partial">Partially paid</option><option value="credit">Credit</option><option value="">All</option></select></div></div><div class="stats" id="pstats"></div><div id="ptable" class="muted">Loading…</div></div>';
+      el('pf_bucket').closest('.fld').insertAdjacentHTML('beforebegin','<div class="fld"><label>Party type</label><select id="pf_source"><option value="">All types</option><option value="expense">Vendors</option><option value="sourcing">Sourcing vendors</option><option value="loan">Lenders / Loan parties</option></select></div>');
+      el('pf_source').onchange=function(){
+        var loan=this.value==='loan';el('pf_from').disabled=loan;
+        if(loan){el('pf_bucket').value='';el('pf_total_bucket').value='';}
+        ['pf_bucket','pf_total_bucket'].forEach(function(id){var input=el(id);input.querySelector('[value="approved"]').textContent=loan?'No principal repaid yet':'Approved / pending payment';input.querySelector('[value="partial"]').textContent=loan?'Partially repaid':'Partially paid';input.querySelector('[value="credit"]').disabled=loan;});
+        loadPendingPayments();
+      };
       Array.prototype.forEach.call(el('panel').querySelectorAll('[data-pdays]'),function(b){b.onclick=function(){el('pf_from').value=this.dataset.pdays==='month'?today().slice(0,8)+'01':dateDaysAgo(Number(this.dataset.pdays));loadPendingPayments();};});
       el('pf_from').value=monthStart();el('pf_to').value=today();
       el('pf_bucket').addEventListener('change',loadPendingPayments);
       el('pf_total_bucket').addEventListener('change',loadPendingPayments);
       el('pf_go').addEventListener('click',loadPendingPayments); loadPendingPayments();
     }
+    var pendingLoadGeneration=0;
+    function loanPartyUiOptions(){return {api:api,uploadFiles:uploadFiles,accountsForNature:accountsForNature,nature:function(){return selectedNature;},refreshAccounts:function(){if(tab==='pending')loadPendingPayments();else if(tab==='vendors')loadVendors();else if(tab==='cash'){loadCash();loadAccountLedger();}}};}
     function loadPendingPayments(){
-      var bucket=el('pf_bucket').value;api('/api/expenses/pending-payments?nature='+encodeURIComponent(el('pf_nature').value)+'&vendor='+encodeURIComponent(el('pf_vendor').value)+'&from='+el('pf_from').value+'&to='+el('pf_to').value+'&bucket='+encodeURIComponent(bucket)).then(function(d){
+      var bucket=el('pf_bucket').value,source=el('pf_source').value,host=el('ptable'),token=++pendingLoadGeneration;host.textContent='Loading…';
+      api('/api/expenses/pending-payments?nature='+encodeURIComponent(el('pf_nature').value)+'&vendor='+encodeURIComponent(el('pf_vendor').value)+'&from='+el('pf_from').value+'&to='+el('pf_to').value+'&bucket='+encodeURIComponent(bucket)+'&source='+encodeURIComponent(source)).then(function(d){
+        if(token!==pendingLoadGeneration||host!==el('ptable'))return;
         if(!d.success){el('ptable').textContent=d.error||'Could not load pending payments.';return;}
         expensesById={};d.expenses.concat(d.purchases||[]).forEach(function(e){expensesById[e.id]=e;});
         var all=d.expenses.concat(d.purchases||[]);
         var totalBucket=el('pf_total_bucket').value,shown=all.filter(function(e){return !totalBucket||(totalBucket==='approved'&&!(e.paidAmount>0)&&e.paymentType!=='Credit')||(totalBucket==='partial'&&e.paidAmount>0)||(totalBucket==='credit'&&e.paymentType==='Credit');});
-        el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(shown.reduce(function(n,e){return n+(e.balanceDue||0);},0))+'</div></div><div class="stat"><div class="k">Payments shown</div><div class="v">'+all.length+'</div></div>';
+        var loans=d.loans||[],loanShown=loans.filter(function(l){return !totalBucket||(totalBucket==='approved'&&!l.repaid)||(totalBucket==='partial'&&l.repaid>0);});
+        el('pstats').innerHTML='<div class="stat"><div class="k">Outstanding</div><div class="v">'+fmt(shown.reduce(function(n,e){return n+(e.balanceDue||0);},0)+loanShown.reduce(function(n,l){return n+l.outstanding;},0))+'</div></div><div class="stat"><div class="k">Payments shown</div><div class="v">'+(all.length+loans.length)+'</div></div>'+(source===''||source==='loan'?'<div class="stat"><div class="k">Loan principal outstanding (as of '+esc(d.asOf)+')</div><div class="v">'+fmt(d.loanOutstanding||0)+'</div></div>':'');
         var purchases=(d.purchases||[]).map(procurementPayableCard).join('');
-        el('ptable').innerHTML=all.length?'<div class="claim-list">'+purchases+vendorPayableGroups(d.expenses)+'</div>':'<span class="muted">No vendor payments pending.</span>';
-      });
+        var loanSection=source===''||source==='loan'?'<section><h3>Lenders / Loan parties</h3>'+ExpenseLoans.renderParties(d)+'</section>':'';
+        el('ptable').innerHTML=(all.length?'<div class="claim-list">'+purchases+vendorPayableGroups(d.expenses)+'</div>':source!=='loan'?'<span class="muted">No vendor payments pending.</span>':'')+loanSection;
+        if(loans.length)ExpenseLoans.bindParties(host,d,loanPartyUiOptions());
+      }).catch(function(error){if(token===pendingLoadGeneration&&host===el('ptable'))host.textContent=error.message||'Could not load pending payments.';});
     }
     function populatePaymentSource(nature,refreshIfEmpty){
       if(el('payType').value==='Credit'){
@@ -1432,7 +1446,9 @@
     }
     function renderVendors(){
       el('panel').innerHTML = '<div class="card"><div class="preset-row"><button class="btn mini primary" data-vsource="expense">Expense vendors</button><button class="btn mini ghost" data-vsource="sourcing">Sourcing vendors</button></div><div class="filters"><div class="fld"><label>Entity</label><select id="vf_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="vf_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="vf_to" value="'+today()+'"></div><div class="fld"><label>Vendor / particulars / expense no.</label><input id="vf_search" placeholder="Name, details or 57"></div><div class="fld"><label>Category</label><input id="vf_category" list="vendorCategoryList" placeholder="All categories"><datalist id="vendorCategoryList">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join('')+'</datalist></div><div class="fld"><label>Sort by amount</label><select id="vf_sort"><option value="">Default order</option><option value="amount_desc">Amount: high to low</option><option value="amount_asc">Amount: low to high</option></select></div><button class="btn ghost mini" id="vf_go">Search</button></div><div class="vendor-ledger-legend"><span><b>In</b> = payment or advance given to vendor</span><span><b>Out</b> = expense or bill from vendor</span><span class="pos"><b>Green</b> = advance paid</span><span class="neg"><b>Red</b> = amount owed</span><span class="muted"><b>Gray</b> = clear</span></div><div class="row-actions" id="vendorManageRow"><input id="newVendor" placeholder="add approved vendor name"><button class="btn ghost mini" id="addVendor">Add</button>'+(cfg.isOwner?'<button class="btn danger mini" id="bulkDeleteVendors">Bulk delete empty</button>':'')+'</div><div id="vtable" class="muted" style="margin-top:12px">Loading…</div></div>';
-      el('panel').dataset.vsource='expense';Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(b){b.onclick=function(){el('panel').dataset.vsource=this.dataset.vsource;Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});if(el('vendorManageRow'))el('vendorManageRow').style.display=this.dataset.vsource==='expense'?'':'none';loadVendors();};});
+      el('panel').querySelector('[data-vsource="sourcing"]').insertAdjacentHTML('afterend','<button class="btn mini ghost" data-vsource="loan">Lenders / Loan parties</button>');
+      el('panel').querySelector('[data-vsource="expense"]').textContent='Vendors';
+      el('panel').dataset.vsource='expense';Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(b){b.onclick=function(){el('panel').dataset.vsource=this.dataset.vsource;Array.prototype.forEach.call(el('panel').querySelectorAll('[data-vsource]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});if(el('vendorManageRow'))el('vendorManageRow').style.display=this.dataset.vsource==='expense'?'':'none';el('vf_category').closest('.fld').style.display=this.dataset.vsource==='loan'?'none':'';el('panel').querySelector('.vendor-ledger-legend').style.display=this.dataset.vsource==='loan'?'none':'';loadVendors();};});
       el('vf_go').onclick=loadVendors;el('vf_nature').onchange=loadVendors;el('vf_sort').onchange=loadVendors;
       el('addVendor').addEventListener('click', function(){
         var nm = el('newVendor').value.trim(); if(!nm) return;
@@ -1441,8 +1457,13 @@
       if(el('bulkDeleteVendors'))el('bulkDeleteVendors').addEventListener('click',openBulkVendorDelete);
       loadVendors();
     }
+    var vendorLoadGeneration=0;
     function loadVendors(){
+      var host=el('vtable'),token=++vendorLoadGeneration,source=el('panel').dataset.vsource||'expense';host.textContent='Loading…';
       api('/api/expenses/vendors?nature='+encodeURIComponent(el('vf_nature').value)+'&from='+el('vf_from').value+'&to='+el('vf_to').value+'&search='+encodeURIComponent(el('vf_search').value)+'&category='+encodeURIComponent(el('vf_category').value)+'&source='+encodeURIComponent(el('panel').dataset.vsource||'expense')).then(function(d){
+        if(token!==vendorLoadGeneration||host!==el('vtable'))return;
+        if(!d.success){host.textContent=d.error||'Could not load party ledgers.';return;}
+        if(source==='loan'){host.innerHTML='<div class="stats"><div class="stat"><div class="k">Principal received</div><div class="v">'+fmt(d.totals.borrowed)+'</div></div><div class="stat"><div class="k">Principal repaid</div><div class="v">'+fmt(d.totals.repaid)+'</div></div><div class="stat"><div class="k">Outstanding loan liability</div><div class="v neg">'+fmt(d.totals.outstanding)+'</div></div></div>'+ExpenseLoans.renderParties(d,el('vf_sort').value);ExpenseLoans.bindParties(host,d,loanPartyUiOptions());return;}
         if(!d.vendors.length){ el('vtable').innerHTML='<span class="muted">No vendors yet.</span>'; return; }
         var vendors=d.vendors.slice(),sort=el('vf_sort').value;if(sort==='amount_asc')vendors.sort(function(a,b){return Number(a.outstanding||0)-Number(b.outstanding||0)||String(a.name).localeCompare(String(b.name));});if(sort==='amount_desc')vendors.sort(function(a,b){return Number(b.outstanding||0)-Number(a.outstanding||0)||String(a.name).localeCompare(String(b.name));});
         var rows = vendors.map(function(v,vi){
@@ -1452,7 +1473,7 @@
           return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date"><b>#'+(vi+1)+'</b> · '+entities.map(esc).join(' + ')+(v.tags||[]).map(function(tag){return ' · '+esc(tag);}).join('')+'</div><span class="tag">'+Number(v.ledgerTransactionCount||0)+' transactions</span></div><div class="claim-main"><div class="claim-desc">'+esc(v.name)+'</div><div class="claim-amount">'+vendorBalanceHtml(v.ledgerClosingBalance)+'</div></div></summary><div class="claim-detail">'+breakdown+manage+vendorLedgerTable(v)+'</div></details>';
         }).join('');
         el('vtable').innerHTML = '<div class="claim-list">'+rows+'</div><div class="stats" style="margin-top:12px"><div class="stat"><div class="k">Total due</div><div class="v neg">'+fmt(d.totalDue||0)+'</div></div><div class="stat"><div class="k">Vendor advances</div><div class="v pos">'+fmt(d.totalAdvance||0)+'</div></div></div>';
-      });
+      }).catch(function(error){if(token===vendorLoadGeneration&&host===el('vtable'))host.textContent=error.message||'Could not load party ledgers.';});
     }
     function openVendorManager(mode,nature,name){
       if(!cfg.isOwner){setMsg('Owner only.',false);return;}

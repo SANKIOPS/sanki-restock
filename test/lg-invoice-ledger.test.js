@@ -55,6 +55,7 @@ test('pending payments contains only finalized LG bill rows, filtered by LG date
       { id: 'CVI-1', source: 'procurement_lg', vendor: 'Logistics Mediator', billNo: 'LG-501', date: '2026-09-18', balanceDue: 2200, paidAmount: 0 },
       { id: 'PO-9', source: 'procurement', vendor: 'Logistics Mediator', date: '2026-09-01', balanceDue: 100, paidAmount: 0 }
     ], procurementAccounting: s => s.procurementAccounting, round0: Math.round, num: x => Number(x) || 0,
+    expenseLoans: require('../modules/expense-loans'), visibleLoanCatalog: () => [], roundMoney: x => Math.round(x * 100) / 100,
     Date, Object, String, Math };
   vm.runInNewContext(source.slice(start, end), context);
   let response;
