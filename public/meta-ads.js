@@ -21,11 +21,12 @@
   $('setupSave').addEventListener('click',()=>uploadSetup(false));
   $('setupFile').addEventListener('change',()=>{setupRevision=null;setupFile=null;$('setupSave').hidden=true;$('setupSummary').textContent='';});
   const paths = { campaigns: 'campaigns', adSets: 'adsets', ads: 'ads', results: 'results' };
-  const labels = { campaigns: 'Campaigns', adSets: 'Ad sets', ads: 'Creatives', results: 'Results', changes: 'Changes' };
-  const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'creative', results: 'result' };
+  const labels = { campaigns: 'Campaigns', adSets: 'Ad sets', ads: 'Ads', results: 'Results', changes: 'Changes' };
+  const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'ad', results: 'result' };
   const statusLabels = { draft: 'Draft', reported_running: 'Reported running', delivery_unconfirmed: 'Reported · verify delivery', active: 'Verified active', paused: 'Paused', completed: 'Completed', archived: 'Archived', unknown: 'Unconfirmed', pending: 'Pending' };
   const statuses = Object.entries(statusLabels);
-  let state = null, view = 'adSets', busy = false, editing = null, sort = null;
+  let state = null, view = 'campaigns', busy = false, editing = null, sort = null;
+  const selection={campaigns:new Set(),adSets:new Set(),ads:new Set(),results:new Set(),changes:new Set()};
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   const missing = value => value === null || value === undefined || value === '';
   const pending = () => '<span class="pending">Pending</span>';
@@ -41,7 +42,7 @@
   const adSetFor = (type, row) => type === 'adSets' ? row : type === 'ads' || type === 'results' ? find('adSets', row.adSetId) : null;
   const campaignFor = (type, row) => type === 'campaigns' ? row : find('campaigns', (adSetFor(type, row) || {}).campaignId);
   const shortId = value => value.length > 18 ? value.slice(0, 18) + '…' : value;
-  const nameCell = (row, name, subtitle) => '<span class="record-id" title="' + esc(row.id) + '">' + esc(shortId(row.id)) + '</span><button class="row-title" data-edit="' + esc(row.id) + '">' + esc(name || row.name || row.id) + '</button>' + note(subtitle);
+  const nameCell = (row, name, subtitle) => '<button class="row-title" '+(['campaigns','adSets'].includes(view)?'data-drill':'data-edit')+'="' + esc(row.id) + '">' + esc(name || row.name || row.id) + '</button>' + note(subtitle);
   const lines = values => values.length ? '<div class="list-lines">' + values.map(esc).join('<br>') + '</div>' : pending();
   const locationText = row => (row.locations || []).map(x => x.name + (missing(x.radiusKm) ? ' · radius pending' : ' +' + x.radiusKm + ' km'));
   const genderText = value => ({women:'Women', men:'Men', all:'All genders'}[value] || value);
@@ -49,13 +50,20 @@
   const setBudget = rows => rows.reduce((sum, row) => sum + (row.budgetDaily || 0), 0);
   const captions = {
     campaigns:'One row per campaign. Configured budget is the sum of its current ad-set budgets.',
-    adSets:'One row per ad set. Select its name to view or update the full setup.',
+    adSets:'Select an ad-set name to view its ads. Use Edit record for settings.',
     ads:'One row per ad. Keep its audience and reporting linked to the correct ad set.',
     results:'One row per ad set or creative, for a stated date range. Enter 0 only when confirmed.',
     changes:'Saved field changes, with the person, time and reason. History cannot be edited.'
   };
   const col = (key, label, render, number = false, value) => ({key,label,render,number,value:value || (row => row[key])});
   function columns() {
+    if($('columnMode').value==='overview' && ['campaigns','adSets','ads'].includes(view)) {
+      const delivery=col('status','Delivery',r=>'<span class="delivery-dot '+esc(r.status)+'"></span>'+badge(r));
+      const action=col('action','Action',r=>'<button class="table-edit" data-edit="'+esc(r.id)+'">Edit record</button>');
+      if(view==='campaigns')return [col('name','Campaign',r=>nameCell(r)),delivery,action,col('objective','Objective',r=>display(r.objective)),col('budgetDaily','Budget',r=>money(setBudget(campaignSets(r)))+note('Daily · ad-set budgets'),true,r=>setBudget(campaignSets(r))),col('adSets','Ad sets',r=>integer(campaignSets(r).length),true,r=>campaignSets(r).length)];
+      if(view==='adSets')return [col('name','Ad set',r=>nameCell(r)),delivery,action,col('performanceGoal','Performance goal',r=>display(r.performanceGoal)),col('budgetDaily','Budget',r=>money(r.budgetDaily)+note('Daily'),true),col('destination','Destination',r=>display(r.destination)),col('locations','Audience locations',r=>r.locations.length?display(locationText(r)[0])+note(r.locations.length>1?'+'+(r.locations.length-1)+' more locations · Full setup':''):pending()),col('ageMin','Age / gender',r=>display(missing(r.ageMin)||missing(r.ageMax)?null:r.ageMin+'–'+r.ageMax)+note(genderText(r.gender)))];
+      return [col('name','Ad',r=>nameCell(r)),delivery,action,col('adSetId','Ad set',r=>display((adSetFor(view,r)||{}).name)),col('format','Format',r=>display(r.format)),col('primaryText','Ad text',r=>display(r.primaryText)),col('cta','Call to action',r=>display(r.cta)),col('media','Creative',r=>r.mediaUrls.length?r.mediaUrls.map((url,i)=>'<a class="creative-link" href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Preview '+(i+1)+'</a>').join(' '):pending())];
+    }
     if (view === 'campaigns') return [
       col('name','Campaign', r => nameCell(r)),
       col('objective','Objective',r => display(r.objective)),
@@ -141,6 +149,8 @@
       const type = view === 'changes' ? historyType(row) : view;
       const record = view === 'changes' ? historyRecord(row) : row;
       const set = adSetFor(type,record), cmp = campaignFor(type,record);
+      if(view!=='campaigns' && selection.campaigns.size && (!cmp||!selection.campaigns.has(cmp.id)))return false;
+      if(['ads','results'].includes(view) && selection.adSets.size && (!set||!selection.adSets.has(set.id)))return false;
       if (campaign && (!cmp || cmp.id !== campaign)) return false;
       if (collection && !(type === 'campaigns' ? campaignSets(record).some(x=>x.collection===collection) : set && set.collection===collection)) return false;
       if (destination && !(type === 'campaigns' ? campaignSets(record).some(x=>x.destination===destination) : set && set.destination===destination)) return false;
@@ -167,6 +177,20 @@
   function render() {
     if (!state) return;
     const s=state.summary;
+    for(const type of Object.keys(selection))for(const id of selection[type])if(!state[type].some(x=>x.id===id))selection[type].delete(id);
+    $('pageTitle').textContent=labels[view];
+    const nc=selection.campaigns.size,ns=selection.adSets.size;
+    $('campaignTabLabel').textContent='▣ Campaigns'+(nc?' · '+nc+' selected':'');
+    $('adSetTabLabel').textContent='▦ Ad sets'+(nc?' for '+nc+' campaign'+(nc>1?'s':''):'');
+    $('adTabLabel').textContent='▤ Ads'+(ns?' for '+ns+' ad set'+(ns>1?'s':''):nc?' for '+nc+' campaign'+(nc>1?'s':''):'');
+    $('scopeSummary').textContent=nc?[...selection.campaigns].map(id=>find('campaigns',id)?.name).join(', '):'All campaigns';
+    $('editSelected').disabled=busy||view==='changes'||selection[view].size!==1;
+    $('viewChildren').hidden=!['campaigns','adSets'].includes(view);
+    $('viewChildren').disabled=busy||!selection[view].size;
+    $('viewChildren').textContent=view==='campaigns'?'View ad sets':'View ads';
+    $('columnMode').disabled=!['campaigns','adSets','ads'].includes(view);
+    $('allRecords').classList.toggle('active',!$('statusFilter').value);
+    $('runningRecords').classList.toggle('active',$('statusFilter').value==='reported_running');
     $('stats').innerHTML=[
       ['Configured / day',money(s.configuredDailyBudget),s.pendingBudgetCount ? s.pendingBudgetCount+' budget(s) pending' : 'All current ad-set budgets'],
       ['Campaigns',integer(s.campaignCount),'Marketing campaign records'],
@@ -175,7 +199,8 @@
     ].map(x=>'<article class="stat"><span class="stat-label">'+x[0]+'</span><strong class="stat-value">'+x[1]+'</strong><span class="stat-detail">'+esc(x[2])+'</span></article>').join('');
     document.querySelectorAll('[data-tab]').forEach(tab=>{
       tab.setAttribute('aria-selected',String(tab.dataset.tab===view));
-      tab.querySelector('span').textContent=state[tab.dataset.tab].length;
+      const type=tab.dataset.tab;
+      tab.querySelector('span').textContent=state[type].filter(row=>{const cmp=campaignFor(type,row),set=adSetFor(type,row);return (type==='campaigns'||type==='changes'||!nc||cmp&&selection.campaigns.has(cmp.id))&&(type!=='ads'||!ns||set&&selection.adSets.has(set.id));}).length;
     });
     $('recordView').setAttribute('aria-labelledby','tab-'+view);
     $('viewTitle').textContent=labels[view];$('viewHelp').textContent=captions[view];
@@ -183,8 +208,12 @@
     $('add').hidden=view==='changes';$('add').textContent='+ '+(view==='results'?'Log result':'Add '+(singular[view]||'record'));
     const cols=columns(), rows=filteredRows();
     $('rowCount').textContent=rows.length+' row'+(rows.length===1?'':'s');
-    $('records').querySelector('thead').innerHTML='<tr>'+cols.map(c=>'<th scope="col" class="'+(c.number?'number':'')+'" data-sort="'+esc(c.key)+'" tabindex="0" aria-sort="'+(sort&&sort.key===c.key?(sort.direction===1?'ascending':'descending'):'none')+'">'+esc(c.label)+(sort&&sort.key===c.key?(sort.direction===1?' ↑':' ↓'):' ↕')+'</th>').join('')+'</tr>';
-    $('records').querySelector('tbody').innerHTML=rows.map(r=>'<tr>'+cols.map(c=>'<td class="'+(c.number?'number':'')+'">'+c.render(r)+'</td>').join('')+'</tr>').join('');
+    const selectable=view!=='changes';
+    $('records').classList.toggle('selectable',selectable);
+    const head=selectable?'<th class="selection-cell"><input type="checkbox" id="selectAllRows" aria-label="Select all visible rows" '+(rows.length&&rows.every(r=>selection[view].has(r.id))?'checked':'')+'></th><th class="record-state">On / off</th>':'';
+    $('records').querySelector('thead').innerHTML='<tr>'+head+cols.map(c=>'<th scope="col" class="'+(c.number?'number':'')+'" data-sort="'+esc(c.key)+'" tabindex="0" aria-sort="'+(sort&&sort.key===c.key?(sort.direction===1?'ascending':'descending'):'none')+'">'+esc(c.label)+(sort&&sort.key===c.key?(sort.direction===1?' ↑':' ↓'):' ↕')+'</th>').join('')+'</tr>';
+    $('records').querySelector('tbody').innerHTML=rows.map(r=>'<tr class="'+(selection[view].has(r.id)?'selected-row':'')+'">'+(selectable?'<td class="selection-cell"><input type="checkbox" data-select="'+esc(r.id)+'" aria-label="Select '+esc(r.name||r.id)+'" '+(selection[view].has(r.id)?'checked':'')+'></td><td class="record-state"><span class="state-switch '+(['active','reported_running'].includes(r.status)&&!r.archived?'on':'')+'" title="Recorded status only; update it with Edit record" role="img" aria-label="Recorded status: '+esc(statusLabels[r.status]||'Unconfirmed')+'"></span></td>':'')+cols.map(c=>'<td class="'+(c.number?'number':'')+'">'+c.render(r)+'</td>').join('')+'</tr>').join('');
+    $('tableFooter').textContent=rows.length+' '+labels[view].toLowerCase()+' · '+selection[view].size+' selected';
     $('empty').hidden=rows.length>0;
     $('empty').innerHTML='<strong>'+(view==='results'&&!state.results.length?'No results logged yet':view==='changes'&&!state.changes.length?'No changes recorded yet':'No matching records')+'</strong>'+(view==='results'?'Log a dated report to compare spend, visits, enquiries and orders.':view==='changes'?'Your initial setup is saved. Future edits will appear here.':'Adjust the filters or add a record.');
     $('export').disabled=rows.length===0||busy;
@@ -355,9 +384,18 @@
     view=tab.dataset.tab;sort=null;render();
   }));
   $('records').addEventListener('click',event=>{
+    const drill=event.target.closest('[data-drill]');if(drill){selection[view].clear();selection[view].add(drill.dataset.drill);if(view==='campaigns')selection.adSets.clear();view=view==='campaigns'?'adSets':'ads';sort=null;render();return;}
     const edit=event.target.closest('[data-edit]');if(edit){openEditor(edit.dataset.edit);return;}
     const heading=event.target.closest('[data-sort]');if(heading){sort={key:heading.dataset.sort,direction:sort&&sort.key===heading.dataset.sort?-sort.direction:1};render();}
   });
+  $('records').addEventListener('change',event=>{if(event.target.id==='selectAllRows'){for(const r of filteredRows())event.target.checked?selection[view].add(r.id):selection[view].delete(r.id);}else if(event.target.dataset.select){event.target.checked?selection[view].add(event.target.dataset.select):selection[view].delete(event.target.dataset.select);}else return;if(view==='campaigns')selection.adSets.clear();render();});
+  $('clearScope').addEventListener('click',()=>{Object.values(selection).forEach(s=>s.clear());$('campaignFilter').value='';render();});
+  $('editSelected').addEventListener('click',()=>{if(selection[view].size===1)openEditor([...selection[view]][0]);});
+  $('viewChildren').addEventListener('click',()=>{if(!selection[view].size)return;view=view==='campaigns'?'adSets':'ads';sort=null;render();});
+  $('columnMode').addEventListener('change',()=>{sort=null;render();});
+  $('openUpload').addEventListener('click',()=>{$('uploadPanel').hidden=!$('uploadPanel').hidden;});
+  $('allRecords').addEventListener('click',()=>{$('statusFilter').value='';render();});
+  $('runningRecords').addEventListener('click',()=>{$('statusFilter').value='reported_running';render();});
   $('records').addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&event.target.matches('[data-sort]')){event.preventDefault();event.target.click();}});
   ['campaignFilter','collectionFilter','statusFilter','destinationFilter','periodStartFilter','periodEndFilter'].forEach(id=>$(id).addEventListener('change',render));
   $('search').addEventListener('input',render);
