@@ -1,0 +1,32 @@
+'use strict';
+window.MetaLinkedWorkspace=(()=>{
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const filters={destination:'',collection:'',creative:''};
+  const options=(values,selected)=>'<option value="">All</option>'+values.map(v=>'<option '+(v===selected?'selected':'')+' value="'+esc(v)+'">'+esc(v)+'</option>').join('');
+  function render(root,state,callbacks){
+    const rows=state.ads.map(ad=>({ad,set:state.adSets.find(s=>s.id===ad.adSetId)})).map(r=>({...r,campaign:state.campaigns.find(c=>c.id===r.set?.campaignId)})).filter(r=>r.set&&r.campaign&&!r.ad.archived&&!r.set.archived&&!r.campaign.archived);
+    const types=[...new Set(['Aesthetic','Vocal','UGC','Other',...state.ads.flatMap(a=>a.creativeTypes||[])])];
+    root.innerHTML='<div class="insight-heading"><h2>Campaigns → Ad sets → Ads</h2><p class="muted">Use Tag ad beside a creative to assign its collection and type once.</p></div><div class="linked-filters"><label>Destination<select id="lwDestination">'+options(['Instagram profile','WhatsApp','Google Maps','Website','Messenger','Other'],filters.destination)+'</select></label><label>Collection<select id="lwCollection">'+options(['Femme','Homme','Studio','Both','Other','Unclassified'],filters.collection)+'</select></label><label>Creative type<select id="lwCreative">'+options(types.concat('Unclassified'),filters.creative)+'</select></label><button id="lwClear">Clear filters</button></div><div id="lwRows"></div><details id="lwPerformance" '+(state.insights?.date?'open':'')+'><summary>Performance and next actions</summary><div id="linkedPerformance"></div></details><dialog id="lwTagDialog"><form id="lwTagForm"><header class="setup-detail-header"><h2 id="lwTagTitle">Tag ad</h2><button type="button" id="lwTagClose" aria-label="Close tag editor">×</button></header><label>Collection<select id="lwTagCollection"><option value="">Unclassified</option>'+['Femme','Homme','Studio','Both','Other'].map(v=>'<option>'+v+'</option>').join('')+'</select></label><label>Creative types<textarea id="lwTagTypes" placeholder="Aesthetic, Vocal, UGC or Other. One type per line; custom types are allowed."></textarea></label><p class="muted">These tags classify your creative in this app. They do not change Meta ads.</p><p id="lwTagError" role="alert"></p><footer><button type="button" id="lwTagCancel">Cancel</button><button type="submit" id="lwTagSave" class="primary">Save tags</button></footer></form></dialog>';
+    let editing=null;
+    function update(){
+      const visible=rows.filter(r=>(!filters.destination||r.set.destination===filters.destination)&&(!filters.collection||(r.ad.collection||r.set.collection||'Unclassified')===filters.collection)&&(!filters.creative||(filters.creative==='Unclassified'?!(r.ad.creativeTypes||[]).length:(r.ad.creativeTypes||[]).includes(filters.creative))));
+      root.querySelector('#lwRows').innerHTML='<p class="report-note">'+visible.length+' matching ads</p><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>Ad set</th><th>Ad / creative</th><th>Destination</th><th>Collection</th><th>Creative type</th><th>Classification</th></tr></thead><tbody>'+visible.map(r=>'<tr><td><button class="row-title" data-open-campaign="'+esc(r.campaign.id)+'">'+esc(r.campaign.name)+'</button></td><td><button class="row-title" data-open-set="'+esc(r.set.id)+'">'+esc(r.set.name)+'</button></td><td><button class="row-title" data-open-ad="'+esc(r.ad.id)+'">'+esc(r.ad.name)+'</button><small>'+esc(r.ad.format||'Type not supplied')+'</small></td><td>'+esc(r.set.destination||'Unconfirmed')+'<small>'+esc(r.ad.whatsappNumber||r.set.whatsappNumber||'')+'</small></td><td>'+esc(r.ad.collection||r.set.collection||'Unclassified')+'</td><td>'+esc((r.ad.creativeTypes||[]).join(', ')||'Unclassified')+'</td><td><button class="table-edit" data-tag-ad="'+esc(r.ad.id)+'">Tag ad</button></td></tr>').join('')+'</tbody></table></div>'+(!visible.length?'<p class="report-note">No matching ads. Clear filters, upload setup or tag your creatives.</p>':'');
+      const ids=new Set(visible.map(r=>r.ad.id));
+      window.MetaInsightView.render(root.querySelector('#linkedPerformance'),{...state,insights:{...state.insights,scoped:true,reportCreatives:state.insights?.creatives||[],creatives:(state.insights?.creatives||[]).filter(r=>ids.has(r.adId))}},callbacks);
+      for(const key of ['collection','creative'])root.querySelector('#linkedPerformance [data-filter="'+key+'"]').closest('label').hidden=true;
+    }
+    for(const [id,key] of [['lwDestination','destination'],['lwCollection','collection'],['lwCreative','creative']])root.querySelector('#'+id).addEventListener('change',e=>{filters[key]=e.target.value;update();});
+    root.querySelector('#lwClear').addEventListener('click',()=>{Object.keys(filters).forEach(k=>filters[k]='');render(root,state,callbacks);});
+    root.querySelector('#lwRows').addEventListener('click',e=>{
+      const b=e.target.closest('button');if(!b)return;
+      if(b.dataset.openCampaign)callbacks.edit('campaigns',b.dataset.openCampaign);
+      if(b.dataset.openSet)callbacks.details(b.dataset.openSet);
+      if(b.dataset.openAd)callbacks.edit('ads',b.dataset.openAd);
+      if(b.dataset.tagAd){editing=state.ads.find(a=>a.id===b.dataset.tagAd);root.querySelector('#lwTagTitle').textContent='Tag ad: '+editing.name;root.querySelector('#lwTagCollection').value=editing.collection||'';root.querySelector('#lwTagTypes').value=(editing.creativeTypes||[]).join('\n');root.querySelector('#lwTagError').textContent='';root.querySelector('#lwTagDialog').showModal();}
+    });
+    for(const id of ['lwTagClose','lwTagCancel'])root.querySelector('#'+id).addEventListener('click',()=>{if(!root.querySelector('#lwTagSave').disabled)root.querySelector('#lwTagDialog').close();});
+    root.querySelector('#lwTagForm').addEventListener('submit',async e=>{e.preventDefault();const save=root.querySelector('#lwTagSave');if(save.disabled||!editing)return;const fields={collection:root.querySelector('#lwTagCollection').value,creativeTypes:root.querySelector('#lwTagTypes').value.split('\n').map(v=>v.trim()).filter(Boolean)};save.disabled=true;try{await callbacks.saveTags(editing.id,fields);}catch(error){root.querySelector('#lwTagError').textContent=error.message;save.disabled=false;}});
+    update();
+  }
+  return {render};
+})();
