@@ -38,6 +38,13 @@ const SECRET_PATH = path.join(DATA_DIR, 'session_secret.key');
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 const COOKIE = 'sanki_session';
 const OWNER_USER = process.env.OWNER_USER || 'gaganlambasanki';
+const PRASHANT_USER = 'prashant';
+const PRASHANT_PAGES = [
+  '/inventory.html', '/inventory-care.html',
+  '/procurement.html', '/fresh-procurement.html', '/size-tracker.html',
+  '/pnl.html', '/rentals.html', '/expenses.html', '/salary.html', '/incentives.html',
+  '/model-calendar.html'
+];
 // Emergency owner recovery token requested on 6 September 2026. Only the
 // SHA-256 digest is shipped; the bearer token itself is opened directly for
 // the owner and never stored in the repository. The persisted redemption id
@@ -214,8 +221,13 @@ function roleCanAccessPath(role, p) {
   return a.includes(p);
 }
 // Union access across all of a user's roles.
-function userCanAccessPath(user, p) { return rolesOf(user).some(r => roleCanAccessPath(r, p)); }
+function isPrashant(user) { return String(user && user.username || '').trim().toLowerCase() === PRASHANT_USER; }
+function userCanAccessPath(user, p) {
+  if (isPrashant(user)) return PRASHANT_PAGES.includes(p);
+  return rolesOf(user).some(r => roleCanAccessPath(r, p));
+}
 function allowedPagesForUser(user) {
+  if (isPrashant(user)) return PRASHANT_PAGES.slice();
   const roles = rolesOf(user);
   if (roles.some(r => getRolePages()[r] === '*')) return '*';
   const set = new Set();
@@ -535,5 +547,6 @@ router.post('/api/admin/users/delete', requireAdmin, (req, res) => {
 module.exports = {
   router, seedAdminIfEmpty, verifySession, landingFor, ROLES,
   roleCanAccessPath, userCanAccessPath,
-  allowedPagesForUser, rolesOf, registerModules, userSummary
+  allowedPagesForUser, rolesOf, registerModules, userSummary,
+  PRASHANT_PAGES, isPrashant
 };
