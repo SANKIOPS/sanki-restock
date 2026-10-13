@@ -19,6 +19,22 @@ restored; their links and history are retained.
 
 ## Results and budgets
 
+“Upload daily performance” accepts ad-level CSV (recommended) or XLSX with exact
+campaign/ad-set/ad IDs, ISO reporting dates, INR spend, impressions and reach.
+Upload configuration first. Each row must cover one day with no breakdowns.
+Rounded numeric IDs are rejected. Preview does not save; saving is atomic and
+revision checked. Re-uploading updates the same ad/day and retains separately
+entered enquiries/orders/revenue. Meta purchase metrics are stored separately
+from confirmed business outcomes. Missing cells remain null, not zero.
+
+Insights uses the latest uploaded day, groups costs by outcome, optimisation goal
+and attribution, shows video observations and flags missing sales, zero delivery,
+WhatsApp click optimisation and cost increases greater than 25% versus the prior
+comparable uploaded day. The threshold is a review flag, not a stop/scale rule.
+Ranks describe observed results, not causal creative quality. This first version
+uses explicit rules; it does not call an AI service, change live budgets, invent
+missing outcomes, aggregate reach across days, or combine overlapping reports.
+
 The configured daily total includes all non-archived ad-set budgets, including
 paused and unverified records. It is not actual spend. Unknown numbers remain
 null; enter zero only when the report confirms zero.

@@ -11,7 +11,7 @@
 <main>
   <header class="page-header">
     <div><p class="eyebrow">SANKI · MARKETING</p><h1 id="pageTitle">Campaigns</h1><p class="muted">Meta Marketing · SANKI account records</p></div>
-    <div class="actions"><button id="refresh">↻ Refresh records</button><button id="openUpload">Upload setup</button></div>
+    <div class="actions"><button id="refresh">↻ Refresh records</button><button id="openUpload">Upload campaign setup</button><button id="openPerformance" class="primary">Upload daily performance</button></div>
   </header>
   <p class="record-note">Tracking records. Changes here do not publish ads or change settings in Meta.</p>
   <section id="uploadPanel" class="workspace upload-panel" aria-label="Import campaign setup" hidden>
@@ -22,6 +22,13 @@
     <button id="setupSave" type="button" class="primary" hidden>Save setup</button>
   </section>
   <section class="stats" id="stats" aria-label="Configured campaign summary"></section>
+  <section id="performancePanel" class="workspace upload-panel" aria-label="Import daily performance" hidden>
+    <h2>Upload daily performance</h2><p class="muted">One CSV for all campaigns. Use your SANKI Daily preset with Yesterday, or daily rows. Import campaign setup first.</p>
+    <input id="performanceFile" type="file" accept=".csv,.xlsx" aria-label="Daily Meta performance file">
+    <button id="performancePreview" type="button">Preview performance</button>
+    <div id="performanceSummary" role="status" style="white-space:pre-wrap"></div>
+    <button id="performanceSave" type="button" class="primary" hidden>Save performance</button>
+  </section>
   <div id="message" role="status" aria-live="polite">Loading marketing records…</div>
   <section class="workspace" aria-label="Marketing records">
     <div class="manager-views"><button id="allRecords" class="view-chip active">All records</button><button id="runningRecords" class="view-chip">Reported running</button><button id="clearScope">Clear selection</button><span id="scopeSummary" class="muted">All campaigns</span></div>
@@ -32,6 +39,7 @@
       <button role="tab" id="tab-ads" data-tab="ads" aria-controls="recordView" aria-selected="false"><b id="adTabLabel">▤ Ads</b> <span></span></button>
       <button role="tab" id="tab-results" data-tab="results" aria-controls="recordView" aria-selected="false">Results <span></span></button>
       <button role="tab" id="tab-changes" data-tab="changes" aria-controls="recordView" aria-selected="false">Changes <span></span></button>
+      <button role="tab" id="tab-insights" data-tab="insights" aria-controls="recordView" aria-selected="false">Insights <span></span></button>
     </div>
     <div class="manager-toolbar"><div class="actions"><button class="primary" id="add" disabled>+ Add campaign</button><button id="editSelected" disabled>Edit record</button><button id="viewChildren" disabled>View ad sets</button></div><div class="actions"><label class="columns-control">Columns<select id="columnMode"><option value="overview">Overview</option><option value="setup">Full setup</option></select></label><button id="export" disabled>↓ Export CSV</button></div></div>
     <div class="filters">
@@ -43,6 +51,7 @@
     <div id="resultFilters" class="period-filter" hidden><label>Period start on / after<input type="date" id="periodStartFilter"></label><label>Period end on / before<input type="date" id="periodEndFilter"></label><p>Each row is one reporting period. Overlapping rows are not added together.</p></div>
     <div class="view-heading"><div><h2 id="viewTitle">Ad sets</h2><p id="viewHelp" class="muted"></p></div><span id="rowCount" class="muted"></span></div>
     <section id="recordView" role="tabpanel" aria-labelledby="tab-adSets">
+      <div id="insightsPanel" hidden></div>
       <div class="table-wrap" tabindex="0" aria-label="Scrollable marketing table"><table id="records"><thead></thead><tbody></tbody></table></div>
       <div id="empty" class="empty" hidden></div>
       <div class="table-footer" id="tableFooter"></div>

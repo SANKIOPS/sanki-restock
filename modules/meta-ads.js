@@ -15,8 +15,8 @@ const PROCESS_INSTANCE = crypto.randomUUID();
 const TYPES = { campaigns: 'campaigns', adsets: 'adSets', ads: 'ads', results: 'results' };
 const ENTITY = { campaigns: 'campaign', adSets: 'adSet', ads: 'ad', results: 'result' };
 const STATUSES = new Set(['draft', 'reported_running', 'delivery_unconfirmed', 'active', 'paused', 'completed', 'archived', 'unknown', 'pending']);
-const METRICS = ['spend', 'impressions', 'reach', 'linkClicks', 'profileVisits', 'messagingStarts', 'qualifiedEnquiries', 'orders', 'revenue', 'storeVisits'];
-const MONEY = new Set(['budgetDaily', 'spend', 'revenue']);
+const METRICS = ['spend', 'impressions', 'reach', 'linkClicks', 'profileVisits', 'messagingStarts', 'qualifiedEnquiries', 'orders', 'revenue', 'storeVisits','metaPurchases','metaPurchaseValue','videoPlays3s','thruPlays','reportedResults'];
+const MONEY = new Set(['budgetDaily', 'spend', 'revenue','metaPurchaseValue']);
 const SCHEMAS = {
   campaigns: {
     metaSourceId: ['text',120], name: ['text', 200, true], objective: ['text', 120], businessGoal: ['text', 500],
@@ -40,6 +40,7 @@ const SCHEMAS = {
     status: ['status'], notes: ['text', 5000]
   },
   results: {
+    reportGoal:['text',250],reportDestination:['text',160],resultIndicator:['text',200], attributionSetting:['text',200], reportedDelivery:['text',100],
     adSetId: ['id', true], adId: ['id'], periodStart: ['date', true], periodEnd: ['date', true],
     ...Object.fromEntries(METRICS.map(key => [key, [MONEY.has(key) ? 'number' : 'count']])),
     source: ['text', 200], notes: ['text', 5000]
@@ -297,7 +298,7 @@ function createStore(options = {}) {
   }
   function view() {
     const state = load();
-    return { ...clone(state), summary: configuredSummary(state) };
+    return { ...clone(state), summary: configuredSummary(state), insights:require('./meta-ads-insights').insights(state) };
   }
   function mutate(type, method, recordId, body, actor) {
     if (!plain(body) || Buffer.byteLength(JSON.stringify(body), 'utf8') > 128 * 1024) fail('Record body must be an object below 128 KiB.');
@@ -363,7 +364,32 @@ function createStore(options = {}) {
       return {counts,revision:state.revision};
     });
   }
-  return { file, load, view, mutate, importSetup };
+  function importPerformance(rows,revision,actor,preview=false) {
+    return locked(()=>{
+      const state=loadUnlocked();
+      if(!Number.isSafeInteger(revision)||revision!==state.revision)fail('Records changed. Preview the performance file again.',409);
+      const counts={created:0,updated:0,unchanged:0}, now=clock(), report=[];
+      const match=(type,meta)=>state[type].find(x=>x.id===meta||x.metaSourceId===meta);
+      for(const row of rows){
+        const campaign=match('campaigns',row.campaignMetaId),set=match('adSets',row.setMetaId),ad=match('ads',row.adMetaId);
+        if(!campaign||!set||!ad)fail(`Upload campaign setup first: ${row.adName||row.adMetaId} is not linked to an imported ad.`,400);
+        if(set.campaignId!==campaign.id||ad.adSetId!==set.id)fail('Report IDs do not match the saved campaign hierarchy. Upload the latest setup first.');
+        const index=state.results.findIndex(x=>x.adId===ad.id&&x.periodStart===row.record.periodStart&&x.periodEnd===row.record.periodEnd),previous=index<0?null:state.results[index];
+        if(state.results.some(x=>x.id!==previous?.id&&x.adId===ad.id&&x.periodStart<=row.record.periodEnd&&x.periodEnd>=row.record.periodStart))fail('This daily row overlaps an existing report for the same ad. Resolve the overlapping report first.');
+        const payload={...row.record,reportGoal:previous?.reportGoal||set.performanceGoal,reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'daily-'+row.adMetaId+'-'+row.record.periodStart,adId:ad.id,adSetId:set.id};
+        const record=normalizeRecord('results',payload,previous), changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
+        report.push({ad:ad.name,adSet:set.name,date:record.periodStart,spend:record.spend,action:!changed.length?'unchanged':previous?'updated':'new'});
+        if(!changed.length){counts.unchanged++;continue;}counts[previous?'updated':'created']++;
+        Object.assign(record,{createdAt:previous?.createdAt||now,createdBy:previous?.createdBy||actor,updatedAt:now,updatedBy:actor});
+        if(previous)state.results[index]=record;else state.results.push(record);
+        for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:'result',entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Daily Meta performance upload',revision:state.revision+1});
+      }
+      validateRelationships(state);
+      if(!preview&&(counts.created||counts.updated)){state.revision++;save(state);}
+      return {counts,revision:state.revision,report};
+    });
+  }
+  return { file, load, view, mutate, importSetup, importPerformance };
 }
 
 function createRouter(store = createStore()) {
@@ -387,6 +413,14 @@ function createRouter(store = createStore()) {
     catch (error) { sendError(error, res); }
   });
   const upload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:5*1024*1024,files:1}}).single('file');
+  router.post(`${BASE}/import-performance`,(req,res)=>upload(req,res,error=>{
+    if(error)return res.status(400).json({success:false,error:'Upload one performance CSV or XLSX below 5 MB.'});
+    try{
+      if(!req.file||! /\.(csv|xlsx)$/i.test(req.file.originalname))fail('Choose an ad-level performance CSV.');
+      let rows;try{rows=require('./meta-ads-performance').parsePerformance(req.file.buffer);}catch(e){fail(e.message);}
+      res.json({success:true,...store.importPerformance(rows,Number(req.body.revision),req.user.username,req.body.preview==='true')});
+    }catch(e){sendError(e,res);}
+  }));
   router.post(`${BASE}/import-setup`, (req,res) => upload(req,res,error => {
     if(error)return res.status(400).json({success:false,error:'Upload one CSV or XLSX file below 5 MB.'});
     try {
