@@ -1301,6 +1301,24 @@ test('Owner can reimburse a SAMAST claimant from an authorised SANKI account', (
   assert.equal(claimantSummary.accounts.find(x=>x.name==='Arshpreet 1919').balance,0);
 });
 
+test('Owner can undo one incorrect reimbursement and restore it to pending',()=>{
+  const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Incorrect reimbursement',amount:2119,billPhoto:'/api/expenses/photo/bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/personal.jpg'}}).body.expense;
+  invoke('POST','/api/expenses/:id',{params:{id:made.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
+  invoke('POST','/api/expenses/:id/approve',{params:{id:made.id},role:'owner'});
+  const paid=invoke('POST','/api/expenses/:id/reimburse',{params:{id:made.id},role:'owner',body:{amount:2119,account:'Counter Cash',paymentProof:'/api/expenses/photo/reimbursement.jpg'}});
+  assert.equal(paid.status,200);
+  const denied=invoke('POST','/api/expenses/:id/reimbursements/:paymentId/undo',{params:{id:made.id,paymentId:'REIM-001'},role:'accounting',body:{reason:'Recorded against the wrong payment'}});
+  assert.equal(denied.status,403);
+  const undone=invoke('POST','/api/expenses/:id/reimbursements/:paymentId/undo',{params:{id:made.id,paymentId:'REIM-001'},role:'owner',body:{reason:'Recorded against the wrong payment'}});
+  assert.equal(undone.status,200);
+  assert.equal(undone.body.reversedPayment.amount,2119);
+  assert.equal(undone.body.expense.reimbursementAmount,0);
+  assert.equal(undone.body.expense.reimbursementStatus,'pending');
+  assert.equal(undone.body.expense.reimbursementReversals.at(-1).payment.proof,'/api/expenses/photo/reimbursement.jpg');
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash'}}).body;
+  assert.ok(!ledger.entries.some(x=>x.id===made.id+'/REIM-001'));
+});
+
 test('multiple pending expenses can be reimbursed together and debit the paying account ledger',()=>{
   const ids=[410,590].map((amount,i)=>{
     const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Batch Vendor '+i,amount,billPhoto:'/api/expenses/photo/bill-'+i+'.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/personal-'+i+'.jpg'}}).body.expense;
