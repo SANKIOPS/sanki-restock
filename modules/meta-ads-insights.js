@@ -14,12 +14,14 @@ function insights(state,selectedPeriod) {
     if(r.spend===null||r.spend===undefined)missingSpend=true;else spend+=r.spend;
     const ad=state.ads.find(a=>a.id===r.adId),set=state.adSets.find(s=>s.id===r.adSetId);if(!ad||!set)continue;
     const goal=r.reportGoal||set.performanceGoal,destination=r.reportDestination||set.destination;
-    const metric=destination==='WhatsApp'?'messagingStarts':/PROFILE_VISIT/i.test(goal||'')?'profileVisits':/PURCHASE/i.test(goal||'')?'metaPurchases':null;
-    const label={messagingStarts:'Messaging conversations',profileVisits:'Instagram profile visits',metaPurchases:'Meta-attributed purchases'}[metric]||'Delivery';
-    const count=metric?r[metric]:null,cost=count>0&&r.spend!=null?r.spend/count:null;
+    const metric=destination==='WhatsApp'?'messagingStarts':/PROFILE_VISIT/i.test(goal||'')?'profileVisits':/PURCHASE/i.test((goal||'')+' '+(r.resultIndicator||''))?'metaPurchases':/REACH/i.test(goal||'')?'reach':null;
+    const label={messagingStarts:'WhatsApp enquiries',profileVisits:'Profile visits',metaPurchases:'Website sales',reach:'Store awareness'}[metric]||'Other';
+    const costFactor=metric==='reach'?1000:1;
+    const count=metric?r[metric]:null,cost=count>0&&r.spend!=null?r.spend/count*costFactor:null;
     const prior=reports.filter(x=>x.adId===r.adId&&x.periodEnd<r.periodStart&&duration(x)===duration(r)&&x.attributionSetting===r.attributionSetting&&(x.reportGoal||goal)===goal).sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[0];
-    const previousCost=prior&&metric&&prior[metric]>0&&prior.spend!=null?prior.spend/prior[metric]:null;
-    const item={ad:ad.name,adSet:set.name,adId:ad.id,goal:label,spend:r.spend,count,cost,previousDate:prior?(prior.periodStart===prior.periodEnd?prior.periodStart:prior.periodStart+' – '+prior.periodEnd):null,previousCost,impressions:r.impressions,videoPlays3s:r.videoPlays3s,thruPlays:r.thruPlays,reportedDelivery:r.reportedDelivery};
+    const previousCost=prior&&metric&&prior[metric]>0&&prior.spend!=null?prior.spend/prior[metric]*costFactor:null;
+    const campaign=state.campaigns?.find(c=>c.id===set.campaignId);
+    const item={ad:ad.name,adSet:set.name,adSetId:set.id,campaignId:set.campaignId,campaign:campaign?.name||'',adId:ad.id,goal:label,metric,costFactor,attribution:r.attributionSetting,collection:ad.collection||set.collection||'',creativeTypes:ad.creativeTypes||[],locations:set.locations||[],interests:set.interests||[],behaviors:set.behaviors||[],spend:r.spend,count,cost,previousDate:prior?(prior.periodStart===prior.periodEnd?prior.periodStart:prior.periodStart+' – '+prior.periodEnd):null,previousCost,impressions:r.impressions,reach:r.reach,videoPlays3s:r.videoPlays3s,thruPlays:r.thruPlays,reportedDelivery:r.reportedDelivery,storeVisits:r.storeVisits,orders:r.orders,revenue:r.revenue};
     creatives.push(item);
     if(metric&&cost!==null){const key=label+' · '+(r.attributionSetting||'attribution unconfirmed')+' · '+(goal||'goal unconfirmed');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
     if(r.impressions===0&&r.spend===0)actions.push({priority:3,title:'No delivery to judge',ad:ad.name,reason:'This report has zero spend and zero impressions.',next:'Check delivery in Meta if this ad was intended to run. Keep it unranked until it delivers.'});

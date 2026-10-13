@@ -71,6 +71,7 @@
 </dialog>
 <dialog id="bulkDialog"><form id="bulkForm"><header><h2 id="bulkTitle">Edit selected records</h2><button type="button" id="bulkClose" aria-label="Close bulk editor">×</button></header><p id="bulkHelp"></p><div id="bulkFields"><label id="bulkStatusWrap">Recorded status<select id="bulkStatus"><option value="">Keep current status</option><option value="reported_running">Reported running</option><option value="paused">Paused</option><option value="draft">Draft</option><option value="completed">Completed</option><option value="unknown">Unconfirmed</option></select></label><label id="bulkBudgetWrap">Daily budget per selected ad set (₹)<input id="bulkBudget" type="number" min="0" step="0.01" placeholder="Leave blank to keep current budgets"></label><label>Shared notes<textarea id="bulkNotes" placeholder="Leave blank to keep current notes"></textarea></label></div><label>Reason<textarea id="bulkReason" maxlength="1000"></textarea></label><p id="bulkError" class="form-error" role="alert"></p><footer><button type="button" id="bulkCancel">Cancel</button><button type="submit" id="bulkSubmit" class="primary">Apply changes</button></footer></form></dialog>
 <script src="/sidebar.js"></script>
+<script src="/meta-insight-controls.js"></script>
 <script src="/meta-ads.js"></script>
 </body>
 </html>

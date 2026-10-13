@@ -75,3 +75,13 @@ null/zero behavior:
 
 The UI is plain HTML/CSS/JavaScript and uses the shared module registry and
 authentication.
+
+## Interactive comparisons
+Insights filters the displayed rows by period, goal, collection, custom creative
+types, result count and editable cost targets. More filters selects campaigns,
+ad sets, targeted locations/audiences and ad/ad-set/campaign comparison levels.
+Combined reach is unavailable because ad reach cannot be added into unique reach.
+View report shows the unfiltered saved figures for the selected period; Export
+filtered results downloads only matching comparison rows. Creative tags are saved
+with each ad and retained on setup reimports. Cost targets are browser-local.
+Assessments use transparent rules and do not automatically change Meta budgets.
