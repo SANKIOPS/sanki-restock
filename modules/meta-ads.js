@@ -344,12 +344,12 @@ function createStore(options = {}) {
       return { record: clone(record), revision: state.revision };
     });
   }
-  function importSetup(records, revision, actor, preview = false) {
+  function importSetup(records, revision, actor, preview = false, options = {}) {
     return locked(() => {
       const state=loadUnlocked();
       if(revision!==state.revision)fail('Marketing records changed. Preview the upload again.',409);
       const now=clock(), counts={created:0,updated:0,unchanged:0};
-      const remap=new Map();
+      const remap=new Map(),review=[],original=clone(state);
       for(const type of ['campaigns','adSets','ads']) for(const input of records[type]) {
         const payload={...input,metaSourceId:input.id,archived:input.status==='archived'};
         for(const key of ['campaignId','adSetId'])if(payload[key])payload[key]=remap.get(payload[key])||payload[key];
@@ -362,13 +362,26 @@ function createStore(options = {}) {
         const changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
         if(!changed.length){counts.unchanged++;continue;}
         counts[previous?'updated':'created']++;
+        review.push({type,id:record.id,name:record.name,action:previous?'update':'create',fields:changed.map(field=>({field,before:previous?.[field]??null,after:record[field]}))});
         Object.assign(record,{createdAt:previous?.createdAt||now,createdBy:previous?.createdBy||actor,updatedAt:now,updatedBy:actor});
         if(previous)state[type][index]=record;else state[type].push(record);
         for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Meta configuration upload',revision:state.revision+1});
       }
+      const includedCampaigns=new Set(records.campaigns.map(r=>remap.get(r.id)||r.id)),includedSets=new Set(records.adSets.map(r=>remap.get(r.id)||r.id)),includedAds=new Set(records.ads.map(r=>remap.get(r.id)||r.id));
+      const missingSets=options.completeCampaigns?original.adSets.filter(r=>!r.archived&&includedCampaigns.has(r.campaignId)&&!includedSets.has(r.id)):[];
+      const missingSetIds=new Set(missingSets.map(r=>r.id));
+      const missing=missingSets.map(r=>({type:'adSets',id:r.id,name:r.name})).concat(options.completeCampaigns?original.ads.filter(r=>!r.archived&&includedSets.has(r.adSetId)&&!missingSetIds.has(r.adSetId)&&!includedAds.has(r.id)).map(r=>({type:'ads',id:r.id,name:r.name})):[]);
+      const decisions=options.decisions||[];
+      if(!Array.isArray(decisions))fail('Missing-record decisions must be a list.');
+      if(!preview&&missing.some(r=>!decisions.some(d=>d.type===r.type&&d.id===r.id&&['keep','remove'].includes(d.action))))fail('Review each missing record: keep existing or mark removed.');
+      counts.removed=0;
+      for(const candidate of missing){if(!decisions.some(d=>d.type===candidate.type&&d.id===candidate.id&&d.action==='remove'))continue;
+        const removals=[{type:candidate.type,id:candidate.id}];if(candidate.type==='adSets')removals.push(...state.ads.filter(a=>a.adSetId===candidate.id&&!a.archived).map(a=>({type:'ads',id:a.id})));
+        for(const entry of removals){const record=state[entry.type].find(r=>r.id===entry.id);if(record.archived)continue;record.archived=true;record.updatedAt=now;record.updatedBy=actor;counts.removed++;state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[entry.type],entityId:record.id,field:'archived',before:false,after:true,action:'archive',reason:'Owner confirmed removed in Meta after complete campaign setup upload',revision:state.revision+1});}
+      }
       validateRelationships(state);
-      if(!preview && (counts.created||counts.updated)){state.revision++;save(state);}
-      return {counts,revision:state.revision};
+      if(!preview && (counts.created||counts.updated||counts.removed)){state.revision++;save(state);}
+      return {counts,revision:state.revision,review,missing};
     });
   }
   function importPerformance(rows,revision,actor,preview=false) {
@@ -460,7 +473,9 @@ function createRouter(store = createStore()) {
       if(!req.file || !/\.(csv|xlsx)$/i.test(req.file.originalname))fail('Choose a Meta configuration CSV or XLSX export.');
       let parsed;try{parsed=require('./meta-ads-import').parseSetup(req.file.buffer);}catch(e){fail(e.message);}
       const preview=req.body.preview==='true';
-      const result=store.importSetup(parsed.records,Number(req.body.revision),req.user.username,preview);
+      if(!preview&&req.body.confirmed!=='true')fail('Confirm the reviewed setup changes before saving.');
+      let decisions=[];try{decisions=JSON.parse(req.body.decisions||'[]');}catch{fail('Invalid missing-record decisions.');}
+      const result=store.importSetup(parsed.records,Number(req.body.revision),req.user.username,preview,{completeCampaigns:req.body.completeCampaigns==='true',decisions});
       res.json({success:true,...result,...(preview?parsed:{})});
     }catch(e){sendError(e,res);}
   }));
