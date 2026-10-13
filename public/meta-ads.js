@@ -20,20 +20,21 @@
   $('setupPreview').addEventListener('click',()=>uploadSetup(true));
   $('setupSave').addEventListener('click',()=>uploadSetup(false));
   $('setupFile').addEventListener('change',()=>{setupRevision=null;setupFile=null;$('setupSave').hidden=true;$('setupSummary').textContent='';});
-  let performanceRevision=null,performanceFile=null;
+  let performanceRevision=null,performanceFile=null,insightsPeriod="";
   async function uploadPerformance(preview){
-    const file=$('performanceFile').files[0];if(!state||!file)return message('Choose a daily performance file.',true);
+    const file=$('performanceFile').files[0];if(!state||!file)return message('Choose a performance file.',true);
     if(!preview&&(file!==performanceFile||performanceRevision===null))return message('Preview this file first.',true);
     $('performancePreview').disabled=true;$('performanceSave').disabled=true;
     try{const body=new FormData();body.append('file',file);body.append('preview',String(preview));body.append('revision',String(preview?state.revision:performanceRevision));
       const response=await fetch(apiBase+'/import-performance',{method:'POST',credentials:'same-origin',body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.error||'Performance upload failed.');
-      if(preview){performanceRevision=data.revision;performanceFile=file;$('performanceSummary').textContent=`${data.report.length} daily ad rows: ${data.counts.created} new, ${data.counts.updated} updated, ${data.counts.unchanged} unchanged.\n`+data.report.map(r=>`${r.date} · ${r.adSet} · ${r.ad} · ${r.spend==null?'spend unavailable':'₹'+r.spend} · ${r.action}`).join('\n');$('performanceSave').hidden=false;}
-      else{performanceRevision=null;$('performanceSave').hidden=true;$('performancePanel').hidden=true;$('performanceSummary').textContent='Daily performance saved. Open Insights for findings and next actions.';view='insights';await load('Daily performance imported.');}
+      if(preview){performanceRevision=data.revision;performanceFile=file;$('performanceSummary').textContent=`${data.report.length} ad/period rows: ${data.counts.created} new, ${data.counts.updated} updated, ${data.counts.unchanged} unchanged.\n`+data.report.map(r=>`${r.periodStart} – ${r.periodEnd} · ${r.adSet} · ${r.ad} · ${r.spend==null?'spend unavailable':'₹'+r.spend} · ${r.action}`).join('\n');$('performanceSave').hidden=false;}
+      else{performanceRevision=null;$('performanceSave').hidden=true;$('performancePanel').hidden=true;$('performanceSummary').textContent='Daily performance saved. Open Insights for findings and next actions.';insightsPeriod="";view='insights';await load('Daily performance imported.');}
     }catch(e){performanceRevision=null;$('performanceSave').hidden=true;$('performanceSummary').textContent=e.message;}finally{$('performancePreview').disabled=false;$('performanceSave').disabled=false;}
   }
   $('performancePreview').addEventListener('click',()=>uploadPerformance(true));$('performanceSave').addEventListener('click',()=>uploadPerformance(false));
   $('performanceFile').addEventListener('change',()=>{performanceRevision=null;performanceFile=null;$('performanceSave').hidden=true;$('performanceSummary').textContent='';});
   $('openPerformance').addEventListener('click',()=>{$('performancePanel').hidden=!$('performancePanel').hidden;});
+  $('insightsPanel').addEventListener('change',event=>{if(event.target.id==='insightPeriodSelect'){insightsPeriod=event.target.value;load('Reporting period selected.');}});
   const paths = { campaigns: 'campaigns', adSets: 'adsets', ads: 'ads', results: 'results' };
   const labels = { campaigns: 'Campaigns', adSets: 'Ad sets', ads: 'Ads', results: 'Results', changes: 'Changes',insights:'Insights' };
   const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'ad', results: 'result' };
@@ -209,7 +210,8 @@
       document.querySelectorAll('[data-tab]').forEach(tab=>{tab.setAttribute('aria-selected',String(tab.dataset.tab===view));const type=tab.dataset.tab;tab.querySelector('span').textContent=type==='insights'?(state.insights?.actions.length||0):type==='changes'?state.changes.length:state[type].filter(r=>!isArchived(type,r)).length;});
       $('recordView').setAttribute('aria-labelledby','tab-insights');
       const data=state.insights||{date:null,note:'Upload daily performance to see insights.',groups:[],actions:[],creatives:[]};
-      $('insightsPanel').innerHTML='<div class="insight-heading"><h2>Your next actions</h2><p class="muted">'+esc(data.date?'Latest report: '+data.date+' · '+data.days+' reporting day(s) saved':'No daily report uploaded')+'</p><p>'+esc(data.note)+'</p></div>'+(data.date?'<div class="insight-spend">Latest-day spend: <strong>'+money(data.spend)+'</strong></div>':'')+'<div class="insight-actions">'+data.actions.map(a=>'<article><h3>'+esc(a.title)+'</h3><strong>'+esc(a.ad)+'</strong><p>'+esc(a.reason)+'</p><p class="next-action">'+esc(a.next)+'</p></article>').join('')+'</div><div class="insight-heading"><h2>Best observed costs</h2><p class="muted">Compared within outcome and attribution window. Different audiences can affect the ranking.</p></div>'+data.groups.map(g=>'<section class="insight-group"><h3>'+esc(g.label)+'</h3>'+g.items.map((r,i)=>'<div class="rank-row"><span><strong>'+esc(r.ad)+'</strong><small>'+esc(r.adSet)+'</small></span><span>'+integer(r.count)+' results</span><strong>'+money(r.cost)+' / result</strong></div>').join('')+'</section>').join('')+(data.date?'<div class="insight-heading"><h2>Creative observations</h2><p class="muted">Video plays are diagnostic counts; they do not prove buying intent.</p></div><div class="table-wrap"><table><thead><tr><th>Ad / ad set</th><th>Spend</th><th>3-second plays</th><th>ThruPlays</th><th>Cost trend</th></tr></thead><tbody>'+data.creatives.map(r=>'<tr><td>'+esc(r.ad)+note(r.adSet)+'</td><td>'+money(r.spend)+'</td><td>'+integer(r.videoPlays3s)+'</td><td>'+integer(r.thruPlays)+'</td><td>'+(r.previousCost!==null&&r.cost!==null?money(r.previousCost)+' → '+money(r.cost)+note('vs '+r.previousDate):'Needs another comparable day')+'</td></tr>').join('')+'</tbody></table></div>':'');
+      $('insightsPanel').innerHTML='<div class="insight-heading"><h2>Your next actions</h2><p class="muted">'+esc(data.date?'Reporting period: '+data.date+' · '+data.days+' day(s)':'No daily report uploaded')+'</p><p>'+esc(data.note)+'</p></div>'+(data.date?'<div class="insight-spend">Spend in this period: <strong>'+money(data.spend)+'</strong></div>':'')+'<div class="insight-actions">'+data.actions.map(a=>'<article><h3>'+esc(a.title)+'</h3><strong>'+esc(a.ad)+'</strong><p>'+esc(a.reason)+'</p><p class="next-action">'+esc(a.next)+'</p></article>').join('')+'</div><div class="insight-heading"><h2>Best observed costs</h2><p class="muted">Compared within outcome and attribution window. Different audiences can affect the ranking.</p></div>'+data.groups.map(g=>'<section class="insight-group"><h3>'+esc(g.label)+'</h3>'+g.items.map((r,i)=>'<div class="rank-row"><span><strong>'+esc(r.ad)+'</strong><small>'+esc(r.adSet)+'</small></span><span>'+integer(r.count)+' results</span><strong>'+money(r.cost)+' / result</strong></div>').join('')+'</section>').join('')+(data.date?'<div class="insight-heading"><h2>Creative observations</h2><p class="muted">Video plays are diagnostic counts; they do not prove buying intent.</p></div><div class="table-wrap"><table><thead><tr><th>Ad / ad set</th><th>Spend</th><th>3-second plays</th><th>ThruPlays</th><th>Cost trend</th></tr></thead><tbody>'+data.creatives.map(r=>'<tr><td>'+esc(r.ad)+note(r.adSet)+'</td><td>'+money(r.spend)+'</td><td>'+integer(r.videoPlays3s)+'</td><td>'+integer(r.thruPlays)+'</td><td>'+(r.previousCost!==null&&r.cost!==null?money(r.previousCost)+' → '+money(r.cost)+note('vs '+r.previousDate):'Needs a separate comparable period')+'</td></tr>').join('')+'</tbody></table></div>':'');
+      if(data.periods?.length){const control=document.createElement('label');control.className='insight-period';control.innerHTML='Reporting period<select id="insightPeriodSelect">'+data.periods.map(p=>'<option value="'+esc(p.key)+'" '+(p.key===data.selectedPeriod?'selected':'')+'>'+esc(p.start===p.end?p.start:p.start+' – '+p.end)+' · '+p.days+' day(s)</option>').join('')+'</select>';$('insightsPanel').prepend(control);}
       return;
     }
     const s=state.summary;
@@ -270,7 +272,7 @@
   async function load(notice) {
     setBusy(true);
     try {
-      state=await request();
+      state=await request(insightsPeriod?"?period="+encodeURIComponent(insightsPeriod):"");
       const selected=$('campaignFilter').value;
       $('campaignFilter').innerHTML='<option value="">All campaigns</option>'+state.campaigns.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+(c.archived?' (archived)':'')+'</option>').join('');
       $('campaignFilter').value=selected;

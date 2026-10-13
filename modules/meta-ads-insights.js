@@ -1,9 +1,14 @@
 'use strict';
-function insights(state) {
-  const daily=state.results.filter(r=>!r.archived&&r.adId&&r.periodStart===r.periodEnd);
-  const dates=[...new Set(daily.map(r=>r.periodStart))].sort(),date=dates.at(-1);
-  if(!date)return {date:null,days:0,spend:null,groups:[],actions:[],creatives:[],note:'Upload a daily performance report to see findings and next actions.'};
-  const latest=daily.filter(r=>r.periodStart===date), groups=new Map(),actions=[],creatives=[];
+function insights(state,selectedPeriod) {
+  const reports=state.results.filter(r=>!r.archived&&r.adId);
+  const periodKey=r=>r.periodStart+'~'+r.periodEnd;
+  const duration=r=>Math.round((Date.parse(r.periodEnd)-Date.parse(r.periodStart))/86400000)+1;
+  const ranges=new Map();for(const r of reports){const key=periodKey(r),old=ranges.get(key);ranges.set(key,{key,start:r.periodStart,end:r.periodEnd,days:duration(r),updatedAt:[old?.updatedAt||'',r.updatedAt||''].sort().at(-1)});}
+  const periods=[...ranges.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)||b.end.localeCompare(a.end)||a.start.localeCompare(b.start));
+  const period=periods.find(p=>p.key===selectedPeriod)||periods[0];
+  if(!period)return {date:null,days:0,periods:[],spend:null,groups:[],actions:[],creatives:[],note:'Upload a performance report to see findings and next actions.'};
+  const date=period.start===period.end?period.start:period.start+' – '+period.end;
+  const latest=reports.filter(r=>periodKey(r)===period.key), groups=new Map(),actions=[],creatives=[];
   let spend=0,missingSpend=false;
   for(const r of latest){
     if(r.spend===null||r.spend===undefined)missingSpend=true;else spend+=r.spend;
@@ -12,9 +17,9 @@ function insights(state) {
     const metric=destination==='WhatsApp'?'messagingStarts':/PROFILE_VISIT/i.test(goal||'')?'profileVisits':/PURCHASE/i.test(goal||'')?'metaPurchases':null;
     const label={messagingStarts:'Messaging conversations',profileVisits:'Instagram profile visits',metaPurchases:'Meta-attributed purchases'}[metric]||'Delivery';
     const count=metric?r[metric]:null,cost=count>0&&r.spend!=null?r.spend/count:null;
-    const prior=daily.filter(x=>x.adId===r.adId&&x.periodStart<date&&x.attributionSetting===r.attributionSetting&&(x.reportGoal||goal)===goal).sort((a,b)=>b.periodStart.localeCompare(a.periodStart))[0];
+    const prior=reports.filter(x=>x.adId===r.adId&&x.periodEnd<r.periodStart&&duration(x)===duration(r)&&x.attributionSetting===r.attributionSetting&&(x.reportGoal||goal)===goal).sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[0];
     const previousCost=prior&&metric&&prior[metric]>0&&prior.spend!=null?prior.spend/prior[metric]:null;
-    const item={ad:ad.name,adSet:set.name,adId:ad.id,goal:label,spend:r.spend,count,cost,previousDate:prior?.periodStart||null,previousCost,impressions:r.impressions,videoPlays3s:r.videoPlays3s,thruPlays:r.thruPlays,reportedDelivery:r.reportedDelivery};
+    const item={ad:ad.name,adSet:set.name,adId:ad.id,goal:label,spend:r.spend,count,cost,previousDate:prior?(prior.periodStart===prior.periodEnd?prior.periodStart:prior.periodStart+' – '+prior.periodEnd):null,previousCost,impressions:r.impressions,videoPlays3s:r.videoPlays3s,thruPlays:r.thruPlays,reportedDelivery:r.reportedDelivery};
     creatives.push(item);
     if(metric&&cost!==null){const key=label+' · '+(r.attributionSetting||'attribution unconfirmed')+' · '+(goal||'goal unconfirmed');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
     if(r.impressions===0&&r.spend===0)actions.push({priority:3,title:'No delivery to judge',ad:ad.name,reason:'This report has zero spend and zero impressions.',next:'Check delivery in Meta if this ad was intended to run. Keep it unranked until it delivers.'});
@@ -25,6 +30,6 @@ function insights(state) {
   const rankings=[...groups].map(([label,items])=>({label,items:items.sort((a,b)=>a.cost-b.cost),winner:items.length>1?items[0]:null}));
   for(const g of rankings)if(g.winner)actions.push({priority:4,title:'Keep testing the lower-cost option',ad:g.winner.ad,reason:`Lowest observed cost in the ${g.label} comparison for ${date}. Audiences and delivery can differ.`,next:'Keep collecting daily results and confirm business quality. This ranking alone does not justify increasing budget.'});
   actions.sort((a,b)=>a.priority-b.priority);
-  return {date,days:dates.length,spend:missingSpend?null:spend,groups:rankings,actions:actions.slice(0,5),creatives,note:'Findings use the latest uploaded day. Rankings compare reported outcomes and attribution windows, not causal creative quality. No live ad changes are made.'};
+  return {date,days:period.days,periodStart:period.start,periodEnd:period.end,selectedPeriod:period.key,periods,spend:missingSpend?null:spend,groups:rankings,actions:actions.slice(0,5),creatives,note:'Findings use only this reporting period. Overlapping reports are stored separately and never added together. Period totals cannot establish individual daily results. Rankings compare observed outcomes, not causal creative quality.'};
 }
 module.exports={insights};

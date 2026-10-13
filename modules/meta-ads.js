@@ -296,7 +296,7 @@ function createStore(options = {}) {
     const existing = readExisting();
     return existing || locked(loadUnlocked);
   }
-  function view() {
+  function view(period) {
     const state = load();
     const output=clone(state);
     for(const set of output.adSets){
@@ -304,7 +304,7 @@ function createStore(options = {}) {
         if(set.behaviorsConfirmed==null&&Array.isArray(groups)&&raw['Flexible Inclusions']){set.interests=groups.flatMap(g=>(g.interests||[]).map(x=>x.name));set.interestsConfirmed=true;set.behaviors=groups.flatMap(g=>(g.behaviors||[]).map(x=>x.name));set.behaviorsConfirmed=true;}
       }catch{/* Preserve existing records when the source audience is unavailable. */}
     }
-    return { ...output, summary: configuredSummary(state), insights:require('./meta-ads-insights').insights(state) };
+    return { ...output, summary: configuredSummary(state), insights:require('./meta-ads-insights').insights(state,period) };
   }
   function mutate(type, method, recordId, body, actor) {
     if (!plain(body) || Buffer.byteLength(JSON.stringify(body), 'utf8') > 128 * 1024) fail('Record body must be an object below 128 KiB.');
@@ -381,14 +381,13 @@ function createStore(options = {}) {
         if(!campaign||!set||!ad)fail(`Upload campaign setup first: ${row.adName||row.adMetaId} is not linked to an imported ad.`,400);
         if(set.campaignId!==campaign.id||ad.adSetId!==set.id)fail('Report IDs do not match the saved campaign hierarchy. Upload the latest setup first.');
         const index=state.results.findIndex(x=>x.adId===ad.id&&x.periodStart===row.record.periodStart&&x.periodEnd===row.record.periodEnd),previous=index<0?null:state.results[index];
-        if(state.results.some(x=>x.id!==previous?.id&&x.adId===ad.id&&x.periodStart<=row.record.periodEnd&&x.periodEnd>=row.record.periodStart))fail('This daily row overlaps an existing report for the same ad. Resolve the overlapping report first.');
-        const payload={...row.record,archived:false,reportGoal:previous?.reportGoal||set.performanceGoal,reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'daily-'+row.adMetaId+'-'+row.record.periodStart,adId:ad.id,adSetId:set.id};
+        const payload={...row.record,archived:false,reportGoal:previous?.reportGoal||set.performanceGoal,reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'period-'+row.adMetaId+'-'+row.record.periodStart+'-'+row.record.periodEnd,adId:ad.id,adSetId:set.id};
         const record=normalizeRecord('results',payload,previous), changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
-        report.push({ad:ad.name,adSet:set.name,date:record.periodStart,spend:record.spend,action:!changed.length?'unchanged':previous?'updated':'new'});
+        report.push({ad:ad.name,adSet:set.name,date:record.periodStart,periodStart:record.periodStart,periodEnd:record.periodEnd,spend:record.spend,action:!changed.length?'unchanged':previous?'updated':'new'});
         if(!changed.length){counts.unchanged++;continue;}counts[previous?'updated':'created']++;
         Object.assign(record,{createdAt:previous?.createdAt||now,createdBy:previous?.createdBy||actor,updatedAt:now,updatedBy:actor});
         if(previous)state.results[index]=record;else state.results.push(record);
-        for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:'result',entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Daily Meta performance upload',revision:state.revision+1});
+        for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:'result',entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Meta performance upload',revision:state.revision+1});
       }
       validateRelationships(state);
       if(!preview&&(counts.created||counts.updated)){state.revision++;save(state);}
@@ -442,7 +441,7 @@ function createRouter(store = createStore()) {
     return res.status(status).json(response);
   }
   router.get(BASE, (req, res) => {
-    try { res.json({ success: true, ...store.view() }); }
+    try { res.json({ success: true, ...store.view(typeof req.query?.period==='string'?req.query.period:undefined) }); }
     catch (error) { sendError(error, res); }
   });
   const upload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:5*1024*1024,files:1}}).single('file');
