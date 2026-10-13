@@ -41,7 +41,7 @@
       <button role="tab" id="tab-changes" data-tab="changes" aria-controls="recordView" aria-selected="false">Changes <span></span></button>
       <button role="tab" id="tab-insights" data-tab="insights" aria-controls="recordView" aria-selected="false">Insights <span></span></button>
     </div>
-    <div class="manager-toolbar"><div class="actions"><button class="primary" id="add" disabled>+ Add campaign</button><button id="editSelected" disabled>Edit record</button><button id="viewChildren" disabled>View ad sets</button></div><div class="actions"><label class="columns-control">Columns<select id="columnMode"><option value="overview">Overview</option><option value="setup">Full setup</option></select></label><button id="export" disabled>↓ Export CSV</button></div></div>
+    <div class="manager-toolbar"><div class="actions"><button class="primary" id="add" disabled>+ Add campaign</button><button id="editSelected" disabled>Edit record</button><button id="removeSelected" class="danger" disabled>Remove selected</button><button id="viewChildren" disabled>View ad sets</button></div><div class="actions"><label class="columns-control">Columns<select id="columnMode"><option value="overview">Overview</option><option value="setup">Full setup</option></select></label><button id="export" disabled>↓ Export CSV</button></div></div>
     <div class="filters">
       <label>Campaign<select id="campaignFilter"><option value="">All campaigns</option></select></label>
       <label>Collection<select id="collectionFilter"><option value="">All collections</option><option>Femme</option><option>Homme</option><option>Studio</option><option>Other</option></select></label>
@@ -68,6 +68,7 @@
     <footer><button type="button" id="archive" class="danger" hidden>Archive record</button><div class="actions"><button type="button" data-close>Cancel</button><button type="submit" class="primary">Save record</button></div></footer>
   </form>
 </dialog>
+<dialog id="bulkDialog"><form id="bulkForm"><header><h2 id="bulkTitle">Edit selected records</h2><button type="button" id="bulkClose" aria-label="Close bulk editor">×</button></header><p id="bulkHelp"></p><div id="bulkFields"><label id="bulkStatusWrap">Recorded status<select id="bulkStatus"><option value="">Keep current status</option><option value="reported_running">Reported running</option><option value="paused">Paused</option><option value="draft">Draft</option><option value="completed">Completed</option><option value="unknown">Unconfirmed</option></select></label><label id="bulkBudgetWrap">Daily budget per selected ad set (₹)<input id="bulkBudget" type="number" min="0" step="0.01" placeholder="Leave blank to keep current budgets"></label><label>Shared notes<textarea id="bulkNotes" placeholder="Leave blank to keep current notes"></textarea></label></div><label>Reason<textarea id="bulkReason" maxlength="1000"></textarea></label><p id="bulkError" class="form-error" role="alert"></p><footer><button type="button" id="bulkCancel">Cancel</button><button type="submit" id="bulkSubmit" class="primary">Apply changes</button></footer></form></dialog>
 <script src="/sidebar.js"></script>
 <script src="/meta-ads.js"></script>
 </body>

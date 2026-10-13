@@ -202,7 +202,7 @@
     $('records').parentElement.hidden=insightView;
     if(insightView){
       $('pageTitle').textContent='Insights';$('resultFilters').hidden=true;$('empty').hidden=true;
-      document.querySelectorAll('[data-tab]').forEach(tab=>{tab.setAttribute('aria-selected',String(tab.dataset.tab===view));tab.querySelector('span').textContent=tab.dataset.tab==='insights'?(state.insights?.actions.length||0):state[tab.dataset.tab].length;});
+      document.querySelectorAll('[data-tab]').forEach(tab=>{tab.setAttribute('aria-selected',String(tab.dataset.tab===view));const type=tab.dataset.tab;tab.querySelector('span').textContent=type==='insights'?(state.insights?.actions.length||0):type==='changes'?state.changes.length:state[type].filter(r=>!isArchived(type,r)).length;});
       $('recordView').setAttribute('aria-labelledby','tab-insights');
       const data=state.insights||{date:null,note:'Upload daily performance to see insights.',groups:[],actions:[],creatives:[]};
       $('insightsPanel').innerHTML='<div class="insight-heading"><h2>Your next actions</h2><p class="muted">'+esc(data.date?'Latest report: '+data.date+' · '+data.days+' reporting day(s) saved':'No daily report uploaded')+'</p><p>'+esc(data.note)+'</p></div>'+(data.date?'<div class="insight-spend">Latest-day spend: <strong>'+money(data.spend)+'</strong></div>':'')+'<div class="insight-actions">'+data.actions.map(a=>'<article><h3>'+esc(a.title)+'</h3><strong>'+esc(a.ad)+'</strong><p>'+esc(a.reason)+'</p><p class="next-action">'+esc(a.next)+'</p></article>').join('')+'</div><div class="insight-heading"><h2>Best observed costs</h2><p class="muted">Compared within outcome and attribution window. Different audiences can affect the ranking.</p></div>'+data.groups.map(g=>'<section class="insight-group"><h3>'+esc(g.label)+'</h3>'+g.items.map((r,i)=>'<div class="rank-row"><span><strong>'+esc(r.ad)+'</strong><small>'+esc(r.adSet)+'</small></span><span>'+integer(r.count)+' results</span><strong>'+money(r.cost)+' / result</strong></div>').join('')+'</section>').join('')+(data.date?'<div class="insight-heading"><h2>Creative observations</h2><p class="muted">Video plays are diagnostic counts; they do not prove buying intent.</p></div><div class="table-wrap"><table><thead><tr><th>Ad / ad set</th><th>Spend</th><th>3-second plays</th><th>ThruPlays</th><th>Cost trend</th></tr></thead><tbody>'+data.creatives.map(r=>'<tr><td>'+esc(r.ad)+note(r.adSet)+'</td><td>'+money(r.spend)+'</td><td>'+integer(r.videoPlays3s)+'</td><td>'+integer(r.thruPlays)+'</td><td>'+(r.previousCost!==null&&r.cost!==null?money(r.previousCost)+' → '+money(r.cost)+note('vs '+r.previousDate):'Needs another comparable day')+'</td></tr>').join('')+'</tbody></table></div>':'');
@@ -216,7 +216,9 @@
     $('adSetTabLabel').textContent='▦ Ad sets'+(nc?' for '+nc+' campaign'+(nc>1?'s':''):'');
     $('adTabLabel').textContent='▤ Ads'+(ns?' for '+ns+' ad set'+(ns>1?'s':''):nc?' for '+nc+' campaign'+(nc>1?'s':''):'');
     $('scopeSummary').textContent=nc?[...selection.campaigns].map(id=>find('campaigns',id)?.name).join(', '):'All campaigns';
-    $('editSelected').disabled=busy||view==='changes'||selection[view].size!==1;
+    $('editSelected').disabled=busy||view==='changes'||!selection[view].size;
+    $('editSelected').textContent=selection[view].size>1?'Edit '+selection[view].size+' records':'Edit record';
+    $('removeSelected').disabled=busy||view==='changes'||!selection[view].size;
     $('viewChildren').hidden=!['campaigns','adSets'].includes(view);
     $('viewChildren').disabled=busy||!selection[view].size;
     $('viewChildren').textContent=view==='campaigns'?'View ad sets':'View ads';
@@ -233,7 +235,7 @@
       tab.setAttribute('aria-selected',String(tab.dataset.tab===view));
       const type=tab.dataset.tab;
       if(type==='insights'){tab.querySelector('span').textContent=state.insights?.actions.length||0;return;}
-      tab.querySelector('span').textContent=state[type].filter(row=>{const cmp=campaignFor(type,row),set=adSetFor(type,row);return (type==='campaigns'||type==='changes'||!nc||cmp&&selection.campaigns.has(cmp.id))&&(type!=='ads'||!ns||set&&selection.adSets.has(set.id));}).length;
+      tab.querySelector('span').textContent=state[type].filter(row=>{const cmp=campaignFor(type,row),set=adSetFor(type,row);return (type==='changes'||($('statusFilter').value==='archived'?isArchived(type,row):!isArchived(type,row)))&&(type==='campaigns'||type==='changes'||!nc||cmp&&selection.campaigns.has(cmp.id))&&(type!=='ads'||!ns||set&&selection.adSets.has(set.id));}).length;
     });
     $('recordView').setAttribute('aria-labelledby','tab-'+view);
     $('viewTitle').textContent=labels[view];$('viewHelp').textContent=captions[view];
@@ -423,7 +425,24 @@
   });
   $('records').addEventListener('change',event=>{if(event.target.id==='selectAllRows'){for(const r of filteredRows())event.target.checked?selection[view].add(r.id):selection[view].delete(r.id);}else if(event.target.dataset.select){event.target.checked?selection[view].add(event.target.dataset.select):selection[view].delete(event.target.dataset.select);}else return;if(view==='campaigns')selection.adSets.clear();render();});
   $('clearScope').addEventListener('click',()=>{Object.values(selection).forEach(s=>s.clear());$('campaignFilter').value='';render();});
-  $('editSelected').addEventListener('click',()=>{if(selection[view].size===1)openEditor([...selection[view]][0]);});
+  let bulkContext=null;
+  function openBulk(action){
+    if(!state||busy||!selection[view]?.size)return;
+    bulkContext={action,type:view,ids:[...selection[view]],revision:state.revision};$('bulkForm').reset();$('bulkError').textContent='';
+    $('bulkTitle').textContent=action==='remove'?'Remove '+bulkContext.ids.length+' selected records':'Edit '+bulkContext.ids.length+' selected records';
+    $('bulkHelp').textContent=action==='remove'?'These records and linked child records will be removed from the current view. Their history is retained. Re-uploading setup restores matching campaigns, ad sets and ads; performance can be uploaded again separately.':'Only the settings entered below change. Other fields stay as they are. This updates app records only.';
+    $('bulkFields').hidden=action==='remove';$('bulkStatusWrap').hidden=view==='results';$('bulkBudgetWrap').hidden=view!=='adSets';$('bulkSubmit').textContent=action==='remove'?'Remove records':'Apply changes';$('bulkDialog').showModal();
+  }
+  $('editSelected').addEventListener('click',()=>{if(selection[view].size===1)openEditor([...selection[view]][0]);else openBulk('edit');});
+  $('removeSelected').addEventListener('click',()=>openBulk('remove'));
+  for(const id of ['bulkClose','bulkCancel'])$(id).addEventListener('click',()=>{if(!$('bulkSubmit').disabled)$('bulkDialog').close();});
+  $('bulkDialog').addEventListener('cancel',e=>{if($('bulkSubmit').disabled)e.preventDefault();});
+  $('bulkForm').addEventListener('submit',async e=>{
+    e.preventDefault();if(!bulkContext||$('bulkSubmit').disabled)return;
+    const fields={};if(bulkContext.action==='edit'){if($('bulkStatus').value&&bulkContext.type!=='results')fields.status=$('bulkStatus').value;if($('bulkBudget').value!==''&&bulkContext.type==='adSets')fields.budgetDaily=Number($('bulkBudget').value);if($('bulkNotes').value.trim())fields.notes=$('bulkNotes').value.trim();}
+    $('bulkSubmit').disabled=true;
+    try{const data=await request('/bulk','POST',{...bulkContext,fields,reason:$('bulkReason').value});$('bulkDialog').close();Object.values(selection).forEach(s=>s.clear());await load(data.changedRecords+' records '+(bulkContext.action==='remove'?'removed. Re-upload setup when ready.':'updated.'));}catch(error){$('bulkError').textContent=error.message;}finally{$('bulkSubmit').disabled=false;}
+  });
   $('viewChildren').addEventListener('click',()=>{if(!selection[view].size)return;view=view==='campaigns'?'adSets':'ads';sort=null;render();});
   $('columnMode').addEventListener('change',()=>{sort=null;render();});
   $('openUpload').addEventListener('click',()=>{$('uploadPanel').hidden=!$('uploadPanel').hidden;});
