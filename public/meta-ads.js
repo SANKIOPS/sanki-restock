@@ -40,7 +40,7 @@
   const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'ad', results: 'result' };
   const statusLabels = { draft: 'Draft', reported_running: 'Reported running', delivery_unconfirmed: 'Reported · verify delivery', active: 'Verified active', paused: 'Paused', completed: 'Completed', archived: 'Archived', unknown: 'Unconfirmed', pending: 'Pending' };
   const statuses = Object.entries(statusLabels);
-  let state = null, view = 'campaigns', busy = false, editing = null, sort = null;
+  let state = null, view = 'insights', busy = false, editing = null, sort = null;
   const selection={campaigns:new Set(),adSets:new Set(),ads:new Set(),results:new Set(),changes:new Set()};
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   const missing = value => value === null || value === undefined || value === '';
@@ -206,10 +206,11 @@
     for(const selector of ['.manager-toolbar','.filters','.view-heading','.manager-search','.manager-views','#tableFooter','#stats'])document.querySelector(selector).hidden=insightView;
     $('records').parentElement.hidden=insightView;
     if(insightView){
-      $('pageTitle').textContent='Insights';$('resultFilters').hidden=true;$('empty').hidden=true;
+      $('pageTitle').textContent='Meta Marketing';$('resultFilters').hidden=true;$('empty').hidden=true;
       document.querySelectorAll('[data-tab]').forEach(tab=>{tab.setAttribute('aria-selected',String(tab.dataset.tab===view));const type=tab.dataset.tab;tab.querySelector('span').textContent=type==='insights'?(state.insights?.actions.length||0):type==='changes'?state.changes.length:state[type].filter(r=>!isArchived(type,r)).length;});
       $('recordView').setAttribute('aria-labelledby','tab-insights');
       const data=state.insights||{date:null,note:'Upload daily performance to see insights.',groups:[],actions:[],creatives:[]};
+      if(window.MetaLinkedWorkspace){window.MetaLinkedWorkspace.render($('insightsPanel'),state,{period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const current=view;view='ads';openEditor(id);view=current;},edit:(type,id)=>{const current=view;view=type;openEditor(id);view=current;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});return;}
       if(window.MetaInsightView){window.MetaInsightView.render($('insightsPanel'),state,{period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const current=view;view='ads';openEditor(id);view=current;}});return;}
       $('insightsPanel').innerHTML='<div class="insight-heading"><h2>Your next actions</h2><p class="muted">'+esc(data.date?'Reporting period: '+data.date+' · '+data.days+' day(s)':'No daily report uploaded')+'</p><p>'+esc(data.note)+'</p></div>'+(data.date?'<div class="insight-spend">Spend in this period: <strong>'+money(data.spend)+'</strong></div>':'')+'<div class="insight-actions">'+data.actions.map(a=>'<article><h3>'+esc(a.title)+'</h3><strong>'+esc(a.ad)+'</strong><p>'+esc(a.reason)+'</p><p class="next-action">'+esc(a.next)+'</p></article>').join('')+'</div><div class="insight-heading"><h2>Best observed costs</h2><p class="muted">Compared within outcome and attribution window. Different audiences can affect the ranking.</p></div>'+data.groups.map(g=>'<section class="insight-group"><h3>'+esc(g.label)+'</h3>'+g.items.map((r,i)=>'<div class="rank-row"><span><strong>'+esc(r.ad)+'</strong><small>'+esc(r.adSet)+'</small></span><span>'+integer(r.count)+' results</span><strong>'+money(r.cost)+' / result</strong></div>').join('')+'</section>').join('')+(data.date?'<div class="insight-heading"><h2>Creative observations</h2><p class="muted">Video plays are diagnostic counts; they do not prove buying intent.</p></div><div class="table-wrap"><table><thead><tr><th>Ad / ad set</th><th>Spend</th><th>3-second plays</th><th>ThruPlays</th><th>Cost trend</th></tr></thead><tbody>'+data.creatives.map(r=>'<tr><td>'+esc(r.ad)+note(r.adSet)+'</td><td>'+money(r.spend)+'</td><td>'+integer(r.videoPlays3s)+'</td><td>'+integer(r.thruPlays)+'</td><td>'+(r.previousCost!==null&&r.cost!==null?money(r.previousCost)+' → '+money(r.cost)+note('vs '+r.previousDate):'Needs a separate comparable period')+'</td></tr>').join('')+'</tbody></table></div>':'');
       if(data.periods?.length){const control=document.createElement('label');control.className='insight-period';control.innerHTML='Reporting period<select id="insightPeriodSelect">'+data.periods.map(p=>'<option value="'+esc(p.key)+'" '+(p.key===data.selectedPeriod?'selected':'')+'>'+esc(p.start===p.end?p.start:p.start+' – '+p.end)+' · '+p.days+' day(s)</option>').join('')+'</select>';$('insightsPanel').prepend(control);}
@@ -313,7 +314,7 @@
       f('confirmedOn','Last reported / checked','date'),...common
     ];
     if(type==='ads')return [
-      f('collection','Collection','select',{options:[['','Unconfirmed'],['Femme','Femme'],['Homme','Homme'],['Both','Both'],['Other','Other']]}),
+      f('collection','Collection','select',{options:[['','Unconfirmed'],['Femme','Femme'],['Homme','Homme'],['Studio','Studio'],['Both','Both'],['Other','Other']]}),
       f('creativeTypes','Creative types','list',{wide:true,help:'One type per line. Examples: Aesthetic, Vocal, UGC, Store walkthrough. Add any type you need; confirm from the actual creative.'}),
       f('adSetId','Ad set','select',{required:true,wide:true,options:state.adSets.filter(x=>!isArchived('adSets',x)).map(x=>[x.id,x.name])}),
       f('name','Ad name','text',{required:true,max:200}),f('model','Model / creator','text',{max:160}),f('format','Creative format','text',{max:100}),
