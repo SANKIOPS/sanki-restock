@@ -19,11 +19,11 @@ const METRICS = ['spend', 'impressions', 'reach', 'linkClicks', 'profileVisits',
 const MONEY = new Set(['budgetDaily', 'spend', 'revenue']);
 const SCHEMAS = {
   campaigns: {
-    name: ['text', 200, true], objective: ['text', 120], businessGoal: ['text', 500],
+    metaSourceId: ['text',120], name: ['text', 200, true], objective: ['text', 120], businessGoal: ['text', 500],
     status: ['status'], adAccountId: ['text', 120], notes: ['text', 5000]
   },
   adSets: {
-    campaignId: ['id', true], name: ['text', 200, true], collection: ['text', 80],
+    setupDetails: ['text',60000], metaSourceId: ['text',120], campaignId: ['id', true], name: ['text', 200, true], collection: ['text', 80],
     budgetDaily: ['number'], conversionLocation: ['text', 160], performanceGoal: ['text', 250],
     destination: ['text', 160], destinationRef: ['reference'], facebookPage: ['text', 200],
     instagramProfile: ['text', 160], whatsappNumber: ['phone'], locations: ['locations'],
@@ -34,7 +34,7 @@ const SCHEMAS = {
     status: ['status'], confirmedOn: ['date'], notes: ['text', 5000]
   },
   ads: {
-    adSetId: ['id', true], name: ['text', 200, true], model: ['text', 160],
+    metaSourceId: ['text',120], adSetId: ['id', true], name: ['text', 200, true], model: ['text', 160],
     format: ['text', 100], description: ['text', 5000], mediaUrls: ['urls'],
     mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
     status: ['status'], notes: ['text', 5000]
@@ -336,7 +336,34 @@ function createStore(options = {}) {
       return { record: clone(record), revision: state.revision };
     });
   }
-  return { file, load, view, mutate };
+  function importSetup(records, revision, actor, preview = false) {
+    return locked(() => {
+      const state=loadUnlocked();
+      if(revision!==state.revision)fail('Marketing records changed. Preview the upload again.',409);
+      const now=clock(), counts={created:0,updated:0,unchanged:0};
+      const remap=new Map();
+      for(const type of ['campaigns','adSets','ads']) for(const input of records[type]) {
+        const payload={...input,metaSourceId:input.id};
+        for(const key of ['campaignId','adSetId'])if(payload[key])payload[key]=remap.get(payload[key])||payload[key];
+        let index=state[type].findIndex(x=>x.id===input.id||x.metaSourceId===input.id);
+        if(index<0){const matches=state[type].map((x,i)=>({x,i})).filter(({x})=>!x.metaSourceId&&x.name===payload.name&&(!payload.campaignId||x.campaignId===payload.campaignId)&&(!payload.adSetId||x.adSetId===payload.adSetId));if(matches.length>1)fail(`Multiple manual records match ${payload.name}. Resolve them before importing.`,409);if(matches.length===1)index=matches[0].i;}
+        const previous=index<0?null:state[type][index];
+        if(previous)payload.id=previous.id;
+        remap.set(input.id,payload.id);
+        const record=normalizeRecord(type,payload,previous);
+        const changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
+        if(!changed.length){counts.unchanged++;continue;}
+        counts[previous?'updated':'created']++;
+        Object.assign(record,{createdAt:previous?.createdAt||now,createdBy:previous?.createdBy||actor,updatedAt:now,updatedBy:actor});
+        if(previous)state[type][index]=record;else state[type].push(record);
+        for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Meta configuration upload',revision:state.revision+1});
+      }
+      validateRelationships(state);
+      if(!preview && (counts.created||counts.updated)){state.revision++;save(state);}
+      return {counts,revision:state.revision};
+    });
+  }
+  return { file, load, view, mutate, importSetup };
 }
 
 function createRouter(store = createStore()) {
@@ -359,6 +386,17 @@ function createRouter(store = createStore()) {
     try { res.json({ success: true, ...store.view() }); }
     catch (error) { sendError(error, res); }
   });
+  const upload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:5*1024*1024,files:1}}).single('file');
+  router.post(`${BASE}/import-setup`, (req,res) => upload(req,res,error => {
+    if(error)return res.status(400).json({success:false,error:'Upload one CSV or XLSX file below 5 MB.'});
+    try {
+      if(!req.file || !/\.(csv|xlsx)$/i.test(req.file.originalname))fail('Choose a Meta configuration CSV or XLSX export.');
+      let parsed;try{parsed=require('./meta-ads-import').parseSetup(req.file.buffer);}catch(e){fail(e.message);}
+      const preview=req.body.preview==='true';
+      const result=store.importSetup(parsed.records,Number(req.body.revision),req.user.username,preview);
+      res.json({success:true,...result,...(preview?parsed:{})});
+    }catch(e){sendError(e,res);}
+  }));
   router.use(BASE, express.json({ limit: '128kb' }));
   for (const [route, type] of Object.entries(TYPES)) {
     router.post(`${BASE}/${route}`, (req, res) => {

@@ -1,6 +1,14 @@
 # Meta Ads records
 
 Owners open **Marketing → Meta Ads** from the shared sidebar or dashboard.
+Upload a CSV or XLSX **configuration export** using “Upload campaign setup”.
+Preview validates the whole file without saving. Save imports its campaign,
+ad-set and ad hierarchy in one atomic revision. Stable Meta IDs prevent repeated
+imports creating duplicates. A uniquely named manual record under the matching
+parent is adopted; ambiguous matches are rejected. Blank audience fields retain
+existing settings and appear as warnings. Interests and behaviours inside
+Flexible Inclusions and distinct Advantage audience age fields are preserved.
+Preview links are retained; this does not download videos or import performance.
 This is a manual marketing record, not a Meta API integration. Saving a record
 does not publish an ad, adjust a live budget, or create an accounting expense.
 
