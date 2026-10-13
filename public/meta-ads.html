@@ -11,7 +11,7 @@
 <main>
   <header class="page-header">
     <div><a class="back-to-app" href="/dashboard.html">← Main app</a><p class="eyebrow">SANKI · MARKETING</p><h1 id="pageTitle">Campaigns</h1><p class="muted">Meta Marketing · SANKI account records</p></div>
-    <div class="actions"><button id="refresh">↻ Refresh records</button><button id="openUpload">Upload campaign setup</button><button id="openPerformance" class="primary">Upload daily performance</button></div>
+    <div class="actions"><button id="refresh">↻ Refresh records</button><button id="openUpload">Upload campaign setup</button><button id="openPerformance" class="primary">Upload performance</button></div>
   </header>
   <p class="record-note">Tracking records. Changes here do not publish ads or change settings in Meta.</p>
   <section id="uploadPanel" class="workspace upload-panel" aria-label="Import campaign setup" hidden>
@@ -23,8 +23,8 @@
   </section>
   <section class="stats" id="stats" aria-label="Configured campaign summary"></section>
   <section id="performancePanel" class="workspace upload-panel" aria-label="Import daily performance" hidden>
-    <h2>Upload daily performance</h2><p class="muted">One CSV for all campaigns. Use your SANKI Daily preset with Yesterday, or daily rows. Import campaign setup first.</p>
-    <input id="performanceFile" type="file" accept=".csv,.xlsx" aria-label="Daily Meta performance file">
+    <h2>Upload performance</h2><p class="muted">One CSV for all campaigns. Choose any date range with your saved SANKI Daily columns. No daily breakdown required. Import campaign setup first.</p>
+    <input id="performanceFile" type="file" accept=".csv,.xlsx" aria-label="Meta performance file">
     <button id="performancePreview" type="button">Preview performance</button>
     <div id="performanceSummary" role="status" style="white-space:pre-wrap"></div>
     <button id="performanceSave" type="button" class="primary" hidden>Save performance</button>
