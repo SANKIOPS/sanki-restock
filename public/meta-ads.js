@@ -259,12 +259,12 @@
       const campaignIds=new Set(rows.map(r=>r.id));
       const sets=state.adSets.filter(r=>campaignIds.has(r.campaignId));
       const ads=state.ads.filter(a=>sets.some(r=>r.id===a.adSetId)&&(!$('collectionFilter').value||(a.collection||sets.find(r=>r.id===a.adSetId)?.collection||'Unclassified')===$('collectionFilter').value)&&(!$('destinationFilter').value||sets.find(r=>r.id===a.adSetId)?.destination===$('destinationFilter').value)&&(!$('creativeTypeFilter').value||(a.creativeTypes||[]).includes($('creativeTypeFilter').value)));
-      MetaLinkedWorkspace.render($('insightsPanel'),{...state,ads,adSets:sets},{isSelected:id=>selection.campaigns.has(id),selectCampaign:(id,checked)=>{checked?selection.campaigns.add(id):selection.campaigns.delete(id);render();},period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const old=view;view='ads';openEditor(id);view=old;},edit:(type,id)=>{const old=view;view=type;openEditor(id);view=old;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});
+      MetaLinkedWorkspace.render($('insightsPanel'),{...state,campaigns:rows,ads,adSets:sets,showLinkedDetails:['campaignFilter','collectionFilter','destinationFilter','creativeTypeFilter','statusFilter','search'].some(id=>$(id).value)},{isSelected:id=>selection.campaigns.has(id),selectCampaign:(id,checked)=>{checked?selection.campaigns.add(id):selection.campaigns.delete(id);render();},period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const old=view;view='ads';openEditor(id);view=old;},edit:(type,id)=>{const old=view;view=type;openEditor(id);view=old;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});
       $('insightsPanel').querySelector('.linked-filters').hidden=true;
       $('records').parentElement.hidden=ads.length>0;
       $('tableFooter').hidden=ads.length>0;
-      $('viewHelp').textContent='Each row links a campaign, ad set and creative. Use the pencil to edit; names open details.';
-      $('rowCount').textContent=ads.length+' linked rows';
+      $('viewHelp').textContent='Campaign summaries. Click a campaign or apply filters to see its ad sets and creatives.';
+      $('rowCount').textContent=rows.length+' campaign(s)';
     }
   }
   async function request(path='',method='GET',body) {
