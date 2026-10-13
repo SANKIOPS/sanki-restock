@@ -87,13 +87,16 @@ function modulePath(href) { return String(href || '').split('#')[0]; }
 
 // ── Visibility resolution ───────────────────────────────────────
 function visibleFor(user) {
+  const isPrashant = String(user && user.username || '').trim().toLowerCase() === 'prashant';
   const isAdmin = rolesOf(user).includes('admin');
   const isOwner = rolesOf(user).includes('owner');
   // Non-admins: visibility follows the (editable) role→pages permission map,
   // union'd across all of the user's roles. A module shows when its page path
   // is in that allow-list. Admin sees everything not hidden.
-  const allowed = (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
-  const canSee = (m) => m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))) || (['salary','incentives'].includes(m.key)&&String(user&&user.username||'').trim().toLowerCase()==='prashant'));
+  const allowed = isPrashant ? allowedPagesForUser(user) : (isAdmin || isOwner) ? '*' : allowedPagesForUser(user);
+  const canSee = (m) => isPrashant
+    ? Array.isArray(allowed) && allowed.includes(modulePath(m.href))
+    : m.ownerOnly ? isOwner : (allowed === '*' || (Array.isArray(allowed) && allowed.includes(modulePath(m.href))));
   return MODULES
     .filter(m => m.status !== 'hidden')
     .filter(canSee)

@@ -229,3 +229,27 @@ test('Prashant can administer salary without gaining access to unrelated modules
   assert.equal(apiAllowedForUser(p,'/api/admin/users','GET'),false);
   assert.equal(apiAllowedForUser(p,'/api/owner/summary','GET'),false);
 });
+
+test('Prashant sees only the requested operational workspace even with an Admin role',()=>{
+  const p={username:'Prashant',role:'admin',roles:['admin']};
+  assert.deepEqual(visibleFor(p).map(module=>module.key),[
+    'inventory-dashboard','inventory-care',
+    'procurement','fresh-proc','size-tracker',
+    'pl','rentals','expenses','salary','incentives',
+    'model-calendar'
+  ]);
+  for(const page of ['/inventory.html','/inventory-care.html','/procurement.html','/fresh-procurement.html','/size-tracker.html','/pnl.html','/rentals.html','/expenses.html','/salary.html','/incentives.html','/model-calendar.html']){
+    assert.equal(userCanAccessPath(p,page),true,page);
+  }
+  for(const page of ['/dashboard.html','/rack-locations.html','/orders.html','/seo-control.html','/meta-ads.html','/catalogue-images.html','/admin-users.html']){
+    assert.equal(userCanAccessPath(p,page),false,page);
+  }
+  assert.equal(apiAllowedForUser(p,'/api/expenses/list','GET'),true);
+  assert.equal(apiAllowedForUser(p,'/api/inventory-care','GET'),true);
+  assert.equal(apiAllowedForUser(p,'/api/procurement/history','GET'),true);
+  assert.equal(apiAllowedForUser(p,'/api/model-calendar','GET'),true);
+  assert.equal(apiAllowedForUser(p,'/api/orders','GET'),false);
+  assert.equal(apiAllowedForUser(p,'/api/seo-control','GET'),false);
+  assert.equal(apiAllowedForUser(p,'/api/marketing/meta','GET'),false);
+  assert.equal(apiAllowedForUser(p,'/api/admin/users','GET'),false);
+});

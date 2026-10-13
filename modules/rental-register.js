@@ -105,13 +105,14 @@ function snapshot(s,today=indiaDate()){
 }
 function register(router,{loadStore,saveStore,isOwner,audit,clock=()=>new Date()}){
   const deny=(res,error,status=400)=>res.status(status).json({success:false,error});
+  const canManageRentals=req=>isOwner(req)||String(req.user&&req.user.username||'').trim().toLowerCase()==='prashant';
   function tick(){const now=clock().toISOString(),today=indiaDate(clock()),s=loadStore(),imported=applySourceOverride(s,now),r=state(s),count=generate(r,today,now);if(imported||count||r.automation.lastCheckedDate!==today){r.automation={lastCheckedDate:today,lastSuccessAt:now,error:null};if(count)r.activity.push({at:now,by:'system',action:'automatic_dues',detail:count+' monthly charge(s) generated.'});r.revision++;s.rentals=r;saveStore(s);}return count;}
   let timer;
   function start(){if(timer)return;const run=()=>{try{tick();}catch(e){console.error('[rentals] scheduler failed:',e.message);try{const s=loadStore(),r=state(s);r.automation.error='Automatic dues could not be saved. Retry from Rental income.';s.rentals=r;saveStore(s);}catch{}}};run();timer=setInterval(run,15*60*1000);timer.unref();}
-  router.get('/api/expenses/rentals',(req,res)=>{if(!isOwner(req))return deny(res,'Owner only.',403);res.json(snapshot(loadStore(),indiaDate(clock())));});
-  router.get('/api/expenses/rentals/summary',(req,res)=>{if(!isOwner(req))return deny(res,'Owner only.',403);const d=snapshot(loadStore(),indiaDate(clock()));res.json({success:true,today:d.today,summary:d.summary,followupCount:d.followups.length,alertCount:d.alerts.length,error:d.automation.error||d.integrity[0]||null});});
+  router.get('/api/expenses/rentals',(req,res)=>{if(!canManageRentals(req))return deny(res,'Owner or Prashant only.',403);res.json(snapshot(loadStore(),indiaDate(clock())));});
+  router.get('/api/expenses/rentals/summary',(req,res)=>{if(!canManageRentals(req))return deny(res,'Owner or Prashant only.',403);const d=snapshot(loadStore(),indiaDate(clock()));res.json({success:true,today:d.today,summary:d.summary,followupCount:d.followups.length,alertCount:d.alerts.length,error:d.automation.error||d.integrity[0]||null});});
   router.post('/api/expenses/rentals',(req,res)=>{
-    if(!isOwner(req))return deny(res,'Owner only.',403);
+    if(!canManageRentals(req))return deny(res,'Owner or Prashant only.',403);
     const s=loadStore(),r=state(s),b=req.body||{},now=clock().toISOString(),today=indiaDate(clock());
     if(b.revision!=null&&b.revision!==r.revision)return deny(res,'The register changed. Refresh and try again.',409);
     let t=r.tenancies.find(x=>x.id===b.tenancyId);

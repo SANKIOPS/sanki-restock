@@ -33,7 +33,7 @@ const path   = require('path');
 // and enforces which pages each role may open. Basic-auth + x-api-key are
 // kept as admin fallbacks so scripts/automation and the bootstrap admin
 // never get locked out.
-const { verifySession, userCanAccessPath, rolesOf, landingFor } = require('./modules/auth-users');
+const { verifySession, userCanAccessPath, rolesOf, landingFor, isPrashant } = require('./modules/auth-users');
 
 // Static asset extensions any logged-in user may fetch regardless of role
 // (JS/CSS/images the shared pages need). Page/navigation requests are gated.
@@ -144,9 +144,18 @@ function apiRuleFor(p) {
 }
 
 function apiAllowedForUser(user, p, method='GET') {
-  if(isPrashantUser(user)&&p.startsWith('/api/salary/'))return true;
-  if(isPrashantUser(user)&&p.startsWith('/api/incentives'))return true;
-  if(isPrashantUser(user)&&((method==='POST'&&p==='/api/expenses/upload')||(method==='GET'&&p==='/api/expenses/config')))return true;
+  if (isPrashant(user)) {
+    const allowed = [
+      '/api/auth/me', '/api/modules',
+      '/api/inventory-care', '/api/stock-movements', '/api/inventory-costs', '/api/inventory-categorization',
+      '/api/products', '/api/inventory', '/api/collections', '/api/identify-product', '/api/data/',
+      '/api/showroom/locations', '/api/showroom/reconcile/exact',
+      '/api/procurement', '/api/fresh/', '/api/casuals/', '/api/sizetracker/',
+      '/api/pl/', '/api/expenses', '/api/salary/', '/api/incentives', '/api/model-calendar',
+      '/api/telegram/', '/api/velocity/remittance/upload'
+    ];
+    return allowed.some(prefix => p === prefix || p.startsWith(prefix));
+  }
   const userRoles = rolesOf(user);
   if (p === '/api/marketing/meta' || p.startsWith('/api/marketing/meta/')) return userRoles.includes('owner');
   // Rack assignment, catalogue refresh and RIS synchronization are Owner-only.
@@ -177,7 +186,7 @@ function apiAllowedForUser(user, p, method='GET') {
   return rule.roles.some(role => userRoles.includes(role));
 }
 
-function isPrashantUser(user){return String(user&&user.username||'').trim().toLowerCase()==='prashant';}
+function isPrashantUser(user){return isPrashant(user);}
 
 function gate(req, res, next) {
   // Decide on the NORMALIZED path so encoded/`..` traversal can't bypass the gate.
@@ -228,7 +237,7 @@ function gate(req, res, next) {
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.
-  if ((p === '/owner.html' || p === '/rentals.html' || p === '/meta-ads.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner')) {
+  if ((p === '/owner.html' || p === '/rentals.html' || p === '/meta-ads.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner') && !(isPrashant(user) && p === '/rentals.html')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
     return res.redirect(302, landingFor(user.role));
   }
@@ -249,12 +258,20 @@ function gate(req, res, next) {
     return next();
   }
 
+  // Prashant has a fixed operational workspace even if his stored role is
+  // Admin. This prevents an old broad role assignment from reopening hidden
+  // departments. Assets remain shared, but direct page navigation is gated.
+  if (isPrashant(user)) {
+    if (isAssetPath(p)) return next();
+    if (p === '/') return res.redirect(302, '/inventory.html');
+    if (userCanAccessPath(user, p)) return next();
+    return res.redirect(302, '/inventory.html');
+  }
+
   // ── Page/navigation gating by role (admin sees everything) ──
   if (rolesOf(user).includes('admin') || rolesOf(user).includes('owner')) return next();
   if (isAssetPath(p)) return next();                 // shared JS/CSS/images
   if (p === '/') return res.redirect(302, landingFor(user.role));
-  if(isPrashantUser(user)&&p==='/salary.html')return next();
-  if(isPrashantUser(user)&&p==='/incentives.html')return next();
   if (userCanAccessPath(user, p)) return next();     // union across all roles
   // Any other page/route this role isn't allowed → send to their home.
   return res.redirect(302, landingFor(user.role));
