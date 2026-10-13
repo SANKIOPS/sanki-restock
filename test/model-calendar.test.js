@@ -5,7 +5,7 @@ process.env.DATA_PATH=path.join(dir,'data.json');
 fs.writeFileSync(path.join(dir,'expenses.json'),JSON.stringify({expenses:{}}));
 // Tests must not send notifications or read the production store.
 require.cache[require.resolve('../modules/telegram')]={id:require.resolve('../modules/telegram'),filename:require.resolve('../modules/telegram'),loaded:true,exports:{}};
-const express=require('express'),{router}=require('../modules/expenses'),{apiAllowedForUser}=require('../auth'),{financial,businessDate}=require('../modules/model-calendar');
+const express=require('express'),{router}=require('../modules/expenses'),{apiAllowedForUser}=require('../auth'),{financial,businessDate,buildCombinations}=require('../modules/model-calendar');
 let server,base;
 test.before(async()=>{const app=express();app.use(express.json());app.use((req,res,next)=>{const role=req.headers['x-test-role']||'owner';req.user={username:'model-calendar-test',role,roles:[role]};next()});app.use(router);server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s))});base='http://127.0.0.1:'+server.address().port;});
 test.after(async()=>{if(server){server.closeAllConnections();await new Promise(r=>server.close(r))}fs.rmSync(dir,{recursive:true,force:true})});
@@ -106,4 +106,18 @@ test('Model Calendar role manages bookings and views payments without expense au
  const rolePayment=await call('POST','/api/expenses/'+id+'/pay',{amount:5000,account:'Services',paymentType:'Cash',paymentProof:'/test-pay.jpg',date:'2026-09-19'});assert.equal(rolePayment.status,200,rolePayment.error);
  s=await call('GET','/api/model-calendar',undefined,role);const linked=s.contracts.find(x=>x.id===c.id);assert.equal(linked.finance.paid,5000);assert.equal(linked.finance.due,10000);
  assert.equal((await call('POST','/api/model-calendar/contracts/'+c.id,{...contract,amount:16000,revision:s.revision},role)).status,400);
+});
+
+test('shoot planner prioritises unshot combinations and prevents model and pair repetition',()=>{
+ const product=(id,kind,designId,updatedAt,colour)=>({id,handle:id,title:id,kind,designId,updatedAt,colour,image:'/'+id+'.jpg',category:kind,totalQty:1,skus:[id]});
+ const products=[product('new-top','upper','TOP-NEW','2026-10-10','White'),product('new-top-blue','upper','TOP-NEW','2026-10-09','Blue'),product('old-top','upper','TOP-OLD','2026-09-01','Pink'),product('new-trouser','lower','LOWER-NEW','2026-10-09','Black'),product('old-trouser','lower','LOWER-OLD','2026-08-01','Blue'),product('used-top-colour','upper','TOP-USED','2026-10-11','Blue'),product('used-lower','lower','LOWER-USED','2026-10-11','Grey')];
+ const history=[{modelName:'Model A',status:'shot',upper:products[5],lower:products[6]}];
+ const result=buildCombinations(products,history,'Model A',2);
+ assert.equal(result.length,2);assert.equal(result[0].upper.id,'new-top');assert.equal(result[0].lower.id,'new-trouser');assert.equal(new Set(result.map(row=>row.upper.designId)).size,result.length);assert.ok(result.every(row=>row.upper.designId!=='TOP-USED'&&row.lower.designId!=='LOWER-USED'));
+ const otherModel=buildCombinations(products,history,'Model B',3);assert.ok(otherModel.every(row=>!(row.upper.id==='used-top-colour'&&row.lower.id==='used-lower')));
+});
+
+test('shoot planner UI stays limited to model, date and combination count with zoomable images',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../public/model-calendar.html'),'utf8'),ui=fs.readFileSync(path.join(__dirname,'../public/shoot-planner.js'),'utf8');
+ assert.match(html,/id="plannerModel"/);assert.match(html,/id="plannerDate"/);assert.match(html,/id="plannerCount"/);assert.match(html,/id="imageDialog"/);assert.match(ui,/Create combinations|Building unused combinations/);assert.match(ui,/data-zoom/);assert.match(ui,/Confirm &amp; assign/);assert.match(ui,/Mark shot/);
 });

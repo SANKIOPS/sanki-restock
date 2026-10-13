@@ -143,8 +143,12 @@ function groupFor(item) {
     productType: item.productType, audience: item.audience, fit: item.fit, line: item.line, season: '', sizeLabels: [] };
 }
 function defaultStyling(item) {
+  const group = groupFor(item);
+  const tuck = String(item.audience).toLowerCase() === 'women' && pilot.garmentCategory(group) === 'upper'
+    ? 'Tucked in'
+    : 'Auto';
   return pilot.normalizeStyling({ aesthetic: 'Limestone estate', modelOrigin: 'Indian', femaleComplexion: 'Fair', maleComplexion: 'Fair',
-    pair: 'Auto', tuck: 'Auto', shoes: 'Auto', chain: 'None', capStyle: 'None', bagStyle: 'None', bagColour: 'Auto', sunglasses: false, watch: false }, groupFor(item));
+    pair: 'Auto', tuck, shoes: 'Auto', chain: 'None', capStyle: 'None', bagStyle: 'None', bagColour: 'Auto', sunglasses: false, watch: false }, group);
 }
 function safeFile(name) { return /^[a-f0-9-]+-[a-z-]+-\d+\.png$/.test(name || '') ? name : ''; }
 function filePath(name) { const clean = safeFile(name); return clean ? path.join(IMAGE_DIR, clean) : ''; }
@@ -171,6 +175,7 @@ function codexBatchManifest(pilotState) {
       'Preserve the exact garment colour, print, weave, collar, buttons, pockets, sleeves, hem, silhouette and length.',
       'Return one image file per requested view. Never return a collage, split frame or contact sheet.',
       'Model views must match the saved audience exactly. Women use an adult woman; Men use an adult man.',
+      'Every women\'s upper must be tucked into its supporting trousers in all model views.',
       'Use understated old-money styling, a limestone-estate setting and natural editorial lighting.',
       'Keep the same trousers, shoes, accessories and model identity between matching front and three-quarter views.',
       'Do not add logos, text or watermarks. Do not invent unseen product details.',

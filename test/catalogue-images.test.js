@@ -41,4 +41,7 @@ test('catalogue Codex batch is a three-view built-in-tool manifest with no paid 
   assert.equal(batch.products[0].views[2].continuityView,'model-front');
   assert.deepEqual(batch.products[2].views.map(view=>view.type),['front','female','male']);
   assert.ok(batch.products.every(item=>item.fingerprint===studio.codexFingerprint(items.find(source=>source.productId===item.productId))));
+  assert.equal(batch.products[0].styling.tuck,'Tucked in');
+  assert.match(batch.products[0].views[1].prompt,/Wear the top tucked in/i);
+  assert.match(batch.instructions.join(' '),/women's upper must be tucked/i);
 });
