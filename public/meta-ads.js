@@ -9,16 +9,17 @@
     if(!preview && (file!==setupFile||setupRevision===null))return message('Preview this file first.',true);
     $('setupPreview').disabled=true;$('setupSave').disabled=true;
     try {
-      const body=new FormData();body.append('file',file);body.append('preview',String(preview));body.append('revision',String(preview?state.revision:setupRevision));
+      const body=new FormData();body.append('file',file);body.append('preview',String(preview));body.append('revision',String(preview?state.revision:setupRevision));body.append('completeCampaigns',String($('setupComplete').checked));body.append('confirmed',String(!preview));body.append('decisions',JSON.stringify([...$('setupReview').querySelectorAll('[data-missing-id]')].map(input=>({type:input.dataset.missingType,id:input.dataset.missingId,action:input.value}))));
       const response=await fetch(apiBase+'/import-setup',{method:'POST',credentials:'same-origin',body});const data=await response.json();
       if(!response.ok||!data.success)throw new Error(data.error||'Upload failed.');
-      if(preview){setupRevision=data.revision;setupFile=file;$('setupSummary').textContent=`${data.records.campaigns.length} campaign(s), ${data.records.adSets.length} ad set(s), ${data.records.ads.length} ad(s).\n${data.counts.created} new; ${data.counts.updated} updated; ${data.counts.unchanged} unchanged.\n`+data.records.campaigns.map(x=>x.name).join('\n')+'\n'+data.warnings.join('\n');$('setupSave').hidden=false;}
-      else {$('setupSave').hidden=true;setupRevision=null;$('setupSummary').textContent='Setup saved. Daily performance upload is the next step.';await load('Campaign setup imported.');}
+      if(preview){setupRevision=data.revision;setupFile=file;$('setupSummary').textContent=`${data.records.campaigns.length} campaign(s), ${data.records.adSets.length} ad set(s), ${data.records.ads.length} ad(s).\n${data.counts.created} new; ${data.counts.updated} updated; ${data.counts.unchanged} unchanged.\n`+data.records.campaigns.map(x=>x.name).join('\n')+'\n'+data.warnings.join('\n');$('setupReview').innerHTML='<h3>Review changes</h3>'+data.review.map(r=>'<details><summary>'+esc(r.action==='create'?'Added: ':'Changed: ')+esc(r.name)+'</summary>'+r.fields.map(f=>'<p><strong>'+esc(f.field)+'</strong><br>'+esc(JSON.stringify(f.before))+' → '+esc(JSON.stringify(f.after))+'</p>').join('')+'</details>').join('')+(data.missing.length?'<h3>Missing from complete export — confirm each</h3>':'')+data.missing.map(r=>'<label>'+esc(r.name)+'<select data-missing-id="'+esc(r.id)+'" data-missing-type="'+esc(r.type)+'"><option value="">Choose a decision</option><option value="keep">Keep existing</option><option value="remove">Confirm removed in Meta</option></select></label>').join('')+(!data.review.length&&!data.missing.length?'<p>No setup changes detected.</p>':'');$('setupSave').hidden=false;}
+      else {$('setupSave').hidden=true;$('setupReview').innerHTML='';setupRevision=null;$('setupSummary').textContent='Setup saved. Daily performance upload is the next step.';await load('Campaign setup imported.');}
     }catch(error){setupRevision=null;$('setupSave').hidden=true;$('setupSummary').textContent=error.message;}
     finally{$('setupPreview').disabled=false;$('setupSave').disabled=false;}
   }
   $('setupPreview').addEventListener('click',()=>uploadSetup(true));
-  $('setupSave').addEventListener('click',()=>uploadSetup(false));
+  $('setupSave').addEventListener('click',()=>{if([...$('setupReview').querySelectorAll('[data-missing-id]')].some(input=>!input.value)){message('Choose keep or removed for each missing record.',true);return;}uploadSetup(false);});
+  $('setupComplete').addEventListener('change',()=>{setupRevision=null;$('setupSave').hidden=true;$('setupReview').innerHTML='Preview again after changing export scope.';});
   $('setupFile').addEventListener('change',()=>{setupRevision=null;setupFile=null;$('setupSave').hidden=true;$('setupSummary').textContent='';});
   let performanceRevision=null,performanceFile=null,insightsPeriod="";
   async function uploadPerformance(preview){
@@ -36,7 +37,7 @@
   $('openPerformance').addEventListener('click',()=>{$('performancePanel').hidden=!$('performancePanel').hidden;});
   $('insightsPanel').addEventListener('change',event=>{if(event.target.id==='insightPeriodSelect'){insightsPeriod=event.target.value;load('Reporting period selected.');}});
   const paths = { campaigns: 'campaigns', adSets: 'adsets', ads: 'ads', results: 'results' };
-  const labels = { campaigns: 'Campaigns', adSets: 'Ad sets', ads: 'Ads', results: 'Results', changes: 'Changes',insights:'Insights' };
+  const labels = { campaigns: 'Campaigns', adSets: 'Ad sets', ads: 'Ads', results: 'Results', changes: 'History',insights:'Insights' };
   const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'ad', results: 'result' };
   const statusLabels = { draft: 'Draft', reported_running: 'Reported running', delivery_unconfirmed: 'Reported · verify delivery', active: 'Verified active', paused: 'Paused', completed: 'Completed', archived: 'Archived', unknown: 'Unconfirmed', pending: 'Pending' };
   const statuses = Object.entries(statusLabels);
@@ -432,7 +433,7 @@
     link.href=url;link.download='SANKI_Meta_'+view+'_'+new Date().toISOString().slice(0,10)+'.csv';link.click();URL.revokeObjectURL(url);
   }
   document.querySelectorAll('[data-tab]').forEach(tab=>tab.addEventListener('click',()=>{
-    view=tab.dataset.tab;sort=null;render();
+    if($('statusFilter').value==='history')$('statusFilter').value='';view=tab.dataset.tab;sort=null;render();
   }));
   $('records').addEventListener('click',event=>{
     const details=event.target.closest('[data-setup]');if(details){openSetupDetails(details.dataset.setup);return;}
@@ -475,10 +476,10 @@
   $('viewChildren').addEventListener('click',()=>{if(!selection[view].size)return;view=view==='campaigns'?'adSets':'ads';sort=null;render();});
   $('columnMode').addEventListener('change',()=>{sort=null;render();});
   $('openUpload').addEventListener('click',()=>{$('uploadPanel').hidden=!$('uploadPanel').hidden;});
-  $('allRecords').addEventListener('click',()=>{$('statusFilter').value='';render();});
-  $('runningRecords').addEventListener('click',()=>{$('statusFilter').value='reported_running';render();});
+  $('allRecords').addEventListener('click',()=>{$('statusFilter').value='';if(view==='changes')view='campaigns';render();});
+  $('runningRecords').addEventListener('click',()=>{$('statusFilter').value='reported_running';if(view==='changes')view='campaigns';render();});
   $('records').addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&event.target.matches('[data-sort]')){event.preventDefault();event.target.click();}});
-  ['campaignFilter','collectionFilter','statusFilter','destinationFilter','creativeTypeFilter','periodStartFilter','periodEndFilter'].forEach(id=>$(id).addEventListener('change',render));
+  ['campaignFilter','collectionFilter','statusFilter','destinationFilter','creativeTypeFilter','periodStartFilter','periodEndFilter'].forEach(id=>$(id).addEventListener('change',()=>{if(id==='statusFilter'){if($('statusFilter').value==='history')view='changes';else if(view==='changes')view='campaigns';}render();}));
   $('search').addEventListener('input',render);
   $('refresh').addEventListener('click',()=>load('Records refreshed.'));
   $('export').addEventListener('click',exportRows);$('add').addEventListener('click',()=>openEditor());
