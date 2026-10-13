@@ -9,6 +9,10 @@ const ORDERS_PATH = process.env.ORDERS_PATH || path.join(DATA_DIR, 'orders.json'
 const INCENTIVES_PATH = process.env.INCENTIVES_PATH || path.join(DATA_DIR, 'incentives.json');
 const RATE = 0.02;
 const DAILY_THRESHOLD = 10000;
+const EXCLUDED_CUSTOMERS = [
+  { name:'Gagan sir', id:'8898466611452', aliases:['gagan sir','gagan sir h'] },
+  { name:'Namita maam', id:'9059966025980', aliases:['namita mam','namita maam','namita ma am'] }
+];
 const SALESPERSONS = [
   { name:'Shivam', aliases:['shivam'], incentiveEligible:true },
   { name:'Krishnakant', aliases:['krishnakant', 'krishna kant', 'krishna'], incentiveEligible:true },
@@ -35,6 +39,11 @@ function normalizedWords(value){
   return String(value || '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 }
 function compact(value){ return normalizedWords(value).replace(/\s/g, ''); }
+function excludedCustomer(order){
+  const customer=order.customer||{},name=normalizedWords(customer.name),id=String(customer.id||'');
+  const noteLines=String(order.note||'').split(/\r?\n/).map(normalizedWords);
+  return EXCLUDED_CUSTOMERS.find(person=>(person.id&&person.id===id)||person.aliases.includes(name)||noteLines.some(line=>person.aliases.some(alias=>line===alias||line===alias+' sis'||line===alias+' sister')))||null;
+}
 function incentiveEligible(name){ return SALESPERSONS.some(person=>person.name===name&&person.incentiveEligible); }
 function escapeRegExp(value){ return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function levenshtein(a,b){
@@ -85,7 +94,7 @@ function buildRecords(orders, state){
   // order's current lifecycle label, decide whether value was collected.
   (orders || []).filter(order=>String(order.channel || '').toUpperCase()==='POS').forEach(order=>{
     const review=(state.reviews || {})[String(order.id)] || {},parsed=parseSalespeople(order.note),salespersons=Array.isArray(review.salespersons)?review.salespersons.filter(name=>SALESPERSONS.some(person=>person.name===name)):parsed.salespersons;
-    const noSalesperson=review.noSalesperson===true,transactions=(order.paymentTransactions || []).filter(successfulReceipt),groups=new Map();
+    const customerExclusion=excludedCustomer(order),noSalesperson=review.noSalesperson===true||!!customerExclusion,transactions=(order.paymentTransactions || []).filter(successfulReceipt),groups=new Map();
     if(!transactions.length){
       const date=String(order.processedAt || order.createdAt || '').slice(0,10);groups.set(date,[]);
     } else transactions.forEach(tx=>{const date=receiptDate(tx,order);if(!groups.has(date))groups.set(date,[]);groups.get(date).push(tx);});
@@ -96,9 +105,13 @@ function buildRecords(orders, state){
       const recordOnlySalespersons=salespersons.filter(name=>!incentiveEligible(name)),recordOnly=!noSalesperson&&salespersons.length>0&&recordOnlySalespersons.length===salespersons.length;
       // Record-only orders cannot create a payable, so tender review is not
       // required for them. Mixed orders retain every normal receipt check.
-      const issues=[];if(!recordOnly&&!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(!recordOnly&&unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
+      // Once an owner has explicitly confirmed that an order has no eligible
+      // salesperson, payment-sync and tender-classification gaps cannot create
+      // an incentive liability. Preserve the warning data in the order itself,
+      // but do not force the already-reviewed exclusion back into Needs review.
+      const issues=[];if(!recordOnly&&!noSalesperson&&!rows.length)issues.push('Payment transactions have not been synced from Shopify.');if(!noSalesperson&&!salespersons.length)issues.push(parsed.suggestions.length?'Confirm the suggested salesperson spelling.':'Salesperson was not found in the order note.');if(!recordOnly&&!noSalesperson&&unknown>0)issues.push('Classify '+mapped.filter(tx=>tx.effectiveMode==='unknown').map(tx=>tx.gateway||'unnamed gateway').join(', ')+'.');
       const portions=splitMoney(eligible,salespersons.length),recordOnlyAmount=noSalesperson?0:money(salespersons.reduce((total,name,index)=>total+(!incentiveEligible(name)?portions[index]:0),0)),incentiveEligibleAmount=noSalesperson?0:money(eligible-recordOnlyAmount);
-      let exclusionReason='';if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(recordOnlySalespersons.length)exclusionReason=recordOnlySalespersons.join(' + ')+': former employee — record only; no incentive payable on their share.';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
+      let exclusionReason='';if(customerExclusion)exclusionReason=customerExclusion.name+': customer orders excluded from incentives';else if(noSalesperson)exclusionReason='Confirmed: no eligible salesperson';else if(recordOnlySalespersons.length)exclusionReason=recordOnlySalespersons.join(' + ')+': former employee — record only; no incentive payable on their share.';else if(!issues.length&&eligible<=0)exclusionReason=storeCredit>0&&storeCredit===totalReceived?'Store credit only':'No eligible cash, UPI or card-machine receipt';
       const status=recordOnly?'record_only':issues.length?'needs_review':(noSalesperson||eligible<=0?'excluded':'ready');
       records.push({
         id:String(order.id)+'|'+date,orderId:String(order.id),orderNumber:String(order.name || order.number || order.id),customerName:String(order.customer&&order.customer.name || ''),receiptDate:date,

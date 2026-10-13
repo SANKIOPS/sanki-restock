@@ -10,6 +10,7 @@ const multer  = require('multer');
 const Jimp    = require('jimp');
 const { gate } = require('./auth');
 const { shopifyClient } = require('./modules/shopify-client');
+const { buildExactPlan, normalizeSku } = require('./modules/exact-inventory-reconcile');
 require('dotenv').config();
 
 // Multer — memory storage for remittance Excel upload (no disk needed)
@@ -2243,6 +2244,188 @@ app.get('/api/showroom/inventory', async (req, res) => {
       rows
     });
   } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
+// POST /api/showroom/reconcile/exact
+// Owner-only, sheet-driven inventory correction. The request is dry-run by
+// default and applies only when `apply: true` is supplied. Quantities are set
+// as physical `on_hand` amounts (not merely available amounts), because the
+// source workbook is a physical Display/Warehouse count.
+app.post('/api/showroom/reconcile/exact', async (req, res) => {
+  try {
+    const roles = Array.isArray(req.user && req.user.roles)
+      ? req.user.roles
+      : [req.user && req.user.role].filter(Boolean);
+    if (!roles.map(role => String(role).toLowerCase()).includes('owner')) {
+      return res.status(403).json({ success: false, error: 'Owner only.' });
+    }
+    const settings = loadShowroomSettings();
+    if (!settings.frontLocationId || !settings.backLocationId) {
+      return res.status(400).json({ success: false, error: 'Configure Display and Warehouse locations first.' });
+    }
+    const rows = Array.isArray(req.body && req.body.rows) ? req.body.rows : [];
+    if (!rows.length || rows.length > 2000) {
+      return res.status(400).json({ success: false, error: 'Provide between 1 and 2,000 SKU rows.' });
+    }
+    const aliases = req.body && typeof req.body.aliases === 'object' && req.body.aliases
+      ? req.body.aliases
+      : {};
+    const zeroUnlisted = req.body && req.body.zeroUnlisted !== false;
+    const apply = req.body && req.body.apply === true;
+
+    async function graphql(query, variables) {
+      const response = await shopifyClient.request(
+        `https://${SHOPIFY_STORE}/admin/api/2024-01/graphql.json`,
+        { method: 'POST', body: JSON.stringify({ query, variables }) }
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(`Shopify GraphQL ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
+      if (Array.isArray(body.errors) && body.errors.length) {
+        throw new Error(body.errors.map(error => error.message).join('; '));
+      }
+      return body.data || {};
+    }
+
+    const all = await shopifyFetchAll(require('node-fetch'),
+      `https://${SHOPIFY_STORE}/admin/api/2024-01/products.json?limit=250&fields=id,title,variants`
+    );
+    const variants = [];
+    for (const product of all) {
+      for (const variant of product.variants || []) {
+        if (!variant.inventory_item_id || !normalizeSku(variant.sku)) continue;
+        variants.push({
+          productId: String(product.id),
+          name: product.title || '',
+          sku: variant.sku || '',
+          variantId: String(variant.id),
+          inventoryItemId: String(variant.inventory_item_id),
+        });
+      }
+    }
+
+    const levels = {};
+    const connected = {};
+    const inventoryIds = variants.map(variant => `gid://shopify/InventoryItem/${variant.inventoryItemId}`);
+    const quantityQuery = `query ExactInventoryLevels($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on InventoryItem {
+          id
+          inventoryLevels(first: 2) {
+            nodes {
+              location { id }
+              quantities(names: ["on_hand"]) { name quantity }
+            }
+          }
+        }
+      }
+    }`;
+    for (let index = 0; index < inventoryIds.length; index += 75) {
+      const data = await graphql(quantityQuery, { ids: inventoryIds.slice(index, index + 75) });
+      for (const node of data.nodes || []) {
+        if (!node || !node.id) continue;
+        const itemId = String(node.id).split('/').pop();
+        levels[itemId] = levels[itemId] || {};
+        connected[itemId] = connected[itemId] || {};
+        for (const level of (node.inventoryLevels && node.inventoryLevels.nodes) || []) {
+          const locationId = String(level.location && level.location.id || '').split('/').pop();
+          const quantity = (level.quantities || []).find(entry => entry.name === 'on_hand');
+          if (!locationId) continue;
+          levels[itemId][locationId] = Number(quantity && quantity.quantity || 0);
+          connected[itemId][locationId] = true;
+        }
+      }
+    }
+
+    const plan = buildExactPlan({
+      variants,
+      levels,
+      rows,
+      aliases,
+      frontLocationId: settings.frontLocationId,
+      backLocationId: settings.backLocationId,
+      zeroUnlisted,
+    });
+    const preview = {
+      success: true,
+      applied: false,
+      meta: {
+        shopifyVariants: variants.length,
+        desiredSkus: plan.desiredSkuCount,
+        changes: plan.changes.length,
+        missingSkus: plan.missing.length,
+        duplicateSkuGroups: plan.duplicateVariants.length,
+        ...plan.totals,
+      },
+      missing: plan.missing,
+      duplicates: plan.duplicateVariants,
+      sample: plan.changes.slice(0, 100),
+    };
+    if (!apply) return res.json(preview);
+    if (plan.missing.length) {
+      return res.status(409).json({ ...preview, error: 'Nothing was changed because one or more sheet SKUs are missing in Shopify.' });
+    }
+
+    // Activate only desired non-zero locations that are not yet stocked there.
+    // Zero quantities at unconnected locations already equal the desired state.
+    const connectErrors = [];
+    for (const change of plan.changes) {
+      if (change.to <= 0 || (connected[change.inventoryItemId] || {})[change.locationId]) continue;
+      const response = await shopifyClient.request(
+        `https://${SHOPIFY_STORE}/admin/api/2024-01/inventory_levels/connect.json`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            location_id: Number(change.locationId),
+            inventory_item_id: Number(change.inventoryItemId),
+          }),
+        }
+      );
+      if (!response.ok && response.status !== 422) {
+        connectErrors.push({ sku: change.sku, location: change.location, status: response.status, body: (await response.text()).slice(0, 300) });
+      } else {
+        connected[change.inventoryItemId] = connected[change.inventoryItemId] || {};
+        connected[change.inventoryItemId][change.locationId] = true;
+      }
+    }
+    if (connectErrors.length) {
+      return res.status(502).json({ ...preview, error: 'Could not activate every required location.', connectErrors });
+    }
+
+    const setMutation = `mutation SetExactInventory($input: InventorySetQuantitiesInput!) {
+      inventorySetQuantities(input: $input) {
+        inventoryAdjustmentGroup { createdAt reason }
+        userErrors { field message }
+      }
+    }`;
+    const batches = [];
+    for (let index = 0; index < plan.changes.length; index += 200) {
+      const slice = plan.changes.slice(index, index + 200);
+      const data = await graphql(setMutation, {
+        input: {
+          name: 'on_hand',
+          reason: 'correction',
+          ignoreCompareQuantity: true,
+          referenceDocumentUri: `gid://sanki/PhysicalInventory/${Date.now()}-${index / 200 + 1}`,
+          quantities: slice.map(change => ({
+            inventoryItemId: `gid://shopify/InventoryItem/${change.inventoryItemId}`,
+            locationId: `gid://shopify/Location/${change.locationId}`,
+            quantity: change.to,
+          })),
+        },
+      });
+      const result = data.inventorySetQuantities || {};
+      const userErrors = result.userErrors || [];
+      batches.push({ count: slice.length, userErrors });
+      if (userErrors.length) {
+        return res.status(502).json({ ...preview, error: 'Shopify rejected an inventory batch.', batches });
+      }
+    }
+
+    res.json({ ...preview, applied: true, batches });
+  } catch (error) {
+    console.error('[/api/showroom/reconcile/exact]', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 

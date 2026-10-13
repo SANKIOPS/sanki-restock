@@ -127,6 +127,40 @@ test('record-only orders do not block active daily approval even with missing or
   assert.equal(invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson:'Shivam'}).status,200);assert.equal(current.approvals['2026-10-01|Shivam'].incentive,240);
 });
 
+test('confirmed no-salesperson orders with unsynced payments do not block same-day approval',()=>{
+  const orders=[
+    order(2765,{note:'903362\nKrishna',total:11694,transactions:[tx(2765,11694,'UPI')]}),
+    order(2767,{note:'',total:4998}),
+    order(2768,{note:'',total:4998})
+  ];
+  let current=state({revision:2,audit:[],reviews:{
+    '2767':{salespersons:[],noSalesperson:true,gatewayModes:{},reason:'Confirmed no eligible salesperson',reviewedAt:'2026-10-12T10:00:00.000Z',reviewedBy:'owner'},
+    '2768':{salespersons:[],noSalesperson:true,gatewayModes:{},reason:'Confirmed no eligible salesperson',reviewedAt:'2026-10-12T10:01:00.000Z',reviewedBy:'owner'}
+  }});
+  const before=buildView(orders,current),excluded=before.records.filter(row=>['2767','2768'].includes(row.orderId));
+  assert.equal(before.summary.needsReview,0);assert.deepEqual(excluded.map(row=>row.reviewStatus),['excluded','excluded']);assert.ok(excluded.every(row=>row.reviewIssues.length===0));
+  const router=createRouter({loadOrders:()=>orders,loadState:()=>current,saveState:value=>{current=value;}}),approved=invoke(router,'post','/api/incentives/approve-day',{date:'2026-10-01',salesperson:'Krishnakant'});
+  assert.equal(approved.status,200);assert.equal(current.approvals['2026-10-01|Krishnakant'].eligibleAmount,11694);assert.equal(current.approvals['2026-10-01|Krishnakant'].incentive,233.88);
+});
+
+test('Gagan and Namita customer orders are excluded without excluding discount approvals',()=>{
+  const gagan={...order(2845,{note:'Krishna',transactions:[tx(300,15000,'Cash')]}),customer:{name:'GAGAN SIR (H)'}};
+  const namita={...order(2848,{note:'838321\nKrishna',transactions:[tx(301,11650.10,'Card Machine')]}),customer:{id:'9059966025980',name:''}};
+  const discount=order(2799,{note:'Krishna\nDisconut approve by Gagan sir',transactions:[tx(302,12000,'Cash')]});
+  const view=buildView([gagan,namita,discount],state());
+  for(const id of ['2845','2848']){const row=view.records.find(x=>x.orderId===id);assert.equal(row.reviewStatus,'excluded');assert.equal(row.eligibleAmount,0);assert.deepEqual(row.reviewIssues,[]);assert.deepEqual(row.shares,[]);assert.match(row.exclusionReason,/customer orders excluded/);}
+  assert.equal(view.records.find(x=>x.orderId==='2799').reviewStatus,'ready');assert.equal(view.days[0].eligibleAmount,12000);assert.equal(view.days[0].incentive,240);
+  const missing=buildView([order(2730,{note:'Namita Mam Sister',total:6297})],state());assert.equal(missing.records[0].reviewStatus,'excluded');assert.equal(missing.summary.needsReview,0);
+  const hiddenName=buildView([{...gagan,customer:{id:'8898466611452',name:''}}],state());assert.equal(hiddenName.records[0].reviewStatus,'excluded');
+});
+
+test('order mirror keeps customer identity when customer names are unavailable',()=>{
+  const {normalizeOrder}=require('../modules/orders');
+  const raw={id:'2848',source_name:'pos',customer:{id:9059966025980},note:'Krishna'};
+  const normalized=normalizeOrder(raw);assert.equal(normalized.customer.id,'9059966025980');assert.equal(buildView([Object.assign(normalized,{processedAt:'2026-10-01',paymentTransactions:[tx(303,11650.10,'UPI')]})],state()).records[0].reviewStatus,'excluded');
+  const later=normalizeOrder({...raw,customer:{}},normalized);assert.equal(later.customer.id,'9059966025980');
+});
+
 test('shared active and former sales preserve equal shares without reallocating former incentives',()=>{
   const rows=[order(25,{note:'123456\nShivam + Isha',total:24000,transactions:[tx(25,24000,'Card Machine')]})],view=buildView(rows,state()),row=view.records[0];
   assert.equal(row.reviewStatus,'ready');assert.equal(row.eligibleTenderAmount,24000);assert.equal(row.eligibleAmount,12000);assert.equal(row.recordOnlyAmount,12000);assert.equal(view.summary.eligibleReceived,12000);assert.equal(view.summary.incentiveEarned,240);

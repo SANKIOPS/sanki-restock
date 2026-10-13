@@ -178,6 +178,28 @@ test('salary advances require owner approval and proof-backed posting, then reco
   const tooMuch=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-08'},body:{empId:emp.id,amount:6000},role:'owner'}); assert.equal(tooMuch.status,400);
 });
 
+test('legacy advances and payrollMonth-only recoveries remain editable from payroll', () => {
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Legacy Advance Deduction',salary:30000,channel:'Shared'}}).body.employee;
+  const salPath=path.join(tempDir,'salary.json'),state=JSON.parse(fs.readFileSync(salPath,'utf8'));
+  state.advances['ADV-LEGACY-DEDUCTION']={id:'ADV-LEGACY-DEDUCTION',empId:emp.id,employeeName:emp.name,amount:10000,date:'2098-04-15',account:'Axis Bank 3448',recoveries:[],active:true};
+  fs.writeFileSync(salPath,JSON.stringify(state));
+
+  const saved=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2098-04'},body:{empId:emp.id,amount:2500,reason:'First payroll deduction'},role:'owner'});
+  assert.equal(saved.status,200,'an older advance without recoveryStartMonth can be deducted');
+  let row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2098-04'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.advanceDueBeforeDeduction,10000);assert.equal(row.loggedAdvanceRecovery,2500);assert.equal(row.outstandingAdvance,7500);
+
+  const legacyState=JSON.parse(fs.readFileSync(salPath,'utf8')),legacyRecovery=legacyState.advances['ADV-LEGACY-DEDUCTION'].recoveries[0];
+  delete legacyRecovery.ym;legacyRecovery.payrollMonth='2098-04';fs.writeFileSync(salPath,JSON.stringify(legacyState));
+  row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2098-04'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.loggedAdvanceRecovery,2500,'a legacy payrollMonth-only recovery is still shown in Deduct now');
+
+  const edited=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2098-04'},body:{empId:emp.id,amount:3000,reason:'Corrected deduction'},role:'owner'});
+  assert.equal(edited.status,200);
+  const finalState=JSON.parse(fs.readFileSync(salPath,'utf8')),recoveries=finalState.advances['ADV-LEGACY-DEDUCTION'].recoveries;
+  assert.equal(recoveries.length,1,'editing replaces the prior payroll-month deduction');assert.equal(recoveries[0].amount,3000);
+});
+
 test('recent activity API keeps complete history despite register filters and never changes ledger data',()=>{
   const employee=invoke('POST','/api/salary/employees',{body:{name:'Activity Register Employee',salary:20000}}).body.employee;
   const old=postAdvance(employee,{amount:1234,date:'2098-01-01'}),newer=postAdvance(employee,{amount:456,date:'2098-02-01'}),cancelled=postAdvance(employee,{amount:789,date:'2098-02-02'});
@@ -206,15 +228,29 @@ test('recent activity stays within the selected salary entity and preserves sala
   assert.equal(invoke('GET','/api/salary/advances',{role:'claimant'}).status,403);
 });
 
-test('advance recovery starts from its actual payout month, not a proposed recovery month',()=>{
+test('next-month advance can be recovered from the preceding salary being paid',()=>{
   const emp=invoke('POST','/api/salary/employees',{body:{name:'Historical Recovery',salary:30000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,paidDays:30},role:'owner'});
   const made=postAdvance(emp,{amount:3000,date:'2026-12-07',account:'Axis Bank 3448',proof:'/historical.jpg',recoveryStartMonth:'2026-11'});
   assert.equal(made.date,'2026-12-07');assert.equal(made.recoveryStartMonth,'2026-12');
-  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000},role:'owner'}).status,400);
-  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-12'},body:{empId:emp.id,amount:1000,reason:'Partial recovery'},role:'owner'}).status,200);
-  const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-12'}}).body.rows.find(x=>x.id===emp.id);
-  assert.equal(row.loggedAdvanceRecovery,1000);
-  const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,2000);
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-10'},body:{empId:emp.id,amount:3000,reason:'Too early'},role:'owner'}).status,400,'an advance more than one month later remains ineligible');
+  assert.equal(invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-11'},body:{empId:emp.id,amount:3000,reason:'Advance paid before November salary settlement'},role:'owner'}).status,200);
+  const row=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-11'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(row.advanceDueBeforeDeduction,3000);assert.equal(row.loggedAdvanceRecovery,3000);assert.equal(row.netPayable,27000);
+  const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,0);assert.equal(updated.recoveries[0].payrollMonth,'2026-11');
+});
+
+test('October advance deduction reduces September payroll payable',()=>{
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'September Recovery Example',salary:31000}}).body.employee;
+  invoke('POST','/api/salary/row/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,paidDays:30},role:'owner'});
+  const made=postAdvance(emp,{amount:10000,date:'2026-10-01',account:'Axis Bank 3448',proof:'/october-advance.jpg'});
+  const before=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(before.advanceDueBeforeDeduction,10000);assert.equal(before.loggedAdvanceRecovery,0);assert.equal(before.netPayable,31000);
+  const saved=invoke('POST','/api/salary/recoveries/:ym',{params:{ym:'2026-09'},body:{empId:emp.id,amount:10000,reason:'Deduct advance paid before September salary settlement'},role:'owner'});
+  assert.equal(saved.status,200);
+  const after=invoke('GET','/api/salary/month/:ym',{params:{ym:'2026-09'}}).body.rows.find(x=>x.id===emp.id);
+  assert.equal(after.advanceDueBeforeDeduction,10000);assert.equal(after.loggedAdvanceRecovery,10000);assert.equal(after.outstandingAdvance,0);assert.equal(after.netPayable,21000);
+  const updated=invoke('GET','/api/salary/advances').body.advances.find(x=>x.id===made.id);assert.equal(updated.outstanding,0);assert.equal(updated.recoveries[0].payrollMonth,'2026-09');
 });
 
 test('owner can post a proof-backed employee advance immediately without approval',()=>{

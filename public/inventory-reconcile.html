@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Exact Inventory Reconciliation · SANKI</title>
+  <style>
+    :root{font-family:Inter,system-ui,sans-serif;color:#173f36;background:#f8f6ed}body{margin:0;padding:32px}.card{max-width:1100px;margin:auto;background:#fffdf5;border:1px solid #cfe3dc;border-radius:18px;padding:28px;box-shadow:0 14px 40px #173f3612}h1{margin:0 0 8px}p{color:#60746e}.warning{background:#fff7d9;border:1px solid #efcf64;padding:12px 14px;border-radius:10px}textarea{box-sizing:border-box;width:100%;min-height:280px;border:1px solid #b9d4cb;border-radius:12px;padding:14px;font:13px ui-monospace,monospace;margin-top:14px}button{border:0;border-radius:10px;padding:12px 18px;font-weight:700;cursor:pointer;margin:14px 8px 0 0}.preview{background:#e3f1ec;color:#086b50}.apply{background:#087f5b;color:white}.apply:disabled,button:disabled{opacity:.45;cursor:not-allowed}pre{white-space:pre-wrap;word-break:break-word;background:#102d27;color:#eafff6;border-radius:12px;padding:16px;max-height:460px;overflow:auto}.summary{font-size:18px;font-weight:700;color:#0b604b}.ok{color:#087f5b}.bad{color:#a23b24}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Exact inventory reconciliation</h1>
+    <p>Owner-only tool. Preview first; Apply sets Shopify physical <strong>On hand</strong> quantities for Display and Warehouse exactly to the supplied sheet truth.</p>
+    <div class="warning">“Zero Shopify-only stock” is enabled: any currently stocked SKU absent from the sheet will be set to zero at both locations.</div>
+    <textarea id="payload" placeholder='Paste the exported inventory JSON here'></textarea>
+    <label><input id="zero" type="checkbox" checked> Zero Shopify-only stock</label><br>
+    <button class="preview" id="preview">Preview exact changes</button>
+    <button class="apply" id="apply" disabled>Apply verified preview</button>
+    <p class="summary" id="summary"></p>
+    <pre id="result">Waiting for inventory JSON.</pre>
+  </main>
+  <script>
+    const payload = document.getElementById('payload');
+    const previewButton = document.getElementById('preview');
+    const applyButton = document.getElementById('apply');
+    const summary = document.getElementById('summary');
+    const result = document.getElementById('result');
+    let lastRequest = null;
+    function requestBody(apply) {
+      const parsed = JSON.parse(payload.value);
+      const inventory = parsed.inventory || parsed;
+      const rows = Array.isArray(inventory) ? inventory : Object.entries(inventory).map(([sku, qty]) => ({
+        sku,
+        frontQty: Number(qty.display || qty.front || 0),
+        backQty: Number(qty.warehouse || qty.back || 0),
+      }));
+      return {
+        rows,
+        aliases: parsed.aliases || {},
+        zeroUnlisted: document.getElementById('zero').checked,
+        apply,
+      };
+    }
+    async function run(apply) {
+      previewButton.disabled = true;
+      applyButton.disabled = true;
+      summary.textContent = apply ? 'Applying…' : 'Checking live Shopify…';
+      result.textContent = 'Please wait.';
+      try {
+        const body = apply ? { ...lastRequest, apply: true } : requestBody(false);
+        const response = await fetch('/api/showroom/reconcile/exact', {
+          method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        result.textContent = JSON.stringify(data, null, 2);
+        if (!response.ok || !data.success) throw new Error(data.error || `HTTP ${response.status}`);
+        const meta = data.meta || {};
+        summary.className = 'summary ' + (data.applied ? 'ok' : '');
+        summary.textContent = data.applied
+          ? `Applied ${meta.changes} exact location corrections. Final target: Display ${meta.desiredFront}, Warehouse ${meta.desiredBack}.`
+          : `Preview: ${meta.changes} corrections; target Display ${meta.desiredFront}, Warehouse ${meta.desiredBack}; missing SKUs ${meta.missingSkus}.`;
+        if (!apply && meta.missingSkus === 0) {
+          lastRequest = body;
+          applyButton.disabled = false;
+        }
+      } catch (error) {
+        summary.className = 'summary bad';
+        summary.textContent = error.message;
+      } finally {
+        previewButton.disabled = false;
+      }
+    }
+    previewButton.addEventListener('click', () => run(false));
+    applyButton.addEventListener('click', () => run(true));
+  </script>
+</body>
+</html>
