@@ -14,6 +14,13 @@
     <div class="actions"><button id="refresh">Refresh</button><button id="export" disabled>Export CSV</button><button class="primary" id="add" disabled>+ Add ad set</button></div>
   </header>
   <p class="record-note">Tracking records. Changes here do not publish ads or change settings in Meta.</p>
+  <section class="workspace" style="padding:16px;margin-bottom:16px" aria-label="Import campaign setup">
+    <h2>Upload campaign setup</h2><p class="muted">Choose the configuration export from Meta. Preview it, then save campaigns, ad sets and creatives together.</p>
+    <input id="setupFile" type="file" accept=".csv,.xlsx" aria-label="Meta configuration file">
+    <button id="setupPreview" type="button">Preview upload</button>
+    <div id="setupSummary" role="status" style="white-space:pre-wrap"></div>
+    <button id="setupSave" type="button" class="primary" hidden>Save setup</button>
+  </section>
   <section class="stats" id="stats" aria-label="Configured campaign summary"></section>
   <div id="message" role="status" aria-live="polite">Loading marketing records…</div>
   <section class="workspace" aria-label="Marketing records">

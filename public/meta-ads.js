@@ -2,6 +2,24 @@
 (() => {
   const $ = id => document.getElementById(id);
   const apiBase = '/api/marketing/meta';
+  let setupRevision=null, setupFile=null;
+  async function uploadSetup(preview) {
+    const file=$('setupFile').files[0];
+    if(!state||!file)return message('Choose a configuration file after records load.',true);
+    if(!preview && (file!==setupFile||setupRevision===null))return message('Preview this file first.',true);
+    $('setupPreview').disabled=true;$('setupSave').disabled=true;
+    try {
+      const body=new FormData();body.append('file',file);body.append('preview',String(preview));body.append('revision',String(preview?state.revision:setupRevision));
+      const response=await fetch(apiBase+'/import-setup',{method:'POST',credentials:'same-origin',body});const data=await response.json();
+      if(!response.ok||!data.success)throw new Error(data.error||'Upload failed.');
+      if(preview){setupRevision=data.revision;setupFile=file;$('setupSummary').textContent=`${data.records.campaigns.length} campaign(s), ${data.records.adSets.length} ad set(s), ${data.records.ads.length} ad(s).\n${data.counts.created} new; ${data.counts.updated} updated; ${data.counts.unchanged} unchanged.\n`+data.records.campaigns.map(x=>x.name).join('\n')+'\n'+data.warnings.join('\n');$('setupSave').hidden=false;}
+      else {$('setupSave').hidden=true;setupRevision=null;$('setupSummary').textContent='Setup saved. Daily performance upload is the next step.';await load('Campaign setup imported.');}
+    }catch(error){setupRevision=null;$('setupSave').hidden=true;$('setupSummary').textContent=error.message;}
+    finally{$('setupPreview').disabled=false;$('setupSave').disabled=false;}
+  }
+  $('setupPreview').addEventListener('click',()=>uploadSetup(true));
+  $('setupSave').addEventListener('click',()=>uploadSetup(false));
+  $('setupFile').addEventListener('change',()=>{setupRevision=null;setupFile=null;$('setupSave').hidden=true;$('setupSummary').textContent='';});
   const paths = { campaigns: 'campaigns', adSets: 'adsets', ads: 'ads', results: 'results' };
   const labels = { campaigns: 'Campaigns', adSets: 'Ad sets', ads: 'Creatives', results: 'Results', changes: 'Changes' };
   const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'creative', results: 'result' };
