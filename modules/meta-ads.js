@@ -34,6 +34,7 @@ const SCHEMAS = {
     status: ['status'], confirmedOn: ['date'], notes: ['text', 5000]
   },
   ads: {
+    collection:['text',80],creativeTypes:['list',100],
     metaSourceId: ['text',120], adSetId: ['id', true], name: ['text', 200, true], model: ['text', 160],
     format: ['text', 100], description: ['text', 5000], mediaUrls: ['urls'],
     setupSource:['text',60000],whatsappNumber:['phone'],mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
