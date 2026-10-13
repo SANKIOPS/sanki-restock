@@ -24,8 +24,7 @@ function parseSetup(buffer) {
     if(locations.length)set.locations=locations;else warnings.add(`${set.name}: location and radius not supplied; existing locations retained.`);
     let targeting=[];
     if(text(r,'Flexible Inclusions')){try{targeting=JSON.parse(text(r,'Flexible Inclusions'));if(!Array.isArray(targeting))throw new Error();}catch{throw new Error(`Cannot read audience settings for ${set.name}.`);}}
-    const selections=targeting.flatMap(g=>[...(g.interests||[]),...(g.behaviors||[])].map(x=>x.name).filter(Boolean));
-    if(selections.length){set.interests=selections;set.interestsConfirmed=true;}else warnings.add(`${set.name}: blank interests need confirmation; existing interests retained.`);
+    if(text(r,'Flexible Inclusions')){set.interests=targeting.flatMap(g=>(g.interests||[]).map(x=>x.name).filter(Boolean));set.interestsConfirmed=true;set.behaviors=targeting.flatMap(g=>(g.behaviors||[]).map(x=>x.name).filter(Boolean));set.behaviorsConfirmed=true;}else warnings.add(`${set.name}: blank targeting needs confirmation; existing selections retained.`);
     set.audienceMode=`Advantage audience: ${text(r,'Advantage Audience')||'unconfirmed'}; age range: ${text(r,'Age Range')||'not supplied'}; settings: ${text(r,'Individual Setting')||'not supplied'}; expansion: ${text(r,'Targeting Optimization')||'unconfirmed'}`;
     const placements=['Publisher Platforms','Facebook Positions','Instagram Positions','Audience Network Positions','Messenger Positions'].flatMap(k=>text(r,k)?[`${k}: ${text(r,k)}`]:[]);
     if(placements.length){set.placements=placements;set.placementsConfirmed=true;}
@@ -34,6 +33,8 @@ function parseSetup(buffer) {
     if(text(r,'Locales'))warnings.add(`${set.name}: language codes are retained in the source export; names require confirmation.`);
     put('adSets',set);
     const ad={id:adId,adSetId,name:text(r,'Ad Name'),status:status(text(r,'Ad Status')),format:text(r,'Creative Type'),primaryText:text(r,'Body'),cta:text(r,'Call to Action')};
+    ad.setupSource=JSON.stringify(Object.fromEntries(Object.keys(r).filter(k=>text(r,k)).map(k=>[k,text(r,k)])));
+    if(text(r,'Call to Action WhatsApp Number'))ad.whatsappNumber=text(r,'Call to Action WhatsApp Number');
     const urls=['Instagram Preview Link','Permalink','Preview Link'].map(k=>text(r,k)).filter(Boolean);if(urls.length)ad.mediaUrls=urls;
     put('ads',ad);
   }

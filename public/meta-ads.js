@@ -59,6 +59,8 @@
   const nameCell = (row, name, subtitle) => '<button class="row-title" '+(['campaigns','adSets'].includes(view)?'data-drill':'data-edit')+'="' + esc(row.id) + '">' + esc(name || row.name || row.id) + '</button>' + note(subtitle);
   const lines = values => values.length ? '<div class="list-lines">' + values.map(esc).join('<br>') + '</div>' : pending();
   const locationText = row => (row.locations || []).map(x => x.name + (missing(x.radiusKm) ? ' · radius pending' : ' +' + x.radiusKm + ' km'));
+  const goalText=value=>({REACH:'Maximise reach',PROFILE_VISIT:'Instagram profile visits',LINK_CLICKS:'Maximise link clicks',CONVERSATIONS:'Messaging conversations'}[value]||value);
+  const setPhones=row=>[...new Set([row.whatsappNumber,...state.ads.filter(a=>a.adSetId===row.id&&!a.archived).map(a=>a.whatsappNumber)].filter(Boolean))];
   const genderText = value => ({women:'Women', men:'Men', all:'All genders'}[value] || value);
   const campaignSets = row => state.adSets.filter(x => x.campaignId === row.id && !x.archived);
   const setBudget = rows => rows.reduce((sum, row) => sum + (row.budgetDaily || 0), 0);
@@ -90,13 +92,15 @@
     ];
     if (view === 'adSets') return [
       col('name','Ad set',r => nameCell(r,r.name,r.collection)),
+      col('setup','Full details',r=>'<button class="table-edit" data-setup="'+esc(r.id)+'">View setup</button>'),
       col('campaign','Campaign',r => display((campaignFor(view,r)||{}).name),false,r=>(campaignFor(view,r)||{}).name),
-      col('performanceGoal','Performance goal',r => display(r.performanceGoal) + note(r.conversionLocation || 'Conversion location pending')),
+      col('performanceGoal','Purpose / optimisation',r => display(goalText(r.performanceGoal)) + note(r.conversionLocation || r.destination || 'Conversion location pending')),
       col('budgetDaily','Configured / day',r => money(r.budgetDaily),true),
-      col('destination','Destination',r => display(r.destination) + note(r.whatsappNumber || (r.instagramProfile ? '@'+r.instagramProfile.replace(/^@/,'') : ''))),
+      col('destination','Destination / WhatsApp number',r => display(r.destination) + (setPhones(r).length?lines(setPhones(r)):r.destination==='WhatsApp'?note('Number not supplied in saved export'):note(r.instagramProfile ? '@'+r.instagramProfile.replace(/^@/,'') : ''))),
       col('locations','Locations',r => lines(locationText(r)),false,r=>locationText(r).join(' ')),
       col('ageMin','Age / gender',r => (missing(r.ageMin)||missing(r.ageMax) ? pending() : esc(r.ageMin + '–' + r.ageMax)) + note(genderText(r.gender)) + note(r.audienceMode || 'Controls vs suggestions pending')),
       col('interests','Interests',r => r.interestsConfirmed ? (r.interests.length ? lines(r.interests) : '<span class="cell-note">No interests selected</span>') : pending(),false,r=>r.interests.join(' ')),
+      col('behaviors','Behaviours',r=>r.behaviorsConfirmed?((r.behaviors||[]).length?lines(r.behaviors):note('No behaviours selected')):pending(),false,r=>(r.behaviors||[]).join(' ')),
       col('facebookPage','Identities',r => display(r.facebookPage) + note(r.instagramProfile ? 'Instagram: @'+r.instagramProfile.replace(/^@/,'') : 'Instagram identity pending')),
       col('frequencyCount','Frequency setting',r => missing(r.frequencyCount)||missing(r.frequencyDays) ? pending() : esc(r.frequencyCount + ' / ' + r.frequencyDays + ' day(s)') + note(r.frequencyMode || 'Cap vs target pending')),
       col('placements','Placements / language',r => (r.placementsConfirmed ? lines(r.placements) : pending()) + note(r.languages.length ? r.languages.join(', ') : 'Languages pending'),false,r=>r.placements.join(' ')),
@@ -209,6 +213,7 @@
       return;
     }
     const s=state.summary;
+    $('records').classList.toggle('full-setup',$('columnMode').value==='setup');
     for(const type of Object.keys(selection))for(const id of selection[type])if(!state[type].some(x=>x.id===id))selection[type].delete(id);
     $('pageTitle').textContent=labels[view];
     const nc=selection.campaigns.size,ns=selection.adSets.size;
@@ -296,6 +301,7 @@
       f('gender','Gender','select',{options:[['','Pending'],['women','Women'],['men','Men'],['all','All genders']]}),
       f('audienceMode','Audience controls / suggestions','text',{max:160,help:'For example, strict controls or Advantage+ suggestions. Leave blank until checked.'}),
       f('interests','Detailed targeting interests','list',{wide:true,help:'One interest per line.'}),f('interestsConfirmed','Interest selections checked','check',{help:'Unchecked means unconfirmed, rather than no interests.'}),
+      f('behaviors','Targeting behaviours','list',{wide:true,help:'One behaviour per line.'}),f('behaviorsConfirmed','Behaviour selections checked','check'),
       f('languages','Languages','list',{help:'One per line. Use All languages only when confirmed.'}),
       f('placements','Placements','list',{help:'One per line.'}),f('placementsConfirmed','Placements checked','check'),
       section('Frequency & verification'),
@@ -419,10 +425,23 @@
     view=tab.dataset.tab;sort=null;render();
   }));
   $('records').addEventListener('click',event=>{
+    const details=event.target.closest('[data-setup]');if(details){openSetupDetails(details.dataset.setup);return;}
     const drill=event.target.closest('[data-drill]');if(drill){selection[view].clear();selection[view].add(drill.dataset.drill);if(view==='campaigns')selection.adSets.clear();view=view==='campaigns'?'adSets':'ads';sort=null;render();return;}
     const edit=event.target.closest('[data-edit]');if(edit){openEditor(edit.dataset.edit);return;}
     const heading=event.target.closest('[data-sort]');if(heading){sort={key:heading.dataset.sort,direction:sort&&sort.key===heading.dataset.sort?-sort.direction:1};render();}
   });
+  function openSetupDetails(id){
+    const r=find('adSets',id);if(!r)return;let raw={};try{raw=JSON.parse(r.setupDetails||'{}');}catch{}
+    const renderValue=v=>Array.isArray(v)?v.length?lines(v):note('None recorded'):display(v);
+    const row=(label,value)=>'<div class="setup-detail-row"><dt>'+esc(label)+'</dt><dd>'+renderValue(value)+'</dd></div>';
+    const target=(values,confirmed)=>confirmed?(values||[]).length?values:'None selected':'Unconfirmed';
+    $('setupDetailsTitle').textContent=r.name;
+    $('setupDetailsBody').innerHTML='<dl>'+row('Campaign',campaignFor('adSets',r)?.name)+row('Campaign objective',campaignFor('adSets',r)?.objective)+row('Purpose / optimisation',goalText(r.performanceGoal))+row('Destination',r.destination)+row('Destination link',r.destinationRef)+row('WhatsApp number(s)',setPhones(r).length?setPhones(r):'Not supplied in saved export')+row('Daily budget',missing(r.budgetDaily)?null:'₹'+r.budgetDaily)+row('All locations and radii',locationText(r))+row('Exported age limits',missing(r.ageMin)||missing(r.ageMax)?null:r.ageMin+'–'+r.ageMax)+row('Separate audience age range',raw['Age Range'])+row('Gender',genderText(r.gender))+row('Interests',target(r.interests,r.interestsConfirmed))+row('Behaviours',target(r.behaviors,r.behaviorsConfirmed))+row('Audience controls and expansion',r.audienceMode)+row('Placements',r.placementsConfirmed?r.placements:'Unconfirmed')+row('Frequency setting',r.frequencyCount==null||r.frequencyDays==null?null:r.frequencyCount+' impressions / '+r.frequencyDays+' day(s) · '+(r.frequencyMode||'type unconfirmed'))+row('Languages / exported locale codes',r.languages?.length?r.languages:raw.Locales)+row('Attribution',raw['Attribution Spec'])+row('Custom audiences',raw['Custom Audiences'])+row('Excluded custom audiences',raw['Excluded Custom Audiences'])+row('Excluded locations',['Excluded Countries','Excluded Cities','Excluded Regions','Excluded Addresses','Excluded Zip'].map(k=>raw[k]).filter(Boolean))+row('Notes',r.notes)+'</dl>';
+    const ads=state.ads.filter(a=>a.adSetId===r.id&&!a.archived);
+    $('setupDetailsBody').innerHTML+='<h3>Ads and creative details</h3>'+ads.map(a=>{let source={};try{source=JSON.parse(a.setupSource||'{}');}catch{}return '<section class="creative-details"><h3>'+esc(a.name)+'</h3><dl>'+row('Creative type',a.format)+row('Call to action',a.cta)+row('WhatsApp number',a.whatsappNumber)+row('Ad text',a.primaryText)+'</dl>'+a.mediaUrls.map((url,i)=>'<a class="creative-link" href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Open creative preview '+(i+1)+'</a>').join('')+(Object.keys(source).length?'<details><summary>All exported settings for this ad</summary><dl>'+Object.entries(source).map(([label,value])=>row(label,value)).join('')+'</dl></details>':'')+'</section>';}).join('');
+    $('setupDetailsDialog').showModal();
+  }
+  $('closeSetupDetails').addEventListener('click',()=>$('setupDetailsDialog').close());
   $('records').addEventListener('change',event=>{if(event.target.id==='selectAllRows'){for(const r of filteredRows())event.target.checked?selection[view].add(r.id):selection[view].delete(r.id);}else if(event.target.dataset.select){event.target.checked?selection[view].add(event.target.dataset.select):selection[view].delete(event.target.dataset.select);}else return;if(view==='campaigns')selection.adSets.clear();render();});
   $('clearScope').addEventListener('click',()=>{Object.values(selection).forEach(s=>s.clear());$('campaignFilter').value='';render();});
   let bulkContext=null;
