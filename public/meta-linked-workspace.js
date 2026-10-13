@@ -2,6 +2,7 @@
 window.MetaLinkedWorkspace=(()=>{
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const expanded=new Set();
+  let dateMode='saved';
   const filters={destination:'',collection:'',creative:''};
   const options=(values,selected)=>'<option value="">All</option>'+values.map(v=>'<option '+(v===selected?'selected':'')+' value="'+esc(v)+'">'+esc(v)+'</option>').join('');
   const safeUrl=v=>{try{const u=new URL(v);return ['https:','http:'].includes(u.protocol)?u.href:'';}catch{return '';}};
@@ -21,8 +22,15 @@ window.MetaLinkedWorkspace=(()=>{
     let editing=null, saving=false;
     const report=state.insights||{},items=report.creatives||[],periods=report.periods||[];
     const goals=[...new Set(items.map(r=>r.goal))];
-    root.querySelector('#lwMetricsControls').innerHTML='<label>Reporting period<select id="lwReportPeriod" '+(!periods.length?'disabled':'')+'>'+(!periods.length?'<option>No performance report saved</option>':'')+periods.map(p=>'<option value="'+esc(p.key)+'" '+(p.key===report.selectedPeriod?'selected':'')+'>'+esc(p.start+' – '+p.end)+'</option>').join('')+'</select></label><details><summary>Cost targets</summary>'+goals.map(g=>'<label>'+esc(g)+' (₹)<input type="number" min="0" step="0.01" data-cost-goal="'+esc(g)+'" value="'+esc(MetaInsightView.getTarget(g))+'" placeholder="Set target"></label>').join('')+'</details><button id="lwViewReport">View report</button><dialog id="lwReportDialog"><button id="lwCloseReport">Close</button><h2>Uploaded performance · '+esc(report.date||'No report')+'</h2>'+items.map(r=>'<p>'+esc(r.ad)+' · '+esc(r.goal)+' · '+(r.count==null?'Results unavailable':esc(r.count)+' results')+' · '+(r.spend==null?'Spend unavailable':'₹'+esc(r.spend))+'</p>').join('')+'</dialog>';
-    root.querySelector('#lwReportPeriod').addEventListener('change',e=>callbacks.period(e.target.value));
+    root.querySelector('#lwMetricsControls').innerHTML='<label>Reporting period<select id="lwReportPeriod" '+(!periods.length?'disabled':'')+'>'+(!periods.length?'<option>No performance report saved</option>':'')+(report.selectedPeriod&&!periods.some(p=>p.key===report.selectedPeriod)?'<option value="'+esc(report.selectedPeriod)+'" selected>'+esc(report.date)+'</option>':'')+periods.map(p=>'<option value="'+esc(p.key)+'" '+(p.key===report.selectedPeriod?'selected':'')+'>'+esc(p.start+' – '+p.end)+'</option>').join('')+'</select></label><details><summary>Cost targets</summary>'+goals.map(g=>'<label>'+esc(g)+' (₹)<input type="number" min="0" step="0.01" data-cost-goal="'+esc(g)+'" value="'+esc(MetaInsightView.getTarget(g))+'" placeholder="Set target"></label>').join('')+'</details><button id="lwViewReport">View report</button><dialog id="lwReportDialog"><button id="lwCloseReport">Close</button><h2>Uploaded performance · '+esc(report.date||'No report')+'</h2>'+items.map(r=>'<p>'+esc(r.ad)+' · '+esc(r.goal)+' · '+(r.count==null?'Results unavailable':esc(r.count)+' results')+' · '+(r.spend==null?'Spend unavailable':'₹'+esc(r.spend))+'</p>').join('')+'</dialog>';
+    const dateControls=document.createElement('div');dateControls.className='lw-date-range';
+    const presets=[['saved','Uploaded period'],['1','Yesterday'],['2','Last 2 days'],['3','Last 3 days'],['5','Last 5 days'],['7','Last 7 days'],['30','Last 30 days'],['custom','Single day / custom range']];
+    dateControls.innerHTML='<label>Date view<select id="lwDateMode">'+presets.map(([v,l])=>'<option value="'+v+'" '+(v===dateMode?'selected':'')+'>'+l+'</option>').join('')+'</select></label><label>From<input type="date" id="lwRangeStart" value="'+esc(report.periodStart||'')+'"></label><label>To<input type="date" id="lwRangeEnd" value="'+esc(report.periodEnd||'')+'"></label><button id="lwApplyRange">Apply dates</button><span class="muted">Last N days ends yesterday. For one day, set From and To to the same date.</span><p class="lw-coverage" role="status">'+esc(report.coverageNote||'Upload performance to see results.')+'</p>';
+    root.querySelector('#lwMetricsControls').prepend(dateControls);
+    const rangeStart=root.querySelector('#lwRangeStart'),rangeEnd=root.querySelector('#lwRangeEnd');
+    root.querySelector('#lwDateMode').addEventListener('change',e=>{dateMode=e.target.value;if(dateMode==='saved')return;const days=Number(dateMode);if(days){const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'}),end=new Date(Date.parse(today)-86400000).toISOString().slice(0,10),start=new Date(Date.parse(end)-(days-1)*86400000).toISOString().slice(0,10);callbacks.period(start+'~'+end);}});
+    root.querySelector('#lwApplyRange').addEventListener('click',()=>{if(!rangeStart.value||!rangeEnd.value||rangeStart.value>rangeEnd.value||Date.parse(rangeEnd.value)-Date.parse(rangeStart.value)>365*86400000){dateControls.querySelector('.lw-coverage').textContent='Choose valid From and To dates, up to 366 days.';return;}dateMode='custom';callbacks.period(rangeStart.value+'~'+rangeEnd.value);});
+    root.querySelector('#lwReportPeriod').addEventListener('change',e=>{dateMode='saved';callbacks.period(e.target.value);});
     root.querySelector('#lwViewReport').disabled=!items.length;
     root.querySelector('#lwViewReport').addEventListener('click',()=>root.querySelector('#lwReportDialog').showModal());
     root.querySelector('#lwCloseReport').addEventListener('click',()=>root.querySelector('#lwReportDialog').close());
@@ -30,7 +38,7 @@ window.MetaLinkedWorkspace=(()=>{
     const money=v=>v==null?'Unavailable':'₹'+Number(v).toLocaleString('en-IN',{maximumFractionDigits:2});
     function performance(ads){
       const ids=new Set(ads.map(a=>a.id)),matches=items.filter(r=>ids.has(r.adId));
-      if(!matches.length)return '<td>Not uploaded</td><td>Unavailable</td><td>Needs performance report</td>';
+      if(!matches.length)return '<td>No coverage</td><td>Unavailable</td><td>Upload report for selected dates</td>';
       const groups=new Map();for(const r of matches){const k=r.goal+'|'+r.attribution;if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);}
       const metrics=[...groups.values()].map(rs=>{const first=rs[0],sum=k=>rs.every(r=>r[k]!=null)?rs.reduce((n,r)=>n+r[k],0):null,count=rs.length>1&&first.metric==='reach'?null:sum('count'),spend=sum('spend');return {...first,grouped:rs.length>1,count,spend,cost:count>0&&spend!=null?spend/count*first.costFactor:null,impressions:sum('impressions'),previousCost:rs.length>1?null:first.previousCost};});
       const spend=matches.every(r=>r.spend!=null)?matches.reduce((n,r)=>n+r.spend,0):null;

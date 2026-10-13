@@ -1,0 +1,9 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {insights}=require('../modules/meta-ads-insights');
+const base={campaigns:[{id:'c',name:'C'}],adSets:[{id:'s',campaignId:'c',name:'S',performanceGoal:'PROFILE_VISIT'}],ads:[{id:'a',name:'A',adSetId:'s'}]};
+const row=(start,end,spend=100,visits=10,extra={})=>({adId:'a',adSetId:'s',periodStart:start,periodEnd:end,spend,profileVisits:visits,impressions:100,reach:80,attributionSetting:'1-day click',reportGoal:'PROFILE_VISIT',...extra});
+test('exact range takes precedence over overlapping daily rows',()=>{const r=insights({...base,results:[row('2026-10-10','2026-10-12',250,50),row('2026-10-10','2026-10-10'),row('2026-10-11','2026-10-11'),row('2026-10-12','2026-10-12')]},'2026-10-10~2026-10-12');assert.equal(r.spend,250);assert.equal(r.creatives[0].count,50);assert.equal(r.creatives[0].cost,5);});
+test('complete non-overlapping coverage aggregates without adding redundant overlaps',()=>{const r=insights({...base,results:[row('2026-10-10','2026-10-11',200,20),row('2026-10-10','2026-10-10'),row('2026-10-11','2026-10-11'),row('2026-10-12','2026-10-12')]},'2026-10-10~2026-10-12');assert.equal(r.spend,300);assert.equal(r.creatives[0].count,30);assert.equal(r.creatives[0].reach,null);});
+test('weekly total cannot supply individual daily results or a range with gaps',()=>{for(const rows of [[row('2026-10-06','2026-10-12',700,70)],[row('2026-10-10','2026-10-10'),row('2026-10-12','2026-10-12')]]){const r=insights({...base,results:rows},'2026-10-10~2026-10-12');assert.equal(r.creatives.length,0);assert.equal(r.spend,null);assert.deepEqual(r.missingAdIds,['a']);}});
+test('incompatible attribution rows are not aggregated across dates',()=>{const r=insights({...base,results:[row('2026-10-10','2026-10-10'),row('2026-10-11','2026-10-11',100,10,{attributionSetting:'7-day click'})]},'2026-10-10~2026-10-11');assert.equal(r.creatives.length,0);});
