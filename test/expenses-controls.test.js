@@ -241,6 +241,32 @@ function invokeThroughRouterAsync(method, routePath, { body = {}, query = {}, ro
   });
 }
 
+test('owner can bulk classify historical PERSONAL statement rows only for the three approved accounts',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(file)?fs.readFileSync(file):null,stored=baseline?JSON.parse(baseline):{},account='ICICI Bank 0993',id='BRD-PERSONAL-HISTORICAL';
+  stored.expenses={};stored.transfers=[];stored.receipts=[];stored.adjustments=[];stored.vendorAdvances=[];stored.bankStatements={};stored.bankDateOverrides={};stored.openingBalancesByNature={PERSONAL:{[account]:20000,'ICICI Bank 0992':5000}};stored.bankReconciliationDrafts={[id]:{id,account,nature:'PERSONAL',transactions:[
+    {date:'2098-07-01',description:'Restaurant payment',reference:'HIST-D1',debit:500,credit:0,balance:19500},
+    {date:'2098-07-01',description:'Pharmacy payment',reference:'HIST-D2',debit:300,credit:0,balance:19200},
+    {date:'2098-07-02',description:'Tenant rent',reference:'HIST-C1',debit:0,credit:10000,balance:29200},
+    {date:'2098-07-03',description:'Own account transfer',reference:'HIST-C2',debit:0,credit:2500,balance:31700}
+  ],summary:{from:'2098-07-01',to:'2098-07-03',openingBalance:20000,closingBalance:31700,totalDebits:800,totalCredits:12500,validated:true},resolutions:{},matchingPolicy:'strict_identity_v2',createdBy:'owner-user',createdAt:new Date().toISOString(),expiresAt:'2099-01-01T00:00:00.000Z'}};
+  fs.writeFileSync(file,JSON.stringify(stored));
+  try{
+    assert.equal(invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'admin',body:{draftId:id,rowIds:['bank-0'],direction:'debit',category:'Food & Dining'}}).status,403,'Prashant cannot use the owner recovery tool');
+    const debits=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-0','bank-1'],direction:'debit',category:'Food & Dining'}});assert.equal(debits.status,200,JSON.stringify(debits.body));assert.equal(debits.body.created,2);
+    let after=JSON.parse(fs.readFileSync(file));assert.equal(Object.keys(after.expenses).length,2);assert.equal(Object.values(after.expenses).every(x=>x.nature==='PERSONAL'&&x.ledger==='Food & Dining'&&x.status==='paid'),true);assert.deepEqual(Object.values(after.expenses).map(x=>x.amount).sort((a,b)=>a-b),[300,500]);
+    const rent=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-2'],direction:'credit',creditKind:'rental_income'}});assert.equal(rent.status,200,JSON.stringify(rent.body));after=JSON.parse(fs.readFileSync(file));const recoveredReceipt=after.receipts.find(x=>x.historicalBulk);assert.ok(recoveredReceipt);assert.deepEqual([recoveredReceipt.receiptType,recoveredReceipt.category,recoveredReceipt.amount],['rental_income','Rental Income',10000]);
+    const transfer=invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-3'],direction:'credit',creditKind:'internal_transfer',fromAccount:'ICICI Bank 0992'}});assert.equal(transfer.status,200,JSON.stringify(transfer.body));after=JSON.parse(fs.readFileSync(file));const recoveredTransfer=after.transfers.find(x=>x.historicalBulk);assert.ok(recoveredTransfer);assert.deepEqual([recoveredTransfer.fromAccount,recoveredTransfer.toAccount,recoveredTransfer.amount],['ICICI Bank 0992','ICICI Bank 0993',2500]);
+    assert.equal(invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:id,rowIds:['bank-2'],direction:'credit',creditKind:'home_received'}}).status,409,'a resolved row cannot be posted twice');
+    after.bankReconciliationDrafts.BAD={...after.bankReconciliationDrafts[id],id:'BAD',account:'Gagan Personal Cash',resolutions:{}};fs.writeFileSync(file,JSON.stringify(after));assert.equal(invoke('POST','/api/expenses/bank-statements/personal-historical-bulk',{role:'owner',body:{draftId:'BAD',rowIds:['bank-0'],direction:'debit',category:'Food & Dining'}}).status,403);
+  }finally{if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});}
+});
+
+test('historical PERSONAL bulk controls expose the five credit choices and approved account scope',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  ['Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
+  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.isOwner&&bankNature==='PERSONAL'/);
+});
+
 test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
   const fundingBody={account:'IndusInd Bank 8181',amount:5000,date:'2026-09-16',reference:'PF-TEST-IN-001',bankName:'Test Bank',last4:'4321',proof:'/api/expenses/photo/funding-test.jpg'};
   assert.equal(invoke('POST','/api/expenses/prashant-funding',{role:'claimant',body:fundingBody}).status,403);
