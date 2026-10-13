@@ -84,7 +84,7 @@
     if (view === 'campaigns') return [
       col('name','Campaign', r => nameCell(r)),
       col('objective','Objective',r => display(r.objective)),
-      col('businessGoal','Business goal',r => r.businessGoal?esc(r.businessGoal):'Not set'+note('Your target, separate from Meta objective')),
+      col('businessGoal','Business goal',r => esc(r.businessGoal||r.objective||'Not supplied in export')),
       col('adSets','Ad sets',r => integer(campaignSets(r).length),true,r=>campaignSets(r).length),
       col('budgetDaily','Configured / day',r => money(setBudget(campaignSets(r))) + note(campaignSets(r).some(s=>missing(s.budgetDaily)) ? 'Some budgets pending' : 'Ad-set budgets'),true,r=>setBudget(campaignSets(r))),
       col('status','Status',badge),
