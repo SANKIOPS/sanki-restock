@@ -28,7 +28,7 @@ const SCHEMAS = {
     destination: ['text', 160], destinationRef: ['reference'], facebookPage: ['text', 200],
     instagramProfile: ['text', 160], whatsappNumber: ['phone'], locations: ['locations'],
     ageMin: ['age'], ageMax: ['age'], gender: ['gender'], interests: ['list', 150],
-    interestsConfirmed: ['booleanOrNull'], languages: ['list', 120], placements: ['list', 120],
+    behaviors:['list',150],behaviorsConfirmed:['booleanOrNull'], interestsConfirmed: ['booleanOrNull'], languages: ['list', 120], placements: ['list', 120],
     placementsConfirmed: ['booleanOrNull'], audienceMode: ['text', 160],
     frequencyCount: ['count'], frequencyDays: ['count'], frequencyMode: ['text', 100],
     status: ['status'], confirmedOn: ['date'], notes: ['text', 5000]
@@ -36,7 +36,7 @@ const SCHEMAS = {
   ads: {
     metaSourceId: ['text',120], adSetId: ['id', true], name: ['text', 200, true], model: ['text', 160],
     format: ['text', 100], description: ['text', 5000], mediaUrls: ['urls'],
-    mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
+    setupSource:['text',60000],whatsappNumber:['phone'],mediaCount: ['count'], cta: ['text', 150], primaryText: ['text', 10000],
     status: ['status'], notes: ['text', 5000]
   },
   results: {
@@ -298,7 +298,13 @@ function createStore(options = {}) {
   }
   function view() {
     const state = load();
-    return { ...clone(state), summary: configuredSummary(state), insights:require('./meta-ads-insights').insights(state) };
+    const output=clone(state);
+    for(const set of output.adSets){
+      try{const raw=JSON.parse(set.setupDetails||'{}'),groups=JSON.parse(raw['Flexible Inclusions']||'[]');
+        if(set.behaviorsConfirmed==null&&Array.isArray(groups)&&raw['Flexible Inclusions']){set.interests=groups.flatMap(g=>(g.interests||[]).map(x=>x.name));set.interestsConfirmed=true;set.behaviors=groups.flatMap(g=>(g.behaviors||[]).map(x=>x.name));set.behaviorsConfirmed=true;}
+      }catch{/* Preserve existing records when the source audience is unavailable. */}
+    }
+    return { ...output, summary: configuredSummary(state), insights:require('./meta-ads-insights').insights(state) };
   }
   function mutate(type, method, recordId, body, actor) {
     if (!plain(body) || Buffer.byteLength(JSON.stringify(body), 'utf8') > 128 * 1024) fail('Record body must be an object below 128 KiB.');
