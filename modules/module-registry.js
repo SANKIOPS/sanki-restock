@@ -66,6 +66,7 @@ const MODULES = [
   { key: 'model-calendar', title: 'Model Calendar', desc: 'Schedule models, track packages and linked expense payments', icon: '📅', href: '/model-calendar.html', section: 'Marketing', status: 'live', roles: ['admin', 'accounting', 'owner', 'model_calendar'] },
   { key: 'seo-control', title: 'SEO', desc: 'SEO, AEO and GEO tasks, cadence, evidence and progress', icon: '◎', href: '/seo-control.html', section: 'SEO', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'meta-ads', title: 'Meta Ads', desc: 'Campaign settings, creative tests, results and change history', icon: '◈', href: '/meta-ads.html', section: 'Marketing', status: 'live', roles: ['owner'], ownerOnly: true },
+  { key: 'catalogue-images', title: 'Catalogue Images', desc: 'Stage, visually verify and publish consistent three-image product galleries', icon: '▧', href: '/catalogue-images.html', section: 'Marketing', status: 'live', roles: ['owner'], ownerOnly: true },
   { key: 'salary',       title: 'Salary',                desc: 'Payroll + attendance — pay from days worked, posted to the P&L', icon: '👛', href: '/salary.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
   { key: 'incentives',   title: 'Sales incentives',      desc: 'POS salesperson incentives from eligible cash, UPI and card receipts', icon: '🎯', href: '/incentives.html', section: 'Accounts', status: 'live', roles: ['admin', 'accounting', 'owner'] },
 

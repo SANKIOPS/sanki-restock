@@ -97,7 +97,7 @@ test('free manifests share the paid image formula and never fabricate accessory 
   const g={...group,...product},po={id:'PO-MANIFEST',imageStyling:{[key]:pilot.normalizeStyling({},g)}},manifest=batch.prepare(po,g);
   assert.deepEqual(manifest.views.map(v=>v.type),pilot.pilotTypes(g));
   for(const view of manifest.views)assert.equal(view.prompt,pilot.imagePrompt(g,view.type,manifest.styling,view.type.startsWith('model-side')));
-  if(/Perfume|Belt/i.test(product.productType))assert.ok(manifest.views.every(v=>['front','detail'].includes(v.type)));
+  if(/Perfume|Belt/i.test(product.productType))assert.ok(manifest.views.every(v=>['front','alternate','detail'].includes(v.type)));
  }
 });
 

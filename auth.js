@@ -98,6 +98,7 @@ const API_ROLE_RULES = [
   { prefix: '/api/model-calendar', roles: ['admin', 'accounting', 'owner', 'model_calendar'] },
   { prefix: '/api/seo-control',     roles: ['owner'] },
   { prefix: '/api/marketing/meta',  roles: ['owner'] },
+  { prefix: '/api/catalogue-images', roles: ['owner'] },
   { prefix: '/api/salary/',               roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/incentives',             roles: ['admin', 'accounting', 'owner'] },
   { prefix: '/api/setup/',                roles: ['admin'] },
@@ -227,7 +228,7 @@ function gate(req, res, next) {
 
   // The Money Picture and its capital/OD APIs are private to the Owner role,
   // even when another account has ordinary Admin access.
-  if ((p === '/owner.html' || p === '/rentals.html' || p === '/meta-ads.html' || p.startsWith('/api/owner/')) && !rolesOf(user).includes('owner')) {
+  if ((p === '/owner.html' || p === '/rentals.html' || p === '/meta-ads.html' || p === '/catalogue-images.html' || p.startsWith('/api/owner/') || p.startsWith('/api/catalogue-images')) && !rolesOf(user).includes('owner')) {
     if (p.startsWith('/api/')) return res.status(403).json({ success: false, error: 'Owner only.' });
     return res.redirect(302, landingFor(user.role));
   }
