@@ -344,7 +344,7 @@ function createStore(options = {}) {
       const now=clock(), counts={created:0,updated:0,unchanged:0};
       const remap=new Map();
       for(const type of ['campaigns','adSets','ads']) for(const input of records[type]) {
-        const payload={...input,metaSourceId:input.id};
+        const payload={...input,metaSourceId:input.id,archived:input.status==='archived'};
         for(const key of ['campaignId','adSetId'])if(payload[key])payload[key]=remap.get(payload[key])||payload[key];
         let index=state[type].findIndex(x=>x.id===input.id||x.metaSourceId===input.id);
         if(index<0){const matches=state[type].map((x,i)=>({x,i})).filter(({x})=>!x.metaSourceId&&x.name===payload.name&&(!payload.campaignId||x.campaignId===payload.campaignId)&&(!payload.adSetId||x.adSetId===payload.adSetId));if(matches.length>1)fail(`Multiple manual records match ${payload.name}. Resolve them before importing.`,409);if(matches.length===1)index=matches[0].i;}
@@ -376,7 +376,7 @@ function createStore(options = {}) {
         if(set.campaignId!==campaign.id||ad.adSetId!==set.id)fail('Report IDs do not match the saved campaign hierarchy. Upload the latest setup first.');
         const index=state.results.findIndex(x=>x.adId===ad.id&&x.periodStart===row.record.periodStart&&x.periodEnd===row.record.periodEnd),previous=index<0?null:state.results[index];
         if(state.results.some(x=>x.id!==previous?.id&&x.adId===ad.id&&x.periodStart<=row.record.periodEnd&&x.periodEnd>=row.record.periodStart))fail('This daily row overlaps an existing report for the same ad. Resolve the overlapping report first.');
-        const payload={...row.record,reportGoal:previous?.reportGoal||set.performanceGoal,reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'daily-'+row.adMetaId+'-'+row.record.periodStart,adId:ad.id,adSetId:set.id};
+        const payload={...row.record,archived:false,reportGoal:previous?.reportGoal||set.performanceGoal,reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'daily-'+row.adMetaId+'-'+row.record.periodStart,adId:ad.id,adSetId:set.id};
         const record=normalizeRecord('results',payload,previous), changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
         report.push({ad:ad.name,adSet:set.name,date:record.periodStart,spend:record.spend,action:!changed.length?'unchanged':previous?'updated':'new'});
         if(!changed.length){counts.unchanged++;continue;}counts[previous?'updated':'created']++;
@@ -389,7 +389,34 @@ function createStore(options = {}) {
       return {counts,revision:state.revision,report};
     });
   }
-  return { file, load, view, mutate, importSetup, importPerformance };
+  function bulk(body,actor){
+    if(!plain(body)||!['campaigns','adSets','ads','results'].includes(body.type)||!Array.isArray(body.ids)||!body.ids.length||body.ids.length>2000||new Set(body.ids).size!==body.ids.length)fail('Select 1–2000 distinct records.');
+    if(!['edit','remove'].includes(body.action))fail('Unsupported bulk action.');
+    const fields=body.fields||{};
+    const allowed=body.type==='adSets'?['status','budgetDaily','notes']:body.type==='results'?['notes']:['status','notes'];
+    if(!plain(fields)||Object.keys(fields).some(k=>!allowed.includes(k))||fields.status==='archived')fail('Unsupported shared setting. Use Remove selected for removal.');
+    if(body.action==='edit'&&!Object.keys(fields).length)fail('Choose at least one shared setting to change.');
+    return locked(()=>{
+      const state=loadUnlocked();if(!Number.isSafeInteger(body.revision)||body.revision!==state.revision)fail('Records changed. Reload before trying again.',409);
+      const selected=new Set(body.ids);if(body.ids.some(id=>!state[body.type].some(r=>r.id===id)))fail('One or more selected records no longer exist.',404);
+      const targets={campaigns:new Set(),adSets:new Set(),ads:new Set(),results:new Set()};targets[body.type]=selected;
+      if(body.action==='remove'){
+        for(const r of state.adSets)if(targets.campaigns.has(r.campaignId))targets.adSets.add(r.id);
+        for(const r of state.ads)if(targets.adSets.has(r.adSetId))targets.ads.add(r.id);
+        for(const r of state.results)if(targets.adSets.has(r.adSetId)||targets.ads.has(r.adId))targets.results.add(r.id);
+      }
+      let changedRecords=0;const now=clock(),reason=safeText(body.reason,'reason',1000)|| (body.action==='remove'?'Remove selected records':'Bulk edit');
+      for(const [type,ids] of Object.entries(targets))for(const recordId of ids){
+        const index=state[type].findIndex(r=>r.id===recordId),previous=state[type][index];
+        const patch=body.action==='remove'?{archived:true}:fields;
+        const record=normalizeRecord(type,patch,previous),changed=Object.keys(patch).filter(k=>JSON.stringify(previous[k])!==JSON.stringify(record[k]));if(!changed.length)continue;
+        Object.assign(record,{createdAt:previous.createdAt,createdBy:previous.createdBy,updatedAt:now,updatedBy:actor});state[type][index]=record;changedRecords++;
+        for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field,before:previous[field]??null,after:record[field],action:body.action==='remove'?'archive':'update',reason,revision:state.revision+1});
+      }
+      validateRelationships(state);if(changedRecords){state.revision++;save(state);}return {revision:state.revision,changedRecords};
+    });
+  }
+  return { file, load, view, mutate, importSetup, importPerformance,bulk };
 }
 
 function createRouter(store = createStore()) {
@@ -432,6 +459,7 @@ function createRouter(store = createStore()) {
     }catch(e){sendError(e,res);}
   }));
   router.use(BASE, express.json({ limit: '128kb' }));
+  router.post(`${BASE}/bulk`,(req,res)=>{try{res.json({success:true,...store.bulk(req.body,req.user.username)});}catch(e){sendError(e,res);}});
   for (const [route, type] of Object.entries(TYPES)) {
     router.post(`${BASE}/${route}`, (req, res) => {
       try { res.status(201).json({ success: true, ...store.mutate(type, 'POST', null, req.body, req.user.username) }); }

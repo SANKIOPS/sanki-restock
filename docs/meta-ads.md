@@ -16,6 +16,10 @@ The views keep one row per campaign, ad set, creative, dated result or field
 change. Filters support campaign, collection, status, destination and search.
 Each view exports its filtered records as CSV. Records can be archived and
 restored; their links and history are retained.
+Multi-selection enables shared status/notes edits, plus a daily budget for ad
+sets. Remove selected archives records and their linked descendants atomically.
+History stays recoverable. Re-importing setup explicitly restores matching
+campaign/ad-set/ad IDs; old results remain removed until performance is reloaded.
 
 ## Results and budgets
 
