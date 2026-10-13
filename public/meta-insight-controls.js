@@ -52,5 +52,5 @@ window.MetaInsightView=(()=>{
     resultBox.addEventListener('click',e=>{const button=e.target.closest('[data-classify]');if(button)callbacks.classify(button.dataset.classify);});
     update();
   }
-  return {render};
+  return {render,assess,setTarget:(goal,value)=>{if(value==='')delete targets[goal];else targets[goal]=Number(value);try{localStorage.setItem('sanki-meta-cost-targets',JSON.stringify(targets));}catch{}},getTarget:goal=>targets[goal]??''};
 })();
