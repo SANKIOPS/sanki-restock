@@ -1,5 +1,5 @@
 // Metered, explicitly started PO generation. Every retry is separately confirmed.
-const IMAGE_TYPES = ['front', 'back', 'female', 'male', 'model-front', 'model-side', 'model-side-female', 'model-side-male', 'detail'];
+const IMAGE_TYPES = ['front', 'back', 'alternate', 'female', 'male', 'model-front', 'model-side', 'model-side-female', 'model-side-male', 'detail'];
 const productProfile = require('../public/purchase-product-profile');
 const SEO_FIELDS = ['displayName', 'title', 'metaTitle', 'metaDescription', 'imageAlt', 'bodyHtml'];
 const UPPER_TYPES = new Set(['shirt','t-shirt','t-shirt hood','sando','hoodie','jacket','top','sweatshirt','sweater']);
@@ -164,7 +164,7 @@ function imagePrompt(group, type, styling, hasContinuityReference=false) {
 }
 
 function accessoryPrompt(group, type) {
-  if (!['front','back','detail'].includes(type)) throw new Error('This accessory uses product-only views; model photographs are not supported.');
+  if (!['front','back','alternate','detail'].includes(type)) throw new Error('This accessory uses product-only views; model photographs are not supported.');
   const kind = productProfile(group).kind;
   const identity = {
     perfume:'Preserve the exact bottle shape, glass colour, liquid appearance, cap, label, brand marks and readable printed wording. Keep its original packaging when it is shown as part of this product. Never invent scent notes, volume, ingredients or label text.',
@@ -172,7 +172,7 @@ function accessoryPrompt(group, type) {
     bag:'Preserve the exact bag silhouette, proportions, colour, material appearance, straps, handles, closures, pockets, hardware and visible branding. Keep all supplied straps and attachments; never replace this bag with a styling accessory.'
   }[kind];
   const detail = kind === 'belt' ? 'the actual buckle, holes and visible stitching' : kind === 'bag' ? 'the actual visible closure, handles and hardware' : 'the actual visible label and cap';
-  const view = type === 'detail' ? 'a close-up of '+detail : type === 'back' ? 'the back shown in the supplied real back reference' : 'the complete product from the front';
+  const view = type === 'detail' ? 'a close-up of '+detail : type === 'alternate' ? 'the complete product at a restrained three-quarter angle, showing a visibly different angle from the straight front without inventing its unseen back' : type === 'back' ? 'the back shown in the supplied real back reference' : 'the complete product from the front';
   return `Create one photorealistic product-only catalogue photograph of ${view} on a warm ivory studio background with natural shadows and even margins. The ORIGINAL PRODUCT PHOTO is the sole authority. ${identity} Remove people, body parts, unrelated products and the source background. No model, outfit, collage or added watermark. Preserve existing product labels; do not add text. Do not invent unseen details or a back view without a real back reference.`;
 }
 
@@ -316,7 +316,7 @@ function evaluateImageCheck(check,type,styling={},group={}) {
     check={...(check||{}),modelMatch:{status:detected==='woman'||detected==='man'?'fail':'uncertain',evidence:detected==='woman'||detected==='man'?`Detected ${detected}; this product requires an adult ${expectedGender}.`:`Could not clearly verify that the model is an adult ${expectedGender}.`}};
   }
   const required=['garmentMatch','singleFrame'];
-  if(!modelView&&['front','back','detail'].includes(type))required.push('productOnly');
+  if(!modelView&&['front','back','alternate','detail'].includes(type))required.push('productOnly');
   if(modelView) required.push('angleMatch','fitMatch','pairMatch','modelMatch','bagMatch','shadesMatch','capMatch','chainMatch','watchMatch');
   if(modelView&&style.shoes!=='Auto')required.push('shoeMatch');
   if(modelView&&style.tuck!=='Auto'&&garmentCategory(group)==='upper')required.push('tuckMatch');

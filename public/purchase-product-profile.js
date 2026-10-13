@@ -7,7 +7,7 @@
     var type = String(group.productType || '').trim().toLowerCase();
     var kind = { perfumes:'perfume', perfume:'perfume', belts:'belt', belt:'belt', bag:'bag', bags:'bag' }[type];
     var back = hasBack ? ['back'] : [];
-    if (kind) return { kind:kind, productOnly:true, views:['front'].concat(back, ['detail']) };
+    if (kind) return { kind:kind, productOnly:true, views:['front'].concat(back, ['alternate','detail']) };
     var audience = String(group.audience || '').toLowerCase();
     var models = audience === 'unisex' ? ['female','male']
       : ['women','men'].indexOf(audience) >= 0 ? ['model-front','model-side'] : [];
