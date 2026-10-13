@@ -4,7 +4,8 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const fetch = require('node-fetch');
+const multer = require('multer');
+const sharp = require('sharp');
 const { shopifyClient } = require('./shopify-client');
 const pilot = require('./procurement-openai-pilot');
 const profileFor = require('../public/purchase-product-profile');
@@ -18,7 +19,11 @@ const STATE_FILE = path.join(ROOT, 'catalogue-image-studio.json');
 const IMAGE_DIR = path.join(ROOT, 'catalogue-images');
 const KNOWN_AUDIENCES = ['Women', 'Men', 'Unisex'];
 const byHandle = new Map(inventoryData.map(item => [String(item.handle || ''), item]));
-let runner = null;
+const codexUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => cb(null, /^image\/(?:jpeg|png|webp)$/i.test(file.mimetype || ''))
+});
 
 function now() { return new Date().toISOString(); }
 function atomicWrite(file, data) {
@@ -133,17 +138,6 @@ async function fetchProducts() {
   }
   return products;
 }
-async function downloadSource(url) {
-  const parsed = new URL(url);
-  if (parsed.protocol !== 'https:' || parsed.hostname !== 'cdn.shopify.com') throw new Error('Only a Shopify CDN image can be used as the source.');
-  const response = await fetch(url, { signal: AbortSignal.timeout(60000), size: 20 * 1024 * 1024 });
-  if (!response.ok) throw new Error('Could not download the selected Shopify source image.');
-  const finalUrl = new URL(response.url || url);
-  if (finalUrl.protocol !== 'https:' || finalUrl.hostname !== 'cdn.shopify.com') throw new Error('The source image redirected outside Shopify CDN.');
-  const buf = await response.buffer();
-  if (!buf.length || buf.length > 20 * 1024 * 1024) throw new Error('The selected source image is empty or too large.');
-  return { buf, mime: response.headers.get('content-type') || 'image/jpeg' };
-}
 function groupFor(item) {
   return { key: item.productId, designCode: item.sku, designName: item.title, colour: item.colour,
     productType: item.productType, audience: item.audience, fit: item.fit, line: item.line, season: '', sizeLabels: [] };
@@ -155,63 +149,50 @@ function defaultStyling(item) {
 function safeFile(name) { return /^[a-f0-9-]+-[a-z-]+-\d+\.png$/.test(name || '') ? name : ''; }
 function filePath(name) { const clean = safeFile(name); return clean ? path.join(IMAGE_DIR, clean) : ''; }
 function draftBuffer(draft) { const file = filePath(draft && draft.file); return file && fs.existsSync(file) ? fs.readFileSync(file) : null; }
-function accepted(qa) { return qa && (qa.status === 'pass' || pilot.canAutoAcceptAdvisoryCheck(qa)); }
 
-async function generateView(item, type, source, group, styling) {
-  const continuityType = type === 'model-side' ? 'model-front' : type === 'model-side-female' ? 'female' : type === 'model-side-male' ? 'male' : '';
-  const continuityDraft = continuityType && item.drafts.find(draft => draft.type === continuityType && draft.accepted);
-  const continuityBuffer = continuityDraft && draftBuffer(continuityDraft);
-  if (continuityType && !continuityBuffer) throw new Error('The matching model front must pass before the three-quarter view is generated.');
-  let repair = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const made = await pilot.generateImage({ key: process.env.OPENAI_API_KEY, group, source, continuitySource: continuityBuffer ? { buf: continuityBuffer } : null,
-      type, styling, repairFields: repair });
-    const qa = await pilot.verifyImage({ key: process.env.OPENAI_API_KEY, group, source, generated: made.buffer,
-      continuitySource: continuityBuffer ? { buf: continuityBuffer } : null, type, styling });
-    fs.mkdirSync(IMAGE_DIR, { recursive: true });
-    const filename = crypto.randomUUID() + '-' + type + '-' + attempt + '.png';
-    fs.writeFileSync(path.join(IMAGE_DIR, filename), made.buffer);
-    const record = { type, attempt, file: filename, qa, accepted: accepted(qa), createdAt: now(), usage: made.usage || null };
-    item.attempts.push(record);
-    if (record.accepted) { item.drafts = item.drafts.filter(draft => draft.type !== type); item.drafts.push(record); return record; }
-    if (!pilot.shouldRetryImageCheck(qa, attempt, 2)) return record;
-    repair = qa.failed || [];
-  }
+function codexFingerprint(item) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    productId:item.productId, sku:item.sku, audience:item.audience, sourceUrl:item.sourceUrl,
+    requiredViews:item.requiredViews
+  })).digest('hex');
 }
-async function generateItem(state, item) {
-  item.status = 'generating'; item.message = 'Downloading the selected source image…'; item.startedAt = now(); save(state);
-  try {
-    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured. No paid generation was started.');
-    if (!KNOWN_AUDIENCES.includes(item.audience)) throw new Error('Select Women, Men or Unisex before generation.');
-    if (!item.sourceUrl) throw new Error('Select a real product reference before generation.');
-    const source = await downloadSource(item.sourceUrl), group = groupFor(item), styling = defaultStyling(item);
-    const required = profileFor(group, false).views;
-    item.requiredViews = required;
-    for (const type of required) {
-      if (item.drafts.some(draft => draft.type === type && draft.accepted && draftBuffer(draft))) continue;
-      item.message = 'Generating and checking ' + type.replace(/-/g, ' ') + '…'; save(state);
-      const result = await generateView(item, type, source, group, styling);
-      if (!result || !result.accepted) break;
-    }
-    const missing = required.filter(type => !item.drafts.some(draft => draft.type === type && draft.accepted && draftBuffer(draft)));
-    item.status = missing.length ? 'review' : 'passed';
-    item.message = missing.length ? 'Held by visual QA: ' + missing.join(', ') + '. Existing Shopify gallery was not changed.' : 'All three staged images passed visual QA. Review them before publishing.';
-  } catch (error) {
-    item.status = 'failed'; item.message = String(error.message || error).slice(0, 500);
-  }
-  item.finishedAt = now(); save(state);
+function codexBatchManifest(pilotState) {
+  const batchId = crypto.randomUUID();
+  return {
+    id: batchId,
+    version: 1,
+    pilotId: pilotState.id,
+    createdAt: now(),
+    status: 'prepared',
+    mode: 'codex-built-in-image-generation',
+    billing: 'Do not call the Railway OpenAI or Gemini APIs. Generate in the user-started Codex session with the built-in image tool.',
+    instructions: [
+      'Use the selected Shopify image only as the garment reference.',
+      'Preserve the exact garment colour, print, weave, collar, buttons, pockets, sleeves, hem, silhouette and length.',
+      'Return one image file per requested view. Never return a collage, split frame or contact sheet.',
+      'Model views must match the saved audience exactly. Women use an adult woman; Men use an adult man.',
+      'Use understated old-money styling, a limestone-estate setting and natural editorial lighting.',
+      'Keep the same trousers, shoes, accessories and model identity between matching front and three-quarter views.',
+      'Do not add logos, text or watermarks. Do not invent unseen product details.',
+      'Upload each result to Catalogue Images, inspect it, and approve it there before publishing to Shopify.'
+    ],
+    products: pilotState.items.map(item => {
+      const group=groupFor(item), styling=defaultStyling(item);
+      return {
+        productId:item.productId, handle:item.handle, sku:item.sku, title:item.title, audience:item.audience,
+        productType:item.productType, colour:item.colour, fit:item.fit, line:item.line,
+        sourceUrl:item.sourceUrl, sourceName:imageName(item.sourceUrl), fingerprint:codexFingerprint(item), styling,
+        views:item.requiredViews.map(type => ({
+          type,
+          label:type.replace(/-/g,' '),
+          continuityView:type === 'model-side' ? 'model-front' : null,
+          prompt:pilot.imagePrompt(group,type,styling,type === 'model-side')
+        }))
+      };
+    })
+  };
 }
-async function runQueue(state) {
-  try {
-    for (const item of state.pilot.items) if (['queued','interrupted','ready','failed','review'].includes(item.status) && !item.publishedAt) await generateItem(state, item);
-    state.pilot.status = state.pilot.items.every(item => ['passed','published'].includes(item.status)) ? 'passed' : 'review';
-    state.pilot.message = state.pilot.status === 'passed' ? 'Pilot generation finished. Every product has a complete QA-passed trio.' : 'Pilot generation finished. Passed products are ready; held products need review or regeneration.';
-  } catch (error) {
-    state.pilot.status = 'failed'; state.pilot.message = String(error.message || error).slice(0, 500);
-  } finally {
-    state.pilot.running = false; state.pilot.finishedAt = now(); save(state); runner = null;
-  }
-}
+
 function publicState(state) {
   const clone = JSON.parse(JSON.stringify(state));
   for (const item of clone.pilot?.items || []) for (const draft of item.drafts || []) draft.url = '/api/catalogue-images/files/' + draft.file;
@@ -231,10 +212,9 @@ async function setPosition(productId, imageId, position) {
 }
 
 router.use('/api/catalogue-images', (req,res,next) => owner(req) ? next() : res.status(403).json({ success:false, error:'Owner only.' }));
-router.get('/api/catalogue-images', (req,res) => res.json({ success:true, ...publicState(load()), generating:!!runner }));
+router.get('/api/catalogue-images', (req,res) => res.json({ success:true, ...publicState(load()), generating:false }));
 router.post('/api/catalogue-images/pilot/prepare', async (req,res) => {
   try {
-    if (runner) return res.status(409).json({ success:false, error:'Generation is already running.' });
     const products = await fetchProducts(), items = choosePilot(products, 4);
     const counts = Object.fromEntries(KNOWN_AUDIENCES.map(audience => [audience, items.filter(item => item.audience === audience).length]));
     if (KNOWN_AUDIENCES.some(audience => counts[audience] < 4)) return res.status(409).json({ success:false, error:'Could not find four source-ready clothing products for every audience.', counts });
@@ -242,38 +222,86 @@ router.post('/api/catalogue-images/pilot/prepare', async (req,res) => {
     if (state.pilot) state.history.unshift({ createdAt:state.pilot.createdAt, finishedAt:state.pilot.finishedAt || null, status:state.pilot.status, items:state.pilot.items.map(item => ({productId:item.productId,sku:item.sku,status:item.status})) });
     state.history = state.history.slice(0, 10);
     state.pilot = { id:crypto.randomUUID(), createdAt:now(), status:'ready', running:false, counts, items,
-      message:'Mixed pilot prepared: 4 Women, 4 Men and 4 Unisex products. Confirm each source and audience before paid generation.' };
+      codexBatches:{}, message:'Mixed pilot prepared: 4 Women, 4 Men and 4 Unisex products. Confirm each source and audience, then prepare the Codex batch.' };
     save(state); res.json({ success:true, ...publicState(state) });
   } catch (error) { res.status(502).json({ success:false, error:String(error.message || error) }); }
 });
 router.patch('/api/catalogue-images/pilot/items/:productId', (req,res) => {
   try {
-    if (runner) return res.status(409).json({ success:false, error:'Wait for generation to finish before changing the setup.' });
     const state=load(), item=state.pilot?.items.find(value => value.productId === req.params.productId);
     if (!item) return res.status(404).json({ success:false, error:'Pilot product not found.' });
     const audience=String(req.body?.audience || item.audience), sourceUrl=String(req.body?.sourceUrl || item.sourceUrl);
     if (!KNOWN_AUDIENCES.includes(audience)) return res.status(400).json({ success:false, error:'Select Women, Men or Unisex.' });
     if (!item.currentImages.some(image => image.src === sourceUrl)) return res.status(400).json({ success:false, error:'Select one of this product’s current Shopify images.' });
-    item.audience=audience;item.sourceUrl=sourceUrl;item.requiredViews=profileFor(groupFor(item),false).views;item.drafts=[];item.attempts=[];item.status='ready';item.message='Setup saved. Ready for paid generation.';save(state);
+    item.audience=audience;item.sourceUrl=sourceUrl;item.requiredViews=profileFor(groupFor(item),false).views;item.drafts=[];item.attempts=[];item.status='ready';item.message='Setup saved. Prepare a fresh Codex batch before returning images.';
+    state.pilot.activeCodexBatchId='';state.pilot.status='ready';state.pilot.message='A product setup changed. Prepare a fresh Codex batch before returning images.';save(state);
     res.json({ success:true, ...publicState(state) });
   } catch (error) { res.status(500).json({ success:false, error:String(error.message || error) }); }
 });
 router.post('/api/catalogue-images/pilot/generate', (req,res) => {
+  res.status(410).json({ success:false, error:'Paid Railway generation is disabled for Catalogue Images. Prepare a Codex batch and generate it in Codex instead.' });
+});
+router.post('/api/catalogue-images/pilot/codex-batch', (req,res) => {
   try {
-    if (req.body?.confirmPaid !== true) return res.status(400).json({ success:false, error:'Paid generation confirmation is required.' });
-    if (runner) return res.status(409).json({ success:false, error:'Generation is already running.' });
     const state=load();
-    if (!state.pilot?.items?.length) return res.status(409).json({ success:false, error:'Prepare the mixed pilot first.' });
-    if (!process.env.OPENAI_API_KEY) return res.status(503).json({ success:false, error:'OPENAI_API_KEY is not configured. No paid generation was started.' });
-    state.pilot.running=true;state.pilot.status='running';state.pilot.startedAt=now();state.pilot.message='Generating one product at a time. Shopify galleries remain unchanged.';
-    for (const item of state.pilot.items) if (!['passed','published'].includes(item.status)) item.status='queued';
-    save(state); runner=runQueue(state); res.status(202).json({ success:true, message:state.pilot.message });
-  } catch (error) { res.status(500).json({ success:false, error:String(error.message || error) }); }
+    if(!state.pilot?.items?.length)return res.status(409).json({success:false,error:'Prepare the mixed pilot first.'});
+    if(state.pilot.items.some(item=>!KNOWN_AUDIENCES.includes(item.audience)||!item.sourceUrl||item.requiredViews.length!==3))
+      return res.status(409).json({success:false,error:'Every pilot product needs a saved audience, source and three requested views.'});
+    const batch=codexBatchManifest(state.pilot);
+    state.pilot.codexBatches=state.pilot.codexBatches||{};
+    state.pilot.codexBatches[batch.id]=batch;
+    state.pilot.activeCodexBatchId=batch.id;
+    state.pilot.status='codex-prepared';
+    state.pilot.running=false;
+    state.pilot.message='Codex batch prepared. Generate the files in Codex, then return each view here for review. No paid Railway AI call was made.';
+    for(const item of state.pilot.items)if(!['passed','published'].includes(item.status)){item.status='codex-prepared';item.message='Waiting for Codex images from batch '+batch.id+'.';}
+    save(state);
+    res.json({success:true,batch,...publicState(state)});
+  }catch(error){res.status(400).json({success:false,error:String(error.message||error)});}
+});
+router.get('/api/catalogue-images/pilot/codex-batch/:batchId', (req,res) => {
+  const state=load(),batch=state.pilot?.codexBatches?.[req.params.batchId];
+  if(!batch)return res.status(404).json({success:false,error:'Codex batch not found.'});
+  res.json({success:true,batch});
+});
+router.post('/api/catalogue-images/pilot/codex-batch/:batchId/items/:productId/results', codexUpload.single('image'), async (req,res) => {
+  try{
+    if(!req.file)return res.status(400).json({success:false,error:'Choose a JPG, PNG or WebP image.'});
+    const state=load(),batch=state.pilot?.codexBatches?.[req.params.batchId],item=state.pilot?.items?.find(value=>value.productId===req.params.productId);
+    if(!batch||!item)return res.status(404).json({success:false,error:'Codex batch or product not found.'});
+    const batchItem=batch.products.find(value=>value.productId===item.productId),type=String(req.body?.type||'');
+    if(!batchItem||batchItem.fingerprint!==codexFingerprint(item))return res.status(409).json({success:false,error:'The product setup changed. Prepare a fresh Codex batch.'});
+    if(!item.requiredViews.includes(type))return res.status(400).json({success:false,error:'Select a requested view for this product.'});
+    const metadata=await sharp(req.file.buffer,{failOn:'error'}).metadata();
+    if(!metadata.width||!metadata.height||metadata.width<700||metadata.height<700)throw new Error('Return a clear image at least 700 × 700 pixels.');
+    fs.mkdirSync(IMAGE_DIR,{recursive:true});
+    const filename=crypto.randomUUID()+'-'+type+'-codex-1.png';
+    await sharp(req.file.buffer,{failOn:'error'}).rotate().png({quality:96}).toFile(path.join(IMAGE_DIR,filename));
+    const prior=item.drafts.find(draft=>draft.type===type);
+    if(prior)item.attempts.push({...prior,replacedAt:now()});
+    const record={type,attempt:1,file:filename,qa:{status:'manual-review',warnings:[],issues:[]},accepted:false,source:'codex-batch',codexBatchId:batch.id,createdAt:now()};
+    item.drafts=item.drafts.filter(draft=>draft.type!==type);item.drafts.push(record);item.status='review';item.message='Codex image returned. Inspect it and approve the view before publishing.';
+    batch.status='partially-returned';batch.returnedAt=now();state.pilot.status='review';state.pilot.message='Codex images are being returned for owner review. Shopify remains unchanged.';save(state);
+    res.json({success:true,...publicState(state)});
+  }catch(error){res.status(400).json({success:false,error:String(error.message||error)});}
+});
+router.post('/api/catalogue-images/pilot/items/:productId/drafts/:type/review', (req,res) => {
+  try{
+    const state=load(),item=state.pilot?.items?.find(value=>value.productId===req.params.productId),type=String(req.params.type||'');
+    if(!item)return res.status(404).json({success:false,error:'Pilot product not found.'});
+    const draft=item.drafts.find(value=>value.type===type&&draftBuffer(value));
+    if(!draft)return res.status(404).json({success:false,error:'Returned Codex image not found.'});
+    draft.accepted=req.body?.accepted===true;draft.qa={status:draft.accepted?'pass':'manual-review',warnings:[],issues:[]};draft.reviewedAt=now();draft.reviewedBy=req.user.username;
+    const complete=item.requiredViews.every(view=>item.drafts.some(value=>value.type===view&&value.accepted&&draftBuffer(value)));
+    item.status=complete?'passed':'review';item.message=complete?'All three Codex images are approved. The trio is ready to publish.':'View saved. Approve all three returned Codex images before publishing.';
+    state.pilot.status=state.pilot.items.every(value=>['passed','published'].includes(value.status))?'passed':'review';
+    state.pilot.message=state.pilot.status==='passed'?'Every pilot product has an approved Codex trio.':'Codex images are under review. Shopify remains unchanged.';save(state);
+    res.json({success:true,...publicState(state)});
+  }catch(error){res.status(400).json({success:false,error:String(error.message||error)});}
 });
 router.post('/api/catalogue-images/pilot/items/:productId/publish', async (req,res) => {
   try {
     if (req.body?.confirm !== true) return res.status(400).json({ success:false, error:'Publishing confirmation is required.' });
-    if (runner) return res.status(409).json({ success:false, error:'Wait for paid generation to finish before publishing.' });
     const state=load(), item=state.pilot?.items.find(value => value.productId === req.params.productId);
     if (!item) return res.status(404).json({ success:false, error:'Pilot product not found.' });
     const ordered=item.requiredViews.map(type => item.drafts.find(draft => draft.type===type&&draft.accepted&&draftBuffer(draft)));
@@ -291,4 +319,4 @@ router.get('/api/catalogue-images/files/:name', (req,res) => {
   const file=filePath(req.params.name);if(!file||!fs.existsSync(file))return res.status(404).end();res.setHeader('Cache-Control','private, max-age=300');res.type('png').sendFile(file);
 });
 
-module.exports = { router, audienceOf, itemFromProduct, candidateScore, choosePilot, groupFor, defaultStyling };
+module.exports = { router, audienceOf, itemFromProduct, candidateScore, choosePilot, groupFor, defaultStyling, codexFingerprint, codexBatchManifest };

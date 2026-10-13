@@ -30,3 +30,15 @@ test('mixed pilot selects four source-ready products for each audience and prior
     assert.ok(group.some(item=>/WhatsApp/i.test(item.currentImages[0].name)));
   }
 });
+
+test('catalogue Codex batch is a three-view built-in-tool manifest with no paid Railway generation',()=>{
+  const items=['Women','Men','Unisex'].map((audience,index)=>studio.itemFromProduct(product(index+1,audience)));
+  const batch=studio.codexBatchManifest({id:'pilot-1',items});
+  assert.equal(batch.mode,'codex-built-in-image-generation');
+  assert.match(batch.billing,/Do not call the Railway OpenAI or Gemini APIs/);
+  assert.equal(batch.products.length,3);
+  assert.deepEqual(batch.products[0].views.map(view=>view.type),['front','model-front','model-side']);
+  assert.equal(batch.products[0].views[2].continuityView,'model-front');
+  assert.deepEqual(batch.products[2].views.map(view=>view.type),['front','female','male']);
+  assert.ok(batch.products.every(item=>item.fingerprint===studio.codexFingerprint(items.find(source=>source.productId===item.productId))));
+});
