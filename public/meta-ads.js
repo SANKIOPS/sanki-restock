@@ -28,7 +28,7 @@
     try{const body=new FormData();body.append('file',file);body.append('preview',String(preview));body.append('revision',String(preview?state.revision:performanceRevision));
       const response=await fetch(apiBase+'/import-performance',{method:'POST',credentials:'same-origin',body});const data=await response.json();if(!response.ok||!data.success)throw new Error(data.error||'Performance upload failed.');
       if(preview){performanceRevision=data.revision;performanceFile=file;$('performanceSummary').textContent=`${data.report.length} ad/period rows: ${data.counts.created} new, ${data.counts.updated} updated, ${data.counts.unchanged} unchanged.\n`+data.report.map(r=>`${r.periodStart} – ${r.periodEnd} · ${r.adSet} · ${r.ad} · ${r.spend==null?'spend unavailable':'₹'+r.spend} · ${r.action}`).join('\n');$('performanceSave').hidden=false;}
-      else{performanceRevision=null;$('performanceSave').hidden=true;$('performancePanel').hidden=true;$('performanceSummary').textContent='Daily performance saved. Open Insights for findings and next actions.';insightsPeriod="";view='insights';await load('Daily performance imported.');}
+      else{performanceRevision=null;$('performanceSave').hidden=true;$('performancePanel').hidden=true;$('performanceSummary').textContent='Daily performance saved. See Campaigns for findings and next actions.';insightsPeriod="";view='campaigns';await load('Daily performance imported.');}
     }catch(e){performanceRevision=null;$('performanceSave').hidden=true;$('performanceSummary').textContent=e.message;}finally{$('performancePreview').disabled=false;$('performanceSave').disabled=false;}
   }
   $('performancePreview').addEventListener('click',()=>uploadPerformance(true));$('performanceSave').addEventListener('click',()=>uploadPerformance(false));
@@ -40,7 +40,7 @@
   const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'ad', results: 'result' };
   const statusLabels = { draft: 'Draft', reported_running: 'Reported running', delivery_unconfirmed: 'Reported · verify delivery', active: 'Verified active', paused: 'Paused', completed: 'Completed', archived: 'Archived', unknown: 'Unconfirmed', pending: 'Pending' };
   const statuses = Object.entries(statusLabels);
-  let state = null, view = 'insights', busy = false, editing = null, sort = null;
+  let state = null, view = 'campaigns', busy = false, editing = null, sort = null;
   const selection={campaigns:new Set(),adSets:new Set(),ads:new Set(),results:new Set(),changes:new Set()};
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   const missing = value => value === null || value === undefined || value === '';
@@ -84,7 +84,7 @@
     if (view === 'campaigns') return [
       col('name','Campaign', r => nameCell(r)),
       col('objective','Objective',r => display(r.objective)),
-      col('businessGoal','Business goal',r => display(r.businessGoal)),
+      col('businessGoal','Business goal',r => esc(r.businessGoal||r.objective||'Not supplied in export')),
       col('adSets','Ad sets',r => integer(campaignSets(r).length),true,r=>campaignSets(r).length),
       col('budgetDaily','Configured / day',r => money(setBudget(campaignSets(r))) + note(campaignSets(r).some(s=>missing(s.budgetDaily)) ? 'Some budgets pending' : 'Ad-set budgets'),true,r=>setBudget(campaignSets(r))),
       col('status','Status',badge),
@@ -170,15 +170,17 @@
     const campaign = $('campaignFilter').value, collection = $('collectionFilter').value;
     const status = $('statusFilter').value, destination = $('destinationFilter').value;
     const query = $('search').value.toLowerCase().trim();
+    const creative=$('creativeTypeFilter').value;
+    const matchingAds=state.ads.filter(a=>!isArchived('ads',a)&&(!collection||(a.collection||adSetFor('ads',a)?.collection||'Unclassified')===collection)&&(!destination||adSetFor('ads',a)?.destination===destination)&&(!creative||(a.creativeTypes||[]).includes(creative)));
+    const matchingSets=new Set(matchingAds.map(a=>a.adSetId));
     let rows = state[view].filter(row => {
       const type = view === 'changes' ? historyType(row) : view;
       const record = view === 'changes' ? historyRecord(row) : row;
       const set = adSetFor(type,record), cmp = campaignFor(type,record);
       if(view!=='campaigns' && selection.campaigns.size && (!cmp||!selection.campaigns.has(cmp.id)))return false;
       if(['ads','results'].includes(view) && selection.adSets.size && (!set||!selection.adSets.has(set.id)))return false;
+      if((collection||destination||creative)&&!((type==='campaigns'?campaignSets(record).some(x=>matchingSets.has(x.id)):type==='adSets'?matchingSets.has(record.id):matchingAds.some(a=>a.id===(type==='ads'?record.id:record.adId)))))return false;
       if (campaign && (!cmp || cmp.id !== campaign)) return false;
-      if (collection && !(type === 'campaigns' ? campaignSets(record).some(x=>x.collection===collection) : set && set.collection===collection)) return false;
-      if (destination && !(type === 'campaigns' ? campaignSets(record).some(x=>x.destination===destination) : set && set.destination===destination)) return false;
       if (view !== 'changes') {
         if (status === 'archived' ? !isArchived(type,record) : isArchived(type,record)) return false;
         if (status && status !== 'archived' && record.status !== status && !(type === 'results' && set && set.status === status)) return false;
@@ -205,17 +207,8 @@
     $('insightsPanel').hidden=!insightView;
     for(const selector of ['.manager-toolbar','.filters','.view-heading','.manager-search','.manager-views','#tableFooter','#stats'])document.querySelector(selector).hidden=insightView;
     $('records').parentElement.hidden=insightView;
-    if(insightView){
-      $('pageTitle').textContent='Meta Marketing';$('resultFilters').hidden=true;$('empty').hidden=true;
-      document.querySelectorAll('[data-tab]').forEach(tab=>{tab.setAttribute('aria-selected',String(tab.dataset.tab===view));const type=tab.dataset.tab;tab.querySelector('span').textContent=type==='insights'?(state.insights?.actions.length||0):type==='changes'?state.changes.length:state[type].filter(r=>!isArchived(type,r)).length;});
-      $('recordView').setAttribute('aria-labelledby','tab-insights');
-      const data=state.insights||{date:null,note:'Upload daily performance to see insights.',groups:[],actions:[],creatives:[]};
-      if(window.MetaLinkedWorkspace){window.MetaLinkedWorkspace.render($('insightsPanel'),state,{period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const current=view;view='ads';openEditor(id);view=current;},edit:(type,id)=>{const current=view;view=type;openEditor(id);view=current;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});return;}
-      if(window.MetaInsightView){window.MetaInsightView.render($('insightsPanel'),state,{period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const current=view;view='ads';openEditor(id);view=current;}});return;}
-      $('insightsPanel').innerHTML='<div class="insight-heading"><h2>Your next actions</h2><p class="muted">'+esc(data.date?'Reporting period: '+data.date+' · '+data.days+' day(s)':'No daily report uploaded')+'</p><p>'+esc(data.note)+'</p></div>'+(data.date?'<div class="insight-spend">Spend in this period: <strong>'+money(data.spend)+'</strong></div>':'')+'<div class="insight-actions">'+data.actions.map(a=>'<article><h3>'+esc(a.title)+'</h3><strong>'+esc(a.ad)+'</strong><p>'+esc(a.reason)+'</p><p class="next-action">'+esc(a.next)+'</p></article>').join('')+'</div><div class="insight-heading"><h2>Best observed costs</h2><p class="muted">Compared within outcome and attribution window. Different audiences can affect the ranking.</p></div>'+data.groups.map(g=>'<section class="insight-group"><h3>'+esc(g.label)+'</h3>'+g.items.map((r,i)=>'<div class="rank-row"><span><strong>'+esc(r.ad)+'</strong><small>'+esc(r.adSet)+'</small></span><span>'+integer(r.count)+' results</span><strong>'+money(r.cost)+' / result</strong></div>').join('')+'</section>').join('')+(data.date?'<div class="insight-heading"><h2>Creative observations</h2><p class="muted">Video plays are diagnostic counts; they do not prove buying intent.</p></div><div class="table-wrap"><table><thead><tr><th>Ad / ad set</th><th>Spend</th><th>3-second plays</th><th>ThruPlays</th><th>Cost trend</th></tr></thead><tbody>'+data.creatives.map(r=>'<tr><td>'+esc(r.ad)+note(r.adSet)+'</td><td>'+money(r.spend)+'</td><td>'+integer(r.videoPlays3s)+'</td><td>'+integer(r.thruPlays)+'</td><td>'+(r.previousCost!==null&&r.cost!==null?money(r.previousCost)+' → '+money(r.cost)+note('vs '+r.previousDate):'Needs a separate comparable period')+'</td></tr>').join('')+'</tbody></table></div>':'');
-      if(data.periods?.length){const control=document.createElement('label');control.className='insight-period';control.innerHTML='Reporting period<select id="insightPeriodSelect">'+data.periods.map(p=>'<option value="'+esc(p.key)+'" '+(p.key===data.selectedPeriod?'selected':'')+'>'+esc(p.start===p.end?p.start:p.start+' – '+p.end)+' · '+p.days+' day(s)</option>').join('')+'</select>';$('insightsPanel').prepend(control);}
-      return;
-    }
+    const creativeValue=$('creativeTypeFilter').value;
+    $('creativeTypeFilter').innerHTML='<option value="">All creative types</option>'+[...new Set(['Aesthetic','Vocal','UGC','Other',...state.ads.flatMap(a=>a.creativeTypes||[])])].map(t=>'<option '+(t===creativeValue?'selected':'')+'>'+esc(t)+'</option>').join('');
     const s=state.summary;
     $('records').classList.toggle('full-setup',$('columnMode').value==='setup');
     for(const type of Object.keys(selection))for(const id of selection[type])if(!state[type].some(x=>x.id===id))selection[type].delete(id);
@@ -262,6 +255,15 @@
     $('empty').innerHTML='<strong>'+(view==='results'&&!state.results.length?'No results logged yet':view==='changes'&&!state.changes.length?'No changes recorded yet':'No matching records')+'</strong>'+(view==='results'?'Log a dated report to compare spend, visits, enquiries and orders.':view==='changes'?'Your initial setup is saved. Future edits will appear here.':'Adjust the filters or add a record.');
     $('export').disabled=rows.length===0||busy;
     $('add').disabled=busy;
+    $('creativeTypeFilter').closest('label').hidden=!['campaigns','adSets','ads'].includes(view);
+    $('insightsPanel').hidden=view!=='campaigns';
+    if(view==='campaigns'&&window.MetaLinkedWorkspace){
+      const campaignIds=new Set(rows.map(r=>r.id));
+      const sets=state.adSets.filter(r=>campaignIds.has(r.campaignId));
+      const ads=state.ads.filter(a=>sets.some(r=>r.id===a.adSetId)&&(!$('collectionFilter').value||(a.collection||sets.find(r=>r.id===a.adSetId)?.collection||'Unclassified')===$('collectionFilter').value)&&(!$('destinationFilter').value||sets.find(r=>r.id===a.adSetId)?.destination===$('destinationFilter').value)&&(!$('creativeTypeFilter').value||(a.creativeTypes||[]).includes($('creativeTypeFilter').value)));
+      MetaLinkedWorkspace.render($('insightsPanel'),{...state,ads,adSets:sets},{period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const old=view;view='ads';openEditor(id);view=old;},edit:(type,id)=>{const old=view;view=type;openEditor(id);view=old;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});
+      $('insightsPanel').querySelector('.linked-filters').hidden=true;
+    }
   }
   async function request(path='',method='GET',body) {
     const response=await fetch(apiBase+path,{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
@@ -474,7 +476,7 @@
   $('allRecords').addEventListener('click',()=>{$('statusFilter').value='';render();});
   $('runningRecords').addEventListener('click',()=>{$('statusFilter').value='reported_running';render();});
   $('records').addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&event.target.matches('[data-sort]')){event.preventDefault();event.target.click();}});
-  ['campaignFilter','collectionFilter','statusFilter','destinationFilter','periodStartFilter','periodEndFilter'].forEach(id=>$(id).addEventListener('change',render));
+  ['campaignFilter','collectionFilter','statusFilter','destinationFilter','creativeTypeFilter','periodStartFilter','periodEndFilter'].forEach(id=>$(id).addEventListener('change',render));
   $('search').addEventListener('input',render);
   $('refresh').addEventListener('click',()=>load('Records refreshed.'));
   $('export').addEventListener('click',exportRows);$('add').addEventListener('click',()=>openEditor());
