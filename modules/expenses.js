@@ -202,8 +202,8 @@ function canonicalAccountName(value) {
   return match?match[1]:raw;
 }
 
-const RECEIPT_TYPES=['asset_sale','other_income','refund','owner_contribution','bank_interest',expenseLoans.TYPE];
-const RECEIPT_CATEGORIES=['Bank Interest Received','Other Income','Refund Received','Owner Contribution','Asset Sale',expenseLoans.CATEGORY];
+const RECEIPT_TYPES=['asset_sale','other_income','refund','owner_contribution','bank_interest','rental_income','personal_income','home_received','other_personal_received',expenseLoans.TYPE];
+const RECEIPT_CATEGORIES=['Bank Interest Received','Other Income','Refund Received','Owner Contribution','Asset Sale','Rental Income','Personal Income','Home Received','Other Personal Received',expenseLoans.CATEGORY];
 function receiptCategory(receiptType,value){
   if(receiptType===expenseLoans.TYPE)return expenseLoans.CATEGORY;
   const supplied=String(value||'').trim(),defaults={bank_interest:'Bank Interest Received',other_income:'Other Income',refund:'Refund Received',owner_contribution:'Owner Contribution',asset_sale:'Asset Sale'};
@@ -4526,6 +4526,45 @@ router.get('/api/expenses/salary-advance-transfer-candidates',(req,res)=>{
   if(!sal)return res.status(500).json({success:false,error:'Salary records are unavailable.'});
   const advances=Object.values(sal.advances||{}).filter(a=>a.active!==false&&num(a.amount)>0&&!a.fundingTransferId&&(!amount||Math.abs(num(a.amount)-amount)<.01)&&(!source||String(a.account||'').trim().toLowerCase()===source)).map(a=>({id:a.id,employeeId:a.empId||'',employeeName:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,amount:num(a.amount),date:a.date,sourceAccount:a.account,reference:a.reference||a.id,note:a.note||''})).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id)));
   res.json({success:true,advances});
+});
+const PERSONAL_HISTORICAL_ACCOUNT_LAST4=new Set(['0993','0992','7883','7823']);
+const PERSONAL_HISTORICAL_CREDITS={
+  rental_income:{receiptType:'rental_income',category:'Rental Income',label:'Rental income'},
+  personal_income:{receiptType:'personal_income',category:'Personal Income',label:'Personal income'},
+  home_received:{receiptType:'home_received',category:'Home Received',label:'Home received'},
+  other_personal_received:{receiptType:'other_personal_received',category:'Other Personal Received',label:'Other personal received'}
+};
+function personalHistoricalAccount(account){return PERSONAL_HISTORICAL_ACCOUNT_LAST4.has(String(account||'').replace(/\D/g,'').slice(-4));}
+router.post('/api/expenses/bank-statements/personal-historical-bulk',(req,res)=>{
+  const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId],rowIds=Array.from(new Set((Array.isArray(b.rowIds)?b.rowIds:[]).map(String)));
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can post historical PERSONAL statement rows in bulk.'});
+  if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
+  if(normalizedNature(draft.nature)!=='PERSONAL'||!personalHistoricalAccount(draft.account))return res.status(403).json({success:false,error:'Bulk historical posting is limited to PERSONAL accounts 0993, 0992 and 7883.'});
+  if(!rowIds.length)return res.status(400).json({success:false,error:'Select at least one unmatched bank row.'});
+  const view=draftReconciliation(s,draft),rows=rowIds.map(id=>view.rows.find(row=>row.id===id)),direction=String(b.direction||''),now=new Date().toISOString(),user=req.user.username;
+  if(rows.some(row=>!row||row.status!=='missing_in_app'||!row.bank||row.reversalReviewRequired||(draft.resolutions||{})[row.id]))return res.status(409).json({success:false,error:'Every selected row must still be an unmatched, unreviewed bank transaction and not a reversal.'});
+  if(direction==='debit'){
+    const category=String(b.category||'').trim();
+    if(!PERSONAL_CATEGORIES.includes(category))return res.status(400).json({success:false,error:'Choose a valid PERSONAL expense category.'});
+    if(rows.some(row=>!(num(row.bank.debit)>0)||num(row.bank.credit)>0))return res.status(400).json({success:false,error:'Select debit rows only when recording historical expenses.'});
+    const expenses=[];draft.resolutions=draft.resolutions||{};s.expenses=s.expenses||{};
+    rows.forEach(row=>{const bank=row.bank,amount=num(bank.debit),description=String(bank.description||'Historical personal expense').trim(),vendor=description.slice(0,120)||'Historical personal expense';s.seq=(s.seq||0)+1;const id='EX-'+String(s.seq).padStart(5,'0'),paymentId='PAY-001',remark='Historical PERSONAL expense classified from verified bank statement';const expense={id,date:bank.date,particulars:description,amount,isInstallment:false,requestedAmount:amount,nature:'PERSONAL',type:'variable',ledger:category,vendor,claimant:user,account:draft.account,channel:'Shared',bill:'none',fundedBy:'company',paymentType:'UPI',qrPhoto:'',billPhoto:'',purchasePaymentProof:'',exceptionEvidence:'Uploaded bank statement',exceptionReason:'Historical row; category-only recovery workflow',billNote:'Historical expense created from verified bank statement; original bill not required',paidAlready:false,personalPaidAmount:0,reimbursementStatus:'not_applicable',reimbursementAmount:0,reimbursementPayments:[],paymentProof:'',status:'paid',paidAmount:amount,payments:[{id:paymentId,amount,date:bank.date,account:draft.account,paymentType:'UPI',proof:'',note:'Verified against uploaded bank statement · '+(bank.reference||draft.id),paidBy:user,paidAt:now,personalFunds:false,bankReconciliationDraft:draft.id,bankReconciliationRow:row.id}],createdAt:now,createdBy:user,approvedAt:now,approvedBy:user,paidAt:now,paidBy:user,reconciliationSource:{draftId:draft.id,rowId:row.id,bankReference:String(bank.reference||''),bankDescription:description,remark,historicalBulk:true}};s.expenses[id]=expense;draft.resolutions[row.id]={action:'create_expense',reason:remark,remark,category,appId:id+'/'+paymentId,expenseId:id,by:user,at:now,historicalBulk:true};expenses.push(expense);audit(s,req,'HISTORICAL_PERSONAL_EXPENSE_BULK_CREATED','expense',id,{nature:'PERSONAL',account:draft.account,paymentId,after:expense,note:remark,draftId:draft.id,bankRowId:row.id});});
+    saveStore(s);return res.json(Object.assign({success:true,created:expenses.length,expenses},draftReconciliation(s,draft)));
+  }
+  if(direction==='credit'){
+    if(rows.some(row=>!(num(row.bank.credit)>0)||num(row.bank.debit)>0))return res.status(400).json({success:false,error:'Select credit rows only when recording historical money received.'});
+    const creditKind=String(b.creditKind||''),receipts=[],transfers=[];draft.resolutions=draft.resolutions||{};
+    if(creditKind==='internal_transfer'){
+      const fromAccount=allowedTransferAccount('PERSONAL',b.fromAccount),toAccount=allowedTransferAccount('PERSONAL',draft.account);
+      if(!fromAccount||!toAccount||fromAccount===toAccount)return res.status(400).json({success:false,error:'Choose a different existing PERSONAL source account.'});
+      rows.forEach(row=>{const bank=row.bank,amount=num(bank.credit);s.transferSeq=(s.transferSeq||0)+1;const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:'PERSONAL',fromNature:'PERSONAL',toNature:'PERSONAL',classification:'internal_transfer',fromAccount,toAccount,amount,date:bank.date,proof:'',note:'Historical transfer classified from bank statement · '+String(bank.description||bank.reference||''),createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:row.id,reference:String(bank.reference||''),description:String(bank.description||'')},historicalBulk:true};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);draft.resolutions[row.id]={action:'create_transfer',reason:transfer.note,remark:transfer.note,appId:transfer.id,transferId:transfer.id,by:user,at:now,historicalBulk:true};transfers.push(transfer);audit(s,req,'HISTORICAL_PERSONAL_TRANSFER_BULK_CREATED','transfer',transfer.id,{nature:'PERSONAL',account:fromAccount,after:transfer,note:transfer.note,draftId:draft.id,bankRowId:row.id});});
+    }else{
+      const definition=PERSONAL_HISTORICAL_CREDITS[creditKind];if(!definition)return res.status(400).json({success:false,error:'Choose Rental income, Personal income, Transfer from other account, Home received, or Other personal received.'});s.receipts=Array.isArray(s.receipts)?s.receipts:[];
+      rows.forEach(row=>{const bank=row.bank,amount=num(bank.credit),source=String(bank.description||definition.label).trim().slice(0,160)||definition.label;s.receiptSeq=(s.receiptSeq||0)+1;const receipt={id:'REC-'+String(s.receiptSeq).padStart(5,'0'),nature:'PERSONAL',account:draft.account,amount,receiptType:definition.receiptType,category:definition.category,source,date:bank.date,note:'Historical '+definition.label.toLowerCase()+' classified from verified bank statement',proof:'',proofs:[],proofException:'Verified directly against uploaded bank statement',createdBy:user,createdAt:now,bankReconciliationEvidence:{draftId:draft.id,rowId:row.id,reference:String(bank.reference||''),description:String(bank.description||'')},historicalBulk:true};s.receipts.push(receipt);draft.resolutions[row.id]={action:'create_receipt',reason:receipt.note,remark:receipt.note,appId:receipt.id,receiptId:receipt.id,by:user,at:now,historicalBulk:true};receipts.push(receipt);audit(s,req,'HISTORICAL_PERSONAL_RECEIPT_BULK_CREATED','receipt',receipt.id,{nature:'PERSONAL',account:draft.account,after:receipt,note:receipt.note,draftId:draft.id,bankRowId:row.id});});
+    }
+    saveStore(s);return res.json(Object.assign({success:true,created:receipts.length+transfers.length,receipts,transfers},draftReconciliation(s,draft)));
+  }
+  res.status(400).json({success:false,error:'Choose debit or credit classification.'});
 });
 router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];
