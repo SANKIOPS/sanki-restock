@@ -2685,6 +2685,33 @@ router.post('/api/expenses/reimbursements/historical-settlement',(req,res)=>{
   saveStore(s);res.json({success:true,batchId,expenseIds:ids,total:roundMoney(items.reduce((sum,x)=>sum+x.due,0)),expenses:items.map(x=>x.e),ledgerMovementCreated:false});
 });
 
+// Reverse one incorrectly recorded reimbursement without deleting the expense.
+// The removed payment is retained on the expense and in the immutable audit log,
+// while the normal ledger builders stop counting it as a cash/bank movement.
+router.post('/api/expenses/:id/reimbursements/:paymentId/undo',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can undo a reimbursement.'});
+  const s=loadStore(),e=s.expenses[req.params.id],reason=String(req.body&&req.body.reason||'').trim();
+  if(!e)return res.status(404).json({success:false,error:'Expense not found.'});
+  if(!canApproveExpenseNature(req,e))return res.status(403).json({success:false,error:'You cannot correct this accounting entity.'});
+  if(reason.length<10)return res.status(400).json({success:false,error:'Enter at least 10 characters explaining why this reimbursement is being undone.'});
+  e.reimbursementPayments=Array.isArray(e.reimbursementPayments)?e.reimbursementPayments:[];
+  const index=e.reimbursementPayments.findIndex(p=>String(p.id)===String(req.params.paymentId));
+  if(index<0)return res.status(404).json({success:false,error:'Reimbursement payment not found.'});
+  const removed=JSON.parse(JSON.stringify(e.reimbursementPayments[index])),appId=e.id+'/'+removed.id;
+  if(unpayBlockedReferences(s).has(appId)||removed.bankReconciliationDraft)return res.status(409).json({success:false,error:'This reimbursement is linked to bank reconciliation. Correct or undo that reconciliation link before reversing the reimbursement.'});
+  e.reimbursementPayments.splice(index,1);
+  e.reimbursementAmount=roundMoney(e.reimbursementPayments.reduce((sum,p)=>sum+num(p.amount),0));
+  const due=expenseRefunds.reimbursementPosition(s,e).pending;
+  e.reimbursementStatus=due>0?(e.reimbursementAmount>0?'partially_reimbursed':'pending'):'reimbursed';
+  const reversal={payment:removed,reason,undoneBy:req.user&&req.user.username||'owner',undoneAt:new Date().toISOString()};
+  e.reimbursementReversals=Array.isArray(e.reimbursementReversals)?e.reimbursementReversals:[];
+  e.reimbursementReversals.push(reversal);
+  if(s.bankDateOverrides)delete s.bankDateOverrides[appId];
+  audit(s,req,'REIMBURSEMENT_REVERSED','expense',e.id,{nature:e.nature,account:removed.account,paymentId:removed.id,before:removed,after:{reimbursementAmount:e.reimbursementAmount,reimbursementStatus:e.reimbursementStatus,pending:due},note:reason});
+  saveStore(s);
+  res.json({success:true,expense:e,reversedPayment:removed,pending:due});
+});
+
 router.post('/api/expenses/:id/reject', (req, res) => {
   if (!canApprove(req)) return res.status(403).json({ success: false, error: 'Only accounting/admin can reject.' });
   const s = loadStore(); const e = s.expenses[req.params.id];
