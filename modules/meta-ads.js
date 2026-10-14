@@ -368,16 +368,16 @@ function createStore(options = {}) {
         for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Meta configuration upload',revision:state.revision+1});
       }
       const includedCampaigns=new Set(records.campaigns.map(r=>remap.get(r.id)||r.id)),includedSets=new Set(records.adSets.map(r=>remap.get(r.id)||r.id)),includedAds=new Set(records.ads.map(r=>remap.get(r.id)||r.id));
-      const missingSets=options.completeCampaigns?original.adSets.filter(r=>!r.archived&&includedCampaigns.has(r.campaignId)&&!includedSets.has(r.id)):[];
+      const missingSets=original.adSets.filter(r=>!r.archived&&includedCampaigns.has(r.campaignId)&&!includedSets.has(r.id));
       const missingSetIds=new Set(missingSets.map(r=>r.id));
-      const missing=missingSets.map(r=>({type:'adSets',id:r.id,name:r.name})).concat(options.completeCampaigns?original.ads.filter(r=>!r.archived&&includedSets.has(r.adSetId)&&!missingSetIds.has(r.adSetId)&&!includedAds.has(r.id)).map(r=>({type:'ads',id:r.id,name:r.name})):[]);
+      const missing=missingSets.map(r=>({type:'adSets',id:r.id,name:r.name})).concat(original.ads.filter(r=>!r.archived&&includedSets.has(r.adSetId)&&!missingSetIds.has(r.adSetId)&&!includedAds.has(r.id)).map(r=>({type:'ads',id:r.id,name:r.name})));
       const decisions=options.decisions||[];
       if(!Array.isArray(decisions))fail('Missing-record decisions must be a list.');
       if(!preview&&missing.some(r=>!decisions.some(d=>d.type===r.type&&d.id===r.id&&['keep','remove'].includes(d.action))))fail('Review each missing record: keep existing or mark removed.');
       counts.removed=0;
       for(const candidate of missing){if(!decisions.some(d=>d.type===candidate.type&&d.id===candidate.id&&d.action==='remove'))continue;
         const removals=[{type:candidate.type,id:candidate.id}];if(candidate.type==='adSets')removals.push(...state.ads.filter(a=>a.adSetId===candidate.id&&!a.archived).map(a=>({type:'ads',id:a.id})));
-        for(const entry of removals){const record=state[entry.type].find(r=>r.id===entry.id);if(record.archived)continue;record.archived=true;record.updatedAt=now;record.updatedBy=actor;counts.removed++;state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[entry.type],entityId:record.id,field:'archived',before:false,after:true,action:'archive',reason:'Owner confirmed removed in Meta after complete campaign setup upload',revision:state.revision+1});}
+        for(const entry of removals){const record=state[entry.type].find(r=>r.id===entry.id);if(record.archived)continue;record.archived=true;record.updatedAt=now;record.updatedBy=actor;counts.removed++;state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[entry.type],entityId:record.id,field:'archived',before:false,after:true,action:'archive',reason:'Owner confirmed removed in Meta after setup upload',revision:state.revision+1});}
       }
       validateRelationships(state);
       if(!preview && (counts.created||counts.updated||counts.removed)){state.revision++;save(state);}
