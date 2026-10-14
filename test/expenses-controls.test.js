@@ -12,6 +12,7 @@ process.env.DATA_PATH = path.join(tempDir, 'data.json');
 const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, bankFinalizationImportPlan, restoreApprovalTrimmedDraft, validateApprovalTrimmedDraftExternalRows, createBankReconciliationDraft, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
+const { applyAxisArshpreetReimbursementDuplicateRepair } = require('../modules/expenses');
 const { applyCashCounterMissingEntries } = require('../modules/expenses');
 const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
 const { stagePaytmSettlementsFromAxisDraft } = require('../modules/expenses');
@@ -401,6 +402,31 @@ test('EX-00300 and EX-00301 keep their 8 September expense dates but show the ac
   assert.equal(store.bankDateOverrides['EX-00300/PAY-001'].bankDate,'2026-09-11');assert.equal(store.bankDateOverrides['EX-00300/PAY-001'].reference,'REF-85');
   assert.equal(store.expenses['EX-OTHER'].payments[0].date,'2026-09-10');assert.equal(store.auditLog.filter(x=>x.action==='PAYMENT_DATE_CORRECTED').length,2);
   assert.equal(applySep11PrashantReimbursementDateCorrection(store),false,'the correction is idempotent');
+});
+
+test('Axis reimbursement duplicate is removed and the bank row keeps ₹2,727 plus ₹5.90 charges',()=>{
+  const batchId='RB-20261013184837-6SMS',draftId='BRD-1791965772925-126037',transferId='TR-00166',account='Axis Bank 3448';
+  const store={
+    expenses:{
+      'EX-R1':{id:'EX-R1',reimbursementPayments:[{id:'REIMB-1',batchId,account,date:'2026-10-14',amount:1200,proof:'/proof-1.jpg'}]},
+      'EX-R2':{id:'EX-R2',reimbursementPayments:[{id:'REIMB-2',batchId,account,date:'2026-10-14',amount:1527,proof:'/proof-2.jpg'}]}
+    },
+    transfers:[{id:transferId,nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:account,toAccount:'Arshpreet 1919',date:'2026-10-13',amount:2730,proof:'/transfer-proof.jpg'}],
+    bankReconciliationDrafts:{[draftId]:{id:draftId,account,nature:'SANKI',transactions:[{date:'2026-10-13',description:'IMPS/P2A/628622200116/ARSHPREET SINGH ARO/X681919/INDUSINDBANKLTD/',reference:'628622200116',debit:2732.9,credit:0}],resolutions:{'bank-0':{action:'split_allocation',appId:transferId,principalAmount:2730,chargeAmount:2.9},'app-1':{action:'linked_split',appId:transferId,linkedRowId:'bank-0'}}}},
+    bankDateOverrides:{[transferId]:{bankDate:'2026-10-13'}},bankReconciliationLinks:{[transferId]:{draftId,rowId:'bank-0'}},
+    bankReconciliationApprovals:{BRA1:{id:'BRA1',draftId,status:'pending'}},oneTimeMigrations:{},auditLog:[],auditSeq:0
+  };
+  assert.equal(applyAxisArshpreetReimbursementDuplicateRepair(store),true);
+  assert.equal(store.transfers.some(x=>x.id===transferId),false);
+  assert.equal(store.bankDateOverrides[transferId],undefined);assert.equal(store.bankReconciliationLinks[transferId],undefined);
+  const resolution=store.bankReconciliationDrafts[draftId].resolutions['bank-0'];
+  assert.deepEqual({action:resolution.action,appId:resolution.appId,principalAmount:resolution.principalAmount,chargeAmount:resolution.chargeAmount,chargeCategory:resolution.chargeCategory},{action:'split_allocation',appId:batchId,principalAmount:2727,chargeAmount:5.9,chargeCategory:'BANK CHARGES'});
+  assert.equal(store.bankReconciliationDrafts[draftId].resolutions['app-1'],undefined);
+  assert.equal(store.bankDateOverrides[batchId].bankDate,'2026-10-13');assert.equal(store.bankDateOverrides[batchId].originalDate,'2026-10-14');assert.equal(store.bankDateOverrides[batchId].provisional,true);
+  assert.equal(store.bankReconciliationApprovals.BRA1.status,'superseded');
+  assert.deepEqual(store.oneTimeMigrations['repair-axis-arshpreet-reimbursement-2727-charge-5-90-remove-tr-00166-v1'].preservedExpenseIds,['EX-R1','EX-R2']);
+  assert.ok(store.auditLog.some(x=>x.action==='TRANSFER_DELETED'&&x.subjectId===transferId));assert.ok(store.auditLog.some(x=>x.action==='BANK_RECONCILIATION_DUPLICATE_LINK_REPAIRED'));
+  assert.equal(applyAxisArshpreetReimbursementDuplicateRepair(store),false,'the repair is idempotent');
 });
 
 test('default transaction dates use the India calendar day instead of UTC',()=>{
@@ -1972,7 +1998,7 @@ test('a split bank-charge resolution consumes its reimbursement instead of leavi
   try{const s=JSON.parse(baseline),account='Axis Bank 3448',draftId='BRD-SPLIT-CONSUMES-APP',appId='EX-SPLIT-CHARGE/REIM-001';s.expenses=s.expenses||{};s.expenses['EX-SPLIT-CHARGE']={id:'EX-SPLIT-CHARGE',nature:'SANKI',status:'approved',vendor:'Test claimant',amount:628.75,reimbursementPayments:[{id:'REIM-001',account,amount:628.75,date:'2099-11-06'}],payments:[]};s.bankReconciliationDrafts=s.bankReconciliationDrafts||{};s.bankReconciliationDrafts[draftId]={id:draftId,account,nature:'SANKI',transactions:[{date:'2099-11-06',description:'IMPS reimbursement plus charge',reference:'SPLIT-63195',debit:631.95,credit:0,balance:0}],summary:{from:'2099-11-06',to:'2099-11-06',openingBalance:631.95,closingBalance:0,totalDebits:631.95,totalCredits:0,validated:true},resolutions:{'bank-0':{action:'split_allocation',appId:'',principalAmount:628.75,chargeAmount:3.2,chargeCategory:'BANK CHARGES',reason:'Matched reimbursement with ₹3.20 bank charge'},'app-73':{action:'linked_split',appId,reason:'Linked as principal component of bank-0'}},matchingPolicy:'strict_identity_v3',createdBy:'owner-user'};fs.writeFileSync(expenseFile,JSON.stringify(s));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}}).body,row=view.rows.find(x=>x.id==='bank-0');assert.equal(row.status,'resolved');assert.equal(view.rows.some(x=>x.status==='missing_in_bank'&&x.app&&x.app.id===appId),false);assert.equal(view.unresolved,0);}finally{fs.writeFileSync(expenseFile,baseline);}
 });
 
-test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),start=html.indexOf('function renderBankReconciliation'),end=html.indexOf('function renderBankContinuityEvidence',start);assert.ok(start>=0&&end>start,'limit the assertion to the reconciliation renderer, not later manual dialogs');const render=html.slice(start,end);assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
+test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),render=html.slice(html.indexOf('function renderBankReconciliation'),html.indexOf('function bankDecisionLabel'));assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
 
 test('reviewed bank transactions can finalize while the closing balance remains pending',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draftId='BRD-DEFER-BALANCE';
