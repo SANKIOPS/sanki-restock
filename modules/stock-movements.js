@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const inventory = require('./inventory-state');
-const countedRackOptions = require('./counted-rack-options.json');
+const warehouseRacks = require('./warehouse-racks');
 const care = require('./inventory-care-store');
 const storePath = process.env.STOCK_MOVEMENTS_PATH || path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'), 'stock_movements.json');
 const locations = ['Display', 'Warehouse'];
@@ -21,7 +21,21 @@ function load(file = storePath) {
   if (!fs.existsSync(file)) return empty();
   const s = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (s.version !== 1 || !Array.isArray(s.positions) || !Array.isArray(s.movements)) fail('Stock movement store requires repair.', 503);
+  // Collapse legacy Display rack positions without changing their total or
+  // rewriting the original movement/care audit records.
+  s.positions = wholeDisplayPositions(s.positions);
   return s;
+}
+function wholeDisplayPositions(positions) {
+  const bySku = new Map(), out = [];
+  for (const p of positions) {
+    if (p.location !== 'Display') { out.push({ ...p }); continue; }
+    if (!Number.isSafeInteger(p.quantity) || p.quantity < 0) fail('Display positions require repair.', 503);
+    if (!bySku.has(p.sku)) { const value = { ...p, rack: '', quantity: 0 }; bySku.set(p.sku, value); out.push(value); }
+    bySku.get(p.sku).quantity += p.quantity;
+    if (!Number.isSafeInteger(bySku.get(p.sku).quantity)) fail('Display positions require repair.', 503);
+  }
+  return out;
 }
 function save(s, file = storePath) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -30,14 +44,14 @@ function save(s, file = storePath) {
   fs.renameSync(tmp, file);
 }
 function ready(s) { return s.baseline?.reconciled === true && !!s.baseline?.reviewedBy && !!s.baseline?.reconciledAt; }
-function rackChoices(s) { return ready(s) ? s.baseline.racks : { Display: countedRackOptions.Display, Warehouse: countedRackOptions.Warehouse }; }
+function rackChoices(s) { return { Display: [], Warehouse: ready(s) ? s.baseline.racks.Warehouse : warehouseRacks.reference.racks }; }
 function point(p) {
   if (!p || !locations.includes(p.location) || (p.rack != null && typeof p.rack !== 'string')) fail('Select a valid location and rack.', 400);
-  const rack = (p.rack || '').trim();
+  const rack = p.location === 'Display' ? '' : (p.rack || '').trim();
   if (rack.length > 40) fail('Rack code is too long.', 400);
   return { location: p.location, rack };
 }
-function same(a, b) { return a.location === b.location && a.rack === b.rack; }
+function same(a, b) { return a.location === b.location && (a.location === 'Display' || a.rack === b.rack); }
 function outstanding(m) { return !['approved', 'cancelled'].includes(m.status); }
 function liveReady(live) {
   const ids = locations.map(k => live.mapping[k]);
@@ -45,11 +59,12 @@ function liveReady(live) {
 }
 function livePositions(s, live) {
   if (!liveReady(live)) return [];
+  const rackFor = warehouseRacks.createIndex(s.movements);
   const counts = new Map(); for (const i of live.items) counts.set(i.sku, (counts.get(i.sku) || 0) + 1);
   return live.items.filter(i => i.sku && i.tracked && counts.get(i.sku) === 1).flatMap(i => locations.map(location => {
     const level = i.levels.find(l => l.locationId === live.mapping[location]);
     const pending = s.movements.filter(m => m.sku === i.sku && m.from.location === location && outstanding(m)).reduce((n,m) => n + m.quantity, 0);
-    return { sku:i.sku, location, rack:'', quantity:Math.max(0, (level?.available || 0) - pending), stocked:!!level, title:i.product.title };
+    return { sku:i.sku, location, rack:'', quantity:Math.max(0, (level?.available || 0) - pending), stocked:!!level, title:i.product.title, ...(location === 'Warehouse' ? rackFor(i.sku) : {}) };
   }));
 }
 function submitLive(s, body, user, live) {
@@ -70,7 +85,7 @@ function submitLive(s, body, user, live) {
   const item = matching[0];
   if (s.movements.some(m => m.sku === sku && outstanding(m))) fail('Review the existing movement for this SKU first.');
   if (care.blockedSku(care.load(),sku)) fail('Confirm the pending dry cleaning Shopify result for this SKU first.');
-  for (const p of [from,to]) if (p.rack && !rackChoices(s)[p.location].includes(p.rack)) fail('Choose a rack from the selected location.',400);
+  for (const p of [from,to]) if (p.location === 'Warehouse' && (!p.rack || !rackChoices(s).Warehouse.includes(p.rack))) fail('Choose a valid warehouse rack.',400);
   const source = item.levels.find(l => l.locationId === live.mapping[from.location]);
   const target = item.levels.find(l => l.locationId === live.mapping[to.location]);
   if (!source || !target) fail('SKU must be stocked at both selected Shopify locations.');
@@ -80,6 +95,7 @@ function submitLive(s, body, user, live) {
 }
 function submit(s, body, user) {
   if (!ready(s)) fail('Reconcile and approve the physical-count baseline before moving stock.');
+  s.positions = wholeDisplayPositions(s.positions);
   if (!user?.username) fail('A named staff login is required.', 403);
   const sku = String(body.sku || '').trim().toUpperCase();
   const quantity = body.quantity;
@@ -92,10 +108,11 @@ function submit(s, body, user) {
     return existing;
   }
   if (s.movements.some(m => m.sku === sku && m.status === 'correction_required')) fail('Resolve the physical correction for this SKU first.');
+  for (const p of [from,to]) if (p.location === 'Warehouse' && (!p.rack || !rackChoices(s).Warehouse.includes(p.rack))) fail('Choose a valid warehouse rack.',400);
   const careStore = care.load();
   if (care.blockedSku(careStore, sku)) fail('Confirm the pending dry cleaning Shopify result for this SKU first.');
   const source = s.positions.find(p => p.sku === sku && same(p, from));
-  const reserved = care.reservedAt(careStore, sku, s.baseline.locations?.[from.location], from.rack);
+  const reserved = care.reservedAt(careStore, sku, s.baseline.locations?.[from.location], from.rack, from.location === 'Display');
   if (!source || source.quantity - reserved < quantity) fail('Not enough available counted pieces on the selected source rack.');
   // Destination codes must be drawn from the reviewed rack list, not free text.
   if (to.rack && !(s.baseline.racks?.[to.location] || []).includes(to.rack)) fail('Destination rack is not in the reviewed rack list.', 400);
@@ -142,8 +159,8 @@ router.get('/api/stock-movements', async (req, res) => {
     // A long inventory read must not return an old approval/cancellation state.
     const s = load();
     const register = care.load();
-    const positions = live ? livePositions(s,live) : s.positions.map(p => ({ ...p, quantity: p.quantity - care.reservedAt(register, p.sku, s.baseline?.locations?.[p.location], p.rack) }));
-    res.json({ success: true, ready: live ? liveReady(live) : true, liveMode:!!live, at:live?.at, username:req.user.username, canApprove: canApprove(req.user), baseline: s.baseline ? { reconciledAt: s.baseline.reconciledAt, racks: s.baseline.racks } : null, rackOptions: rackChoices(s), rackSource: ready(s) ? 'Approved movement baseline' : countedRackOptions.source, positions, movements: s.movements.slice(-500).reverse() });
+    const positions = live ? livePositions(s,live) : s.positions.map(p => ({ ...p, quantity: p.quantity - care.reservedAt(register, p.sku, s.baseline?.locations?.[p.location], p.rack, p.location === 'Display') }));
+    res.json({ success: true, ready: live ? liveReady(live) : true, liveMode:!!live, at:live?.at, username:req.user.username, canApprove: canApprove(req.user), baseline: s.baseline ? { reconciledAt: s.baseline.reconciledAt, racks: rackChoices(s) } : null, rackOptions: rackChoices(s), rackSource: ready(s) ? 'Approved movement baseline' : warehouseRacks.reference.source, positions, movements: s.movements.slice(-500).reverse() });
   } catch (e) { res.status(e.status || 503).json({ success: false, error: 'Movement data unavailable. Contact the inventory manager.' }); }
 });
 router.post('/api/stock-movements', (req, res) => serial(async () => {
@@ -185,4 +202,4 @@ router.post('/api/stock-movements/:id/review', (req, res) => serial(async () => 
   const s=load(), m=await review(s,req.params.id,req.body,req.user);
   res.json({ success: true, movement: m });
 }).catch(e => res.status(e.status || 500).json({ success: false, error: e.message })));
-module.exports = { router, submit, submitLive, livePositions, liveReady, review, sync, ready, rackChoices, canApprove, load, save, serial };
+module.exports = { router, submit, submitLive, livePositions, liveReady, review, sync, ready, rackChoices, canApprove, load, save, serial, wholeDisplayPositions };
