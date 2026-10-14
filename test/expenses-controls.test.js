@@ -1899,10 +1899,7 @@ test('daily dashboard reminder highlights 3448 and 0425 statements through yeste
 
 test('reconciliation reminders include the approved bank, clearing, cash, Velocity and card schedules',()=>{
   const cardFile=path.join(tempDir,'credit-cards.json'),original=fs.existsSync(cardFile)?fs.readFileSync(cardFile,'utf8'):'',cards={cards:{'CC-1':{id:'CC-1',name:'HDFC',last4:'7376',cycleDay:21,active:true},'CC-2':{id:'CC-2',name:'ICICI',last4:'1006',cycleDay:11,active:true}},statements:{'CCS-1':{id:'CCS-1',cardId:'CC-1',status:'review',storedName:'hdfc.pdf',uploadedAt:'2026-10-01T00:00:00Z',periodFrom:'2026-08-22',periodTo:'2026-09-21',summary:{from:'2026-08-22',to:'2026-09-21'}},'CCS-MANUAL':{id:'CCS-MANUAL',cardId:'CC-2',status:'finalized',originalName:'Manual entry',storedName:'',summary:{format:'Manual',to:'2099-01-01'}}}};fs.writeFileSync(cardFile,JSON.stringify(cards));
-  const result=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});if(original)fs.writeFileSync(cardFile,original);else fs.rmSync(cardFile,{force:true});assert.equal(result.status,200);const byAccount=name=>result.body.reminders.find(x=>x.account===name);
-  assert.equal(byAccount('Axis Bank 3448').cadenceDays,2);assert.equal(byAccount('Tiana 0425').cadenceDays,7);assert.equal(byAccount('IndusInd Bank 8181').cadenceDays,2);assert.equal(byAccount('Counter Cash').cadenceDays,1);
-  assert.equal(byAccount('Paytm Settlement Clearing').cadenceDays,2);assert.equal(byAccount('Paytm reconciliation'),undefined,'the unified Paytm workspace has one reminder, not duplicate report and clearing warnings');assert.equal(result.body.reminders.filter(x=>/Paytm/.test(x.account)).length,1);
-  assert.equal(byAccount('Velocity reconciliation').cadenceDays,7);const hdfc=byAccount('HDFC 7376'),icici=byAccount('ICICI 1006');assert.equal(hdfc.cadenceDays,7);assert.equal(hdfc.status,'review_pending');assert.equal(icici.status,'statement_required','manual card entries do not count as a reconciled statement');assert.equal(hdfc.href,'/expenses.html?tab=creditcards');assert.equal(byAccount('Paytm Settlement Clearing').href,'/expenses.html?tab=cash&account=Paytm%20Settlement%20Clearing');assert.match(byAccount('Velocity reconciliation').href,/account=Velocity/);
+  const result=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});if(original)fs.writeFileSync(cardFile,original);else fs.rmSync(cardFile,{force:true});assert.equal(result.status,200);const byAccount=name=>result.body.reminders.find(x=>x.account===name);assert.equal(byAccount('Axis Bank 3448').cadenceDays,2);assert.equal(byAccount('Tiana 0425').cadenceDays,7);assert.equal(byAccount('IndusInd Bank 8181').cadenceDays,2);assert.equal(byAccount('Counter Cash').cadenceDays,1);assert.equal(result.body.reminders.filter(x=>x.account==='Paytm Settlement Clearing').length,1,'Paytm report review and clearing use one universal reminder');assert.equal(byAccount('Paytm Settlement Clearing').cadenceDays,2);assert.match(byAccount('Paytm Settlement Clearing').href,/tab=cash&account=Paytm%20Settlement%20Clearing/);assert.equal(byAccount('Velocity reconciliation').cadenceDays,7);const hdfc=byAccount('HDFC 7376'),icici=byAccount('ICICI 1006');assert.equal(hdfc.cadenceDays,7);assert.equal(hdfc.status,'review_pending');assert.equal(icici.status,'statement_required','manual card entries do not count as a reconciled statement');assert.equal(hdfc.href,'/expenses.html?tab=creditcards');assert.match(byAccount('Velocity reconciliation').href,/account=Velocity/);
 });
 
 test('alternate-day and weekly bank reminders appear only when their cadence is reached',()=>{
@@ -3012,10 +3009,9 @@ test('Paytm clearing starts on 22 August and shows settlement and charges separa
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{}}));
   const legacyEntries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,legacyReceipt=legacyEntries.find(x=>x.kind==='paytm_customer_receipts');
   assert.equal(legacyReceipt,undefined);assert.equal(legacyEntries.some(x=>x.kind!=='opening'&&x.date<'2026-08-22'),false);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
-  assert.match(html,/showPaytmWorkspace=isPaytmClearing&&cfg.isAdmin/,'the deployed unified Paytm review is scoped to its account');
-  assert.match(html,/renderPaytmReports\(paytmReconciliationWorkspace\)/,'use the single Paytm account workspace');
-  assert.match(html,/if\(el\('paytmLedgerWorkspace'\)\)el\('paytmLedgerWorkspace'\)\.remove\(\)/,'remove the legacy duplicate workspace');
+  const paytmUi=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(paytmUi,/detailedStatementCard\.insertAdjacentHTML\('beforebegin','<div id="paytmReconciliationWorkspace"/,'the Paytm reconciliation workspace is placed above the detailed statement');
+  assert.doesNotMatch(paytmUi,/paytmWorkspace\.parentNode\.appendChild\(paytmWorkspace\)/,'the old below-ledger Paytm workspace placement is removed');
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
@@ -3148,10 +3144,11 @@ test('internal reconciliation flags malformed transfers and requires a recorded 
 test('finalized Paytm report shows outgoing settlement before the Axis bank link',()=>{
   const expenseStorePath=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseStorePath,'utf8')),baseline=JSON.parse(JSON.stringify(stored));
   stored.paytmVerifiedSettlements=[{id:'PTMV-PENDING',settlementId:'SET-PENDING',payoutId:'PAYOUT-PENDING',utr:'UTR-PENDING',settledDate:'2026-09-25',net:983.2,commission:10,platformFee:5,gst:1.8,nonCustomerAmount:0,finalizedAt:'2026-09-25T12:00:00Z'}];stored.paytmPayoutPostings=[];fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
-  let entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-25',to:'2026-09-25'}}).body.entries;
+  let ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-25',to:'2026-09-25'}}).body,entries=ledger.entries;
+  assert.equal(ledger.reconciledThrough,'2026-09-25','Paytm uses its own finalized settlement date instead of the generic bank-statement cutoff');
   const settlement=entries.find(x=>x.id==='PTMV-PENDING'),charges=entries.find(x=>x.id==='PTMV-PENDING/CHARGES');assert.equal(settlement.debit,983.2);assert.equal(settlement.reference,'UTR-PENDING');assert.equal(settlement.pendingBankLink,true);assert.equal(charges.debit,16.8);
   stored.paytmPayoutPostings=[{id:'PTMR-POST-PENDING',settlementId:'SET-PENDING',payoutId:'PAYOUT-PENDING',date:'2026-09-25',utr:'UTR-PENDING',net:983.2,commission:10,platformFee:5,gst:1.8,nonCustomerAmount:0,orderNumbers:[]}];fs.writeFileSync(expenseStorePath,JSON.stringify(stored));
-  entries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-25',to:'2026-09-25'}}).body.entries;assert.equal(entries.some(x=>x.id==='PTMV-PENDING'),false,'verified preview is replaced, not duplicated, after bank posting');assert.equal(entries.find(x=>x.id==='PTMR-POST-PENDING').debit,983.2);
+  ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-09-25',to:'2026-09-25'}}).body;entries=ledger.entries;assert.equal(ledger.reconciledThrough,'2026-09-25');assert.equal(entries.some(x=>x.id==='PTMV-PENDING'),false,'verified preview is replaced, not duplicated, after bank posting');assert.equal(entries.find(x=>x.id==='PTMR-POST-PENDING').debit,983.2);
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
 });
 
