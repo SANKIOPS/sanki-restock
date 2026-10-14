@@ -35,7 +35,7 @@ test('10000 owned: 50 cleaning + 10 not for sale reduces available to 9940; part
   const dispose = makeAction(s, batch.id, { requestId: crypto.randomUUID(), action: 'dispose', disposed: true, note: 'Permanently removed 2 damaged pieces', lines: [{ lineId, from: 'miscellaneous', quantity: 2 }] }, admin);
   assert.equal(buildInput(s, dispose, l).changes[0].changeFromQuantity, 12);
   confirmLocally(s, dispose, l); d = registerData(s, l, admin); assert.equal(d.totals.totalQty, 9998); assert.equal(d.totals.availableQty, 9988); assert.equal(d.totals.notForSaleQty, 10);
-  assert.equal(care.reservedAt(s, 'SA1', location, 'T1'), 12);
+  assert.equal(care.reservedAt(s, 'SA1', location, '',true), 12);
 });
 test('duplicate requests cannot double log; changed payload rejected; invalid whole quantities rejected', () => {
   const s = care.empty(), l = live(), b = body(); makeOpen(s,b,staff,l); makeOpen(s,b,staff,l);

@@ -230,7 +230,6 @@ router.get('/api/stock-search', async (req, res) => {
     const limit   = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
 
     let variants = await getCatalog(false);
-    const store = loadRacks();
     const inventory = require('./inventory-state');
     const live = inventory.withCare(await inventory.snapshot());
     const byId = new Map(live.items.map(i => [i.id.split('/').pop(), i]));
@@ -240,15 +239,12 @@ router.get('/api/stock-search', async (req, res) => {
       const q = inventory.quantities(item, live.mapping);
       return { ...v, inventoryQuantity: q.availableQty, ownedQuantity: q.totalQty, cleaningQuantity: q.cleaningQty, notForSaleQuantity: q.notForSaleQty };
     });
-    const racks = store.racks || {};
-    const skuRacks = store.skuRacks || {};
-
-    // Rack precedence: a manual per-variant assignment wins over the bulk RIS
-    // SKU import, so hand-tuned corrections aren't overwritten by a resync.
+    // Stock search shares the dashboard's warehouse reference and approved
+    // movement history. The older RIS/manual store is retained for its audit.
+    const rackFor = require('./warehouse-racks').readIndex();
     let rows = variants.map(v => {
-      const byVariant = (racks[String(v.variantId)] || {}).rack || '';
-      const bySku = v.sku ? (skuRacks[normSku(v.sku)] || {}).rack || '' : '';
-      return { ...v, rack: byVariant || bySku, rackSource: byVariant ? 'manual' : (bySku ? 'ris' : '') };
+      const current=rackFor(v.sku);
+      return { ...v, rack: current.warehouseRack || '', warehouseRacks:current.warehouseRacks, rackSource:current.warehouseRackSource };
     });
 
     if (vendor)  rows = rows.filter(r => r.vendor.toLowerCase() === vendor);

@@ -32,8 +32,8 @@ function balances(s, batch) {
 }
 // Movement positions retain their reviewed opening quantities. Only confirmed
 // care operations reserve those pieces; releasing them restores the same rack.
-function reservedAt(s, sku, locationId, rack) {
-  return s.batches.reduce((n, b) => n + balances(s, b).filter(l => l.sku === sku && l.locationId === locationId && l.rack === rack).reduce((q, l) => q + l.cleaning + l.miscellaneous + l.disposed, 0), 0);
+function reservedAt(s, sku, locationId, rack, wholeLocation = false) {
+  return s.batches.reduce((n, b) => n + balances(s, b).filter(l => l.sku === sku && l.locationId === locationId && (wholeLocation || l.rack === rack)).reduce((q, l) => q + l.cleaning + l.miscellaneous + l.disposed, 0), 0);
 }
 function blockedSku(s, sku) {
   return s.operations.some(o => ['sync_pending', 'review_required'].includes(o.status) && o.lines.some(l => l.sku === sku));
