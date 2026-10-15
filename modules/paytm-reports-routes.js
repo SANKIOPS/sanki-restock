@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
 const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, validatePayoutPosting } = require('./paytm-accounting');
+const { applyRoundingReview } = require('./paytm-rounding');
 
 function registerPaytmReports(router, deps) {
   const { loadStore, saveStore, audit, canAccess, canClassify, upload, view, today, orders, saleRows, shopifyClient, shopifyStore } = deps;
@@ -17,6 +18,7 @@ function registerPaytmReports(router, deps) {
     if (!order || !/^\d+$/.test(String(order.id))) return res.status(404).json({ success: false, error: 'Choose a synced Shopify order with a numeric order ID.' });
     if (!shopifyClient || !shopifyStore) return res.status(503).json({ success: false, error: 'Shopify connection is not configured.' });
     const store = loadStore();
+    if (Object.values(store.paytmRoundingReviews || {}).some(review => String(review.orderId) === String(order.id))) return res.status(409).json({ success: false, error: 'This order has an audited rounding receipt. Reverse its rounding treatment before changing the payment split.' });
     if ((store.paytmPayoutPostings || []).some(x => (x.orderIds || []).includes(String(order.id)))) return res.status(409).json({ success: false, error: 'This order is in a posted payout. Correct the posting before changing its payment split.' });
     try {
       const response = await shopifyClient.request(`https://${shopifyStore}/admin/api/2024-01/orders/${order.id}/transactions.json`);
@@ -104,6 +106,7 @@ function registerPaytmReports(router, deps) {
     const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || ''), orderId = String(body.orderId || '');
     try {
       const tx = (store.paytmReportTransactions || {})[transactionId];
+      if ((store.paytmRoundingReviews || {})[transactionId] || (store.receipts || []).some(receipt => receipt.paytmRoundingTransactionId === transactionId)) throw new Error('This payment has an audited rounding receipt. Reverse its rounding treatment before changing the Shopify link.');
       if ((store.paytmPayoutPostings || []).some(x => x.transactionIds.includes(transactionId))) throw new Error('A posted payout link cannot be changed.');
       if ((store.paytmExcludedTransactions || {})[transactionId]) throw new Error('Restore this excluded transaction before linking it to a Shopify order.');
       if ((store.paytmManualResolutions || {})[transactionId]) throw new Error('Correct the manual sale/cash classification before linking this payment to Shopify.');
@@ -122,6 +125,7 @@ function registerPaytmReports(router, deps) {
     const store = loadStore(), body = req.body || {}, id = String(body.transactionId || '').trim();
     const tx = (store.paytmReportTransactions || {})[id], type = String(body.type || ''), party = String(body.party || '').trim(), details = String(body.details || '').trim(), reason = String(body.reason || '').trim(), proof = String(body.proof || '').trim();
     if (!tx) return res.status(404).json({ success: false, error: 'Paytm transaction not found.' });
+    if ((store.paytmRoundingReviews || {})[id] || (store.receipts || []).some(receipt => receipt.paytmRoundingTransactionId === id)) return res.status(409).json({ success: false, error: 'This payment has an audited rounding receipt. Reverse its rounding treatment before changing the classification.' });
     if (!['manual_sale', 'cash_transfer'].includes(type)) return res.status(400).json({ success: false, error: 'Choose manual sale or cash-to-bank transfer.' });
     if (!party || details.length < 5 || reason.length < 10 || !/^\/api\/expenses\/photo\/[a-zA-Z0-9._-]+$/.test(proof)) return res.status(400).json({ success: false, error: 'Enter the customer/third party, sale or transfer details, a reason of at least 10 characters, and upload proof.' });
     if ((store.paytmOrderLinks || {})[id] || (store.paytmManualResolutions || {})[id] || (store.paytmExcludedTransactions || {})[id] || (store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(id))) return res.status(409).json({ success: false, error: 'This Paytm payment is already linked, classified, excluded, or posted.' });
@@ -141,6 +145,23 @@ function registerPaytmReports(router, deps) {
     audit(store, req, 'PAYTM_TRANSACTION_CLASSIFIED', 'paytm_transaction', id, { nature: 'SANKI', account: CLEARING, after: store.paytmManualResolutions[id] });
     saveStore(store);
     res.json({ success: true, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/rounding-review', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), body = req.body || {};
+    try {
+      const result = applyRoundingReview(store, String(body.transactionId || ''), saleRows(store), {
+        difference: body.difference, reason: String(body.reason || '').trim(),
+        username: req.user.username, at: new Date().toISOString()
+      });
+      if (result.created) {
+        audit(store, req, 'PAYTM_RECEIPT_ROUNDING_RECORDED', 'paytm_transaction', result.review.transactionId,
+          { nature: 'SANKI', account: CLEARING, after: result.review,
+            note: 'Separate Rounding Off receipt; original Shopify and Paytm evidence unchanged. ' + result.review.reason });
+        saveStore(store);
+      }
+      res.json({ success: true, ...result, view: view(store) });
+    } catch (error) { res.status(400).json({ success: false, error: error.message }); }
   });
   router.post('/api/expenses/paytm-reports/unclassify', (req, res) => {
     if (deny(req, res)) return;
@@ -162,6 +183,7 @@ function registerPaytmReports(router, deps) {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || '').trim(), reason = String(body.reason || '').trim(), tx = (store.paytmReportTransactions || {})[transactionId];
     if (!tx) return res.status(404).json({ success: false, error: 'Paytm transaction not found.' });
+    if ((store.paytmRoundingReviews || {})[transactionId] || (store.receipts || []).some(receipt => receipt.paytmRoundingTransactionId === transactionId)) return res.status(409).json({ success: false, error: 'This payment has an audited rounding receipt. Reverse its rounding treatment before excluding it.' });
     if ((store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(transactionId))) return res.status(400).json({ success: false, error: 'A posted payout transaction cannot be excluded.' });
     if ((store.paytmManualResolutions || {})[transactionId]) return res.status(409).json({ success: false, error: 'Correct the manual sale/cash classification before excluding this payment.' });
     if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a reason of at least 10 characters for excluding this payment.' });

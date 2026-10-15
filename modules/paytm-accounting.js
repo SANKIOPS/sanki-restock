@@ -1,4 +1,5 @@
 const { summarizePayouts } = require('./paytm-report');
+const { validateOrderReceiptTotals } = require('./paytm-rounding');
 
 const CLEARING = 'Paytm Settlement Clearing';
 const BANK = 'Axis Bank 3448';
@@ -107,6 +108,7 @@ function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
 function validateSettlementReview(store, payoutId, saleRows, options = {}) {
   const payout = getPayout(store, payoutId);
   if (!payout) throw new Error('Payout not found. Import the Paytm report first.');
+  if (payout.transactionIds.some(id => (store.paytmRoundingReviews || {})[id] && (store.paytmExcludedTransactions || {})[id])) throw new Error('An excluded payment retains an audited rounding receipt. Reverse or correct that rounding treatment before posting.');
   const excludedIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && (store.paytmExcludedTransactions || {})[id]);
   if (excludedIds.length && !options.allowExcluded) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before finalizing the payout.');
   if (!payout.utr || !payout.settledDate) throw new Error('Settlement UTR and settled date are required for an exact bank link.');
@@ -116,11 +118,19 @@ function validateSettlementReview(store, payoutId, saleRows, options = {}) {
   if (linked.some(x => !x)) throw new Error('Every Paytm payment in this payout must be linked to Shopify or classified as a verified manual sale/cash transfer before posting.');
   const excludedAmount=excludedIds.reduce((sum,id)=>sum+Number((store.paytmReportTransactions||{})[id]?.amount||0),0);
   if (linked.reduce((sum, x) => sum + cents(x.amount), 0) !== cents(payout.customerGross-excludedAmount)) throw new Error('Reviewed customer receipts plus excluded payments do not equal the customer-payment gross for this settlement.');
+  const roundedOrders = new Set();
   for (const link of linked) {
     if (link.type === 'manual_sale' || link.type === 'cash_transfer') {
       const source = link.type === 'manual_sale' ? store.receipts : store.transfers;
       const record = (source || []).find(x => x.id === link.recordId && x.paytmTransactionId === link.transactionId);
       if (!record || cents(record.amount) !== cents(link.amount) || !record.proof) throw new Error(`Reviewed Paytm ${link.transactionId} record changed or lost its proof. Review it before posting.`);
+      continue;
+    }
+    // Rounding is an explicit, evidence-bound accounting receipt, never a
+    // general tolerance. Check the order's aggregate links across all payouts.
+    if (Object.values(store.paytmRoundingReviews || {}).some(review => String(review.orderId) === String(link.orderId))) {
+      if (!roundedOrders.has(String(link.orderId))) validateOrderReceiptTotals(store, link.orderId, saleRows);
+      roundedOrders.add(String(link.orderId));
       continue;
     }
     const row = saleRows.find(x => String(x.orderId) === link.orderId && x.account !== 'Counter Cash');
