@@ -970,16 +970,18 @@ function applyAxisArshpreetReimbursementDuplicateRepair(s){
   return true;
 }
 function applyArshpreetSep12SalaryAdvanceRepair(s,salaryStore){
-  const key='reclassify-tr-00126-as-arshpreet-salary-advance-v1',transferId='TR-00126',amount=14000,date='2026-09-12',fromAccount='Axis Bank 3448',toAccount='Arshpreet 1919',now=new Date().toISOString();
+  const key='reclassify-tr-00126-as-arshpreet-salary-advance-v2',transferId='TR-00126',amount=14000,date='2026-09-12',fromAccount='Axis Bank 3448',toAccount='Arshpreet 1919',now=new Date().toISOString();
   s.oneTimeMigrations=s.oneTimeMigrations||{};
   if(s.oneTimeMigrations[key])return {expensesChanged:false,salaryChanged:false};
   const transfer=(s.transfers||[]).find(x=>x.id===transferId);
   if(!transfer||!salaryStore)return {expensesChanged:false,salaryChanged:false};
-  const transferMatches=normalizedNature(transfer.fromNature||transfer.nature)==='SANKI'&&normalizedNature(transfer.toNature||transfer.nature)==='SANKI'&&canonicalAccountName(transfer.fromAccount)===fromAccount&&canonicalAccountName(transfer.toAccount)===toAccount&&String(transfer.date||'').slice(0,10)===date&&Math.abs(num(transfer.amount)-amount)<.01;
-  const employees=Object.values(salaryStore.employees||{}).filter(employee=>String(employee.name||'').toLowerCase().replace(/[^a-z0-9]/g,'')==='arshpreetsingharora');
-  if(!transferMatches||employees.length!==1)return {expensesChanged:false,salaryChanged:false};
-  const employee=employees[0];
   salaryStore.advances=salaryStore.advances||{};
+  const transferMatches=canonicalAccountName(transfer.fromAccount).toLowerCase()===fromAccount.toLowerCase()&&canonicalAccountName(transfer.toAccount).toLowerCase()===toAccount.toLowerCase()&&String(transfer.date||'').slice(0,10)===date&&Math.abs(num(transfer.amount)-amount)<.01;
+  const employeeNameKey=value=>String(value||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const knownAdvance=salaryStore.advances['ADV-00051'];
+  const employees=Object.values(salaryStore.employees||{});
+  const employee=(knownAdvance&&employeeNameKey(knownAdvance.employeeName)==='arshpreetsingharora'&&employees.find(item=>String(item.id)===String(knownAdvance.empId)))||employees.find(item=>item.active!==false&&employeeNameKey(item.name)==='arshpreetsingharora')||employees.find(item=>employeeNameKey(item.name)==='arshpreetsingharora');
+  if(!transferMatches||!employee)return {expensesChanged:false,salaryChanged:false};
   const exact=Object.values(salaryStore.advances).filter(advance=>advance.active!==false&&advance.empId===employee.id&&String(advance.date||advance.payoutDate||'').slice(0,10)===date&&Math.abs(num(advance.amount)-amount)<.01);
   let advance=exact.find(item=>item.fundingTransferId===transferId)||exact.find(item=>!item.fundingTransferId);
   if(!advance){
