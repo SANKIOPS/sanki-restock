@@ -1132,7 +1132,7 @@ test('spending dashboard category creation uses explicit management permission a
   assert.equal(blocked.status,403);
   assert.equal(invoke('GET','/api/expenses/config',{role:'admin',username:'ordinary-admin'}).body.canManageCategories,false);
   assert.equal(invoke('GET','/api/expenses/config',{role:'admin',username:'prashant'}).body.canManageCategories,true);
-  const created=invoke('POST','/api/expenses/custom-ledgers',{role:'owner',body:{name,type:'variable',group}});
+  const created=invoke('POST','/api/expenses/custom-ledgers',{role:'admin',username:'prashant',body:{name,type:'variable',group}});
   assert.equal(created.status,200,JSON.stringify(created.body));
   assert.equal(created.body.ledger.name,name);
   assert.equal(created.body.ledger.group,group);
