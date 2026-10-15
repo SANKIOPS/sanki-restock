@@ -4,7 +4,6 @@ const { purchaseBillingAmount } = require('./purchase-payment-status');
 const { finalizedByPo } = require('./lg-invoices');
 const { calculateReconciliationOpening, finalizedMovementCoverageIds, pendingCarryForwardCandidates } = require('./reconciliation-opening');
 const { recoverReversalSourceMetadata } = require('./reconciliation-source-metadata');
-const { reconciliationReminderAttention } = require('./reconciliation-reminder-attention');
 const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
 const { vendorSearchRank, compareVendorSearch } = require('./vendor-ledger-search');
 // ═══════════════════════════════════════════════════════════════
@@ -973,6 +972,39 @@ function applyAxisArshpreetReimbursementDuplicateRepair(s){
   s.oneTimeMigrations[key]={appliedAt:now,result:'corrected',draftId,bankRowId,batchId,batchAmount,bankCharge:5.9,removedTransferId:transfer?transferId:'',preservedExpenseIds:batchPayments.map(x=>x.expenseId),supersededApprovalIds:before.pendingApprovals};
   return true;
 }
+function applyArshpreetSep12SalaryAdvanceRepair(s,salaryStore){
+  const key='reclassify-tr-00126-as-arshpreet-salary-advance-v1',transferId='TR-00126',amount=14000,date='2026-09-12',fromAccount='Axis Bank 3448',toAccount='Arshpreet 1919',now=new Date().toISOString();
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return {expensesChanged:false,salaryChanged:false};
+  const transfer=(s.transfers||[]).find(x=>x.id===transferId);
+  if(!transfer||!salaryStore)return {expensesChanged:false,salaryChanged:false};
+  const transferMatches=normalizedNature(transfer.fromNature||transfer.nature)==='SANKI'&&normalizedNature(transfer.toNature||transfer.nature)==='SANKI'&&canonicalAccountName(transfer.fromAccount)===fromAccount&&canonicalAccountName(transfer.toAccount)===toAccount&&String(transfer.date||'').slice(0,10)===date&&Math.abs(num(transfer.amount)-amount)<.01;
+  const employees=Object.values(salaryStore.employees||{}).filter(employee=>String(employee.name||'').toLowerCase().replace(/[^a-z0-9]/g,'')==='arshpreetsingharora');
+  if(!transferMatches||employees.length!==1)return {expensesChanged:false,salaryChanged:false};
+  const employee=employees[0];
+  salaryStore.advances=salaryStore.advances||{};
+  const exact=Object.values(salaryStore.advances).filter(advance=>advance.active!==false&&advance.empId===employee.id&&String(advance.date||advance.payoutDate||'').slice(0,10)===date&&Math.abs(num(advance.amount)-amount)<.01);
+  let advance=exact.find(item=>item.fundingTransferId===transferId)||exact.find(item=>!item.fundingTransferId);
+  if(!advance){
+    if(exact.length)return {expensesChanged:false,salaryChanged:false};
+    do{salaryStore.advanceSeq=num(salaryStore.advanceSeq)+1;}while(salaryStore.advances['ADV-'+String(salaryStore.advanceSeq).padStart(5,'0')]);
+    const id='ADV-'+String(salaryStore.advanceSeq).padStart(5,'0');
+    advance=salaryStore.advances[id]={id,empId:employee.id,employeeName:employee.name,amount,date,payoutDate:date,account:fromAccount,payingNature:'SANKI',proof:transfer.proof||'',proofs:proofList(transfer.proofs,transfer.proof),note:'Employee salary advance deposited into Arshpreet 1919; corrected from internal transfer '+transferId,reference:transferId,recoveryStartMonth:'2026-09',recoveries:[],active:true,createdBy:transfer.createdBy||'prashant',createdAt:transfer.createdAt||now,approvedBy:'Owner-directed correction',approvedAt:now};
+  }
+  if(advance.fundingTransferId&&advance.fundingTransferId!==transferId)return {expensesChanged:false,salaryChanged:false};
+  const before=JSON.parse(JSON.stringify(transfer));
+  Object.assign(advance,{employeeName:employee.name,account:fromAccount,payingNature:'SANKI',fundingTransferId:transferId,fundingToAccount:toAccount,fundingLinkedAt:advance.fundingLinkedAt||now,fundingLinkedBy:advance.fundingLinkedBy||'Owner-directed correction'});
+  Object.assign(transfer,{classification:'salary_advance_funding',salaryAdvanceId:advance.id,employeeId:employee.id,employeeName:employee.name,advanceDate:date,reclassifiedAt:now,reclassifiedBy:'Owner-directed correction'});
+  const explanation='Owner confirmed '+transferId+' is Arshpreet\'s ₹14,000 salary advance, not an ordinary internal transfer.';
+  transfer.note=[String(transfer.note||'').trim(),explanation].filter(Boolean).join(' · ');
+  salaryStore.advanceAudit=salaryStore.advanceAudit||[];
+  if(!salaryStore.advanceAudit.some(event=>event.action==='TRANSFER_RECLASSIFIED_AS_ADVANCE'&&event.advanceId===advance.id&&event.details&&event.details.transferId===transferId))salaryStore.advanceAudit.push({at:now,by:'Owner-directed correction',action:'TRANSFER_RECLASSIFIED_AS_ADVANCE',advanceId:advance.id,details:{transferId,fromAccount,toAccount,amount,date,preservedProof:true}});
+  salaryStore.oneTimeMigrations=salaryStore.oneTimeMigrations||{};
+  salaryStore.oneTimeMigrations[key]={appliedAt:now,advanceId:advance.id,transferId,amount,date,fromAccount,toAccount,rule:'Preserve the bank movement and proof; classify the employee-account funding as a recoverable salary advance.'};
+  audit(s,null,'TRANSFER_RECLASSIFIED_AS_SALARY_ADVANCE','transfer',transferId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:fromAccount,before,after:JSON.parse(JSON.stringify(transfer)),note:explanation,advanceId:advance.id});
+  s.oneTimeMigrations[key]={appliedAt:now,result:'reclassified',advanceId:advance.id,transferId,employeeId:employee.id,employeeName:employee.name,amount,date,fromAccount,toAccount,preservedProof:true,preservedReconciliation:true};
+  return {expensesChanged:true,salaryChanged:true,advanceId:advance.id};
+}
 function loadStore() {
   let s;
   try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
@@ -1031,6 +1063,9 @@ function loadStore() {
     if(applySep11PrashantReimbursementDateCorrection(s))saveStore(s);
     if(applySep13ShopifyCashComponentCorrections(s))saveStore(s);
     if(applyAxisArshpreetReimbursementDuplicateRepair(s))saveStore(s);
+    const arshpreetSalaryStore=loadSalaryStore(),arshpreetAdvanceRepair=applyArshpreetSep12SalaryAdvanceRepair(s,arshpreetSalaryStore);
+    if(arshpreetAdvanceRepair.salaryChanged)saveSalaryStore(arshpreetSalaryStore);
+    if(arshpreetAdvanceRepair.expensesChanged)saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
     // the official bank row remains the sole Axis balance movement.
@@ -1342,7 +1377,7 @@ function procurementAccounting(s) {
 function loadProcurementStore() {
   try { return JSON.parse(fs.readFileSync(PROC_PATH, 'utf8')); } catch { return { pos: {} }; }
 }
-function salesLedgerEntries(accountingStore, options = {}) {
+function salesLedgerEntries(accountingStore) {
   const rows = [];
   const allocationOverrides=(accountingStore&&accountingStore.saleAllocationOverrides)||{};
   const componentAmountOverrides=(accountingStore&&accountingStore.saleComponentAmountOverrides)||{};
@@ -1360,13 +1395,7 @@ function salesLedgerEntries(accountingStore, options = {}) {
       if(orderNo==='2720')return; // owner-confirmed test order: not genuine revenue
       if(orderNo==='2717')return; // owner-confirmed fully store-credit-funded order
       const date=String(x.processedAt||x.createdAt||'').slice(0,10);
-      const linkedPaytm=Object.values((accountingStore&&accountingStore.paytmOrderLinks)||{}).filter(link=>String(link.orderId)===String(x.id)).reduce((sum,link)=>{
-        // The separately recorded Rounding Off receipt supplies the difference.
-        // Retain the raw evidence for display if an approval becomes stale;
-        // settlement validation will block it without dropping other orders.
-        try { return sum + approvedBaseAmount(accountingStore, link); }
-        catch { return sum + num(link.amount); }
-      },0);
+      const linkedPaytm=Object.values((accountingStore&&accountingStore.paytmOrderLinks)||{}).filter(link=>String(link.orderId)===String(x.id)).reduce((sum,link)=>sum+num(link.amount),0);
       const shopifyPayment=(accountingStore&&accountingStore.paytmShopifyPayments||{})[x.id]||{};
       const verifiedTransactions=(Array.isArray(x.paymentTransactions)&&x.paymentTransactions.length?x.paymentTransactions:shopifyPayment.transactions)||[];
       const explicitPaytm=shopifyPayment.paytmAmount!=null?num(shopifyPayment.paytmAmount):(x.paytmAmount!=null?num(x.paytmAmount):(x.paytmPaidAmount!=null?num(x.paytmPaidAmount):null));
@@ -1377,16 +1406,13 @@ function salesLedgerEntries(accountingStore, options = {}) {
       const paytmBound=postedPaytmOrders.has(String(x.id))||(!bankLinked&&paytmSalesInScope(date)&&(paytm||verifiedPaytm>0||String(x.channel||'').toLowerCase()==='pos'));
       const websiteSale=/website|online/.test(String(x.channel||'').toLowerCase()),nonCashDefault=cod?VELOCITY_CLEARING_ACCOUNT:(paytmBound?PAYTM_CLEARING_ACCOUNT:(websiteSale?WEBSITE_SALES_ACCOUNT:(date>=SHOPIFY_DIRECT_TO_AXIS_FROM?DEFAULT_SALES_BANK:PAYTM_CLEARING_ACCOUNT)));
       const gatewayParts=(x.paymentGateways||[]).map(value=>String(value||'').trim().toLowerCase()).filter(Boolean),pureCash=cash&&gatewayParts.length>0&&gatewayParts.every(value=>/^cash$/.test(value)),hasVerifiedShopifyPayments=verifiedTransactions.length>0;
-      // Settlement evidence is the successful original receipt, not the net
-      // sale after a later refund. Never synthesize it from a refunded total.
-      if(options.originalReceipts&&!hasVerifiedShopifyPayments&&num(x.moneyRefunded||x.refundAmount)>0)return;
       if(hasVerifiedShopifyPayments&&!override){
         const successful=verifiedTransactions.filter(tx=>['sale','capture'].includes(String(tx.kind||'').toLowerCase())&&(!tx.status||String(tx.status).toLowerCase()==='success')&&num(tx.amount)>0),byId=new Map(successful.map(tx=>[String(tx.id||''),tx]));
         const bucket=tx=>{const gateway=String(tx.gateway||tx.payment_gateway||'').toLowerCase();return /store.?credit|gift.?card/.test(gateway)?'store_credit':(/cash\s*on\s*delivery|\bcod\b/.test(gateway)?'cod':(/paytm|\bupi\b/.test(gateway)?'paytm':(/cash/.test(gateway)?'cash':'other')));};
         const components=new Map();successful.forEach(tx=>{const key=bucket(tx),row=components.get(key)||{amount:0,gateway:String(tx.gateway||tx.payment_gateway||key),transactionIds:[],manualCashCollected:false};row.amount=roundMoney(row.amount+num(tx.amount));row.transactionIds.push(String(tx.id||''));if(key==='cod'&&(tx.manualPaymentGateway===true||String(tx.userId||tx.user_id||'')||/manually.*paid|marked.*paid/i.test(String(tx.message||''))))row.manualCashCollected=true;components.set(key,row);});
         const embeddedRefunds=verifiedTransactions.filter(tx=>String(tx.kind||'').toLowerCase()==='refund'&&(!tx.status||String(tx.status).toLowerCase()==='success'));
         const refundKeys=new Set(),allRefunds=[...embeddedRefunds,...(x.refundTransactions||[])].filter(tx=>{if(!(num(tx.amount)>0))return false;const key=String(tx.id||'')||[tx.parentId||tx.parent_id||'',tx.gateway||tx.payment_gateway||'',tx.amount,tx.processedAt||tx.processed_at||''].join('|');if(refundKeys.has(key))return false;refundKeys.add(key);return true;});
-        if(!options.originalReceipts)allRefunds.forEach(tx=>{const parent=byId.get(String(tx.parentId||tx.parent_id||'')),key=parent?bucket(parent):bucket(tx);if(key==='store_credit')return;const row=components.get(key);if(row)row.amount=roundMoney(Math.max(0,row.amount-num(tx.amount)));});
+        allRefunds.forEach(tx=>{const parent=byId.get(String(tx.parentId||tx.parent_id||'')),key=parent?bucket(parent):bucket(tx);if(key==='store_credit')return;const row=components.get(key);if(row)row.amount=roundMoney(Math.max(0,row.amount-num(tx.amount)));});
         const common={orderId:String(x.id),orderNumber:orderNo||String(x.name||x.id),date,gross,paymentGateways:x.paymentGateways||[],description:'Shopify payment component · '+(x.name||x.id)+' · '+(x.channel||''),cashAmount:num(components.get('cash')&&components.get('cash').amount),nonCashAmount:roundMoney(Array.from(components.entries()).filter(([key])=>!['cash','store_credit'].includes(key)).reduce((sum,[,row])=>sum+num(row.amount),0)),refundAmount:x.moneyRefunded!=null?num(x.moneyRefunded):num(x.refundAmount)};
         const routes={cash:DEFAULT_COUNTER_CASH,paytm:PAYTM_CLEARING_ACCOUNT,cod:VELOCITY_CLEARING_ACCOUNT,other:nonCashDefault};let sequence=0;
         components.forEach((component,key)=>{if(key==='store_credit'||!(component.amount>0))return;const id=key==='cash'?baseId:(key==='paytm'?baseId+'/NONCASH':baseId+'/PAYMENT-'+(++sequence)),account=key==='cod'&&component.manualCashCollected?DEFAULT_COUNTER_CASH:(routes[key]||nonCashDefault),amount=num(componentAmountOverrides[id]&&componentAmountOverrides[id].amount)||component.amount;rows.push(Object.assign({id,account,amount,originalAmount:component.amount,componentAmountOverride:componentAmountOverrides[id]||null,allocationPart:key,gateway:component.gateway,manualCashCollected:component.manualCashCollected,shopifyTransactionIds:component.transactionIds},common));});
@@ -1419,9 +1445,6 @@ function salesLedgerEntries(accountingStore, options = {}) {
     seen.add(key); return true;
   });
 }
-// Read-only proof projection. Operational balances continue using the default
-// refund-netted sales rows; this cannot issue, undo or hide a refund.
-function paytmReceiptEvidenceRows(s) { return salesLedgerEntries(s, { originalReceipts: true }); }
 function velocitySettlementDate(value){
   if(value instanceof Date&&!isNaN(value))return value.toISOString().slice(0,10);
   const raw=String(value||'').trim();if(!raw)return'';
@@ -1657,7 +1680,7 @@ function ledgerAccountsForNature(s, nature) {
 }
 function paytmClearingSettlementOutflows(s) {
   const postedKeys=new Set((s.paytmPayoutPostings||[]).flatMap(x=>[String(x.settlementId||''),String(x.payoutId||'')]));
-  const reviewed=reviewedUnpostedSettlements(s,paytmReceiptEvidenceRows(s));
+  const reviewed=reviewedUnpostedSettlements(s,salesLedgerEntries(s));
   const detailed=(s.paytmVerifiedSettlements||[]).filter(x=>!postedKeys.has(String(x.settlementId||''))&&!postedKeys.has(String(x.payoutId||''))).concat(reviewed,s.paytmPayoutPostings||[]).map(x=>({date:x.date||x.settledDate||String(x.finalizedAt||'').slice(0,10),net:num(x.net),fees:num(x.commission)+num(x.platformFee)+num(x.gst)+num(x.nonCustomerAmount)}));
   const legacy=(s.paytmSettlements||[]).filter(x=>!legacyPaytmSettlementIsCovered(s,x,reviewed)).map(x=>{const net=num(x.netAmount),charge=num(x.chargeAmount),gross=num(x.grossAmount||net+charge);return{date:x.date,net,fees:Math.max(0,gross-net)};});
   return legacy.concat(detailed);
@@ -1700,7 +1723,6 @@ function rolesOfReq(req) {
 function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
-function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req);}
 const PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181']);
 function isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification){
   if(fromNature!=='SANKI'||toNature!=='SANKI'||classification!=='internal_transfer')return false;
@@ -1712,7 +1734,6 @@ function canLogCreditCardExpense(req){return isAdmin(req)||isPrashant(req);}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
 function paytmReportView(s) {
   const transactions=Object.values(s.paytmReportTransactions||{}).map(tx=>Object.assign({platformFee:0,isCustomerPayment:true},tx)).sort((a,b)=>String(b.date+b.transactionId).localeCompare(String(a.date+a.transactionId)));
-  const roundingSales = paytmReceiptEvidenceRows(s);
   const payouts=summarizePayouts(transactions);
   const bankMatches=payouts.map(payout=>Object.assign({},payout,matchPayoutBank(s,payout))).sort((a,b)=>String((b.settledDate||b.payoutDate||'')+b.payoutId).localeCompare(String((a.settledDate||a.payoutDate||'')+a.payoutId)));
   const orders=Object.values((()=>{try{return JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{};}catch{return {};}})()).filter(isOriginalPaymentOrder);
@@ -1736,17 +1757,8 @@ function paytmReportView(s) {
   const excluded=s.paytmExcludedTransactions||{};
   bankMatches.forEach(x=>{x.posted=posted.has(x.payoutId);x.postingId=posted.get(x.payoutId)&&posted.get(x.payoutId).id||'';x.verified=verified.has(x.settlementId);x.verificationId=verified.get(x.settlementId)&&verified.get(x.settlementId).id||'';x.linkedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&(links[id]||manual[id])).length;x.excludedCount=x.transactionIds.filter(id=>(s.paytmReportTransactions||{})[id]?.isCustomerPayment!==false&&excluded[id]).length;x.readyForBulkFinalize=!x.posted&&!x.verified&&!x.excludedCount&&x.linkedCount===x.customerPaymentCount;x.readyToFinalize=false;const excludedExactDate=!x.excludedCount||x.bankCandidates[0]?.date===x.settledDate;x.readyToPost=!x.posted&&x.bankMatched&&x.bankCandidates.length===1&&excludedExactDate&&((x.verified&&!x.excludedCount)||(x.excludedCount>0&&x.linkedCount+x.excludedCount===x.customerPaymentCount));});
   orderMatches.forEach(x=>{x.confirmedLink=links[x.transactionId]||null;x.manualResolution=manual[x.transactionId]||null;x.exclusion=excluded[x.transactionId]||null;const payout=bankMatches.find(p=>p.transactionIds.includes(x.transactionId));x.bankMatched=!!payout?.bankMatched;x.bankSettlement=payout?{payoutId:payout.payoutId,utr:payout.utr,net:payout.net,bankMatch:payout.bankMatch,bankCandidates:payout.bankCandidates}:null;});
-  orderMatches.forEach(match => {
-    if (!match.confirmedLink || match.exclusion || match.manualResolution) return;
-    const source=roundingSales.find(row=>String(row.orderId)===String(match.confirmedLink.orderId)&&row.account===PAYTM_CLEARING_ACCOUNT);
-    if(source&&num(source.refundAmount)>0)match.originalReceiptExplanation='Original successful payment matched before the subsequent Shopify refund of ₹'+num(source.refundAmount).toFixed(2)+'. The refund remains recorded separately; it does not erase this receipt.';
-    const review = roundingReview(s, match.transactionId, roundingSales);
-    if (review.eligible || review.approved || (s.paytmRoundingReviews || {})[match.transactionId]) match.roundingReview = review;
-  });
   const legacyDrafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===PAYTM_CLEARING_ACCOUNT).map(d=>({id:d.id,name:d.originalName||'Legacy bank statement preview',createdAt:d.createdAt,from:d.summary?.from,to:d.summary?.to,rows:(d.transactions||[]).length}));
-  const sharedStatus=paytmReconciliationStatus(s,roundingSales),statusById=new Map(sharedStatus.settlements.map(x=>[x.settlementId,x]));
-bankMatches.forEach(x=>{x.reconciliationStatus=statusById.get(x.settlementId);if(x.reconciliationStatus.historicalEvidenceLink){x.posted=true;x.postingId=x.reconciliationStatus.historicalEvidenceLink.historicalSettlementId;}x.readyToFinalize=x.reconciliationStatus.code==='ready';x.readyForBulkFinalize=x.reconciliationStatus.code==='ready';x.readyToPost=x.readyToPost&&x.reconciliationStatus.bankLinkReady;});
-  return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,reconciliationStatus:sharedStatus,from:PAYTM_START_DATE,through:indiaBusinessDate()};
+  return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
 function reconciliationAccountsForNature(s,nature){
   const n=normalizedNature(nature),cards=n==='SANKI'?Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false).map(creditCardName):[];
@@ -2009,8 +2021,6 @@ router.get('/api/expenses/config', (req, res) => {
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
     canManageExpenseRefunds: isAdmin(req),
-    canManageCategories: canManageCategoriesAndVendors(req),
-    canManageVendors: canManageCategoriesAndVendors(req),
     isOwner: rolesOfReq(req).includes('owner'),
     canVerifyCounterCash: isOwner(req)||isPrashant(req),
     canLogCreditCardExpense: canLogCreditCardExpense(req),
@@ -2598,43 +2608,15 @@ router.get('/api/expenses/reconciliation-reminders',(req,res)=>{
   visibleCards.forEach(card=>{const every=cadenceDays['Credit cards'],statements=Object.values(cards.statements||{}).filter(x=>x.cardId===card.id&&(x.storedName||String(x.summary&&x.summary.format||'').toLowerCase()!=='manual')),statementThrough=x=>String(x&&x.summary&&x.summary.to||x&&x.periodTo||''),pending=statements.filter(x=>x.status!=='finalized').sort((a,b)=>String(b.uploadedAt||'').localeCompare(String(a.uploadedAt||'')))[0],latest=statements.filter(x=>x.status==='finalized').sort((a,b)=>statementThrough(b).localeCompare(statementThrough(a)))[0],through=statementThrough(latest),needsStatement=isDue(through,every);reminders.push({type:'credit_card',account:creditCardName(card),cardId:card.id,cadenceDays:every,cadenceLabel:'Weekly',reconciledThrough:through,requiredThrough,needsStatement,pendingDraft:!!pending,draftId:pending&&pending.id||'',draftFrom:pending&&pending.summary&&pending.summary.from||pending&&pending.periodFrom||'',draftTo:pending&&pending.summary&&pending.summary.to||pending&&pending.periodTo||'',daysBehind:daysSince(through),status:pending?'review_pending':(needsStatement?'statement_required':'up_to_date'),href:'/expenses.html?tab=creditcards'});});
   const cashRows=(s.cashReconciliations||[]),cashApproved=cashRows.filter(x=>x.status==='approved').sort((a,b)=>String(b.verifiedThrough||'').localeCompare(String(a.verifiedThrough||'')))[0],cashPending=cashRows.filter(x=>x.status==='pending').sort((a,b)=>String(b.requestedAt||'').localeCompare(String(a.requestedAt||'')))[0],cashThrough=String(cashApproved&&cashApproved.verifiedThrough||''),cashNeeds=!cashThrough||cashThrough<requiredThrough,cashDays=cashThrough?Math.max(0,Math.round((Date.parse(requiredThrough+'T00:00:00Z')-Date.parse(cashThrough+'T00:00:00Z'))/86400000)):null;
   reminders.push({type:'cash',account:'Counter Cash',nature:'SANKI',cadenceDays:1,cadenceLabel:'Daily',reconciledThrough:cashThrough,requiredThrough,needsStatement:cashNeeds,pendingDraft:!!cashPending,draftId:cashPending&&cashPending.id||'',draftFrom:cashPending&&cashPending.verifiedThrough||'',draftTo:cashPending&&cashPending.verifiedThrough||'',daysBehind:cashDays,status:cashPending?'approval_pending':(cashNeeds?'verification_required':'up_to_date'),href:'/expenses.html?tab=cash&account=Counter%20Cash'});
-  const paytm=paytmReportView(s),paytmEvery=cadenceDays['Paytm Settlement Clearing'],paytmImport=(s.paytmReportImports||[]).slice().sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0],paytmImportThrough=String(paytmImport&&paytmImport.at||'').slice(0,10),paytmDraft=Object.values(s.paytmReportDrafts||{}).sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0],paytmUnresolved=paytm.reconciliationStatus.counts.total-paytm.reconciliationStatus.counts.posted,clearingPending=(paytm.payouts||[]).filter(x=>x.verified&&!x.posted).length,paytmThrough=ledgerReconciliationStatus(s,'SANKI',PAYTM_CLEARING_ACCOUNT).through,reportNeeds=isDue(paytmImportThrough,paytmEvery),clearingNeeds=isDue(paytmThrough,paytmEvery),paytmPending=!!paytmDraft||paytmUnresolved>0,paytmStatus=paytmPending?'review_pending':(reportNeeds?'report_required':(clearingNeeds?'reconciliation_required':'up_to_date')),paytmDetails=[paytmUnresolved?paytm.reconciliationStatus.counts.incomplete+' incomplete settlement(s) · '+paytm.reconciliationStatus.counts.ready+' ready to finalize · '+paytm.reconciliationStatus.counts.finalized+' finalized, bank link pending':'',clearingPending?clearingPending+' verified settlement(s) awaiting Axis 3448 link':''].filter(Boolean).join(' · ');
+  const paytm=paytmReportView(s),paytmEvery=cadenceDays['Paytm Settlement Clearing'],paytmImport=(s.paytmReportImports||[]).slice().sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0],paytmImportThrough=String(paytmImport&&paytmImport.at||'').slice(0,10),paytmDraft=Object.values(s.paytmReportDrafts||{}).sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0],paytmUnresolved=(paytm.orderMatches||[]).filter(x=>!x.confirmedLink&&!x.manualResolution&&!x.exclusion).length+(paytm.payouts||[]).filter(x=>!x.posted).length,clearingPending=(paytm.payouts||[]).filter(x=>x.verified&&!x.posted).length,paytmThrough=ledgerReconciliationStatus(s,'SANKI',PAYTM_CLEARING_ACCOUNT).through,reportNeeds=isDue(paytmImportThrough,paytmEvery),clearingNeeds=isDue(paytmThrough,paytmEvery),paytmPending=!!paytmDraft||paytmUnresolved>0,paytmStatus=paytmPending?'review_pending':(reportNeeds?'report_required':(clearingNeeds?'reconciliation_required':'up_to_date')),paytmDetails=[paytmUnresolved?paytmUnresolved+' Paytm item(s) still need reconciliation':'',clearingPending?clearingPending+' verified settlement(s) awaiting Axis 3448 link':''].filter(Boolean).join(' · ');
   reminders.push({type:'paytm',account:'Paytm Settlement Clearing',cadenceDays:paytmEvery,cadenceLabel:'Every alternate day',reconciledThrough:paytmThrough||paytmImportThrough,requiredThrough,needsStatement:reportNeeds||clearingNeeds,pendingDraft:paytmPending,draftId:paytmDraft&&paytmDraft.id||'',daysBehind:daysSince(paytmThrough||paytmImportThrough),status:paytmStatus,actionLabel:paytmPending?'Finish Paytm reconciliation':(reportNeeds?'Paytm report required':(clearingNeeds?'Clearing reconciliation required':'Up to date')),detail:paytmDetails,href:'/expenses.html?tab=cash&account='+encodeURIComponent(PAYTM_CLEARING_ACCOUNT)});
   let velocity={entries:[],lastImport:''};try{velocity=JSON.parse(fs.readFileSync(VELOCITY_REMITTANCE_PATH,'utf8'));}catch{}const velocityEvery=cadenceDays.Velocity,velocityThrough=String(velocity.lastImport||'').slice(0,10),velocityNeeds=isDue(velocityThrough,velocityEvery);
   reminders.push({type:'velocity',account:'Velocity reconciliation',cadenceDays:velocityEvery,cadenceLabel:'Weekly',reconciledThrough:velocityThrough,requiredThrough,needsStatement:velocityNeeds,pendingDraft:false,daysBehind:daysSince(velocityThrough),status:velocityNeeds?'report_required':'up_to_date',actionLabel:'Velocity remittance report required',href:'/expenses.html?tab=cash&account=Velocity'});
-  // Never advance finalized books just because an admin submitted their review.
-  // Pending approval is informational for the reconciler only when every saved
-  // period still validates and no newer statement is due. Evaluate on detached
-  // snapshots: displaying a dashboard must not repair or post financial data.
-  const owner=isOwner(req),draftViews=new Map(),readOnlyDraftState=draft=>{
-    if(!draftViews.has(draft.id)){
-      const approval=Object.values(s.bankReconciliationApprovals||{}).filter(x=>x.draftId===draft.id&&x.status==='pending').sort((a,b)=>String(b.requestedAt||'').localeCompare(String(a.requestedAt||'')))[0]||null;
-      let view=null,evaluatedDraft=draft;
-      if(approval&&!draft.originalStatementPeriod){try{const snapshot=JSON.parse(JSON.stringify(s)),detached=snapshot.bankReconciliationDrafts[draft.id];evaluatedDraft=detached;view=draftReconciliation(snapshot,detached,{readOnly:true});}catch(error){console.error('[expenses] Could not validate reconciliation reminder:',draft.id,error.message);}}
-      draftViews.set(draft.id,{draft:evaluatedDraft,approval,view});
-    }
-    return draftViews.get(draft.id);
-  };
-  const policyReminders=reminders.map(reminder=>{
-    if(reminder.type==='bank'||reminder.type==='credit_card'){
-      const drafts=Object.values(s.bankReconciliationDrafts||{}).filter(draft=>draft.account===reminder.account&&(reminder.type==='credit_card'||normalizedNature(draft.nature)===reminder.nature)&&canAccessBankDraft(req,s,draft));
-      const additionalReviewPending=reminder.type==='credit_card'&&reminder.pendingDraft&&!drafts.some(draft=>draft.id===reminder.draftId);
-      return reconciliationReminderAttention({reminder,owner,drafts:drafts.map(readOnlyDraftState),additionalReviewPending,isDue});
-    }
-    if(reminder.type==='cash'&&cashPending){
-      const drafts=cashRows.filter(row=>row.status==='pending').map(row=>{
-        const currentLedger=round0(recordedAccountBalance(s,'SANKI',DEFAULT_COUNTER_CASH,row.verifiedThrough)),difference=round0(num(row.countedBalance)-currentLedger),numbersPresent=[row.countedBalance,row.ledgerBalance,row.difference].every(value=>value!=null&&String(value).trim()!==''&&Number.isFinite(Number(value))),valid=numbersPresent&&Number(row.countedBalance)>=0&&round0(num(row.ledgerBalance))===currentLedger&&round0(num(row.difference))===0&&difference===0;
-        return{draft:{id:row.id,account:DEFAULT_COUNTER_CASH,summary:{from:row.verifiedThrough,to:row.verifiedThrough,validated:valid}},approval:{draftId:row.id,account:DEFAULT_COUNTER_CASH,from:row.verifiedThrough,to:row.verifiedThrough,status:'pending'},view:{canFinalize:valid,unresolved:0,balanceResolved:valid,balanceDifference:difference,reconciliationConflicts:[]}};
-      });
-      return reconciliationReminderAttention({reminder,owner,drafts,isDue:(date)=>!date||date<requiredThrough});
-    }
-    return{...reminder,attentionRequired:reminder.status!=='up_to_date'};
-  });
-  res.json({success:true,requiredThrough,cadenceDays,pendingCount:policyReminders.filter(x=>x.attentionRequired).length,reminders:policyReminders});
+  res.json({success:true,requiredThrough,cadenceDays,pendingCount:reminders.filter(x=>x.status!=='up_to_date').length,reminders});
 });
 
 router.get('/api/expenses/cash-reconciliations',(req,res)=>{
-  if(!isOwner(req)&&!isPrashant(req)&&!(isAdmin(req)&&approvalNatures(req).includes('SANKI')&&accountVisibleToReq(req,DEFAULT_COUNTER_CASH)))return res.status(403).json({success:false,error:'Owner or Prashant only.'});const s=loadStore(),rows=(s.cashReconciliations||[]).slice().sort((a,b)=>String(b.verifiedThrough+b.requestedAt).localeCompare(String(a.verifiedThrough+a.requestedAt))),approved=rows.find(x=>x.status==='approved')||null;res.json({success:true,account:DEFAULT_COUNTER_CASH,reconciledThrough:approved&&approved.verifiedThrough||'',latest:approved,pending:rows.filter(x=>x.status==='pending'),history:rows.slice(0,20)});
+  if(!isOwner(req)&&!isPrashant(req))return res.status(403).json({success:false,error:'Owner or Prashant only.'});const s=loadStore(),rows=(s.cashReconciliations||[]).slice().sort((a,b)=>String(b.verifiedThrough+b.requestedAt).localeCompare(String(a.verifiedThrough+a.requestedAt))),approved=rows.find(x=>x.status==='approved')||null;res.json({success:true,account:DEFAULT_COUNTER_CASH,reconciledThrough:approved&&approved.verifiedThrough||'',latest:approved,pending:rows.filter(x=>x.status==='pending'),history:rows.slice(0,20)});
 });
 router.post('/api/expenses/cash-reconciliations',(req,res)=>{
   if(!isOwner(req)&&!isPrashant(req))return res.status(403).json({success:false,error:'Owner or Prashant only.'});const s=loadStore(),b=req.body||{},verifiedThrough=String(b.verifiedThrough||'').slice(0,10),countedBalance=round0(num(b.countedBalance)),note=String(b.note||'').trim();if(!/^\d{4}-\d{2}-\d{2}$/.test(verifiedThrough)||verifiedThrough>indiaBusinessDate()||b.countedBalance==null||String(b.countedBalance).trim()===''||num(b.countedBalance)<0)return res.status(400).json({success:false,error:'Enter a valid verification date and physical cash balance.'});const ledgerBalance=round0(recordedAccountBalance(s,'SANKI',DEFAULT_COUNTER_CASH,verifiedThrough)),difference=round0(countedBalance-ledgerBalance);if(difference&&!note)return res.status(400).json({success:false,error:'Explain the physical-cash difference. Verification never adjusts the ledger automatically.'});s.cashReconciliations=Array.isArray(s.cashReconciliations)?s.cashReconciliations:[];if(s.cashReconciliations.some(x=>x.status==='pending'&&x.verifiedThrough===verifiedThrough))return res.status(409).json({success:false,error:'A verification for this date is already awaiting Owner approval.'});s.cashReconciliationSeq=num(s.cashReconciliationSeq)+1;const ownerAction=isOwner(req),row={id:'CCR-'+String(s.cashReconciliationSeq).padStart(5,'0'),nature:'SANKI',account:DEFAULT_COUNTER_CASH,verifiedThrough,ledgerBalance,countedBalance,difference,note,status:ownerAction?'approved':'pending',requestedBy:req.user.username,requestedAt:new Date().toISOString()};if(ownerAction){row.approvedBy=req.user.username;row.approvedAt=row.requestedAt;}s.cashReconciliations.push(row);audit(s,req,ownerAction?'CASH_BALANCE_VERIFIED':'CASH_VERIFICATION_REQUESTED','cash_reconciliation',row.id,{nature:'SANKI',account:DEFAULT_COUNTER_CASH,after:row,note:note||'Physical cash agrees with ledger'});saveStore(s);res.json({success:true,approvalPending:!ownerAction,verification:row});
@@ -3411,7 +3393,7 @@ function vendorLinkedExpenses(s, nature, name) {
   return Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === n && sharedVendorIdentityKey(e.vendor) === key);
 }
 router.post('/api/expenses/vendors/manage/edit', (req, res) => {
-  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can edit vendor ledgers.' });
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can edit vendor ledgers.' });
   const s=loadStore(), b=req.body||{}, nature=normalizedNature(b.nature), oldName=cleanVendorName(b.name), newName=cleanVendorName(b.newName);
   if(!oldName||!newName) return res.status(400).json({success:false,error:'Current and new vendor names are required.'});
   syncSharedVendorDirectory(s);const oldKey=sharedVendorIdentityKey(oldName),newKey=sharedVendorIdentityKey(newName),current=(s.vendorDirectory||{})[oldKey];
@@ -3430,7 +3412,7 @@ router.post('/api/expenses/vendors/manage/edit', (req, res) => {
   saveStore(s);res.json({success:true,name:newName,updatedExpenses:linked.length,entities});
 });
 router.post('/api/expenses/vendors/manage/merge', (req, res) => {
-  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can merge vendor ledgers.' });
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can merge vendor ledgers.' });
   const s=loadStore(),b=req.body||{},sourceName=cleanVendorName(b.sourceName),targetName=cleanVendorName(b.targetName);syncSharedVendorDirectory(s);
   const sourceKey=sharedVendorIdentityKey(sourceName),targetKey=sharedVendorIdentityKey(targetName),source=(s.vendorDirectory||{})[sourceKey],target=(s.vendorDirectory||{})[targetKey];
   if(!sourceName||!targetName||sourceKey===targetKey) return res.status(400).json({success:false,error:'Select two different vendor ledgers.'});
@@ -3607,7 +3589,6 @@ router.post('/api/expenses/sale-allocation',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Only Admin or Owner can correct a sale allocation.'});
   const s=loadStore(),b=req.body||{},sale=shopifySaleForAllocation(b.saleId),cashAmount=roundMoney(b.cashAmount),reason=String(b.reason||'').trim();
   if(!sale)return res.status(404).json({success:false,error:'Shopify sale not found.'});
-  if(Object.values(s.paytmRoundingReviews||{}).some(review=>String(review.orderId)===String(sale.order.id)))return res.status(409).json({success:false,error:'This sale has an audited rounding receipt. Reverse its rounding treatment before changing the payment split.'});
   if(cashAmount<0||cashAmount>sale.gross||!reason)return res.status(400).json({success:false,error:'Cash amount must be between ₹0 and the sale total, and a reason is required.'});
   if((s.bankDateOverrides||{})[sale.id]||(s.bankDateOverrides||{})[sale.id+'/NONCASH'])return res.status(409).json({success:false,error:'This sale allocation is already reconciled. Reopen its reconciliation before correcting the split.'});
   if(isOwner(req)){const allocation=applySaleAllocation(s,req,sale,cashAmount,reason);saveStore(s);return res.json({success:true,allocation,approved:true});}
@@ -3639,7 +3620,7 @@ router.patch('/api/expenses/ledger-entry',(req,res)=>{
   if(expenseLoans.protectsMovement(s,id))return res.status(409).json({success:false,error:'Loan principal is protected. Use the loan register correction workflow; do not change a linked cash entry independently.'});
   if (expenseRefunds.protectsMovement(s,id)||record.refundRecoveryExpenseId||record.__expense&&expenseRefunds.hasSource(s,record.__expense.id)) return res.status(409).json({success:false,error:'This entry is linked to Refunds & Returns. Correct the refund/recovery there before changing its source movement.'});
   if(kind==='receipt'&&require('./rental-register').receiptUsage(require('./rental-register').state(s),id)>0)return res.status(409).json({success:false,error:'This receipt is linked to rent or advance credit. Reverse those links in Rental income before editing it.'});
-  if(record.paytmTransactionId||record.paytmRoundingTransactionId)return res.status(409).json({success:false,error:'This entry is tied to a reviewed Paytm transaction. Correct it from Paytm reconciliation instead.'});
+  if(record.paytmTransactionId)return res.status(409).json({success:false,error:'This entry is tied to a reviewed Paytm transaction. Correct it from Paytm reconciliation instead.'});
   before=JSON.parse(JSON.stringify(record,(key,value)=>key==='__expense'?undefined:value));const signed=kind==='adjustment'&&num(record.amount)<0?-amount:amount;record.amount=signed;record.date=date;if(kind==='receipt')record.source=source;if('note' in record||kind==='adjustment'||kind==='transfer'||kind==='salary_advance_funding')record.note=note;record.editedAt=new Date().toISOString();record.editedBy=req.user.username;
   if(record.__expense){const expense=record.__expense;delete record.__expense;if(subjectType==='expense_payment'){expense.paidAmount=roundMoney((expense.payments||[]).reduce((n,p)=>n+num(p.amount),0)+(expense.vendorAdvanceApplications||[]).reduce((n,a)=>n+num(a.amount),0));if(expense.status!=='rejected')expense.status=expenseRefunds.expenseDue(s,expense)<=0?'paid':expense.paidAmount>0?'partially_paid':(expense.approvedAt?'approved':'pending');}else expense.reimbursementAmount=roundMoney((expense.reimbursementPayments||[]).reduce((n,p)=>n+num(p.amount),0));}
   audit(s,req,'LEDGER_ENTRY_EDITED',subjectType,id,{nature:b.nature,account:b.account,before,after:record,note:reason});saveStore(s);res.json({success:true,entry:record});
@@ -3794,7 +3775,7 @@ function ledgerReconciliationStatus(s,nature,account){
   Object.entries(s.bankDateOverrides||{}).forEach(([id,x])=>{if(x.reconciliationDraft)index.set(id,Object.assign({status:'reconciled',reconciliationId:x.reconciliationDraft,bankDate:x.bankDate||'',bankReference:x.bankReference||'',finalizedAt:x.at||'',finalizedBy:x.by||''},index.get(id)||{}));});
   const latest=(book.imports||[]).slice().sort((a,b)=>String(a.finalizedAt||'').localeCompare(String(b.finalizedAt||''))).at(-1),last=book.lastReconciliation?Object.assign({},book.lastReconciliation,{from:book.lastReconciliation.from||latest&&latest.from||'',to:book.lastReconciliation.to||latest&&latest.to||book.reconciledThrough||''}):null,status={through:book.reconciledThrough||'',last,index};
   if(normalizedNature(nature)!=='SANKI'||account!==PAYTM_CLEARING_ACCOUNT)return status;
-const reviewed=reviewedUnpostedSettlements(s,paytmReceiptEvidenceRows(s)),completed=[...(s.paytmSettlements||[]),...(s.paytmVerifiedSettlements||[]),...(s.paytmPayoutPostings||[]),...reviewed].map(item=>({date:String(item.settledDate||item.date||item.payoutDate||item.finalizedAt||item.postedAt||'').slice(0,10),at:item.finalizedAt||item.postedAt||item.createdAt||'',by:item.finalizedBy||item.postedBy||item.createdBy||'',reviewedNotFinalized:!!item.reviewedNotFinalized})).filter(item=>/^\d{4}-\d{2}-\d{2}$/.test(item.date)).sort((a,b)=>a.date.localeCompare(b.date)||String(a.at).localeCompare(String(b.at))),paytmLatest=completed.at(-1);
+  const reviewed=reviewedUnpostedSettlements(s,salesLedgerEntries(s)),completed=[...(s.paytmSettlements||[]),...(s.paytmVerifiedSettlements||[]),...(s.paytmPayoutPostings||[]),...reviewed].map(item=>({date:String(item.settledDate||item.date||item.payoutDate||item.finalizedAt||item.postedAt||'').slice(0,10),at:item.finalizedAt||item.postedAt||item.createdAt||'',by:item.finalizedBy||item.postedBy||item.createdBy||'',reviewedNotFinalized:!!item.reviewedNotFinalized})).filter(item=>/^\d{4}-\d{2}-\d{2}$/.test(item.date)).sort((a,b)=>a.date.localeCompare(b.date)||String(a.at).localeCompare(String(b.at))),paytmLatest=completed.at(-1);
   if(paytmLatest&&paytmLatest.date>status.through){status.through=paytmLatest.date;status.last=paytmLatest.at?{at:paytmLatest.at,by:paytmLatest.by,through:paytmLatest.date,paytmSettlementReview:true}:null;}
   return status;
 }
@@ -3818,8 +3799,6 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>{const gross=num(x.grossPaymentAmount);entries.push({id:x.paymentReference||x.id,date:x.date,kind:gross?'expense':'vendor_advance',description:(gross?'Vendor payment · ':'Vendor advance · ')+x.vendor+' · '+x.note,credit:0,debit:gross||num(x.amount),proof:x.proof||'',reference:x.bankReference||x.paymentReference||x.id,by:x.createdBy||'',vendorAdvanceAmount:gross?num(x.amount):0});});
   (s.receipts || []).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&(!creditCard||!x.creditCardRefund||expenseRefunds.manualCardRefunds(s,creditCard.id,account).some(r=>r.id===x.id))).forEach(x=>{const category=x.expenseRefundId?'Expense refund':receiptCategory(x.receiptType,x.category);entries.push({id:x.id,date:x.date,reference:x.bankReference||x.bankReconciliationEvidence&&x.bankReconciliationEvidence.reference||x.id,kind:expenseLoans.isLoan(x)?'loan_received':x.expenseRefundId?'expense_refund':x.refundRecoveryExpenseId?'refund_recovery':'receipt',description:receiptLabel(x.receiptType)+' · '+x.source+(category?' · '+category:''),category,credit:creditCard&&x.creditCardRefund?0:num(x.amount),debit:creditCard&&x.creditCardRefund?num(x.amount):0,proof:x.proof,note:x.note,source:x.source||'',by:x.createdBy,manualSaleId:x.manualSaleId||'',editable:!expenseLoans.isLoan(x)&&!x.expenseRefundId&&!x.refundRecoveryExpenseId&&!x.manualSaleId&&!x.paytmTransactionId});});
   expenseLoans.repayments(s).filter(x=>normalizedNature(x.nature)===nature&&x.account===account).forEach(x=>entries.push({id:x.id,date:x.date,kind:'loan_repayment',description:'Loan principal repayment · '+x.source,reference:x.bankReference||x.id,debit:num(x.amount),credit:0,note:x.note,proof:x.proof,proofs:x.proofs||[],loanId:x.loanId,by:x.createdBy,editable:false}));
-  const roundingReceipts = new Set((s.receipts || []).filter(receipt => receipt.paytmRoundingTransactionId).map(receipt => receipt.id));
-  entries.forEach(entry => { if (roundingReceipts.has(entry.id)) entry.editable = false; });
   if(nature==='SANKI')personalFundingRows(s).forEach(f=>{
     if(f.account===account)entries.push({id:f.id,date:f.date,kind:'personal_funding',description:'Temporary personal funding from Prashant · due to Prashant · '+f.bankName+' '+f.last4,reference:f.reference,credit:num(f.amount),debit:0,proof:f.proof,note:f.note,by:f.createdBy});
     (f.repayments||[]).filter(p=>p.account===account).forEach(p=>entries.push({id:f.id+'/'+p.id,date:p.date,kind:'personal_funding_repayment',description:'Repayment to Prashant · clears '+f.id+' · '+f.bankName+' '+f.last4,reference:p.reference,credit:0,debit:num(p.amount),proof:p.proof,note:p.note,by:p.createdBy}));
@@ -3904,7 +3883,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
     }else automaticSales.forEach(x=>entries.push({id:x.id,date:x.date,kind:'sale',description:x.description,credit:num(x.amount),debit:0,orderId:x.orderId||'',orderNumber:x.orderNumber||'',gross:num(x.gross||x.amount),cashAmount:x.cashAmount,nonCashAmount:x.nonCashAmount,allocationPart:x.allocationPart||'',saleAllocation:x.saleAllocation||null,editableSale:String(x.id||'').startsWith('SHOPIFY/')}));
   }
   const postedPaytmKeys=new Set((s.paytmPayoutPostings||[]).flatMap(item=>[String(item.settlementId||''),String(item.payoutId||'')]));
-  const pendingPaytmSettlements=nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT?(s.paytmVerifiedSettlements||[]).filter(x=>!postedPaytmKeys.has(String(x.settlementId||''))&&!postedPaytmKeys.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,paytmReceiptEvidenceRows(s))):[];
+  const pendingPaytmSettlements=nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT?(s.paytmVerifiedSettlements||[]).filter(x=>!postedPaytmKeys.has(String(x.settlementId||''))&&!postedPaytmKeys.has(String(x.payoutId||''))).concat(reviewedUnpostedSettlements(s,salesLedgerEntries(s))):[];
   if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT)(s.paytmSettlements||[]).filter(x=>!legacyPaytmSettlementIsCovered(s,x,pendingPaytmSettlements)).forEach(x=>{
     const bankBook=(s.bankStatements||{})[x.bankAccount]||{},bankTx=Object.values(bankBook.transactions||{}).find(t=>t.id===x.bankTransactionId),reference=String(x.bankReference||bankTx&&bankTx.reference||bankTx&&bankTx.description||x.bankTransactionId||''),net=Math.round(num(x.netAmount)*100)/100,charge=Math.round(num(x.chargeAmount)*100)/100,gross=Math.round(num(x.grossAmount||net+charge)*100)/100,unknown=Math.max(0,Math.round((gross-net-charge)*100)/100),settlement=Object.assign({},x,{bankReference:reference,unknownChargeAmount:unknown});
     entries.push({id:x.id,date:x.date,kind:'paytm_settlement',description:'Settlement to '+x.bankAccount,reference,credit:0,debit:net,settlement});
@@ -3918,7 +3897,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   if(nature==='SANKI'&&account===PAYTM_CLEARING_ACCOUNT){
     pendingPaytmSettlements.forEach(x=>{
       const date=x.settledDate||String(x.finalizedAt||'').slice(0,10),reference=x.utr||x.payoutId||x.settlementId,fees=roundMoney(num(x.commission)+num(x.platformFee)+num(x.gst)),other=roundMoney(num(x.nonCustomerAmount));
-      entries.push({id:x.id,date,kind:'paytm_settlement',description:(x.historicalEvidenceLink?'Paytm detailed report · attached to finalized bank settlement '+x.historicalEvidenceLink.historicalSettlementId:x.reviewedNotFinalized?'Paytm settlement · reconciled report · awaiting Axis 3448 bank link':'Paytm settlement · awaiting Axis 3448 bank link'),reference,credit:0,debit:num(x.net),settlement:x,pendingBankLink:!x.historicalEvidenceLink,reviewedNotFinalized:!!x.reviewedNotFinalized});
+      entries.push({id:x.id,date,kind:'paytm_settlement',description:(x.reviewedNotFinalized?'Paytm settlement · reconciled report · awaiting Axis 3448 bank link':'Paytm settlement · awaiting Axis 3448 bank link'),reference,credit:0,debit:num(x.net),settlement:x,pendingBankLink:true,reviewedNotFinalized:!!x.reviewedNotFinalized});
       if(fees>0)entries.push({id:x.id+'/CHARGES',date,kind:'paytm_charge',description:'Paytm commission, platform fee and GST',reference,credit:0,debit:fees,settlement:x,pendingBankLink:true});
       if(other>0)entries.push({id:x.id+'/OTHER-DEDUCTIONS',date,kind:'paytm_charge',description:'Paytm VAS / other settlement deduction',reference,credit:0,debit:other,settlement:x,pendingBankLink:true});
     });
@@ -4399,9 +4378,9 @@ function addPersonalHistoricalSuggestions(s,draft,rows){
     if(!best)return;row.personalSuggestion={vendor:best.example.vendor,category:best.example.category,confidence:best.overlap.length>=2||best.example.source==='saved rule'?'strong':'possible',matchedTokens:best.overlap,source:best.example.source,sourceRowId:best.example.sourceRowId,groupKey:(best.example.vendor+'|'+best.example.category).toLowerCase()};
   });
 }
-function draftReconciliation(s,draft,options={}){
-  if(!draft.originalStatementPeriod&&repairScreenshotDraftDates(draft)&&!options.readOnly)saveStore(s);
-  if(!draft.originalStatementPeriod&&stagePaytmSettlementsFromAxisDraft(s,draft)&&!options.readOnly)saveStore(s);
+function draftReconciliation(s,draft){
+  if(!draft.originalStatementPeriod&&repairScreenshotDraftDates(draft))saveStore(s);
+  if(!draft.originalStatementPeriod&&stagePaytmSettlementsFromAxisDraft(s,draft))saveStore(s);
   const bank=draft.transactions||[],book=(s.bankStatements||{})[bankStatementBookKey(draft.nature,draft.account)]||{},continuityCutoff=String(book.reconciledThrough||''),effectiveFrom=continuityCutoff&&(!draft.summary.to||continuityCutoff<draft.summary.to)?continuityCutoff:'',priorLinkedIds=new Set();
   (book.imports||[]).forEach(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(x=>(x.linkedRecordIds||[]).forEach(id=>priorLinkedIds.add(id))));
   // A later statement can reveal a bank row on the already-finalized cutoff
@@ -4695,7 +4674,7 @@ async function combineStatementScreenshots(files){
   const sheetRows=clean.map(row=>({Date:row.date,Narration:row.description,Reference:row.reference,Debit:row.debit||'',Credit:row.credit||'',Balance:row.balance})),workbook=XLSX.utils.book_new(),sheet=XLSX.utils.json_to_sheet(sheetRows),filePath=path.join(STATEMENT_DRAFT_DIR,Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.xlsx');XLSX.utils.book_append_sheet(workbook,sheet,'Statement');XLSX.writeFile(workbook,filePath);
   files.forEach(file=>{try{fs.unlinkSync(file.path);}catch{}});return{filePath,originalName:'Statement screenshots ('+files.length+').xlsx',warnings};
 }
-registerPaytmReports(router,{loadStore,saveStore,audit,upload:paytmUpload,today:indiaBusinessDate,view:paytmReportView,orders:()=>{try{return Object.values(JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{});}catch{return[];}},saleRows:paytmReceiptEvidenceRows,canAccess:req=>canAccessBankReconciliation(req,loadStore(),'SANKI',DEFAULT_SALES_BANK),canClassify:isOwner,shopifyClient,shopifyStore:process.env.SHOPIFY_STORE});
+registerPaytmReports(router,{loadStore,saveStore,audit,upload:paytmUpload,today:indiaBusinessDate,view:paytmReportView,orders:()=>{try{return Object.values(JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{});}catch{return[];}},saleRows:salesLedgerEntries,canAccess:req=>canAccessBankReconciliation(req,loadStore(),'SANKI',DEFAULT_SALES_BANK),canClassify:isOwner,shopifyClient,shopifyStore:process.env.SHOPIFY_STORE});
 router.post('/api/expenses/bank-statements/import',statementUpload.fields([{name:'statements',maxCount:30},{name:'statement',maxCount:1}]),(req,res,next)=>{req.statementFiles=[...((req.files&&req.files.statements)||[]),...((req.files&&req.files.statement)||[])];const s=loadStore();if(canAccessBankReconciliation(req,s,req.body&&req.body.nature,req.body&&req.body.account))return next();req.statementFiles.forEach(file=>{try{fs.unlinkSync(file.path);}catch{}});return res.status(403).json({success:false,error:'You cannot reconcile this bank account.'});},async(req,res)=>{const files=req.statementFiles||[];if(!files.length)return res.status(400).json({success:false,error:'Choose an XLS, XLSX, CSV, PDF or one or more statement images.'});let prepared;try{prepared=await combineStatementScreenshots(files);const out=await createBankReconciliationDraft({filePath:prepared.filePath,originalName:prepared.originalName,password:String(req.body&&req.body.password||''),account:req.body.account,nature:req.body.nature,username:req.user.username,device:'Web'});if(prepared.warnings&&prepared.warnings.length)out.warnings=prepared.warnings;return res.status(out.success?200:400).json(out);}catch(e){files.forEach(file=>{try{if(fs.existsSync(file.path))fs.unlinkSync(file.path);}catch{}});if(prepared&&prepared.filePath)try{if(fs.existsSync(prepared.filePath))fs.unlinkSync(prepared.filePath);}catch{}return res.status(400).json({success:false,error:e.message||'Could not read these bank statement files.'});}});
 router.use('/api/expenses/bank-statements',async(req,res,next)=>{if(req.method!=='GET')return next();try{const s=loadStore(),account=String(req.query.account||''),nature=normalizedNature(req.query.nature);if(!canAccessBankReconciliation(req,s,nature,account))return next();const drafts=Object.values(s.bankReconciliationDrafts||{}).filter(x=>x.account===account&&normalizedNature(x.nature)===nature).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))),requested=String(req.query.draftId||''),draft=(requested&&drafts.find(x=>x.id===requested))||drafts[0];if(draft)await recoverStoredBankReversalMetadata(req,draft);next();}catch(error){next(error);}});
 router.get('/api/expenses/bank-statements',(req,res)=>{const s=loadStore(),account=String(req.query.account||''),nature=normalizedNature(req.query.nature);if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'You cannot view this bank reconciliation.'});const key=bankStatementBookKey(nature,account),book=((s.bankStatements||{})[key])||{transactions:{},imports:[]},transactions=Object.values(book.transactions||{}).sort((a,b)=>String(b.date+b.id).localeCompare(String(a.date+a.id))),drafts=Object.values(s.bankReconciliationDrafts||{}).filter(x=>x.account===account&&normalizedNature(x.nature)===nature).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||''))),requested=String(req.query.draftId||''),draft=(requested&&drafts.find(x=>x.id===requested))||drafts[0];if(draft&&!draft.originalStatementPeriod&&repairOrphanedReconciliationExpenses(s,draft))saveStore(s);const draftOptions=drafts.map(x=>({draftId:x.id,from:x.summary&&x.summary.from||'',to:x.summary&&x.summary.to||'',originalName:x.originalName||'',createdAt:x.createdAt||'',resolved:Object.keys(x.resolutions||{}).length,rows:(x.transactions||[]).length}));res.json({success:true,account,nature,imports:(book.imports||[]).slice().reverse(),transactions,lastReconciliation:book.lastReconciliation||null,updatedThrough:book.reconciledThrough||'',closingBalance:book.lastReconciliation&&(book.lastReconciliation.companyAdjustedClosingBalance??book.lastReconciliation.closingBalance)||0,actualClosingBalance:book.lastReconciliation&&book.lastReconciliation.closingBalance||0,draftOptions,draft:draft?draftReconciliation(s,draft):null});});
@@ -4758,7 +4737,6 @@ function reconcileBankStatementAccount(account,username,device,draftId,nature){c
 router.post('/api/expenses/bank-statements/reconcile',(req,res)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot reconcile this bank account.'});const out=reconcileBankStatementAccount(String(b.account||''),req.user.username,'Web',b.draftId,draft.nature);res.status(out.success?200:400).json(out);});
 router.use('/api/expenses/bank-statements',(req,res,next)=>{const guarded=new Set(['/correct-ledger-entry','/create-incoming','/resolve','/create-expense','/resolve-balance']);if(req.method!=='POST'||!guarded.has(req.path))return next();const s=loadStore(),draft=(s.bankReconciliationDrafts||{})[String(req.body&&req.body.draftId||'')];if(!draft)return next();const plan=bankFinalizationImportPlan(s,draft);if(!plan.error)return next();return res.status(409).json({success:false,error:plan.error+' This preview is locked; discard it and upload the original statement again.'});});
 function correctLedgerMovementAmount(s,id,amount){
-  if((s.receipts||[]).some(receipt=>receipt.id===id&&receipt.paytmRoundingTransactionId))return null;
   if(expenseLoans.protectsMovement(s,id)||expenseRefunds.protectsMovement(s,id)||(s.receipts||[]).some(r=>r.id===id&&r.refundRecoveryExpenseId))return null;
   const transfer=(s.transfers||[]).find(x=>x.id===id);if(transfer){const before=num(transfer.amount);transfer.amount=amount;return{type:'transfer',before,after:amount};}
   const adjustment=(s.adjustments||[]).find(x=>x.id===id);if(adjustment){const before=num(adjustment.amount),sign=before<0?-1:1;adjustment.amount=sign*amount;return{type:'adjustment',before:Math.abs(before),after:amount};}
@@ -4776,7 +4754,6 @@ function correctLedgerMovementAmount(s,id,amount){
   return null;
 }
 function setLedgerMovementExcluded(s,id,excluded,reason,user){
-  if((s.receipts||[]).some(receipt=>receipt.id===id&&receipt.paytmRoundingTransactionId))return false;
   if(expenseLoans.protectsMovement(s,id)||expenseRefunds.protectsMovement(s,id)||(s.receipts||[]).some(r=>r.id===id&&r.refundRecoveryExpenseId))return false;
   const stamp={reason:String(reason||''),by:user||'system',at:new Date().toISOString()};
   for(const expense of Object.values(s.expenses||{}))for(const payment of [].concat(expense.payments||[],expense.reimbursementPayments||[]))if(expense.id+'/'+payment.id===id){payment.accountingExcluded=!!excluded;payment.accountingExclusion=excluded?stamp:null;return true;}
@@ -5641,7 +5618,7 @@ router.post('/api/expenses/accounts/remove', (req, res) => {
 });
 // Admin: list / remove admin-approved CUSTOM categories (built-in ones stay).
 router.post('/api/expenses/custom-ledgers', (req, res) => {
-  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can create categories.' });
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Owner only.' });
   const s=loadStore(), b=req.body||{}, name=String(b.name||'').trim();
   if(!name || name.length>120) return res.status(400).json({success:false,error:'Enter a category name (up to 120 characters).'});
   if(!TYPES.includes(b.type)) return res.status(400).json({success:false,error:'Choose a valid category type.'});
@@ -5656,7 +5633,7 @@ router.post('/api/expenses/custom-ledgers', (req, res) => {
   res.json({success:true,ledger});
 });
 router.get('/api/expenses/custom-ledgers', (req, res) => {
-  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can view custom categories.' });
+  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Owner only.' });
   const s = loadStore();
   res.json({ success: true, ledgers: Object.values(s.customLedgers || {}), isAdmin: isAdmin(req) });
 });
@@ -5757,6 +5734,7 @@ module.exports.indiaDisplayTimestamp = indiaDisplayTimestamp;
 module.exports.indiaBusinessDate = indiaBusinessDate;
 module.exports.applySep11PrashantReimbursementDateCorrection = applySep11PrashantReimbursementDateCorrection;
 module.exports.applyAxisArshpreetReimbursementDuplicateRepair = applyAxisArshpreetReimbursementDuplicateRepair;
+module.exports.applyArshpreetSep12SalaryAdvanceRepair = applyArshpreetSep12SalaryAdvanceRepair;
 module.exports.applyIndus8181TransferDateCorrection = applyIndus8181TransferDateCorrection;
 module.exports.applyIndus8181Sep15DebitDateCorrection = applyIndus8181Sep15DebitDateCorrection;
 module.exports.applyIndus8181Sep15OmDateCorrection = applyIndus8181Sep15OmDateCorrection;
