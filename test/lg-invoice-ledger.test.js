@@ -5,6 +5,25 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { finalizedByPo } = require('../modules/lg-invoices');
 const { purchaseBillingAmount, purchasePaymentStatus } = require('../modules/purchase-payment-status');
+test('owner-confirmed 14 August LG payment reduces vendor dues without naming an account', () => {
+  const source=fs.readFileSync(path.join(__dirname,'../modules/expenses.js'),'utf8'),start=source.indexOf('function procurementPayables('),end=source.indexOf('function ledgerMeta(',start);
+  const context={procurementAccounting:s=>s.procurementAccounting,loadProcurementStore:()=>proc,finalizedByPo,purchaseBillingAmount,round0:Math.round,num:x=>Number(x)||0,poCostBreakdown:()=>({lines:[]}),audit:(s,_req,action,type,id,details)=>{s.audit.push({action,type,id,details});},Date,Object,Array,String,Math};
+  let applyLgHistoricalPayment20260814;
+  const makePo=(id,date)=>({id,vendor:'LG supplier',billNo:id,datePurchase:date,origin:'india',lines:[]});
+  const proc={settings:{},pos:{P1:makePo('P1','2026-08-02'),P2:makePo('P2','2026-09-09'),P3:makePo('P3','2026-10-07')},combinedVendorInvoices:{
+    C1:{id:'C1',poIds:['P1'],vendors:['LG'],lgBillNumber:'LGfirstbill',lgDate:'2026-08-02',finalized:{amountInr:342661,allocations:{P1:342661}}},
+    C2:{id:'C2',poIds:['P2'],vendors:['LG'],lgBillNumber:'LG-001',lgDate:'2026-09-09',finalized:{amountInr:119794,allocations:{P2:119794}}},
+    C3:{id:'C3',poIds:['P3'],vendors:['LG'],lgBillNumber:'00001',lgDate:'2026-10-07',finalized:{amountInr:18909,allocations:{P3:18909}}}
+  }};
+  applyLgHistoricalPayment20260814=vm.runInNewContext(source.slice(start,end)+'\napplyLgHistoricalPayment20260814;',context);
+  const state={procurementAccounting:{mediator:'LG',paymentsByPo:{P1:{payments:[{id:'PPAY-001',batchPaymentId:'PPB-SEP',amount:190000,account:'Gagan Sir Cash',date:'2026-09-18'}]}}},oneTimeMigrations:{},audit:[]};
+  assert.equal(applyLgHistoricalPayment20260814(state,proc),true);
+  const historical=Object.values(state.procurementAccounting.paymentsByPo).flatMap(row=>row.payments||[]).filter(payment=>payment.batchPaymentId==='HIST-LG-20260814-290000');
+  assert.equal(historical.reduce((sum,payment)=>sum+payment.amount,0),290000);
+  assert.ok(historical.every(payment=>payment.date==='2026-08-14'&&payment.account===''&&payment.accountingExcluded===true));
+  assert.equal(342661+119794+18909-190000-historical.reduce((sum,payment)=>sum+payment.amount,0),1364);
+  assert.equal(applyLgHistoricalPayment20260814(state,proc),false,'migration is idempotent');
+});
 
 test('finalized LG bill appears once in sourcing ledger projection with its LG date and chosen amount', () => {
   const source = fs.readFileSync(path.join(__dirname, '../modules/expenses.js'), 'utf8');

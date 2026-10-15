@@ -1070,6 +1070,7 @@ function loadStore() {
     const arshpreetSalaryStore=loadSalaryStore(),arshpreetAdvanceRepair=applyArshpreetSep12SalaryAdvanceRepair(s,arshpreetSalaryStore);
     if(arshpreetAdvanceRepair.salaryChanged)saveSalaryStore(arshpreetSalaryStore);
     if(arshpreetAdvanceRepair.expensesChanged)saveStore(s);
+    if(applyLgHistoricalPayment20260814(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
     // the official bank row remains the sole Axis balance movement.
@@ -1512,8 +1513,8 @@ function poCostBreakdown(po, defaults) {
   const lines=(po.lines||[]).map(l=>{const qty=num(l.qty),unitPrice=num(l.perPcsYuan),weightGrams=num(l.weightGrams),goodsPerPc=india?unitPrice:unitPrice*exRate,freightPerPc=india?transportPerPc:weightGrams*freightPerGram,landedPerPc=goodsPerPc+freightPerPc;return{sku:l.sku||'',designName:l.designName||'',qty,unitPrice:roundMoney(unitPrice),weightGrams:roundMoney(weightGrams),goodsPerPc:roundMoney(goodsPerPc),freightPerPc:roundMoney(freightPerPc),landedPerPc:roundMoney(landedPerPc),lineTotal:roundMoney(landedPerPc*qty)};});
   return{origin:india?'india':'china',exRate:roundMoney(exRate),freightPerGram:roundMoney(freightPerGram),transportTotal:roundMoney(transportTotal),totalQty,goodsTotal:roundMoney(lines.reduce((n,l)=>n+l.goodsPerPc*l.qty,0)),freightTotal:roundMoney(lines.reduce((n,l)=>n+l.freightPerPc*l.qty,0)),landedTotal:roundMoney(lines.reduce((n,l)=>n+l.lineTotal,0)),formula:india?'Landed/pc = INR price/pc + (total transport / total quantity)':'Landed/pc = (Yuan price/pc x exchange rate) + (weight g/pc x freight rate/g)',lines};
 }
-function procurementPayables(s, includePaid) {
-  const cfg = procurementAccounting(s), proc = loadProcurementStore(), finalized = finalizedByPo(proc);
+function procurementPayables(s, includePaid, procurementStore) {
+  const cfg = procurementAccounting(s), proc = procurementStore || loadProcurementStore(), finalized = finalizedByPo(proc);
   return Object.values(proc.pos || {}).filter(po => !po.historical)
     .map(po => {
       const state = cfg.paymentsByPo[po.id] || {}, payments = Array.isArray(state.payments) ? state.payments : [];
@@ -1525,8 +1526,8 @@ function procurementPayables(s, includePaid) {
         costBreakdown: poCostBreakdown(po, proc.settings || {}), costCorrectionHistory: po.costCorrectionHistory || [] };
     }).filter(x => includePaid || x.balanceDue > 0).sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
-function procurementLedgerPayables(s, includePaid) {
-  const children = procurementPayables(s, true), proc = loadProcurementStore();
+function procurementLedgerPayables(s, includePaid, procurementStore) {
+  const proc = procurementStore || loadProcurementStore(), children = procurementPayables(s, true, proc);
   // Draft and unlinked POs are not debts in the Logistics Mediator ledger.
   // Only an explicitly finalized LG bill creates a payable here.
   const grouped = Object.values(proc.combinedVendorInvoices || {}).filter(invoice => invoice.finalized).map(invoice => {
@@ -1559,6 +1560,40 @@ function procurementLedgerPayables(s, includePaid) {
   });
   return grouped.filter(item => includePaid || item.balanceDue > 0)
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+function applyLgHistoricalPayment20260814(s, procurementStore) {
+  const migrationKey='lg-historical-payment-2026-08-14-290000-v1',batchPaymentId='HIST-LG-20260814-290000';
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[migrationKey])return false;
+  const proc=procurementStore||loadProcurementStore(),invoices=Object.values(proc.combinedVendorInvoices||{});
+  const anchor=invoices.find(invoice=>invoice.finalized&&String(invoice.lgBillNumber||'').toLowerCase()==='lgfirstbill'&&String(invoice.lgDate||'').slice(0,10)==='2026-08-02'&&round0(invoice.finalized.amountInr)===342661);
+  if(!anchor)return false;
+  const cfg=procurementAccounting(s),payables=procurementLedgerPayables(s,true,proc).sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.billNo||'').localeCompare(String(b.billNo||'')));
+  const existing=Object.values(cfg.paymentsByPo||{}).flatMap(state=>state.payments||[]);
+  if(existing.some(payment=>payment.batchPaymentId===batchPaymentId))return false;
+  const totalPaid=round0(existing.reduce((sum,payment)=>sum+num(payment.amount),0)),beforeDue=round0(payables.reduce((sum,payable)=>sum+num(payable.balanceDue),0));
+  // Exact identity checks prevent a later deployment from applying this owner-
+  // confirmed correction to a changed set of books.
+  if(totalPaid!==190000||beforeDue!==291364)return false;
+  const amount=290000,allocations=[];let left=amount;
+  for(const payable of payables){
+    if(left<=0)break;
+    for(const bill of payable.purchaseBills||[]){
+      if(left<=0)break;
+      const allocation=Math.min(left,round0(bill.balanceDue));
+      if(allocation>0){allocations.push({payable,bill,amount:allocation});left-=allocation;}
+    }
+  }
+  if(left!==0)return false;
+  const now=new Date().toISOString();
+  allocations.forEach(({payable,bill,amount:allocation})=>{
+    const state=cfg.paymentsByPo[bill.id]||(cfg.paymentsByPo[bill.id]={payments:[]});state.payments=Array.isArray(state.payments)?state.payments:[];
+    const payment={id:'HIST-LG-20260814-'+String(state.payments.length+1).padStart(3,'0'),batchPaymentId,combinedInvoiceId:payable.id,linkedPoIds:payable.poIds||[],supplier:bill.supplier,amount:allocation,account:'',date:'2026-08-14',reference:'Historical LG payment before accounting start',bankReference:'',paymentType:'Historical payment',proof:'',proofs:[],note:'Owner-confirmed ₹2,90,000 payment made on 14 August 2026 before the accounting app started. Vendor ledger only; excluded from every bank and cash ledger.',paidBy:'gaganlambasanki',paidAt:now,historicalSettlement:true,accountingExcluded:true};
+    state.payments.push(payment);
+    audit(s,null,'PROCUREMENT_HISTORICAL_PAYMENT_RECORDED','procurement',bill.id,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:'',batchPaymentId,paymentId:payment.id,after:payment,note:payment.note});
+  });
+  s.oneTimeMigrations[migrationKey]={appliedAt:now,batchPaymentId,date:'2026-08-14',amount,beforeDue,afterDue:beforeDue-amount,accountLedgerEffect:0,allocations:allocations.map(({payable,bill,amount:allocation})=>({lgBillId:payable.id,lgBillNumber:payable.billNo,poId:bill.id,amount:allocation}))};
+  return true;
 }
 function ledgerMeta(s, name) {
   const ov = (s.ledgerOverrides || {})[name] || {};
@@ -5782,7 +5817,7 @@ router.use((error,req,res,next)=>{
   res.status(500).json({success:false,error:'The accounting change could not be saved safely. Please retry once; if it continues, contact support.'});
 });
 
-module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyReviewedVendorDecisions20261009, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyOwnerConfirmedEx00132GrossPayment, applyVendorOverpaymentDisplayMetadata, canonicalAccountName, mergeAccountRecords };
+module.exports = { router, summaryForPL, telegramAccountingSummary, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramSuggestBusinessCategory, telegramExpense, telegramApproveExpense, telegramRejectExpense, telegramRecordPayment, telegramResolveAccount, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, importBankStatementUpload, reconcileBankStatementAccount, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, mergeVendorRecords, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyReviewedVendorDecisions20261009, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, resetBankReconciliationData, applyOwnerRequestedBankReconciliationReset, applyOwnerRequestedKaluPaymentRemovals, applyOwnerConfirmedEx00032GrossPayment, applyOwnerConfirmedEx00132GrossPayment, applyVendorOverpaymentDisplayMetadata, applyLgHistoricalPayment20260814, canonicalAccountName, mergeAccountRecords };
 // A background job must never replace unreadable financial data with blankStore().
 function loadRentalStore(){const raw=JSON.parse(fs.readFileSync(EXP_PATH,'utf8'));if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('Invalid accounts store');return loadStore();}
 const rentalJobs=require('./rental-register').register(router,{loadStore:loadRentalStore,saveStore,isOwner,audit});
