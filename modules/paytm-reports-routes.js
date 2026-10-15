@@ -213,7 +213,12 @@ function registerPaytmReports(router, deps) {
         audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified, note: 'Bulk finalization of all fully matched Paytm settlements' });
       } catch (error) { skipped.push({ settlementId: candidate.settlementId, reason: error.message }); }
     }
-    if (finalized.length) saveStore(store);
+    store.paytmLastFinalizationAttempt = { at: new Date().toISOString(), by: req.user.username,
+      newlyFinalized: finalized.length, incomplete: skipped.length, skippedSettlements: skipped };
+    audit(store, req, 'PAYTM_BULK_FINALIZATION_REVIEWED', 'paytm_reconciliation', 'all', {
+      nature: 'SANKI', account: CLEARING, after: store.paytmLastFinalizationAttempt,
+      note: 'Shared result of the finalization attempt; validation failures remain unresolved and no opening/balance adjustment is created.' });
+    saveStore(store);
     res.json({ success: true, finalized: finalized.length, skipped: skipped.length, skippedSettlements: skipped, view: view(store) });
   });
   router.post('/api/expenses/paytm-reports/post-payout', (req, res) => {
