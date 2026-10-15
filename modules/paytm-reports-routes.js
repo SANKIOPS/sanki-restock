@@ -281,8 +281,23 @@ const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, 
       const key=evidence.payout.settlementId;
       if(store.paytmHistoricalEvidenceLinks[key])throw new Error('Historical evidence is already attached. No duplicate attachment was created.');
       const link={settlementId:key,historicalSettlementId:evidence.historicalSettlementId,bankTransactionId:evidence.bank.id,reconciliationImportId:evidence.reconciliationImportId,reason,by:req.user.username,at:new Date().toISOString()};
+      if(evidence.completePendingDetail){
+        const legacy=store.paytmSettlements.find(x=>x.id===evidence.historicalSettlementId),before=JSON.parse(JSON.stringify(legacy)),payout=evidence.payout;
+        const fees=Math.round((payout.commission+payout.platformFee+payout.gst+payout.nonCustomerAmount)*100)/100;
+        // Complete only the intentionally empty report detail. The finalized
+        // bank net, ID, date, reference and Owner approval remain untouched.
+        Object.assign(legacy,{grossAmount:payout.customerGross,chargeAmount:fees,paytmChargeAmount:fees,hiddenChargeAmount:0,provisional:false,reportDetailCompleted:true,reportDetailCompletedBy:req.user.username,reportDetailCompletedAt:link.at,reason:'Detailed Paytm report completed the original bank-only gross/fee placeholder. '+reason});
+        link.completedPendingDetail={before,gross:payout.customerGross,commission:payout.commission,platformFee:payout.platformFee,gst:payout.gst,vas:payout.nonCustomerAmount,fees,net:payout.net};
+        if(fees>0){
+          const expense={id:'BRE-HIST-'+key,nature:'SANKI',date:payout.settledDate,amount:fees,account:CLEARING,category:'PAYTM CHARGES',type:'running',vendor:'Paytm',particulars:'Verified report charges completing bank-only settlement '+legacy.id+'; '+reason,settlementId:legacy.id,paytmHistoricalSettlementId:legacy.id,bankTransactionId:evidence.bank.id,createdBy:req.user.username,createdAt:link.at};
+          store.reconciliationExpenses=store.reconciliationExpenses||[];store.reconciliationExpenses.push(expense);link.completedPendingDetail.expenseId=expense.id;
+        }
+        audit(store,req,'PAYTM_BANK_ONLY_DETAIL_COMPLETED','paytm_settlement',legacy.id,{nature:'SANKI',account:CLEARING,before,after:legacy,note:'Original finalized Axis credit preserved. Only previously pending gross/fees completed from the validated Paytm report; fees recorded once.'});
+      }
       store.paytmHistoricalEvidenceLinks[key]=link;
-      audit(store,req,'PAYTM_HISTORICAL_EVIDENCE_ATTACHED','paytm_settlement',key,{nature:'SANKI',account:BANK,after:link,note:'Detailed report attached to the existing finalized settlement. No new bank, clearing, charge or income posting created.'});
+      const verified=(store.paytmVerifiedSettlements||[]).find(x=>x.settlementId===key);
+      if(verified)verified.historicalEvidenceLink=link;
+      audit(store,req,'PAYTM_HISTORICAL_EVIDENCE_ATTACHED','paytm_settlement',key,{nature:'SANKI',account:BANK,after:link,note:link.completedPendingDetail?'Original bank-only settlement detail completed from validated report. Existing finalized Axis credit retained; no duplicate bank posting.':'Detailed report attached to the existing finalized settlement. No new bank, clearing, charge or income posting created.'});
       saveStore(store);
       res.json({success:true,link,view:view(store)});
     }catch(error){res.status(400).json({success:false,error:error.message});}
