@@ -1582,9 +1582,9 @@
     };
     el('vendorProofClose').onclick=function(){++vendorProofGeneration;el('vendorProofDlg').close();};
     function vendorManagementActions(v,selectedEntity,source){
-      if(source!=='expense'||!cfg.isAdmin)return'';
-      var nature=selectedEntity||(v.entities||[])[0]||v.nature||'SANKI',attrs=' data-vendor-nature="'+esc(nature)+'" data-vendor-name="'+esc(v.name)+'"',disabled=cfg.isOwner?'':' disabled aria-disabled="true" title="Owner approval required for shared vendor changes"';
-      return '<div class="expense-actions"><button type="button" class="btn mini ghost" data-vendor-action="edit"'+attrs+disabled+'>Rename vendor</button> <button type="button" class="btn mini ghost" data-vendor-action="merge"'+attrs+disabled+'>Merge vendor</button>'+(cfg.isOwner&&selectedEntity&&v.count===0?' <button class="btn mini danger" type="button" data-vendor-action="delete"'+attrs+'>Remove from '+esc(selectedEntity)+'</button>':'')+(cfg.isOwner?'':'<span class="hint">Owner only: shared vendor rename and merge affect every entity.</span>')+'</div>';
+      if(source!=='expense'||!cfg.isAdmin&&!cfg.canManageVendors&&!cfg.isOwner)return'';
+      var canManage=!!(cfg.canManageVendors||cfg.isOwner),nature=selectedEntity||(v.entities||[])[0]||v.nature||'SANKI',attrs=' data-vendor-nature="'+esc(nature)+'" data-vendor-name="'+esc(v.name)+'"',disabled=canManage?'':' disabled aria-disabled="true" title="Only Owner or an authorized vendor manager can change shared vendor names"';
+      return '<div class="expense-actions"><button type="button" class="btn mini ghost" data-vendor-action="edit"'+attrs+disabled+'>Rename vendor</button> <button type="button" class="btn mini ghost" data-vendor-action="merge"'+attrs+disabled+'>Merge vendor</button>'+(cfg.isOwner&&selectedEntity&&v.count===0?' <button class="btn mini danger" type="button" data-vendor-action="delete"'+attrs+'>Remove from '+esc(selectedEntity)+'</button>':'')+(canManage?'':'<span class="hint">Owner or authorized vendor manager only: shared vendor rename and merge affect every entity.</span>')+'</div>';
     }
     function vendorLedgerTable(v){
       var opening=Number(v.ledgerOpeningBalance||0),rows=v.ledgerRows||[],showEntity=(v.entities||[]).length>1,entityHead=showEntity?'<th>Entity</th>':'',entityOpening=showEntity?'<td>All</td>':'';
@@ -1633,7 +1633,8 @@
       }).catch(function(error){if(token===vendorLoadGeneration&&host===el('vtable'))host.textContent=error.message||'Could not load party ledgers.';});
     }
     function openVendorManager(mode,nature,name){
-      if(!cfg.canManageVendors){setMsg('Owner or Prashant only.',false);return;}
+      var deleting=mode==='delete'||mode==='bulk-delete';
+      if(deleting?!cfg.isOwner:!cfg.canManageVendors&&!cfg.isOwner){setMsg(deleting?'Only the Owner can delete vendor ledgers.':'Only Owner or an authorized vendor manager can rename or merge vendors.',false);return;}
       vendorManageState={mode:mode,nature:nature||'',name:name||''};
       el('vendorManageMsg').className='msg';el('vendorManageMsg').textContent='';
       el('vendorRenameWrap').style.display=mode==='edit'?'':'none';
@@ -1670,6 +1671,7 @@
     el('vendorManageGo').addEventListener('click',async function(){
       var state=vendorManageState,btn=this;if(!state||btn.disabled)return;
       el('vendorManageMsg').className='msg';el('vendorManageMsg').textContent='';
+      var changing=state.mode==='edit'||state.mode==='merge';if(changing?!cfg.canManageVendors&&!cfg.isOwner:!cfg.isOwner){el('vendorManageMsg').className='msg err';el('vendorManageMsg').textContent=changing?'Only Owner or an authorized vendor manager can rename or merge vendors.':'Only the Owner can delete vendor ledgers.';return;}
       if(state.mode==='edit'||state.mode==='merge'){
         var changeReason=el('vendorChangeReason').value.trim();if(!changeReason){el('vendorManageMsg').className='msg err';el('vendorManageMsg').textContent='Enter the reason for this shared vendor change.';return;}
       }
