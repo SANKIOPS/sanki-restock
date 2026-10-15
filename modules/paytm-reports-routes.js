@@ -146,6 +146,22 @@ function registerPaytmReports(router, deps) {
     saveStore(store);
     res.json({ success: true, view: view(store) });
   });
+  router.post('/api/expenses/paytm-reports/unclassify', (req, res) => {
+    if (deny(req, res)) return;
+    if (!canClassify || !canClassify(req)) return res.status(403).json({ success: false, error: 'Only the Owner may correct a manual Paytm classification.' });
+    const store = loadStore(), id = String(req.body && req.body.transactionId || '').trim(), reason = String(req.body && req.body.reason || '').trim();
+    const classification = (store.paytmManualResolutions || {})[id];
+    if (!classification) return res.status(404).json({ success: false, error: 'Manual classification not found.' });
+    if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a correction reason of at least 10 characters.' });
+    if ((store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(id))) return res.status(409).json({ success: false, error: 'This payment is in a posted payout. Reopen the payout before correcting it.' });
+    const key = classification.type === 'manual_sale' ? 'receipts' : 'transfers';
+    if (!(store[key] || []).some(x => x.id === classification.recordId && x.paytmTransactionId === id)) return res.status(409).json({ success: false, error: 'The linked accounting record changed. Review it before correcting this classification.' });
+    store[key] = store[key].filter(x => x.id !== classification.recordId);
+    delete store.paytmManualResolutions[id];
+    audit(store, req, 'PAYTM_TRANSACTION_CLASSIFICATION_REVERSED', 'paytm_transaction', id, { nature: 'SANKI', account: CLEARING, before: classification, note: reason });
+    saveStore(store);
+    res.json({ success: true, view: view(store) });
+  });
   router.post('/api/expenses/paytm-reports/rounding-review', (req, res) => {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {};
@@ -162,22 +178,6 @@ function registerPaytmReports(router, deps) {
       }
       res.json({ success: true, ...result, view: view(store) });
     } catch (error) { res.status(400).json({ success: false, error: error.message }); }
-  });
-  router.post('/api/expenses/paytm-reports/unclassify', (req, res) => {
-    if (deny(req, res)) return;
-    if (!canClassify || !canClassify(req)) return res.status(403).json({ success: false, error: 'Only the Owner may correct a manual Paytm classification.' });
-    const store = loadStore(), id = String(req.body && req.body.transactionId || '').trim(), reason = String(req.body && req.body.reason || '').trim();
-    const classification = (store.paytmManualResolutions || {})[id];
-    if (!classification) return res.status(404).json({ success: false, error: 'Manual classification not found.' });
-    if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a correction reason of at least 10 characters.' });
-    if ((store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(id))) return res.status(409).json({ success: false, error: 'This payment is in a posted payout. Reopen the payout before correcting it.' });
-    const key = classification.type === 'manual_sale' ? 'receipts' : 'transfers';
-    if (!(store[key] || []).some(x => x.id === classification.recordId && x.paytmTransactionId === id)) return res.status(409).json({ success: false, error: 'The linked accounting record changed. Review it before correcting this classification.' });
-    store[key] = store[key].filter(x => x.id !== classification.recordId);
-    delete store.paytmManualResolutions[id];
-    audit(store, req, 'PAYTM_TRANSACTION_CLASSIFICATION_REVERSED', 'paytm_transaction', id, { nature: 'SANKI', account: CLEARING, before: classification, note: reason });
-    saveStore(store);
-    res.json({ success: true, view: view(store) });
   });
   router.post('/api/expenses/paytm-reports/exclude', (req, res) => {
     if (deny(req, res)) return;
@@ -235,7 +235,12 @@ function registerPaytmReports(router, deps) {
         audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified, note: 'Bulk finalization of all fully matched Paytm settlements' });
       } catch (error) { skipped.push({ settlementId: candidate.settlementId, reason: error.message }); }
     }
-    if (finalized.length) saveStore(store);
+    store.paytmLastFinalizationAttempt = { at: new Date().toISOString(), by: req.user.username,
+      newlyFinalized: finalized.length, incomplete: skipped.length, skippedSettlements: skipped };
+    audit(store, req, 'PAYTM_BULK_FINALIZATION_REVIEWED', 'paytm_reconciliation', 'all', {
+      nature: 'SANKI', account: CLEARING, after: store.paytmLastFinalizationAttempt,
+      note: 'Shared result of the finalization attempt; validation failures remain unresolved and no opening/balance adjustment is created.' });
+    saveStore(store);
     res.json({ success: true, finalized: finalized.length, skipped: skipped.length, skippedSettlements: skipped, view: view(store) });
   });
   router.post('/api/expenses/paytm-reports/post-payout', (req, res) => {
