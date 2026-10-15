@@ -180,4 +180,24 @@ test('clean Counter Cash requests stop admin warnings; changed balances and newe
   assert.equal(row(invoke(), 'Counter Cash').status, 'review_pending');
 });
 
+test('posted Paytm batches with covered old previews do not become pending; roles see identical counts and previews', () => {
+  const store=fresh(), tx={transactionId:'PT-REMINDER',date:minus(1),amount:100,commission:1,gst:.18,platformFee:0,settledAmount:98.82,utr:'UTR-REMINDER',payoutId:'P-REMINDER',settledDate:required};
+  Object.assign(store,{paytmReportTransactions:{[tx.transactionId]:tx},paytmPayoutPostings:[{id:'POST-REMINDER',payoutId:tx.utr,settlementId:tx.utr,date:required,net:98.82}],paytmVerifiedSettlements:[],paytmReportImports:[{at:required+'T08:00:00Z'}],paytmReportDrafts:{OLD:{id:'OLD',transactions:[tx],enrichments:[],warnings:[],sources:[{name:'already-saved.csv'}]}}});
+  save(store);const before=fs.readFileSync(expenseFile,'utf8'),admin=row(invoke(),'Paytm Settlement Clearing'),owner=row(invoke('owner'),'Paytm Settlement Clearing');
+  assert.equal(admin.status,'up_to_date');assert.equal(admin.attentionRequired,false);assert.equal(admin.pendingDraft,false);assert.equal(admin.settlementCounts.posted,1);assert.equal(admin.settlementCounts.incomplete,0);
+  assert.deepEqual(admin,owner);assert.equal(admin.reportPreviews[0].code,'already_covered');assert.equal(fs.readFileSync(expenseFile,'utf8'),before);
+  store.paytmReportDrafts.NEW={id:'NEW',transactions:[{...tx,transactionId:'NEW-PAYMENT'}],warnings:[]};save(store);
+  const pending=row(invoke(),'Paytm Settlement Clearing');assert.equal(pending.attentionRequired,true);assert.equal(pending.actionLabel,'Review Paytm upload evidence');assert.equal(pending.settlementCounts.incomplete,0);assert.match(pending.detail,/NEW.*1 new payment/);
+});
+
+test('cash reminder identifies the actual changed request while a newer clean count stays awaiting Owner approval',()=>{
+  const store=fresh();store.cashReconciliations=[
+    {id:'CCR-OLD',account:'Counter Cash',status:'pending',verifiedThrough:minus(1),countedBalance:10,ledgerBalance:10,difference:0,requestedAt:minus(1)+'T08:00:00Z'},
+    {id:'CCR-NEW',account:'Counter Cash',status:'pending',verifiedThrough:required,countedBalance:0,ledgerBalance:0,difference:0,requestedAt:required+'T08:00:00Z'}
+  ];save(store);const before=fs.readFileSync(expenseFile,'utf8'),admin=row(invoke(),'Counter Cash'),owner=row(invoke('owner'),'Counter Cash');
+  assert.equal(admin.status,'review_pending');assert.equal(admin.attentionRequired,true);assert.deepEqual(admin.cashStatus,owner.cashStatus);
+  assert.deepEqual(admin.cashStatus.counts,{pending:2,reviewRequired:1,awaitingOwnerApproval:1});assert.match(admin.detail,/CCR-OLD.*Ledger changed/);assert.match(admin.detail,/CCR-NEW.*agrees.*awaiting Owner/);
+  assert.equal(fs.readFileSync(expenseFile,'utf8'),before);
+});
+
 test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
