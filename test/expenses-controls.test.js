@@ -2815,7 +2815,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /matches\('img\.thumb'\)/);
   assert.match(html, /\.claim-card summary \{ padding:3px 7px/);
   assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
-  assert.match(html,/el\(x\)\.disabled=!cfg\.isOwner/);
+  assert.match(html,/\['editAmount','editTotal','editRequested'\]\.forEach\(function\(x\)\{el\(x\)\.disabled=locked\|\|!cfg\.isOwner/);
+  assert.match(html,/el\(x\)\.title=locked\?'Locked for every role: this payment is reconciled\.'/);
   assert.match(html,/Only the Owner can change amounts/);
   assert.match(html,/<label>Paying account<\/label><select id="lf_account">/);
   assert.match(html,/payingAccount='\+encodeURIComponent/);

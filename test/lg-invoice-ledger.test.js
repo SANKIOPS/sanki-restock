@@ -67,7 +67,9 @@ test('pending payments contains only finalized LG bill rows, filtered by LG date
 test('sourcing ledger LG bill expands to show purchase and vendor calculation differences', () => {
   const html = fs.readFileSync(path.join(__dirname, '../public/expenses.html'), 'utf8');
   const start = html.indexOf('    function procurementCostHtml(raw)');
-  const end = html.indexOf('    function vendorLedgerTable(v)', start);
+  const end = html.indexOf('    var vendorPaymentProofRows=', start);
+  assert.ok(start >= 0, 'procurement cost renderer boundary exists');
+  assert.ok(end > start, 'renderer extraction ends before vendor proof handlers');
   const render = vm.runInNewContext(html.slice(start, end) + '\nprocurementCostHtml;', {
     esc: String, fmt: n => '₹' + n
   });
