@@ -1677,6 +1677,7 @@ function rolesOfReq(req) {
 function isOwner(req){return rolesOfReq(req).includes('owner');}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
+function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req);}
 const PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181']);
 function isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification){
   if(fromNature!=='SANKI'||toNature!=='SANKI'||classification!=='internal_transfer')return false;
@@ -1985,6 +1986,8 @@ router.get('/api/expenses/config', (req, res) => {
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
     canManageExpenseRefunds: isAdmin(req),
+    canManageCategories: canManageCategoriesAndVendors(req),
+    canManageVendors: canManageCategoriesAndVendors(req),
     isOwner: rolesOfReq(req).includes('owner'),
     canVerifyCounterCash: isOwner(req)||isPrashant(req),
     canLogCreditCardExpense: canLogCreditCardExpense(req),
@@ -3302,7 +3305,7 @@ function vendorLinkedExpenses(s, nature, name) {
   return Object.values(s.expenses || {}).filter(e => normalizedNature(e.nature) === n && sharedVendorIdentityKey(e.vendor) === key);
 }
 router.post('/api/expenses/vendors/manage/edit', (req, res) => {
-  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can edit vendor ledgers.' });
+  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can edit vendor ledgers.' });
   const s=loadStore(), b=req.body||{}, nature=normalizedNature(b.nature), oldName=cleanVendorName(b.name), newName=cleanVendorName(b.newName);
   if(!oldName||!newName) return res.status(400).json({success:false,error:'Current and new vendor names are required.'});
   syncSharedVendorDirectory(s);const oldKey=sharedVendorIdentityKey(oldName),newKey=sharedVendorIdentityKey(newName),current=(s.vendorDirectory||{})[oldKey];
@@ -3320,7 +3323,7 @@ router.post('/api/expenses/vendors/manage/edit', (req, res) => {
   saveStore(s);res.json({success:true,name:newName,updatedExpenses:linked.length,entities});
 });
 router.post('/api/expenses/vendors/manage/merge', (req, res) => {
-  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Only the Owner can merge vendor ledgers.' });
+  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can merge vendor ledgers.' });
   const s=loadStore(),b=req.body||{},sourceName=cleanVendorName(b.sourceName),targetName=cleanVendorName(b.targetName);syncSharedVendorDirectory(s);
   const sourceKey=sharedVendorIdentityKey(sourceName),targetKey=sharedVendorIdentityKey(targetName),source=(s.vendorDirectory||{})[sourceKey],target=(s.vendorDirectory||{})[targetKey];
   if(!sourceName||!targetName||sourceKey===targetKey) return res.status(400).json({success:false,error:'Select two different vendor ledgers.'});
@@ -5514,7 +5517,7 @@ router.post('/api/expenses/accounts/remove', (req, res) => {
 });
 // Admin: list / remove admin-approved CUSTOM categories (built-in ones stay).
 router.post('/api/expenses/custom-ledgers', (req, res) => {
-  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Owner only.' });
+  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can create categories.' });
   const s=loadStore(), b=req.body||{}, name=String(b.name||'').trim();
   if(!name || name.length>120) return res.status(400).json({success:false,error:'Enter a category name (up to 120 characters).'});
   if(!TYPES.includes(b.type)) return res.status(400).json({success:false,error:'Choose a valid category type.'});
@@ -5529,7 +5532,7 @@ router.post('/api/expenses/custom-ledgers', (req, res) => {
   res.json({success:true,ledger});
 });
 router.get('/api/expenses/custom-ledgers', (req, res) => {
-  if (!isOwner(req)) return res.status(403).json({ success:false, error:'Owner only.' });
+  if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can view custom categories.' });
   const s = loadStore();
   res.json({ success: true, ledgers: Object.values(s.customLedgers || {}), isAdmin: isAdmin(req) });
 });

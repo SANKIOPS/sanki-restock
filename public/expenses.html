@@ -560,7 +560,7 @@
       if(tab==='creditcards') return renderCreditCards();
       if(tab==='cash') return cfg.canVerifyCounterCash&&!cfg.isAdmin?renderCounterCashOnly():renderCash();
       if(tab==='reimbursements') return renderReimbursements();
-      if(tab==='categories'&&cfg.isOwner) return renderCategories();
+      if(tab==='categories'&&cfg.canManageCategories) return renderCategories();
       if(tab==='audit') return renderAudit();
       if(tab==='approvals') return renderApprovals();
     }
@@ -1548,7 +1548,7 @@
         var vendors=d.vendors.slice(),sort=el('vf_sort').value;if(sort==='amount_asc')vendors.sort(function(a,b){return Number(a.outstanding||0)-Number(b.outstanding||0)||String(a.name).localeCompare(String(b.name));});if(sort==='amount_desc')vendors.sort(function(a,b){return Number(b.outstanding||0)-Number(a.outstanding||0)||String(a.name).localeCompare(String(b.name));});
         var rows = vendors.map(function(v,vi){
           (v.entries||[]).forEach(function(e){expensesById[e.id]=e;});
-          var entities=v.entities&&v.entities.length?v.entities:[v.nature],selectedEntity=el('vf_nature').value,manage=cfg.isOwner&&selectedEntity&&(el('panel').dataset.vsource||'expense')==='expense'?'<div class="expense-actions"><button class="btn mini ghost" onclick="editVendorLedger(\''+esc(selectedEntity)+'\',\''+esc(v.name)+'\')">Edit shared name</button> <button class="btn mini ghost" onclick="mergeVendorLedger(\''+esc(selectedEntity)+'\',\''+esc(v.name)+'\')">Merge shared vendor</button>'+(v.count===0?' <button class="btn mini danger" onclick="deleteVendorLedger(\''+esc(selectedEntity)+'\',\''+esc(v.name)+'\')">Remove from '+esc(selectedEntity)+'</button>':'')+'</div>':'';
+          var entities=v.entities&&v.entities.length?v.entities:[v.nature],selectedEntity=el('vf_nature').value,manage=cfg.canManageVendors&&selectedEntity&&(el('panel').dataset.vsource||'expense')==='expense'?'<div class="expense-actions"><button class="btn mini ghost" onclick="editVendorLedger(\''+esc(selectedEntity)+'\',\''+esc(v.name)+'\')">Edit shared name</button> <button class="btn mini ghost" onclick="mergeVendorLedger(\''+esc(selectedEntity)+'\',\''+esc(v.name)+'\')">Merge shared vendor</button>'+(cfg.isOwner&&v.count===0?' <button class="btn mini danger" onclick="deleteVendorLedger(\''+esc(selectedEntity)+'\',\''+esc(v.name)+'\')">Remove from '+esc(selectedEntity)+'</button>':'')+'</div>':'';
           var breakdown=(v.entityBalances||[]).length>1?'<div class="muted" style="margin:7px 0">'+v.entityBalances.map(function(x){return '<b>'+esc(x.nature)+'</b> '+vendorBalanceHtml(x.ledgerClosingBalance);}).join(' · ')+'</div>':'';
           return '<details class="claim-card"><summary><div class="claim-head"><div class="claim-date"><b>#'+(vi+1)+'</b> · '+entities.map(esc).join(' + ')+(v.tags||[]).map(function(tag){return ' · '+esc(tag);}).join('')+'</div><span class="tag">'+Number(v.ledgerTransactionCount||0)+' transactions</span></div><div class="claim-main"><div class="claim-desc">'+esc(v.name)+'</div><div class="claim-amount">'+vendorBalanceHtml(v.ledgerClosingBalance)+'</div></div></summary><div class="claim-detail">'+breakdown+manage+vendorLedgerTable(v)+'</div></details>';
         }).join('');
@@ -1556,7 +1556,7 @@
       }).catch(function(error){if(token===vendorLoadGeneration&&host===el('vtable'))host.textContent=error.message||'Could not load party ledgers.';});
     }
     function openVendorManager(mode,nature,name){
-      if(!cfg.isOwner){setMsg('Owner only.',false);return;}
+      if(!cfg.canManageVendors){setMsg('Owner or Prashant only.',false);return;}
       vendorManageState={mode:mode,nature:nature||'',name:name||''};
       el('vendorManageMsg').className='msg';el('vendorManageMsg').textContent='';
       el('vendorRenameWrap').style.display=mode==='edit'?'':'none';
@@ -2040,7 +2040,7 @@ var allTransactions=(d.transactions||[]).slice().sort(newestFirst),payoutRows=pa
 
     // ── APPROVALS — approvers handle vendors; admin also handles categories/accounts ──
     function renderCategories(){
-      if(!cfg.isOwner)return;
+      if(!cfg.canManageCategories)return;
       el('panel').innerHTML='<div class="card"><h3 style="margin-top:0">Manage categories</h3><p class="sub">Approved groups and subcategories shared by SANKI, SAMAST and PERSONAL. Historical expenses retain their original categories and audit trail.</p><div class="filters"><div class="fld"><label>Subcategory name</label><input id="categoryName" placeholder="Enter new category name" maxlength="120"></div><div class="fld"><label>Group</label><select id="categoryGroup">'+opts(cfg.categoryGroups||[])+'</select></div><div class="fld"><label>Type</label><select id="categoryType">'+opts(cfg.types,'variable')+'</select></div><button class="btn primary" id="categoryAdd">Add category</button></div><div id="categoryMsg" class="msg"></div><div id="categoryList"></div></div>';
       el('categoryList').insertAdjacentHTML('beforebegin','<div id="categoryReviewResult" class="sub"></div>');
       api('/api/expenses/category-review-finalization').then(function(d){
@@ -2127,7 +2127,7 @@ var allTransactions=(d.transactions||[]).slice().sort(newestFirst),payoutRows=pa
 
     // boot
     loadConfig().then(function(){
-      if(cfg.isOwner){el('categoriesTab').style.display='';}
+      if(cfg.canManageCategories){el('categoriesTab').style.display='';}
       selectedNature=(cfg.natures&&cfg.natures[0])||'SANKI';
       bankNature=selectedNature;
       if(cfg.isAdmin){el('pendingTab').style.display='';el('receivablesTab').style.display='';el('spendingTab').style.display='';el('auditTab').style.display='';}
@@ -2135,7 +2135,7 @@ var allTransactions=(d.transactions||[]).slice().sort(newestFirst),payoutRows=pa
         var cashBtn = el('tabs').querySelector('[data-t="cash"]');
         if(cashBtn&&!cfg.canVerifyCounterCash) cashBtn.remove();
         var vendorsBtn = el('tabs').querySelector('[data-t="vendors"]');
-        if(vendorsBtn) vendorsBtn.remove();
+        if(vendorsBtn&&!cfg.canManageVendors) vendorsBtn.remove();
         var salaryLedgersBtn=el('tabs').querySelector('[data-t="salaryledgers"]');
         if(salaryLedgersBtn) salaryLedgersBtn.remove();
         var reimburseBtn = el('tabs').querySelector('[data-t="reimbursements"]');
