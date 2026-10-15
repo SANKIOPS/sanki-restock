@@ -1100,6 +1100,10 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.match(html, /id="sd_account"/);
   assert.match(html, /id="sd_category"/);
   assert.match(html, /id="sd_category_go">Show spending by category/);
+  assert.match(html, /cfg\.isOwner\?'<button type="button" class="btn mini ghost" id="sd_add_category"/);
+  assert.match(html, /id="spendingCategoryDlg"/);
+  assert.match(html, /api\('\/api\/expenses\/custom-ledgers'/);
+  assert.match(html, /refreshSpendingCategoryList\(\)/);
   assert.doesNotMatch(html, /id="sd_view"/);
   const created = invoke('POST', '/api/expenses', { body: {
     vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'
@@ -1125,6 +1129,19 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.equal(admin.body.payments.some(x => x.entity === 'PERSONAL'), false);
   const claimant = invoke('GET', '/api/expenses/spending-dashboard', { role: 'claimant' });
   assert.equal(claimant.status, 403);
+});
+
+test('spending dashboard category creation uses the approved Owner-only category catalog', () => {
+  const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+  const name='Dashboard Added Category',group=config.categoryGroups[0]||'';
+  const blocked=invoke('POST','/api/expenses/custom-ledgers',{role:'admin',body:{name,type:'variable',group}});
+  assert.equal(blocked.status,403);
+  const created=invoke('POST','/api/expenses/custom-ledgers',{role:'owner',body:{name,type:'variable',group}});
+  assert.equal(created.status,200,JSON.stringify(created.body));
+  assert.equal(created.body.ledger.name,name);
+  assert.equal(created.body.ledger.group,group);
+  const refreshed=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+  assert.ok(refreshed.ledgers.some(x=>x.name===name&&x.group===group));
 });
 
 test('receivables support partial collections and credit the receiving account ledger', () => {
@@ -1998,7 +2015,7 @@ test('a split bank-charge resolution consumes its reimbursement instead of leavi
   try{const s=JSON.parse(baseline),account='Axis Bank 3448',draftId='BRD-SPLIT-CONSUMES-APP',appId='EX-SPLIT-CHARGE/REIM-001';s.expenses=s.expenses||{};s.expenses['EX-SPLIT-CHARGE']={id:'EX-SPLIT-CHARGE',nature:'SANKI',status:'approved',vendor:'Test claimant',amount:628.75,reimbursementPayments:[{id:'REIM-001',account,amount:628.75,date:'2099-11-06'}],payments:[]};s.bankReconciliationDrafts=s.bankReconciliationDrafts||{};s.bankReconciliationDrafts[draftId]={id:draftId,account,nature:'SANKI',transactions:[{date:'2099-11-06',description:'IMPS reimbursement plus charge',reference:'SPLIT-63195',debit:631.95,credit:0,balance:0}],summary:{from:'2099-11-06',to:'2099-11-06',openingBalance:631.95,closingBalance:0,totalDebits:631.95,totalCredits:0,validated:true},resolutions:{'bank-0':{action:'split_allocation',appId:'',principalAmount:628.75,chargeAmount:3.2,chargeCategory:'BANK CHARGES',reason:'Matched reimbursement with ₹3.20 bank charge'},'app-73':{action:'linked_split',appId,reason:'Linked as principal component of bank-0'}},matchingPolicy:'strict_identity_v3',createdBy:'owner-user'};fs.writeFileSync(expenseFile,JSON.stringify(s));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}}).body,row=view.rows.find(x=>x.id==='bank-0');assert.equal(row.status,'resolved');assert.equal(view.rows.some(x=>x.status==='missing_in_bank'&&x.app&&x.app.id===appId),false);assert.equal(view.unresolved,0);}finally{fs.writeFileSync(expenseFile,baseline);}
 });
 
-test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),render=html.slice(html.indexOf('function renderBankReconciliation'),html.indexOf('function renderBankContinuityEvidence'));assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
+test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),render=html.slice(html.indexOf('function renderBankReconciliation'),html.indexOf('function bankDecisionLabel'));assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
 
 test('reviewed bank transactions can finalize while the closing balance remains pending',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draftId='BRD-DEFER-BALANCE';
@@ -2413,10 +2430,10 @@ test('personal bank reconciliation UI uses Owner-only entity accounts and clears
   assert.match(html,/function bankAccountsForNature\(nature\)/);
   assert.match(html,/id="bs_nature"/);
   assert.match(html,/bankAccountsByNature/);
-  assert.match(html,/nature=bankNature/);
+  assert.match(html,/encodeURIComponent\(bankNature\)/);
   assert.match(html,/selected account is automatic/);
-  assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(nature\)/);
-  assert.match(html,/bankDraftId='';bankReconView=null;el\('bs_finalize'\)\.style\.display='none';el\('bs_discard'\)\.style\.display='none';host\.innerHTML=ReconciliationStatus\.bankSaved\(d\)/);
+  assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
+  assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent=d\.balanceReconciled\?/);
   assert.match(html,/Reconciliation history/);
   assert.match(html,/Statement period: /);
   assert.match(html,/Finalized: /);
