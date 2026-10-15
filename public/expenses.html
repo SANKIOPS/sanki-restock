@@ -78,6 +78,9 @@
     .hint { font-size:11px; color:#9ca3af; margin-top:3px; }
     .inline-request { margin-top:8px; padding:10px; border:1px solid #dbe3ec; border-radius:9px; background:#f8fafc; }
     .inline-request .request-actions { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    .category-group-label { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:4px; }
+    .category-group-label label { margin:0; }
+    #spendingGroupFields[hidden] { display:none; }
     .payment-choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .payment-choice label { display:flex; align-items:center; gap:8px; min-height:44px; margin:0; padding:10px 12px; border:1px solid #d1d5db; border-radius:8px; background:#fff; text-transform:none; letter-spacing:0; font-size:13px; cursor:pointer; }
     .payment-choice input { width:18px; height:18px; min-width:18px; margin:0; padding:0; accent-color:var(--blue); }
@@ -240,8 +243,14 @@
     <p class="sub">Create an approved category without leaving the Spending dashboard. It will be available everywhere expenses are categorized.</p>
     <div class="grid">
       <div class="fld full"><label>Category name</label><input id="spendingCategoryName" placeholder="Enter new category name" maxlength="120"></div>
-      <div class="fld"><label>Group</label><select id="spendingCategoryGroup"></select></div>
+      <div class="fld"><div class="category-group-label"><label for="spendingCategoryGroup">Group</label><button type="button" class="btn mini ghost" id="spendingCategoryAddGroup" aria-controls="spendingGroupFields" aria-expanded="false">＋ Add group</button></div><select id="spendingCategoryGroup"></select></div>
       <div class="fld"><label>Type</label><select id="spendingCategoryType"></select></div>
+      <div class="fld full inline-request" id="spendingGroupFields" hidden>
+        <label for="spendingGroupName">New group name</label><input id="spendingGroupName" placeholder="Enter new group name" maxlength="120" autocomplete="off">
+        <p class="hint">Saved groups are shared wherever expense categories are managed. This will not create a category or change any expense.</p>
+        <div class="request-actions"><button type="button" class="btn mini primary" id="spendingGroupSave">Save group</button><button type="button" class="btn mini ghost" id="spendingGroupCancel">Cancel group</button></div>
+        <div id="spendingGroupMsg" class="msg" role="status" aria-live="polite"></div>
+      </div>
     </div>
     <div id="spendingCategoryMsg" class="msg" role="status" aria-live="polite"></div>
     <div class="row-actions"><button type="button" class="btn primary" id="spendingCategorySave">Add category</button><button type="button" class="btn ghost" id="spendingCategoryCancel">Cancel</button></div>
@@ -269,7 +278,7 @@
     <div id="payCouponWrap" style="display:none;margin:12px 0;padding:12px;background:#eef8f2;border:1px solid #b6d8c8;border-radius:10px"><div class="fld"><label for="payRefundCredit">Available credit with this merchant</label><select id="payRefundCredit"></select></div><div class="fld" style="margin-top:10px"><label for="payCouponAmount">Coupon / credit actually used ₹</label><input id="payCouponAmount" type="number" min="0.01" step="0.01"></div><p class="hint" id="payCouponHint">Credit settles the bill without a bank/cash movement. Only record the amount actually accepted by the merchant; coupon terms still apply.</p></div>
     <div class="fld" id="payAcctWrap"><label id="payAcctLabel">Pay from account</label><select id="payAcct"></select>
       <button type="button" class="btn mini ghost" id="payAddAcct" style="margin-top:7px">＋ Add paying account</button>
-      <button type="button" class="btn mini ghost" id="payClaimantSwitch" style="display:none;margin-top:7px">Paid personally by Arshpreet · 1919</button></div>
+      <button type="button" class="btn mini ghost" id="payClaimantSwitch" style="display:none;margin-top:7px">Paid personally by Arshpreet · 1919</button><div id="payFundingHint" class="hint" style="display:none" role="status"></div></div>
     <div class="grid" style="margin-top:10px">
       <div class="fld"><label id="payAmountLabel">Amount ₹</label><input type="number" id="payAmount" min="0.01" step="0.01"><div class="hint" id="payAmountHint" style="display:none"></div></div>
       <div class="fld"><label>Date</label><input type="date" id="payDate"></div>
@@ -1107,10 +1116,10 @@
         el('payAcctLabel').textContent='Credit card used';
         el('payAcct').innerHTML='<option value="">Select credit card used</option>'+cards.map(function(c){return '<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>';}).join('');
         el('payMsg').textContent=cards.length?'':'No credit card exists yet. Add one from the Credit cards section.';
-        return Promise.resolve(cards);
+        return Promise.resolve(cards).then(function(result){updateVendorPaymentFundingLabels();return result;});
       }
       el('payAcctLabel').textContent='Pay from account';
-      return populateVendorPayAccounts(nature,refreshIfEmpty);
+      return populateVendorPayAccounts(nature,refreshIfEmpty).then(function(result){updateVendorPaymentFundingLabels();return result;});
     }
     function vendorPayableGroups(expenses){var groups={};(expenses||[]).forEach(function(e){var key=String(e.vendor||'Unspecified vendor').trim().toLocaleLowerCase('en-IN'),g=groups[key]||(groups[key]={vendor:e.vendor||'Unspecified vendor',items:[],due:0});g.items.push(e);g.due+=Number(e.balanceDue||0);});return Object.values(groups).sort(function(a,b){return a.vendor.localeCompare(b.vendor,'en',{sensitivity:'base',numeric:true});}).map(function(g){if(g.items.length===1)return expenseCard(g.items[0]);return '<details class="claim-card"><summary><div class="claim-main"><div class="claim-desc">'+esc(g.vendor)+'<div class="claim-vendor">'+g.items.length+' approved bills grouped under this vendor</div></div><div class="claim-amount">'+fmt(g.due)+' due</div></div></summary><div class="claim-detail"><div class="claim-list">'+g.items.sort(function(a,b){return String(a.date+a.id).localeCompare(String(b.date+b.id));}).map(expenseCard).join('')+'</div></div></details>';}).join('');}
     function procurementPayableCard(e){
@@ -1120,18 +1129,58 @@
     window.setMediator=function(current){var name=prompt('Logistics mediator / payee name:',current||'');if(!name||!name.trim())return;api('/api/expenses/procurement-payables/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediator:name.trim()})}).then(function(d){if(d.success){setMsg('Purchase mediator updated.',true);loadPendingPayments();}else setMsg(d.error||'Could not update mediator.',false);});};
     function dateDaysAgo(days){var d=new Date(Date.now()+5.5*3600*1000-(days-1)*86400000);return d.toISOString().slice(0,10);}
     function refreshSpendingCategoryList(){var list=el('sd_category_list');if(list)list.innerHTML=(cfg.ledgers||[]).map(function(l){return '<option value="'+esc(l.name)+'" label="'+esc(l.group||'')+'">';}).join('');}
+    var spendingGroupGeneration=0,spendingGroupSaving=false;
+    function refreshSpendingGroupChoices(selected){var current=selected||el('spendingCategoryGroup').value;el('spendingCategoryGroup').innerHTML=opts(cfg.categoryGroups||[],current);}
+    function setSpendingGroupSaving(saving){
+      spendingGroupSaving=saving;
+      ['spendingGroupSave','spendingGroupCancel','spendingGroupName','spendingCategorySave','spendingCategoryCancel','spendingCategoryAddGroup','spendingCategoryGroup'].forEach(function(id){el(id).disabled=saving;});
+    }
+    function resetSpendingGroupForm(){
+      spendingGroupGeneration++;setSpendingGroupSaving(false);
+      el('spendingGroupFields').hidden=true;el('spendingGroupName').value='';
+      el('spendingGroupMsg').className='msg';el('spendingGroupMsg').textContent='';
+      el('spendingCategoryAddGroup').setAttribute('aria-expanded','false');
+    }
     window.openSpendingCategoryDialog=function(){
       if(!cfg.canManageCategories)return;
+      resetSpendingGroupForm();
       el('spendingCategoryName').value='';
-      el('spendingCategoryGroup').innerHTML=opts(cfg.categoryGroups||[]);
+      refreshSpendingGroupChoices();
       el('spendingCategoryType').innerHTML=opts(cfg.types,'variable');
       el('spendingCategoryMsg').className='msg';el('spendingCategoryMsg').textContent='';
       el('spendingCategoryDlg').showModal();
       setTimeout(function(){el('spendingCategoryName').focus();},0);
     };
     el('spendingCategoryCancel').addEventListener('click',function(){el('spendingCategoryDlg').close();});
+    el('spendingCategoryDlg').addEventListener('cancel',function(event){if(spendingGroupSaving)event.preventDefault();});
+    el('spendingCategoryDlg').addEventListener('close',function(){if(!el('spendingCategoryDlg').open)resetSpendingGroupForm();});
+    el('spendingCategoryAddGroup').addEventListener('click',function(){
+      if(!cfg.canManageCategories||spendingGroupSaving||el('spendingCategorySave').disabled)return;
+      resetSpendingGroupForm();el('spendingGroupFields').hidden=false;
+      el('spendingCategoryAddGroup').setAttribute('aria-expanded','true');el('spendingGroupName').focus();
+    });
+    el('spendingGroupCancel').addEventListener('click',function(){if(!spendingGroupSaving){resetSpendingGroupForm();el('spendingCategoryAddGroup').focus();}});
+    el('spendingGroupSave').addEventListener('click',function(){
+      if(!cfg.canManageCategories||spendingGroupSaving)return;
+      var name=el('spendingGroupName').value.trim(),message=el('spendingGroupMsg');
+      if(!name||name.length>120){message.className='msg err';message.textContent='Enter a group name (up to 120 characters).';return;}
+      var generation=++spendingGroupGeneration;setSpendingGroupSaving(true);
+      message.className='msg';message.textContent='Saving group…';
+      api('/api/expenses/category-groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})}).then(function(d){
+        if(!d.success)throw new Error(d.error||'Could not add group.');
+        if(generation!==spendingGroupGeneration)return;
+        return loadConfig().catch(function(){throw new Error('The group was saved, but the list could not refresh. Retry to select the existing group.');}).then(function(){
+          if(generation!==spendingGroupGeneration)return;
+          refreshSpendingGroupChoices(d.group);refreshSpendingCategoryList();
+          el('spendingGroupFields').hidden=true;el('spendingGroupName').value='';
+          el('spendingCategoryAddGroup').setAttribute('aria-expanded','false');
+          el('spendingCategoryMsg').className='msg ok';el('spendingCategoryMsg').textContent=d.already?'This group already exists and is now selected.':'Group added and selected. You can now add the category.';
+        });
+      }).catch(function(error){if(generation!==spendingGroupGeneration)return;message.className='msg err';message.textContent=error&&error.message||'Could not add group. Please retry.';}).finally(function(){if(generation===spendingGroupGeneration)setSpendingGroupSaving(false);});
+    });
+    el('spendingGroupName').addEventListener('keydown',function(event){if(event.key==='Enter'){event.preventDefault();el('spendingGroupSave').click();}});
     el('spendingCategorySave').addEventListener('click',function(){
-      if(!cfg.canManageCategories)return;
+      if(!cfg.canManageCategories||spendingGroupSaving)return;
       var btn=this,name=el('spendingCategoryName').value.trim(),message=el('spendingCategoryMsg');
       if(!name){message.className='msg err';message.textContent='Enter a category name.';return;}
       btn.disabled=true;message.className='msg';message.textContent='Saving…';
@@ -1326,6 +1375,15 @@
       el('paySettlementMode').value='money';el('paySettlementWrap').style.display='none';el('payCouponWrap').style.display='none';el('payCouponAmount').value='';el('payRefundCredit').innerHTML='';
       ['payAcctWrap','payTypeWrap','payProofWrap'].forEach(function(id){el(id).style.display='';});
       el('payAcct').disabled=false;el('payNote').required=false;el('payNoteLabel').textContent='Note (optional)';el('payAmount').oninput=null;el('payAmount').min='0.01';el('payAmountLabel').textContent='Amount ₹';
+      el('payFundingHint').style.display='none';el('payFundingHint').textContent='';
+    }
+    function updateVendorPaymentFundingLabels(){
+      var hint=el('payFundingHint');
+      if(payMode!=='vendor'){hint.style.display='none';hint.textContent='';return;}
+      var amount=Number(el('payAmount').value)||0,owner=el('payType').value==='Credit'?'':(cfg.claimantAccountOwners||{})[el('payAcct').value],person=owner?owner.charAt(0).toUpperCase()+owner.slice(1):'';
+      hint.style.display=owner&&amount>0?'':'none';
+      hint.textContent=owner?'This records '+person+'’s personal payment to the vendor. Any reimbursement is tracked to '+person+'; no company bank account is deducted.':'';
+      el('payProofLabel').textContent=amount===0?'Payment proof not required — non-cash settlement':owner?person+' → vendor personal payment proof — required':'Company payment proof — required';
     }
     function selectedPaymentBills(){return Array.prototype.map.call(document.querySelectorAll('.batch-expense:checked'),function(x){return {due:Number(x.getAttribute('data-due'))||0,date:x.getAttribute('data-date')||''};});}
     function selectedPaymentCredit(){var key=el('payRefundCredit').value;return payRefundCredits.find(function(c){return expensePaymentCredits.key(c)===key;});}
@@ -1352,7 +1410,7 @@
       var bankPayment=Number(el('payAmount').value)||0,newAdvance=Math.max(0,Math.round((bankPayment-net)*100)/100),summary=el('payCreditSummary');
       if(summary)summary.textContent=state.error||( 'Selected bills '+fmt(gross)+(coupon?' · Coupon / merchant credit '+fmt(state.couponAmount):' · Existing vendor advance '+fmt(creditApplied))+' · Bank/cash/card payment '+fmt(bankPayment)+(mode==='credit'&&net>0?' · Still unpaid '+fmt(net):'')+(newAdvance?' · New vendor advance (money) '+fmt(newAdvance):''));
       var credit=selectedPaymentCredit();el('payCouponHint').textContent='Credit settles the bill without a bank/cash movement. Only record what the merchant accepted; coupon terms still apply.'+(coupon&&credit?' After this use: '+fmt(state.remainingCredit)+' credit remains.':'');
-      el('payProofWrap').style.display=coupon&&bankPayment===0?'none':'';el('payProofLabel').textContent=bankPayment===0?'Payment proof not required — non-cash settlement':'Company payment proof — required';
+      el('payProofWrap').style.display=coupon&&bankPayment===0?'none':'';updateVendorPaymentFundingLabels();
       el('payGo').textContent=coupon?(bankPayment>0?'Save credit + payment':'Apply merchant credit'):(bankPayment===0?'Apply vendor advance':(boxes.length>1?'Pay selected together':'Save payment'));
       el('payGo').disabled=paySubmitting||!payCandidatesReady||!!state.error||(coupon&&!el('payNote').value.trim())||(bankPayment>0&&!payUrls.length)||(bankPayment===0&&!coupon&&!creditApplied);
     }
@@ -1444,6 +1502,7 @@
     el('payCouponAmount').addEventListener('input',function(){updateVendorPaymentSelection(true);});
     el('payDate').addEventListener('change',function(){if(payMode==='vendor'){renderPaymentCreditOptions(false);updateVendorPaymentSelection(true);}});
     el('payNote').addEventListener('input',function(){if(payMode==='vendor')updateVendorPaymentSelection(false);});
+    el('payAcct').addEventListener('change',updateVendorPaymentFundingLabels);
     ['input','change'].forEach(function(event){el('payDlg').addEventListener(event,function(){if(!paySubmitting)payRequestId=newVendorPaymentRequest();});});
     el('payType').addEventListener('change',function(){
       if(payMode!=='vendor'&&payMode!=='procurement')return;
@@ -1455,7 +1514,7 @@
       if(!name||!name.trim()) return;
       api('/api/expenses/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim()})}).then(function(d){
         if(!d.success){el('payMsg').textContent=d.error||'Could not add account.';return;}
-        loadConfig().then(function(){el('payAcct').innerHTML=opts(cfg.accounts,d.account);el('payAcct').value=d.account;el('payMsg').textContent='Account added and selected.';});
+        loadConfig().then(function(){el('payAcct').innerHTML=opts(cfg.accounts,d.account);el('payAcct').value=d.account;updateVendorPaymentFundingLabels();el('payMsg').textContent='Account added and selected.';});
       });
     });
     el('payFile').addEventListener('change', function(){
