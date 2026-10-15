@@ -6,6 +6,7 @@ const { calculateReconciliationOpening, finalizedMovementCoverageIds, pendingCar
 const { recoverReversalSourceMetadata } = require('./reconciliation-source-metadata');
 const { reconciliationReminderAttention } = require('./reconciliation-reminder-attention');
 const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
+const { vendorSearchRank, compareVendorSearch } = require('./vendor-ledger-search');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -39,6 +40,7 @@ const { registerPaytmReports } = require('./paytm-reports-routes');
 const expenseRefunds = require('./expense-refunds');
 const expenseLoans = require('./expense-loans');
 const expenseRefundRoutes = require('./expense-refunds-routes');
+const { expenseFinancialLock } = require('./expense-financial-lock');
 const { LINK_TOLERANCE_CENTS, transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements, matchPayoutBank, reconciliationStatus: paytmReconciliationStatus } = require('./paytm-accounting');
 const { roundingReview, approvedBaseAmount } = require('./paytm-rounding');
 const { shopifyClient } = require('./shopify-client');
@@ -507,27 +509,27 @@ function applyOwnerConfirmedAxis3645Cases(s) {
   return changed;
 }
 function vendorBalanceForNames(s,nature,names){
-  const n=normalizedNature(nature),keys=new Set([].concat(names||[]).map(x=>String(x||'').trim().toLowerCase()).filter(Boolean));let billed=0,paid=0,count=0;
-  Object.values(s.expenses||{}).forEach(e=>{if(normalizedNature(e.nature)!==n||!keys.has(String(e.vendor||'').trim().toLowerCase())||!['approved','partially_paid','paid'].includes(e.status))return;const refunds=expenseRefunds.expenseTotals(s,e.id);billed+=num(e.amount)-refunds.billCredit;paid+=num(e.paidAmount)-refunds.refunded;count+=1;});
-  (s.vendorOpeningPayables||[]).forEach(e=>{if(normalizedNature(e.nature)!==n||!keys.has(String(e.vendor||'').trim().toLowerCase()))return;billed+=num(e.amount);paid+=num(e.paidAmount);count+=1;});
-  (s.vendorAdvances||[]).forEach(e=>{if(e.accountingExcluded||normalizedNature(e.nature)!==n||!keys.has(String(e.vendor||'').trim().toLowerCase()))return;paid+=Math.max(0,num(e.remainingAmount));count+=1;});
+  const n=normalizedNature(nature),keys=new Set([].concat(names||[]).map(sharedVendorIdentityKey).filter(Boolean));let billed=0,paid=0,count=0;
+  Object.values(s.expenses||{}).forEach(e=>{if(normalizedNature(e.nature)!==n||!keys.has(sharedVendorIdentityKey(e.vendor))||!['approved','partially_paid','paid'].includes(e.status))return;const refunds=expenseRefunds.expenseTotals(s,e.id);billed+=num(e.amount)-refunds.billCredit;paid+=num(e.paidAmount)-refunds.refunded;count+=1;});
+  (s.vendorOpeningPayables||[]).forEach(e=>{if(normalizedNature(e.nature)!==n||!keys.has(sharedVendorIdentityKey(e.vendor)))return;billed+=num(e.amount);paid+=num(e.paidAmount);count+=1;});
+  (s.vendorAdvances||[]).forEach(e=>{if(e.accountingExcluded||normalizedNature(e.nature)!==n||!keys.has(sharedVendorIdentityKey(e.vendor)))return;paid+=Math.max(0,num(e.remainingAmount));count+=1;});
   return{billed:round0(billed),paid:round0(paid),outstanding:round0(billed-paid),count};
 }
 function mergeVendorRecords(s,nature,sourceNames,targetName,options){
-  const n=normalizedNature(nature),target=String(targetName||'').trim(),targetKey=target.toLowerCase(),sources=Array.from(new Set([].concat(sourceNames||[]).map(x=>String(x||'').trim()).filter(x=>x&&x.toLowerCase()!==targetKey))),sourceKeys=new Set(sources.map(x=>x.toLowerCase())),master=vendorMasterForNature(s,n),before=vendorBalanceForNames(s,n,[target].concat(sources)),changedExpenses=[],changedOpeningPayables=[],changedAdvances=[],changedDraftResolutions=[];
+  const n=normalizedNature(nature),target=cleanVendorName(targetName),targetKey=sharedVendorIdentityKey(target),sources=Array.from(new Set([].concat(sourceNames||[]).map(cleanVendorName).filter(x=>x&&sharedVendorIdentityKey(x)!==targetKey))),sourceKeys=new Set(sources.map(sharedVendorIdentityKey)),sameSource=value=>sourceKeys.has(sharedVendorIdentityKey(value)),master=vendorMasterForNature(s,n),before=vendorBalanceForNames(s,n,[target].concat(sources)),changedExpenses=[],changedOpeningPayables=[],changedAdvances=[],changedDraftResolutions=[];
   if(!target)return{success:false,error:'Target vendor name is required.'};
-  const sourceLedgers=sources.map(name=>master[name.toLowerCase()]).filter(Boolean),existingTarget=master[targetKey];master[targetKey]=existingTarget||{name:target,notes:''};master[targetKey].name=target;
-  const notes=Array.from(new Set([master[targetKey].notes].concat(sourceLedgers.map(x=>x.notes)).map(x=>String(x||'').trim()).filter(Boolean)));master[targetKey].notes=notes.join(' · ');
-  Object.values(s.expenses||{}).forEach(e=>{if(normalizedNature(e.nature)===n&&sourceKeys.has(String(e.vendor||'').trim().toLowerCase())){changedExpenses.push(e.id);e.vendor=target;}});
+  const sourceLedgers=Object.values(master).filter(record=>sameSource(record&&record.name)),targetLedgers=Object.entries(master).filter(([,record])=>sharedVendorIdentityKey(record&&record.name)===targetKey);master[targetKey]=mergeVendorMasterMetadata(sourceLedgers.concat(targetLedgers.map(([,record])=>record)),target);
+  targetLedgers.forEach(([key])=>{if(key!==targetKey)delete master[key];});
+  Object.values(s.expenses||{}).forEach(e=>{if(normalizedNature(e.nature)===n&&sameSource(e.vendor)){changedExpenses.push(e.id);e.vendor=target;}});
   expenseRefunds.records(s).filter(r=>r.nature===n).forEach(r=>{
-    if(sourceKeys.has(String(r.vendor||'').toLowerCase())){r.originalVendor=r.originalVendor||r.vendor;r.vendor=target;}
-    (r.components||[]).forEach(c=>{if(sourceKeys.has(String(c.issuer||'').toLowerCase())){c.originalIssuer=c.originalIssuer||c.issuer;c.issuer=target;}});
+    if(sameSource(r.vendor)){r.originalVendor=r.originalVendor||r.vendor;r.vendor=target;}
+    (r.components||[]).forEach(c=>{if(sameSource(c.issuer)){c.originalIssuer=c.originalIssuer||c.issuer;c.issuer=target;}});
   });
-  (s.vendorAdvances||[]).filter(a=>normalizedNature(a.nature)===n&&a.creditOnly&&sourceKeys.has(String(a.issuer||'').toLowerCase())).forEach(a=>{a.originalIssuer=a.originalIssuer||a.issuer;a.issuer=target;});
-  (s.vendorOpeningPayables||[]).forEach(e=>{if(normalizedNature(e.nature)===n&&sourceKeys.has(String(e.vendor||'').trim().toLowerCase())){changedOpeningPayables.push(e.id);e.vendor=target;}});
-  (s.vendorAdvances||[]).forEach(e=>{if(normalizedNature(e.nature)===n&&sourceKeys.has(String(e.vendor||'').trim().toLowerCase())){changedAdvances.push(e.id);e.vendor=target;}});
-  Object.values(s.bankReconciliationDrafts||{}).filter(d=>!d.originalStatementPeriod).forEach(d=>{if(normalizedNature(d.nature)!==n)return;Object.entries(d.resolutions||{}).forEach(([rowId,r])=>{if(sourceKeys.has(String(r.vendor||'').trim().toLowerCase())){r.vendor=target;changedDraftResolutions.push({draftId:d.id,rowId});}});});
-  sources.forEach(name=>{const key=name.toLowerCase();if(master[key])delete master[key];});
+  (s.vendorAdvances||[]).filter(a=>normalizedNature(a.nature)===n&&a.creditOnly&&sameSource(a.issuer)).forEach(a=>{a.originalIssuer=a.originalIssuer||a.issuer;a.issuer=target;});
+  (s.vendorOpeningPayables||[]).forEach(e=>{if(normalizedNature(e.nature)===n&&sameSource(e.vendor)){changedOpeningPayables.push(e.id);e.vendor=target;}});
+  (s.vendorAdvances||[]).forEach(e=>{if(normalizedNature(e.nature)===n&&sameSource(e.vendor)){changedAdvances.push(e.id);e.vendor=target;}});
+  Object.values(s.bankReconciliationDrafts||{}).filter(d=>!d.originalStatementPeriod).forEach(d=>{if(normalizedNature(d.nature)!==n)return;Object.entries(d.resolutions||{}).forEach(([rowId,r])=>{if(sameSource(r.vendor)){r.vendor=target;changedDraftResolutions.push({draftId:d.id,rowId});}});});
+  Object.entries(master).forEach(([key,record])=>{if(sameSource(record&&record.name))delete master[key];});
   const after=vendorBalanceForNames(s,n,[target]),result={success:true,nature:n,targetName:target,sourceNames:sources,updatedExpenses:changedExpenses.length,updatedOpeningPayables:changedOpeningPayables.length,updatedAdvances:changedAdvances.length,updatedDraftResolutions:changedDraftResolutions.length,changedExpenses,changedOpeningPayables,changedAdvances,changedDraftResolutions,before,after};
   if(!(options&&options.skipAudit))sources.forEach(sourceName=>audit(s,options&&options.req||null,'VENDOR_MERGED','vendor',sourceName,{user:options&&options.user,device:options&&options.device,nature:n,before:{source:sourceName,target,balance:before},after:{name:target,linkedExpenses:changedExpenses,balance:after},note:options&&options.note||'Vendor aliases consolidated without changing transaction amounts, dates, references, proofs or payment accounts'}));
   return result;
@@ -1295,7 +1297,28 @@ function telegramResolveAccount(nature,requested){const q=String(requested||'').
 function telegramResolveTransferAccount(requested,preferredNature){const raw=String(requested||'').trim(),tag=raw.match(/^(SANKI|SAMAST|PERSONAL)\s+(.+)$/i),explicit=tag&&normalizedNature(tag[1]),q=String(tag?tag[2]:raw).trim().toLowerCase(),digits=q.replace(/\D/g,''),matches=[];NATURES.forEach(nature=>transferAccountsForNature(nature).forEach(account=>{if(account.toLowerCase()===q||(digits&&account.replace(/\D/g,'').endsWith(digits)))matches.push({nature,account});}));const wanted=explicit||preferredNature&&normalizedNature(preferredNature),scoped=wanted?matches.filter(x=>x.nature===wanted):matches;return scoped.length===1?scoped[0]:null;}
 function telegramRecordTransfer(actor,body){const b=body||{},s=loadStore();let from=telegramResolveTransferAccount(b.fromAccount),to=telegramResolveTransferAccount(b.toAccount);if(from&&!to)to=telegramResolveTransferAccount(b.toAccount,from.nature);if(to&&!from)from=telegramResolveTransferAccount(b.fromAccount,to.nature);const amount=num(b.amount),proof=String(b.proof||'').trim();if(!from||!to)return{success:false,error:'One account was not recognized or is ambiguous. Add SANKI, SAMAST or PERSONAL before a shared account when needed.'};if(from.nature===to.nature&&from.account.toLowerCase()===to.account.toLowerCase())return{success:false,error:'Source and destination accounts must be different.'};if(!(amount>0))return{success:false,error:'Transfer amount must be greater than 0.'};if(!proof)return{success:false,error:'Transfer proof is required.'};const classification=String(b.classification||(from.nature===to.nature?'internal_transfer':'inter_entity_loan'));s.transferSeq=(s.transferSeq||0)+1;const now=new Date().toISOString(),transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:from.nature,fromNature:from.nature,toNature:to.nature,classification,fromAccount:from.account,toAccount:to.account,amount,date:String(b.date||now.slice(0,10)).slice(0,10),proof,note:String(b.note||'').trim(),createdBy:String(actor||'admin'),createdAt:now,device:'Telegram'};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,null,'TRANSFER_RECORDED','transfer',transfer.id,{user:transfer.createdBy,device:'Telegram',nature:from.nature,account:from.account,after:transfer});saveStore(s);return{success:true,transfer};}
 function telegramRecordNamitaTransfer(actor,body){const b=body||{},s=loadStore(),q=String(b.fromAccount||''),digits=q.replace(/\D/g,''),personal=companyAccountsForNature('PERSONAL'),personalMatches=personal.filter(a=>digits&&a.replace(/\D/g,'').endsWith(digits)),fromPersonal=personal.find(a=>a.toLowerCase()===q.toLowerCase())||(personalMatches.length===1?personalMatches[0]:''),fallback=telegramResolveTransferAccount(q),from=fromPersonal?{nature:'PERSONAL',account:fromPersonal}:fallback,toAccount=/cash/i.test(String(b.toAccount||''))?'Namita Cash':'Namita 5464',amount=num(b.amount),proof=String(b.proof||'').trim();if(!from)return{success:false,error:'The source account was not recognized.'};if(!(amount>0))return{success:false,error:'Transfer amount must be greater than 0.'};if(!proof)return{success:false,error:'Transfer proof is required.'};s.transferSeq=(s.transferSeq||0)+1;const now=new Date().toISOString(),classification=from.nature==='PERSONAL'?'internal_transfer':'owner_withdrawal',transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:from.nature,fromNature:from.nature,toNature:'PERSONAL',classification,fromAccount:from.account,toAccount,amount,date:String(b.date||now.slice(0,10)).slice(0,10),proof,note:String(b.note||'Namita funds').trim(),createdBy:String(actor||'owner'),createdAt:now,device:'Telegram'};s.transfers=Array.isArray(s.transfers)?s.transfers:[];s.transfers.push(transfer);audit(s,null,'TRANSFER_RECORDED','transfer',transfer.id,{user:transfer.createdBy,device:'Telegram',nature:from.nature,account:from.account,after:transfer});saveStore(s);return{success:true,transfer};}
-function telegramApproveExpense(id,actor,changes){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};const before=JSON.parse(JSON.stringify(e)),c=changes||{};['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}if(c.nature)e.nature=normalizedNature(c.nature);if(e.ledger&&(e.ledger!==before.ledger||normalizedNature(e.nature)!==normalizedNature(before.nature))&&sankiCategories.active(s)&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase()))return{success:false,error:'Select an approved subcategory.',needsCategory:true,expense:e};if(e.ledger&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase())){s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};}const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};e.vendor=registerVendorForNature(s,e.nature,e.vendor,{notes:''});e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';if(e.paidAlready)e.reimbursementStatus='pending';e.approvedAt=new Date().toISOString();e.approvedBy=actor;audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};}
+function telegramApproveExpense(id,actor,changes){
+  const s=loadStore(),e=s.expenses[id];
+  if(!e)return{success:false,error:'Expense not found.'};
+  if(e.status!=='pending')return{success:false,error:'This expense is already '+e.status+'.',expense:e};
+  const before=JSON.parse(JSON.stringify(e)),c=changes||{},lock=expenseFinancialLock(s,e,{blockedReferences:unpayBlockedReferences(s)});
+  if(lock.locked&&reconciledExpensePayloadChanged(e,c))return{success:false,error:'This expense has a reconciled payment. Its amount, date and payment details are locked for every role. Correct only its descriptive details in the app.',appRequired:true,expense:e};
+  ['particulars','vendor','ledger','type','paymentType'].forEach(k=>{if(c[k]!=null&&String(c[k]).trim())e[k]=String(c[k]).trim();});
+  if(c.amount!=null&&num(c.amount)>0){e.amount=num(c.amount);e.requestedAmount=e.isInstallment?Math.min(num(e.requestedAmount)||e.amount,e.amount):e.amount;}
+  if(c.nature)e.nature=normalizedNature(c.nature);
+  if(e.ledger&&(e.ledger!==before.ledger||normalizedNature(e.nature)!==normalizedNature(before.nature))&&sankiCategories.active(s)&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase()))return{success:false,error:'Select an approved subcategory.',needsCategory:true,expense:e};
+  if(e.ledger&&!pickableLedgers(s,e.nature).some(x=>x.name.toLowerCase()===e.ledger.toLowerCase()))s.customLedgers[e.ledger]={name:e.ledger,type:TYPES.includes(e.type)?e.type:'variable'};
+  const changed=['nature','particulars','vendor','ledger','type','paymentType','amount','requestedAmount'].some(k=>JSON.stringify(before[k])!==JSON.stringify(e[k]));
+  if(changed)audit(s,null,'EDITED','expense',id,{user:actor,device:'Telegram',nature:e.nature,before,after:e,note:'Edited during Telegram approval'});
+  if(e.bill==='none'||!e.billPhoto)return{success:false,error:'This expense needs bill-exception review in the app before approval.',appRequired:true,expense:e};
+  if(!e.vendor)return{success:false,error:'Vendor is required.',expense:e};
+  if(!e.ledger)return{success:false,error:'Add a category before approving.',needsCategory:true,expense:e};
+  e.vendor=registerVendorForNature(s,e.nature,e.vendor,{notes:''});e.status=num(e.paidAmount)>=num(e.amount)?'paid':num(e.paidAmount)>0?'partially_paid':'approved';
+  if(e.paidAlready)e.reimbursementStatus='pending';
+  e.approvedAt=new Date().toISOString();e.approvedBy=actor;
+  audit(s,null,'APPROVED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,approvedBy:actor,amount:e.amount}});
+  saveStore(s);notifyExpenseUser(e,'approved');return{success:true,expense:e};
+}
 function telegramRejectExpense(id,actor,reason){const s=loadStore(),e=s.expenses[id];if(!e)return{success:false,error:'Expense not found.'};if(e.status!=='pending')return{success:false,error:'Only a pending expense can be rejected.'};e.status='rejected';e.rejectReason=String(reason||'Rejected from Telegram');e.rejectedAt=new Date().toISOString();e.rejectedBy=actor;audit(s,null,'REJECTED','expense',id,{user:actor,device:'Telegram',nature:e.nature,after:{status:e.status,reason:e.rejectReason}});saveStore(s);notifyExpenseUser(e,'rejected');return{success:true,expense:e};}
 function telegramRecordPayment(id,actor,b){const s=loadStore(),e=s.expenses[id],body=b||{};if(!e)return{success:false,error:'Expense not found.'};if(!['approved','partially_paid'].includes(e.status)||e.paidAlready)return{success:false,error:'This expense is not awaiting a vendor payment.'};const proof=String(body.proof||'');if(!proof)return{success:false,error:'Payment screenshot is required.'};const account=telegramResolveAccount(e.nature,body.account);if(!account)return{success:false,error:'Paying account was not recognized.',needsAccount:true};const issues=reconciliationIssues(s,normalizedNature(e.nature),account);if(issues.length)return{success:false,error:'This account has a reconciliation warning. Complete this payment in the app.',appRequired:true};const outstanding=expenseRefunds.expenseDue(s,e),amount=body.amount!=null?num(body.amount):outstanding;if(!(amount>0)||amount>outstanding)return{success:false,error:'Payment must be between ₹0 and '+outstanding+'.'};e.account=account;e.paidAmount=num(e.paidAmount)+amount;e.paymentProof=proof;e.payments=Array.isArray(e.payments)?e.payments:[];e.payments.push({id:nextExpensePaymentId(s,e),amount,date:String(body.date||indiaBusinessDate()).slice(0,10),account,paymentType:'UPI',proof,note:'Recorded through Telegram',paidBy:actor,paidAt:new Date().toISOString()});e.status=expenseRefunds.expenseDue(s,e)<=0?'paid':'partially_paid';e.paidAt=new Date().toISOString();e.paidBy=actor;audit(s,null,'PAYMENT_RECORDED','expense',id,{user:actor,device:'Telegram',nature:e.nature,account,paymentId:e.payments.at(-1).id,after:e.payments.at(-1)});saveStore(s);notifyExpenseUser(e,e.status==='paid'?'paid':'partially_paid',amount);return{success:true,expense:e,payment:e.payments.at(-1)};}
 // Runs an existing synchronous accounting route for a linked Telegram user.
@@ -2097,6 +2120,68 @@ router.post('/api/expenses', (req, res) => {
 });
 
 // ── Edit ─────────────────────────────────────────────────────────
+const EXPENSE_METADATA_FIELDS = new Set(['vendor','particulars','ledger','type','editReason']);
+function canEditExpenseMetadata(req,e) {
+  if(e.nonExpenseReimbursement||e.salaryAdvanceId)return false;
+  return isAdmin(req) || e.status==='pending' && (canApprove(req)||expenseBelongsToUser(req,e));
+}
+function decoratedEditableExpense(s,req,e,blockedReferences) {
+  const refs=blockedReferences||unpayBlockedReferences(s),lock=expenseFinancialLock(s,e,{blockedReferences:refs});
+  return expenseRefunds.decorateExpense(s,Object.assign({},e,{
+    canEditMetadata:!!s.expenses[e.id]&&canEditExpenseMetadata(req,e),
+    financialFieldsLocked:lock.locked,financialLockReason:lock.reason,
+    payments:(e.payments||[]).map(p=>Object.assign({},p,{unpayBlockedReason:expenseRefunds.hasSource(s,e.id)?'Reverse the linked refund before removing this payment.':unpayBlockedReason(e,p,refs)}))
+  }));
+}
+function reconciledExpensePayloadChanged(e,b) {
+  const lastCompany=(e.payments||[]).filter(p=>!p.personalFunds).at(-1),personal=(e.payments||[]).find(p=>p.personalFunds);
+  const expected=Object.assign({},e,{
+    requestedAmount:e.requestedAmount||e.amount,
+    paymentAccount:lastCompany&&lastCompany.account||e.account||'',
+    personalAccount:personal&&personal.account||'',
+    billPhoto:e.billPhoto||'',billPhotos:e.billPhotos||[e.billPhoto].filter(Boolean),qrPhoto:e.qrPhoto||'',
+    personalPaymentProof:e.purchasePaymentProof||'',personalPaymentProofs:e.purchasePaymentProofs||[e.purchasePaymentProof].filter(Boolean),
+    purchasePaymentProof:e.purchasePaymentProof||'',purchasePaymentProofs:e.purchasePaymentProofs||[e.purchasePaymentProof].filter(Boolean)
+  });
+  return Object.entries(b).some(([key,value])=>{
+    if(EXPENSE_METADATA_FIELDS.has(key))return false;
+    if(['amount','requestedAmount'].includes(key))return num(value)!==num(expected[key]);
+    if(['paidAlready','isInstallment'].includes(key))return(value===true||value==='true')!==!!expected[key];
+    if(key==='date')return String(value||'').slice(0,10)!==String(e.date||'').slice(0,10);
+    if(Array.isArray(value)||Array.isArray(expected[key]))return JSON.stringify(value||[])!==JSON.stringify(expected[key]||[]);
+    return String(value==null?'':value).trim()!==String(expected[key]==null?'':expected[key]).trim();
+  });
+}
+function editExpenseMetadata(s,req,e,b,editReason) {
+  const before=JSON.parse(JSON.stringify(e)),next=Object.assign({},e);
+  if(b.vendor!=null){
+    const vendor=String(b.vendor).trim();if(!vendor)return{status:400,error:'Vendor name is required.'};
+    next.vendor=vendor;
+  }
+  if(b.particulars!=null)next.particulars=String(b.particulars).trim();
+  if(b.type!=null){if(!TYPES.includes(b.type))return{status:400,error:'Select a valid expense type.'};next.type=b.type;}
+  if(b.ledger!=null){
+    const ledger=String(b.ledger).trim();if(!ledger)return{status:400,error:'Select an expense category.'};
+    if(ledger!==e.ledger&&!isAdmin(req))return{status:403,error:'Only Admin or Owner can assign or change the category.'};
+    if(ledger!==e.ledger&&!pickableLedgers(s,e.nature).some(l=>l.name.toLowerCase()===ledger.toLowerCase())){
+      if(sankiCategories.active(s))return{status:400,error:'Select an approved subcategory. Manage categories to add a new one.'};
+      if(!isOwner(req))return{status:403,error:'Only the Owner can create a new category. Choose an existing category.'};
+      s.customLedgers=s.customLedgers||{};s.customLedgers[ledger]={name:ledger,type:next.type||'variable'};
+    }
+    next.ledger=ledger;
+  }
+  if(next.vendor!==e.vendor&&canApprove(req))next.vendor=registerVendorForNature(s,e.nature,next.vendor,{});
+  const changes=['vendor','particulars','ledger','type'].filter(key=>next[key]!==e[key]).map(key=>({field:key,before:e[key]==null?'':e[key],after:next[key]==null?'':next[key]}));
+  if(!changes.length)return{changed:false};
+  // Descriptive corrections must never rebuild personal payments, reset
+  // reimbursement status, or touch reconciled statement snapshots.
+  for(const key of ['vendor','particulars','ledger','type'])e[key]=next[key];
+  e.auditHistory=Array.isArray(e.auditHistory)?e.auditHistory:[];
+  e.auditHistory.push({id:'EDIT-'+String(e.auditHistory.length+1).padStart(3,'0'),reason:editReason||'Pending expense correction',changes,editedBy:req.user&&req.user.username||'system',editedAt:new Date().toISOString()});
+  if(e.telegramNeedsReview)e.telegramNeedsReview=false;
+  audit(s,req,'EDITED','expense',e.id,{nature:e.nature,before,after:e,note:editReason||'Pending expense correction'});
+  return{changed:true};
+}
 // Single-segment POST paths that have their OWN handlers registered after this
 // param route — the ':id' pattern would otherwise swallow them. Fall through.
 const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'sale-allocation', 'receivables', 'vendors', 'custom-ledgers', 'upload', 'batch-pay', 'cash-reconciliations']);
@@ -2106,11 +2191,15 @@ router.post('/api/expenses/:id', (req, res, next) => {
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
   if (!canViewExpense(req, e)) return res.status(403).json({ success: false, error: normalizedNature(e.nature)==='PERSONAL'?'Only the Owner or the expense creator can view this PERSONAL record.':'You do not have access to this accounting entity.' });
+  if(e.nonExpenseReimbursement||e.salaryAdvanceId)return res.status(409).json({success:false,error:'This entry is generated by the salary/reimbursement workflow. Correct it in its source workflow rather than as a vendor expense.'});
   if (!canApprove(req) && (e.createdBy !== (req.user && req.user.username) || e.status !== 'pending')) {
     return res.status(403).json({ success: false, error: 'You can only edit your own pending expenses.' });
   }
   const b = req.body || {};
   const finalized = e.status !== 'pending';
+  const financialLock=expenseFinancialLock(s,e,{blockedReferences:unpayBlockedReferences(s)});
+  if(financialLock.locked&&reconciledExpensePayloadChanged(e,b))return res.status(409).json({success:false,error:'This expense has a reconciled payment. Its amount, date and payment details are locked for every role, including the Owner. Only vendor, particulars and category/type may be edited.',financialFieldsLocked:true,financialLockReason:financialLock.reason});
+  if(b.vendor!=null&&sharedVendorIdentityKey(b.vendor)!==sharedVendorIdentityKey(e.vendor)&&(e.vendorAdvanceApplications||[]).some(application=>!application.accountingExcluded&&num(application.amount)>0))return res.status(409).json({success:false,error:'This expense uses an existing vendor advance. Rename or merge the shared vendor ledger to correct its identity, or reverse the advance application in its source workflow before moving this bill to a different vendor. Particulars and category remain editable.'});
   if (expenseRefunds.hasSource(s,e.id)||expenseRefunds.hasCreditApplication(s,e.id)) {
     const lastCompany=(e.payments||[]).filter(p=>!p.personalFunds).at(-1),personal=(e.payments||[]).find(p=>p.personalFunds),accountingFields=['amount','date','nature','vendor','paidAlready','paymentType','fundedBy','account','isInstallment'];
     const changed=accountingFields.some(k=>b[k]!=null&&String(b[k])!==String(e[k]==null?(k==='paidAlready'||k==='isInstallment'?false:''):e[k]))
@@ -2122,6 +2211,12 @@ router.post('/api/expenses/:id', (req, res, next) => {
   if (finalized && !isAdmin(req)) return res.status(403).json({ success:false, error:'Only Owner or Admin can edit an approved or paid expense.' });
   const editReason = String(b.editReason || '').trim();
   if (finalized && !editReason) return res.status(400).json({ success:false, error:'Reason for editing an approved or paid expense is required.' });
+  if(financialLock.locked||!reconciledExpensePayloadChanged(e,b)){
+    const result=editExpenseMetadata(s,req,e,b,editReason);
+    if(result.error)return res.status(result.status).json({success:false,error:result.error});
+    if(result.changed)saveStore(s);
+    return res.json({success:true,expense:decoratedEditableExpense(s,req,e)});
+  }
   const beforeEdit = JSON.parse(JSON.stringify(e));
   const hasCompanyPayments=(e.payments||[]).some(p=>!p.personalFunds),hasReimbursements=(e.reimbursementPayments||[]).length>0||num(e.reimbursementAmount)>0;
   // A personally-paid amount is one accounting fact represented in the
@@ -2887,7 +2982,7 @@ router.get('/api/expenses/list', (req, res) => {
   const totalCount = list.length;
   if (limit) list = list.slice(0, limit);
   const blockedRefs=unpayBlockedReferences(s);
-  list=list.map(e=>expenseRefunds.decorateExpense(s,Object.assign({},e,{payments:(e.payments||[]).map(p=>Object.assign({},p,{unpayBlockedReason:expenseRefunds.hasSource(s,e.id)?'Reverse the linked refund before removing this payment.':unpayBlockedReason(e,p,blockedRefs)}))})));
+  list=list.map(e=>decoratedEditableExpense(s,req,e,blockedRefs));
   res.json({ success: true, expenses: list, totals, totalCount, hasMore: totalCount > list.length });
 });
 
@@ -3197,7 +3292,15 @@ router.get('/api/expenses/vendors', (req, res) => {
   }
   const books = {};
   cardExpenseRecords(s).forEach(e=>registerVendorForNature(s,e.nature,e.vendor,{tags:['Credit-card merchant']}));syncSharedVendorDirectory(s);
-  const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
+  const grossPaymentBatches=new Map((s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&x.batchPaymentId&&num(x.grossPaymentAmount)>0).map(x=>[x.batchPaymentId,x]));
+  // A descriptive vendor correction may move one paid bill to another ledger,
+  // but it must never move the original bank payment or its remaining advance.
+  // Keep the familiar one-gross-payment row while all allocations share a
+  // vendor; otherwise show the already-stored payment/advance allocations in
+  // their actual vendor books, without changing any financial source record.
+  const batchVendorIdentities=new Map(Array.from(grossPaymentBatches,([id,advance])=>[id,new Set([normalizedNature(advance.nature)+'|'+sharedVendorIdentityKey(advance.vendor)])]));
+  Object.values(s.expenses||{}).forEach(expense=>(expense.payments||[]).forEach(payment=>{if(payment.accountingExcluded||!batchVendorIdentities.has(payment.batchPaymentId))return;batchVendorIdentities.get(payment.batchPaymentId).add(normalizedNature(expense.nature)+'|'+sharedVendorIdentityKey(expense.vendor));}));
+  const splitGrossPaymentBatches=new Set(Array.from(batchVendorIdentities).filter(([,identities])=>identities.size>1).map(([id])=>id));
   const directory=s.vendorDirectory||{};
   const ensureBook=(n,name,metadata)=>{
     const sharedKey=sharedVendorIdentityKey(name),key=n+'|'+sharedKey,shared=directory[sharedKey]||{},saved=metadata||{},existing=books[key];
@@ -3206,13 +3309,16 @@ router.get('/api/expenses/vendors', (req, res) => {
   };
   const addLedgerEntry=(book,entry,entryType)=>{
     const baseParticulars=String(entry.particulars||entry.supplier||entry.ledger||entry.billNo||entry.id||'Vendor entry');
+    const storedExpense=(s.expenses||{})[entry.id]===entry,expenseId=storedExpense?String(entry.id):'',editableExpense=storedExpense&&canEditExpenseMetadata(req,entry);
     if(entryType==='Vendor advance'){
-      const gross=num(entry.grossPaymentAmount),isOverpayment=gross>0&&entry.batchPaymentId;
-      book.ledgerItems.push({nature:book.nature,date:String(entry.date||''),particulars:String(entry.note||(isOverpayment?'Payment to vendor':'Advance paid to vendor'))+(entry.account?' · '+entry.account:''),type:entry.creditOnly?'Refund credit':isOverpayment?'Payment':entryType,reference:String(entry.bankReference||entry.transactionReference||entry.paymentReference||entry.id||''),in:roundMoney(isOverpayment?gross:entry.amount),out:0,entryId:entry.id||'',kind:isOverpayment?'payment':'advance',order:20});
+      const gross=num(entry.grossPaymentAmount),isOverpayment=gross>0&&entry.batchPaymentId&&!splitGrossPaymentBatches.has(entry.batchPaymentId);
+      const proofs=proofList(entry.proofs,entry.proof);
+      book.ledgerItems.push({nature:book.nature,date:String(entry.date||''),particulars:String(entry.note||(isOverpayment?'Payment to vendor':'Advance paid to vendor'))+(entry.account?' · '+entry.account:''),type:entry.creditOnly?'Refund credit':isOverpayment?'Payment':entryType,reference:String(entry.bankReference||entry.transactionReference||entry.paymentReference||entry.id||''),in:roundMoney(isOverpayment?gross:entry.amount),out:0,entryId:entry.id||'',expenseId:'',paymentId:'',editableExpense:false,proof:proofs[0]||'',proofs,paymentProofAvailable:proofs.length>0,source:entry.source||'vendor_advance',kind:isOverpayment?'payment':'advance',order:20});
       return;
     }
-    book.ledgerItems.push({nature:book.nature,date:String(entry.date||''),particulars:baseParticulars,type:entryType,reference:String(entry.id||entry.billNo||''),in:0,out:roundMoney(entry.amount),entryId:entry.id||'',kind:'expense',source:entry.source||'',order:10});
-    (entry.payments||[]).forEach(payment=>{if(grossPaymentBatches.has(payment.batchPaymentId))return;book.ledgerItems.push({nature:book.nature,date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',kind:'payment',source:entry.source||'',order:20});});
+    const source=entry.source||(storedExpense?'expense':entryType==='Opening payable'?'opening_vendor_payable':'');
+    book.ledgerItems.push({nature:book.nature,date:String(entry.date||''),particulars:baseParticulars,type:entryType,reference:String(entry.id||entry.billNo||''),in:0,out:roundMoney(entry.amount),entryId:entry.id||'',expenseId,editableExpense,kind:'expense',source,order:10});
+    (entry.payments||[]).forEach(payment=>{if(grossPaymentBatches.has(payment.batchPaymentId)&&!splitGrossPaymentBatches.has(payment.batchPaymentId))return;const proofs=proofList(payment.proofs,payment.proof);book.ledgerItems.push({nature:book.nature,date:String(payment.date||entry.date||''),particulars:String(payment.note||('Payment for '+baseParticulars))+(payment.account?' · '+payment.account:''),type:payment.personalFunds?'Personal payment':'Payment',reference:String(payment.transactionReference||payment.bankReference||payment.reference||((entry.id||'')+'/'+(payment.id||'PAYMENT'))),in:roundMoney(payment.amount),out:0,entryId:entry.id||'',expenseId,paymentId:payment.id||'',editableExpense,proof:proofs[0]||'',proofs,paymentProofAvailable:proofs.length>0,kind:'payment',source,order:20});});
   };
   const natures=nature?[nature]:approvalNatures(req);
   natures.forEach(n=>{const master=vendorMasterForNature(s,n);Object.values(master).forEach(v=>ensureBook(n,v.name,v));});
@@ -3274,7 +3380,7 @@ router.get('/api/expenses/vendors', (req, res) => {
     });
     list=Object.values(sharedBooks).map(b=>{b.entities=Array.from(new Set(b.entities)).sort((a,c)=>a.localeCompare(c));b.entityBalances.sort((a,c)=>a.nature.localeCompare(c.nature));return finalizeBook(b);});
   }
-  list=list.filter(b=>(!category||b.ledgerTransactionCount>0)&&(!search||fuzzyIncludes(b.name,search)||(b.entities||[]).some(x=>fuzzyIncludes(x,search))||b.ledgerRows.some(x=>fuzzyIncludes(x.particulars,search)||fuzzyIncludes(x.type,search)||String(x.reference||'').toLowerCase().includes(search)||String(x.in||'').includes(search)||String(x.out||'').includes(search)))).sort((a,b)=>a.name.localeCompare(b.name));
+  list=list.filter(b=>(!category||b.ledgerTransactionCount>0)&&Number.isFinite(vendorSearchRank(b,search))).sort((a,b)=>compareVendorSearch(a,b,search));
   const totalDue=roundMoney(list.reduce((n,b)=>n+Math.max(0,num(b.ledgerClosingBalance)),0)),totalAdvance=roundMoney(list.reduce((n,b)=>n+Math.max(0,-num(b.ledgerClosingBalance)),0));
   res.json({ success: true, vendors: list, totalOutstanding: list.reduce((n, b) => n + b.outstanding, 0), totalDue, totalAdvance });
 });
@@ -3308,6 +3414,7 @@ router.post('/api/expenses/vendors/manage/edit', (req, res) => {
   syncSharedVendorDirectory(s);const oldKey=sharedVendorIdentityKey(oldName),newKey=sharedVendorIdentityKey(newName),current=(s.vendorDirectory||{})[oldKey];
   if(!current) return res.status(404).json({success:false,error:'Vendor ledger not found.'});
   if(newKey!==oldKey&&(s.vendorDirectory||{})[newKey]) return res.status(409).json({success:false,error:'That shared vendor already exists. Use Merge instead.'});
+  if(cardExpenseRecords(s).some(entry=>sharedVendorIdentityKey(entry.vendor)===oldKey))return res.status(409).json({success:false,error:'This vendor has credit-card statement-backed entries. Correct its merchant identity in the credit-card workflow before renaming this shared vendor; no vendor records were changed.'});
   const entities=(current.entities||[]).slice(),linked=[];
   Object.values(s.expenses||{}).forEach(e=>{if(sharedVendorIdentityKey(e.vendor)===oldKey){linked.push(e.id);e.vendor=newName;}});
   (s.vendorOpeningPayables||[]).forEach(x=>{if(sharedVendorIdentityKey(x.vendor)===oldKey)x.vendor=newName;});
@@ -3316,7 +3423,7 @@ router.post('/api/expenses/vendors/manage/edit', (req, res) => {
   Object.values(s.bankReconciliationDrafts||{}).forEach(d=>Object.values(d.resolutions||{}).forEach(r=>{if(sharedVendorIdentityKey(r.vendor)===oldKey)r.vendor=newName;}));
   vendorMasterPairs(s).forEach(([,master])=>{const records=Object.entries(master).filter(([,record])=>sharedVendorIdentityKey(record&&record.name)===oldKey);if(!records.length)return;records.forEach(([key])=>delete master[key]);master[newKey]=mergeVendorMasterMetadata(records.map(([,record])=>record),newName);});
   delete s.vendorDirectory[oldKey];syncSharedVendorDirectory(s);if(s.vendorDirectory[newKey])s.vendorDirectory[newKey].name=newName;
-  audit(s,req,'VENDOR_RENAMED','vendor',oldName,{nature:'ALL',before:{name:oldName,entities},after:{name:newName,entities,linkedExpenses:linked},note:'Renamed the shared vendor identity across every entity; transaction amounts and balances were preserved.'});
+  audit(s,req,'VENDOR_RENAMED','vendor',oldName,{nature:'ALL',before:{name:oldName,entities},after:{name:newName,entities,linkedExpenses:linked},note:'Renamed the shared vendor identity across every entity; transaction amounts and balances were preserved.'+(String(b.reason||'').trim()?' Reason: '+String(b.reason).trim():'')});
   saveStore(s);res.json({success:true,name:newName,updatedExpenses:linked.length,entities});
 });
 router.post('/api/expenses/vendors/manage/merge', (req, res) => {
@@ -3326,9 +3433,10 @@ router.post('/api/expenses/vendors/manage/merge', (req, res) => {
   if(!sourceName||!targetName||sourceKey===targetKey) return res.status(400).json({success:false,error:'Select two different vendor ledgers.'});
   if(!source) return res.status(404).json({success:false,error:'Source shared vendor not found.'});
   if(!target) return res.status(404).json({success:false,error:'Target shared vendor not found.'});
+  if(cardExpenseRecords(s).some(entry=>sharedVendorIdentityKey(entry.vendor)===sourceKey))return res.status(409).json({success:false,error:'The source vendor has credit-card statement-backed entries. Correct its merchant identity in the credit-card workflow before merging this shared vendor; no vendor records were changed.'});
   const entities=Array.from(new Set([].concat(source.entities||[],target.entities||[]))),sourceNames=Array.from(new Set([source.name].concat(source.aliases||[]))),results=[];
   entities.forEach(entity=>{const referenced=sourceNames.some(name=>vendorReferenceSummary(s,entity,name).total),master=vendorMasterForNature(s,entity),hasSource=Object.values(master).some(record=>sharedVendorIdentityKey(record&&record.name)===sourceKey);if(!hasSource&&!referenced)return;registerVendorForNature(s,entity,target.name,target);results.push(mergeVendorRecords(s,entity,sourceNames,target.name,{req,skipAudit:true}));});
-  syncSharedVendorDirectory(s);audit(s,req,'VENDOR_MERGED','vendor',source.name,{nature:'ALL',before:{source:source.name,entities:source.entities},after:{name:target.name,entities:(s.vendorDirectory[targetKey]||{}).entities},note:'Merged the shared vendor identity across every entity; transaction amounts, dates, references, proofs and payment accounts were preserved.'});
+  syncSharedVendorDirectory(s);audit(s,req,'VENDOR_MERGED','vendor',source.name,{nature:'ALL',before:{source:source.name,entities:source.entities},after:{name:target.name,entities:(s.vendorDirectory[targetKey]||{}).entities},note:'Merged the shared vendor identity across every entity; transaction amounts, dates, references, proofs and payment accounts were preserved.'+(String(b.reason||'').trim()?' Reason: '+String(b.reason).trim():'')});
   saveStore(s);res.json({success:true,name:target.name,sourceName:source.name,entities,updatedExpenses:results.reduce((sum,result)=>sum+num(result.updatedExpenses),0),results});
 });
 router.post('/api/expenses/vendors/manage/delete', (req, res) => {
@@ -3514,7 +3622,15 @@ router.patch('/api/expenses/ledger-entry',(req,res)=>{
   if(kind==='receipt'){record=(s.receipts||[]).find(x=>x.id===id);if(record&&!source)return res.status(400).json({success:false,error:'Receipt source is required.'});}
   else if(kind==='adjustment')record=(s.adjustments||[]).find(x=>x.id===id);
   else if(kind==='transfer')record=(s.transfers||[]).find(x=>x.id===id&&x.classification!=='money_exchange');
-  else if(['expense','personal_expense','reimbursement','reimbursement_received'].includes(kind)){const parts=id.split('/'),expense=s.expenses&&s.expenses[parts[0]],list=kind.startsWith('reimbursement')?'reimbursementPayments':'payments';record=expense&&(expense[list]||[]).find(x=>x.id===parts[1]);subjectType=list==='payments'?'expense_payment':'reimbursement';if(record)record.__expense=expense;}
+  else if(['expense','personal_expense','reimbursement','reimbursement_received'].includes(kind)){
+    const parts=id.split('/'),expense=s.expenses&&s.expenses[parts[0]],list=kind.startsWith('reimbursement')?'reimbursementPayments':'payments';
+    record=expense&&(expense[list]||[]).find(x=>x.id===parts[1]);subjectType=list==='payments'?'expense_payment':'reimbursement';
+    if(record){
+      const lock=expenseFinancialLock(s,expense,{blockedReferences:unpayBlockedReferences(s)});
+      if(lock.locked&&(amount!==num(record.amount)||date!==String(record.date||'').slice(0,10)))return res.status(409).json({success:false,error:'This expense has a reconciled payment. Its payment amounts and dates are locked for every role, including the Owner. Correct descriptive details through the expense editor.',financialFieldsLocked:true,financialLockReason:lock.reason});
+      record.__expense=expense;
+    }
+  }
   else if(kind==='receivable'){const parts=id.split('/'),receivable=s.receivables&&s.receivables[parts[0]];record=receivable&&(receivable.collections||[]).find(x=>x.id===parts[1]);subjectType='receivable_collection';}
   if(!record)return res.status(400).json({success:false,error:'This entry must be edited in its source module, or it no longer exists.'});
   if(expenseLoans.protectsMovement(s,id))return res.status(409).json({success:false,error:'Loan principal is protected. Use the loan register correction workflow; do not change a linked cash entry independently.'});
@@ -4644,7 +4760,15 @@ function correctLedgerMovementAmount(s,id,amount){
   const transfer=(s.transfers||[]).find(x=>x.id===id);if(transfer){const before=num(transfer.amount);transfer.amount=amount;return{type:'transfer',before,after:amount};}
   const adjustment=(s.adjustments||[]).find(x=>x.id===id);if(adjustment){const before=num(adjustment.amount),sign=before<0?-1:1;adjustment.amount=sign*amount;return{type:'adjustment',before:Math.abs(before),after:amount};}
   const receipt=(s.receipts||[]).find(x=>x.id===id);if(receipt){const before=num(receipt.amount);receipt.amount=amount;return{type:'receipt',before,after:amount};}
-  for(const expense of Object.values(s.expenses||{})){for(const payment of expense.payments||[]){if(expense.id+'/'+payment.id===id){const before=num(payment.amount);payment.amount=amount;return{type:'expense_payment',before,after:amount,expenseId:expense.id};}}for(const payment of expense.reimbursementPayments||[]){if(expense.id+'/'+payment.id===id){const before=num(payment.amount);payment.amount=amount;return{type:'reimbursement',before,after:amount,expenseId:expense.id};}}}
+  for(const expense of Object.values(s.expenses||{}))for(const [field,type] of [['payments','expense_payment'],['reimbursementPayments','reimbursement']])for(const payment of expense[field]||[]){
+    if(expense.id+'/'+payment.id!==id)continue;
+    const before=num(payment.amount);
+    if(before!==amount){
+      const lock=expenseFinancialLock(s,expense,{blockedReferences:unpayBlockedReferences(s)});
+      if(lock.locked)return{error:'This expense has a reconciled payment. Its payment amounts are locked for every role, including the Owner. Correct descriptive details through the expense editor.',financialFieldsLocked:true,financialLockReason:lock.reason};
+    }
+    payment.amount=amount;return{type,before,after:amount,expenseId:expense.id};
+  }
   for(const receivable of Object.values(s.receivables||{}))for(const collection of receivable.collections||[]){if(receivable.id+'/'+collection.id===id){const before=num(collection.amount);collection.amount=amount;return{type:'receivable_collection',before,after:amount,receivableId:receivable.id};}}
   return null;
 }
@@ -4656,7 +4780,7 @@ function setLedgerMovementExcluded(s,id,excluded,reason,user){
   for(const listName of ['adjustments','transfers','receipts','vendorAdvances']){const record=(s[listName]||[]).find(x=>x.id===id);if(record){record.accountingExcluded=!!excluded;record.accountingExclusion=excluded?stamp:null;return true;}}
   return false;
 }
-router.post('/api/expenses/bank-statements/correct-ledger-entry',(req,res)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId],amount=num(b.amount),reason=String(b.reason||'').trim();if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot edit this reconciliation.'});if(!(amount>0)||!reason)return res.status(400).json({success:false,error:'A corrected amount and reason are required.'});const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId);if(!row||row.status!=='amount_mismatch'||!row.app||!row.bank)return res.status(400).json({success:false,error:'Choose an amount-mismatch row with both ledger and bank entries.'});const change=correctLedgerMovementAmount(s,row.app.id,amount);if(!change)return res.status(400).json({success:false,error:'This ledger source cannot be edited here. Link it or create an explicit adjustment instead.'});audit(s,req,'BANK_RECONCILIATION_LEDGER_AMOUNT_CORRECTED','ledger_entry',row.app.id,{nature:draft.nature,account:draft.account,before:{amount:change.before},after:{amount:change.after},note:reason,draftId:draft.id,bankDate:row.bank.date});saveStore(s);res.json(draftReconciliation(s,draft));});
+router.post('/api/expenses/bank-statements/correct-ledger-entry',(req,res)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId],amount=num(b.amount),reason=String(b.reason||'').trim();if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot edit this reconciliation.'});if(!(amount>0)||!reason)return res.status(400).json({success:false,error:'A corrected amount and reason are required.'});const view=draftReconciliation(s,draft),row=view.rows.find(x=>x.id===b.rowId);if(!row||row.status!=='amount_mismatch'||!row.app||!row.bank)return res.status(400).json({success:false,error:'Choose an amount-mismatch row with both ledger and bank entries.'});const change=correctLedgerMovementAmount(s,row.app.id,amount);if(!change)return res.status(400).json({success:false,error:'This ledger source cannot be edited here. Link it or create an explicit adjustment instead.'});if(change.error)return res.status(409).json(Object.assign({success:false},change));audit(s,req,'BANK_RECONCILIATION_LEDGER_AMOUNT_CORRECTED','ledger_entry',row.app.id,{nature:draft.nature,account:draft.account,before:{amount:change.before},after:{amount:change.after},note:reason,draftId:draft.id,bankDate:row.bank.date});saveStore(s);res.json(draftReconciliation(s,draft));});
 router.get('/api/expenses/salary-advance-transfer-candidates',(req,res)=>{
   if(!isAdmin(req))return res.status(403).json({success:false,error:'Owner/Admin only.'});
   const sal=loadSalaryStore(),amount=num(req.query.amount),source=String(req.query.sourceAccount||'').trim().toLowerCase();
@@ -5585,6 +5709,19 @@ const expenseRefundDeps = {
 };
 expenseRefundRoutes.register(router,expenseRefundDeps);
 router.use(modelCalendar.createRouter({loadStore,saveStore,audit}));
+
+// Registered after the named GET routes so /list, /config and other
+// workspaces cannot be captured by the expense-ID detail endpoint.
+router.get('/api/expenses/:id',(req,res,next)=>{
+  const id=String(req.params.id||'');
+  // Rental routes are mounted later in this legacy module. Only real expense
+  // IDs belong here; named workspaces must continue through the router.
+  if(!/^EX-[A-Za-z0-9_-]+$/.test(id))return next();
+  const s=loadStore(),e=(s.expenses||{})[id];
+  if(!e)return res.status(404).json({success:false,error:'Expense not found. This entry may belong to a separate source workflow.'});
+  if(!canViewExpense(req,e))return res.status(403).json({success:false,error:'You do not have access to this expense.'});
+  res.json({success:true,expense:decoratedEditableExpense(s,req,e)});
+});
 
 // Keep API failures machine-readable so the page can display the real failure
 // instead of silently trying to parse Express's HTML error page.
