@@ -1125,11 +1125,13 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.equal(claimant.status, 403);
 });
 
-test('spending dashboard category creation uses the approved Owner-only category catalog', () => {
+test('spending dashboard category creation uses explicit management permission and the approved catalog', () => {
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   const name='Dashboard Added Category',group=config.categoryGroups[0]||'';
-  const blocked=invoke('POST','/api/expenses/custom-ledgers',{role:'admin',body:{name,type:'variable',group}});
+  const blocked=invoke('POST','/api/expenses/custom-ledgers',{role:'admin',username:'ordinary-admin',body:{name,type:'variable',group}});
   assert.equal(blocked.status,403);
+  assert.equal(invoke('GET','/api/expenses/config',{role:'admin',username:'ordinary-admin'}).body.canManageCategories,false);
+  assert.equal(invoke('GET','/api/expenses/config',{role:'admin',username:'prashant'}).body.canManageCategories,true);
   const created=invoke('POST','/api/expenses/custom-ledgers',{role:'owner',body:{name,type:'variable',group}});
   assert.equal(created.status,200,JSON.stringify(created.body));
   assert.equal(created.body.ledger.name,name);

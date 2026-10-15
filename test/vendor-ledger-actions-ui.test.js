@@ -8,12 +8,12 @@ const ledgerCode=section('    var vendorPaymentProofRows=','    function renderV
 const managerCode=section('    function openVendorManager(','    // ── ACCOUNT LEDGERS & ACCOUNT-TO-ACCOUNT TRANSFERS');
 const spendingCode=section('    function spendingPaymentCard(','    function loadSpendingDashboard(){');
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-function harness({owner=false,admin=true,expense={},response,tab='vendors'}={}){
+function harness({owner=false,admin=true,manager=false,expense={},response,tab='vendors'}={}){
   const nodes={},calls=[],messages=[],loads=[],confirms=[];
   const node=id=>nodes[id]||(nodes[id]={value:'',textContent:'',innerHTML:'',disabled:false,open:false,files:[],style:{},dataset:{},attrs:{},listeners:{},
     setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,fn){this.listeners[k]=fn;},focus(){},showModal(){this.open=true;},close(){this.open=false;},querySelectorAll(){return[];}});
   const e={id:'EX-00112',nature:'SANKI',status:'paid',date:'2026-08-28',amount:20000,vendor:'UJ',particulars:'Old particulars',ledger:'General',type:'variable',paymentType:'UPI',paidAlready:false,payments:[{id:'PAY-001',amount:20000,account:'Axis',date:'2026-08-28',proof:'/proof-one.jpg'}],...expense};
-  const s={window:{},cfg:{isAdmin:admin,isOwner:owner,natures:['SANKI','SAMAST'],types:['fixed','variable'],vendors:['UJ','Final Vendor'],vendorsByNature:{SANKI:['UJ','Final Vendor'],SAMAST:['Another Vendor']}},expensesById:{[e.id]:e},vendorManageState:null,tab,el:node,esc,fmt:n=>'₹'+n,opts:()=>'',accountsForNature:()=>['Axis'],encodeURIComponent,
+  const s={window:{},cfg:{isAdmin:admin,isOwner:owner,canManageVendors:manager,natures:['SANKI','SAMAST'],types:['fixed','variable'],vendors:['UJ','Final Vendor'],vendorsByNature:{SANKI:['UJ','Final Vendor'],SAMAST:['Another Vendor']}},expensesById:{[e.id]:e},vendorManageState:null,tab,el:node,esc,fmt:n=>'₹'+n,opts:()=>'',accountsForNature:()=>['Axis'],encodeURIComponent,
     setMsg:(...args)=>messages.push(args),loadConfig:()=>Promise.resolve(),loadVendors:()=>loads.push('vendors'),loadSpendingDashboard:()=>loads.push('spending'),loadList:()=>loads.push('list'),
     uploadFiles:()=>{throw Error('No uploads expected');},uploadFile:()=>{throw Error('No uploads expected');},
     api:(url,options={})=>{calls.push({url,...options});return Promise.resolve(response?response(url,options):options.method==='POST'?{success:true,expense:e,updatedExpenses:1}:{success:true,expense:e});},
@@ -111,8 +111,16 @@ test('legacy payments without a stable ID use only the exact ledger row proof',a
 test('Owner sees rename and merge in All-entity view; Admin sees permission explanation without expanded powers',()=>{
   const owner=harness({owner:true}),v={name:'UJ',entities:['SANKI','SAMAST'],count:1};
   const actions=owner.s.vendorManagementActions(v,'','expense');assert.match(actions,/Rename vendor/);assert.match(actions,/Merge vendor/);assert.doesNotMatch(actions,/ disabled/);assert.match(actions,/data-vendor-nature="SANKI"/);
-  const admin=harness().s.vendorManagementActions(v,'','expense');assert.match(admin,/disabled aria-disabled="true"/);assert.match(admin,/Owner only/);
+  const admin=harness().s.vendorManagementActions(v,'','expense');assert.match(admin,/disabled aria-disabled="true"/);assert.match(admin,/Owner or authorized vendor manager only/);
   assert.equal(owner.s.vendorManagementActions(v,'','sourcing'),'');assert.equal(harness({admin:false}).s.vendorManagementActions(v,'','expense'),'');
+});
+
+test('explicit vendor-management capability enables authorized Prashant rename/merge without granting deletion or ordinary Admin access',async()=>{
+  const authorized=harness({manager:true,admin:false}),v={name:'UJ',entities:['SANKI'],count:0};
+  const actions=authorized.s.vendorManagementActions(v,'SANKI','expense');assert.match(actions,/Rename vendor/);assert.match(actions,/Merge vendor/);assert.doesNotMatch(actions,/ disabled|data-vendor-action="delete"/);
+  authorized.s.window.mergeVendorLedger('SANKI','UJ');assert.equal(authorized.nodes.vendorManageDlg.open,true);authorized.nodes.vendorChangeReason.value='Merge duplicate vendor';authorized.nodes.vendorMergeTarget.value='Final Vendor';await authorized.nodes.vendorManageGo.listeners.click.call(authorized.nodes.vendorManageGo);assert.equal(authorized.calls.length,1);assert.match(authorized.calls[0].url,/manage\/merge$/);
+  const deletion=harness({manager:true});deletion.s.window.deleteVendorLedger('SANKI','UJ');assert.notEqual(deletion.node('vendorManageDlg').open,true);assert.match(deletion.messages.at(-1)[0],/Only the Owner can delete/);
+  const ordinary=harness();ordinary.s.window.editVendorLedger('SANKI','UJ');assert.notEqual(ordinary.node('vendorManageDlg').open,true);ordinary.s.vendorManageState={mode:'merge',nature:'SANKI',name:'UJ'};ordinary.node('vendorChangeReason').value='Direct attempt';ordinary.node('vendorMergeTarget').value='Final Vendor';await ordinary.nodes.vendorManageGo.listeners.click.call(ordinary.nodes.vendorManageGo);assert.equal(ordinary.calls.length,0);assert.match(ordinary.nodes.vendorManageMsg.textContent,/authorized vendor manager/);
 });
 
 test('merge requires a reason and explicit confirmation, retains chosen final name and audited reason',async()=>{
