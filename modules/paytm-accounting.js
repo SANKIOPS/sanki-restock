@@ -176,4 +176,45 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked, excludedIds, excludedAmount };
 }
 
-module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };
+// Status is a read-only projection of the very same validators used to post.
+// It deliberately has no user/role argument and creates no ledger movements.
+function settlementStatus(store, payout, saleRows) {
+  const posted = (store.paytmPayoutPostings || []).find(x => x.settlementId === payout.settlementId || x.payoutId === payout.payoutId);
+  const verified = (store.paytmVerifiedSettlements || []).find(x => x.settlementId === payout.settlementId);
+  const bank = matchPayoutBank(store, payout), reasons = [], bankReasons = [];
+  let code = posted ? 'posted' : verified ? 'finalized' : 'ready';
+  if (!posted && !verified) {
+    try { validateSettlementReview(store, payout.payoutId, saleRows); }
+    catch (error) { code = 'incomplete'; reasons.push(error.message); }
+  }
+  let bankLinkReady = false;
+  if (!posted) {
+    if (!bank.bankMatched) bankReasons.push(bank.bankMatch === 'ambiguous' ?
+      'More than one possible Axis 3448 credit exists. A unique UTR, amount and settled-date match is required.' : bank.bankMatch === 'amount/date candidate' ?
+      'An amount/date candidate exists, but its bank reference does not contain the Paytm settlement UTR.' :
+      'No Axis 3448 credit matches this settlement UTR and exact net amount in the available bank evidence.');
+    else {
+      try { validatePayoutPosting(store, payout.payoutId, bank.bankCandidates[0].id, saleRows); bankLinkReady = true; }
+      catch (error) { bankReasons.push(error.message); }
+    }
+  }
+  const blockedTransactions = payout.transactionIds.filter(id => {
+    const tx = (store.paytmReportTransactions || {})[id];
+    return tx && tx.isCustomerPayment !== false && ((store.paytmExcludedTransactions || {})[id] ||
+      !((store.paytmOrderLinks || {})[id] || (store.paytmManualResolutions || {})[id]));
+  }).map(id => ({ transactionId: id, reason: (store.paytmExcludedTransactions || {})[id] ?
+    'Excluded from Shopify: ' + (store.paytmExcludedTransactions[id].reason || 'Excluded payment') : 'No confirmed Shopify link or verified manual sale/cash-transfer classification.' }));
+  return { code, label: { posted: 'Linked and posted to Axis 3448', finalized: 'Paytm review finalized — bank link pending',
+    ready: 'Ready for Paytm finalization', incomplete: 'Incomplete — review required' }[code], reasons, bankReasons, bankLinkReady,
+    payoutId: payout.payoutId, settlementId: payout.settlementId, utr: payout.utr, settledDate: payout.settledDate, net: payout.net,
+    blockedTransactions, finalizedBy: verified && verified.finalizedBy || posted && posted.postedBy || '',
+    finalizedAt: verified && verified.finalizedAt || posted && posted.postedAt || '' };
+}
+function reconciliationStatus(store, saleRows) {
+  const settlements = summarizePayouts(Object.values(store.paytmReportTransactions || {})).map(p => settlementStatus(store, p, saleRows));
+  const counts = { total: settlements.length, posted: 0, finalized: 0, ready: 0, incomplete: 0, bankLinkPending: 0 };
+  settlements.forEach(s => { counts[s.code]++; if (s.code !== 'posted') counts.bankLinkPending++; });
+  return { counts, settlements, incompleteSettlements: settlements.filter(s => s.code === 'incomplete'),
+    lastAttempt: store.paytmLastFinalizationAttempt || null };
+}
+module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting, settlementStatus, reconciliationStatus };
