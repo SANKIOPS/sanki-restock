@@ -86,3 +86,21 @@ test('historical attachment rejects changed net, gross, charges, dates, multiple
  const mutations=[s=>s.paytmSettlements[0].netAmount++,s=>s.paytmSettlements[0].grossAmount++,s=>s.paytmSettlements[0].chargeAmount++,s=>s.paytmSettlements[0].date='2026-09-06',s=>s.bankStatements['Axis Bank 3448'].imports[0].reconciliationRows[0].linkedRecordIds.push('FOREIGN'),s=>delete s.bankStatements['Axis Bank 3448'].imports[0].finalizedAt,s=>s.bankDateOverrides.FOREIGN={bankTransactionId:'SYNTHETIC-BANK'}];
  for(const mutate of mutations){const {s}=historicalSetup();mutate(s);save(s);assert.equal(attach('admin').status,400);assert.deepEqual(current().paytmHistoricalEvidenceLinks,{});}
 });
+test('a re-imported bank row ID cannot bypass finalized evidence or create another bank posting',()=>{
+ const {s,bank}=historicalSetup();s.bankStatements['Axis Bank 3448'].imports[0].reconciliationRows[0].bank={...bank,id:'SYNTHETIC-OLD-IMPORT-ID'};save(s);
+ const rows=[{id:'SHOPIFY/9006001/PAYMENT-1',orderId:'9006001',account:'Paytm Settlement Clearing',amount:100}];
+ assert.throws(()=>validatePayoutPosting(s,'SYNTHETIC-ORIGINAL',bank.id,rows),/finalized reconciliation/);
+ assert.equal(attach('admin').status,200);assert.deepEqual(current().paytmPayoutPostings,[]);
+ assert.equal(view('admin').reconciliationStatus.counts.posted,1);
+});
+test('on-page Paytm review keeps confirmation mandatory, cancel safe and submissions one-shot',()=>{
+ const vm=require('node:vm'),html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');
+ const start=html.indexOf('    function confirmPaytmReview('),end=html.indexOf('    function showPaytmSaved(',start),nodes=new Map();
+ const document={getElementById:id=>nodes.get(id),createElement:tag=>({tag,children:[],style:{},setAttribute(){},append(...children){this.children.push(...children);},addEventListener(name,fn){this[name]=fn;},showModal(){this.open=true;},focus(){this.focused=true;},close(){this.open=false;},remove(){nodes.delete(this.id);}}),body:{appendChild(node){nodes.set(node.id,node);}}};
+ const ctx={document};vm.runInNewContext(html.slice(start,end),ctx);let posted=0;
+ ctx.confirmPaytmReview('Verify original receipt, exact UTR, amount and date',()=>posted++);let d=nodes.get('paytmReviewConfirmation');assert.equal(posted,0);assert.equal(d.open,true);assert.equal(d.children[1].textContent,'Verify original receipt, exact UTR, amount and date');assert.equal(d.children[2].focused,true);
+ d.children[2].onclick();assert.equal(posted,0);assert.equal(nodes.size,0);
+ ctx.confirmPaytmReview('Explicit posting review',()=>posted++);d=nodes.get('paytmReviewConfirmation');d.children[3].onclick();d.children[3].onclick();assert.equal(posted,1);assert.equal(nodes.size,0);
+ ctx.confirmPaytmReview('Escape cancels',()=>posted++);d=nodes.get('paytmReviewConfirmation');d.cancel({preventDefault(){}});assert.equal(posted,1);assert.equal(nodes.size,0);
+ assert.ok(html.includes('confirmPaytmReview(message,function(){'));
+});

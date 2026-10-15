@@ -173,9 +173,13 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   if ((store.paytmPayoutPostings || []).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis bank credit is already used by a Paytm payout.');
   if (Object.values(store.bankDateOverrides || {}).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis credit is already linked to another ledger entry. Correct that link first.');
   const book = (store.bankStatements || {})[BANK] || {};
-  if ((book.imports || []).some(record => [].concat(record.reconciliationRows || [], record.carriedReconciliationRows || []).some(row => row.bank && row.bank.id === bankTransactionId && (row.linkedRecordIds || []).length))) throw new Error('This Axis credit was already linked in a finalized reconciliation. Correct that link first.');
+  if ((book.imports || []).some(record => [].concat(record.reconciliationRows || [], record.carriedReconciliationRows || []).some(row => row.bank && (row.bank.id === bankTransactionId || sameSettlementCredit(row.bank,bank,payout.utr)) && (row.linkedRecordIds || []).length))) throw new Error('This Axis credit was already linked in a finalized reconciliation. Correct that link first.');
   if ([...(store.adjustments || []), ...(store.receipts || []), ...(store.bankTruthMovements || [])].some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis credit already has a ledger posting. Review it before posting Paytm.');
   return { payout, bank, linked, excludedIds, excludedAmount };
+}
+function sameSettlementCredit(a,b,utr) {
+  return !!utr&&a.date===b.date&&cents(a.credit)===cents(b.credit)&&cents(a.debit)===0&&cents(b.debit)===0&&
+    `${a.reference||''} ${a.description||''}`.includes(utr)&&`${b.reference||''} ${b.description||''}`.includes(utr);
 }
 
 // Attach detailed report evidence to an ALREADY finalized historical posting.
@@ -195,7 +199,7 @@ function validateHistoricalSettlementAttachment(store, payoutId, saleRows) {
   if(candidates.length!==1)throw new Error('The existing historical settlement must match the exact customer gross, charges, net, date and UTR.');
   const legacy=candidates[0],book=(store.bankStatements||{})[BANK]||{};
   const finalized=(book.imports||[]).flatMap(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[])
-    .filter(row=>row.bank&&row.bank.id===bank.id&&(row.linkedRecordIds||[]).length)
+    .filter(row=>row.bank&&(row.bank.id===bank.id||sameSettlementCredit(row.bank,bank,payout.utr))&&(row.linkedRecordIds||[]).length)
     .map(row=>({record,row})));
   if(!finalized.length||finalized.some(({record,row})=>!record.finalizedAt||!record.finalizedBy||
     (row.linkedRecordIds||[]).length!==1||row.linkedRecordIds[0]!==legacy.id||
