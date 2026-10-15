@@ -104,3 +104,18 @@ test('on-page Paytm review keeps confirmation mandatory, cancel safe and submiss
  ctx.confirmPaytmReview('Escape cancels',()=>posted++);d=nodes.get('paytmReviewConfirmation');d.cancel({preventDefault(){}});assert.equal(posted,1);assert.equal(nodes.size,0);
  assert.ok(html.includes('confirmPaytmReview(message,function(){'));
 });
+test('bank-only placeholders complete only missing report detail, record fees once and preserve finalized bank evidence',()=>{
+ const {s}=historicalSetup(),legacy=s.paytmSettlements[0];Object.assign(legacy,{bankTruthOnly:true,provisional:false,source:'axis_3448_paytm_bank_narration',grossAmount:98,chargeAmount:0,paytmChargeAmount:0,orderIds:[],transferIds:[],otherReceipts:[]});save(s);
+ const bankBefore=copy(s.bankStatements),netBefore=legacy.netAmount;assert.equal(finalize().status,200);const before=clearing();
+ const result=attach('admin');assert.equal(result.status,200,JSON.stringify(result.body));const saved=current(),completed=saved.paytmSettlements[0];
+ assert.equal(completed.netAmount,netBefore);assert.equal(completed.grossAmount,100);assert.equal(completed.chargeAmount,2);assert.equal(completed.provisional,false);assert.equal(completed.bankTruthOnly,true,'a bank-origin record must never invent customer sales');
+ assert.deepEqual(saved.bankStatements,bankBefore);assert.deepEqual(saved.paytmPayoutPostings,[]);assert.equal(saved.reconciliationExpenses.length,1);assert.equal(saved.reconciliationExpenses[0].amount,2);assert.equal(saved.reconciliationExpenses[0].account,'Paytm Settlement Clearing');assert.ok(saved.paytmVerifiedSettlements[0].historicalEvidenceLink);
+ assert.deepEqual(clearing().entries.map(x=>[x.credit,x.debit]),before.entries.map(x=>[x.credit,x.debit]));assert.equal(view().reconciliationStatus.counts.posted,1);
+ assert.equal(attach('admin').status,400);assert.equal(current().reconciliationExpenses.length,1);assert.ok(JSON.stringify(saved).includes('PAYTM_BANK_ONLY_DETAIL_COMPLETED'));
+});
+test('placeholder completion rejects non-empty allocations, wrong source and an already existing fee record',()=>{
+ for(const mutate of [x=>x.transferIds=['FOREIGN'],x=>x.source='unverified',x=>x.reportDetailCompleted=true]){
+  const {s}=historicalSetup();Object.assign(s.paytmSettlements[0],{bankTruthOnly:true,provisional:true,source:'axis_3448_paytm_bank_narration',grossAmount:98,chargeAmount:0});mutate(s.paytmSettlements[0]);save(s);assert.equal(attach('admin').status,400);
+ }
+ const {s}=historicalSetup();Object.assign(s.paytmSettlements[0],{bankTruthOnly:true,provisional:true,source:'axis_3448_paytm_bank_narration',grossAmount:98,chargeAmount:0});s.reconciliationExpenses=[{id:'EXISTING-FEE',settlementId:'SYNTHETIC-HIST',amount:2}];save(s);assert.equal(attach('admin').status,400);assert.equal(current().reconciliationExpenses.length,1);
+});

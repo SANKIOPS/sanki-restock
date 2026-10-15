@@ -195,9 +195,11 @@ function validateHistoricalSettlementAttachment(store, payoutId, saleRows) {
   const fees=cents(payout.commission)+cents(payout.platformFee)+cents(payout.gst)+cents(payout.nonCustomerAmount);
   const candidates=(store.paytmSettlements||[]).filter(x=>x.bankAccount===BANK&&String(x.date).slice(0,10)===payout.settledDate&&
     String(x.utr||x.bankReference||x.reference||'')===payout.utr&&cents(x.netAmount)===cents(payout.net)&&
-    cents(x.grossAmount)===cents(payout.customerGross)&&cents(x.chargeAmount)===fees);
+    ((cents(x.grossAmount)===cents(payout.customerGross)&&cents(x.chargeAmount)===fees)||pendingHistoricalDetail(x)));
   if(candidates.length!==1)throw new Error('The existing historical settlement must match the exact customer gross, charges, net, date and UTR.');
   const legacy=candidates[0],book=(store.bankStatements||{})[BANK]||{};
+  const completePendingDetail=pendingHistoricalDetail(legacy);
+  if(completePendingDetail&&(store.reconciliationExpenses||[]).some(x=>x.settlementId===legacy.id||x.paytmHistoricalSettlementId===legacy.id))throw new Error('This pending settlement already has a charge record. Review it before completing the report detail.');
   const finalized=(book.imports||[]).flatMap(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[])
     .filter(row=>row.bank&&(row.bank.id===bank.id||sameSettlementCredit(row.bank,bank,payout.utr))&&(row.linkedRecordIds||[]).length)
     .map(row=>({record,row})));
@@ -208,7 +210,12 @@ function validateHistoricalSettlementAttachment(store, payoutId, saleRows) {
   if(Object.entries(store.bankDateOverrides||{}).some(([id,x])=>x.bankTransactionId===bank.id&&id!==legacy.id)||
     [...(store.adjustments||[]),...(store.receipts||[]),...(store.bankTruthMovements||[])].some(x=>x.bankTransactionId===bank.id))throw new Error('Another accounting record already claims this bank credit.');
   if(Object.values(store.paytmHistoricalEvidenceLinks||{}).some(x=>x.settlementId!==payout.settlementId&&(x.bankTransactionId===bank.id||x.historicalSettlementId===legacy.id)))throw new Error('This historical evidence is already attached to another detailed settlement.');
-  return {payout,linked,bank,historicalSettlementId:legacy.id,reconciliationImportId:finalized[0].record.id};
+  return {payout,linked,bank,historicalSettlementId:legacy.id,reconciliationImportId:finalized[0].record.id,completePendingDetail};
+}
+function pendingHistoricalDetail(x) {
+  return x.bankTruthOnly===true&&x.source==='axis_3448_paytm_bank_narration'&&x.reportDetailCompleted!==true&&
+    cents(x.grossAmount)===cents(x.netAmount)&&cents(x.chargeAmount)===0&&cents(x.paytmChargeAmount)===0&&cents(x.hiddenChargeAmount)===0&&
+    !(x.orderIds||[]).length&&!(x.transferIds||[]).length&&!(x.otherReceipts||[]).length;
 }
 
 // Status is a read-only projection of the very same validators used to post.
@@ -240,7 +247,7 @@ function settlementStatus(store, payout, saleRows) {
       try { validatePayoutPosting(store, payout.payoutId, bank.bankCandidates[0].id, saleRows); bankLinkReady = true; }
       catch (error) { bankReasons.push(error.message); }
     }
-    if(code!=='incomplete')try{const evidence=validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows);historicalCandidate={historicalSettlementId:evidence.historicalSettlementId,bankTransactionId:evidence.bank.id,reconciliationImportId:evidence.reconciliationImportId};}catch{/* A genuinely conflicting claim remains blocked by the posting validator. */}
+    if(code!=='incomplete')try{const evidence=validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows);historicalCandidate={completePendingDetail:evidence.completePendingDetail,fees:Math.round((payout.commission+payout.platformFee+payout.gst+payout.nonCustomerAmount)*100)/100,historicalSettlementId:evidence.historicalSettlementId,bankTransactionId:evidence.bank.id,reconciliationImportId:evidence.reconciliationImportId};}catch{/* A genuinely conflicting claim remains blocked by the posting validator. */}
   }
   const blockedTransactions = payout.transactionIds.filter(id => {
     const tx = (store.paytmReportTransactions || {})[id];
