@@ -153,7 +153,9 @@ function reviewedUnpostedSettlements(store, saleRows) {
     if (verified.has(String(candidate.settlementId || '')) || verified.has(String(candidate.payoutId || '')) || posted.has(String(candidate.settlementId || '')) || posted.has(String(candidate.payoutId || ''))) continue;
     try {
       const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows);
-      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, reviewedNotFinalized: true });
+      let historicalEvidenceLink=null;
+      if((store.paytmHistoricalEvidenceLinks||{})[payout.settlementId]) { validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows); historicalEvidenceLink=store.paytmHistoricalEvidenceLinks[payout.settlementId]; }
+      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, historicalEvidenceLink, reviewedNotFinalized: !historicalEvidenceLink });
     } catch { /* Incomplete or unsafe batches stay out of the ledger. */ }
   }
   return rows;
@@ -176,19 +178,56 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   return { payout, bank, linked, excludedIds, excludedAmount };
 }
 
+// Attach detailed report evidence to an ALREADY finalized historical posting.
+// This is not permission to post over a duplicate bank credit: every original
+// amount, fee, UTR, date and finalized ledger claim must agree exactly.
+function validateHistoricalSettlementAttachment(store, payoutId, saleRows) {
+  const {payout,linked}=validateSettlementReview(store,payoutId,saleRows);
+  if ((store.paytmPayoutPostings||[]).some(x=>x.settlementId===payout.settlementId||(x.transactionIds||[]).some(id=>payout.transactionIds.includes(id)))) throw new Error('This detailed settlement already has a payout posting.');
+  const match=matchPayoutBank(store,payout);
+  if(!match.bankMatched||match.bankCandidates.length!==1)throw new Error('A unique exact Axis UTR and net credit is required to attach historical evidence.');
+  const bank=match.bankCandidates[0];
+  if(bank.date!==payout.settledDate)throw new Error('Historical bank evidence must be on the exact settled date.');
+  const fees=cents(payout.commission)+cents(payout.platformFee)+cents(payout.gst)+cents(payout.nonCustomerAmount);
+  const candidates=(store.paytmSettlements||[]).filter(x=>x.bankAccount===BANK&&String(x.date).slice(0,10)===payout.settledDate&&
+    String(x.utr||x.bankReference||x.reference||'')===payout.utr&&cents(x.netAmount)===cents(payout.net)&&
+    cents(x.grossAmount)===cents(payout.customerGross)&&cents(x.chargeAmount)===fees);
+  if(candidates.length!==1)throw new Error('The existing historical settlement must match the exact customer gross, charges, net, date and UTR.');
+  const legacy=candidates[0],book=(store.bankStatements||{})[BANK]||{};
+  const finalized=(book.imports||[]).flatMap(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[])
+    .filter(row=>row.bank&&row.bank.id===bank.id&&(row.linkedRecordIds||[]).length)
+    .map(row=>({record,row})));
+  if(!finalized.length||finalized.some(({record,row})=>!record.finalizedAt||!record.finalizedBy||
+    (row.linkedRecordIds||[]).length!==1||row.linkedRecordIds[0]!==legacy.id||
+    cents(row.bank.credit)!==cents(payout.net)||cents(row.bank.debit)!==0||row.bank.date!==bank.date||
+    !String(row.bank.reference||row.bank.description||'').includes(payout.utr)))throw new Error('The exact bank row must already be finalized against this historical settlement only.');
+  if(Object.entries(store.bankDateOverrides||{}).some(([id,x])=>x.bankTransactionId===bank.id&&id!==legacy.id)||
+    [...(store.adjustments||[]),...(store.receipts||[]),...(store.bankTruthMovements||[])].some(x=>x.bankTransactionId===bank.id))throw new Error('Another accounting record already claims this bank credit.');
+  if(Object.values(store.paytmHistoricalEvidenceLinks||{}).some(x=>x.settlementId!==payout.settlementId&&(x.bankTransactionId===bank.id||x.historicalSettlementId===legacy.id)))throw new Error('This historical evidence is already attached to another detailed settlement.');
+  return {payout,linked,bank,historicalSettlementId:legacy.id,reconciliationImportId:finalized[0].record.id};
+}
+
 // Status is a read-only projection of the very same validators used to post.
 // It deliberately has no user/role argument and creates no ledger movements.
 function settlementStatus(store, payout, saleRows) {
   const posted = (store.paytmPayoutPostings || []).find(x => x.settlementId === payout.settlementId || x.payoutId === payout.payoutId);
   const verified = (store.paytmVerifiedSettlements || []).find(x => x.settlementId === payout.settlementId);
   const bank = matchPayoutBank(store, payout), reasons = [], bankReasons = [];
-  let code = posted ? 'posted' : verified ? 'finalized' : 'ready';
+  const attachment=(store.paytmHistoricalEvidenceLinks||{})[payout.settlementId];
+  let historicalCandidate=null,attachmentValid=false;
+  if(attachment){
+    try {const evidence=validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows);
+      if(attachment.historicalSettlementId!==evidence.historicalSettlementId||attachment.bankTransactionId!==evidence.bank.id||attachment.reconciliationImportId!==evidence.reconciliationImportId)throw new Error('Saved historical evidence changed. Review the attachment again.');
+      attachmentValid=true;
+    }catch(error){reasons.push(error.message);}
+  }
+  let code = posted || attachmentValid ? 'posted' : attachment ? 'incomplete' : verified ? 'finalized' : 'ready';
   if (!posted && !verified) {
     try { validateSettlementReview(store, payout.payoutId, saleRows); }
     catch (error) { code = 'incomplete'; reasons.push(error.message); }
   }
   let bankLinkReady = false;
-  if (!posted) {
+  if (!posted&&!attachmentValid) {
     if (!bank.bankMatched) bankReasons.push(bank.bankMatch === 'ambiguous' ?
       'More than one possible Axis 3448 credit exists. A unique UTR, amount and settled-date match is required.' : bank.bankMatch === 'amount/date candidate' ?
       'An amount/date candidate exists, but its bank reference does not contain the Paytm settlement UTR.' :
@@ -197,6 +236,7 @@ function settlementStatus(store, payout, saleRows) {
       try { validatePayoutPosting(store, payout.payoutId, bank.bankCandidates[0].id, saleRows); bankLinkReady = true; }
       catch (error) { bankReasons.push(error.message); }
     }
+    if(code!=='incomplete')try{const evidence=validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows);historicalCandidate={historicalSettlementId:evidence.historicalSettlementId,bankTransactionId:evidence.bank.id,reconciliationImportId:evidence.reconciliationImportId};}catch{/* A genuinely conflicting claim remains blocked by the posting validator. */}
   }
   const blockedTransactions = payout.transactionIds.filter(id => {
     const tx = (store.paytmReportTransactions || {})[id];
@@ -207,8 +247,8 @@ function settlementStatus(store, payout, saleRows) {
   return { code, label: { posted: 'Linked and posted to Axis 3448', finalized: 'Paytm review finalized — bank link pending',
     ready: 'Ready for Paytm finalization', incomplete: 'Incomplete — review required' }[code], reasons, bankReasons, bankLinkReady,
     payoutId: payout.payoutId, settlementId: payout.settlementId, utr: payout.utr, settledDate: payout.settledDate, net: payout.net,
-    blockedTransactions, finalizedBy: verified && verified.finalizedBy || posted && posted.postedBy || '',
-    finalizedAt: verified && verified.finalizedAt || posted && posted.postedAt || '' };
+    blockedTransactions,historicalCandidate,historicalEvidenceLink:attachmentValid?attachment:null, finalizedBy: verified && verified.finalizedBy || posted && posted.postedBy || attachmentValid&&attachment.by || '',
+    finalizedAt: verified && verified.finalizedAt || posted && posted.postedAt || attachmentValid&&attachment.at || '' };
 }
 function reconciliationStatus(store, saleRows) {
   const settlements = summarizePayouts(Object.values(store.paytmReportTransactions || {})).map(p => settlementStatus(store, p, saleRows));
@@ -217,4 +257,4 @@ function reconciliationStatus(store, saleRows) {
   return { counts, settlements, incompleteSettlements: settlements.filter(s => s.code === 'incomplete'),
     lastAttempt: store.paytmLastFinalizationAttempt || null };
 }
-module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting, settlementStatus, reconciliationStatus };
+module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting, validateHistoricalSettlementAttachment, settlementStatus, reconciliationStatus };

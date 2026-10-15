@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
-const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, validatePayoutPosting } = require('./paytm-accounting');
+const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, validatePayoutPosting, validateHistoricalSettlementAttachment } = require('./paytm-accounting');
 const { applyRoundingReview } = require('./paytm-rounding');
 
 function registerPaytmReports(router, deps) {
@@ -56,6 +56,7 @@ function registerPaytmReports(router, deps) {
         if (existing[tx.transactionId]) {
           if (differs(existing[tx.transactionId], tx)) { warnings.push(`Previously imported transaction ${tx.transactionId} has a genuine financial or identifier conflict. Saved evidence was not changed; review this ID separately.`); duplicates++; continue; }
           const enriched = mergeEvidence(existing[tx.transactionId], tx);
+          assertEnrichmentSafe(store, existing[tx.transactionId], enriched);
           if (JSON.stringify(enriched) !== JSON.stringify(existing[tx.transactionId])) enrichments.push(tx);
           duplicates++;
         } else fresh.push(tx);
@@ -83,7 +84,13 @@ function registerPaytmReports(router, deps) {
       const old = store.paytmReportTransactions[tx.transactionId];
       if (!old || differs(old, tx)) return res.status(409).json({ success: false, error: `Transaction ${tx.transactionId} changed after preview. Upload again.` });
       const next = mergeEvidence(old, tx);
-      if (JSON.stringify(next) !== JSON.stringify(old)) { store.paytmReportTransactions[tx.transactionId] = { ...next, enrichedAt: new Date().toISOString(), enrichedBy: req.user.username }; enriched++; }
+      try { assertEnrichmentSafe(store, old, next); }
+      catch(error) { return res.status(409).json({success:false,error:error.message}); }
+      if (JSON.stringify(next) !== JSON.stringify(old)) {
+        store.paytmReportTransactions[tx.transactionId] = { ...next, enrichedAt: new Date().toISOString(), enrichedBy: req.user.username };
+        audit(store,req,'PAYTM_EVIDENCE_ENRICHED','paytm_transaction',tx.transactionId,{nature:'SANKI',account:CLEARING,before:old,after:store.paytmReportTransactions[tx.transactionId],note:'Original report supplied missing evidence; source import hashes retained. No ledger or bank posting created.'});
+        enriched++;
+      }
     }
     store.paytmReportImports = store.paytmReportImports || [];
     store.paytmReportImports.push({ id: draftId, at: new Date().toISOString(), by: req.user.username, sources: draft.sources, count: added, enriched, duplicates: draft.duplicates, warnings: draft.warnings });
@@ -212,9 +219,10 @@ function registerPaytmReports(router, deps) {
     const store = loadStore(), payoutId = String(req.body && req.body.payoutId || '');
     try {
       const { payout, linked } = validateSettlementReview(store, payoutId, saleRows(store));
+      if((store.paytmHistoricalEvidenceLinks||{})[payout.settlementId])throw new Error('This detailed settlement is already attached to finalized historical bank evidence.');
       store.paytmVerifiedSettlements = store.paytmVerifiedSettlements || [];
       if (store.paytmVerifiedSettlements.some(x => x.settlementId === payout.settlementId)) throw new Error('This Paytm settlement is already finalized.');
-      const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
+const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
       store.paytmVerifiedSettlements.push(verified);
       audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified });
       saveStore(store);
@@ -227,10 +235,11 @@ function registerPaytmReports(router, deps) {
     store.paytmVerifiedSettlements = store.paytmVerifiedSettlements || [];
     const finalized = [], skipped = [];
     for (const candidate of payouts) {
+      if((store.paytmHistoricalEvidenceLinks||{})[candidate.settlementId])continue;
       if (store.paytmVerifiedSettlements.some(x => x.settlementId === candidate.settlementId) || (store.paytmPayoutPostings || []).some(x => x.settlementId === candidate.settlementId || x.payoutId === candidate.payoutId)) continue;
       try {
         const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows(store));
-        const verified = { id: `PTMV-${Date.now()}-${finalized.length + 1}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
+        const verified = { id: `PTMV-${Date.now()}-${finalized.length + 1}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
         store.paytmVerifiedSettlements.push(verified); finalized.push(verified);
         audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified, note: 'Bulk finalization of all fully matched Paytm settlements' });
       } catch (error) { skipped.push({ settlementId: candidate.settlementId, reason: error.message }); }
@@ -249,7 +258,7 @@ function registerPaytmReports(router, deps) {
     try {
       const { payout, bank, linked, excludedIds, excludedAmount } = validatePayoutPosting(store, payoutId, bankTransactionId, saleRows(store));
       const postedAt = new Date().toISOString();
-      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId: payout.payoutId, settlementId: payout.settlementId, sourcePayoutIds: payout.sourcePayoutIds, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), excludedTransactionIds:excludedIds,excludedAmount,bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, settledDate: payout.settledDate, gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
+      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId: payout.payoutId, settlementId: payout.settlementId, sourcePayoutIds: payout.sourcePayoutIds, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), excludedTransactionIds:excludedIds,excludedAmount,bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, settledDate: payout.settledDate, gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
       store.paytmPayoutPostings = store.paytmPayoutPostings || [];
       store.paytmPayoutPostings.push(posting);
       store.reconciliationExpenses = store.reconciliationExpenses || [];
@@ -262,16 +271,50 @@ function registerPaytmReports(router, deps) {
       res.json({ success: true, posting, view: view(store) });
     } catch (error) { res.status(400).json({ success: false, error: error.message }); }
   });
+  router.post('/api/expenses/paytm-reports/attach-historical', (req,res)=>{
+    if(deny(req,res))return;
+    const store=loadStore(),body=req.body||{},reason=String(body.reason||'').trim();
+    try {
+      if(reason.length<10)throw new Error('Enter a historical-evidence review reason of at least 10 characters.');
+      const evidence=validateHistoricalSettlementAttachment(store,String(body.payoutId||''),saleRows(store));
+      store.paytmHistoricalEvidenceLinks=store.paytmHistoricalEvidenceLinks||{};
+      const key=evidence.payout.settlementId;
+      if(store.paytmHistoricalEvidenceLinks[key])throw new Error('Historical evidence is already attached. No duplicate attachment was created.');
+      const link={settlementId:key,historicalSettlementId:evidence.historicalSettlementId,bankTransactionId:evidence.bank.id,reconciliationImportId:evidence.reconciliationImportId,reason,by:req.user.username,at:new Date().toISOString()};
+      store.paytmHistoricalEvidenceLinks[key]=link;
+      audit(store,req,'PAYTM_HISTORICAL_EVIDENCE_ATTACHED','paytm_settlement',key,{nature:'SANKI',account:BANK,after:link,note:'Detailed report attached to the existing finalized settlement. No new bank, clearing, charge or income posting created.'});
+      saveStore(store);
+      res.json({success:true,link,view:view(store)});
+    }catch(error){res.status(400).json({success:false,error:error.message});}
+  });
 }
 function differs(a, b) {
   const financial = ['date', 'amount', 'commission', 'gst', 'settledAmount'];
   if (financial.some(key => String(a[key] ?? '') !== String(b[key] ?? ''))) return true;
   return ['platformFee', 'payoutId', 'utr', 'settledDate', 'transactionType'].some(key => valuePresent(a[key]) && valuePresent(b[key]) && String(a[key]) !== String(b[key]));
 }
+function receiptReviewEvidence(links,rows) {
+  return links.filter(x=>x.orderId).map(link=>{
+    const source=rows.find(row=>String(row.orderId)===String(link.orderId)&&row.account===CLEARING);
+    return {orderId:link.orderId,orderNumber:link.orderNumber,transactionId:link.transactionId,sourceId:source&&source.id,
+      originalReceiptAmount:source&&source.amount,subsequentRefundAmount:source&&source.refundAmount||0,
+      reason:source&&source.refundAmount>0?'Original successful receipt verified independently of a later Shopify refund. Refund accounting preserved.':'Original receipt component verified.'};
+  });
+}
 function valuePresent(value) { return value !== undefined && value !== null && String(value) !== ''; }
 function mergeEvidence(old, current) {
   const next = { ...old };
   for (const key of ['platformFee', 'payoutId', 'payoutDate', 'utr', 'settledDate', 'transactionType', 'comments', 'paymentMode', 'posId', 'merchantOrderId', 'rrn', 'isCustomerPayment']) if (!valuePresent(next[key]) && valuePresent(current[key])) next[key] = current[key];
+  // Old imports defaulted unknown types to customer payments. When the
+  // original CSV supplies the missing type, recompute its derived flag too.
+  if (valuePresent(current.transactionType) && next.transactionType===current.transactionType) next.isCustomerPayment=current.transactionType.toUpperCase()==='ACQUIRING';
   return next;
+}
+function assertEnrichmentSafe(store, old, next) {
+  if ((old.isCustomerPayment!==false)===(next.isCustomerPayment!==false)) return;
+  const id=old.transactionId,payout=old.utr||old.payoutId;
+  if ((store.paytmOrderLinks||{})[id]||(store.paytmManualResolutions||{})[id]||(store.paytmRoundingReviews||{})[id]||(store.paytmHistoricalEvidenceLinks||{})[payout]||
+      [...(store.paytmVerifiedSettlements||[]),...(store.paytmPayoutPostings||[])].some(x=>(x.transactionIds||[]).includes(id)||x.payoutId===payout||x.settlementId===payout))
+    throw new Error('This source classification affects an already reviewed or posted payment. Correct its existing review before re-importing transaction '+id+'.');
 }
 module.exports = { registerPaytmReports };
