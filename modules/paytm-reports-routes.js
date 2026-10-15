@@ -11,6 +11,15 @@ function registerPaytmReports(router, deps) {
     if (deny(req, res)) return;
     res.json({ success: true, ...view(loadStore()) });
   });
+  router.get('/api/expenses/paytm-reports/previews/:id', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore(), draft = (store.paytmReportDrafts || {})[req.params.id];
+    if (!draft) return res.status(404).json({ success: false, error: 'This upload preview is no longer pending. Refresh the saved Paytm status.' });
+    const status = paytmPreviewStatus(store, draft);
+    res.json({ success: true, draftId: draft.id, ...status, newTransactions: status.newCount,
+      enrichedTransactions: status.enrichmentCount, duplicates: draft.duplicates || 0,
+      payouts: summarizePayouts([...(Array.isArray(draft.transactions) ? draft.transactions : []), ...(Array.isArray(draft.enrichments) ? draft.enrichments : [])].filter(tx => tx && tx.transactionId)) });
+  });
   router.post('/api/expenses/paytm-reports/sync-shopify-payments', async (req, res) => {
     if (deny(req, res)) return;
     const orderId = String(req.body && req.body.orderId || '').trim();
@@ -66,23 +75,22 @@ function registerPaytmReports(router, deps) {
       store.paytmReportDrafts = store.paytmReportDrafts || {};
       store.paytmReportDrafts[draftId] = { id: draftId, at: new Date().toISOString(), by: req.user.username, sources, warnings, duplicates, transactions: fresh, enrichments };
       saveStore(store);
-      res.json({ success: true, draftId, sources, warnings, duplicates, enrichedTransactions: enrichments.length, newTransactions: fresh.length, payouts: summarizePayouts([...all.values()]) });
+      res.json({ success: true, draftId, sources, warnings, duplicates, conflictCount: paytmPreviewStatus(store, store.paytmReportDrafts[draftId]).conflictCount, enrichedTransactions: enrichments.length, newTransactions: fresh.length, payouts: summarizePayouts([...all.values()]) });
     } catch (error) { res.status(400).json({ success: false, error: error.message || 'Could not read Paytm reports.' }); }
   });
   router.post('/api/expenses/paytm-reports/confirm', (req, res) => {
     if (deny(req, res)) return;
     const store = loadStore(), draftId = String(req.body && req.body.draftId || ''), draft = (store.paytmReportDrafts || {})[draftId];
     if (!draft) return res.status(404).json({ success: false, error: 'Preview not found. Upload the report again.' });
+    const preview = paytmPreviewStatus(store, draft);
+    // Validate the entire saved preview again before touching any evidence.
+    if (preview.conflictCount) return res.status(409).json({ success: false, error: preview.reasons.join(' ') });
     store.paytmReportTransactions = store.paytmReportTransactions || {};
     let added = 0, enriched = 0;
-    for (const tx of draft.transactions) {
+    for (const tx of [...draft.transactions, ...(draft.enrichments || [])]) {
       const old = store.paytmReportTransactions[tx.transactionId];
       if (old && differs(old, tx)) return res.status(409).json({ success: false, error: `Transaction ${tx.transactionId} changed after preview. Upload again.` });
-      if (!old) { store.paytmReportTransactions[tx.transactionId] = { ...tx, importedAt: new Date().toISOString(), importedBy: req.user.username }; added++; }
-    }
-    for (const tx of draft.enrichments || []) {
-      const old = store.paytmReportTransactions[tx.transactionId];
-      if (!old || differs(old, tx)) return res.status(409).json({ success: false, error: `Transaction ${tx.transactionId} changed after preview. Upload again.` });
+      if (!old) { store.paytmReportTransactions[tx.transactionId] = { ...tx, importedAt: new Date().toISOString(), importedBy: req.user.username }; added++; continue; }
       const next = mergeEvidence(old, tx);
       try { assertEnrichmentSafe(store, old, next); }
       catch(error) { return res.status(409).json({success:false,error:error.message}); }
@@ -303,6 +311,41 @@ const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, 
     }catch(error){res.status(400).json({success:false,error:error.message});}
   });
 }
+function paytmPreviewStatus(store, draft) {
+  const existing = store.paytmReportTransactions || {}, reasons = [], warnings = Array.isArray(draft.warnings) ? draft.warnings : [];
+  let newCount = 0, enrichmentCount = 0, coveredCount = 0, conflictCount = 0;
+  conflictCount += warnings.filter(warning => /genuine financial|identifier conflict|differs between selected files/i.test(String(warning))).length;
+  if (!Array.isArray(draft.transactions) || draft.enrichments != null && !Array.isArray(draft.enrichments) || draft.warnings != null && !Array.isArray(draft.warnings)) {
+    conflictCount++; reasons.push('Saved upload preview has invalid or missing rows. Re-upload the original report for review.');
+  }
+  for (const tx of [...(Array.isArray(draft.transactions) ? draft.transactions : []), ...(Array.isArray(draft.enrichments) ? draft.enrichments : [])]) {
+    if (!tx || !tx.transactionId) { conflictCount++; reasons.push('An upload row has no transaction ID; re-upload the original report for review.'); continue; }
+    const old = existing[tx.transactionId];
+    if (!old) {
+      if (Array.isArray(draft.enrichments) && draft.enrichments.includes(tx)) { conflictCount++; reasons.push('Transaction ' + tx.transactionId + ' is no longer saved; re-upload its original report.'); }
+      else newCount++;
+      continue;
+    }
+    if (differs(old, tx)) { conflictCount++; reasons.push('Transaction ' + tx.transactionId + ' conflicts with saved financial or identifier evidence; re-upload the original report for review.'); continue; }
+    const next = mergeEvidence(old, tx);
+    try { assertEnrichmentSafe(store, old, next); }
+    catch (error) { conflictCount++; reasons.push(error.message); continue; }
+    if (JSON.stringify(next) !== JSON.stringify(old)) enrichmentCount++;
+    else coveredCount++;
+  }
+  // Even a duplicate-only preview with source warnings stays reviewable. A
+  // completed payout must never conceal a conflicting unconfirmed upload.
+  if (newCount) reasons.push(newCount + ' new payment row(s) are not yet saved as report evidence.');
+  if (enrichmentCount) reasons.push(enrichmentCount + ' saved payment row(s) have missing report details to review.');
+  if (warnings.length) reasons.push(...warnings);
+  const actionable = newCount > 0 || enrichmentCount > 0 || conflictCount > 0 || warnings.length > 0;
+  if (!actionable) reasons.push('All rows are already covered by saved report evidence, or this preview has no new rows. It does not make completed settlements pending.');
+  return { id: draft.id, at: draft.at, by: draft.by, sources: draft.sources || [], warnings, newCount, enrichmentCount, coveredCount, conflictCount,
+    actionable, code: actionable ? 'review_required' : 'already_covered', reasons };
+}
+function paytmPreviewStatuses(store) {
+  return Object.values(store.paytmReportDrafts || {}).map(draft => paytmPreviewStatus(store, draft)).sort((a,b) => String(b.at || '').localeCompare(String(a.at || '')));
+}
 function differs(a, b) {
   const financial = ['date', 'amount', 'commission', 'gst', 'settledAmount'];
   if (financial.some(key => String(a[key] ?? '') !== String(b[key] ?? ''))) return true;
@@ -332,4 +375,4 @@ function assertEnrichmentSafe(store, old, next) {
       [...(store.paytmVerifiedSettlements||[]),...(store.paytmPayoutPostings||[])].some(x=>(x.transactionIds||[]).includes(id)||x.payoutId===payout||x.settlementId===payout))
     throw new Error('This source classification affects an already reviewed or posted payment. Correct its existing review before re-importing transaction '+id+'.');
 }
-module.exports = { registerPaytmReports };
+module.exports = { registerPaytmReports, paytmPreviewStatuses };
