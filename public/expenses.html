@@ -198,10 +198,10 @@
     .ledger-recon-alert.show { display:block; }
     .ledger-recon-alert h2 { margin:0 0 2px; font-size:13.5px; color:#6d4aa0; }
     .ledger-recon-alert .intro { margin:0 0 6px; color:#766987; font-size:11px; }
-    .ledger-recon-links { display:flex; flex-wrap:wrap; gap:5px; }
+    .ledger-recon-links { display:flex; flex-wrap:wrap; align-items:flex-start; gap:5px; }
     .ledger-recon-link { display:inline-flex; flex:1 1 280px; flex-direction:column; gap:1px; min-width:220px; padding:6px 8px; color:inherit; text-decoration:none; border:1px solid #eee8f6; border-radius:7px; background:rgba(255,255,255,.7); }
     .ledger-recon-link b { color:#68429e; font-size:11.5px; }
-    .ledger-recon-link span { color:#737b89; font-size:10.5px; }
+    .ledger-recon-link span { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; color:#737b89; font-size:10.5px; }
   </style>
 </head>
 <body>
@@ -525,7 +525,7 @@
         var host=el('ledgerReconciliationAttention'),items=(d.success?d.reminders:[]).filter(function(x){return x.attentionRequired!==false&&x.status!=='up_to_date';});
         if(!items.length){host.className='ledger-recon-alert';host.innerHTML='';return;}
         host.className='ledger-recon-alert show';
-        host.innerHTML='<h2>⚠ Account reconciliations pending</h2><p class="intro">Items appear according to their approved daily, alternate-day or weekly schedule.</p><div class="ledger-recon-links">'+items.map(function(x){var status=x.actionLabel||(x.status==='approval_pending'?'Awaiting Owner approval':x.status==='verification_required'?'Cash verification required':x.pendingDraft?'Finish pending review':'Statement required'),detail=x.detail||(x.status==='approval_pending'?('Physical count submitted for '+(x.draftTo||'—')):x.pendingDraft?('Review started'+(x.draftFrom?' · '+x.draftFrom+' to '+x.draftTo:'')):('Last reconciled: '+(x.reconciledThrough||'Not yet')+(x.daysBehind!=null?' · '+x.daysBehind+' day'+(x.daysBehind===1?'':'s')+' since last review':'')))+(x.cadenceLabel?' · '+x.cadenceLabel:'');return '<a class="ledger-recon-link" href="'+esc(x.href)+'"><b>'+esc(x.account)+' — '+esc(status)+'</b><span>'+esc(detail)+' · Open reconciliation →</span></a>';}).join('')+'</div>';
+        host.innerHTML='<h2>⚠ Account reconciliations pending</h2><p class="intro">Items appear according to their approved daily, alternate-day or weekly schedule.</p><div class="ledger-recon-links">'+items.map(function(x){var status=x.actionLabel||(x.status==='approval_pending'?'Awaiting Owner approval':x.status==='verification_required'?'Cash verification required':x.pendingDraft?'Finish pending review':'Statement required'),counts=x.settlementCounts||{},detail=x.type==='paytm'?((Number(counts.reviewRequired)||Number(counts.incomplete)||0)+' item(s) need review'+(x.cadenceLabel?' · '+x.cadenceLabel:'')):(x.type==='cash'&&x.cashStatus&&x.cashStatus.counts?((Number(x.cashStatus.counts.reviewRequired)||0)+' cash verification(s) need review'):(x.status==='approval_pending'?('Physical count submitted for '+(x.draftTo||'—')):x.pendingDraft?('Review started'+(x.draftFrom?' · '+x.draftFrom+' to '+x.draftTo:'')):('Last reconciled: '+(x.reconciledThrough||'Not yet')+(x.daysBehind!=null?' · '+x.daysBehind+' day'+(x.daysBehind===1?'':'s')+' since last review':'')))+(x.cadenceLabel?' · '+x.cadenceLabel:''));return '<a class="ledger-recon-link" href="'+esc(x.href)+'"><b>'+esc(x.account)+' — '+esc(status)+'</b><span>'+esc(detail)+' · Open reconciliation →</span></a>';}).join('')+'</div>';
       });
     }
 
