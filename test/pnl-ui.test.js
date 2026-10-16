@@ -9,12 +9,13 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'pnl.js'), '
 test('P&L collapse release versions script and styles to avoid stale cached assets', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','pnl.html'),'utf8');
   assert.match(html, /href="\/pnl\.css\?v=20261008-collapsed-heads"/);
-  assert.match(html, /src="\/pnl\.js\?v=20261008-collapsed-heads"/);
+  const hash=require('node:crypto').createHash('sha256').update(source).digest('hex').slice(0,12);
+  assert.ok(html.includes('/pnl.js?v='+hash),'current report code must be content-versioned');
 });
 function sample(missing = false) {
   return buildReport({ orders: { orders: { O: { id: 'O', name: '<unsafe invoice>', channel: 'POS', financialStatus: 'paid', taxesIncluded: true, total: 2999, processedAt: '2026-10-01', lineItems: [{ id: 'L', sku: 'SKU', qty: 1, price: 2999 }] } } }, opening: missing ? {} : { lots: [{ sku: 'SKU', qty: 10, unitCost: 999, verified: true }] } }, { from: '2026-10-01', to: '2026-10-08' });
 }
-function harness(fetcher) {
+function harness(fetcher, url='https://example.test/pnl.html') {
   const elements = new Map(), listeners = {}, groupRows = new Map(), tabs = ['statement', 'tax', 'collections', 'trends', 'policy'].map(id => ({ dataset: { tab: id }, listeners: {}, setAttribute() {}, addEventListener(name, fn) { this.listeners[name] = fn; } }));
   function element(id) {
     if (!elements.has(id)) elements.set(id, { id, value: '', innerHTML: '', textContent: '', hidden: false, disabled: false, open: false, listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; }, showModal() { this.open = true; }, close() { this.open = false; } });
@@ -22,10 +23,20 @@ function harness(fetcher) {
   }
   element('channel').value = 'All';
   const document = { getElementById: element, body: { classList: { add() {}, remove() {} } }, querySelectorAll(selector) { const group=selector.match(/^\[data-expense-group="(\w+)"\]$/)?.[1]; return group ? groupRows.get(group)||[] : selector === '[data-tab]' ? tabs : selector === '.view' ? tabs.map(t => element(t.dataset.tab)) : []; }, addEventListener(name, fn) { listeners[name] = fn; } };
-  vm.runInNewContext(source, { document, fetch: fetcher, AbortController, URLSearchParams, Date, location: {}, window: { print() {} } });
-  return { element, tabs, groupRows, clickHead(head) { listeners.click({ target: { closest: selector => selector==='[data-group-toggle]' ? head : null } }); }, clickFilter(filter) { listeners.click({ target: { closest: selector => selector==='[data-filter]' ? { dataset: { filter } } : null } }); }, refresh() { element('filters').listeners.submit({ preventDefault() {} }); } };
+  const window={print(){},location:new URL(url),history:{state:null,replaceState(_state,_title,target){window.location=new URL(target,window.location);}}};
+  const context=vm.createContext({document,fetch:fetcher,AbortController,URL,URLSearchParams,Date,location:window.location,window});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/navigation-state.js'),'utf8'),context);context.SankiNavigation=window.SankiNavigation;vm.runInContext(source,context);
+  return { element, tabs, groupRows, url:()=>window.location.href, clickHead(head) { listeners.click({ target: { closest: selector => selector==='[data-group-toggle]' ? head : null } }); }, clickFilter(filter) { listeners.click({ target: { closest: selector => selector==='[data-filter]' ? { dataset: { filter } } : null } }); }, refresh() { element('filters').listeners.submit({ preventDefault() {} }); } };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('P&L page refresh keeps selected tab, date range and channel without replaying mutations',async()=>{
+  const calls=[],fetcher=async(url,options)=>{calls.push({url,options});return{ok:true,status:200,json:async()=>sample()};};
+  const first=harness(fetcher,'https://example.test/pnl.html?from=2026-09-01&to=2026-09-15&channel=POS');await settle();first.tabs[2].listeners.click();
+  const refreshed=harness(fetcher,first.url());await settle();
+  assert.equal(refreshed.element('collections').hidden,false);assert.equal(refreshed.element('statement').hidden,true);assert.equal(refreshed.element('from').value,'2026-09-01');assert.equal(refreshed.element('to').value,'2026-09-15');assert.equal(refreshed.element('channel').value,'POS');
+  assert.ok(calls.every(call=>!call.options?.method||call.options.method==='GET'));
+});
 test('P&L UI renders typed totals, escaped references, tabs and SKU drill-down', async () => {
   const ui = harness(async () => ({ ok: true, status: 200, json: async () => sample() })); await settle();
   assert.match(ui.element('cards').innerHTML, /1,542\.53/); assert.equal(ui.element('export').disabled, false);
