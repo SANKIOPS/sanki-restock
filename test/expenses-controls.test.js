@@ -13,11 +13,24 @@ const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPerso
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, bankFinalizationImportPlan, restoreApprovalTrimmedDraft, validateApprovalTrimmedDraftExternalRows, createBankReconciliationDraft, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const { applyAxisArshpreetReimbursementDuplicateRepair } = require('../modules/expenses');
+const { applyArshpreetSep01SalaryAdvanceRepair } = require('../modules/expenses');
 const { applyCashCounterMissingEntries } = require('../modules/expenses');
 const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
 const { stagePaytmSettlementsFromAxisDraft } = require('../modules/expenses');
 const { bankReversalPairCandidates } = require('../modules/expenses');
 const XLSX = require('xlsx');
+
+test('TR-00124 is preserved and linked to an Arshpreet salary advance instead of the imprest ledger',()=>{
+  const transfer={id:'TR-00124',nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Arshpreet 1919',date:'2026-09-01',amount:10000,classification:'internal_transfer',proof:'/salary-advance-10000.jpg',proofs:['/salary-advance-10000.jpg'],note:'Bank transfer',createdBy:'prashant',createdAt:'2026-09-01T10:00:00.000Z'};
+  const store={transfers:[transfer],oneTimeMigrations:{},auditLog:[],auditSeq:0};
+  const salary={employees:{EMP1:{id:'EMP1',name:'Arshpreet Singh Arora'}},advances:{'ADV-00053':{id:'ADV-00053',empId:'EMP1',employeeName:'Arshpreet Singh Arora',amount:14000,date:'2026-09-12',recoveries:[]}},advanceSeq:53,advanceAudit:[],oneTimeMigrations:{}};
+  const result=applyArshpreetSep01SalaryAdvanceRepair(store,salary);
+  assert.equal(result.expensesChanged,true);assert.equal(result.salaryChanged,true);
+  assert.equal(transfer.classification,'salary_advance_funding');assert.equal(transfer.salaryAdvanceId,'ADV-00054');assert.equal(transfer.employeeId,'EMP1');
+  const advance=salary.advances['ADV-00054'];assert.equal(advance.amount,10000);assert.equal(advance.date,'2026-09-01');assert.equal(advance.account,'Axis Bank 3448');assert.equal(advance.fundingTransferId,'TR-00124');assert.equal(advance.fundingToAccount,'Arshpreet 1919');assert.deepEqual(advance.recoveries,[]);assert.equal(advance.proof,'/salary-advance-10000.jpg');
+  assert.ok(salary.advanceAudit.some(event=>event.action==='TRANSFER_RECLASSIFIED_AS_ADVANCE'&&event.advanceId===advance.id));assert.ok(store.auditLog.some(event=>event.action==='TRANSFER_RECLASSIFIED_AS_SALARY_ADVANCE'&&event.subjectId==='TR-00124'));
+  assert.deepEqual(applyArshpreetSep01SalaryAdvanceRepair(store,salary),{expensesChanged:false,salaryChanged:false},'the repair is idempotent');
+});
 
 test('bank reversal candidates require explicit bank evidence and one exact reference pair',()=>{
   const debit={date:'2098-06-01',reference:'123456789012',description:'UPI outgoing',debit:665,credit:0},credit={date:'2098-06-01',reference:'123456789012',description:'REVERSED : UPI outgoing',debit:0,credit:665,reversal:true};
@@ -1829,7 +1842,18 @@ test('advanced accounting workspaces are Owner/Admin only and claimant classific
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
   assert.match(html, /cfg\.isAdmin\?'<div class="fld full"><label>Category/);
   assert.match(html, /if\(!cfg\.isAdmin\).*every non-Owner\/Admin user/);
-  assert.match(html, /function syncApprovalsTab\(\)\{\s*if\(!cfg\.isAdmin\) return/);
+  assert.match(html, /function syncApprovalsTab\(\)\{\s*var existing/);
+  assert.doesNotMatch(html, /b\.dataset\.t\s*=\s*'approvals'/);
+});
+
+test('expense navigation is grouped and refunds are nested inside receivables',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),refunds=fs.readFileSync(path.join(__dirname,'..','public','expense-refunds.js'),'utf8');
+  ['A. Accounting','B. Ledgers','C. Manage','D. Audit'].forEach(label=>assert.match(html,new RegExp(label.replace('.','\\.'))));
+  assert.ok(html.indexOf('data-t="list"')<html.indexOf('data-t="pending"'));assert.ok(html.indexOf('data-t="pending"')<html.indexOf('data-t="receivables"'));assert.ok(html.indexOf('data-t="receivables"')<html.indexOf('data-t="spending"'));
+  assert.ok(html.indexOf('data-t="vendors"')<html.indexOf('data-t="salaryledgers"'));assert.ok(html.indexOf('data-t="salaryledgers"')<html.indexOf('data-t="cash"'));assert.ok(html.indexOf('data-t="cash"')<html.indexOf('data-t="creditcards"'));assert.ok(html.indexOf('data-t="creditcards"')<html.indexOf('data-t="reimbursements"'));
+  assert.doesNotMatch(html,/<button[^>]+data-t="refunds"/);assert.doesNotMatch(html,/<button[^>]+data-t="approvals"/);
+  assert.match(html,/data-receivables-view="refunds"/);assert.match(html,/if\(tp==='refunds'\)\{tp='receivables';receivablesSubview='refunds';\}/);
+  assert.match(refunds,/tab !== 'receivables' \|\| receivablesSubview !== 'refunds'/);
 });
 
 test('account ledgers render an expandable one-click money trail', () => {
