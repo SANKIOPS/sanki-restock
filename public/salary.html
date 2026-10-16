@@ -100,6 +100,7 @@
     <dialog id="advanceEditDlg"><div class="dialog-body"><h3 style="margin-top:0">Correct posted advance</h3><input id="advance_edit_id" type="hidden"><p class="conf">Check the original payout proof before correcting an amount, date or account. The change is audited; a non-Owner edit goes for approval.</p><div class="advance-grid"><div><label>Amount ₹</label><input id="advance_edit_amount" type="number" min="0.01" step="0.01"></div><div><label>Actual payout date</label><input id="advance_edit_date" type="date"></div><div><label>Paying account</label><input id="advance_edit_account"></div><div><label>Note</label><input id="advance_edit_note"></div><div style="grid-column:1/-1"><label>Reason for correction</label><input id="advance_edit_reason" required></div></div><div class="bar" style="margin-top:16px"><button class="btn" onclick="saveAdvanceEdit()">Save correction</button><button class="btn ghost" onclick="el('advanceEditDlg').close()">Cancel</button></div></div></dialog>
   </div>
 
+  <script src="/navigation-state.js?v=bb4a39520dbd"></script>
   <script src="/sidebar.js"></script>
   <script src="/salary-advance-activity.js?v=20261009-1"></script>
   <script>
@@ -121,6 +122,10 @@
     function flash(txt, ok){ el('msg').className='msg '+(ok?'ok':'err'); el('msg').textContent=txt; }
 
     function load(){
+      SankiNavigation.set({tab:state.view,entity:state.entity,month:state.ym});
+      Array.prototype.forEach.call(el('tabs').querySelectorAll('[data-v]'),function(b){b.classList.toggle('on',b.dataset.v===state.view);});
+      Array.prototype.forEach.call(el('salaryEntities').querySelectorAll('[data-entity]'),function(b){b.classList.toggle('on',b.dataset.entity===state.entity);});
+      el('salaryTitle').textContent=(state.entity==='SAMAST'?'Samast':'SANKI')+' Salary & Attendance';
       el('mlabel').textContent = ymLabel(state.ym);
       if(state.view==='employees'){ loadEmployees(); return; }
       if(state.view==='increments'){ loadIncrements(); return; }
@@ -459,16 +464,15 @@
     el('prevM').addEventListener('click', function(){ state.ym = shiftMonth(state.ym, -1); load(); });
     el('nextM').addEventListener('click', function(){ state.ym = shiftMonth(state.ym, 1); load(); });
 
-    // Default to the month that has data (July 2026 seed) if the current month is empty.
+    // A refresh must keep the requested view, entity and month, even if empty.
     (function(){
       var now = new Date(); state.ym = now.getFullYear()+'-'+pad(now.getMonth()+1);
+      state.ym=SankiNavigation.month('month',state.ym);
+      state.entity=SankiNavigation.choice('entity',['SANKI','SAMAST'],'SANKI');
+      state.view=SankiNavigation.choice('tab',['payroll','attendance','employees','increments','advances'],'payroll');
       fetch('/api/auth/me').then(function(r){return r.json();}).catch(function(){return {};}).then(function(me){
         state.paymentOnly=String(me.username||'').trim().toLowerCase()==='prashant'&&!(me.roles||[]).some(function(r){return ['admin','accounting','owner'].includes(r);});
-        if(state.paymentOnly){Array.prototype.forEach.call(el('salaryEntities').querySelectorAll('[data-entity]'),function(b){if(b.dataset.entity!=='SANKI')b.hidden=true;});Array.prototype.forEach.call(el('tabs').querySelectorAll('[data-v]'),function(b){if(b.dataset.v!=='payroll'&&b.dataset.v!=='advances')b.hidden=true;});}
-        return api('/api/salary/month/'+state.ym);
-      }).then(function(d){
-        var has = d && d.success && d.rows && d.rows.some(function(r){ return r.paidDays!=null || (r.advance||r.paid); });
-        if(!has) state.ym = '2026-07';
+        if(state.paymentOnly){state.entity='SANKI';if(state.view!=='payroll'&&state.view!=='advances')state.view='payroll';Array.prototype.forEach.call(el('salaryEntities').querySelectorAll('[data-entity]'),function(b){if(b.dataset.entity!=='SANKI')b.hidden=true;});Array.prototype.forEach.call(el('tabs').querySelectorAll('[data-v]'),function(b){if(b.dataset.v!=='payroll'&&b.dataset.v!=='advances')b.hidden=true;});}
         load();
       }).catch(function(){ load(); });
     })();

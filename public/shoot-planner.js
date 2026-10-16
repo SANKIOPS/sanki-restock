@@ -28,6 +28,8 @@
  async function assign(){if(loading||!suggestions.length)return;loading=true;message('Assigning combinations…');try{const data=await api('/assign',{revision:state.revision,modelName:$('plannerModel').value,date:$('plannerDate').value,combinations:suggestions.map(x=>({upperId:x.upper.id,lowerId:x.lower.id}))});state={...state,...data};refreshStats();suggestions=[];render();message('Outfits assigned. They are protected from duplicate assignment.');window.dispatchEvent(new Event('planner:changed'));}catch(error){message(error.message,true);}finally{loading=false;}}
  async function change(path,body,method){if(loading)return;loading=true;try{const data=await api(path,{...body,revision:state.revision},method);state={...state,...data};refreshStats();render();message(method==='DELETE'?'Combination released.':'Combination marked as shot.');window.dispatchEvent(new Event('planner:changed'));}catch(error){message(error.message,true);}finally{loading=false;}}
  $('plannerForm').addEventListener('submit',suggest);
- $('plannerTab').onclick=()=>{$('calendarTab').setAttribute('aria-selected','false');$('packagesTab').setAttribute('aria-selected','false');$('plannerTab').setAttribute('aria-selected','true');$('calendarView').hidden=true;$('packagesView').hidden=true;$('plannerView').hidden=false;load();};
+ function openPlanner(){SankiNavigation.set({tab:'planner'});$('calendarTab').setAttribute('aria-selected','false');$('packagesTab').setAttribute('aria-selected','false');$('plannerTab').setAttribute('aria-selected','true');$('calendarView').hidden=true;$('packagesView').hidden=true;$('plannerView').hidden=false;load();}
+ $('plannerTab').onclick=openPlanner;
+ if(SankiNavigation.choice('tab',['calendar','packages','planner'],'calendar')==='planner')openPlanner();
  document.querySelectorAll('#imageDialog [data-close]').forEach(button=>button.onclick=()=>$('imageDialog').close());
 })();

@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script src="/navigation-state.js?v=bb4a39520dbd"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fresh Procurement · Sanki Business OS</title>
@@ -1342,6 +1343,7 @@
 
   // ── Line tabs: SANKI FUNKY (existing) vs SANKI CASUALS (new system) ──
   function switchLine(line){
+    SankiNavigation.set({line:line});
     var funky = line !== 'casual';
     czLine = funky ? 'funky' : 'casuals';
     el('lineFunky').style.display = 'none';
@@ -1360,7 +1362,7 @@
   }
   el('tabFunky').addEventListener('click', function(){ switchLine('funky'); });
   el('tabCasual').addEventListener('click', function(){ switchLine('casual'); });
-  (function(){ var saved='funky'; try { saved = localStorage.getItem('sanki_fresh_line') || 'funky'; } catch(e){} switchLine(saved); })();
+  (function(){ var saved='funky'; try { saved = localStorage.getItem('sanki_fresh_line') || 'funky'; } catch(e){} switchLine(SankiNavigation.choice('line',['funky','casual'],saved==='casual'?'casual':'funky')); })();
 
   // Wiring
   ['tStatement','tMedium','tBasic'].forEach(function(id){ el(id).addEventListener('input', renderTiers); el(id).addEventListener('change', saveSettings); });

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sanki Restocking Dashboard</title>
+<script src="/navigation-state.js?v=bb4a39520dbd"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -847,12 +848,14 @@ let currentSearchFilter = 'all';
 let purchaseOrders = safeParse('sanki_pos', []);
 let THRESHOLD_CRITICAL = parseInt(localStorage.getItem('t_critical') || '4');
 let THRESHOLD_LOW = parseInt(localStorage.getItem('t_low') || '10');
-let poTabFilter = 'all';
+let poTabFilter = SankiNavigation.choice('poTab',['all','active','draft','transit','received','fulfilled'],'all');
 
 // ════════════════════════════════════════════════════════════
 // NAVIGATION
 // ════════════════════════════════════════════════════════════
 function showPage(p) {
+  if (!document.getElementById('page-' + p)) return;
+  SankiNavigation.set({}, p);
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   const pg = document.getElementById('page-' + p);
@@ -879,15 +882,15 @@ function showPage(p) {
     }
       if (p === 'search') renderSearch('');
   if (p === 'hot') renderHotSellers();
-  if (p === 'po') renderPOPage();
+  if (p === 'po') { document.querySelectorAll('#page-po .tab').forEach(function(b){b.classList.toggle('active',(b.getAttribute('onclick')||'').indexOf("'"+poTabFilter+"'")>=0);});renderPOPage(); }
   if (p === 'suppliers') renderSuppliersPage();
   if (p === 'dashboard') updateActivePOList();
   if (p === 'procurement') { if(typeof renderProcTable==='function') renderProcTable(); }
-  if (p === 'finance') { if(typeof setFinTab==='function'){setFinTab('pl');renderPLMetrics();renderPLTable();renderExpenses();renderMonthly();} }
+  if (p === 'finance') { if(typeof setFinTab==='function'){setFinTab(SankiNavigation.choice('financeTab',['pl','expenses','monthly'],'pl'));renderPLMetrics();renderPLTable();renderExpenses();renderMonthly();} }
   if (p === 'customers') { if(typeof renderCustomers==='function') renderCustomers(); }
   if (p === 'whatsapp') { if(typeof renderWAStats==='function') renderWAStats(); }
   if (p === 'content') { if(typeof renderContent==='function') renderContent(); }
-  if (p === 'marketing') { if(typeof setMktTab==='function'){setMktTab('calendar');renderCalendar();renderCampaigns();} }
+  if (p === 'marketing') { if(typeof setMktTab==='function'){setMktTab(SankiNavigation.choice('marketingTab',['calendar','campaigns'],'calendar'));renderCalendar();renderCampaigns();} }
   if (p === 'orders') { if(typeof initOrdersPage==='function') initOrdersPage(); }
   document.getElementById('exportMenu').style.display = 'none';
   document.getElementById('poMenu').style.display = 'none';
@@ -2161,6 +2164,7 @@ function useIdentifyMatch(name) {
 // PURCHASE ORDERS
 // ════════════════════════════════════════════════════════════
 function setPOTab(el, tab) {
+  SankiNavigation.set({poTab:tab});
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   el.classList.add('active');
   poTabFilter=tab;
@@ -2723,6 +2727,7 @@ function exportProcurementCSV(){
 // FINANCE
 // ══════════════════════════════════════
 function setFinTab(tab){
+  SankiNavigation.set({financeTab:tab});
   ['pl','expenses','monthly'].forEach(function(t){
     document.getElementById('finContent-'+t).style.display=t===tab?'':'none';
     var btn=document.getElementById('finTab-'+t);
@@ -2839,7 +2844,7 @@ function renderContent(){document.getElementById('contentTbody').innerHTML=CONTE
 // ══════════════════════════════════════
 // MARKETING
 // ══════════════════════════════════════
-function setMktTab(tab){['calendar','campaigns'].forEach(function(t){document.getElementById('mktContent-'+t).style.display=t===tab?'':'none';var btn=document.getElementById('mktTab-'+t);if(btn){btn.style.background=t===tab?'var(--info)':'';btn.style.color=t===tab?'#fff':'';}});}
+function setMktTab(tab){SankiNavigation.set({marketingTab:tab});['calendar','campaigns'].forEach(function(t){document.getElementById('mktContent-'+t).style.display=t===tab?'':'none';var btn=document.getElementById('mktTab-'+t);if(btn){btn.style.background=t===tab?'var(--info)':'';btn.style.color=t===tab?'#fff':'';}});}
 function openCalModal(){document.getElementById('cal-date').value=new Date().toISOString().split('T')[0];document.getElementById('cal-caption').value='';document.getElementById('calModal').style.display='flex';}
 function closeCalModal(){document.getElementById('calModal').style.display='none';}
 function saveCalItem(){var item={id:Date.now(),date:document.getElementById('cal-date').value,type:document.getElementById('cal-type').value,platform:document.getElementById('cal-platform').value,status:document.getElementById('cal-status').value,caption:document.getElementById('cal-caption').value};CAL_ITEMS.push(item);saveExt('sanki_calendar',CAL_ITEMS);closeCalModal();renderCalendar();}

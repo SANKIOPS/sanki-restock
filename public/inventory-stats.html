@@ -48,7 +48,7 @@
   </style>
 </head>
 <body>
-<script src="/sidebar.js"></script>
+<script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script>
   <header class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-3">
     <div class="flex items-center gap-3">
       <a href="/" class="text-blue-600 font-bold text-lg">⚡ Sanki Dashboard</a>
@@ -129,6 +129,7 @@
   const STATE_KEY = 'sanki_inv_stats_state_v2';
 
   const _state = loadState();
+  _state.view=SankiNavigation.choice('view',['sku','product','vendor','category'],_state.view);
   function loadState() {
     try {
       const s = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
@@ -143,6 +144,7 @@
     }
   }
   function saveState() {
+    SankiNavigation.set({view:_state.view});
     try { localStorage.setItem(STATE_KEY, JSON.stringify(_state)); } catch(e) {}
   }
 
@@ -544,6 +546,7 @@
 
   let _lastRender = { rows: [], cols: [] };
   function render() {
+    SankiNavigation.set({view:_state.view});
     renderTabs();
     renderBreadcrumb();
     renderSummary();
