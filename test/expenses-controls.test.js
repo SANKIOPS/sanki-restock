@@ -1846,14 +1846,16 @@ test('advanced accounting workspaces are Owner/Admin only and claimant classific
   assert.doesNotMatch(html, /b\.dataset\.t\s*=\s*'approvals'/);
 });
 
-test('expense navigation is grouped and refunds are nested inside receivables',()=>{
+test('expense navigation uses collapsible groups and refunds render on the receivables page',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),refunds=fs.readFileSync(path.join(__dirname,'..','public','expense-refunds.js'),'utf8');
-  ['A. Accounting','B. Ledgers','C. Manage','D. Audit'].forEach(label=>assert.match(html,new RegExp(label.replace('.','\\.'))));
+  ['accounting','ledgers','manage','audit'].forEach(group=>{assert.match(html,new RegExp('data-group-toggle="'+group+'"'));assert.match(html,new RegExp('data-tab-group="'+group+'"'));});
   assert.ok(html.indexOf('data-t="list"')<html.indexOf('data-t="pending"'));assert.ok(html.indexOf('data-t="pending"')<html.indexOf('data-t="receivables"'));assert.ok(html.indexOf('data-t="receivables"')<html.indexOf('data-t="spending"'));
   assert.ok(html.indexOf('data-t="vendors"')<html.indexOf('data-t="salaryledgers"'));assert.ok(html.indexOf('data-t="salaryledgers"')<html.indexOf('data-t="cash"'));assert.ok(html.indexOf('data-t="cash"')<html.indexOf('data-t="creditcards"'));assert.ok(html.indexOf('data-t="creditcards"')<html.indexOf('data-t="reimbursements"'));
   assert.doesNotMatch(html,/<button[^>]+data-t="refunds"/);assert.doesNotMatch(html,/<button[^>]+data-t="approvals"/);
-  assert.match(html,/data-receivables-view="refunds"/);assert.match(html,/if\(tp==='refunds'\)\{tp='receivables';receivablesSubview='refunds';\}/);
-  assert.match(refunds,/tab !== 'receivables' \|\| receivablesSubview !== 'refunds'/);
+  assert.match(html,/function toggleTabGroup\(name\)/);assert.match(html,/group\.classList\.toggle\('open',expanded\)/);assert.match(html,/button\.setAttribute\('aria-expanded',expanded\?'true':'false'\)/);
+  assert.match(html,/id="rv_refunds_section"/);assert.match(html,/renderRefundsSection\('rv_refunds_section'\)/);assert.match(html,/if\(tp==='refunds'\)tp='receivables'/);
+  assert.doesNotMatch(html,/data-receivables-view=/);assert.doesNotMatch(html,/receivablesSubview/);
+  assert.match(refunds,/window\.renderRefundsSection/);assert.match(refunds,/refundHostId/);assert.doesNotMatch(refunds,/receivablesSubview|receivablesSubnav|bindReceivablesSubnav/);
 });
 
 test('account ledgers render an expandable one-click money trail', () => {
