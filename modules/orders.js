@@ -390,19 +390,25 @@ router.post('/api/orders-ledger/gokwik-report', financeUpload.single('file'), (r
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
 let financeRefreshing=false, financeLastAttempt=0;
-router.post('/api/orders-ledger/velocity-finance/sync', async(req,res)=>{
-  if(financeRefreshing)return res.status(409).json({success:false,error:'Velocity finance sync already running'});
-  if(!process.env.VELOCITY_API_KEY)return res.status(503).json({success:false,error:'A named Velocity API key must be configured on the server'});
-  if(Date.now()-financeLastAttempt<60000)return res.status(429).json({success:false,error:'Please wait one minute before another finance sync'});
-  financeRefreshing=true; financeLastAttempt=Date.now();
+async function syncFinance() {
+  if(financeRefreshing)throw new Error('Velocity finance sync already running');
+  if(!process.env.VELOCITY_API_KEY)throw new Error('A named Velocity API key must be configured on the server');
+  if(Date.now()-financeLastAttempt<60000)throw new Error('Please wait one minute before another finance sync');
+  financeRefreshing=true;financeLastAttempt=Date.now();
   try {
-    const store=loadStore(),awbs=Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)).filter(Boolean);
-    if(!awbs.length)return res.status(400).json({success:false,error:'No AWBs available. Sync Shopify orders first.'});
+    const store=loadStore();let legacy={orders:[]};
+    try{legacy=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'sanki_cache.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    const linked=new Set(Object.keys(store.orders));
+    const awbs=[...new Set([...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...(legacy.orders||[]).filter(o=>linked.has(String(o.id))).flatMap(o=>(o.fulfillments||[]).filter(f=>f.status!=='cancelled').map(f=>f.tracking_number))].map(v=>String(v||'').trim()).filter(v=>v&&!/^(n\/a|na|none)$/i.test(v)))];
+    if(!awbs.length)throw new Error('No AWBs available. Sync Shopify orders first.');
     const rows=await require('./velocity-finance').fetchRemittances({awbs,token:process.env.VELOCITY_API_KEY});
     const file=path.join(path.dirname(ORDERS_PATH),'velocity_finance_evidence.json');
     atomicWrite(file,JSON.stringify({rows,updatedAt:new Date().toISOString()}));
-    res.json({success:true,checked:rows.length,reportedSettled:rows.filter(r=>r.utr).length,bankVerified:false});
-  }catch(e){res.status(502).json({success:false,error:e.message});}finally{financeRefreshing=false;}
+    return {success:true,checked:rows.length,reportedSettled:rows.filter(r=>r.utr).length,bankVerified:false};
+  }finally{financeRefreshing=false;}
+}
+router.post('/api/orders-ledger/velocity-finance/sync', async(req,res)=>{
+  try{res.json(await syncFinance());}catch(e){res.status(502).json({success:false,error:e.message});}
 });
 
 router.get('/api/orders-ledger/integrated', (req, res) => {
@@ -419,6 +425,7 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const orders = mergedList(store).filter(o => !boundary || String(o.createdAt || '') >= boundary)
       .map(o => integrateOrder(o, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
       .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    require('./order-settlement-links').attachSettlementLinks(orders,read('expenses.json',{}),online.rows||[],finance.rows||[]);
     res.json({ success: true, orders, sources: { shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
   } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }
 });
@@ -473,4 +480,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance };
