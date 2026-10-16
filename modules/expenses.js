@@ -8,6 +8,7 @@ const { reconciliationReminderAttention } = require('./reconciliation-reminder-a
 const { cashVerificationView } = require('./cash-verification-status');
 const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
 const { vendorSearchRank, compareVendorSearch } = require('./vendor-ledger-search');
+const claimantPolicy = require('./expense-claimant-policy');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -47,6 +48,15 @@ const { roundingReview, approvedBaseAmount } = require('./paytm-rounding');
 const { shopifyClient } = require('./shopify-client');
 
 const router = express.Router();
+// Enforce the claimant surface before upload, reconciliation or other route
+// wrappers can run. Read access to a record/proof is checked again below.
+router.use((req, res, next) => {
+  if (req.path !== '/api/expenses' && !String(req.path||'').startsWith('/api/expenses/')) return next();
+  if (claimantPolicy.claimantOnly(req) && !claimantPolicy.allowedRequest(req.method, req.path)) {
+    return res.status(403).json({ success:false, error:'Claimants may only log today’s expenses and view their own expense status and proofs. Ask an approver to make corrections.' });
+  }
+  next();
+});
 const modelCalendar = require('./model-calendar');
 
 const DATA_DIR = process.env.DATA_PATH
@@ -1406,6 +1416,7 @@ function telegramApi(method, routePath, target, input) {
   const layer=router.stack.find(item=>item.route&&item.route.path===routePath&&item.route.methods[String(method||'POST').toLowerCase()]);
   if(!layer)return{success:false,error:'Accounting action is unavailable.'};
   const o=input||{},req={body:o.body||{},params:o.params||{},query:o.query||{},headers:{'user-agent':'Telegram','x-forwarded-for':'Telegram'},ip:'Telegram',user:{username:String(target&&target.username||target||''),roles:(target&&target.roles)||[],role:((target&&target.roles)||[])[0]||''},get(name){return this.headers[String(name).toLowerCase()]||'';}};
+  if(claimantPolicy.claimantOnly(req)&&!claimantPolicy.allowedRequest(String(method||'POST').toUpperCase(),routePath))return{success:false,status:403,error:'Claimants may only log today’s expenses and view their own expense status and proofs.'};
   let status=200,result={success:false,error:'Accounting action did not return a result.'};
   const res={status(code){status=code;return this;},json(value){result=value;return this;},end(){return this;},sendFile(){return this;}};
   try{layer.route.stack[0].handle(req,res,()=>{});}catch(e){return{success:false,error:String(e.message||e),status:500};}
@@ -2067,8 +2078,12 @@ router.post('/api/expenses/upload', proofUpload.single('photo'), async (req, res
 });
 router.get('/api/expenses/photo/:file', (req, res) => {
   const name = path.basename(String(req.params.file || ''));
+  if (claimantPolicy.claimantOnly(req)) {
+    const s=loadStore(),url='/api/expenses/photo/'+name;
+    if (!Object.values(s.expenses||{}).some(e=>canViewExpense(req,e)&&claimantPolicy.expenseProofs(e).includes(url))) return res.status(403).end();
+  }
   if (name.startsWith('personal-')) {
-    const s=loadStore(),url='/api/expenses/photo/'+name,linked=Object.values(s.expenses||{}).find(e=>normalizedNature(e.nature)==='PERSONAL'&&[].concat(e.billPhotos||[],e.qrPhoto||[],e.purchasePaymentProofs||[],e.paymentProofs||[],...(e.payments||[]).map(p=>p.proofs||[]),...(e.reimbursementPayments||[]).map(p=>p.proofs||[])).includes(url));
+    const s=loadStore(),url='/api/expenses/photo/'+name,linked=Object.values(s.expenses||{}).find(e=>normalizedNature(e.nature)==='PERSONAL'&&canViewExpense(req,e)&&claimantPolicy.expenseProofs(e).includes(url));
     const linkedRefund=expenseRefunds.records(s).find(r=>r.nature==='PERSONAL'&&(r.proofs||[]).includes(url));
     if ((!linked || !canViewExpense(req,linked)) && !(linkedRefund&&isOwner(req))) return res.status(403).end();
   }
@@ -2121,12 +2136,16 @@ router.get('/api/expenses/config', (req, res) => {
     bills: BILLS.filter(b => b !== 'none'), paymentTypes: PAYMENT_TYPES,
     isAdmin: isAdmin(req),
     canManageExpenseRefunds: isAdmin(req),
-    canManageCategories: canManageCategoriesAndVendors(req),
-    canManageVendors: canManageCategoriesAndVendors(req),
+    canManageCategories: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
+    canManageVendors: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
     isOwner: rolesOfReq(req).includes('owner'),
-    canVerifyCounterCash: isOwner(req)||isPrashant(req),
+    canVerifyCounterCash: !claimantPolicy.claimantOnly(req)&&(isOwner(req)||isPrashant(req)),
     canLogCreditCardExpense: canLogCreditCardExpense(req),
     canApprove: canApprove(req),
+    claimantOnly: claimantPolicy.claimantOnly(req),
+    expenseDatePolicy: claimantPolicy.claimantOnly(req) ? 'today_only' : 'any',
+    businessDate: indiaBusinessDate(),
+    businessTimeZone: 'Asia/Kolkata',
     me: (req.user && req.user.username) || '',
     pendingCount: visiblePendingReqs.length
   });
@@ -2135,6 +2154,8 @@ router.get('/api/expenses/config', (req, res) => {
 // ── Create (starts PENDING, logged by a runner) ──────────────────
 router.post('/api/expenses', (req, res) => {
   const b = req.body || {};
+  const now = new Date().toISOString(), datePolicy = claimantPolicy.submissionDate(req,b.date,now);
+  if (datePolicy.error) return res.status(400).json({ success:false, error:datePolicy.error, businessDate:datePolicy.businessDate });
   const s = loadStore();
   let modelContract;
   try { modelContract = modelCalendar.prepareExpenseLink(s, req, b); }
@@ -2193,10 +2214,9 @@ router.post('/api/expenses', (req, res) => {
 
   s.seq = (s.seq || 0) + 1;
   const id = 'EX-' + String(s.seq).padStart(5, '0');
-  const now = new Date().toISOString();
   s.expenses[id] = {
     id,
-    date: (b.date || now.slice(0, 10)).toString().slice(0, 10),
+    date: datePolicy.date,
     particulars: String(b.particulars || '').trim(),
     amount,
     isInstallment,
@@ -2217,7 +2237,7 @@ router.post('/api/expenses', (req, res) => {
     status: 'pending',                            // pending → approved → paid
     paidAmount: paidAlready ? requestedAmount : 0,
     payments: paidAlready ? [{
-      id: 'PAY-001', amount: requestedAmount, date: String(b.date || now.slice(0, 10)).slice(0, 10),
+      id: 'PAY-001', amount: requestedAmount, date: datePolicy.date,
       account: personalAccount, paymentType, creditCardId:creditCard&&creditCard.id||'', proof: personalPaymentProof, proofs:personalPaymentProofs,
       note: String(b.paymentNote || 'Paid personally by submitter').trim(),
       paidBy: claimant, paidAt: now, personalFunds: !creditCard
@@ -2238,12 +2258,13 @@ router.post('/api/expenses', (req, res) => {
 const EXPENSE_METADATA_FIELDS = new Set(['vendor','particulars','ledger','type','editReason']);
 function canEditExpenseMetadata(req,e) {
   if(e.nonExpenseReimbursement||e.salaryAdvanceId)return false;
-  return isAdmin(req) || e.status==='pending' && (canApprove(req)||expenseBelongsToUser(req,e));
+  return isAdmin(req) || e.status==='pending' && canApprove(req);
 }
 function decoratedEditableExpense(s,req,e,blockedReferences) {
   const refs=blockedReferences||unpayBlockedReferences(s),lock=expenseFinancialLock(s,e,{blockedReferences:refs});
   return expenseRefunds.decorateExpense(s,Object.assign({},e,{
     canEditMetadata:!!s.expenses[e.id]&&canEditExpenseMetadata(req,e),
+    canManageExpense:canApprove(req)&&canApproveExpenseNature(req,e),
     financialFieldsLocked:lock.locked,financialLockReason:lock.reason,
     payments:(e.payments||[]).map(p=>Object.assign({},p,{unpayBlockedReason:expenseRefunds.hasSource(s,e.id)?'Reverse the linked refund before removing this payment.':unpayBlockedReason(e,p,refs)}))
   }));
@@ -2302,6 +2323,7 @@ function editExpenseMetadata(s,req,e,b,editReason) {
 const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'sale-allocation', 'receivables', 'vendors', 'custom-ledgers', 'upload', 'batch-pay', 'cash-reconciliations']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
+  if (!canApprove(req)) return res.status(403).json({ success:false, error:'Claimants cannot edit submitted expenses. Ask an approver to make the correction.' });
   const s = loadStore();
   const e = s.expenses[req.params.id];
   if (!e) return res.status(404).json({ success: false, error: 'Not found.' });
@@ -3131,6 +3153,7 @@ router.get('/api/expenses/pending-payments', (req, res) => {
     return true;
   }).map(e => ({
     ...e,
+    canManageExpense:canApprove(req)&&canApproveExpenseNature(req,e),
     balanceDue: expenseRefunds.expenseDue(s,e),
     contractBalance: expenseRefunds.expenseDue(s,e),
     daysPending: Math.max(0, Math.floor((Date.parse(today) - Date.parse(String(e.approvedAt || e.date).slice(0, 10))) / 86400000))
