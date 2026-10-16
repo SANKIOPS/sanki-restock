@@ -217,7 +217,7 @@
     <p class="sub">Log → approve (bill proof) → pay (payment proof). Only approved business expenses reach the P&amp;L.</p>
     <div id="ledgerReconciliationAttention" class="ledger-recon-alert" role="status" aria-live="polite"></div>
 
-    <div class="tabs" id="tabs">
+    <div class="tabs" id="tabs" style="visibility:hidden">
       <div class="tabs-primary">
         <button data-t="log" class="on">＋ Log expense</button>
         <button class="group-toggle" type="button" data-group-toggle="accounting" aria-expanded="false" aria-controls="tabGroupAccounting">Accounting</button>
@@ -524,7 +524,7 @@
   </div></dialog>
 
   <script src="/sidebar.js"></script>
-  <script src="/expense-refunds.js?v=collapsible-receivables-20261016"></script>
+  <script src="/expense-refunds.js?v=56afceda004e"></script>
   <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
   <script src="/expense-loans.js?v=lender-groups-20261012"></script>
   <script src="/reconciliation-status.js?v=status-clarity-20261015"></script>
@@ -568,7 +568,9 @@
     document.addEventListener('click',function(ev){if(ev.target&&ev.target.matches&&ev.target.matches('img.thumb')){ev.preventDefault();ev.stopImmediatePropagation();viewProof(ev.target.src);}},true);
 
     function refreshCategorySuggestions(){(cfg.natures||[]).forEach(function(n){var id='approvalLedgerList_'+n,d=el(id);if(!d){d=document.createElement('datalist');d.id=id;document.body.appendChild(d);}d.innerHTML=categorySuggestions(n);});}
-    function loadConfig(){ return api('/api/expenses/config').then(function(d){ cfg = d; refreshCategorySuggestions(); if(el('approvalLedgerList')) el('approvalLedgerList').innerHTML=cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join(''); }); }
+    function loadConfig(){ return api('/api/expenses/config',{cache:'no-store'}).then(function(d){ if(!d.success)throw Error(d.error||'Could not load expense permissions.');cfg = d; refreshCategorySuggestions(); if(el('approvalLedgerList')) el('approvalLedgerList').innerHTML=cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join(''); }); }
+    function expenseOperatorAllowed(e){return !!(cfg&&cfg.claimantOnly!==true&&cfg.canApprove===true&&e&&e.canManageExpense===true);}
+    function syncClaimantDate(date){var field=el('f_date');if(!field||!cfg.claimantOnly)return;cfg.businessDate=date;field.value=date;field.min=date;field.max=date;field.readOnly=true;}
 
     function setOpenTabGroup(name){
       openTabGroup=name||'';
@@ -608,6 +610,7 @@
     });
 
     function render(){
+      if(cfg.claimantOnly&&tab!=='log'&&tab!=='list')tab='list';
       if(el('panel'))el('panel').dataset.reconciliationDirty='';
       setMsg('');
       if(tab==='log') return renderLog();
@@ -752,11 +755,12 @@
       }).catch(function(){setMsg('Could not load the model package. Reload before submitting.',false);});
     }
     function renderLog(){
+      var entryDate=cfg.claimantOnly?cfg.businessDate:today();
       el('panel').innerHTML =
       '<div class="card">'+
       ((cfg.isOwner||cfg.isAdmin||String(cfg.me||'').trim().toLowerCase()==='prashant')?'<div class="fld" style="margin-bottom:16px"><label>What are you recording?</label><select id="entryKind"><option value="expense">Vendor / other expense</option><option value="advance">Salary advance</option>'+(cfg.isAdmin?'<option value="sourcing">Sourcing Vendor Payment</option>':'')+'</select><div class="hint">Salary payments are recorded on the Salary page. This option records only an advance.</div></div>':'')+
       '<div id="normalExpenseFields" class="grid">'+
-        '<div class="fld"><label>Date</label><input type="date" id="f_date" value="'+today()+'"></div>'+
+        '<div class="fld"><label for="f_date">Date</label><input type="date" id="f_date" value="'+esc(entryDate)+'"'+(cfg.claimantOnly?' readonly min="'+esc(entryDate)+'" max="'+esc(entryDate)+'" aria-describedby="claimantDateHint"':'')+'>'+(cfg.claimantOnly?'<div class="hint" id="claimantDateHint">Today only — India time. For an older bill, ask an approver to record the correct expense date.</div>':'')+'</div>'+
         '<div class="fld" id="normalAmountWrap"><label>Amount ₹</label><input type="number" id="f_amount" min="0" step="1" placeholder="0"></div>'+
         '<div class="fld full"><label>Particulars (what was it for)</label><input id="f_part" placeholder="e.g. lunch for install team, auto to vendor…"></div>'+
         (cfg.isAdmin?'<div class="fld full"><label>Category (expense header)</label>'+
@@ -956,6 +960,7 @@
     function chosenFiles(a,b){return [].concat(Array.prototype.slice.call(el(a).files||[]),Array.prototype.slice.call(el(b).files||[]));}
 
     function saveExpense(){
+      if(cfg.claimantOnly&&el('f_date').value!==cfg.businessDate){syncClaimantDate(cfg.businessDate);setMsg('Claimants can log only today’s expenses. The date has been restored; review the expense and submit again.',false);return;}
       var ledgerVal = el('f_ledger')?el('f_ledger').value.trim():'';
       if(el('f_ledger')&&!findLedger(ledgerVal)){ setMsg('Pick an existing category.', false); return; }
       if(!el('f_vendor').value.trim()){setMsg('Enter or select a vendor name.',false);return;}
@@ -987,7 +992,7 @@
       }).then(function(d){
         btn.disabled=false; el('upState').textContent='';
         if(d.success){ setMsg('Logged '+d.expense.id+' — pending approval.', true); loadConfig().then(renderLog); }
-        else setMsg(d.error||'Could not save.', false);
+        else {if(d.businessDate&&cfg.claimantOnly)syncClaimantDate(d.businessDate);setMsg(d.error||'Could not save.', false);}
       }).catch(function(error){ btn.disabled=false; el('upState').textContent=''; setMsg(error&&error.message||'Upload/save failed.', false); });
     }
 
@@ -1038,7 +1043,7 @@
     window.filterExpenseSummary=function(status){missingBillOnly=false;el('lf_status').value=status;loadList();};
     window.filterMissingBills=function(){missingBillOnly=true;el('lf_status').value='';loadList();};
     function expenseActions(e){
-      if(!cfg.canApprove) return '';
+      if(!expenseOperatorAllowed(e)) return '';
       var edit=cfg.isAdmin?' <button class="btn mini ghost" onclick="editExpense(\''+e.id+'\')">Edit</button>':'';
       if(e.status==='pending') return (canApproveExpense(e)?'<button class="btn mini primary" onclick="approve(\''+e.id+'\')">Approve</button>':'<span class="badge b-nobill">proof incomplete</span>')+edit+' <button class="btn mini ghost" onclick="rejectExpense(\''+e.id+'\')">Reject</button>';
       if((e.status==='approved'||e.status==='partially_paid')&&!e.paidAlready) return '<label class="btn mini ghost combined-pay-choice" title="Select this bill with other outstanding bills for the same vendor"><input type="checkbox" class="combined-pay-select" value="'+esc(e.id)+'" data-vendor="'+esc(String(e.vendor||'').trim().toLowerCase())+'" data-nature="'+esc(e.nature||'SANKI')+'" data-due="'+Math.max(0,(e.amount||0)-(e.paidAmount||0))+'"> Select to combine</label> <button class="btn mini green" onclick="openPay(\''+e.id+'\')">'+(e.status==='partially_paid'?'Record next payment':'Record payment')+'</button>'+(e.status==='approved'&&!(e.payments||[]).length&&!e.isInstallment&&ashpreetPaymentAccounts(e).length?' <button class="btn mini ghost" onclick="openClaimantPay(\''+e.id+'\')">Record Ashpreet-paid</button>':'')+(e.status==='approved'?' <button class="btn mini ghost" onclick="approve(\''+e.id+'\')">Undo approval</button>':'')+edit;
@@ -1064,11 +1069,20 @@
       refresh();
     }
     function paymentHistory(e){
-      var payments=(e.payments||[]).map(function(p){var ref=e.id+'/'+(p.id||'PAYMENT'),gross=Number(p.grossPaymentAmount)||Number(p.amount)||0,advance=Number(p.vendorAdvanceAmount)||0,breakdown=advance?'<br><span class="muted">'+fmt(p.expenseAllocationAmount||p.amount)+' applied to this expense · '+fmt(advance)+' vendor advance</span>':'',unpay=cfg.canApprove&&(!cfg.approvalNatures||cfg.approvalNatures.indexOf(e.nature||'SANKI')>=0)?(p.unpayBlockedReason?'<button type="button" class="btn mini ghost" disabled>Unpay</button><br><span class="muted">'+esc(p.unpayBlockedReason)+'</span>':'<button type="button" class="btn mini ghost" onclick="unpayExpense(\''+e.id+'\',\''+esc(p.id||'')+'\')">Unpay</button>'):'';return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'<br><span class="muted">Transaction ref: '+esc(ref)+'</span>'+breakdown+'</span><span><b>'+fmt(gross)+'</b><br>'+unpay+'</span>'+proofGallery(p.proofs||[p.proof], 'Payment')+'</div>';});
+      var reimbursements=(e.reimbursementPayments||[]).map(function(p){return '<div class="payment-entry"><span><b>Reimbursement'+(p.accountingExcluded?' — reversed':'')+'</b><br>'+esc(p.date||'')+' · '+esc(p.account||'')+'<br><span class="muted">Transaction ref: '+esc(p.transactionReference||e.id+'/'+p.id)+'</span></span><b>'+fmt(p.amount)+'</b>'+proofGallery([].concat(p.proofs||[],p.proof||[]),'Reimbursement')+'</div>';});
+      var payments=(e.payments||[]).map(function(p){var ref=e.id+'/'+(p.id||'PAYMENT'),gross=Number(p.grossPaymentAmount)||Number(p.amount)||0,advance=Number(p.vendorAdvanceAmount)||0,breakdown=advance?'<br><span class="muted">'+fmt(p.expenseAllocationAmount||p.amount)+' applied to this expense · '+fmt(advance)+' vendor advance</span>':'',unpay=expenseOperatorAllowed(e)?(p.unpayBlockedReason?'<button type="button" class="btn mini ghost" disabled>Unpay</button><br><span class="muted">'+esc(p.unpayBlockedReason)+'</span>':'<button type="button" class="btn mini ghost" onclick="unpayExpense(\''+e.id+'\',\''+esc(p.id||'')+'\')">Unpay</button>'):'';return '<div class="payment-entry"><span>'+esc(p.date||'')+' · '+esc(p.account||p.paymentType||'')+(p.paidBy?' · '+esc(p.paidBy):'')+'<br><span class="muted">Transaction ref: '+esc(ref)+'</span>'+breakdown+'</span><span><b>'+fmt(gross)+'</b><br>'+unpay+'</span>'+proofGallery(p.proofs||[p.proof], 'Payment')+'</div>';});
       var advances=(e.vendorAdvanceApplications||[]).filter(function(a){return !a.accountingExcluded;}).map(function(a){return '<div class="payment-entry"><span>'+esc(a.date||e.date||'')+' · '+(a.refundCredit?'Coupon / merchant credit used':'Vendor advance applied')+'<br><span class="muted">'+(a.refundCredit?'Credit ref: '+esc(a.creditReference||a.vendorAdvanceId||'—')+(a.issuer?' · '+esc(a.issuer):''):'Advance ref: '+esc(a.vendorAdvanceId||'—'))+' · no new bank debit</span></span><b>'+fmt(a.amount)+'</b></div>';});
-      if(!payments.length&&!advances.length)return '<span class="muted">No payment recorded yet.</span>';return '<div class="payment-history">'+payments.concat(advances).join('')+'</div>';
+      if(!payments.length&&!advances.length&&!reimbursements.length)return '<span class="muted">No payment recorded yet.</span>';return '<div class="payment-history">'+payments.concat(advances,reimbursements).join('')+'</div>';
     }
     function proofGallery(urls,label){return Array.from(new Set((urls||[]).filter(Boolean))).map(function(url,i){return '<span class="claim-proof"><img class="thumb" src="'+esc(url)+'" onclick="window.open(this.src)" alt="'+esc(label)+' proof">'+esc(label)+' '+(i+1)+'</span>';}).join('');}
+    function expenseTrackingDetails(e){
+      var personalClaim=e.refundAdjustedPersonalPaid!=null?e.refundAdjustedPersonalPaid:(e.personalPaidAmount||0);
+      var approved=!!e.approvedAt||['approved','partially_paid','paid'].indexOf(e.status)>=0;
+      var approval=e.status==='rejected'?'Rejected'+(e.rejectReason?' — '+e.rejectReason:''):approved?'Approved'+(e.approvedBy?' by '+e.approvedBy:''):'Pending approval';
+      var text='<div class="expense-section"><b>Approval & payment status</b><div>'+esc(approval)+'</div><div>Vendor payment: '+fmt(e.paidAmount||0)+' paid · '+fmt(e.balanceDue!=null?e.balanceDue:Math.max(0,(e.amount||0)-(e.paidAmount||0)))+' due</div>';
+      if(e.paidAlready&&e.fundedBy==='claimant')text+='<div>Reimbursement: '+esc(String(e.reimbursementStatus||'awaiting_approval').replace(/_/g,' '))+' · '+fmt(e.reimbursementAmount||0)+' reimbursed'+(e.reimbursementStatus==='rejected'?'':' · '+fmt(Math.max(0,personalClaim-(e.reimbursementAmount||0)))+' remaining')+(e.refundReimbursementRecoverable>0?' · '+fmt(e.refundReimbursementRecoverable)+' to return to company after refund':'')+'</div>';
+      return text+'</div>';
+    }
     function expenseCard(e,rowNo){
       if(e.statementBacked)return '<details class="claim-card" id="row_'+esc(e.id)+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.nature)+'</div><span class="badge b-paid">Credit Card'+(e.unbilled?' · Unbilled':'')+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor)+'<div class="claim-vendor">'+esc(e.particulars)+'</div><div class="claim-row-meta">'+esc(e.account)+' │ '+esc(e.ledger)+' │ '+esc(e.type)+'</div></div><div class="claim-amount">'+fmt(e.amount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Category: '+esc(e.ledger)+'</span><span>Type: '+esc(e.type)+'</span><span>Channel: '+esc(e.channel||'—')+'</span><span>Card: '+esc(e.account)+'</span><span>Source: '+esc(e.creditCardStatementId)+'</span><span>'+esc(e.classification==='refund'?'Refund reduces expenses':'Expense recorded on the transaction date')+'</span></div>'+refundExpenseHistory(e)+'<div class="expense-actions"><a class="btn mini ghost" href="/expenses.html?tab=creditcards&amp;statement='+encodeURIComponent(e.creditCardStatementId)+'">View source statement</a></div></div></details>';
 
@@ -1080,10 +1094,10 @@
       var payingAccountLabel=payingAccounts.length?payingAccounts.join(', '):'Not paid';
       var latestPayment=(e.payments||[])[(e.payments||[]).length-1],latestReference=latestPayment?(e.id+'/'+(latestPayment.id||'PAYMENT')):'';
       var recordedPaymentWithProof=(e.payments||[]).slice().reverse().find(function(p){return !!p.proof||(p.proofs||[]).length;});
-      var paymentProofs=e.paymentProofs||(recordedPaymentWithProof&&(recordedPaymentWithProof.proofs||[recordedPaymentWithProof.proof]))||((e.reimbursementPayments||[]).length?(e.reimbursementPayments[e.reimbursementPayments.length-1].proofs||[e.reimbursementPayments[e.reimbursementPayments.length-1].proof]):[]);
+      var paymentProofs=[].concat(e.paymentProofs||[],e.paymentProof||[],...(e.payments||[]).map(function(p){return [].concat(p.proofs||[],p.proof||[]);}),...(e.reimbursementPayments||[]).map(function(p){return [].concat(p.proofs||[],p.proof||[]);}));
       var proofs=proofGallery(e.billPhotos||[e.billPhoto],'Bill')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+proofGallery(paymentProofs,'Payment');
       var audits=refundExpenseHistory(e)+((e.auditHistory||[]).length?'<div class="expense-section"><b>Edit history</b>'+(e.auditHistory||[]).slice().reverse().map(function(a){return '<div class="payment-entry"><span>'+esc((a.editedAt||'').replace('T',' ').slice(0,16))+' · '+esc(a.editedBy||'')+' · '+esc(a.reason||'')+'<br><span class="muted">'+(a.changes||[]).map(function(c){return esc(c.field+': '+String(c.before)+' → '+String(c.after));}).join(' · ')+'</span></span><b>'+((a.changes||[]).length)+' field(s)</b></div>';}).join('')+'</div>':'');
-      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+(latestReference?' │ Ref '+esc(latestReference):'')+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Transaction ref: '+esc(latestReference||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(cfg.canApprove?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
+      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'&&!cfg.claimantOnly?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+(latestReference?' │ Ref '+esc(latestReference):'')+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Transaction ref: '+esc(latestReference||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+expenseTrackingDetails(e)+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(expenseOperatorAllowed(e)?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
     }
     var lgPayablesById={};
     function loadLgPayables(){
@@ -1221,6 +1235,7 @@
         (proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'</div></details>';
     }
     function canApproveExpense(e){
+      if(!expenseOperatorAllowed(e))return false;
       if(e.bill==='none') return cfg.isAdmin&&e.fundedBy==='claimant'&&e.purchasePaymentProof&&e.exceptionEvidence&&(e.exceptionReason||e.billNote);
       return !!e.billPhoto;
     }
@@ -1358,12 +1373,14 @@
       }).catch(function(err){approveSubmitting=false;el('approveGo').disabled=false;el('approveCancel').disabled=false;el('approveMsg').textContent=err.message||'Could not approve.';});
     });
     window.rejectExpense = function(id){
+      if(!expenseOperatorAllowed(expensesById[id]))return;
       var reason=prompt('Reason for rejection:'); if(reason===null) return;
       api('/api/expenses/'+id+'/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason})}).then(function(d){
         if(d.success) loadList(); else setMsg(d.error||'Could not reject.',false);
       });
     };
     window.delExp = function(id){
+      if(!expenseOperatorAllowed(expensesById[id]))return;
       var reason=prompt('Reason for deleting '+id+':');if(reason===null)return;reason=reason.trim();if(!reason){setMsg('Deletion reason is required.',false);return;}
       if(!confirm('Permanently delete '+id+'? The expense snapshot and your reason will remain in Audit Logs.')) return;
       api('/api/expenses/'+id, { method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason}) }).then(function(d){if(d.success){setMsg(id+' deleted. Its complete record remains in Audit Logs.',true);loadList();}else setMsg(d.error||'Could not delete expense.',false);});
@@ -2298,7 +2315,14 @@ var allTransactions=(d.transactions||[]).slice().sort(newestFirst),payoutRows=pa
         if(reimburseBtn) reimburseBtn.remove();
       }
       syncApprovalsTab();
+      if(cfg.claimantOnly){
+        var ownExpensesTab=el('tabs').querySelector('button[data-t="list"]');
+        if(ownExpensesTab)el('tabs').querySelector('.tabs-primary').appendChild(ownExpensesTab);
+        Array.prototype.forEach.call(el('tabs').querySelectorAll('button[data-t]'),function(button){if(button.dataset.t!=='log'&&button.dataset.t!=='list')button.remove();});
+        el('ledgerReconciliationAttention').innerHTML='';
+      }
       syncTabGroups();
+      el('tabs').style.visibility='visible';
       loadReconciliationAttention();
       // Optional deep links can open a particular expense or the approvals queue.
       var qs = new URLSearchParams(location.search);
@@ -2312,7 +2336,7 @@ var allTransactions=(d.transactions||[]).slice().sort(newestFirst),payoutRows=pa
       setOpenTabGroup(tab==='log'?'':groupForTab(tab));
       render();
       initializeReconciliationStatusRefresh();
-    });
+    }).catch(function(error){setMsg(error.message||'Could not load expense permissions. Please refresh.',false);});
   </script>
   <script>
     if ('serviceWorker' in navigator) {

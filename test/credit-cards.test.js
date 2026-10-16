@@ -67,7 +67,7 @@ test('Prashant can select an accessible card and log a credit-card expense witho
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
   const config=invokeExpense('GET','/api/expenses/config',{role:'claimant',username:'prashant'});
   assert.equal(config.status,200);assert.equal(config.body.isAdmin,false);assert.equal(config.body.canLogCreditCardExpense,true);assert.ok(config.body.creditCards.some(x=>x.id===card.id));
-  const made=invokeExpense('POST','/api/expenses',{role:'claimant',username:'prashant',body:{date:'2026-09-26',amount:275,particulars:'Admin card purchase',nature:'SANKI',vendor:'Office supplier',paymentType:'Credit',paidAlready:true,creditCardId:card.id,personalAccount:card.id,personalPaymentProof:'/card-proof-prashant.jpg',billPhoto:'/bill-prashant.jpg'}});
+  const made=invokeExpense('POST','/api/expenses',{role:'claimant',username:'prashant',body:{date:config.body.businessDate,amount:275,particulars:'Admin card purchase',nature:'SANKI',vendor:'Office supplier',paymentType:'Credit',paidAlready:true,creditCardId:card.id,personalAccount:card.id,personalPaymentProof:'/card-proof-prashant.jpg',billPhoto:'/bill-prashant.jpg'}});
   assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.payments[0].account,card.displayName);assert.equal(made.body.expense.payments[0].personalFunds,false);assert.equal(made.body.expense.status,'pending');
 });
 test('an unpaid credit expense retains the selected card for its later payment',()=>{
