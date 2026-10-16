@@ -76,6 +76,7 @@ function reconciliationEvidence(store, supplied) {
 function expenseFinancialLock(store, expense, options = {}) {
   store = store || {};
   if (!expense || typeof expense !== 'object') return { locked: false, reason: '', references: [] };
+  if (expense.gokwikPostingId && (store.gokwikPostings || {})[expense.gokwikPostingId]) return {locked:true,reason:'This expense is part of an Owner-approved GoKwik settlement. Its amount, date and payment evidence are locked.',references:list(expense.payments).map(p=>qualified(expense,p))};
   const evidence = reconciliationEvidence(store, options.blockedReferences), movements = [];
   const allExpenses = values(store.expenses), ownId = text(expense.id);
   const addMovement = (payment, reimbursement = false) => {

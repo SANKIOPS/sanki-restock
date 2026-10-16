@@ -7,7 +7,6 @@ const path = require('node:path');
 const { buildReport, lineTax, gstRate, day, costLots } = require('../modules/pnl-report');
 const { exportWorkbook, loadSources, createRouter } = require('../modules/pnl-routes');
 const XLSX = require('xlsx');
-const express = require('express');
 
 function fixtures(orderChanges = {}) {
   const order = { id: '1', name: '#1', channel: 'POS', financialStatus: 'paid', processedAt: '2026-10-01T05:00:00Z', total: 2999, discount: 0, shipping: 0, taxesIncluded: true, lineItems: [{ id: 'L1', sku: 'SKU1', qty: 1, price: 2999, discount: 0 }], ...orderChanges };
@@ -246,12 +245,23 @@ test('missing/malformed sources are reported without saving or replacing stores'
   }
 });
 test('report API validates dates and exports without writes', async () => {
-  const app = express(); app.use(createRouter({ read: () => fixtures(), clock: () => new Date('2026-10-08T06:00:00Z') }));
-  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
-  try {
-    const base = 'http://127.0.0.1:' + server.address().port;
-    assert.equal((await fetch(base + '/api/pl/report?from=2026-10-01&to=2026-10-09')).status, 400);
-    const response = await fetch(base + '/api/pl/report?from=2026-10-01&to=2026-10-08'); assert.equal(response.headers.get('cache-control'), 'no-store'); assert.equal((await response.json()).totals.netProfit, 1542.53);
-    const excel = await fetch(base + '/api/pl/report/export?from=2026-10-01&to=2026-10-08'); assert.match(excel.headers.get('content-type'), /spreadsheetml/);
-  } finally { await new Promise(resolve => server.close(resolve)); }
+  // Exercise the real Express router without opening a TCP port. This works
+  // in network-isolated CI and still validates routing, status, headers and bytes.
+  const sources=fixtures(),before=JSON.stringify(sources);
+  const router=createRouter({read:()=>sources,clock:()=>new Date('2026-10-08T06:00:00Z')});
+  async function request(url) {
+    return new Promise((resolve,reject)=>{
+      const headers={},req={method:'GET',url,originalUrl:url,query:Object.fromEntries(new URL(url,'http://test').searchParams)};
+      const res={statusCode:200,set(name,value){headers[name.toLowerCase()]=value;return this;},status(code){this.statusCode=code;return this;},json(body){resolve({status:this.statusCode,headers,body});},send(body){resolve({status:this.statusCode,headers,body});}};
+      router.handle(req,res,error=>reject(error||new Error('Report route not found')));
+    });
+  }
+  const invalid=await request('/api/pl/report?from=2026-10-01&to=2026-10-09');
+  assert.equal(invalid.status,400);assert.match(invalid.body.error,/valid dates/);
+  const response=await request('/api/pl/report?from=2026-10-01&to=2026-10-08');
+  assert.equal(response.status,200);assert.equal(response.headers['cache-control'],'no-store');assert.equal(response.body.totals.netProfit,1542.53);
+  const excel=await request('/api/pl/report/export?from=2026-10-01&to=2026-10-08');
+  assert.equal(excel.status,200);assert.match(excel.headers['content-type'],/spreadsheetml/);assert.equal(excel.headers['cache-control'],'no-store');
+  assert.ok(Buffer.isBuffer(excel.body));assert.ok(XLSX.read(excel.body,{type:'buffer'}).SheetNames.includes('Summary'));
+  assert.equal(JSON.stringify(sources),before,'report and export must not mutate financial sources');
 });

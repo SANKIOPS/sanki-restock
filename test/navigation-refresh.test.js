@@ -76,7 +76,7 @@ test('saved reconciliation period is restored by a read only request, not a post
 });
 test('ledger refresh preserves an explicit date range and changing accounts clears only the old draft',async()=>{
   const ctx=browser('https://example.test/expenses.html?tab=cash&account=IndusInd%20Bank%208181&draft=BRD-123&ledgerFrom=2026-10-01&ledgerTo=2026-10-07');
-  const fields=new Map(),calls=[];ctx.el=id=>{if(!fields.has(id))fields.set(id,{value:'',style:{},innerHTML:'',remove(){}});return fields.get(id);};
+  const fields=new Map(),calls=[];ctx.el=id=>{if(!fields.has(id))fields.set(id,{value:'',style:{},classList:{toggle(){}},innerHTML:'',remove(){}});return fields.get(id);};
   ctx.el('lg_account').value='IndusInd Bank 8181';ctx.el('lg_from').value='2026-10-01';ctx.el('lg_to').value='2026-10-07';
   ctx.ledgerLoadedAccount='';ctx.selectedNature='SANKI';ctx.cfg={isOwner:false,isAdmin:false};ctx.bankAccountsForNature=()=>[];ctx.reconciliationAccountsForNature=()=>[];ctx.esc=String;ctx.fmt=String;
   ctx.api=async(url,options)=>{calls.push({url,options});return{success:true,account:ctx.el('lg_account').value,entries:[],lastReconciliation:{from:'2026-08-01'},balance:0};};
@@ -124,7 +124,7 @@ test('changed external scripts are content-versioned so first refresh cannot run
   const assets=['navigation-state.js','inventory-care.js','inventory-enhancements.js','inventory-movements.js','meta-ads.js','model-calendar.js','pnl.js','rental-register.js','seo-control.js','shoot-planner.js'];
   for(const file of fs.readdirSync(path.join(__dirname,'../public')).filter(file=>file.endsWith('.html'))){
     for(const match of publicFile(file).matchAll(/<script\s+src="\/([^"?]+)(?:\?v=([^"]+))?"/g))if(assets.includes(match[1])){
-      const hash=require('node:crypto').createHash('sha256').update(publicFile(match[1])).digest('hex').slice(0,12);assert.equal(match[2],hash,file+' loads '+match[1]);
+      const hash=require('node:crypto').createHash('sha256').update(publicFile(match[1]).replace(/\r\n/g,'\n')).digest('hex').slice(0,12);assert.equal(match[2],hash,file+' loads '+match[1]);
     }
   }
 });
