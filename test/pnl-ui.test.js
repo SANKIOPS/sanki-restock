@@ -9,7 +9,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'pnl.js'), '
 test('P&L collapse release versions script and styles to avoid stale cached assets', () => {
   const html=fs.readFileSync(path.join(__dirname,'..','public','pnl.html'),'utf8');
   assert.match(html, /href="\/pnl\.css\?v=20261008-collapsed-heads"/);
-  const hash=require('node:crypto').createHash('sha256').update(source).digest('hex').slice(0,12);
+  const hash=require('node:crypto').createHash('sha256').update(source.replace(/\r\n/g,'\n')).digest('hex').slice(0,12);
   assert.ok(html.includes('/pnl.js?v='+hash),'current report code must be content-versioned');
 });
 function sample(missing = false) {

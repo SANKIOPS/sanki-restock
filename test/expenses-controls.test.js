@@ -1466,10 +1466,10 @@ test('personally paid non-cash expense requires the account used and cash is nam
 
 test('payment accounts are scoped by claimant and accounting entity', () => {
   const claimantConfig = invoke('GET', '/api/expenses/config').body;
-  assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
+  assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919','Arshpreet Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','Kirti Nagar Cash']);
-  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919']);
+  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919','Arshpreet Cash']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
   const blocked = invoke('POST', '/api/expenses', { body:{vendor:'Scoped Vendor',amount:100,billPhoto:'/api/expenses/photo/scoped.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Shivam 4807',personalPaymentProof:'/api/expenses/photo/scoped-pay.jpg'} });
   assert.equal(blocked.status, 400);
@@ -1480,7 +1480,7 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   assert.equal(adminConfig.ledgerAccountsByNature.SAMAST.includes('ICICI Bank 0992'),false);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'SAMAST',account:'ICICI Bank 0992'}}).status,403);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'ICICI Bank 0992'}}).status,200);
-  assert.deepEqual(adminConfig.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919']);
+  assert.deepEqual(adminConfig.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919','Arshpreet Cash']);
   assert.deepEqual(claimantConfig.claimantPaymentAccountsByUser,{});
 });
 
@@ -1513,7 +1513,7 @@ test('Prashant can record an initially company-payable SAMAST expense as paid by
   invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'REPAIR & MAINTANCE'},role:'owner'});
   assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id},role:'admin'}).status,200);
   const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
-  assert.deepEqual(config.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919']);
+  assert.deepEqual(config.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919','Arshpreet Cash']);
   const paid=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:700,paymentProof:'/api/expenses/photo/cctv-payment.jpg',date:'2026-09-18'}});
   assert.equal(paid.status,200);assert.equal(paid.body.expense.reimbursementStatus,'pending');
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'Arshpreet 1919'}}).body;
@@ -1918,7 +1918,8 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="editBillFile"/);
   assert.match(html, /Upload statement or register for reconciliation/);
   assert.match(html, /Upload or reconcile statement/);
-  assert.match(html, /if\(recon\).*if\(reconcileEligible&&!isPaytmClearing\)loadBankStatement\(\)/);
+  assert.match(html, /if\(recon\).*if\(reconcileEligible&&!isPaytmClearing&&!isGoKwikClearing\)loadBankStatement\(\)/);
+  assert.match(html, /GoKwikReconciliation\.mount\(gokwikControls/);
   assert.match(html, /id="ledgerRecon" style="display:none/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
@@ -3011,6 +3012,7 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   const clearing=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Paytm Settlement Clearing'},role:'owner'}).body.entries;
   const cashLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash'},role:'owner'}).body.entries;
   const websiteLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Tiana Traders IndusInd 0437'},role:'owner'}).body.entries;
+  const gokwikLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'GoKwik Settlement Clearing'},role:'owner'}).body.entries;
   const velocityLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Velocity'},role:'owner'}).body.entries;
   assert.equal(axis.some(x=>x.id==='SHOPIFY/paytm'),false);
   assert.equal(axis.some(x=>x.id==='SHOPIFY/direct'||x.id==='SHOPIFY/manualPos'),false);
@@ -3036,7 +3038,8 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   assert.equal(cashLedger.find(x=>x.orderId==='partiallyPaidCash').credit,1100,'a partially paid order posts only the successful cash payment, not its unpaid balance');
   assert.equal(cashLedger.find(x=>x.orderId==='staffCollectedCod').credit,10494,'website COD manually collected by staff posts to Counter Cash');
   assert.equal(velocityLedger.some(x=>x.orderId==='staffCollectedCod'),false,'staff-collected COD is not a Velocity receivable');
-  assert.equal(websiteLedger.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000,'website receipts route to Tiana Traders IndusInd 0437');
+  assert.equal(websiteLedger.some(x=>x.id==='SHOPIFY/unlabeled'),false,'website receipts must not directly credit IndusInd 0437');
+  assert.equal(gokwikLedger.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000,'website receipts enter GoKwik clearing before the net settlement');
   assert.equal(velocityLedger.find(x=>x.id==='SHOPIFY/codWebsite').credit,11000,'COD sales accrue in Velocity instead of Counter Cash or a bank account');
   assert.equal(cashLedger.some(x=>x.id==='SHOPIFY/codWebsite'),false,'Cash on Delivery is not counter cash');
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
