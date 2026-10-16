@@ -2883,7 +2883,12 @@ app.listen(PORT, async () => {
   // Velocity: sync every 30 min
   setInterval(() => syncVelocityShipments(), 30 * 60 * 1000);
 
-  // Velocity remittance: try API every 6 hours — auto-settles COD if endpoint found
+  // Discover shipments by Shopify external ID, including orders with no Shopify AWB.
+  const autoSyncLogistics=()=>require('./modules/orders').syncLogistics().then(r=>console.log('[velocity-orders] Matched '+r.matchedOrders+' orders from '+r.total+' shipments')).catch(e=>console.error('[velocity-orders] '+e.message));
+  setInterval(autoSyncLogistics,10*60*1000);
+  setTimeout(autoSyncLogistics,20*1000);
+
+  // Provider remittance evidence refresh; bank reconciliation remains separate.
   async function autoSyncRemittance() {
     if (!VELOCITY_API_KEY) return;
     try { const result=await require('./modules/orders').syncFinance(); console.log('[velocity-finance] Checked '+result.checked+' AWBs; '+result.reportedSettled+' provider-reported payouts'); }

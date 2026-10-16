@@ -19,3 +19,11 @@ test('verified Velocity AWB fills a missing Shopify tracking reference',()=>{
  assert.equal(view.shipments[0].awb,'7D140289586');
  assert.equal(view.shipments[0].weight,0.75);
 });
+test('automatic provider discovery links future orders without Shopify AWBs',()=>{
+ const view=integrateOrder({id:'future',shipments:[{awb:null}],velocityShipments:[{awb:'NEW123',status:'delivered',courier:'DTDC'}]});
+ assert.equal(view.deliveryStatus,'delivered');assert.equal(view.shipments[0].awb,'NEW123');
+});
+test('fulfilled orders without any provider reference expose the missing link',()=>{
+ const view=integrateOrder({id:'missing',channel:'Website',fulfillmentStatus:'fulfilled',shipments:[{awb:null}]});
+ assert.equal(view.deliveryStatus,'Shipment link missing');
+});

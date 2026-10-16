@@ -390,6 +390,36 @@ router.post('/api/orders-ledger/gokwik-report', financeUpload.single('file'), (r
     res.json({success:true,imported:rows.length,total:combined.size,bankVerified:false});
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
+let logisticsPromise=null;
+function syncLogistics(){
+  if(logisticsPromise)return logisticsPromise;
+  logisticsPromise=(async()=>{
+    const file=path.join(path.dirname(ORDERS_PATH),'velocity_order_index.json');
+    let previous={byOrder:{},shipments:{}};
+    try{previous=JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    try{
+      if(!process.env.VELOCITY_API_KEY)throw new Error('Velocity API key is not configured');
+      const adapter=require('./velocity-order-sync');
+      const index=await adapter.fetchShipmentIndex({token:process.env.VELOCITY_API_KEY});
+      // Load after network requests so orders arriving during discovery are included.
+      const store=loadStore(),matched=adapter.matchShipments(store.orders,index.rows);
+      const awbs=[...new Set([...index.rows.map(s=>s.awb),...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...Object.values(store.dispatch).map(d=>d.velocityAwb)].filter(Boolean))];
+      let tracking={},trackingError=null;
+      try{tracking=await require('./velocity-tracking').fetchTracking({awbs,token:process.env.VELOCITY_API_KEY});}catch(e){trackingError=e.message;}
+      const now=new Date().toISOString();
+      const shipments={...(previous.shipments||{})};
+      for(const row of index.rows)shipments[row.awb]={...shipments[row.awb],...row,...tracking[row.awb],courierName:(tracking[row.awb]||{}).courierName||row.courier,lastUpdated:now};
+      for(const [awb,t] of Object.entries(tracking))shipments[awb]={...shipments[awb],...t,courierName:t.courierName||(shipments[awb]||{}).courierName||''};
+      const result={byOrder:matched.byOrder,shipments,lastSync:now,lastAttempt:now,error:trackingError,total:index.total,matchedOrders:Object.keys(matched.byOrder).length,unmatched:matched.unmatched};
+      atomicWrite(file,JSON.stringify(result));
+      return {success:true,total:result.total,matchedOrders:result.matchedOrders};
+    }catch(e){atomicWrite(file,JSON.stringify({...previous,lastAttempt:new Date().toISOString(),error:e.message}));throw e;}
+  })().finally(()=>{logisticsPromise=null;});
+  return logisticsPromise;
+}
+router.post('/api/orders-ledger/velocity-sync',async(req,res)=>{
+ try{res.json(await syncLogistics());}catch(e){res.status(502).json({success:false,error:e.message});}
+});
 let financeRefreshing=false, financeLastAttempt=0;
 async function syncFinance() {
   if(financeRefreshing)throw new Error('Velocity finance sync already running');
@@ -399,8 +429,9 @@ async function syncFinance() {
   try {
     const store=loadStore();let legacy={orders:[]};
     try{legacy=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'sanki_cache.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    let index={byOrder:{}};try{index=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'velocity_order_index.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
     const linked=new Set(Object.keys(store.orders));
-    const awbs=[...new Set([...Object.values(store.dispatch).map(d=>d.velocityAwb),...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...(legacy.orders||[]).filter(o=>linked.has(String(o.id))).flatMap(o=>(o.fulfillments||[]).filter(f=>f.status!=='cancelled').map(f=>f.tracking_number))].map(v=>String(v||'').trim()).filter(v=>v&&!/^(n\/a|na|none)$/i.test(v)))];
+    const awbs=[...new Set([...Object.values(index.byOrder||{}).flatMap(rows=>rows.map(s=>s.awb)),...Object.values(store.dispatch).map(d=>d.velocityAwb),...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...(legacy.orders||[]).filter(o=>linked.has(String(o.id))).flatMap(o=>(o.fulfillments||[]).filter(f=>f.status!=='cancelled').map(f=>f.tracking_number))].map(v=>String(v||'').trim()).filter(v=>v&&!/^(n\/a|na|none)$/i.test(v)))];
     if(!awbs.length)throw new Error('No AWBs available. Sync Shopify orders first.');
     const tracking=await require('./velocity-tracking').fetchTracking({awbs,token:process.env.VELOCITY_API_KEY});
     atomicWrite(path.join(path.dirname(ORDERS_PATH),'velocity_tracking_evidence.json'),JSON.stringify({shipments:tracking,lastSync:new Date().toISOString()}));
@@ -420,8 +451,10 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const read = (name, fallback) => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH), name), 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
     const velocity = read('velocity_cache.json', { shipments: {} });
     const tracking = read('velocity_tracking_evidence.json',{shipments:{}});
+    const index = read('velocity_order_index.json',{byOrder:{},shipments:{}});
     velocity.shipments=Object.assign({},velocity.shipments,tracking.shipments);
-    velocity.lastSync=tracking.lastSync||velocity.lastSync;
+    for(const [awb,row] of Object.entries(index.shipments||{})){const old=velocity.shipments[awb]||{};velocity.shipments[awb]=String(row.lastUpdated||'')>=String(old.lastUpdated||'')?{...old,...row}:{...row,...old};}
+    velocity.lastSync=index.lastSync||tracking.lastSync||velocity.lastSync;
     const remittances = read('velocity_remittance.json', { entries: [] });
     const legacy = read('sanki_cache.json', { orders: [] });
     const finance = read('velocity_finance_evidence.json', {rows:[]});
@@ -429,10 +462,10 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const { integrateOrder } = require('./sales-order-view');
     const boundary = accountingStartAt();
     const orders = mergedList(store)
-      .map(o => integrateOrder(o, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
+      .map(o => integrateOrder({...o,velocityShipments:(index.byOrder||{})[o.id]||[]}, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
       .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
     require('./order-settlement-links').attachSettlementLinks(orders,read('expenses.json',{}),online.rows||[],finance.rows||[]);
-    res.json({ success: true, orders, sources: { shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
+    res.json({ success: true, orders, sources: { velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
   } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }
 });
 
@@ -496,4 +529,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncLogistics };
