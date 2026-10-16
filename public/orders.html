@@ -126,7 +126,7 @@
     <div class="modal" id="modal"></div>
   </div>
 
-  <script src="/sidebar.js"></script>
+  <script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script>
   <script>
     (function () {
       var cardsEl = document.getElementById('cards');
@@ -135,7 +135,7 @@
       var subEl = document.getElementById('sub');
       var ov = document.getElementById('ov');
       var modal = document.getElementById('modal');
-      var filters = { q:'', channel:'', packing:'', from:'', to:'' };
+      var filters = { q:'', channel:SankiNavigation.choice('channel',['','POS','Website'],''), packing:'', from:SankiNavigation.date('from',''), to:SankiNavigation.date('to','') };
       var lastOrders = [];
 
       function money(n){ return '₹' + (Number(n)||0).toLocaleString('en-IN', { maximumFractionDigits:0 }); }
@@ -324,7 +324,7 @@
         document.getElementById('clearBtn').style.display = anyActive() ? '' : 'none';
         document.getElementById('activeNote').textContent = anyActive() ? 'filters applied' : '';
       }
-      function afterFilterChange(){ syncClear(); load(); }
+      function afterFilterChange(){ SankiNavigation.set({channel:filters.channel,from:filters.from,to:filters.to});syncClear(); load(); }
 
       qEl.oninput=function(){ clearTimeout(deb); deb=setTimeout(function(){ filters.q=qEl.value.trim(); afterFilterChange(); },300); };
       packEl.onchange=function(){ filters.packing=this.value; afterFilterChange(); };
@@ -373,6 +373,8 @@
           .catch(function(){ b.disabled=false; b.textContent=t; alert('Backfill error'); });
       };
 
+      fromEl.value=filters.from;toEl.value=filters.to;
+      Array.prototype.forEach.call(document.querySelectorAll('#chanTabs .tab'),function(b){b.classList.toggle('active',b.getAttribute('data-chan')===filters.channel);});
       syncClear();
       load();
     })();

@@ -1,10 +1,12 @@
 (function(){'use strict';
-var page=1,pageSize=50,stockAt='',stockRequest=0,stockLoading=false,stockTimer,stockQueued=false;
-var canCare=false,canCosts=false;
-window.sankiInventoryAccess.then(function(access){canCare=access.care;canCosts=access.costs;if(stockAt)render()});
+var page=Number(SankiNavigation.text('page',/^[1-9]\d{0,5}$/,'1')),pageSize=50,stockAt='',stockRequest=0,stockLoading=false,stockTimer,stockQueued=false;
+var canCare=false,canCosts=false,accessReady=false;
+window.sankiInventoryAccess.then(function(access){accessReady=true;canCare=access.care;canCosts=access.costs;if(!canCosts&&mode==='attention')mode='all';if(stockAt)render()});
 var barcodeHandle='',detailInflight={},view=window.SankiInventoryView;
-var products=[],mode='all',filters={},q='',expandedHandle='',details={},attentionData=null,attentionLoading=false,attentionFilters={category:'',productType:'',gender:'',collection:''};
+var products=[],mode=SankiNavigation.choice('view',['all','outOfStock','available','cleaning','miscellaneous','other','funky','casuals','display','warehouse','attention'],'all'),filters={},q=SankiNavigation.text('search',/^[^<>]*$/,''),expandedHandle='',details={},attentionData=null,attentionLoading=false,attentionFilters={category:'',productType:'',gender:'',collection:''};
 var fields={Category:'category','Product type':'productType',Fit:'fit',Gender:'gender',Design:'design',Fabric:'fabric',Season:'season',Sleeves:'sleeves',Collection:'collection'};
+Object.keys(fields).forEach(function(label){filters[label]=SankiNavigation.text('filter_'+fields[label],/^[^<>]*$/,'');});
+document.getElementById('search').value=q;
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function sum(xs,k){return xs.reduce(function(n,p){return n+(Number(p[k])||0)},0)}
 function inMode(p){return view.includes(p,mode)}
 function matches(p,except){if(barcodeHandle&&p.handle!==barcodeHandle)return false;if(!inMode(p))return false;for(var label in filters){if(label!==except&&filters[label]&&String(p[fields[label]])!==filters[label])return false}if(!q)return true;var vars=view.visibleVariants(p,mode),hay=[p.title,p.handle,p.category,p.productType,p.fit,p.gender,p.design,p.fabric,p.collection,p.season,p.sleeves].concat([].concat.apply([],vars.map(function(v){return[v.sku,v.variant,v.size,v.colour]}))).join(' ').toLowerCase();return q.split(/\s+/).every(function(x){return hay.indexOf(x)>=0})}function selected(){return products.filter(function(p){return matches(p,'')})}
@@ -64,11 +66,13 @@ function bindProductRows(host){
  });
 }
 function render(){
+ var context={view:mode,page:page,search:q};Object.keys(fields).forEach(function(label){context['filter_'+fields[label]]=filters[label]||null;});SankiNavigation.set(context);
+ if(mode==='attention'&&!accessReady)return;
  if(mode==='attention'){document.getElementById('pagination').hidden=true;renderAttention();return}
  var anchor=findProductRow(expandedHandle);
  if(!anchor)document.querySelector('.table-wrap').style.minHeight='';
  preserveRow(anchor,function(){
-  cards();buildFilters();var xs=selected(),pages=Math.max(1,Math.ceil(xs.length/pageSize));page=Math.max(1,Math.min(page,pages));var start=(page-1)*pageSize;
+  cards();buildFilters();var xs=selected(),pages=Math.max(1,Math.ceil(xs.length/pageSize));page=Math.max(1,Math.min(page,pages));SankiNavigation.set({page:page});var start=(page-1)*pageSize;
   document.getElementById('count').textContent=(xs.length?'Showing '+(start+1)+'–'+Math.min(start+pageSize,xs.length)+' of '+xs.length:'0')+' products · '+sum(xs.map(function(p){return view.listProduct(p,mode)}),'totalQty').toLocaleString()+' pieces';renderPagination(pages,xs.length);
   document.getElementById('viewTitle').textContent={all:'In-stock inventory',outOfStock:'Out of stock products',available:'Available for sale',cleaning:'Dry cleaning',miscellaneous:'Not for sale',other:'Other unavailable / committed',funky:'SANKI Funky',casuals:'SANKI Casuals',display:'Display inventory',warehouse:'Warehouse inventory'}[mode];
   var host=document.getElementById('rows');host.innerHTML=xs.slice(start,start+pageSize).map(function(p){return productRow(view.listProduct(p,mode))}).join('')||'<tr><td colspan="10" class="empty">'+(mode==='outOfStock'?'No out-of-stock SKUs match those filters.':'No in-stock SKUs match those filters. Choose Out of stock products to see unavailable SKUs.')+'</td></tr>';

@@ -60,7 +60,7 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
-<script src="/sidebar.js"></script>
+<script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script>
   <header class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-3">
     <div class="flex items-center gap-3">
       <a href="/" class="text-blue-600 font-bold text-lg">⚡ Sanki Dashboard</a>
@@ -366,8 +366,14 @@
   // ============================================================
   // TABS
   // ============================================================
+  function selectShowroomTab(tab){
+    SankiNavigation.set({tab:tab});
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+    document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.classList.toggle('hidden',s.id!=='tab-'+tab));
+  }
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      selectShowroomTab(btn.dataset.tab);
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
       document.querySelectorAll('section[id^="tab-"]').forEach(s => {
         s.classList.toggle('hidden', s.id !== 'tab-' + btn.dataset.tab);
@@ -1079,6 +1085,9 @@
   // ============================================================
   // BOOT
   // ============================================================
+  const restoredShowroomTab=SankiNavigation.choice('tab',['settings','audit','queue','inventory','reconcile'],'settings');
+  selectShowroomTab(restoredShowroomTab);
+  if(restoredShowroomTab==='inventory')loadInventory();
   (async () => {
     await loadLocations();
     await loadSettings();

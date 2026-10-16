@@ -6,7 +6,7 @@
   var host = document.createElement('section'); host.className = 'moves'; host.id = 'stock-movements';
   host.innerHTML = '<header><h2>Stock movements</h2><nav aria-label="Stock movement views"><button data-view="move" aria-selected="true">Move stock</button><button data-view="pending" aria-selected="false">Pending approval</button><button data-view="history" aria-selected="false">History</button></nav></header><div class="move-body"><p class="move-message" id="move-message" role="status" aria-live="polite">Checking counted inventory…</p><form id="move-form"><div class="move-grid"><label><span>SKU · scan or type</span><input id="move-sku" list="move-skus" autocomplete="off" required placeholder="Scan barcode or enter SKU"><datalist id="move-skus"></datalist></label><label><span>From location</span><select id="move-from"><option>Warehouse</option><option>Display</option></select></label><label><span>From rack</span><select id="move-from-rack"></select></label><label><span>Pieces</span><input id="move-quantity" type="number" min="1" step="1" value="1" required></label><label><span>To location</span><select id="move-to"><option>Display</option><option>Warehouse</option></select></label><label><span>To rack</span><select id="move-to-rack"></select></label></div><div class="move-position" id="move-position">Select a SKU to see its counted locations and racks.</div><div class="move-foot"><small class="sub">Submit only after physically moving the pieces. Shopify updates after approval.</small><button class="primary" id="move-submit" disabled>Submit movement</button></div></form><div class="move-list" id="move-list" hidden></div></div>';
   cards.insertAdjacentElement('afterend', host);
-  var state, view = 'move', requestId, busy = false, cancelId, refreshSerial=0;
+  var state, view = SankiNavigation.choice('movement',['move','pending','history'],'move'), requestId, busy = false, cancelId, refreshSerial=0;
   var cancelForm=document.createElement('form');cancelForm.id='move-cancel-form';cancelForm.hidden=true;
   cancelForm.innerHTML='<label>Reason for cancelling this request<input id="move-cancel-reason" required maxlength="500" autocomplete="off"></label><p class="sub">Shopify quantities will not change. If pieces were already physically moved, do not move them again for the replacement request.</p><div class="review"><button class="primary" type="submit">Confirm cancellation</button><button type="button" id="move-keep-request">Keep request</button></div>';
   el('move-message').insertAdjacentElement('afterend',cancelForm);
@@ -48,6 +48,7 @@
     var d = await r.json(); if (!r.ok || !d.success) throw Error(d.error || 'Stock movement request failed.'); return d;
   }
   function render() {
+    SankiNavigation.set({movement:view});
     el('move-form').hidden = view !== 'move'; el('move-list').hidden = view === 'move';
     host.querySelectorAll('[data-view]').forEach(function(b){b.setAttribute('aria-selected', String(b.dataset.view === view));});
     if (!state) return;

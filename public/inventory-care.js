@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var data, view = 'cleaning', draft = [], requestId, busy = false, attempted = false;
+  var data, view = SankiNavigation.choice('view',['cleaning','miscellaneous','pending','history'],'cleaning'), draft = [], requestId, busy = false, attempted = false;
   var registerSequence = 0, quantitySequence = 0, quantityLoading = false, quantityTimer, quantityAt = '', quantityQueued = false, quantityQueuedForce = false;
   function el(id) { return document.getElementById(id); }
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -55,6 +55,7 @@
   }
   function register() {
     if (!data) return;
+    SankiNavigation.set({view:view});
     document.querySelectorAll('[data-view]').forEach(function(b){b.setAttribute('aria-selected',String(b.dataset.view === view));});
     if (view === 'history' || view === 'pending') {
       var ops = data.operations.filter(function(o){return (view === 'history' || !['confirmed','cancelled'].includes(o.status)) && filterBatch(data.batches.find(function(b){return b.id === o.batchId;}));});

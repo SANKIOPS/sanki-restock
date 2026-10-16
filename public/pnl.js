@@ -57,6 +57,7 @@
     el('export').disabled=false;el('print').disabled=false;
   }
   async function load(){
+    SankiNavigation.set({from:el('from').disabled?start:el('from').value,to:el('to').value,channel:el('channel').value});
     const request=++sequence;if(abort)abort.abort();abort=new AbortController();
     if(el('details').open)el('details').close();
     document.body.classList.add('loading');el('status').className='';el('status').textContent='Reading sales, SKU allocations and actual payments…';
@@ -98,9 +99,13 @@
   });
   el('filters').addEventListener('submit',event=>{event.preventDefault();load();});
   document.querySelectorAll('[data-period]').forEach(button=>button.addEventListener('click',()=>period(button.dataset.period)));
-  document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));document.querySelectorAll('.view').forEach(view=>view.hidden=view.id!==button.dataset.tab);}));
+  function selectReportTab(tab){SankiNavigation.set({tab});document.querySelectorAll('[data-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===tab)));document.querySelectorAll('.view').forEach(view=>view.hidden=view.id!==tab);}
+  document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>selectReportTab(button.dataset.tab)));
   el('closeDetails').addEventListener('click',()=>el('details').close());
   el('export').addEventListener('click',()=>{if(report)location.href='/api/pl/report/export?'+new URLSearchParams({from:report.range.from,to:report.range.to,channel:report.channel});});
   el('print').addEventListener('click',()=>window.print());
-  period('month');
+  selectReportTab(SankiNavigation.choice('tab',['statement','tax','collections','trends','policy'],'statement'));
+  el('from').value=SankiNavigation.date('from',today.slice(0,7)+'-01');el('to').value=SankiNavigation.date('to',today);
+  el('channel').value=SankiNavigation.choice('channel',['All','POS','Website','Other'],'All');
+  load();
 })();
