@@ -186,7 +186,7 @@ async function getVelToken() {
 
   // Try VELOCITY_API_KEY as direct long-lived token first
   if (VELOCITY_API_KEY && !VELOCITY_USERNAME) {
-    velToken = VELOCITY_API_KEY;
+    velToken = /^Bearer\s/i.test(VELOCITY_API_KEY) ? VELOCITY_API_KEY : 'Bearer ' + VELOCITY_API_KEY;
     velTokenExpiry = Date.now() + 23 * 60 * 60 * 1000; // assume 23 h
     return velToken;
   }

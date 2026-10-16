@@ -165,7 +165,7 @@ function normalizeOrder(o, previous = {}) {
   const email = cust.email || o.email || o.contact_email || '';
   const lineItems = (o.line_items || []).map(li => ({
     id: String(li.id || ''), taxable: li.taxable !== false,
-    sku: li.sku || '', title: li.title || '', variantTitle: li.variant_title || '',
+    productId: String(li.product_id || ''), variantId: String(li.variant_id || ''), image: li.image && li.image.src || '', sku: li.sku || '', title: li.title || '', variantTitle: li.variant_title || '',
     qty: li.quantity || 0, price: num(li.price),
     discount: (li.discount_allocations || []).reduce((sum, d) => sum + num(d.amount), 0),
     taxLines: (li.tax_lines || []).map(t => ({ title: t.title, rate: num(t.rate), price: num(t.price) }))
@@ -220,6 +220,7 @@ function normalizeOrder(o, previous = {}) {
     financialStatus: o.financial_status || '',
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
     deliveryComplete,
+    shipments: fulfillments.filter(f => f.status !== 'cancelled').map(f => ({ id: String(f.id), awb: f.tracking_number || '', courier: f.tracking_company || '', trackingUrl: f.tracking_url || '', status: f.shipment_status || f.status || '', weight: null })),
     paymentGateways: o.payment_gateway_names || [],
     paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
     paymentTransactionSchemaVersion: 2,
@@ -372,6 +373,54 @@ router.get('/api/orders-ledger', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
   const offset = parseInt(req.query.offset, 10) || 0;
   res.json({ success: true, total: list.length, summary, orders: list.slice(offset, offset + limit) });
+});
+
+const financeUpload = require('multer')({storage: require('multer').memoryStorage(), limits: {fileSize: 10 * 1024 * 1024}});
+router.post('/api/orders-ledger/gokwik-report', financeUpload.single('file'), (req,res) => {
+  try {
+    if(!req.file)return res.status(400).json({success:false,error:'Choose a GoKwik settlement report'});
+    const xlsx=require('xlsx'),book=xlsx.read(req.file.buffer,{type:'buffer',raw:true});
+    const rows=require('./gokwik-settlements').normalizeRows(xlsx.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{defval:''}));
+    const file=path.join(path.dirname(ORDERS_PATH),'gokwik_settlement_evidence.json');
+    let prior={rows:[]};try{prior=JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    const combined=new Map((prior.rows||[]).map(r=>[r.paymentId+'|'+r.type+'|'+r.utr,r]));
+    rows.forEach(r=>combined.set(r.paymentId+'|'+r.type+'|'+r.utr,r));
+    atomicWrite(file,JSON.stringify({rows:[...combined.values()],importedAt:new Date().toISOString(),importedBy:req.user&&req.user.username||'admin'}));
+    res.json({success:true,imported:rows.length,total:combined.size,bankVerified:false});
+  }catch(e){res.status(400).json({success:false,error:e.message});}
+});
+let financeRefreshing=false, financeLastAttempt=0;
+router.post('/api/orders-ledger/velocity-finance/sync', async(req,res)=>{
+  if(financeRefreshing)return res.status(409).json({success:false,error:'Velocity finance sync already running'});
+  if(!process.env.VELOCITY_API_KEY)return res.status(503).json({success:false,error:'A named Velocity API key must be configured on the server'});
+  if(Date.now()-financeLastAttempt<60000)return res.status(429).json({success:false,error:'Please wait one minute before another finance sync'});
+  financeRefreshing=true; financeLastAttempt=Date.now();
+  try {
+    const store=loadStore(),awbs=Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)).filter(Boolean);
+    if(!awbs.length)return res.status(400).json({success:false,error:'No AWBs available. Sync Shopify orders first.'});
+    const rows=await require('./velocity-finance').fetchRemittances({awbs,token:process.env.VELOCITY_API_KEY});
+    const file=path.join(path.dirname(ORDERS_PATH),'velocity_finance_evidence.json');
+    atomicWrite(file,JSON.stringify({rows,updatedAt:new Date().toISOString()}));
+    res.json({success:true,checked:rows.length,reportedSettled:rows.filter(r=>r.utr).length,bankVerified:false});
+  }catch(e){res.status(502).json({success:false,error:e.message});}finally{financeRefreshing=false;}
+});
+
+router.get('/api/orders-ledger/integrated', (req, res) => {
+  try {
+    const store = loadStore();
+    const read = (name, fallback) => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH), name), 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
+    const velocity = read('velocity_cache.json', { shipments: {} });
+    const remittances = read('velocity_remittance.json', { entries: [] });
+    const legacy = read('sanki_cache.json', { orders: [] });
+    const finance = read('velocity_finance_evidence.json', {rows:[]});
+    const online = read('gokwik_settlement_evidence.json', {rows:[]});
+    const { integrateOrder } = require('./sales-order-view');
+    const boundary = accountingStartAt();
+    const orders = mergedList(store).filter(o => !boundary || String(o.createdAt || '') >= boundary)
+      .map(o => integrateOrder(o, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
+      .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    res.json({ success: true, orders, sources: { shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
+  } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }
 });
 
 router.get('/api/orders-ledger/:id', (req, res) => {
