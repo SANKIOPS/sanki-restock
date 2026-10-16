@@ -41,7 +41,7 @@ const SECTION_ORDER = ['Main', 'Sales', 'SEO', 'Inventory', 'Store Ops', 'Purcha
 // Everything starts 'hidden' (blank launcher). We turn modules 'live'
 // deliberately, one at a time, as we build/bless them together.
 const MODULES = [
-  { key: 'sales-orders-logistics', title: 'Sales Orders and Logistics', desc: 'Orders, customer payments, shipments and settlement evidence in one screen', icon: 'S', href: '/sales-orders.html', section: 'Sales', status: 'live', roles: ['admin', 'sales', 'owner'] },
+  { key: 'sales-orders-logistics', title: 'Sales Orders and Logistics', desc: 'Orders, customer payments, shipments and settlement evidence in one screen', icon: '📦', href: '/sales-orders.html', section: 'Sales', status: 'live', roles: ['admin', 'sales', 'owner'] },
   { key: 'restock',      title: 'Restock Planner',       desc: 'Reorder fast-movers before they run out',            icon: '🔄', href: '/index.html#restock',            section: 'Main',      status: 'hidden', roles: ['admin', 'inventory'] },
   { key: 'velocity',     title: 'Velocity Intelligence', desc: 'How fast every product is selling',                  icon: '⚡', href: '/velocity.html',                  section: 'Main',      status: 'hidden', roles: ['admin', 'sales', 'inventory'] },
   { key: 'analytics',    title: 'Analytics',             desc: 'Sales & performance dashboards',                     icon: '📊', href: '/analytics.html',                 section: 'Main',      status: 'hidden', roles: ['admin', 'sales'] },
