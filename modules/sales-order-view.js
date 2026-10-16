@@ -4,7 +4,8 @@ const round = value => Math.round((value + Number.EPSILON) * 100) / 100;
 function integrateOrder(order, velocity = {}, remittances = [], legacy = [], finance = [], online = []) {
   const old = legacy.find(row => String(row.id) === String(order.id));
   const lineItems=(order.lineItems||[]).map(item=>{const raw=old&&(old.line_items||[]).find(r=>String(r.id)===String(item.id));return raw?{...item,variantId:item.variantId||String(raw.variant_id||''),productId:item.productId||String(raw.product_id||'')}:item;});
-  const source = (order.shipments && order.shipments.length ? order.shipments : null) || (old && (old.fulfillments || []).filter(f => f.status !== 'cancelled').map(f => ({awb:f.tracking_number, courier:f.tracking_company,status:f.shipment_status || 'Tracking update pending'}))) || [];
+  let source = (order.shipments && order.shipments.length ? order.shipments : null) || (old && (old.fulfillments || []).filter(f => f.status !== 'cancelled').map(f => ({awb:f.tracking_number, courier:f.tracking_company,status:f.shipment_status || 'Tracking update pending'}))) || [];
+  if(order.dispatch&&order.dispatch.velocityAwb&&!source.some(s=>s.awb===order.dispatch.velocityAwb)) source=[...source.filter(s=>s.awb),{awb:order.dispatch.velocityAwb,courier:order.dispatch.courier,status:'Tracking update pending'}];
   const shipments = source.map(s => { const v = velocity[String(s.awb || '').trim()]; return v ? {...s, courier:v.courierName || s.courier, status:v.status || s.status, updatedAt:v.lastUpdated, deliveredAt:v.deliveredDate, codAmount:v.codAmount, location:v.currentLocation,weight:v.weight??s.weight,trackingUrl:v.trackingUrl||s.trackingUrl} : s; });
   const payments = (order.paymentTransactions || []).filter(t => ['sale','capture'].includes(t.kind) && t.status === 'success');
   const known = order.paymentTransactionSchemaVersion === 2;

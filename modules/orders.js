@@ -303,6 +303,7 @@ function mergedList(store) {
     return Object.assign({}, o, {
       dispatch: {
         courier: d.courier || '',
+        velocityAwb: d.velocityAwb || '',
         deliveredAt: d.deliveredAt || '',
         trackingUrl: d.trackingUrl || '',
         packingStatus: d.packingStatus || 'pending',
@@ -399,7 +400,7 @@ async function syncFinance() {
     const store=loadStore();let legacy={orders:[]};
     try{legacy=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'sanki_cache.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
     const linked=new Set(Object.keys(store.orders));
-    const awbs=[...new Set([...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...(legacy.orders||[]).filter(o=>linked.has(String(o.id))).flatMap(o=>(o.fulfillments||[]).filter(f=>f.status!=='cancelled').map(f=>f.tracking_number))].map(v=>String(v||'').trim()).filter(v=>v&&!/^(n\/a|na|none)$/i.test(v)))];
+    const awbs=[...new Set([...Object.values(store.dispatch).map(d=>d.velocityAwb),...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...(legacy.orders||[]).filter(o=>linked.has(String(o.id))).flatMap(o=>(o.fulfillments||[]).filter(f=>f.status!=='cancelled').map(f=>f.tracking_number))].map(v=>String(v||'').trim()).filter(v=>v&&!/^(n\/a|na|none)$/i.test(v)))];
     if(!awbs.length)throw new Error('No AWBs available. Sync Shopify orders first.');
     const tracking=await require('./velocity-tracking').fetchTracking({awbs,token:process.env.VELOCITY_API_KEY});
     atomicWrite(path.join(path.dirname(ORDERS_PATH),'velocity_tracking_evidence.json'),JSON.stringify({shipments:tracking,lastSync:new Date().toISOString()}));
@@ -444,6 +445,15 @@ router.get('/api/orders-ledger/:id', (req, res) => {
   res.json({ success: true, order: merged });
 });
 
+// Verified provider references are kept separate from the Shopify source mirror.
+router.post('/api/orders-ledger/:id/velocity-link', (req,res)=>{
+  const store=loadStore(),id=String(req.params.id),awb=String(req.body.awb||'').trim();
+  if(!store.orders[id])return res.status(404).json({success:false,error:'Order not found'});
+  if(!/^[A-Za-z0-9-]{6,50}$/.test(awb))return res.status(400).json({success:false,error:'A valid verified AWB is required'});
+  store.dispatch[id]={...(store.dispatch[id]||{}),velocityAwb:awb,courier:String(req.body.courier||'').trim(),updatedAt:new Date().toISOString(),updatedBy:(req.user&&req.user.username)||'system'};
+  saveStore(store);res.json({success:true,awb});
+});
+
 const PACKING_STATES = ['pending', 'packed', 'booked', 'dispatched', 'delivered', 'rto', 'cancelled'];
 const CONFIRM_STATES = ['pending', 'confirmed', 'unreachable', 'cancelled'];
 
@@ -457,6 +467,7 @@ router.post('/api/orders-ledger/:id/dispatch', (req, res) => {
   if (b.deliveredAt && (!validDate(String(b.deliveredAt)) || b.deliveredAt > accountingDay(new Date().toISOString()) || b.deliveredAt < accountingDay(store.orders[id].createdAt))) return res.status(400).json({ success: false, error: 'Use a valid actual delivery date between the order date and today.' });
   if (b.packingStatus === 'delivered' && !deliveredAt && !store.orders[id].completedAt) return res.status(400).json({ success: false, error: 'Enter the actual delivery date. P&L must not use the date this form was edited.' });
   const next = {
+    velocityAwb:       cur.velocityAwb || '',
     courier:           b.courier != null ? String(b.courier).trim() : (cur.courier || ''),
     trackingUrl:       b.trackingUrl != null ? String(b.trackingUrl).trim() : (cur.trackingUrl || ''),
     packingStatus:     PACKING_STATES.includes(b.packingStatus) ? b.packingStatus : (cur.packingStatus || 'pending'),
