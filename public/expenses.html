@@ -19,9 +19,15 @@
     .wrap { max-width:1120px; margin:0 auto; padding:22px 20px 90px; }
     h1 { font-size:22px; margin:0 0 2px; font-weight:800; }
     .sub { color:#6b7280; font-size:13px; margin:0 0 16px; }
-    .tabs { display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
+    .tabs { margin-bottom:18px; }
+    .tabs-primary { margin-bottom:10px; }
+    .tab-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .tab-group { min-width:0; padding:10px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; }
+    .tab-group-title { margin:0 0 7px; color:#64748b; font-size:10px; font-weight:800; letter-spacing:.7px; text-transform:uppercase; }
+    .tab-group-buttons { display:flex; flex-wrap:wrap; gap:6px; }
     .tabs button { font-size:13px; padding:9px 16px; border:1px solid #d1d5db; background:#fff; border-radius:8px; cursor:pointer; font-weight:600; color:#374151; }
     .tabs button.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+    .receivables-subnav { display:flex; flex-wrap:wrap; gap:7px; margin-bottom:12px; }
     .card { background:#fff; border:1px solid rgba(0,0,0,.08); border-radius:12px; padding:18px; margin-bottom:16px; }
     .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px 16px; }
     .fld { display:flex; flex-direction:column; min-width:0; }   /* min-width:0 lets grid/flex tracks shrink below input intrinsic width */
@@ -175,7 +181,10 @@
       .payment-choice label { width:100%; min-height:48px; }
       .inline-request .request-actions { align-items:stretch; flex-direction:column; }
       .inline-request .request-actions .btn { width:100%; }
-      .tabs { gap:8px; }
+      .tabs-primary { display:flex; }
+      .tabs-primary button { flex:1 1 auto; }
+      .tab-groups { grid-template-columns:1fr; gap:8px; }
+      .tab-group-buttons { gap:8px; }
       .tabs button { flex:1 1 auto; text-align:center; padding:11px 12px; }
       .row-actions { gap:8px; }
       .row-actions .btn { flex:1 1 auto; padding:13px 16px; }
@@ -211,19 +220,36 @@
     <div id="ledgerReconciliationAttention" class="ledger-recon-alert" role="status" aria-live="polite"></div>
 
     <div class="tabs" id="tabs">
-      <button data-t="log" class="on">＋ Log expense</button>
-      <button data-t="list">All expenses</button>
-      <button data-t="pending" id="pendingTab" style="display:none">Payables</button>
-      <button data-t="receivables" id="receivablesTab" style="display:none">Receivables</button>
-      <button data-t="refunds" id="refundsTab" style="display:none">Refunds &amp; Returns</button>
-      <button data-t="spending" id="spendingTab" style="display:none">Spending dashboard</button>
-      <button data-t="vendors">Vendor ledgers</button>
-      <button data-t="salaryledgers">Salary ledgers</button>
-      <button data-t="creditcards">Credit cards</button>
-      <button data-t="cash">Account ledgers</button>
-      <button data-t="reimbursements">Reimbursements</button>
-      <button data-t="categories" id="categoriesTab" style="display:none">Manage categories</button>
-      <button data-t="audit" id="auditTab" style="display:none">Audit log</button>
+      <div class="tabs-primary"><button data-t="log" class="on">＋ Log expense</button></div>
+      <div class="tab-groups">
+        <section class="tab-group" data-tab-group>
+          <div class="tab-group-title">A. Accounting</div>
+          <div class="tab-group-buttons">
+            <button data-t="list">All expenses</button>
+            <button data-t="pending" id="pendingTab" style="display:none">Payables</button>
+            <button data-t="receivables" id="receivablesTab" style="display:none">Receivables</button>
+            <button data-t="spending" id="spendingTab" style="display:none">Spending dashboard</button>
+          </div>
+        </section>
+        <section class="tab-group" data-tab-group>
+          <div class="tab-group-title">B. Ledgers</div>
+          <div class="tab-group-buttons">
+            <button data-t="vendors">Vendor ledgers</button>
+            <button data-t="salaryledgers">Salary ledgers</button>
+            <button data-t="cash">Account ledgers</button>
+            <button data-t="creditcards">Credit cards</button>
+            <button data-t="reimbursements">Reimbursements</button>
+          </div>
+        </section>
+        <section class="tab-group" data-tab-group>
+          <div class="tab-group-title">C. Manage</div>
+          <div class="tab-group-buttons"><button data-t="categories" id="categoriesTab" style="display:none">Manage categories</button></div>
+        </section>
+        <section class="tab-group" data-tab-group>
+          <div class="tab-group-title">D. Audit</div>
+          <div class="tab-group-buttons"><button data-t="audit" id="auditTab" style="display:none">Audit log</button></div>
+        </section>
+      </div>
     </div>
 
     <div id="panel"></div>
@@ -502,7 +528,7 @@
   </div></dialog>
 
   <script src="/sidebar.js"></script>
-  <script src="/expense-refunds.js?v=ff5f31cc038e"></script>
+  <script src="/expense-refunds.js?v=grouped-receivables-20261016"></script>
   <script src="/expense-payment-credits.js?v=c6f1629604f4"></script>
   <script src="/expense-loans.js?v=lender-groups-20261012"></script>
   <script src="/reconciliation-status.js?v=status-clarity-20261015"></script>
@@ -511,7 +537,7 @@
     var fmt = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:Number.isInteger(v)?0:1,maximumFractionDigits:2}); };
     var fmtBank = function(n){ var v=Number(n)||0; return '₹' + v.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
     var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
-    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, payRefundCredits=[], payRequestId='', paySubmitting=false, payCandidatesReady=false, payOpenRevision=0, historicalReimburseIds=[], approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null, listRequestSeq=0;
+    var cfg = null, tab = 'log', payId = null, payUrls = [], payMode = 'vendor', payVendorCreditAvailable = 0, payRefundCredits=[], payRequestId='', paySubmitting=false, payCandidatesReady=false, payOpenRevision=0, historicalReimburseIds=[], approveId = '', focusId = '', focusedExpenseId = '', expensesById = {}, selectedNature = 'SANKI', bankNature = 'SANKI', receiveId = '', receivablesById = {}, receivablesSubview='receivables', spendingData = null, spendingView='expenses', missingBillOnly=false, ccData=null, ccStatements=[], ccReviewId='', bankReconForm=null, vendorManageState=null, listRequestSeq=0;
     function updatePaytmChargeSplit(){if(!bankReconForm||el('brKind').value!=='paytm')return;var row=bankReconRow(bankReconForm.rowId),net=Number(row&&row.bank&&row.bank.credit||0),gross=Number(el('brGross').value||0),hidden=Number(el('brHiddenCharge').value||0);el('brPaytmNet').value=net;el('brPaytmCharge').value=Math.max(0,Number((gross-net-hidden).toFixed(2)));saveBankReconForm();}
     el('brHiddenCharge').addEventListener('input',updatePaytmChargeSplit);el('brGross').addEventListener('input',updatePaytmChargeSplit);el('brPaytmCharge').addEventListener('input',saveBankReconForm);el('brChargeCategory').addEventListener('change',saveBankReconForm);
 
@@ -546,13 +572,21 @@
     document.addEventListener('click',function(ev){if(ev.target&&ev.target.matches&&ev.target.matches('img.thumb')){ev.preventDefault();ev.stopImmediatePropagation();viewProof(ev.target.src);}},true);
 
     function refreshCategorySuggestions(){(cfg.natures||[]).forEach(function(n){var id='approvalLedgerList_'+n,d=el(id);if(!d){d=document.createElement('datalist');d.id=id;document.body.appendChild(d);}d.innerHTML=categorySuggestions(n);});}
-    function loadConfig(){ return api('/api/expenses/config').then(function(d){ cfg = d; if(el('refundsTab'))el('refundsTab').style.display=d.canManageExpenseRefunds?'':'none'; refreshCategorySuggestions(); if(el('approvalLedgerList')) el('approvalLedgerList').innerHTML=cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join(''); }); }
+    function loadConfig(){ return api('/api/expenses/config').then(function(d){ cfg = d; refreshCategorySuggestions(); if(el('approvalLedgerList')) el('approvalLedgerList').innerHTML=cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join(''); }); }
+
+    function syncTabGroups(){
+      Array.prototype.forEach.call(el('tabs').querySelectorAll('[data-tab-group]'),function(group){
+        var visible=Array.prototype.some.call(group.querySelectorAll('button[data-t]'),function(button){return button.style.display!=='none'&&button.isConnected;});
+        group.style.display=visible?'':'none';
+      });
+    }
 
     // ── tabs ──
     el('tabs').addEventListener('click', function(e){
       if(!e.target.dataset.t) return;
       tab = e.target.dataset.t;
-      Array.prototype.forEach.call(el('tabs').children, function(b){ b.classList.toggle('on', b.dataset.t===tab); });
+      if(tab==='receivables')receivablesSubview='receivables';
+      Array.prototype.forEach.call(el('tabs').querySelectorAll('button[data-t]'), function(b){ b.classList.toggle('on', b.dataset.t===tab); });
       render();
     });
 
@@ -562,8 +596,7 @@
       if(tab==='log') return renderLog();
       if(tab==='list') return renderList();
       if(tab==='pending') return renderPendingPayments();
-      if(tab==='receivables') return renderReceivables();
-      if(tab==='refunds') return renderRefunds();
+      if(tab==='receivables') return receivablesSubview==='refunds'?renderRefunds():renderReceivables();
       if(tab==='spending') return renderSpendingDashboard();
       if(tab==='vendors') return renderVendors();
       if(tab==='salaryledgers') return renderSalaryLedgers();
@@ -755,7 +788,7 @@
       document.addEventListener('click',closeVendorSuggestions,true);
       el('saveExp').addEventListener('click', saveExpense);
       if(el('entryKind')){el('entryKind').addEventListener('change',toggleSalaryEntry);el('seEntity').addEventListener('change',loadSalaryEntryEmployees);el('seSave').addEventListener('click',saveSalaryEntry);toggleSalaryEntry();}
-      if(el('addCardFromExpense'))el('addCardFromExpense').addEventListener('click',function(){tab='creditcards';Array.prototype.forEach.call(el('tabs').children,function(b){b.classList.toggle('on',b.dataset.t===tab);});render();});
+      if(el('addCardFromExpense'))el('addCardFromExpense').addEventListener('click',function(){tab='creditcards';Array.prototype.forEach.call(el('tabs').querySelectorAll('button[data-t]'),function(b){b.classList.toggle('on',b.dataset.t===tab);});render();});
       if(el('linkTelegram')){el('linkTelegram').addEventListener('click',linkTelegram);loadTelegramUsers();}
       if(el('setupTelegram'))el('setupTelegram').addEventListener('click',setupTelegram);
       if(el('testTelegram'))el('testTelegram').addEventListener('click',testTelegram);
@@ -1520,8 +1553,12 @@
       });
     }
 
+    function receivablesSubnav(active){return '<div class="receivables-subnav" aria-label="Receivables sections"><button class="btn '+(active==='receivables'?'primary':'ghost')+'" data-receivables-view="receivables">Receivables</button>'+(cfg.canManageExpenseRefunds?'<button class="btn '+(active==='refunds'?'primary':'ghost')+'" data-receivables-view="refunds">Refunds &amp; Returns</button>':'')+'</div>';}
+    function bindReceivablesSubnav(){Array.prototype.forEach.call(el('panel').querySelectorAll('[data-receivables-view]'),function(button){button.onclick=function(){receivablesSubview=this.dataset.receivablesView;if(receivablesSubview==='refunds')renderRefunds();else renderReceivables();};});}
     function renderReceivables(){
-      el('panel').innerHTML='<div class="card"><h3 style="margin-top:0">Add money receivable</h3><div class="grid"><div class="fld"><label>Entity</label><select id="rv_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div><div class="fld"><label>Party who owes money</label><input id="rv_party" placeholder="Person, customer or vendor"></div><div class="fld full"><label>Reason</label><input id="rv_reason" placeholder="What is this money due for?"></div><div class="fld"><label>Amount ₹</label><input type="number" id="rv_amount" min="1"></div><div class="fld"><label>Entry date</label><input type="date" id="rv_date" value="'+today()+'"></div><div class="fld"><label>Due date</label><input type="date" id="rv_due"></div><div class="fld"><label>Supporting proof — optional</label><input type="file" id="rv_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="rv_add">Add receivable</button></div></div><div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="rv_filter_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="rv_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="rv_to" value="'+today()+'"></div><div class="fld"><label>Status</label><select id="rv_status"><option value="">All</option><option value="open">Open</option><option value="partially_received">Partially received</option><option value="received">Received</option></select></div><div class="fld"><label>Party</label><input id="rv_filter_party" placeholder="Search party"></div><button class="btn ghost mini" id="rv_go">Filter</button></div><div class="stats" id="rv_stats"></div><div id="rv_list" class="muted">Loading…</div></div>';
+      receivablesSubview='receivables';
+      el('panel').innerHTML=receivablesSubnav('receivables')+'<div class="card"><h3 style="margin-top:0">Add money receivable</h3><div class="grid"><div class="fld"><label>Entity</label><select id="rv_nature">'+opts(cfg.approvalNatures||cfg.natures,selectedNature)+'</select></div><div class="fld"><label>Party who owes money</label><input id="rv_party" placeholder="Person, customer or vendor"></div><div class="fld full"><label>Reason</label><input id="rv_reason" placeholder="What is this money due for?"></div><div class="fld"><label>Amount ₹</label><input type="number" id="rv_amount" min="1"></div><div class="fld"><label>Entry date</label><input type="date" id="rv_date" value="'+today()+'"></div><div class="fld"><label>Due date</label><input type="date" id="rv_due"></div><div class="fld"><label>Supporting proof — optional</label><input type="file" id="rv_proof" accept="image/*"></div></div><div class="row-actions"><button class="btn primary" id="rv_add">Add receivable</button></div></div><div class="card"><div class="filters"><div class="fld"><label>Entity</label><select id="rv_filter_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>From</label><input type="date" id="rv_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="rv_to" value="'+today()+'"></div><div class="fld"><label>Status</label><select id="rv_status"><option value="">All</option><option value="open">Open</option><option value="partially_received">Partially received</option><option value="received">Received</option></select></div><div class="fld"><label>Party</label><input id="rv_filter_party" placeholder="Search party"></div><button class="btn ghost mini" id="rv_go">Filter</button></div><div class="stats" id="rv_stats"></div><div id="rv_list" class="muted">Loading…</div></div>';
+      bindReceivablesSubnav();
       el('rv_nature').addEventListener('change',function(){selectedNature=this.value;});el('rv_add').addEventListener('click',createReceivable);el('rv_go').addEventListener('click',loadReceivables);loadReceivables();
     }
     function createReceivable(){
@@ -2224,15 +2261,10 @@ var allTransactions=(d.transactions||[]).slice().sort(newestFirst),payoutRows=pa
           loadConfig().then(function(){ syncApprovalsTab(); loadApprovals(); });
         });
     };
-    // Show/update the approver/admin Approvals tab (with a pending-count badge).
+    // Approval records and APIs remain intact, but the standalone navigation tab is retired.
     function syncApprovalsTab(){
-      if(!cfg.isAdmin) return;
       var existing = el('tabs').querySelector('[data-t="approvals"]');
-      var label = 'Approvals'+(cfg.pendingCount ? ' ('+cfg.pendingCount+')' : '');
-      if(existing){ existing.textContent = label; return; }
-      var b = document.createElement('button');
-      b.dataset.t = 'approvals'; b.textContent = label;
-      el('tabs').appendChild(b);
+      if(existing)existing.remove();
     }
 
     // boot
@@ -2252,15 +2284,17 @@ var allTransactions=(d.transactions||[]).slice().sort(newestFirst),payoutRows=pa
         if(reimburseBtn) reimburseBtn.remove();
       }
       syncApprovalsTab();
+      syncTabGroups();
       loadReconciliationAttention();
       // Optional deep links can open a particular expense or the approvals queue.
       var qs = new URLSearchParams(location.search);
       var f = qs.get('focus'), tp = qs.get('tab');
       if(tp==='paytm')tp='cash';
+      if(tp==='refunds'){tp='receivables';receivablesSubview='refunds';}
       if(modelCalendarContractId)tp='log';
       if(f){ tab = 'list'; focusId = f; focusedExpenseId = f; }
       else if(tp && el('tabs').querySelector('[data-t="'+tp+'"]')){ tab = tp; }
-      Array.prototype.forEach.call(el('tabs').children, function(b){ b.classList.toggle('on', b.dataset.t===tab); });
+      Array.prototype.forEach.call(el('tabs').querySelectorAll('button[data-t]'), function(b){ b.classList.toggle('on', b.dataset.t===tab); });
       render();
       initializeReconciliationStatusRefresh();
     });
