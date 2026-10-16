@@ -427,7 +427,7 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const online = read('gokwik_settlement_evidence.json', {rows:[]});
     const { integrateOrder } = require('./sales-order-view');
     const boundary = accountingStartAt();
-    const orders = mergedList(store).filter(o => !boundary || String(o.createdAt || '') >= boundary)
+    const orders = mergedList(store)
       .map(o => integrateOrder(o, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
       .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
     require('./order-settlement-links').attachSettlementLinks(orders,read('expenses.json',{}),online.rows||[],finance.rows||[]);
