@@ -1524,6 +1524,10 @@
       if(payMode!=='vendor'&&payMode!=='procurement')return;
       populatePaymentSource((expensesById[payId]||{}).nature||'SANKI',true);
     });
+    el('payAcct').addEventListener('change',function(){
+      if(!['vendor','procurement','claimant'].includes(payMode)||el('payType').value==='Credit'||!this.value)return;
+      el('payType').value=/cash/i.test(this.value)?'Cash':'UPI';
+    });
     el('payAddAcct').addEventListener('click', function(){
       if(!cfg.isAdmin){ requestAccount(); return; }
       var name=prompt('New paying account name (for example, HDFC Bank 1234):');

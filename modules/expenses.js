@@ -197,9 +197,9 @@ const ENTITY_ACCOUNTS = {
   PERSONAL: ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash']
 };
 const CLAIMANT_ACCOUNTS = {
-  arshpreet: ['Arshpreet 1919'],
-  shivam: ['Shivam 4807'],
-  pradeep: ['Pradeep 8606'],
+  arshpreet: ['Arshpreet 1919','Arshpreet Cash'],
+  shivam: ['Shivam 4807','Shivam Cash'],
+  pradeep: ['Pradeep 8606','Pradeep Cash'],
   namita: ['Namita 5464','Namita Cash']
 };
 const USER_PAYMENT_ACCOUNTS = {
@@ -1782,8 +1782,18 @@ function reimbursementClaimantForExpense(expense){
 }
 function vendorPaymentAccountsForReq(req,nature) {
   const company=payingAccountsForReq(req,nature);
-  if(!isOwner(req))return company;
-  return Array.from(new Set(company.concat(...Object.values(CLAIMANT_ACCOUNTS))));
+  // Admins need to record the real source of a business vendor payment when a
+  // claimant paid personally. The payment remains a claimant-funded outflow
+  // and creates the matching reimbursement balance; it never debits a company
+  // bank account. PERSONAL claimant accounts remain Owner-only.
+  if(!isAdmin(req)||(normalizedNature(nature)==='PERSONAL'&&!isOwner(req)))return company;
+  const claimantUsers=normalizedNature(nature)==='PERSONAL'?Object.keys(CLAIMANT_ACCOUNTS):['arshpreet','shivam','pradeep'];
+  return Array.from(new Set(company.concat(...claimantUsers.map(username=>CLAIMANT_ACCOUNTS[username]||[]))));
+}
+function claimantAccountOwnersForReq(req) {
+  if(!isAdmin(req))return {};
+  const visible=new Set(NATURES.flatMap(nature=>vendorPaymentAccountsForReq(req,nature)));
+  return Object.fromEntries(Object.entries(CLAIMANT_ACCOUNTS).flatMap(([username,accounts])=>accounts.filter(account=>visible.has(account)).map(account=>[account,username])));
 }
 function allowedVendorPaymentAccount(req,nature,account) {
   const candidate=canonicalAccountName(account),allowed=vendorPaymentAccountsForReq(req,nature);
@@ -2168,7 +2178,7 @@ router.get('/api/expenses/config', (req, res) => {
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     vendorPaymentAccountsByNature: Object.fromEntries(NATURES.map(n => [n, vendorPaymentAccountsForReq(req,n)])),
-    claimantAccountOwners: isOwner(req)?Object.fromEntries(Object.entries(CLAIMANT_ACCOUNTS).flatMap(([username,accounts])=>accounts.map(account=>[account,username]))):{},
+    claimantAccountOwners: claimantAccountOwnersForReq(req),
     claimantPaymentAccountsByUser: (isPrashant(req)||ownerView) ? {arshpreet:CLAIMANT_ACCOUNTS.arshpreet.slice()} : {},
     personalAccounts: personalAccountsForReq(req), people: Array.from(new Set([].concat(s.people||[],Object.values(s.expenses||{}).map(e=>e.createdBy||e.claimant).filter(Boolean)))).sort((a,b)=>a.localeCompare(b)),
     types: TYPES, natures: allowed, channels: CHANNELS, creditCards,
@@ -2659,10 +2669,12 @@ function recordBatchVendorPayment(req, res) {
   if(refundCredit&&b.amount!=null&&(!Number.isFinite(Number(b.amount))||Math.abs(Number(b.amount)*100-expenseRefunds.cents(b.amount))>.00001))return res.status(400).json({success:false,error:'Enter the actual bank/cash amount with at most two decimal places.'});
   const proofs=proofList(b.paymentProofs,b.paymentProof),proof=proofs[0]||'';
   if (requestedTotal>0&&!proofs.length) return res.status(400).json({ success:false, error:'Payment proof is required — no proof, no payment.' });
-  const paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI'),card=requestedTotal>0&&paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
+  let paymentType=PAYMENT_TYPES.includes(b.paymentType)?b.paymentType:(first.paymentType||'UPI');
+  const card=requestedTotal>0&&paymentType==='Credit'&&resolveCreditCard(req,b.creditCardId||b.account);
   const vendorAccount=requestedTotal>0&&!card?allowedVendorPaymentAccount(req,nature,String(b.account||'').trim()):null;
   const account = requestedTotal>0?(card?creditCardName(card):vendorAccount&&vendorAccount.name):'';
   if (requestedTotal>0&&!account) return res.status(400).json({ success:false, error:paymentType==='Credit'?'Select the credit card used.':'Select a paying account assigned to this accounting entity.' });
+  if(requestedTotal>0&&!card)paymentType=/cash/i.test(account)?'Cash':'UPI';
   const claimantPayer=vendorAccount&&vendorAccount.claimant||'';
   const reconIssues = requestedTotal>0?(card||claimantPayer?[]:reconciliationIssues(s, nature, account)):[], overrideReason = String(b.reconciliationOverrideReason || '').trim();
   if (reconIssues.length && !overrideReason) return res.status(409).json({ success:false, requiresOverride:true, issues:reconIssues, error:'This account has an unresolved reconciliation warning. Enter an urgent-payment override reason to continue.' });

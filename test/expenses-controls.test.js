@@ -1543,7 +1543,7 @@ test('Prashant can record a separate Ashpreet vendor bill directly from assigned
   assert.equal(paid.body.expenses[0].reimbursementStatus,'not_applicable');
 });
 
-test('Owner can record a partial vendor payment from an existing claimant account',()=>{
+test('Owner and Admin can record a partial business vendor payment from an existing claimant account',()=>{
   const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Claimant Part Pay Vendor',amount:1000,billPhoto:'/api/expenses/photo/claimant-part-bill.jpg',qrPhoto:'/api/expenses/photo/claimant-part-qr.jpg',paymentType:'UPI'}});
   assert.equal(made.status,200,JSON.stringify(made.body));
   const id=made.body.expense.id;
@@ -1553,7 +1553,14 @@ test('Owner can record a partial vendor payment from an existing claimant accoun
   assert.ok(ownerConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'));
   assert.equal(ownerConfig.claimantAccountOwners['Arshpreet 1919'],'arshpreet');
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
-  assert.equal(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'),false);
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet Cash'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Shivam 4807'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Shivam Cash'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Pradeep 8606'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Pradeep Cash'));
+  assert.equal(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Namita 5464'),false,'personal claimant accounts do not leak into a business payment picker');
+  assert.equal(adminConfig.claimantAccountOwners['Arshpreet 1919'],'arshpreet');
   const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[id],account:'Arshpreet 1919',amount:400,paymentProof:'/api/expenses/photo/claimant-part-pay.jpg',date:'2026-09-30'}});
   assert.equal(paid.status,200,JSON.stringify(paid.body));
   const expense=paid.body.expenses[0],payment=expense.payments.at(-1);
@@ -1567,11 +1574,25 @@ test('Owner can record a partial vendor payment from an existing claimant accoun
 
 test('Owner can select every registered claimant account for a PERSONAL vendor payment',()=>{
   const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
-  for(const account of ['Arshpreet 1919','Shivam 4807','Pradeep 8606'])assert.ok(ownerConfig.vendorPaymentAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL vendor payment accounts');
+  for(const account of ['Arshpreet 1919','Arshpreet Cash','Shivam 4807','Shivam Cash','Pradeep 8606','Pradeep Cash'])assert.ok(ownerConfig.vendorPaymentAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL vendor payment accounts');
   assert.equal(ownerConfig.claimantAccountOwners['Shivam 4807'],'shivam');
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.equal(adminConfig.vendorPaymentAccountsByNature.PERSONAL.includes('Shivam 4807'),false,'claimant accounts remain Owner-only in this picker');
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/paid personally by/);
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/paid personally by/);assert.match(html,/payAcct'\)\.addEventListener\('change'/);assert.match(html,/cash\/i\.test\(this\.value\)\?'Cash':'UPI'/);
+});
+
+test('Admin claimant-account vendor payment creates the correct reimbursement without a company-bank debit',()=>{
+  const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Admin Claimant Pay Vendor',amount:325,billPhoto:'/api/expenses/photo/admin-claimant-bill.jpg',qrPhoto:'/api/expenses/photo/admin-claimant-qr.jpg',paymentType:'UPI'}});
+  assert.equal(made.status,200,JSON.stringify(made.body));
+  const id=made.body.expense.id;
+  invoke('POST','/api/expenses/:id/approve',{params:{id},role:'owner'});
+  const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'admin',body:{expenseIds:[id],account:'Shivam Cash',amount:325,paymentType:'UPI',paymentProof:'/api/expenses/photo/admin-claimant-pay.jpg',date:'2026-10-16'}});
+  assert.equal(paid.status,200,JSON.stringify(paid.body));
+  const expense=paid.body.expenses[0],payment=expense.payments.at(-1);
+  assert.equal(expense.status,'paid');assert.equal(expense.personalPaidAmount,325);assert.equal(expense.reimbursementStatus,'pending');
+  assert.equal(payment.account,'Shivam Cash');assert.equal(payment.paymentType,'Cash');assert.equal(payment.personalFunds,true);assert.equal(payment.paidBy,'shivam');assert.equal(payment.recordedBy,'prashant');
+  const reimbursements=invoke('GET','/api/expenses/reimbursements',{role:'admin',query:{nature:'SANKI'}}).body;
+  assert.ok(reimbursements.reimbursements.some(x=>x.id===id&&x.closingBalance===325&&x.reimbursementClaimant==='shivam'));
 });
 
 test('non-reimbursable personal expenses never appear as owner reimbursement liabilities',()=>{
