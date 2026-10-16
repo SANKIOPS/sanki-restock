@@ -9,7 +9,7 @@ const crypto = require('node:crypto');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordProvisionalPayment, telegramPayingAccounts, telegramRejectExpense, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
 const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, bankFinalizationImportPlan, restoreApprovalTrimmedDraft, validateApprovalTrimmedDraftExternalRows, createBankReconciliationDraft, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
 const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
 const { applyAxisArshpreetReimbursementDuplicateRepair } = require('../modules/expenses');
@@ -3175,6 +3175,31 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.equal(duplicate.success,false);
   assert.match(duplicate.error,/not awaiting a vendor payment/);
   assert.equal(telegramExpense(id).payments.length,1);
+});
+
+test('Telegram can record a one-tap-account provisional payment without approving or double-posting the expense',()=>{
+  const file=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(file);
+  try{
+    const created=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Pending Telegram Vendor',particulars:'Pending repair bill',amount:418,bill:'printed',billPhoto:'/api/expenses/photo/pending-bill.jpg',qrPhoto:'/api/expenses/photo/pending-qr.jpg',paymentType:'UPI'}}),id=created.body.expense.id;
+    const prashantAccounts=telegramPayingAccounts('SANKI','prashant',['admin']);
+    assert.ok(prashantAccounts.includes('Prashant Axis 3645'));assert.ok(prashantAccounts.includes('Counter Cash'));assert.equal(prashantAccounts.includes('Axis Bank 3448'),false);
+    const provisional=telegramRecordProvisionalPayment(id,'prashant',{amount:418,account:'Prashant Axis 3645',date:'2026-10-16',proof:'/api/expenses/photo/provisional-payment.jpg',sourceKey:'telegram-payment:test:provisional-1'},{roles:['admin']});
+    assert.equal(provisional.success,true);assert.equal(provisional.expense.status,'pending');assert.equal(provisional.expense.approvedAt,null);assert.equal(provisional.expense.paidAmount,0);assert.equal(provisional.expense.provisionalPaidAmount,418);assert.equal(provisional.payment.provisional,true);
+    const ledgerBefore=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-10-16',to:'2026-10-16'}}).body.entries,entryBefore=ledgerBefore.find(x=>x.id===id+'/'+provisional.payment.id);
+    assert.equal(entryBefore.kind,'provisional_expense_payment');assert.equal(entryBefore.debit,418);assert.equal(entryBefore.approvalPending,true);
+    const approved=telegramApproveExpense(id,'prashant',{ledger:'REPAIR & MAINTANCE'});
+    assert.equal(approved.success,true);assert.equal(approved.expense.status,'paid');assert.equal(approved.expense.paidAmount,418);assert.equal(approved.expense.payments.length,1);assert.equal(approved.expense.payments[0].id,provisional.payment.id);assert.equal(approved.expense.payments[0].provisional,undefined);
+    const ledgerAfter=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Prashant Axis 3645',from:'2026-10-16',to:'2026-10-16'}}).body.entries.filter(x=>x.id===id+'/'+provisional.payment.id);
+    assert.equal(ledgerAfter.length,1,'approval must promote the same movement instead of posting a second debit');assert.equal(ledgerAfter[0].kind,'expense');
+    const stored=JSON.parse(fs.readFileSync(file)),events=(stored.auditLog||[]).filter(x=>x.subjectId===id);assert.ok(events.some(x=>x.action==='PROVISIONAL_PAYMENT_RECORDED'));assert.ok(events.some(x=>x.action==='PROVISIONAL_PAYMENT_LINKED'));
+
+    const second=invoke('POST','/api/expenses',{body:{nature:'SANKI',vendor:'Rejected Paid Vendor',particulars:'Rejected after payment',amount:100,bill:'printed',billPhoto:'/api/expenses/photo/rejected-paid-bill.jpg',qrPhoto:'/api/expenses/photo/rejected-paid-qr.jpg',paymentType:'UPI'}}).body.expense;
+    assert.equal(telegramRecordProvisionalPayment(second.id,'prashant',{amount:100,account:'Counter Cash',date:'2026-10-16',proof:'/api/expenses/photo/rejected-paid-proof.jpg',sourceKey:'telegram-payment:test:provisional-2'},{roles:['admin']}).success,true);
+    const rejected=telegramRejectExpense(second.id,'prashant');assert.equal(rejected.success,true);assert.equal(rejected.expense.paymentResolutionRequired,true);
+    const deletion=invoke('DELETE','/api/expenses/:id',{role:'owner',params:{id:second.id},body:{reason:'Should remain visible'}});assert.equal(deletion.status,409);assert.match(deletion.body.error,/real payment is already recorded/i);
+
+    const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');assert.match(telegramSource,/Record payment now/);assert.match(telegramSource,/Which account actually paid/);assert.match(telegramSource,/Do not type or edit account numbers/);assert.match(telegramSource,/expense and category are still pending approval/i);
+  }finally{fs.writeFileSync(file,baseline);}
 });
 
 test('Namita Personal bot expenses use separate Namita account and cash ledgers', () => {
