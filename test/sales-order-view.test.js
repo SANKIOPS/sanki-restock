@@ -27,3 +27,7 @@ test('fulfilled orders without any provider reference expose the missing link',(
  const view=integrateOrder({id:'missing',channel:'Website',fulfillmentStatus:'fulfilled',shipments:[{awb:null}]});
  assert.equal(view.deliveryStatus,'Shipment link missing');
 });
+test('external fulfillment without tracking is never presented as delivered',()=>{
+ const view=integrateOrder({id:'external',channel:'Website',fulfillmentStatus:'fulfilled',velocityShipments:[{awb:'',status:'externally_fulfilled'}]});
+ assert.equal(view.deliveryStatus,'Fulfilled outside Velocity · tracking unavailable');assert.equal(view.shipments.length,0);
+});

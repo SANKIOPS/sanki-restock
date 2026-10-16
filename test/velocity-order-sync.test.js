@@ -17,3 +17,8 @@ test('full pagination includes later pages and rejects repeated data',async()=>{
 test('provider failure cannot be treated as an empty successful index',async()=>{
  await assert.rejects(fetchShipmentIndex({token:'secret',fetchImpl:async()=>({ok:false,status:401})}),/401/);
 });
+test('provider orders fulfilled externally remain discoverable without an AWB',()=>{
+ const r=row('external');r.attributes.tracking_number=null;r.attributes.status='externally_fulfilled';
+ const shipment=normalizeShipment(r);assert.equal(shipment.awb,'');assert.equal(shipment.status,'externally_fulfilled');
+ assert.equal(matchShipments({'123':{}},[shipment]).byOrder['123'].length,1);
+});

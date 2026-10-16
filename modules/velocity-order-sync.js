@@ -2,9 +2,9 @@
 const BASE='https://shazam.velocity.in/custom/api/v1';
 function normalizeShipment(row){
  const a=row.attributes||{},o=a.order||{},awb=String(a.tracking_number||'').trim();
- if(!o.external_id||o.channel!=='shopify'||!awb)return null;
+ if(!o.external_id||o.channel!=='shopify')return null;
  const grams=a.applicable_weight&&a.applicable_weight.value;
- return {id:String(row.id),orderId:String(o.external_id),orderName:o.display_id||'',awb,courier:(a.carrier||{}).name||'',status:a.status||'Tracking update pending',weight:grams!=null&&Number.isFinite(Number(grams))?Number(grams)/1000:null,trackingUrl:'https://www.velocityshipping.in/track/'+encodeURIComponent(awb)};
+ return {id:String(row.id),orderId:String(o.external_id),orderName:o.display_id||'',awb,courier:(a.carrier||{}).name||'',status:a.status||'Tracking update pending',weight:grams!=null&&Number.isFinite(Number(grams))?Number(grams)/1000:null,trackingUrl:awb?'https://www.velocityshipping.in/track/'+encodeURIComponent(awb):''};
 }
 async function fetchShipmentIndex({token,fetchImpl=require('node-fetch'),pause=ms=>new Promise(r=>setTimeout(r,ms))}){
  const rows=[],seen=new Set();let total=null;

@@ -408,7 +408,7 @@ function syncLogistics(){
       try{tracking=await require('./velocity-tracking').fetchTracking({awbs,token:process.env.VELOCITY_API_KEY});}catch(e){trackingError=e.message;}
       const now=new Date().toISOString();
       const shipments={...(previous.shipments||{})};
-      for(const row of index.rows)shipments[row.awb]={...shipments[row.awb],...row,...tracking[row.awb],courierName:(tracking[row.awb]||{}).courierName||row.courier,lastUpdated:now};
+      for(const row of index.rows.filter(s=>s.awb))shipments[row.awb]={...shipments[row.awb],...row,...tracking[row.awb],courierName:(tracking[row.awb]||{}).courierName||row.courier,lastUpdated:now};
       for(const [awb,t] of Object.entries(tracking))shipments[awb]={...shipments[awb],...t,courierName:t.courierName||(shipments[awb]||{}).courierName||''};
       const result={byOrder:matched.byOrder,shipments,lastSync:now,lastAttempt:now,error:trackingError,total:index.total,matchedOrders:Object.keys(matched.byOrder).length,unmatched:matched.unmatched};
       atomicWrite(file,JSON.stringify(result));
