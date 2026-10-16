@@ -54,7 +54,9 @@ function registerGoKwikReports(router,deps) {
   router.post(base+'/discard-preview',run((req,res)=>{const s=loadStore(),id=String(req.body.previewId || '');if(!s.gokwikPreviews?.[id])throw Error('Preview not found.');delete s.gokwikPreviews[id];event(s,req,'GOKWIK_PREVIEW_DISCARDED',id,{});saveStore(s);respond(res,s);}));
   router.post(base+'/link-order',run((req,res)=>{
     const s=loadStore(),id=String(req.body.paymentId || ''),tx=(s.gokwikTransactions || {})[id],reason=String(req.body.reason || '').trim();if(!tx)throw Error('Payment not found.');if(reason.length<10)throw Error('Enter a review reason of at least 10 characters.');
-    assertNotPosted(s,tx);const link=g.validateLink(s,tx,orders());s.gokwikOrderLinks=s.gokwikOrderLinks || {};s.gokwikOrderLinks[id]={...link,reason,at:new Date().toISOString(),by:req.user.username};invalidateApproval(s,tx);event(s,req,'GOKWIK_ORDER_LINKED',id,{after:s.gokwikOrderLinks[id]});saveStore(s);respond(res,s);
+    assertNotPosted(s,tx);const at=new Date().toISOString(),link=g.validateLink(s,tx,orders(),{confirmedOrderId:req.body.orderId});s.gokwikOrderLinks=s.gokwikOrderLinks || {};
+    const identityReview=req.body.orderId?{sourceOrderId:tx.orderId,orderId:link.orderId,reason,at,by:req.user.username}:(s.gokwikOrderLinks[id]||{}).identityReview;
+    s.gokwikOrderLinks[id]={...link,...(identityReview?{identityReview}:{}),reason,at,by:req.user.username};invalidateApproval(s,tx);event(s,req,'GOKWIK_ORDER_LINKED',id,{after:s.gokwikOrderLinks[id]});saveStore(s);respond(res,s);
   }));
   router.post(base+'/unmatch',run((req,res)=>{
     const s=loadStore(),id=String(req.body.paymentId || ''),tx=(s.gokwikTransactions || {})[id],reason=String(req.body.reason || '').trim();if(!tx)throw Error('Payment not found.');if(reason.length<10)throw Error('Enter an unmatch reason of at least 10 characters.');assertNotPosted(s,tx);const before=s.gokwikOrderLinks?.[id];if(s.gokwikOrderLinks)delete s.gokwikOrderLinks[id];invalidateApproval(s,tx);event(s,req,'GOKWIK_ORDER_UNMATCHED',id,{before,note:reason});saveStore(s);respond(res,s);
