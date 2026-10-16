@@ -74,6 +74,10 @@ test('the bank loader rejects stale responses and does not overwrite an edited r
   const elements={bs_account:{value:'Namita 5464'},bs_table:{textContent:'',innerHTML:'previous'},bs_history:{innerHTML:''},bs_finalize:{style:{display:''}},bs_discard:{style:{display:''}}};
   const requests=[];let dirty=false,rendered=[];
   const context=vm.createContext({Promise,encodeURIComponent,Error,bankNature:'PERSONAL',bankStatementLoadGeneration:0,bankDraftId:'OLD',bankReconView:{},bankDraftOptions:[],el:id=>elements[id],api:(url)=>new Promise(resolve=>requests.push({url,resolve})),reconciliationStatusBusy:()=>dirty,renderBankHistory:()=> 'history',renderBankReconciliation:d=>rendered.push(d.draftId),ReconciliationStatus:ui,bankDraftSwitcher:()=>'',fmt:String,esc:String});
+  // Run the real navigation dependency introduced by refresh persistence;
+  // preserve every stale-response/dirty-review assertion below.
+  context.window=context;context.URL=URL;context.location={href:'https://example.test/expenses.html',pathname:'/expenses.html',search:'',hash:''};context.history={state:null,replaceState(){}};
+  new vm.Script(fs.readFileSync(path.join(__dirname,'../public/navigation-state.js'),'utf8')).runInContext(context);
   new vm.Script(source).runInContext(context);
   const old=context.loadBankStatement('OLD',true),current=context.loadBankStatement('NEW',true);
   assert.equal(requests[1].url,'/api/expenses/bank-statements?nature=PERSONAL&account=Namita%205464&draftId=NEW');
