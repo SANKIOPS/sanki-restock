@@ -1009,6 +1009,41 @@ function applyArshpreetSep12SalaryAdvanceRepair(s,salaryStore){
   s.oneTimeMigrations[key]={appliedAt:now,result:'reclassified',advanceId:advance.id,transferId,employeeId:employee.id,employeeName:employee.name,amount,date,fromAccount,toAccount,preservedProof:true,preservedReconciliation:true};
   return {expensesChanged:true,salaryChanged:true,advanceId:advance.id};
 }
+function applyArshpreetSep01SalaryAdvanceRepair(s,salaryStore){
+  const key='reclassify-tr-00124-as-arshpreet-salary-advance-v1',transferId='TR-00124',amount=10000,date='2026-09-01',fromAccount='Axis Bank 3448',toAccount='Arshpreet 1919',now=new Date().toISOString();
+  s.oneTimeMigrations=s.oneTimeMigrations||{};
+  if(s.oneTimeMigrations[key])return {expensesChanged:false,salaryChanged:false};
+  const transfer=(s.transfers||[]).find(x=>x.id===transferId);
+  if(!transfer||!salaryStore)return {expensesChanged:false,salaryChanged:false};
+  salaryStore.advances=salaryStore.advances||{};
+  const transferMatches=canonicalAccountName(transfer.fromAccount).toLowerCase()===fromAccount.toLowerCase()&&canonicalAccountName(transfer.toAccount).toLowerCase()===toAccount.toLowerCase()&&String(transfer.date||'').slice(0,10)===date&&Math.abs(num(transfer.amount)-amount)<.01;
+  const employeeNameKey=value=>String(value||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const knownAdvance=salaryStore.advances['ADV-00051'];
+  const employees=Object.values(salaryStore.employees||{});
+  const employee=(knownAdvance&&employeeNameKey(knownAdvance.employeeName)==='arshpreetsingharora'&&employees.find(item=>String(item.id)===String(knownAdvance.empId)))||employees.find(item=>item.active!==false&&employeeNameKey(item.name)==='arshpreetsingharora')||employees.find(item=>employeeNameKey(item.name)==='arshpreetsingharora');
+  if(!transferMatches||!employee)return {expensesChanged:false,salaryChanged:false};
+  const exact=Object.values(salaryStore.advances).filter(advance=>advance.active!==false&&advance.empId===employee.id&&String(advance.date||advance.payoutDate||'').slice(0,10)===date&&Math.abs(num(advance.amount)-amount)<.01);
+  let advance=exact.find(item=>item.fundingTransferId===transferId)||exact.find(item=>!item.fundingTransferId);
+  if(!advance){
+    if(exact.length)return {expensesChanged:false,salaryChanged:false};
+    do{salaryStore.advanceSeq=num(salaryStore.advanceSeq)+1;}while(salaryStore.advances['ADV-'+String(salaryStore.advanceSeq).padStart(5,'0')]);
+    const id='ADV-'+String(salaryStore.advanceSeq).padStart(5,'0');
+    advance=salaryStore.advances[id]={id,empId:employee.id,employeeName:employee.name,amount,date,payoutDate:date,account:fromAccount,payingNature:'SANKI',proof:transfer.proof||'',proofs:proofList(transfer.proofs,transfer.proof),note:'Employee salary advance deposited into Arshpreet 1919; corrected from internal transfer '+transferId,reference:transferId,recoveryStartMonth:'2026-09',recoveries:[],active:true,createdBy:transfer.createdBy||'prashant',createdAt:transfer.createdAt||now,approvedBy:'Owner-directed correction',approvedAt:now};
+  }
+  if(advance.fundingTransferId&&advance.fundingTransferId!==transferId)return {expensesChanged:false,salaryChanged:false};
+  const before=JSON.parse(JSON.stringify(transfer));
+  Object.assign(advance,{employeeName:employee.name,account:fromAccount,payingNature:'SANKI',fundingTransferId:transferId,fundingToAccount:toAccount,fundingLinkedAt:advance.fundingLinkedAt||now,fundingLinkedBy:advance.fundingLinkedBy||'Owner-directed correction'});
+  Object.assign(transfer,{classification:'salary_advance_funding',salaryAdvanceId:advance.id,employeeId:employee.id,employeeName:employee.name,advanceDate:date,reclassifiedAt:now,reclassifiedBy:'Owner-directed correction'});
+  const explanation='Owner confirmed '+transferId+' is Arshpreet\'s ₹10,000 salary advance, not an ordinary internal transfer.';
+  transfer.note=[String(transfer.note||'').trim(),explanation].filter(Boolean).join(' · ');
+  salaryStore.advanceAudit=salaryStore.advanceAudit||[];
+  if(!salaryStore.advanceAudit.some(event=>event.action==='TRANSFER_RECLASSIFIED_AS_ADVANCE'&&event.advanceId===advance.id&&event.details&&event.details.transferId===transferId))salaryStore.advanceAudit.push({at:now,by:'Owner-directed correction',action:'TRANSFER_RECLASSIFIED_AS_ADVANCE',advanceId:advance.id,details:{transferId,fromAccount,toAccount,amount,date,preservedProof:true}});
+  salaryStore.oneTimeMigrations=salaryStore.oneTimeMigrations||{};
+  salaryStore.oneTimeMigrations[key]={appliedAt:now,advanceId:advance.id,transferId,amount,date,fromAccount,toAccount,rule:'Preserve the bank movement and proof; classify the employee-account funding as a recoverable salary advance.'};
+  audit(s,null,'TRANSFER_RECLASSIFIED_AS_SALARY_ADVANCE','transfer',transferId,{user:'gaganlambasanki',device:'Owner-directed deployment',nature:'SANKI',account:fromAccount,before,after:JSON.parse(JSON.stringify(transfer)),note:explanation,advanceId:advance.id});
+  s.oneTimeMigrations[key]={appliedAt:now,result:'reclassified',advanceId:advance.id,transferId,employeeId:employee.id,employeeName:employee.name,amount,date,fromAccount,toAccount,preservedProof:true,preservedReconciliation:true};
+  return {expensesChanged:true,salaryChanged:true,advanceId:advance.id};
+}
 function loadStore() {
   let s;
   try { s = Object.assign(blankStore(), JSON.parse(fs.readFileSync(EXP_PATH, 'utf8'))); }
@@ -1070,6 +1105,9 @@ function loadStore() {
     const arshpreetSalaryStore=loadSalaryStore(),arshpreetAdvanceRepair=applyArshpreetSep12SalaryAdvanceRepair(s,arshpreetSalaryStore);
     if(arshpreetAdvanceRepair.salaryChanged)saveSalaryStore(arshpreetSalaryStore);
     if(arshpreetAdvanceRepair.expensesChanged)saveStore(s);
+    const arshpreetSep01AdvanceRepair=applyArshpreetSep01SalaryAdvanceRepair(s,arshpreetSalaryStore);
+    if(arshpreetSep01AdvanceRepair.salaryChanged)saveSalaryStore(arshpreetSalaryStore);
+    if(arshpreetSep01AdvanceRepair.expensesChanged)saveStore(s);
     if(applyLgHistoricalPayment20260814(s))saveStore(s);
     // Repair the two owner-identified Axis charges that were previously saved
     // only as balance adjustments. These postings affect spending/P&L only;
@@ -5839,6 +5877,7 @@ module.exports.indiaBusinessDate = indiaBusinessDate;
 module.exports.applySep11PrashantReimbursementDateCorrection = applySep11PrashantReimbursementDateCorrection;
 module.exports.applyAxisArshpreetReimbursementDuplicateRepair = applyAxisArshpreetReimbursementDuplicateRepair;
 module.exports.applyArshpreetSep12SalaryAdvanceRepair = applyArshpreetSep12SalaryAdvanceRepair;
+module.exports.applyArshpreetSep01SalaryAdvanceRepair = applyArshpreetSep01SalaryAdvanceRepair;
 module.exports.applyIndus8181TransferDateCorrection = applyIndus8181TransferDateCorrection;
 module.exports.applyIndus8181Sep15DebitDateCorrection = applyIndus8181Sep15DebitDateCorrection;
 module.exports.applyIndus8181Sep15OmDateCorrection = applyIndus8181Sep15OmDateCorrection;
