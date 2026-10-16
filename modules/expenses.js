@@ -9,6 +9,7 @@ const { cashVerificationView } = require('./cash-verification-status');
 const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
 const { vendorSearchRank, compareVendorSearch } = require('./vendor-ledger-search');
 const claimantPolicy = require('./expense-claimant-policy');
+const ledgerConnections = require('./expense-ledger-connections');
 // ═══════════════════════════════════════════════════════════════
 // Expenses — the money-OUT side of in-app accounting, built around SANKI's
 // real "runner" process and made leakage-proof by PROOF at every gate.
@@ -1282,6 +1283,7 @@ function loadStore() {
     if(sankiCategories.applyWithBackup(s,EXP_PATH))saveStore(s);
     if(categoryFinalization.applyWithBackup(s,EXP_PATH))saveStore(s);
     if(syncClaimantFundedSalaryAdvanceReimbursements(s))saveStore(s);
+    if(ledgerConnections.repairCreatedTransferLinks(s,({transfer,record,row,key,before})=>audit(s,null,'BANK_CREATED_TRANSFER_LINK_RESTORED','transfer',transfer.id,{nature:transfer.nature,account:key,before,after:{recordId:record.id,rowId:row.id,linkedRecordIds:row.linkedRecordIds},note:'Restored by exact finalized bank-row provenance; amounts, approvals and bank evidence unchanged.'})))saveStore(s);
     return s;
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
@@ -3646,12 +3648,12 @@ router.get('/api/expenses/balances', (req, res) => {
     const posted=(account,date)=>inRange(date)&&cashEntryIsVisible(account,date)&&afterAuthoritativeOpening(account,date);
     Object.values(s.expenses).forEach(e => {
       const a = e.account || '(unspecified)';
-      (e.payments || []).filter(p => !p.accountingExcluded && (paymentIsPosted(e)||p.provisional) && posted(p.account||a,p.date)).forEach(p => {
+      (e.payments || []).filter(p => !p.accountingExcluded && (paymentIsPosted(e)||p.provisional) && posted(p.account||a,accountMovementDate(s,p.account||a,nature,e.id+'/'+p.id,p.date))).forEach(p => {
         const paymentAccount = p.account || a;
         if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(paymentAccount).toLowerCase()))return;
         paidOut[paymentAccount] = (paidOut[paymentAccount] || 0) + num(p.amount);
       });
-      (e.reimbursementPayments || []).filter(p=>!p.accountingExcluded&&posted(p.account,p.date)).forEach(p => {
+      (e.reimbursementPayments || []).filter(p=>!p.accountingExcluded&&posted(p.account,accountMovementDate(s,p.account,nature,p.batchId||e.id+'/'+p.id,p.date))).forEach(p => {
         const ra = p.account || '(unspecified)';
         if(!ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(ra).toLowerCase()))return;
         paidOut[ra] = (paidOut[ra] || 0) + num(p.amount);
@@ -3660,9 +3662,9 @@ router.get('/api/expenses/balances', (req, res) => {
       // inflow back into the claimant account that originally funded the
       // expense. Without this credit, a fully reimbursed claimant incorrectly
       // remains negative forever in the Money Trail.
-      const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;
+      const personalAccount=ledgerConnections.claimantAccount(e);
       if(personalAccount&&ledgerAccountsForNature(s,nature).some(x=>x.toLowerCase()===String(personalAccount).toLowerCase())){
-        (e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&posted(personalAccount,p.date)).forEach(p=>{
+        (e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&posted(personalAccount,accountMovementDate(s,personalAccount,nature,p.batchId||e.id+'/'+p.id+'/RECEIVED',p.date))).forEach(p=>{
           collected[personalAccount]=(collected[personalAccount]||0)+num(p.amount);
         });
       }
@@ -3965,13 +3967,22 @@ router.post('/api/expenses/sales-refunds',(req,res)=>{
 
 function ledgerReconciliationStatus(s,nature,account){
   const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)]||{},index=new Map();
-  (book.imports||[]).forEach(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(row=>(row.linkedRecordIds||[]).forEach(id=>index.set(id,{status:'reconciled',reconciliationId:record.id,bankDate:row.bank&&row.bank.date||'',bankReference:row.bank&&row.bank.reference||'',finalizedAt:record.finalizedAt||'',finalizedBy:record.finalizedBy||''}))));
-  Object.entries(s.bankDateOverrides||{}).forEach(([id,x])=>{if(x.reconciliationDraft)index.set(id,Object.assign({status:'reconciled',reconciliationId:x.reconciliationDraft,bankDate:x.bankDate||'',bankReference:x.bankReference||'',finalizedAt:x.at||'',finalizedBy:x.by||''},index.get(id)||{}));});
+  (book.imports||[]).forEach(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).forEach(row=>ledgerConnections.linkedIds(row).forEach(id=>index.set(id,{status:'reconciled',reconciliationId:record.id,bankDate:row.bank&&row.bank.date||'',bankReference:row.bank&&row.bank.reference||'',finalizedAt:record.finalizedAt||'',finalizedBy:record.finalizedBy||''}))));
+  const finalized=ledgerConnections.finalizedLinks(s);
+  const connectedIds=new Set((s.transfers||[]).filter(t=>((t.fromNature||t.nature)===nature&&t.fromAccount===account)||((t.toNature||t.nature)===nature&&t.toAccount===account)).map(t=>t.id));
+  Object.values(s.expenses||{}).forEach(e=>{if(ledgerConnections.claimantAccount(e)!==account)return;(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded).forEach(p=>connectedIds.add(p.batchId||e.id+'/'+p.id));});
+  // Entry-level source evidence does NOT advance this account's verified cutoff.
+  // An active draft date override alone must never claim finalized status.
+  finalized.forEach((_,id)=>{if(!connectedIds.has(id))return;const evidence=ledgerConnections.uniqueFinalizedLink(s,id,finalized);if(!evidence)return;const status=Object.assign(ledgerConnections.evidenceStatus(evidence),{sourceAccountConfirmed:evidence.key!==bankStatementBookKey(nature,account)});if(!index.has(id))index.set(id,status);index.set(id+'/RECEIVED',status);});
   const latest=(book.imports||[]).slice().sort((a,b)=>String(a.finalizedAt||'').localeCompare(String(b.finalizedAt||''))).at(-1),last=book.lastReconciliation?Object.assign({},book.lastReconciliation,{from:book.lastReconciliation.from||latest&&latest.from||'',to:book.lastReconciliation.to||latest&&latest.to||book.reconciledThrough||''}):null,status={through:book.reconciledThrough||'',last,index};
   if(normalizedNature(nature)!=='SANKI'||account!==PAYTM_CLEARING_ACCOUNT)return status;
 const reviewed=reviewedUnpostedSettlements(s,paytmReceiptEvidenceRows(s)),completed=[...(s.paytmSettlements||[]),...(s.paytmVerifiedSettlements||[]),...(s.paytmPayoutPostings||[]),...reviewed].map(item=>({date:String(item.settledDate||item.date||item.payoutDate||item.finalizedAt||item.postedAt||'').slice(0,10),at:item.finalizedAt||item.postedAt||item.createdAt||'',by:item.finalizedBy||item.postedBy||item.createdBy||'',reviewedNotFinalized:!!item.reviewedNotFinalized})).filter(item=>/^\d{4}-\d{2}-\d{2}$/.test(item.date)).sort((a,b)=>a.date.localeCompare(b.date)||String(a.at).localeCompare(String(b.at))),paytmLatest=completed.at(-1);
   if(paytmLatest&&paytmLatest.date>status.through){status.through=paytmLatest.date;status.last=paytmLatest.at?{at:paytmLatest.at,by:paytmLatest.by,through:paytmLatest.date,paytmSettlementReview:true}:null;}
   return status;
+}
+function accountMovementDate(s,account,nature,id,date){
+  const override=ledgerConnections.movementOverride(s,id);
+  return override&&!wasLedgerMovementCarried(s,account,nature,id)?override.bankDate||date:date;
 }
 router.get('/api/expenses/account-ledger', (req, res) => {
   const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantCash=isPrashant(req)&&nature==='SANKI'&&account===DEFAULT_COUNTER_CASH;
@@ -4027,10 +4038,18 @@ router.get('/api/expenses/account-ledger', (req, res) => {
       // its money movement to business-bank operators. Keep the amount,
       // account date and bank reference visible, but never disclose the
       // private vendor, particulars, proof or claimant.
-      if(entryNature==='PERSONAL'&&nature==='SANKI')(e.payments||[]).filter(p=>!p.accountingExcluded&&(paymentIsPosted(e)||p.provisional)&&(p.account||e.account)===account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p=>entries.push({id:e.id+'/'+p.id,date:p.date,kind:'personal_expense_redacted',entity:'PERSONAL',description:'Owner personal expense · private details restricted [PERSONAL]',reference:p.bankReference||'',credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:'',note:'',by:'',editable:false,privacyRedacted:true}));
+      if(entryNature==='PERSONAL'&&nature==='SANKI'){
+        (e.payments||[]).filter(p=>!p.accountingExcluded&&(paymentIsPosted(e)||p.provisional)&&(p.account||e.account)===account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p=>entries.push({id:e.id+'/'+p.id,date:p.date,kind:'personal_expense_redacted',entity:'PERSONAL',description:'Owner personal expense · private details restricted [PERSONAL]',reference:p.bankReference||'',credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:'',note:'',by:'',editable:false,privacyRedacted:true}));
+        const funding=ledgerConnections.claimantAccount(e),privateExpense={id:e.id,claimant:'Private claimant',vendor:'Private expense',particulars:'Details restricted',createdAt:''};
+        (e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&(p.account===account||funding===account)).forEach(p=>{
+          const direction=p.account===account?'paid':'received',safePayment=Object.assign({},p,{proof:'',proofs:[],note:'',paidBy:'',paidAt:''});
+          if(p.batchId){addReimbursementBatchItem(direction,privateExpense,safePayment,'PERSONAL');const batch=reimbursementBatches.get(direction+'/'+p.batchId);batch.privacyRedacted=true;batch.proof='';batch.proofs=[];batch.by='';return;}
+          entries.push({id:e.id+'/'+p.id+(direction==='received'?'/RECEIVED':''),date:p.date,kind:'personal_reimbursement_redacted',entity:'PERSONAL',description:'Private expense reimbursement · details restricted [PERSONAL]',credit:direction==='received'?num(p.amount):0,debit:direction==='paid'?num(p.amount):0,proof:'',note:'',by:'',editable:false,privacyRedacted:true});
+        });
+      }
       return;
     }
-    const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account||e.claimantFundingAccount||'';
+    const personalAccount=ledgerConnections.claimantAccount(e);
     (e.payments || []).filter(p => !p.accountingExcluded&&(paymentIsPosted(e)||p.provisional) && (p.account || e.account) === account&&!grossPaymentBatches.has(p.batchPaymentId)).forEach(p => entries.push({id:e.id+'/'+p.id,date:p.date,kind:p.provisional?'provisional_expense_payment':(p.personalFunds?'personal_expense':'expense'),entity:entryNature,description:(p.provisional?'Payment awaiting expense approval · ':'')+(e.vendor||'Vendor')+' · '+(e.particulars||e.id)+entityLabel+(p.personalFunds?' · paid personally':''),credit:creditCard?num(p.amount):0,debit:creditCard?0:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,creditCardStatementId:p.creditCardStatementId||'',editable:!p.provisional&&!p.batchPaymentId&&!p.creditCardStatementId,approvalPending:!!p.provisional}));
     (e.reimbursementPayments || []).filter(p => !p.accountingExcluded&&p.account === account).forEach(p => p.batchId?addReimbursementBatchItem('paid',e,p,entryNature):entries.push({id:e.id+'/'+p.id,date:p.date,kind:'reimbursement',entity:entryNature,description:'Reimbursement to '+(e.claimant||e.createdBy||'claimant')+entityLabel,credit:0,debit:num(p.amount),proof:p.proof,note:p.note||'',by:p.paidBy,editable:true}));
     (e.reimbursementPayments || []).filter(p => !p.accountingExcluded&&personalAccount === account).forEach(p => p.batchId?addReimbursementBatchItem('received',e,p,entryNature):entries.push({id:e.id+'/'+p.id+'/RECEIVED',date:p.date,kind:'reimbursement_received',entity:entryNature,description:'Reimbursement received from '+(p.account||'company account')+entityLabel,credit:num(p.amount),debit:0,proof:p.proof,by:p.paidBy}));
@@ -4112,7 +4131,7 @@ router.get('/api/expenses/account-ledger', (req, res) => {
   });
   // Bank-statement rows stay in reconciliation reports only; Excluded / PSNL rows never become operational ledger entries.
   if(account===DEFAULT_COUNTER_CASH)for(let i=entries.length-1;i>=0;i--)if(entries[i].kind!=='opening'&&!cashEntryIsVisible(account,entries[i].date))entries.splice(i,1);
-  entries.forEach(x=>{const override=(s.bankDateOverrides||{})[x.id];if(override){x.originalDate=x.date;x.date=wasLedgerMovementCarried(s,account,nature,x.id)?x.originalDate:override.bankDate;x.bankDateOverride=override;}});
+  entries.forEach(x=>{const override=ledgerConnections.movementOverride(s,x.id);if(override){x.originalDate=x.date;x.date=accountMovementDate(s,account,nature,x.id,x.date);x.bankDateOverride=override;}});
   // An opening balance is the balance brought forward before the first ledger
   // movement; its effective date is audit metadata, not another receipt on that
   // date.  Treating it as a dated credit made earlier rows omit the opening and
@@ -4409,8 +4428,17 @@ function appBankMovements(s,account,nature){const rows=[],n=normalizedNature(nat
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===n).forEach(x=>(x.collections||[]).filter(c=>c.account===account).forEach(c=>rows.push({id:x.id+'/'+c.id,date:c.date,description:x.party,credit:num(c.amount),debit:0})));
   if(n==='SANKI'){salesLedgerEntries(s).filter(includeAutomaticSale).filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:x.description,reference:x.reference||'',proof:x.proof||'',credit:num(x.amount),debit:0}));procurementPayables(s,true).forEach(p=>(p.payments||[]).filter(x=>x.account===account).forEach(x=>rows.push({id:p.id+'/'+x.id,date:x.date,createdAt:x.paidAt,description:p.vendor||p.id,reference:x.bankReference||'',proof:x.proof||'',debit:num(x.amount),credit:0})));salaryPaymentEntries().filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary payment · '+x.employeeName+(x.note?' · '+x.note:''),reference:x.reference||x.batchId||x.id,proof:x.proof||'',category:'Salary payment',debit:num(x.amount),credit:0}));incentivePaymentEntries().filter(x=>x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Sales incentive payment · '+x.salesperson+(x.note?' · '+x.note:''),reference:x.reference||x.id,proof:(x.proofs||[])[0]||'',category:'Sales incentive payment',debit:num(x.amount),credit:0}));}
   salaryAdvanceEntries().filter(x=>x.payingNature===n&&!x.fundingTransferId&&x.account===account).forEach(x=>rows.push({id:x.id,date:x.date,createdAt:x.createdAt,description:'Salary advance · '+x.employee+' ['+x.entity+']'+(x.note?' · '+x.note:''),reference:x.reference||x.id,proof:x.proof||'',proofs:x.proofs||[],category:'Employee salary advance',debit:num(x.amount),credit:0}));
+  // Claimant-bank reconciliation must contain the same receiving credits as
+  // its ledger and Money Trail; otherwise already reimbursed money is missing.
+  const receivedBatches=new Map();
+  Object.values(s.expenses||{}).filter(e=>ledgerConnections.claimantAccount(e)===account).forEach(e=>(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded).forEach(p=>{
+    const id=e.id+'/'+p.id+'/RECEIVED';
+    if(!p.batchId){rows.push({id,date:p.date,createdAt:p.paidAt||'',description:'Reimbursement received',reference:p.bankReference||id,credit:num(p.amount),debit:0,entity:normalizedNature(e.nature),proof:normalizedNature(e.nature)==='PERSONAL'?'':p.proof||''});return;}
+    const batch=receivedBatches.get(p.batchId)||{id:p.batchId,date:p.date,createdAt:p.paidAt||'',description:'Reimbursement received batch',reference:p.batchId,credit:0,debit:0,sourceIds:[]};batch.credit+=num(p.amount);batch.sourceIds.push(id);receivedBatches.set(p.batchId,batch);
+  }));
+  receivedBatches.forEach(batch=>{batch.credit=roundMoney(batch.credit);rows.push(batch);});
   const card=creditCardByAccount(account);
-  return rows.map(x=>{let row=x;if(card)row=Object.assign({},x,{debit:num(x.credit),credit:num(x.debit)});const override=(s.bankDateOverrides||{})[row.id];return override?Object.assign({},row,{originalDate:row.date,date:wasLedgerMovementCarried(s,account,n,row.id)?row.date:override.bankDate,bankDateOverride:override}):row;});}
+  return rows.map(x=>{let row=x;if(card)row=Object.assign({},x,{debit:num(x.credit),credit:num(x.debit)});const override=ledgerConnections.movementOverride(s,row.id);return override?Object.assign({},row,{originalDate:row.date,date:accountMovementDate(s,account,n,row.id,row.date),bankDateOverride:override}):row;});}
 function applyReviewedBankDates(s,draft){
   if(!draft)return 0;s.bankDateOverrides=s.bankDateOverrides||{};s.bankReconciliationLinks=s.bankReconciliationLinks||{};const movements=appBankMovements(s,draft.account,draft.nature),movementFor=id=>movements.find(x=>x.id===id||(x.sourceIds||[]).includes(id)),now=new Date().toISOString(),groups=new Map();let changed=0;
   Object.entries(draft.resolutions||{}).forEach(([rowId,r])=>{if(r.action==='link_multiple_bank_entries'&&r.groupId){groups.set(r.groupId,r);return;}const appIds=['link_multiple_existing','link_with_rounding','vendor_advance_split'].includes(r.action)?(r.appIds||[]):['accept_match','link_existing','opening_vendor_payable_split','split_allocation'].includes(r.action)&&r.appId?[r.appId]:[];if(!appIds.length)return;const index=Number(String(rowId).replace('bank-','')),bank=(draft.transactions||[])[index];if(!bank)return;appIds.forEach(appId=>{const movement=movementFor(appId),existing=s.bankDateOverrides[appId];if(existing&&existing.reconciliationDraft!==draft.id)return;s.bankDateOverrides[appId]={bankDate:bank.date,originalDate:movement&&movement.originalDate||movement&&movement.date||existing&&existing.originalDate||'',bankReference:String(bank.reference||''),reconciliationDraft:draft.id,provisional:true,remark:r.remark||r.reason||'Reviewed bank match; bank date is authoritative',by:r.by||draft.createdBy||'system',at:r.at||now};changed+=1;});});
@@ -4932,6 +4960,38 @@ router.post('/api/expenses/bank-statements/correct-finalized-link',(req,res)=>{
   audit(s,req,'FINALIZED_BANK_RECONCILIATION_LINK_CORRECTED','bank_reconciliation',record.id,{nature,account,bankDate:row.bank.date,rowId,before,after:{linkedRecordIds:[appId],ledger:movement},note:reason});saveStore(s);
   res.json({success:true,recordId:record.id,row});
 });
+// Correct the old gross-as-principal transfer error without reopening unrelated
+// rows or changing the real source-bank debit. This remains Owner-only, just
+// like the other finalized-record correction workflows above.
+router.post('/api/expenses/bank-statements/correct-finalized-transfer-split',(req,res)=>{
+  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can correct a finalized transfer split.'});
+  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature),account=String(b.account||''),reason=String(b.reason||'').trim();
+  if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).json({success:false,error:'Account access denied.'});
+  const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)],record=book&&(book.imports||[]).find(x=>x.id===b.recordId),row=record&&[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[]).find(x=>x.id===b.rowId),transfer=(s.transfers||[]).find(x=>x.id===b.appId);
+  if(!record||!record.finalizedAt||!row||!row.bank||!transfer||!reason)return res.status(400).json({success:false,error:'Choose the finalized transfer and supply the confirmed principal, bank charge and reason.'});
+  const bank=row.bank,split=ledgerConnections.transferSplit(bank,b.principalAmount,b.chargeAmount);
+  if(!split||!(split.charge>0)||!(num(bank.debit)>0)||bank.reversal||row.resolutionAction==='bank_reversal_pair')return res.status(400).json({success:false,error:'Confirmed amount received plus bank charge must exactly equal this outgoing bank debit. Unexplained differences must stay pending.'});
+  if(transfer.classification!=='internal_transfer'||transfer.fromAccount!==account||normalizedNature(transfer.fromNature||transfer.nature)!==nature||!accountVisibleToReq(req,transfer.toAccount))return res.status(409).json({success:false,error:'This is not an ordinary internal transfer from the selected account.'});
+  if(transfer.reconciliationDraft!==record.draftId||transfer.bankRowId!==row.id||transfer.date!==bank.date||!ledgerConnections.linkedIds(row).includes(transfer.id))return res.status(409).json({success:false,error:'The original transfer and finalized bank-row provenance must agree.'});
+  const otherLinks=(book.imports||[]).flatMap(x=>[].concat(x.reconciliationRows||[],x.carriedReconciliationRows||[])).filter(x=>x!==row&&ledgerConnections.linkedIds(x).includes(transfer.id));
+  if(otherLinks.length)return res.status(409).json({success:false,error:'This transfer has another finalized claim. Review the conflicting link first.'});
+  if(transfer.confirmedBankSplit){if(roundMoney(transfer.amount)===split.principal&&roundMoney(transfer.confirmedBankSplit.charge)===split.charge)return res.json({success:true,already:true,transfer});return res.status(409).json({success:false,error:'A confirmed split already exists. Review its accounting effect before changing it again.'});}
+  if(roundMoney(transfer.amount)!==split.gross||ledgerConnections.linkedIds(row).some(id=>id!==transfer.id))return res.status(409).json({success:false,error:'Only the original unsplit gross transfer can be corrected here.'});
+  const existingCharges=(s.adjustments||[]).filter(x=>!x.accountingExcluded&&x.reconciliationDraft===transfer.reconciliationDraft&&x.bankRowId===row.id);
+  if(existingCharges.length)return res.status(409).json({success:false,error:'This bank row already has an accounting adjustment. Review it before splitting to avoid duplicate charges.'});
+  const before=JSON.parse(JSON.stringify(transfer)),beforeBalance=recordedAccountBalance(s,nature,account),at=new Date().toISOString();
+  s.adjSeq=num(s.adjSeq)+1;const id='ADJ-'+String(s.adjSeq).padStart(4,'0'),charge={id,nature,account,amount:-split.charge,date:bank.date,note:'Confirmed bank charge for '+transfer.id+' · '+reason,reconciliationDraft:transfer.reconciliationDraft,bankRowId:row.id,bankTransactionId:bank.transactionId||'',transferChargeFor:transfer.id,createdBy:req.user.username,createdAt:at};
+  transfer.amount=split.principal;transfer.confirmedBankSplit={gross:split.gross,principal:split.principal,charge:split.charge,chargeId:id,recordId:record.id,rowId:row.id,reason,by:req.user.username,at};
+  transfer.editedAt=at;transfer.editedBy=req.user.username;
+  s.adjustments=s.adjustments||[];s.adjustments.push(charge);
+  s.reconciliationExpenses=s.reconciliationExpenses||[];s.reconciliationExpenses.push({id:'BRE-'+id,nature,date:bank.date,amount:split.charge,account,category:'BANK CHARGES',type:'running',vendor:'Bank',particulars:charge.note,adjustmentId:id,bankTransactionId:bank.transactionId||'',reconciliationDraft:transfer.reconciliationDraft,createdBy:req.user.username,createdAt:at});
+  if(Math.abs(recordedAccountBalance(s,nature,account)-beforeBalance)>.001)return res.status(409).json({success:false,error:'Source-bank balance conservation check failed; nothing was saved.'});
+  const previous={linkedRecordIds:row.linkedRecordIds,ledger:row.ledger};
+  row.linkedRecordIds=[transfer.id,id];row.ledger={id:transfer.id,date:bank.date,description:'Internal transfer principal',debit:split.principal,credit:0};row.chargeAmount=split.charge;row.chargeAdjustmentId=id;row.decision='Confirmed transfer principal + bank charge';row.reason=reason;
+  row.correctionHistory=row.correctionHistory||[];row.correctionHistory.push({before:previous,after:{linkedRecordIds:row.linkedRecordIds,principal:split.principal,charge:split.charge},reason,by:req.user.username,at});
+  audit(s,req,'FINALIZED_TRANSFER_PRINCIPAL_AND_CHARGE_CORRECTED','transfer',transfer.id,{nature,account,before,after:{transfer,charge},note:reason});saveStore(s);
+  res.json({success:true,transfer,charge,sourceBankDebit:split.gross,sourceBalanceUnchanged:true});
+});
 router.get('/api/expenses/bank-statements/file/:id',(req,res)=>{const s=loadStore(),id=String(req.params.id||''),nature=normalizedNature(req.query.nature),account=String(req.query.account||'');if(!canAccessBankReconciliation(req,s,nature,account))return res.status(403).end();const book=(s.bankStatements||{})[bankStatementBookKey(nature,account)],record=book&&(book.imports||[]).find(x=>x.id===id),name=record&&path.basename(String(record.file||'')),fp=name&&path.join(STATEMENT_DIR,name);if(!record||!name||!fp.startsWith(STATEMENT_DIR)||!fs.existsSync(fp))return res.status(404).end();res.sendFile(fp);});
 function reconcileBankStatementAccount(account,username,device,draftId,nature){const s=loadStore(),n=normalizedNature(nature),draft=(s.bankReconciliationDrafts||{})[draftId]||Object.values(s.bankReconciliationDrafts||{}).filter(x=>x.account===account&&normalizedNature(x.nature)===n).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];if(!draft)return{success:false,error:'Upload and preview a statement first.'};return draftReconciliation(s,draft);}
 router.post('/api/expenses/bank-statements/reconcile',(req,res)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];if(!canAccessBankDraft(req,s,draft))return res.status(403).json({success:false,error:'You cannot reconcile this bank account.'});const out=reconcileBankStatementAccount(String(b.account||''),req.user.username,'Web',b.draftId,draft.nature);res.status(out.success?200:400).json(out);});
@@ -5185,7 +5245,9 @@ router.post('/api/expenses/bank-statements/resolve',(req,res)=>{
     const fromAccount=num(row.bank.debit)>0?draft.account:otherAccount,toAccount=num(row.bank.credit)>0?draft.account:otherAccount;
     if(!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))return res.status(403).json({success:false,error:'One of these accounts is restricted to the Owner.'});
     if(!isOwner(req)&&isPrashant(req)&&!isPrashantApprovedTransfer(draft.nature,draft.nature,fromAccount,toAccount,'internal_transfer'))return res.status(403).json({success:false,error:'Choose an internal transfer involving 3448, 0425, 3645 or 8181 and another available business account.'});
-    b.otherAccount=otherAccount;
+    const split=ledgerConnections.transferSplit(row.bank,b.principalAmount,b.chargeAmount);
+    if(!split)return res.status(400).json({success:false,error:'Amount received plus bank charge must exactly equal the bank transaction. A bank credit cannot include a sender-side charge.'});
+    b.principalAmount=split.principal;b.chargeAmount=split.charge;b.otherAccount=otherAccount;
   }
   const chargeCategory=b.action==='paytm_settlement'?'PAYTM CHARGES':String(b.chargeCategory||'BANK CHARGES').trim();
   if(['create_split_adjustment','split_allocation'].includes(b.action)&&!['BANK CHARGES','PAYTM CHARGES'].includes(chargeCategory))return res.status(400).json({success:false,error:'Choose Bank Charges or Paytm Charges.'});
@@ -5286,7 +5348,19 @@ router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{const b=req
 function applyFinalizedInternalTransfers(draft,username){
   if(!draft||!Object.values(draft.resolutions||{}).some(r=>r.action==='create_internal_transfer'))return;
   const s=loadStore(),now=new Date().toISOString();
-  Object.entries(draft.resolutions||{}).forEach(([bankRowId,r])=>{if(r.action!=='create_internal_transfer'||(s.transfers||[]).some(x=>x.reconciliationDraft===draft.id&&x.bankRowId===bankRowId))return;const index=Number(String(bankRowId).replace('bank-','')),bank=(draft.transactions||[])[index],other=String(r.otherAccount||'').trim();if(!bank||!other)return;s.transferSeq=num(s.transferSeq)+1;const incoming=num(bank.credit)>0,transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:draft.nature,fromNature:draft.nature,toNature:draft.nature,classification:'internal_transfer',fromAccount:incoming?other:draft.account,toAccount:incoming?draft.account:other,amount:num(bank.credit)||num(bank.debit),date:bank.date,proof:'',bankStatementEvidence:true,bankReference:bank.reference||'',note:r.reason,bankRowId,reconciliationDraft:draft.id,createdBy:username,createdAt:now};s.transfers.push(transfer);audit(s,null,'BANK_CONFIRMED_TRANSFER_CREATED','transfer',transfer.id,{user:username,device:'Web',nature:draft.nature,account:draft.account,after:transfer,note:r.reason});});saveStore(s);
+  Object.entries(draft.resolutions||{}).forEach(([bankRowId,r])=>{
+    if(r.action!=='create_internal_transfer'||(s.transfers||[]).some(x=>x.reconciliationDraft===draft.id&&x.bankRowId===bankRowId))return;
+    const index=Number(String(bankRowId).replace('bank-','')),bank=(draft.transactions||[])[index],other=String(r.otherAccount||'').trim();if(!bank||!other)return;
+    const split=ledgerConnections.transferSplit(bank,num(r.principalAmount)>0?r.principalAmount:undefined,r.chargeAmount);if(!split)throw new Error('Invalid bank-confirmed transfer split; principal plus charge must equal bank amount.');
+    s.transferSeq=num(s.transferSeq)+1;
+    const incoming=num(bank.credit)>0,transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:draft.nature,fromNature:draft.nature,toNature:draft.nature,classification:'internal_transfer',fromAccount:incoming?other:draft.account,toAccount:incoming?draft.account:other,amount:split.principal,date:bank.date,proof:'',bankStatementEvidence:true,bankReference:bank.reference||'',note:r.reason,bankRowId,reconciliationDraft:draft.id,createdBy:username,createdAt:now};
+    s.transfers.push(transfer);
+    if(split.charge>0){
+      s.adjSeq=num(s.adjSeq)+1;const id='ADJ-'+String(s.adjSeq).padStart(4,'0'),charge={id,nature:draft.nature,account:draft.account,amount:-split.charge,date:bank.date,note:'Confirmed transfer bank charge for '+transfer.id,reconciliationDraft:draft.id,bankRowId,transferChargeFor:transfer.id,createdBy:username,createdAt:now};
+      s.adjustments=s.adjustments||[];s.adjustments.push(charge);s.reconciliationExpenses=s.reconciliationExpenses||[];s.reconciliationExpenses.push({id:'BRE-'+id,nature:draft.nature,date:bank.date,amount:split.charge,account:draft.account,category:'BANK CHARGES',type:'running',vendor:'Bank',particulars:charge.note,adjustmentId:id,reconciliationDraft:draft.id,createdBy:username,createdAt:now});transfer.confirmedBankSplit={gross:split.gross,principal:split.principal,charge:split.charge,chargeId:id,reason:r.reason,by:username,at:now};
+    }
+    audit(s,null,'BANK_CONFIRMED_TRANSFER_CREATED','transfer',transfer.id,{user:username,device:'Web',nature:draft.nature,account:draft.account,after:transfer,note:r.reason});
+  });saveStore(s);
 }
 router.use('/api/expenses/bank-statements/finalize',(req,res,next)=>{const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId];if(!draft)return next();const original=res.json.bind(res);res.json=payload=>{if(payload&&payload.success)applyFinalizedInternalTransfers(draft,req.user.username);return original(payload);};next();});
 function applyFinalizedCompositeLinks(draft,username){
@@ -5522,8 +5596,8 @@ function recordedAccountBalance(s,nature,account,asOf){
   if(nature==='SANKI')personalFundingRows(s).forEach(f=>{if(f.account===account&&on(f.date))total+=num(f.amount);(f.repayments||[]).filter(p=>p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
   (s.transfers||[]).filter(x=>!x.accountingExcluded&&on(x.date)).forEach(x=>{if(normalizedNature(x.fromNature||x.nature)===nature&&x.fromAccount===account)total-=transferDebitAmount(x);if(normalizedNature(x.toNature||x.nature)===nature&&x.toAccount===account&&transferCreditsCompanyFunds(x,nature,account))total+=transferCreditAmount(x);});
   (s.vendorAdvances||[]).filter(x=>!x.accountingExcluded&&normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)).forEach(x=>total-=num(x.grossPaymentAmount)||num(x.amount));
-  Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&!grossPaymentBatches.has(p.batchPaymentId)&&(paymentIsPosted(e)||p.provisional)&&(p.account||e.account)===account&&on(p.date)).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(p.date)).forEach(p=>total-=num(p.amount));});
-  Object.values(s.expenses||{}).forEach(e=>{const personalAccount=((e.payments||[]).find(p=>p.personalFunds&&p.account)||{}).account;if(personalAccount===account)(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&on(p.date)).forEach(p=>total+=num(p.amount));});
+  Object.values(s.expenses||{}).forEach(e=>{(e.payments||[]).filter(p=>!p.accountingExcluded&&!grossPaymentBatches.has(p.batchPaymentId)&&(paymentIsPosted(e)||p.provisional)&&(p.account||e.account)===account&&on(accountMovementDate(s,account,nature,e.id+'/'+p.id,p.date))).forEach(p=>total-=num(p.amount));(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&p.account===account&&on(accountMovementDate(s,account,nature,p.batchId||e.id+'/'+p.id,p.date))).forEach(p=>total-=num(p.amount));});
+  Object.values(s.expenses||{}).forEach(e=>{const personalAccount=ledgerConnections.claimantAccount(e);if(personalAccount===account)(e.reimbursementPayments||[]).filter(p=>!p.accountingExcluded&&on(accountMovementDate(s,account,nature,p.batchId||e.id+'/'+p.id+'/RECEIVED',p.date))).forEach(p=>total+=num(p.amount));});
   (s.bankTruthMovements||[]).filter(x=>normalizedNature(x.nature)===nature&&x.account===account&&on(x.date)&&!usesCompanyAdjustedBankTruth(nature,account)).forEach(x=>total+=num(x.credit)-num(x.debit));
   Object.values(s.receivables||{}).filter(x=>normalizedNature(x.nature)===nature).forEach(x=>(x.collections||[]).filter(c=>c.account===account&&on(c.date)).forEach(c=>total+=num(c.amount)));
   (s.salesRefunds||[]).filter(x=>normalizedNature(x.nature)===nature&&x.refundAccount===account&&on(x.date)).forEach(x=>total-=num(x.amount));
