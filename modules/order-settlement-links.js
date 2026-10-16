@@ -12,13 +12,21 @@ function bankEvidence(accounting, reference, expected){
 }
 function attachSettlementLinks(orders,accounting,online,finance){
  const groups=new Map();
- for(const row of online){if(!row.utr)continue;const key='online|'+row.utr;const g=groups.get(key)||{reference:row.utr,net:0};const net=row.credit!=null&&row.reportedGokwikDeduction!=null?(money(row.credit)-money(row.debit)-money(row.reportedGokwikDeduction))/100:Number(row.net)||0;g.net+=net;groups.set(key,g);}
+ for(const row of online){
+  if(!row.utr)continue;const key='online|'+row.utr,g=groups.get(key)||{reference:row.utr,net:0,invalid:false};
+  let net;
+  if(row.credit!=null&&row.reportedGokwikDeduction!=null){
+   net=(money(row.credit)-money(row.reportedGokwikDeduction))/100;
+   if(net<0||(money(row.debit)!==0&&money(row.debit)!==money(net)))g.invalid=true;
+  }else{net=Number(row.net);if(!Number.isFinite(net)||net<0)g.invalid=true;}
+  g.net+=Number.isFinite(net)?net:0;groups.set(key,g);
+ }
  // COD API provides gross collection, not net batch deductions. Do not infer
  // the net bank payout by summing collections. Only imported payout data can
  // establish an expected COD batch total.
  for(const order of orders){
   order.bankEvidence=[];
-  for(const row of order.onlineEvidence||[]){const group=groups.get('online|'+row.utr);const match=group&&bankEvidence(accounting,group.reference,group.net);if(match&&!order.bankEvidence.some(x=>x.reference===match.reference))order.bankEvidence.push(match);}
+  for(const row of order.onlineEvidence||[]){const group=groups.get('online|'+row.utr);const match=group&&!group.invalid&&bankEvidence(accounting,group.reference,group.net);if(match&&!order.bankEvidence.some(x=>x.reference===match.reference))order.bankEvidence.push(match);}
   const links=Object.entries(accounting.paytmOrderLinks||{}).filter(([,v])=>String(v.orderId)===String(order.id));
   order.posClearance=links.map(([transactionId,link])=>{
    const tx=(accounting.paytmReportTransactions||{})[transactionId]||{};

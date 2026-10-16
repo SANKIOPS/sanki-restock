@@ -49,11 +49,25 @@ The GoKwik clearing account also exposes this same embedded component.
 
 ## Supported evidence and boundaries
 
-Only INR Payment rows on/after 22 August 2026 are accepted. Single-digit day/month
-dates and zero-padded four-decimal money fields are supported. Unknown transaction
-types, debit/refund/chargeback rows, nonzero fractional paise, inconsistent totals,
+Only INR Payment rows on/after 22 August 2026 are accepted. Slash/hyphen day-first
+dates, ISO calendar dates and valid 12/24-hour times (including seconds) are
+supported, with strict calendar validation. Zero-padded four-decimal money fields
+are supported. CSV BOMs, CRLF, quoted fields, semicolon separators and UTF16LE are
+handled without converting identifiers to numbers. Headers are trimmed and
+case-insensitive; duplicate headers and malformed rows fail before any save.
+Debit may be zero or exactly the net payout (Credit minus the separate deduction).
+It is never deducted again. All GoKwik readers use the same monetary validation.
+Unknown transaction types, refund/chargeback rows, nonzero fractional paise, inconsistent totals,
 conflicting payment IDs and inconsistent UTR dates/providers fail closed. These
 cases need additional source examples and a separately verified implementation.
+
+Merchant IDs in scientific notation remain exactly as supplied. They never
+auto-link. The UI requires an explicit full-ID confirmation and review reason,
+and the server requires one unique cached Shopify order with the exact order
+number and an ID within the source's rounding interval. The original ID, selected
+exact ID, reviewer, time and reason remain auditable. Ambiguous or incompatible
+identities stay blocked. Funding limits, source locks and Owner revalidation also
+apply to these links; source CSVs are not rewritten.
 
 Refunds/cancellations do not erase a genuine original capture. Refund money must
 still be recorded separately through the existing refund workflow. Zero-net batches
@@ -79,3 +93,19 @@ in a loopback-restricted sandbox and are not claimed as passing.
 Content-version assertions normalize Windows CRLF to Git's LF before hashing.
 P&L API tests exercise the real Express router in-process, including invalid-date
 rejection, no-store headers, workbook decoding and unchanged financial sources.
+
+### Import-format corrective release
+
+The follow-up fix covers day-first hyphen timestamps, 12/24-hour times, strict
+calendar validation, BOM/header normalization, UTF-16 and semicolon CSVs, and
+preserves all identifiers as source text. Debit is validated as either zero or
+the reported net payout, not deducted twice. Both GoKwik readers share the same
+date and monetary field rules. Existing legacy evidence is projected with the
+correct payout without rewriting its original source.
+
+Rounded scientific-notation merchant IDs cannot auto-link. An explicit full-ID
+review must pass order-number, uniqueness, rounding-interval and funding checks;
+the original ID and reviewed ID remain auditable. A malformed row rejects the
+whole upload before evidence is saved. The scoped financial/UI regression run
+passes 689 checks, with zero failures, cancellations or skips. All new fixtures
+are synthetic; the customer's settlement CSV is not part of the repository.
