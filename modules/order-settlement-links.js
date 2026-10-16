@@ -12,7 +12,7 @@ function bankEvidence(accounting, reference, expected){
 }
 function attachSettlementLinks(orders,accounting,online,finance){
  const groups=new Map();
- for(const row of online){if(!row.utr)continue;const key='online|'+row.utr;const g=groups.get(key)||{reference:row.utr,net:0};g.net+=Number(row.net)||0;groups.set(key,g);}
+ for(const row of online){if(!row.utr)continue;const key='online|'+row.utr;const g=groups.get(key)||{reference:row.utr,net:0};const net=row.credit!=null&&row.reportedGokwikDeduction!=null?(money(row.credit)-money(row.debit)-money(row.reportedGokwikDeduction))/100:Number(row.net)||0;g.net+=net;groups.set(key,g);}
  // COD API provides gross collection, not net batch deductions. Do not infer
  // the net bank payout by summing collections. Only imported payout data can
  // establish an expected COD batch total.
