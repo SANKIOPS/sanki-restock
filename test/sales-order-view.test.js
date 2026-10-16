@@ -10,3 +10,4 @@ test('integrated route joins persisted Shopify orders and Velocity by AWB',()=>{
  finally{if(previous===undefined)delete process.env.ORDERS_PATH;else process.env.ORDERS_PATH=previous;fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('partial COD remains partial COD after both advance and courier collection clear',()=>{const o=integrateOrder({...base,paymentGateways:['Gokwik PPCOD']},{},[],[],[{awb:'AWB1',amount:2800,deliveryDate:'2026-10-16',utr:'UTR'}],[{orderId:'1',type:'Payment',gross:200,utr:'ONLINE'}]);assert.equal(o.received,3000);assert.equal(o.balance,0);assert.equal(o.paymentType,'Partial COD');});
+test('historical line items recover product image identifiers from the existing order cache',()=>{const o=integrateOrder({...base,lineItems:[{id:'L1',title:'Shirt'}]},{},[],[{id:'1',line_items:[{id:'L1',variant_id:123,product_id:456}]}]);assert.equal(o.lineItems[0].variantId,'123');assert.equal(o.lineItems[0].productId,'456');});
