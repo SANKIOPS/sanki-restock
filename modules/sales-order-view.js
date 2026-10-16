@@ -3,8 +3,8 @@ const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const round = value => Math.round((value + Number.EPSILON) * 100) / 100;
 function integrateOrder(order, velocity = {}, remittances = [], legacy = [], finance = [], online = []) {
   const old = legacy.find(row => String(row.id) === String(order.id));
-  const source = (order.shipments && order.shipments.length ? order.shipments : null) || (old && (old.fulfillments || []).filter(f => f.status !== 'cancelled').map(f => ({awb:f.tracking_number, courier:f.tracking_company,status:f.shipment_status || f.status}))) || [];
-  const shipments = source.map(s => { const v = velocity[String(s.awb || '').trim()]; return v ? {...s, courier:v.courierName || s.courier, status:v.status || s.status, updatedAt:v.lastUpdated, deliveredAt:v.deliveredDate, codAmount:v.codAmount, location:v.currentLocation} : s; });
+  const source = (order.shipments && order.shipments.length ? order.shipments : null) || (old && (old.fulfillments || []).filter(f => f.status !== 'cancelled').map(f => ({awb:f.tracking_number, courier:f.tracking_company,status:f.shipment_status || 'Tracking update pending'}))) || [];
+  const shipments = source.map(s => { const v = velocity[String(s.awb || '').trim()]; return v ? {...s, courier:v.courierName || s.courier, status:v.status || s.status, updatedAt:v.lastUpdated, deliveredAt:v.deliveredDate, codAmount:v.codAmount, location:v.currentLocation,weight:v.weight??s.weight,trackingUrl:v.trackingUrl||s.trackingUrl} : s; });
   const payments = (order.paymentTransactions || []).filter(t => ['sale','capture'].includes(t.kind) && t.status === 'success');
   const known = order.paymentTransactionSchemaVersion === 2;
   const codEvidence=finance.filter(r=>shipments.some(s=>String(s.awb)===r.awb));

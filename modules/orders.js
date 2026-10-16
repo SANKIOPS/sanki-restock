@@ -220,7 +220,7 @@ function normalizeOrder(o, previous = {}) {
     financialStatus: o.financial_status || '',
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
     deliveryComplete,
-    shipments: fulfillments.filter(f => f.status !== 'cancelled').map(f => ({ id: String(f.id), awb: f.tracking_number || '', courier: f.tracking_company || '', trackingUrl: f.tracking_url || '', status: f.shipment_status || f.status || '', weight: null })),
+    shipments: fulfillments.filter(f => f.status !== 'cancelled').map(f => ({ id: String(f.id), awb: f.tracking_number || '', courier: f.tracking_company || '', trackingUrl: f.tracking_url || '', status: f.shipment_status || 'Tracking update pending', weight: null })),
     paymentGateways: o.payment_gateway_names || [],
     paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
     paymentTransactionSchemaVersion: 2,
@@ -401,6 +401,8 @@ async function syncFinance() {
     const linked=new Set(Object.keys(store.orders));
     const awbs=[...new Set([...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...(legacy.orders||[]).filter(o=>linked.has(String(o.id))).flatMap(o=>(o.fulfillments||[]).filter(f=>f.status!=='cancelled').map(f=>f.tracking_number))].map(v=>String(v||'').trim()).filter(v=>v&&!/^(n\/a|na|none)$/i.test(v)))];
     if(!awbs.length)throw new Error('No AWBs available. Sync Shopify orders first.');
+    const tracking=await require('./velocity-tracking').fetchTracking({awbs,token:process.env.VELOCITY_API_KEY});
+    atomicWrite(path.join(path.dirname(ORDERS_PATH),'velocity_tracking_evidence.json'),JSON.stringify({shipments:tracking,lastSync:new Date().toISOString()}));
     const rows=await require('./velocity-finance').fetchRemittances({awbs,token:process.env.VELOCITY_API_KEY});
     const file=path.join(path.dirname(ORDERS_PATH),'velocity_finance_evidence.json');
     atomicWrite(file,JSON.stringify({rows,updatedAt:new Date().toISOString()}));
@@ -416,6 +418,9 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const store = loadStore();
     const read = (name, fallback) => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH), name), 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
     const velocity = read('velocity_cache.json', { shipments: {} });
+    const tracking = read('velocity_tracking_evidence.json',{shipments:{}});
+    velocity.shipments=Object.assign({},velocity.shipments,tracking.shipments);
+    velocity.lastSync=tracking.lastSync||velocity.lastSync;
     const remittances = read('velocity_remittance.json', { entries: [] });
     const legacy = read('sanki_cache.json', { orders: [] });
     const finance = read('velocity_finance_evidence.json', {rows:[]});
