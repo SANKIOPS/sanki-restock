@@ -205,10 +205,11 @@ const CLAIMANT_ACCOUNTS = {
 const USER_PAYMENT_ACCOUNTS = {
   prashant: [
     'Prashant Axis 3645', 'Prashant Cash', 'Counter Cash',
-    'IndusInd Bank 7883', 'ICICI Bank 0993', 'IndusInd Bank 8181', 'Kirti Nagar Cash'
+    'IndusInd Bank 7883', 'ICICI Bank 0993', 'IndusInd Bank 8181', 'Kirti Nagar Cash', 'Services'
   ]
 };
 const OWNER_ONLY_ACCOUNTS = ['ICICI Bank 0992','Services'];
+const PRASHANT_VISIBLE_OWNER_ACCOUNTS = ['Services'];
 const ACCOUNT_RENAMES = { 'Axis Bank 3645':'Prashant Axis 3645', 'Cash':'Counter Cash', 'prashant Cash':'Prashant Cash' };
 
 function canonicalAccountName(value) {
@@ -226,7 +227,10 @@ function receiptCategory(receiptType,value){
   return supplied||defaults[receiptType]||'';
 }
 function receiptLabel(receiptType){return{loan_received:'Loan received — repayable principal',product_sale:'Product sale',asset_sale:'Asset sale',bank_interest:'Bank interest received',refund:'Refund received',expense_refund:'Expense refund',refund_recovery:'Employee refund recovery',owner_contribution:'Owner contribution',other_income:'Other income'}[receiptType]||'Money received';}
-function accountVisibleToReq(req,account){return isOwner(req)||!OWNER_ONLY_ACCOUNTS.some(name=>name.toLowerCase()===canonicalAccountName(account).toLowerCase());}
+function accountVisibleToReq(req,account){
+  const name=canonicalAccountName(account),restricted=OWNER_ONLY_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase());
+  return isOwner(req)||(isPrashant(req)&&PRASHANT_VISIBLE_OWNER_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase()))||!restricted;
+}
 function visibleAccountsForReq(req,accounts){return (accounts||[]).filter(account=>accountVisibleToReq(req,account));}
 function searchRank(fields, query) {
   const q=String(query||'').trim().toLowerCase().replace(/\s+/g,' ');if(!q)return 0;
@@ -1863,7 +1867,7 @@ function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req)
 const PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181']);
 function isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification){
   if(fromNature!=='SANKI'||toNature!=='SANKI'||classification!=='internal_transfer')return false;
-  const available=new Set(transferAccountsForNature('SANKI').filter(account=>!OWNER_ONLY_ACCOUNTS.includes(account)));
+  const available=new Set(transferAccountsForNature('SANKI').filter(account=>!OWNER_ONLY_ACCOUNTS.includes(account)||PRASHANT_VISIBLE_OWNER_ACCOUNTS.includes(account)));
   return fromAccount!==toAccount&&available.has(fromAccount)&&available.has(toAccount)&&
     (PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS.has(fromAccount)||PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS.has(toAccount));
 }
@@ -2160,7 +2164,7 @@ router.get('/api/expenses/config', (req, res) => {
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
     reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
-    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH]:(allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : [])])),
+    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : [])])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     vendorPaymentAccountsByNature: Object.fromEntries(NATURES.map(n => [n, vendorPaymentAccountsForReq(req,n)])),
@@ -3877,8 +3881,9 @@ router.post('/api/expenses/transfers/:id/delete', (req,res) => {
 });
 
 router.post('/api/expenses/receipts', (req,res) => {
-  if(!isOwner(req)&&!((req.body||{}).receiptType===expenseLoans.TYPE&&canApprove(req))) return res.status(403).json({success:false,error:'Only the Owner can record money received. Accounting approvers may record repayable loans.'});
-  const s=loadStore(),b=req.body||{},nature=normalizedNature(b.nature);
+  const b=req.body||{},nature=normalizedNature(b.nature),prashantServices=isPrashant(req)&&nature==='SANKI'&&canonicalAccountName(b.account)==='Services';
+  if(!isOwner(req)&&!prashantServices&&!(b.receiptType===expenseLoans.TYPE&&canApprove(req))) return res.status(403).json({success:false,error:'Only the Owner can record money received. Prashant may record Services receipts; accounting approvers may record repayable loans.'});
+  const s=loadStore();
   if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot record money for this entity.'});
   const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim(),category=receiptCategory(receiptType,b.category),note=String(b.note||'').trim(),ownerCashDeclaration=rolesOfReq(req).includes('owner')&&/cash/i.test(String(account||''))&&!proof;
   if(!account) return res.status(400).json({success:false,error:'Select the account that received the money.'});
@@ -3978,10 +3983,10 @@ const reviewed=reviewedUnpostedSettlements(s,paytmReceiptEvidenceRows(s)),comple
   return status;
 }
 router.get('/api/expenses/account-ledger', (req, res) => {
-  const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantCash=isPrashant(req)&&nature==='SANKI'&&account===DEFAULT_COUNTER_CASH;
-  if (!isAdmin(req)&&!prashantCash) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
+  const nature = normalizedNature(req.query.nature), account = String(req.query.account || '').trim(),prashantSpecial=isPrashant(req)&&nature==='SANKI'&&(account===DEFAULT_COUNTER_CASH||account==='Services');
+  if (!isAdmin(req)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'Owner/Admin only.' });
   const s = loadStore();
-  if (!approvalNatures(req).includes(nature)&&!prashantCash) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
+  if (!approvalNatures(req).includes(nature)&&!prashantSpecial) return res.status(403).json({ success: false, error: 'You cannot view this accounting entity.' });
   if (!account) return res.status(400).json({ success: false, error: 'Select an account.' });
   if (!accountVisibleToReq(req,account)) return res.status(403).json({success:false,error:'This ledger is restricted to the Owner.'});
   const creditCard=resolveCreditCard(req,account);
