@@ -96,10 +96,10 @@ test('unchanged legacy full financial payload preserves an unreconciled personal
   for(const key of ['payments','reimbursementPayments','reimbursementAmount','reimbursementStatus','paidAmount','personalPaidAmount','purchasePaymentProofs'])assert.deepEqual(after[key],before.expenses[id][key],key);
 });
 
-test('pending claimant metadata changes do not register an approved vendor and synthetic sources stay read-only',()=>{
+test('claimants cannot edit pending metadata and synthetic sources stay read-only',()=>{
   const {id}=seed({locked:false}),s=read();Object.assign(s.expenses[id],{status:'pending',paidAmount:0,approvedAt:null,payments:[]});fs.writeFileSync(expenseFile,JSON.stringify(s));
   const before=read();const out=invoke('POST','/api/expenses/:id',{params:{id},role:'claimant',username:'synthetic-claimant',body:{vendor:'Not an approved master vendor',particulars:'Pending correction'}});
-  assert.equal(out.status,200,JSON.stringify(out.body));const after=read();assert.equal(after.expenses[id].vendor,'Not an approved master vendor');
+  assert.equal(out.status,403,JSON.stringify(out.body));const after=read();assert.deepEqual(after.expenses[id],before.expenses[id]);
   for(const key of ['vendors','vendorsByNature','vendorDirectory'])assert.deepEqual(after[key],before[key],key);
   for(const marker of ['salaryAdvanceId','nonExpenseReimbursement']){
     const s=read();s.expenses[id][marker]=marker==='salaryAdvanceId'?'ADV-SYNTHETIC':true;fs.writeFileSync(expenseFile,JSON.stringify(s));
