@@ -1,7 +1,7 @@
 /* Linked expense refunds. The server validates every allocation again at save. */
 (function () {
   'use strict';
-  var data, draft, preview, filter = { nature: 'SANKI', from: '', to: '', status: '', search: '' }, busy = false, revision = 0, labelled = 0, frozen = [];
+  var data, draft, preview, filter = { nature: 'SANKI', from: '', to: '', status: '', search: '' }, busy = false, revision = 0, labelled = 0, frozen = [], refundHostId = 'panel';
   var labels = { cash: 'Cash', upi: 'UPI', bank: 'Bank transfer', card: 'Credit-card reversal', voucher: 'Voucher / Coupon / Gift card', store_credit: 'Store credit', vendor_credit: 'Vendor credit', credit_note: 'Credit note — unpaid bill' };
   var endpoint = '/api/expenses/expense-refunds';
   function moneyMode(mode) { return ['cash', 'upi', 'bank', 'card'].includes(mode); }
@@ -46,23 +46,26 @@
       data = result; return result;
     });
   }
-  window.renderRefunds = function () {
-    receivablesSubview = 'refunds';
-    if (!cfg.canManageExpenseRefunds) { el('panel').innerHTML = receivablesSubnav('refunds') + '<div class="card">Only Admin or Owner can manage expense refunds.</div>'; bindReceivablesSubnav(); return; }
-    el('panel').innerHTML = receivablesSubnav('refunds') + '<div class="card">Loading Refunds &amp; Returns…</div>';
-    bindReceivablesSubnav();
-    load().then(draw).catch(function (error) { el('panel').textContent = error.message; });
+  function refundHost() { return node(refundHostId) || el('panel'); }
+  window.renderRefundsSection = function (hostId) {
+    refundHostId = hostId || 'panel';
+    var host = refundHost();
+    if (!cfg.canManageExpenseRefunds) { host.innerHTML = '<div class="card">Only Admin or Owner can manage expense refunds.</div>'; return; }
+    host.innerHTML = '<div class="card">Loading Refunds &amp; Returns…</div>';
+    load().then(draw).catch(function (error) { var target = refundHost(); if (target) target.innerHTML = '<div class="card">' + esc(error.message) + '</div>'; });
   };
+  window.renderRefunds = function () { window.renderRefundsSection('panel'); };
   function draw() {
-    if (tab !== 'receivables' || receivablesSubview !== 'refunds') return;
+    if (tab !== 'receivables') return;
+    var host = refundHost();
+    if (!host) return;
     var s = data.summary;
-    el('panel').innerHTML = receivablesSubnav('refunds') + '<div class="card"><div class="row-actions"><h2 style="margin:0;flex:1">Refunds &amp; Returns</h2><button class="btn primary" id="rf_log">＋ Log refund / return</button></div><p class="hint">Linked to the original expense or payment. Money, non-cash credits and unpaid-bill credit notes are recorded separately. Proof is optional; a reason is required.</p><div class="filters"><div class="fld"><label>Entity</label><select id="rf_entity">' + options(cfg.approvalNatures, filter.nature) + '</select></div><div class="fld"><label>From</label><input type="date" id="rf_from" value="' + esc(filter.from) + '"></div><div class="fld"><label>To</label><input type="date" id="rf_to" value="' + esc(filter.to) + '"></div><div class="fld"><label>Status</label><select id="rf_status">' + options([{ value: '', label: 'All' }, { value: 'received', label: 'Received' }, { value: 'pending', label: 'Refund pending' }, { value: 'completed', label: 'Pending return completed' }, { value: 'voided', label: 'Voided (audit history)' }], filter.status) + '</select></div><div class="fld"><label>Search vendor / reference</label><input id="rf_search" value="' + esc(filter.search) + '"></div><button class="btn ghost" id="rf_filter">Filter</button></div></div>' +
+    host.innerHTML = '<div class="card"><div class="row-actions"><h2 style="margin:0;flex:1">Refunds &amp; Returns</h2><button class="btn primary" id="rf_log">＋ Log refund / return</button></div><p class="hint">Linked to the original expense or payment. Money, non-cash credits and unpaid-bill credit notes are recorded separately. Proof is optional; a reason is required.</p><div class="filters"><div class="fld"><label>Entity</label><select id="rf_entity">' + options(cfg.approvalNatures, filter.nature) + '</select></div><div class="fld"><label>From</label><input type="date" id="rf_from" value="' + esc(filter.from) + '"></div><div class="fld"><label>To</label><input type="date" id="rf_to" value="' + esc(filter.to) + '"></div><div class="fld"><label>Status</label><select id="rf_status">' + options([{ value: '', label: 'All' }, { value: 'received', label: 'Received' }, { value: 'pending', label: 'Refund pending' }, { value: 'completed', label: 'Pending return completed' }, { value: 'voided', label: 'Voided (audit history)' }], filter.status) + '</select></div><div class="fld"><label>Search vendor / reference</label><input id="rf_search" value="' + esc(filter.search) + '"></div><button class="btn ghost" id="rf_filter">Filter</button></div></div>' +
       '<div class="stats">' + [['Money received by company', s.moneyReceived], ['Credit available (non-cash)', s.creditsAvailable], ['Refund still pending', s.pending], ['Unpaid-bill credit notes', s.creditNotes], ['Refunds to original payer', s.personalReceived]].map(function (x) { return '<div class="stat"><div class="k">' + x[0] + '</div><div class="v">' + amount(x[1]) + '</div></div>'; }).join('') + '</div><p class="hint">Available credit is the remaining value of credits issued in the selected period. Expired credit: ' + amount(s.creditsExpired) + '. Vouchers never increase cash/bank balances.</p>' +
       '<div class="card" style="overflow:auto"><table><thead><tr><th>Date / refund reference</th><th>Expense / payment</th><th>Vendor</th><th>Amount</th><th>Mode / received into</th><th>Status / history</th></tr></thead><tbody>' + (data.refunds.length ? data.refunds.map(recordRow).join('') : '<tr><td colspan="6" class="muted">No refunds or returns in this view.</td></tr>') + '</tbody></table></div>' + recoverableView() + '<div class="msg" id="rf_page_message" role="status"></div>';
-    bindReceivablesSubnav();
     node('rf_log').onclick = function () { openForm(); };
-    node('rf_filter').onclick = function () { filter = { nature: node('rf_entity').value, from: node('rf_from').value, to: node('rf_to').value, status: node('rf_status').value, search: node('rf_search').value }; renderRefunds(); };
-    el('panel').onclick = function (event) {
+    node('rf_filter').onclick = function () { filter = { nature: node('rf_entity').value, from: node('rf_from').value, to: node('rf_to').value, status: node('rf_status').value, search: node('rf_search').value }; window.renderRefundsSection(refundHostId); };
+    host.onclick = function (event) {
       var b = event.target.closest('[data-rf-action]'); if (!b) return;
       var record = data.refunds.find(function (r) { return r.id === b.dataset.id; });
       if (b.dataset.rfAction === 'receive') return openForm(record);
