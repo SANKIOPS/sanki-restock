@@ -2860,7 +2860,7 @@ app.listen(PORT, async () => {
   // Sales spine — keep the local Shopify-order ledger fresh. Backfills on
   // first run, then incremental every few minutes. Read-only; never writes
   // back to Shopify.
-  try { require('./modules/orders').startAutoSync(); }
+  try { require('./modules/orders').startAutoSync(); require('./modules/orders').startGoKwikSync(); }
   catch (e) { console.error('[orders] auto-sync start error:', e.message); }
 
   // Load caches from disk

@@ -390,6 +390,18 @@ router.post('/api/orders-ledger/gokwik-report', financeUpload.single('file'), (r
     res.json({success:true,imported:rows.length,total:combined.size,bankVerified:false});
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
+function gokwikFile(){return path.join(path.dirname(ORDERS_PATH),'gokwik_api_evidence.json');}
+function syncGoKwik(force=false){return require('./gokwik-auto-sync').sync({file:gokwikFile(),orders:loadStore().orders,write:atomicWrite,force});}
+function startGoKwikSync(){
+ const tick=()=>{if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return;syncGoKwik().then(r=>{if(!r.skipped)console.log('[gokwik-api] Synced '+r.rows+' settlement records across '+r.days+' days');}).catch(e=>console.error('[gokwik-api] '+e.message));};
+ setTimeout(tick,45000);setInterval(tick,30*60*1000);
+}
+router.post('/api/orders-ledger/gokwik-sync',(req,res)=>{
+ if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return res.status(503).json({success:false,error:'GoKwik API credentials are not configured'});
+ syncGoKwik(true).catch(e=>console.error('[gokwik-api] '+e.message));
+ res.status(202).json({success:true,status:require('./gokwik-auto-sync').status(gokwikFile())});
+});
+router.get('/api/orders-ledger/gokwik-status',(req,res)=>res.json({success:true,...require('./gokwik-auto-sync').status(gokwikFile())}));
 let logisticsPromise=null;
 function syncLogistics(){
   if(logisticsPromise)return logisticsPromise;
@@ -459,13 +471,16 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const legacy = read('sanki_cache.json', { orders: [] });
     const finance = read('velocity_finance_evidence.json', {rows:[]});
     const online = read('gokwik_settlement_evidence.json', {rows:[]});
+    const apiState=read('gokwik_api_evidence.json',{days:{}});
+    online.rows=require('./gokwik-api').mergedEvidence(online.rows||[],Object.values(apiState.days||{}).flat());
+    const gokwikApiStatus=require('./gokwik-auto-sync').status(gokwikFile());
     const { integrateOrder } = require('./sales-order-view');
     const boundary = accountingStartAt();
     const orders = mergedList(store)
       .map(o => integrateOrder({...o,velocityShipments:(index.byOrder||{})[o.id]||[]}, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
       .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
     require('./order-settlement-links').attachSettlementLinks(orders,read('expenses.json',{}),online.rows||[],finance.rows||[]);
-    res.json({ success: true, orders, sources: { velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
+    res.json({ success: true, orders, sources: { gokwikApi:gokwikApiStatus, velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
   } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }
 });
 
@@ -529,4 +544,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncLogistics };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncLogistics, syncGoKwik, startGoKwikSync };

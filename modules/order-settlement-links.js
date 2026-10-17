@@ -15,7 +15,9 @@ function attachSettlementLinks(orders,accounting,online,finance){
  for(const row of online){
   if(!row.utr)continue;const key='online|'+row.utr,g=groups.get(key)||{reference:row.utr,net:0,invalid:false};
   let net;
-  if(row.credit!=null&&row.reportedGokwikDeduction!=null){
+  if(row.source==='gokwik_api_v2'){
+   net=Number(row.net);if(!Number.isFinite(net))g.invalid=true;
+  }else if(row.credit!=null&&row.reportedGokwikDeduction!=null){
    net=(money(row.credit)-money(row.reportedGokwikDeduction))/100;
    if(net<0||(money(row.debit)!==0&&money(row.debit)!==money(net)))g.invalid=true;
   }else{net=Number(row.net);if(!Number.isFinite(net)||net<0)g.invalid=true;}
