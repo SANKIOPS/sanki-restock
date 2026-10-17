@@ -1555,7 +1555,9 @@ function salesLedgerEntries(accountingStore, options = {}) {
     });
   } catch { /* orders have not synced yet */ }
   const seen = new Set();
-  return gokwikAccounting.projectSales(rows,accountingStore||{}).filter(x=>x.date&&x.amount>0).filter(x => {
+  let projected=gokwikAccounting.projectSales(rows,accountingStore||{});
+  try{const payouts=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'velocity_payout_evidence.json'),'utf8')),index=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'velocity_order_index.json'),'utf8')),orders=Object.values(JSON.parse(fs.readFileSync(ORDERS_PATH,'utf8')).orders||{}).map(o=>({...o,shipments:[...(o.shipments||[]),...((index.byOrder||{})[o.id]||[])]}));projected=require('./velocity-payout-accounting').projectCollections(projected,orders,payouts.batches||[]);}catch(e){if(e.code!=='ENOENT')console.error('[velocity-collection-ledger] '+e.message);}
+  return projected.filter(x=>x.date&&x.amount>0).filter(x => {
     const key = String(x.id || '') + '|' + x.date + '|' + x.amount;
     if (seen.has(key)) return false;
     seen.add(key); return true;

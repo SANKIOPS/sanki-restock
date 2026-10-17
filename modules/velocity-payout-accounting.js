@@ -28,4 +28,17 @@ function batches(accounting,orders,sales,payouts,from='2026-08-21'){
  }
  return result;
 }
-module.exports={batches,BANK,CLEARING,WALLET};
+function projectCollections(rows,orders,payouts,from='2026-08-21'){
+ const result=rows.map(r=>({...r})),byAwb=new Map(),collections=new Map(),seen=new Set();
+ for(const o of orders)for(const ship of [...(o.shipments||[]),...(o.fulfillments||[])]){const awb=String(ship.awb||ship.tracking_number||'');if(!awb)continue;const ids=byAwb.get(awb)||new Set();ids.add(String(o.id));byAwb.set(awb,ids);}
+ for(const b of payouts){if(b.status!=='settled'||!b.allocationsComplete)continue;for(const e of b.entries||[]){if(e.type!=='credit'||seen.has(e.awb))continue;const ids=byAwb.get(e.awb);if(ids?.size!==1)continue;seen.add(e.awb);const id=[...ids][0],g=collections.get(id)||{amount:0,date:'',awbs:[]};g.amount+=money(e.amount);const date=String(e.deliveryDate||b.date).slice(0,10);if(!g.date||date<g.date)g.date=date;g.awbs.push(e.awb);collections.set(id,g);}}
+ for(const o of orders){const c=collections.get(String(o.id));if(!c||c.date<from||o.cancelledAt||['refunded','partially_refunded'].includes(o.financialStatus)||Number(o.moneyRefunded||o.refundAmount)>0||o.channel==='POS'||['2720','2717'].includes(String(o.orderNumber||o.name||'').replace(/^#/,'')))continue;const existing=result.filter(r=>String(r.orderId)===String(o.id));if(existing.some(r=>r.account===CLEARING||r.manualCashCollected)||Object.keys(o.saleAllocationOverrides||{}).length)continue;
+  // An explicit account allocation or another verified receipt must never be
+  // silently overwritten. Only fill an entirely absent courier receipt.
+  if(existing.some(r=>r.saleAllocation||r.componentAmountOverride))continue;
+  if(c.amount+existing.reduce((n,r)=>n+money(r.amount),0)>money(o.total))continue;
+  result.push({id:'VELOCITY-COLLECTION/'+o.id,orderId:String(o.id),orderNumber:String(o.orderNumber||o.name||'').replace(/^#/,''),date:c.date,account:CLEARING,amount:c.amount/100,originalAmount:c.amount/100,gross:Number(o.total),allocationPart:'cod',reference:c.awbs.join(', '),source:'velocity_mcp',description:'Velocity verified COD collection · '+(o.name||o.id)});
+ }
+ return result;
+}
+module.exports={batches,projectCollections,BANK,CLEARING,WALLET};
