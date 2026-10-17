@@ -368,7 +368,7 @@ function createStore(options = {}) {
         for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Meta configuration upload',revision:state.revision+1});
       }
       const includedCampaigns=new Set(records.campaigns.map(r=>remap.get(r.id)||r.id)),includedSets=new Set(records.adSets.map(r=>remap.get(r.id)||r.id)),includedAds=new Set(records.ads.map(r=>remap.get(r.id)||r.id));
-      const missingSets=original.adSets.filter(r=>!r.archived&&includedCampaigns.has(r.campaignId)&&!includedSets.has(r.id));
+      const missingSets=options.level==='campaigns'?[]:original.adSets.filter(r=>!r.archived&&includedCampaigns.has(r.campaignId)&&!includedSets.has(r.id));
       const missingSetIds=new Set(missingSets.map(r=>r.id));
       const missing=missingSets.map(r=>({type:'adSets',id:r.id,name:r.name})).concat(original.ads.filter(r=>!r.archived&&includedSets.has(r.adSetId)&&!missingSetIds.has(r.adSetId)&&!includedAds.has(r.id)).map(r=>({type:'ads',id:r.id,name:r.name})));
       const decisions=options.decisions||[];
@@ -472,11 +472,14 @@ function createRouter(store = createStore()) {
     try {
       if(!req.file || !/\.(csv|xlsx)$/i.test(req.file.originalname))fail('Choose a Meta configuration CSV or XLSX export.');
       let parsed;try{parsed=require('./meta-ads-import').parseSetup(req.file.buffer);}catch(e){fail(e.message);}
+      const campaignChoices=parsed.level==='campaigns'?parsed.records.campaigns.map(r=>({id:r.id,name:r.name,status:r.status})):[];
+      if(parsed.level==='campaigns'&&req.body.campaignIds){let ids;try{ids=JSON.parse(req.body.campaignIds);}catch{fail('Invalid campaign selection.');}if(!Array.isArray(ids)||!ids.length||ids.some(id=>!campaignChoices.some(c=>c.id===id)))fail('Select at least one campaign from this file.');parsed.records.campaigns=parsed.records.campaigns.filter(r=>ids.includes(r.id));}
       const preview=req.body.preview==='true';
+      if(!preview&&parsed.level==='campaigns'&&!req.body.campaignIds)fail('Choose campaigns and preview the selected campaigns before saving.');
       if(!preview&&req.body.confirmed!=='true')fail('Confirm the reviewed setup changes before saving.');
       let decisions=[];try{decisions=JSON.parse(req.body.decisions||'[]');}catch{fail('Invalid missing-record decisions.');}
-      const result=store.importSetup(parsed.records,Number(req.body.revision),req.user.username,preview,{completeCampaigns:req.body.completeCampaigns==='true',decisions});
-      res.json({success:true,...result,...(preview?parsed:{})});
+      const result=store.importSetup(parsed.records,Number(req.body.revision),req.user.username,preview,{completeCampaigns:req.body.completeCampaigns==='true',decisions,level:parsed.level});
+      res.json({success:true,...result,...(preview?{...parsed,campaignChoices}:{})});
     }catch(e){sendError(e,res);}
   }));
   router.use(BASE, express.json({ limit: '128kb' }));
