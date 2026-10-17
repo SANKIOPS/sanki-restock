@@ -391,7 +391,10 @@ router.post('/api/orders-ledger/gokwik-report', financeUpload.single('file'), (r
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
 function gokwikFile(){return path.join(path.dirname(ORDERS_PATH),'gokwik_api_evidence.json');}
-function syncGoKwik(force=false){return require('./gokwik-auto-sync').sync({file:gokwikFile(),orders:loadStore().orders,write:atomicWrite,force});}
+function syncGoKwik(force=false){
+ let report={rows:[]};try{report=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'gokwik_settlement_evidence.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+ return require('./gokwik-auto-sync').sync({file:gokwikFile(),orders:loadStore().orders,preferredDates:(report.rows||[]).map(r=>r.date),write:atomicWrite,force});
+}
 function startGoKwikSync(){
  const tick=()=>{if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return;syncGoKwik().then(r=>{if(!r.skipped)console.log('[gokwik-api] Synced '+r.rows+' settlement records across '+r.days+' days');}).catch(e=>console.error('[gokwik-api] '+e.message));};
  setTimeout(tick,45000);setInterval(tick,30*60*1000);

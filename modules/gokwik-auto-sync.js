@@ -3,7 +3,7 @@ const fs=require('fs'),path=require('path'),api=require('./gokwik-api');
 let active=null;
 const read=file=>{try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return {days:{}};throw e;}};
 function status(file){const s=read(file);return {configured:!!(process.env.GOKWIK_APP_ID&&process.env.GOKWIK_APP_SECRET),running:!!active,lastSync:s.lastSync||null,lastAttempt:s.lastAttempt||null,error:s.error||null,coveredThrough:s.coveredThrough||null,earliestDate:s.earliestDate||null,daysSynced:Object.keys(s.days||{}).length,rows:Object.values(s.days||{}).reduce((n,r)=>n+r.length,0),backfillPending:!!s.backfillPending};}
-function sync({file,orders,write,force=false,now=new Date(),maxDays=400,fetchDay=api.fetchDay,pause=ms=>new Promise(r=>setTimeout(r,ms))}){
+function sync({file,orders,write,force=false,now=new Date(),maxDays=400,preferredDates=[],fetchDay=api.fetchDay,pause=ms=>new Promise(r=>setTimeout(r,ms))}){
  if(active)return active;
  active=(async()=>{
   let state=read(file);state.days||={};
@@ -16,7 +16,8 @@ function sync({file,orders,write,force=false,now=new Date(),maxDays=400,fetchDay
   if(!earliest||!/^\d{4}-\d{2}-\d{2}$/.test(earliest)||earliest>through)return {skipped:true};
   const recent=Array.from({length:7},(_,i)=>api.shift(through,-i)).filter(d=>d>=earliest),missing=[];
   for(let date=earliest;date<=through;date=api.shift(date,1))if(!Object.hasOwn(state.days,date))missing.push(date);
-  const todo=[...new Set([...recent,...missing])];
+  const priority=preferredDates.filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)&&d>=earliest&&d<=through);
+  const todo=[...new Set([...priority,...recent,...missing])];
   state={...state,earliestDate:earliest,lastAttempt:now.toISOString(),error:null,backfillPending:missing.length>0};write(file,JSON.stringify(state));
   try{
    for(const date of todo.slice(0,maxDays)){
