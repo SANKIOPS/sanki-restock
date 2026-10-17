@@ -25,7 +25,7 @@ test('API refund is included in batch bank net without being another customer pa
  const {attachSettlementLinks}=require('../modules/order-settlement-links'),{integrateOrder}=require('../modules/sales-order-view');
  const payment=api.normalize({...sample,deductions:{}},'2026-08-25'),refund=api.normalize({...sample,transaction_type:'Refund',reference_id:'REFUND1',credit:0,debit:25,deductions:{}},'2026-08-25');
  const view=integrateOrder({id:payment.orderId,total:150,lineItems:[]},{},[],[],[],[payment,refund]);assert.equal(view.received,150);
- attachSettlementLinks([view],{bankStatements:{bank:{transactions:{credit:{credit:120.57,utr:'UTR12345678',date:'2026-08-25'}}}}},[payment,refund],[]);assert.equal(view.bankEvidence.length,1);
+ attachSettlementLinks([view],{bankStatements:{'Tiana Traders IndusInd 0437':{transactions:{credit:{credit:120.57,utr:'UTR12345678',date:'2026-08-25'}}}}},[payment,refund],[]);assert.equal(view.bankEvidence.length,1);
 });
 test('daily checkpoints resume and retain prior evidence on provider failure',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gokwik-api-')),file=path.join(dir,'evidence.json');const oldId=process.env.GOKWIK_APP_ID,oldSecret=process.env.GOKWIK_APP_SECRET;

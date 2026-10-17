@@ -2894,8 +2894,12 @@ app.listen(PORT, async () => {
     try { const result=await require('./modules/orders').syncFinance(); console.log('[velocity-finance] Checked '+result.checked+' AWBs; '+result.reportedSettled+' provider-reported payouts'); }
     catch(e) { console.log('[velocity-finance] Sync unavailable: '+e.message); }
   }
-  setInterval(autoSyncRemittance, 6 * 60 * 60 * 1000); // every 6 hours
+  setInterval(autoSyncRemittance, 60 * 60 * 1000); // hourly
   setTimeout(autoSyncRemittance, 30 * 1000); // also try 30s after startup
+
+  const syncVelocityPayouts=()=>{if(!process.env.VELOCITY_MCP_ACCESS_TOKEN||!process.env.VELOCITY_MCP_UID)return;require('./modules/orders').syncVelocityPayouts().then(r=>console.log('[velocity-payouts] Synced '+r.batches+' batches; '+r.allocationIssues+' allocation issues')).catch(e=>console.error('[velocity-payouts] '+e.message));};
+  setInterval(syncVelocityPayouts,60*60*1000);
+  setTimeout(syncVelocityPayouts,40000);
 
   // Self-ping every 14 min to keep Render free tier alive
   setInterval(async () => {

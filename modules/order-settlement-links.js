@@ -1,12 +1,15 @@
 'use strict';
 const money=v=>Math.round(Number(v||0)*100);
 const ref=v=>String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
-function bankEvidence(accounting, reference, expected){
+function bankEvidence(accounting, reference, expected, options={}){
  const target=ref(reference);if(target.length<8)return null;
  const found=[];
  for(const [bookKey,book] of Object.entries(accounting.bankStatements||{}))for(const row of Object.values(book.transactions||{})){
-  const text=ref([row.reference,row.description,row.narration,row.utr].filter(Boolean).join(' '));
-  if(text.includes(target)&&money(row.credit)===money(expected)&&Number(row.credit)>0)found.push({account:book.account||bookKey,date:row.date,reference,amount:Number(row.credit),transactionId:row.id});
+  if(options.account&&String(book.account||bookKey).replace(/^SANKI\|/,'')!==options.account)continue;
+  if(options.date&&(!row.date||String(row.date).slice(0,10)<options.date||String(row.date).slice(0,10)>new Date(Date.parse(options.date)+14*86400000).toISOString().slice(0,10)))continue;
+  const texts=[row.reference,row.description,row.narration,row.utr].filter(Boolean).map(String);
+  const exact=texts.some(text=>ref(text)===target||text.toUpperCase().split(/[^A-Z0-9]+/).includes(target));
+  if(exact&&money(row.credit)===money(expected)&&Number(row.credit)>0)found.push({account:book.account||bookKey,date:row.date,reference,amount:Number(row.credit),transactionId:row.id});
  }
  return found.length===1?found[0]:null;
 }
@@ -28,7 +31,7 @@ function attachSettlementLinks(orders,accounting,online,finance){
  // establish an expected COD batch total.
  for(const order of orders){
   order.bankEvidence=[];
-  for(const row of order.onlineEvidence||[]){const group=groups.get('online|'+row.utr);const match=group&&!group.invalid&&bankEvidence(accounting,group.reference,group.net);if(match&&!order.bankEvidence.some(x=>x.reference===match.reference))order.bankEvidence.push(match);}
+  for(const row of order.onlineEvidence||[]){const group=groups.get('online|'+row.utr);const match=group&&!group.invalid&&bankEvidence(accounting,group.reference,group.net,{account:'Tiana Traders IndusInd 0437'});if(match&&!order.bankEvidence.some(x=>x.reference===match.reference))order.bankEvidence.push(match);}
   const links=Object.entries(accounting.paytmOrderLinks||{}).filter(([,v])=>String(v.orderId)===String(order.id));
   order.posClearance=links.map(([transactionId,link])=>{
    const tx=(accounting.paytmReportTransactions||{})[transactionId]||{};

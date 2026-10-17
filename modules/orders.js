@@ -457,9 +457,10 @@ async function syncFinance() {
   }finally{financeRefreshing=false;}
 }
 router.post('/api/orders-ledger/velocity-finance/sync', async(req,res)=>{
-  try{res.json(await syncFinance());}catch(e){res.status(502).json({success:false,error:e.message});}
+  try{const result=await syncFinance();if(process.env.VELOCITY_MCP_ACCESS_TOKEN&&process.env.VELOCITY_MCP_UID)result.payouts=await syncVelocityPayouts();res.json(result);}catch(e){res.status(502).json({success:false,error:e.message});}
 });
 
+function syncVelocityPayouts(){return require('./velocity-payout-sync').sync({file:path.join(path.dirname(ORDERS_PATH),'velocity_payout_evidence.json'),write:atomicWrite});}
 router.get('/api/orders-ledger/integrated', (req, res) => {
   try {
     const store = loadStore();
@@ -482,8 +483,13 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const orders = mergedList(store)
       .map(o => integrateOrder({...o,velocityShipments:(index.byOrder||{})[o.id]||[]}, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
       .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-    require('./order-settlement-links').attachSettlementLinks(orders,read('expenses.json',{}),online.rows||[],finance.rows||[]);
-    res.json({ success: true, orders, sources: { gokwikApi:gokwikApiStatus, velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
+    const accounting=read('expenses.json',{});
+    require('./order-settlement-links').attachSettlementLinks(orders,accounting,online.rows||[],finance.rows||[]);
+    const payoutFile=path.join(path.dirname(ORDERS_PATH),'velocity_payout_evidence.json');
+    const payoutState=require('./velocity-payout-sync').read(payoutFile);
+    require('./order-money-journey').attach(orders,accounting,online.rows||[],payoutState.batches||[]);
+    const velocityPayouts=require('./velocity-payout-sync').status(payoutFile);
+    res.json({ success: true, orders, sources: { velocityPayouts, gokwikApi:gokwikApiStatus, velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
   } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }
 });
 
@@ -547,4 +553,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncLogistics, syncGoKwik, startGoKwikSync };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync };
