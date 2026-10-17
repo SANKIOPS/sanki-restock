@@ -780,6 +780,7 @@
         (cfg.isAdmin?'<div class="fld"><label>Type</label><select id="f_type">'+opts(cfg.types,'variable')+'</select></div>':'')+
         '<div class="fld"><label>Accounting entity / nature</label><select id="f_nature">'+opts(cfg.natures,selectedNature)+'</select><div class="hint">Choose SANKI, SAMAST (Kirti Nagar), or owner-private PERSONAL.</div></div>'+
         '<div class="fld combo-wrap"><label for="f_vendor">Vendor</label><div class="vendor-input"><input id="f_vendor" placeholder="type 2–3 letters, or enter a new vendor" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="vendorSuggestions"><button type="button" class="btn ghost" id="vendorDropdown" aria-label="Show vendors for expense">▾</button></div><div id="vendorSuggestions" class="combo-menu" role="listbox" aria-label="Expense vendor suggestions"></div><div class="hint">Select a matching vendor, or keep typing a new vendor name.</div></div>'+
+        '<div class="fld"><label for="f_vendorphone">Vendor phone number (required)</label><input id="f_vendorphone" type="tel" inputmode="tel" autocomplete="tel" value="+91" placeholder="+91 9876543210"><div class="hint">Minimum 10 digits. India country code +91 is added by default.</div></div>'+
         '<div class="fld full"><label>Have you already paid for this expense?</label><select id="f_paidalready"><option value="false">No — company must pay the vendor</option><option value="true">Yes — I paid personally</option></select></div>'+
         '<div class="fld"><label>Is this an installment / contract?</label><select id="f_installment"><option value="false">No</option><option value="true">Yes</option></select></div>'+
         '<div class="fld" id="totalAgreedWrap" style="display:none"><label>Total agreed amount ₹</label><input type="number" id="f_totalamount" min="1" step="1" placeholder="e.g. 10000"></div>'+
@@ -814,7 +815,7 @@
       el('f_paidalready').addEventListener('change', togglePaymentFlow);
       el('f_installment').addEventListener('change', toggleInstallment);
       bindVendorPicker('f_vendor');
-      el('f_nature').addEventListener('change',function(){selectedNature=this.value;el('f_vendor').value='';if(el('ledgerList'))el('ledgerList').innerHTML=categorySuggestions(selectedNature);if(el('f_ledger'))el('f_ledger').value='';renderVendorSuggestions();});
+      el('f_nature').addEventListener('change',function(){selectedNature=this.value;el('f_vendor').value='';el('f_vendorphone').value='+91';if(el('ledgerList'))el('ledgerList').innerHTML=categorySuggestions(selectedNature);if(el('f_ledger'))el('f_ledger').value='';renderVendorSuggestions();});
       document.removeEventListener('click',closeVendorSuggestions,true);
       document.addEventListener('click',closeVendorSuggestions,true);
       el('saveExp').addEventListener('click', saveExpense);
@@ -882,7 +883,7 @@
       menu.innerHTML=matches.map(function(v){return '<div class="combo-option" role="option" tabindex="0" data-vendor="'+esc(v)+'">'+esc(v)+'</div>';}).join('');
       menu.classList.add('open');input.setAttribute('aria-expanded','true');
       Array.prototype.forEach.call(menu.querySelectorAll('.combo-option'),function(o){
-        function choose(){input.value=o.dataset.vendor;input.focus();hideVendorSuggestions(inputId);}
+        function choose(){input.value=o.dataset.vendor;if(inputId==='f_vendor'&&el('f_vendorphone')&&cfg.vendorPhones&&cfg.vendorPhones[o.dataset.vendor])el('f_vendorphone').value=cfg.vendorPhones[o.dataset.vendor];input.focus();hideVendorSuggestions(inputId);}
         o.addEventListener('mousedown',function(ev){ev.preventDefault();});
         o.addEventListener('click',choose);
         o.addEventListener('keydown',function(ev){if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();choose();}else if(ev.key==='Escape'){input.focus();hideVendorSuggestions(inputId);}});
@@ -974,6 +975,11 @@
       var ledgerVal = el('f_ledger')?el('f_ledger').value.trim():'';
       if(el('f_ledger')&&!findLedger(ledgerVal)){ setMsg('Pick an existing category.', false); return; }
       if(!el('f_vendor').value.trim()){setMsg('Enter or select a vendor name.',false);return;}
+      var vendorPhone=el('f_vendorphone').value.trim(),vendorDigits=vendorPhone.replace(/\D/g,'');
+      if(vendorDigits.length===10)vendorPhone='+91'+vendorDigits;
+      else if(!vendorPhone.startsWith('+')&&vendorDigits.length===12&&vendorDigits.startsWith('91'))vendorPhone='+'+vendorDigits;
+      else if(vendorPhone.startsWith('+'))vendorPhone='+'+vendorDigits;
+      if(!/^\+\d{10,15}$/.test(vendorPhone)||(vendorPhone.startsWith('+91')&&vendorPhone.slice(3).length<10)){setMsg('Enter a valid vendor phone number with at least 10 digits. The country code defaults to +91.',false);el('f_vendorphone').focus();return;}
       var billFiles=chosenFiles('f_billcamera','f_billfile'),qrInput=chosenFile('f_qrcamera','f_qrphoto'),personalFiles=chosenFiles('f_personalcamera','f_personalproof');
       if(!billFiles.length){ setMsg('Attach at least one printed or handwritten bill photo before submitting.', false); return; }
       var paidAlready=el('f_paidalready').value==='true', paymentType=el('f_paymenttype').value;
@@ -992,7 +998,7 @@
           modelCalendarContractId: modelCalendarContractId || undefined,
           date: el('f_date').value, amount: totalAmount, particulars: el('f_part').value, nature:el('f_nature').value,
           ledger: ledgerVal, type: el('f_type')?el('f_type').value:'variable',
-          vendor: el('f_vendor').value.trim(), paymentType:paymentType, paidAlready:paidAlready,
+          vendor: el('f_vendor').value.trim(), vendorPhone:vendorPhone, paymentType:paymentType, paidAlready:paidAlready,
           isInstallment:installment, requestedAmount:installment?el('f_requestedamount').value:totalAmount,
           paymentNote:installment?el('f_paymentnote').value:'', personalPaymentProof:(urls[2]||[])[0]||'',personalPaymentProofs:urls[2]||[],personalAccount:paymentType==='Cash'?(cfg.me+' Cash'):el('f_personalaccount').value,creditCardId:paymentType==='Credit'?el('f_personalaccount').value:'',
           channel:cfg.isAdmin&&el('f_channel')?el('f_channel').value:'Shared', bill: el('f_bill').value,
@@ -1107,7 +1113,7 @@
       var paymentProofs=[].concat(e.paymentProofs||[],e.paymentProof||[],...(e.payments||[]).map(function(p){return [].concat(p.proofs||[],p.proof||[]);}),...(e.reimbursementPayments||[]).map(function(p){return [].concat(p.proofs||[],p.proof||[]);}));
       var proofs=proofGallery(e.billPhotos||[e.billPhoto],'Bill')+(e.qrPhoto?'<span class="claim-proof"><img class="thumb" src="'+esc(e.qrPhoto)+'" onclick="window.open(this.src)" alt="QR code">QR</span>':'')+proofGallery(paymentProofs,'Payment');
       var audits=refundExpenseHistory(e)+((e.auditHistory||[]).length?'<div class="expense-section"><b>Edit history</b>'+(e.auditHistory||[]).slice().reverse().map(function(a){return '<div class="payment-entry"><span>'+esc((a.editedAt||'').replace('T',' ').slice(0,16))+' · '+esc(a.editedBy||'')+' · '+esc(a.reason||'')+'<br><span class="muted">'+(a.changes||[]).map(function(c){return esc(c.field+': '+String(c.before)+' → '+String(c.after));}).join(' · ')+'</span></span><b>'+((a.changes||[]).length)+' field(s)</b></div>';}).join('')+'</div>':'');
-      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'&&!cfg.claimantOnly?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+(latestReference?' │ Ref '+esc(latestReference):'')+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Transaction ref: '+esc(latestReference||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+expenseTrackingDetails(e)+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(expenseOperatorAllowed(e)?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
+      return '<details class="claim-card" id="row_'+e.id+'"><summary><div class="claim-head"><div class="claim-date">'+(rowNo?'<b>#'+rowNo+'</b> · ':'')+esc(e.date)+' · '+esc(e.id)+' · <span class="tag">'+esc(e.nature||'SANKI')+'</span>'+(e.telegramNeedsReview?' · <span class="tag">NEEDS REVIEW</span>':'')+'</div><span class="badge b-'+esc(e.status)+'">'+(e.paymentType==='Credit'&&!cfg.claimantOnly?'CREDIT':esc(e.status))+'</span></div><div class="claim-main"><div class="claim-desc">'+esc(e.vendor||e.particulars||'Expense')+'<div class="claim-vendor">'+esc(e.particulars||'')+'</div><div class="claim-row-meta">'+esc(claimantName)+' │ '+esc(payingAccountLabel)+(latestReference?' │ Ref '+esc(latestReference):'')+'</div></div><div class="claim-amount">'+fmt(displayedAmount)+'</div></div></summary><div class="claim-detail"><div class="claim-meta"><span>Claimant: '+esc(claimantName)+'</span><span>Vendor phone: '+esc(e.vendorPhone||'Legacy entry — not recorded')+'</span><span>Category: '+esc(e.ledger||'—')+'</span><span>Type: '+esc(e.type||'—')+'</span><span>Payment: '+esc(e.paymentType||e.account||'—')+'</span><span>Transaction ref: '+esc(latestReference||'—')+'</span><span>Approved: '+esc((e.approvedAt||'—').slice(0,10))+'</span><span>Paid: '+fmt(e.paidAmount)+' · Due now: '+fmt(due)+'</span>'+(e.isInstallment?'<span>Total agreed: '+fmt(e.amount)+' · Contract remaining: '+fmt(contractDue)+'</span>':'')+(e.daysPending!=null?'<span>Pending: '+e.daysPending+' day(s)</span>':'')+'</div>'+expenseTrackingDetails(e)+(proofs?'<div class="claim-proofs">'+proofs+'</div>':'')+'<div class="expense-section"><b>Payment history</b>'+paymentHistory(e)+'</div>'+audits+(expenseOperatorAllowed(e)?'<div class="expense-actions">'+expenseActions(e)+' <button class="btn mini ghost" onclick="delExp(\''+e.id+'\')">Delete</button></div>':'')+'</div></details>';
     }
     var lgPayablesById={};
     function loadLgPayables(){

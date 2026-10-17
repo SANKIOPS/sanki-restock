@@ -198,6 +198,7 @@ test('owner-confirmed Axis 3645 cases preserve unrelated reconciliation progress
 });
 
 function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant', username = '' } = {}) {
+  if(method==='POST'&&routePath==='/api/expenses'&&!Object.prototype.hasOwnProperty.call(body,'vendorPhone'))body={...body,vendorPhone:'+91 9876543210'};
   const layer = router.stack.find(item => item.route && item.route.path === routePath && item.route.methods[method.toLowerCase()]);
   assert.ok(layer, `route exists: ${method} ${routePath}`);
   const req = {
@@ -220,6 +221,16 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
   });
   return { status, body: result };
 }
+
+test('every web expense logger must provide a valid vendor phone number',()=>{
+  const common={nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Phone Required Vendor',amount:100,billPhoto:'/api/expenses/photo/phone-bill.jpg',paymentType:'Cash'};
+  for(const role of ['claimant','admin','owner']){
+    const missing=invoke('POST','/api/expenses',{role,body:{...common,vendorPhone:''}});assert.equal(missing.status,400);assert.match(missing.body.error,/vendor phone/i);
+    const short=invoke('POST','/api/expenses',{role,body:{...common,vendorPhone:'+91 12345'}});assert.equal(short.status,400);assert.match(short.body.error,/at least 10 digits/i);
+  }
+  const valid=invoke('POST','/api/expenses',{body:{...common,vendorPhone:'98765 43210'}});assert.equal(valid.status,200);assert.equal(valid.body.expense.vendorPhone,'+919876543210');
+  const html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');assert.match(html,/id="f_vendorphone"[^>]*value="\+91"/);assert.match(html,/vendorPhone:vendorPhone/);
+});
 
 // Historical-book scenarios still use the ordinary claimant submission path.
 // An Owner then records the historical bill date through the authorized edit

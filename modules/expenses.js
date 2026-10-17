@@ -563,8 +563,19 @@ function vendorReferenceSummary(s,nature,name){
   return{expenses,openingPayables,advances,refunds,draftResolutions,total:expenses.length+openingPayables.length+advances.length+refunds.length+draftResolutions.length};
 }
 function mergeVendorMasterMetadata(records,name){
-  const rows=records.filter(Boolean),merged=Object.assign({},...rows),notes=Array.from(new Set(rows.map(x=>String(x.notes||'').trim()).filter(Boolean))),tags=Array.from(new Set(rows.flatMap(x=>Array.isArray(x.tags)?x.tags:[]).map(x=>String(x||'').trim()).filter(Boolean)));
-  merged.name=name;merged.notes=notes.join(' · ');if(tags.length)merged.tags=tags;return merged;
+  const rows=records.filter(Boolean),merged=Object.assign({},...rows),notes=Array.from(new Set(rows.map(x=>String(x.notes||'').trim()).filter(Boolean))),tags=Array.from(new Set(rows.flatMap(x=>Array.isArray(x.tags)?x.tags:[]).map(x=>String(x||'').trim()).filter(Boolean))),phones=Array.from(new Set(rows.flatMap(x=>[].concat(x.phones||[],x.phone||[])).map(x=>String(x||'').trim()).filter(Boolean)));
+  merged.name=name;merged.notes=notes.join(' · ');if(tags.length)merged.tags=tags;if(phones.length){merged.phone=phones[0];merged.phones=phones;}return merged;
+}
+function normalizeVendorPhone(value){
+  const raw=String(value||'').trim();if(!raw)return'';
+  if(!/^\+?[0-9\s().-]+$/.test(raw))return'';
+  const digits=raw.replace(/\D/g,'');let normalized='';
+  if(digits.length===10)normalized='+91'+digits;
+  else if(!raw.startsWith('+')&&digits.length===12&&digits.startsWith('91'))normalized='+'+digits;
+  else if(raw.startsWith('+')&&digits.length>=10&&digits.length<=15)normalized='+'+digits;
+  if(!/^\+\d{10,15}$/.test(normalized))return'';
+  if(normalized.startsWith('+91')&&normalized.slice(3).length<10)return'';
+  return normalized;
 }
 const SHARED_VENDOR_DIRECTORY_MIGRATION_KEY='shared-vendor-directory-cross-entity-v1';
 const SHARED_VENDOR_NAME_OVERRIDES={
@@ -592,7 +603,8 @@ function syncSharedVendorDirectory(s){
     const tags=Array.from(new Set([].concat(current.tags||[],prior.tags||[],record.tags||[]).map(x=>String(x||'').trim()).filter(Boolean)));
     const aliases=Array.from(new Set([].concat(current.aliases||[],prior.aliases||[],rawName).map(cleanVendorName).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
     const entities=Array.from(new Set([].concat(current.entities||[],nature))).sort((a,b)=>a.localeCompare(b));
-    next[key]={name,notes,tags,aliases,entities};
+    const phones=Array.from(new Set([].concat(current.phones||[],prior.phones||[],record.phones||[],current.phone||[],prior.phone||[],record.phone||[]).map(x=>String(x||'').trim()).filter(Boolean)));
+    next[key]={name,notes,tags,aliases,entities};if(phones.length){next[key].phone=phones[0];next[key].phones=phones;}
   }));
   const changed=JSON.stringify(previous)!==JSON.stringify(next);s.vendorDirectory=next;return changed;
 }
@@ -2163,6 +2175,7 @@ router.get('/api/expenses/config', (req, res) => {
   syncSharedVendorDirectory(s);
   const sharedVendorsFor=nature=>Object.values(s.vendorDirectory||{}).filter(v=>(v.entities||[]).includes(nature)).map(v=>v.name);
   const vendorsByNature = { SANKI: sharedVendorsFor('SANKI'), SAMAST: sharedVendorsFor('SAMAST'), PERSONAL: ownerView ? sharedVendorsFor('PERSONAL') : [] };
+  const visibleVendorNames=new Set(Object.values(vendorsByNature).flat()),vendorPhones={};Object.values(s.vendorDirectory||{}).forEach(v=>{if(v&&v.name&&v.phone&&visibleVendorNames.has(v.name))vendorPhones[v.name]=v.phone;});
   // Only approved master vendors are reusable. A name typed by a claimant is
   // promoted into this list only when the related expense is approved.
   Object.keys(vendorsByNature).forEach(n => vendorsByNature[n].sort((a, b) => a.localeCompare(b)));
@@ -2174,6 +2187,7 @@ router.get('/api/expenses/config', (req, res) => {
     categoryGroups: [...new Set(sankiCategories.catalog(s).map(x=>x.group))],
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
+    vendorPhones,
     accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
@@ -2260,6 +2274,8 @@ router.post('/api/expenses', (req, res) => {
 
   const vendor = String(b.vendor || '').trim();
   if (!vendor) return res.status(400).json({ success: false, error: 'Vendor name is required.' });
+  const vendorPhone=normalizeVendorPhone(b.vendorPhone);
+  if(!vendorPhone)return res.status(400).json({success:false,error:'Enter a valid vendor phone number with at least 10 digits. The default country code is +91.'});
   const isInstallment = !!b.isInstallment;
   const requestedAmount = isInstallment ? num(b.requestedAmount) : amount;
   if (isInstallment && (!(requestedAmount > 0) || requestedAmount > amount)) {
@@ -2275,7 +2291,7 @@ router.post('/api/expenses', (req, res) => {
     amount,
     isInstallment,
     requestedAmount,
-    nature, type, ledger, vendor, creditCardId:creditCard&&creditCard.id||'',
+    nature, type, ledger, vendor, vendorPhone, creditCardId:creditCard&&creditCard.id||'',
     claimant,                                     // who did the errand (was "runner")
     account: '',                                  // selected by approver when payment is made
     channel, bill, fundedBy: paidAlready&&!creditCard ? 'claimant' : 'company', paymentType,
@@ -2569,7 +2585,7 @@ router.post('/api/expenses/:id/approve', (req, res) => {
   e.vendor=cleanVendorName(e.vendor);
   // A claimant may type a new vendor directly. Approval confirms the corrected
   // name and promotes it into the reusable vendor list.
-  e.vendor=registerVendorForNature(s,e.nature,e.vendor,{notes:''});
+  e.vendor=registerVendorForNature(s,e.nature,e.vendor,{notes:'',phone:e.vendorPhone||'',phones:e.vendorPhone?[e.vendorPhone]:[]});
   promoteProvisionalPayments(s,e,(req.user&&req.user.username)||'admin','Web approval');
   const totalDue = num(e.amount);
   e.status = e.paidAmount >= totalDue ? 'paid' : (e.paidAmount > 0 ? 'partially_paid' : 'approved');
