@@ -39,3 +39,8 @@ test('daily checkpoints resume and retain prior evidence on provider failure',as
   await assert.rejects(auto.sync({file,orders,write,now:new Date('2026-08-28T12:00:00Z'),force:true,pause:async()=>{},fetchDay:async()=>[]}),/previously populated/);
  }finally{if(oldId==null)delete process.env.GOKWIK_APP_ID;else process.env.GOKWIK_APP_ID=oldId;if(oldSecret==null)delete process.env.GOKWIK_APP_SECRET;else process.env.GOKWIK_APP_SECRET=oldSecret;fs.rmSync(dir,{recursive:true,force:true});}
 });
+test('repeated settlement entries for one payment never double the customer receipt',()=>{
+ const {integrateOrder}=require('../modules/sales-order-view');const r=api.normalize(sample,'2026-08-25');
+ const view=integrateOrder({id:r.orderId,total:150,lineItems:[]},{},[],[],[],[r,{...r,date:'2026-08-26',utr:'OTHERUTR'}]);
+ assert.equal(view.received,150);assert.equal(view.balance,0);assert.equal(view.onlineEvidence.length,2);
+});
