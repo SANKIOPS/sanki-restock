@@ -18,7 +18,7 @@ function integrateOrder(order, velocity = {}, remittances = [], legacy = [], fin
   // A payment can appear in several settlement entries/dates. Count the
   // customer's receipt once, while preserving every entry for bank batch net.
   const collectedPayments=new Map();
-  for(const r of onlineEvidence.filter(r=>r.type==='Payment')){const key=r.paymentId||r.referenceId;if(key)collectedPayments.set(key,Math.max(collectedPayments.get(key)||0,number(r.gross)));}
+  for(const [index,r] of onlineEvidence.filter(r=>r.type==='Payment').entries()){const key=r.paymentId||r.referenceId||(r.source==='gokwik_api_v2'?'':'legacy-row-'+index);if(key)collectedPayments.set(key,Math.max(collectedPayments.get(key)||0,number(r.gross)));}
   const providerCollected=round([...collectedPayments.values()].reduce((n,v)=>n+v,0)+codEvidence.filter(r=>!r.error&&r.deliveryDate).reduce((n,r)=>n+number(r.amount),0));
   const received = known || providerCollected>0 ? Math.max(known ? round(payments.reduce((sum,t) => sum + number(t.amount),0)) : 0,providerCollected) : null;
   const refunded = number(order.moneyRefunded) + number(order.storeCreditIssued);
