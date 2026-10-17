@@ -16,7 +16,7 @@ function attach(orders,accounting,payouts){
   const linkedAmount=links.reduce((n,l)=>n+Math.round(Number(l.amount||0)*100),0),total=Math.round(Number(o.total||0)*100);
   o.bankReceiptStatus=verified?(linkedAmount>=total?'Received in bank · reconciled':'Part received in bank'):allReconciled?'Reconciled · saved bank posting':links.some(l=>l.bankVerified)?'Part received in bank':links.some(l=>l.statusCode==='finalized')?'Paytm review finalized · bank link pending':'POS reconciliation pending';
   o.settlementStatus=o.bankReceiptStatus;
-  o.moneyJourney=links.map(l=>({provider:'Paytm',amount:l.amount,paymentId:l.transactionId,batchId:l.payoutId,status:l.status,bankVerified:l.bankVerified,references:l.reference?[l.reference]:[],bankEvidence:l.bankEvidence?[l.bankEvidence]:[]}));
+  o.moneyJourney=links.map(l=>({provider:'Paytm',amount:l.amount,paymentId:l.transactionId,batchId:l.payoutId,batchNet:l.batchNet,status:l.status,bankVerified:l.bankVerified,references:l.reference?[l.reference]:[],bankEvidence:l.bankEvidence?[l.bankEvidence]:[]}));
   o.bankEvidence=[...new Map([...(o.bankEvidence||[]),...links.map(l=>l.bankEvidence).filter(Boolean)].map(b=>[b.account+'|'+b.transactionId,b])).values()];
  }
  return orders;
