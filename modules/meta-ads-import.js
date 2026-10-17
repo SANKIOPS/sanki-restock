@@ -10,6 +10,11 @@ function parseSetup(buffer) {
   const status = v => ({ACTIVE:'reported_running',PAUSED:'paused',INACTIVE:'paused',ARCHIVED:'archived',DELETED:'archived'}[v.toUpperCase()] || 'unknown');
   const number = (r,k) => {const v=text(r,k);if(!v)return undefined;const n=Number(v);if(!Number.isFinite(n))throw new Error(`Invalid ${k}.`);return n;};
   function put(type, record) {const prior=records[type].get(record.id);if(prior && JSON.stringify(prior)!==JSON.stringify(record))throw new Error(`Conflicting settings for ${record.name}. Export a consistent setup.`);records[type].set(record.id,record);}
+  if(rows.some(r=>Object.hasOwn(r,'Campaign name'))&&!rows.some(r=>Object.hasOwn(r,'Ad Set ID')||Object.hasOwn(r,'Ad set ID')||Object.hasOwn(r,'Ad ID'))){
+    for(const r of rows){if(!text(r,'Campaign ID')&&!text(r,'Campaign name'))continue;const campaign={id:metaId(r,'Campaign ID','meta-campaign-'),name:text(r,'Campaign name')};if(!campaign.name)throw new Error('Campaign name is required.');const delivery=text(r,'Campaign delivery').toLowerCase();if(delivery==='active')campaign.status='reported_running';else if(['paused','off'].includes(delivery))campaign.status='paused';else if(delivery)campaign.status='delivery_unconfirmed';if(text(r,'Campaign objective'))campaign.objective=text(r,'Campaign objective');put('campaigns',campaign);}
+    warnings.add('Campaign table only: ad sets, targeting and creatives are not supplied and will remain unchanged. Delivery is not necessarily the configured on/off toggle.');
+    return {level:'campaigns',records:{campaigns:[...records.campaigns.values()],adSets:[],ads:[]},warnings:[...warnings]};
+  }
   for(const r of rows) {
     const campaignId=metaId(r,'Campaign ID','meta-campaign-'), adSetId=metaId(r,'Ad Set ID','meta-adset-'), adId=metaId(r,'Ad ID','meta-ad-');
     put('campaigns',{id:campaignId,name:text(r,'Campaign Name'),objective:text(r,'Campaign Objective'),status:status(text(r,'Campaign Status'))});

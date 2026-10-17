@@ -2,17 +2,19 @@
 (() => {
   const $ = id => document.getElementById(id);
   const apiBase = '/api/marketing/meta';
-  let setupRevision=null, setupFile=null;
+  let setupRevision=null, setupFile=null, setupCampaignIds=null;
   async function uploadSetup(preview) {
     const file=$('setupFile').files[0];
     if(!state||!file)return message('Choose a configuration file after records load.',true);
     if(!preview && (file!==setupFile||setupRevision===null))return message('Preview this file first.',true);
     $('setupPreview').disabled=true;$('setupSave').disabled=true;
     try {
-      const body=new FormData();body.append('file',file);body.append('preview',String(preview));body.append('revision',String(preview?state.revision:setupRevision));body.append('completeCampaigns',true);body.append('confirmed',String(!preview));body.append('decisions',JSON.stringify([...$('setupReview').querySelectorAll('[data-missing-id]')].map(input=>({type:input.dataset.missingType,id:input.dataset.missingId,action:input.value}))));
+      const body=new FormData();body.append('file',file);body.append('preview',String(preview));if(setupCampaignIds)body.append('campaignIds',JSON.stringify(setupCampaignIds));body.append('revision',String(preview?state.revision:setupRevision));body.append('completeCampaigns',true);body.append('confirmed',String(!preview));body.append('decisions',JSON.stringify([...$('setupReview').querySelectorAll('[data-missing-id]')].map(input=>({type:input.dataset.missingType,id:input.dataset.missingId,action:input.value}))));
       const response=await fetch(apiBase+'/import-setup',{method:'POST',credentials:'same-origin',body});const data=await response.json();
       if(!response.ok||!data.success)throw new Error(data.error||'Upload failed.');
-      if(preview){setupRevision=data.revision;setupFile=file;$('setupSummary').textContent=`${data.records.campaigns.length} campaign(s), ${data.records.adSets.length} ad set(s), ${data.records.ads.length} ad(s).\n${data.counts.created} new; ${data.counts.updated} updated; ${data.counts.unchanged} unchanged.\n`+data.records.campaigns.map(x=>x.name).join('\n')+'\n'+data.warnings.join('\n');$('setupReview').innerHTML='<h3>Review changes</h3>'+data.review.map(r=>'<details><summary>'+esc(r.action==='create'?'Added: ':'Changed: ')+esc(r.name)+'</summary>'+r.fields.map(f=>'<p><strong>'+esc(f.field)+'</strong><br>'+esc(JSON.stringify(f.before))+' → '+esc(JSON.stringify(f.after))+'</p>').join('')+'</details>').join('')+(data.missing.length?'<h3>Missing from this export — confirm each; absence alone does not prove deletion</h3>':'')+data.missing.map(r=>'<label>'+esc(r.name)+'<select data-missing-id="'+esc(r.id)+'" data-missing-type="'+esc(r.type)+'"><option value="">Choose a decision</option><option value="keep">Keep existing</option><option value="remove">Confirm removed in Meta</option></select></label>').join('')+(!data.review.length&&!data.missing.length?'<p>No setup changes detected.</p>':'');$('setupSave').hidden=false;}
+      if(preview){setupRevision=data.revision;setupFile=file;
+        $('setupCampaignChoices').innerHTML=data.level==='campaigns'?'<h3>Select campaigns to record ('+data.campaignChoices.length+' in file)</h3><p>Check only the campaigns you want, then click Preview upload again.</p><div class="setup-campaign-list">'+data.campaignChoices.map(c=>'<label><input type="checkbox" data-setup-campaign="'+esc(c.id)+'" '+(setupCampaignIds?.includes(c.id)?'checked':'')+'>'+esc(c.name)+'</label>').join('')+'</div>':'';
+        $('setupCampaignChoices').querySelectorAll('[data-setup-campaign]').forEach(input=>input.addEventListener('change',()=>{setupCampaignIds=[...$('setupCampaignChoices').querySelectorAll('[data-setup-campaign]:checked')].map(x=>x.dataset.setupCampaign);setupRevision=null;$('setupSave').hidden=true;$('setupSummary').textContent=setupCampaignIds.length+' selected. Click Preview upload to review only these campaigns.';}));$('setupSummary').textContent=`${data.records.campaigns.length} campaign(s), ${data.records.adSets.length} ad set(s), ${data.records.ads.length} ad(s).\n${data.counts.created} new; ${data.counts.updated} updated; ${data.counts.unchanged} unchanged.\n`+data.records.campaigns.map(x=>x.name).join('\n')+'\n'+data.warnings.join('\n');$('setupReview').innerHTML='<h3>Review changes</h3>'+data.review.map(r=>'<details><summary>'+esc(r.action==='create'?'Added: ':'Changed: ')+esc(r.name)+'</summary>'+r.fields.map(f=>'<p><strong>'+esc(f.field)+'</strong><br>'+esc(JSON.stringify(f.before))+' → '+esc(JSON.stringify(f.after))+'</p>').join('')+'</details>').join('')+(data.missing.length?'<h3>Missing from this export — confirm each; absence alone does not prove deletion</h3>':'')+data.missing.map(r=>'<label>'+esc(r.name)+'<select data-missing-id="'+esc(r.id)+'" data-missing-type="'+esc(r.type)+'"><option value="">Choose a decision</option><option value="keep">Keep existing</option><option value="remove">Confirm removed in Meta</option></select></label>').join('')+(!data.review.length&&!data.missing.length?'<p>No setup changes detected.</p>':'');$('setupSave').hidden=data.level==='campaigns'&&!setupCampaignIds?.length;}
       else {$('setupSave').hidden=true;$('setupReview').innerHTML='';setupRevision=null;$('setupSummary').textContent='Setup saved. Daily performance upload is the next step.';await load('Campaign setup imported.');}
     }catch(error){setupRevision=null;$('setupSave').hidden=true;$('setupSummary').textContent=error.message;}
     finally{$('setupPreview').disabled=false;$('setupSave').disabled=false;}
@@ -20,7 +22,7 @@
   $('setupPreview').addEventListener('click',()=>uploadSetup(true));
   $('setupSave').addEventListener('click',()=>{if([...$('setupReview').querySelectorAll('[data-missing-id]')].some(input=>!input.value)){message('Choose keep or removed for each missing record.',true);return;}uploadSetup(false);});
 
-  $('setupFile').addEventListener('change',()=>{setupRevision=null;setupFile=null;$('setupSave').hidden=true;$('setupSummary').textContent='';});
+  $('setupFile').addEventListener('change',()=>{setupRevision=null;setupFile=null;setupCampaignIds=null;$('setupCampaignChoices').innerHTML='';$('setupReview').innerHTML='';$('setupSave').hidden=true;$('setupSummary').textContent='';});
   let performanceRevision=null,performanceFile=null,insightsPeriod="";
   async function uploadPerformance(preview){
     const file=$('performanceFile').files[0];if(!state||!file)return message('Choose a performance file.',true);
@@ -264,8 +266,8 @@
       const ads=state.ads.filter(a=>sets.some(r=>r.id===a.adSetId)&&(!$('collectionFilter').value||(a.collection||sets.find(r=>r.id===a.adSetId)?.collection||'Unclassified')===$('collectionFilter').value)&&(!$('destinationFilter').value||sets.find(r=>r.id===a.adSetId)?.destination===$('destinationFilter').value)&&(!$('creativeTypeFilter').value||(a.creativeTypes||[]).includes($('creativeTypeFilter').value)));
       MetaLinkedWorkspace.render($('insightsPanel'),{...state,campaigns:rows,ads,adSets:sets,showLinkedDetails:['campaignFilter','collectionFilter','destinationFilter','creativeTypeFilter','statusFilter','search'].some(id=>$(id).value)},{isSelected:id=>selection.campaigns.has(id),selectCampaign:(id,checked)=>{checked?selection.campaigns.add(id):selection.campaigns.delete(id);render();},period:value=>{insightsPeriod=value;load('Reporting period selected.');},classify:id=>{const old=view;view='ads';openEditor(id);view=old;},edit:(type,id)=>{const old=view;view=type;openEditor(id);view=old;},details:openSetupDetails,saveTags:async(id,fields)=>{await request('/ads/'+encodeURIComponent(id),'PATCH',{...fields,revision:state.revision,reason:'Classify creative'});await load('Creative tags saved.');}});
       $('insightsPanel').querySelector('.linked-filters').hidden=true;
-      $('records').parentElement.hidden=ads.length>0;
-      $('tableFooter').hidden=ads.length>0;
+      $('records').parentElement.hidden=rows.length>0&&$('statusFilter').value!=='archived';
+      $('tableFooter').hidden=rows.length>0&&$('statusFilter').value!=='archived';
       $('viewHelp').textContent='Campaign summaries. Click a campaign or apply filters to see its ad sets and creatives.';
       $('rowCount').textContent=rows.length+' campaign(s)';
     }
