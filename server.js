@@ -2870,7 +2870,8 @@ app.listen(PORT, async () => {
   // Initial syncs on startup
   if (SHOPIFY_STORE && SHOPIFY_TOKEN) {
     console.log('[sync] Starting initial Shopify sync...');
-    await backgroundSync(SYNC_DAYS);
+    // Do not let a slow historical Shopify pull delay independent payment pollers.
+    backgroundSync(SYNC_DAYS).catch(e=>console.error('[sync] Initial Shopify sync failed: '+e.message));
   }
   if (hasVelocity) {
     console.log('[velocity] Starting initial Velocity sync...');
