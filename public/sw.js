@@ -5,7 +5,7 @@
 //  • static assets     → stale-while-revalidate (instant from cache, refresh in bg)
 // Only same-origin, status-200, credentialed ("basic") responses are cached, so a
 // login redirect or a cross-origin response never poisons the cache.
-const CACHE = 'sanki-os-v3';
+const CACHE = 'sanki-os-v4';
 const SHELL = [
   '/sidebar.js',
   '/manifest.webmanifest',
@@ -44,7 +44,11 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(
       fetch(req)
         .then((res) => { if (cacheable(res)) { const cp = res.clone(); caches.open(CACHE).then((c) => c.put(req, cp)); } return res; })
-        .catch(() => caches.match(req).then((r) => r || caches.match('/dashboard.html')))
+        .catch(async () => {
+          // Keep this section's shell, never substitute the Dashboard on refresh.
+          const saved = await caches.match(req) || await caches.match(url.pathname);
+          return saved || new Response('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connection unavailable</title><h1>This page is unavailable offline</h1><p>Your current page address is unchanged. Reconnect and refresh to continue.</p></html>', { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+        })
     );
     return;
   }

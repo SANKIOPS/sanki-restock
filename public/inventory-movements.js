@@ -6,12 +6,12 @@
   var host = document.createElement('section'); host.className = 'moves'; host.id = 'stock-movements';
   host.innerHTML = '<header><h2>Stock movements</h2><nav aria-label="Stock movement views"><button data-view="move" aria-selected="true">Move stock</button><button data-view="pending" aria-selected="false">Pending approval</button><button data-view="history" aria-selected="false">History</button></nav></header><div class="move-body"><p class="move-message" id="move-message" role="status" aria-live="polite">Checking counted inventory…</p><form id="move-form"><div class="move-grid"><label><span>SKU · scan or type</span><input id="move-sku" list="move-skus" autocomplete="off" required placeholder="Scan barcode or enter SKU"><datalist id="move-skus"></datalist></label><label><span>From location</span><select id="move-from"><option>Warehouse</option><option>Display</option></select></label><label><span>From rack</span><select id="move-from-rack"></select></label><label><span>Pieces</span><input id="move-quantity" type="number" min="1" step="1" value="1" required></label><label><span>To location</span><select id="move-to"><option>Display</option><option>Warehouse</option></select></label><label><span>To rack</span><select id="move-to-rack"></select></label></div><div class="move-position" id="move-position">Select a SKU to see its counted locations and racks.</div><div class="move-foot"><small class="sub">Submit only after physically moving the pieces. Shopify updates after approval.</small><button class="primary" id="move-submit" disabled>Submit movement</button></div></form><div class="move-list" id="move-list" hidden></div></div>';
   cards.insertAdjacentElement('afterend', host);
-  var state, view = 'move', requestId, busy = false, cancelId, refreshSerial=0;
+  var state, view = SankiNavigation.choice('movement',['move','pending','history'],'move'), requestId, busy = false, cancelId, refreshSerial=0;
   var cancelForm=document.createElement('form');cancelForm.id='move-cancel-form';cancelForm.hidden=true;
   cancelForm.innerHTML='<label>Reason for cancelling this request<input id="move-cancel-reason" required maxlength="500" autocomplete="off"></label><p class="sub">Shopify quantities will not change. If pieces were already physically moved, do not move them again for the replacement request.</p><div class="review"><button class="primary" type="submit">Confirm cancellation</button><button type="button" id="move-keep-request">Keep request</button></div>';
   el('move-message').insertAdjacentElement('afterend',cancelForm);
   var confirmation=document.createElement('label');confirmation.id='move-confirm-label';confirmation.hidden=true;
-  confirmation.innerHTML='<input id="move-confirm" type="checkbox"> I physically moved these pieces and checked the selected source and destination racks.';
+  confirmation.innerHTML='<input id="move-confirm" type="checkbox"> I physically moved these pieces and checked the selected warehouse rack(s). Display is one location.';
   confirmation.style.cssText='display:block;margin:12px 0;font-size:12px';el('move-position').insertAdjacentElement('afterend',confirmation);
   el('move-confirm').style.cssText='width:auto;min-height:0;margin-right:7px';
   function el(id) { return document.getElementById(id); }
@@ -19,21 +19,27 @@
   function sku() { return el('move-sku').value.trim().toUpperCase(); }
   function message(s) { el('move-message').textContent = s; }
   function active(m) { return !['approved','cancelled'].includes(m.status); }
-  function options(id, racks) { var old=el(id).value; el(id).innerHTML = '<option value="">Rack unassigned</option>' + racks.map(function(r){return '<option>'+esc(r)+'</option>';}).join('');if(racks.includes(old))el(id).value=old; }
+  function locationLabel(p) { return p.location==='Display'?'Display':p.location+' / '+(p.rack||'Unassigned'); }
+  function options(id, racks) { var old=el(id).value; el(id).innerHTML = '<option value="">Choose warehouse rack</option>' + racks.map(function(r){return '<option>'+esc(r)+'</option>';}).join('');if(racks.includes(old))el(id).value=old; }
   function updateSubmit() {
     var rows=state?state.positions.filter(function(p){return p.sku===sku();}):[],q=Number(el('move-quantity').value);
     var source=rows.find(function(p){return p.location===el('move-from').value&&(state.liveMode||p.rack===el('move-from-rack').value);});
     var target=!state||!state.liveMode||rows.some(function(p){return p.location===el('move-to').value&&p.stocked;});
-    var different=el('move-from').value!==el('move-to').value||el('move-from-rack').value!==el('move-to-rack').value;
-    el('move-submit').disabled=busy||!state||!state.ready||!source||source.quantity<q||!Number.isSafeInteger(q)||q<1||!target||!different||(state.liveMode&&!el('move-confirm').checked)||state.movements.some(function(m){return m.sku===sku()&&active(m);});
+    var different=el('move-from').value!==el('move-to').value||(el('move-from').value==='Warehouse'&&el('move-from-rack').value!==el('move-to-rack').value);
+    var validRacks=['from','to'].every(function(k){return el('move-'+k).value==='Display'||!!el('move-'+k+'-rack').value;});
+    el('move-submit').disabled=busy||!validRacks||!state||!state.ready||!source||source.quantity<q||!Number.isSafeInteger(q)||q<1||!target||!different||(state.liveMode&&!el('move-confirm').checked)||state.movements.some(function(m){return m.sku===sku()&&active(m);});
   }
   function racks() {
     if (!state) return;
     var rows = state.positions.filter(function(p){return p.sku === sku();});
     var sourceRacks = state.ready && !state.liveMode ? Array.from(new Set(rows.filter(function(p){return p.location === el('move-from').value && p.quantity>0;}).map(function(p){return p.rack;}).filter(Boolean))).sort() : (state.rackOptions && state.rackOptions[el('move-from').value]) || [];
+    var warehouse=rows.find(function(p){return p.location==='Warehouse';});
+    if(state.liveMode&&el('move-from').value==='Warehouse'&&warehouse&&warehouse.warehouseRacks&&warehouse.warehouseRacks.length)sourceRacks=warehouse.warehouseRacks;
     options('move-from-rack', sourceRacks);
+    if(el('move-from').value==='Warehouse'&&sourceRacks.length===1)el('move-from-rack').value=sourceRacks[0];
     options('move-to-rack', (state.rackOptions && state.rackOptions[el('move-to').value]) || []);
-    el('move-position').textContent = rows.length ? rows.map(function(p){return p.location+' · '+(state.liveMode?p.quantity+' available pieces':(p.rack || 'Rack unassigned')+' · '+p.quantity+' pieces');}).join('\n')+(state.liveMode?'\nLive quantity is checked by location. Physically verify the selected racks; rack balances have not been audited.':'') : sku() ? 'No unique tracked stock found for this SKU.' : 'Select an exact SKU to see available pieces.';
+    ['from','to'].forEach(function(k){var select=el('move-'+k+'-rack'),display=el('move-'+k).value==='Display';select.parentElement.hidden=display;select.disabled=display;select.required=!display;if(display)select.value='';});
+    el('move-position').textContent = rows.length ? rows.map(function(p){return p.location+' · '+(state.liveMode?p.quantity+' available pieces':(p.location==='Display'?'Whole location':p.rack || 'Rack unassigned')+' · '+p.quantity+' pieces');}).join('\n')+(state.liveMode?'\nDisplay is one location. Warehouse racks follow the updated sheet and approved moves. Check the physical pieces; available quantity is verified in Shopify by location.':'') : sku() ? 'No unique tracked stock found for this SKU.' : 'Select an exact SKU to see available pieces.';
     if (state.movements.some(function(m){return m.sku === sku() && active(m);})) el('move-position').textContent += '\nReview the existing movement before submitting another for this SKU.';
     updateSubmit();
   }
@@ -42,6 +48,7 @@
     var d = await r.json(); if (!r.ok || !d.success) throw Error(d.error || 'Stock movement request failed.'); return d;
   }
   function render() {
+    SankiNavigation.set({movement:view});
     el('move-form').hidden = view !== 'move'; el('move-list').hidden = view === 'move';
     host.querySelectorAll('[data-view]').forEach(function(b){b.setAttribute('aria-selected', String(b.dataset.view === view));});
     if (!state) return;
@@ -55,7 +62,7 @@
         else if(m.status!=='correction_required')controls=(!m.syncRejected?'<button data-id="'+esc(m.id)+'" data-action="approve">'+(m.status==='sync_pending'?'Retry same sync':'Approve')+'</button>':'')+(!m.syncInput||m.syncRejected?'<button data-id="'+esc(m.id)+'" data-action="correction">Correction</button>':'')+(m.mode==='live'&&m.status==='pending'&&!m.syncInput&&!m.firstAttemptAt?'<button data-id="'+esc(m.id)+'" data-action="cancel">Cancel request</button>':'');
       }
       var audit=m.cancelledBy?'Cancelled by '+m.cancelledBy+' · '+new Date(m.cancelledAt).toLocaleString():m.resolvedBy?'Correction resolved by '+m.resolvedBy:m.reviewedBy?'Reviewed by '+m.reviewedBy+(m.status==='approved'&&m.reviewedBy===m.submittedBy?' · Self-approved':''):active(m)?'An inventory approver must review this movement.':'';
-      return '<article class="move-row"><div><b>'+esc(m.sku)+'</b><small>'+m.quantity+' pieces · '+esc(m.submittedBy)+'</small></div><div>'+esc(m.from.location)+' / '+esc(m.from.rack||'Unassigned')+' → '+esc(m.to.location)+' / '+esc(m.to.rack||'Unassigned')+'<small>'+esc(new Date(m.submittedAt).toLocaleString())+'</small></div><div class="move-pending">'+esc(label)+'<small>'+esc(m.cancellationReason||m.resolutionNote||m.reviewNote||m.syncError||'')+'</small></div>'+(controls?'<div class="review">'+controls+'</div>':'<small>'+esc(audit)+'</small>')+'</article>';
+      return '<article class="move-row"><div><b>'+esc(m.sku)+'</b><small>'+m.quantity+' pieces · '+esc(m.submittedBy)+'</small></div><div>'+esc(locationLabel(m.from))+' → '+esc(locationLabel(m.to))+'<small>'+esc(new Date(m.submittedAt).toLocaleString())+'</small></div><div class="move-pending">'+esc(label)+'<small>'+esc(m.cancellationReason||m.resolutionNote||m.reviewNote||m.syncError||'')+'</small></div>'+(controls?'<div class="review">'+controls+'</div>':'<small>'+esc(audit)+'</small>')+'</article>';
     }).join('')||'<p class="sub">No '+(view==='history'?'completed movements':'movements awaiting approval')+'.</p>';
   }
   async function refresh() {
@@ -64,7 +71,7 @@
     if(serial!==refreshSerial)return;
     state=next;
     el('move-skus').innerHTML = Array.from(new Set(state.positions.map(function(p){return p.sku;}))).sort().map(function(s){return '<option value="'+esc(s)+'">';}).join('');
-    message(state.registerOnly ? 'Authorised inventory approvers can review their own or other staff requests. Approval checks current Shopify quantities.' : state.ready ? state.liveMode ? 'Live Shopify available stock · Select and verify the physical racks. Authorised inventory approvers can approve their own or other staff requests.' : 'Reported physical position updates immediately. Manager approval confirms the Shopify transfer.' : 'Configure distinct Display and Warehouse Shopify locations before submitting movements.');
+    message(state.registerOnly ? 'Authorised inventory approvers can review their own or other staff requests. Approval checks current Shopify quantities.' : state.ready ? state.liveMode ? 'Live Shopify available stock · Display is one location. Select and verify warehouse racks. Authorised inventory approvers can approve their own or other staff requests.' : 'Reported physical position updates immediately. Manager approval confirms the Shopify transfer.' : 'Configure distinct Display and Warehouse Shopify locations before submitting movements.');
     render();
   }
   host.querySelectorAll('[data-view]').forEach(function(b){b.onclick = function(){if(busy)return;cancelId=null;cancelForm.hidden=true;view = b.dataset.view;render();refresh().catch(function(err){message(err.message);});};});
@@ -89,7 +96,7 @@
     requestId=requestId||crypto.randomUUID();var body={requestId:requestId,sku:sku(),quantity:Number(el('move-quantity').value),from:{location:el('move-from').value,rack:el('move-from-rack').value},to:{location:el('move-to').value,rack:el('move-to-rack').value},physicalConfirmed:el('move-confirm').checked};
     busy=true;host.querySelectorAll('form input,form select,form button').forEach(function(x){x.disabled=true;});
     try { ++refreshSerial;await api('/api/stock-movements',body);requestId=null;el('move-confirm').checked=false;view='pending';await refresh();message('Movement recorded. An authorised inventory approver can approve it in Pending approval before Shopify quantities change, including their own request.'); }
-    catch(err){message(err.message);}finally{busy=false;host.querySelectorAll('form input,form select,form button').forEach(function(x){x.disabled=false;});updateSubmit();}
+    catch(err){message(err.message);}finally{busy=false;host.querySelectorAll('form input,form select,form button').forEach(function(x){x.disabled=false;});racks();}
   };
   el('move-list').onclick = async function(e){
     var b = e.target.closest('button[data-id]'); if (!b||busy) return;

@@ -151,6 +151,7 @@
     </div>
   </div>
 
+  <script src="/navigation-state.js?v=bb4a39520dbd"></script>
   <script src="/sidebar.js"></script>
   <script>
     var el = function(id){ return document.getElementById(id); };
@@ -195,7 +196,7 @@
     });
 
     // Dispatch to whichever view is active.
-    function load(){ if(state.view==='ue') loadUEView(); else loadPL(); }
+    function load(){ SankiNavigation.set({tab:state.view,from:state.from,to:state.to});if(state.view==='ue') loadUEView(); else loadPL(); }
 
     function num(n){ var cls = n<0 ? ' class="neg"' : ''; return '<span'+cls+'>'+fmt(n)+'</span>'; }
     // A cost row: shows expenses as a negative deduction. Greyed only if zero
@@ -345,7 +346,12 @@
     }
     document.addEventListener('click', function(e){ if(e.target && e.target.id==='ueSave') saveUE(); });
 
-    setQuick('thismonth');
+    state.view=SankiNavigation.choice('tab',['pl','ue'],'pl');
+    Array.prototype.forEach.call(el('tabs').children,function(b){b.classList.toggle('on',b.dataset.v===state.view);});
+    el('view-pl').hidden=state.view!=='pl';el('view-ue').hidden=state.view!=='ue';
+    var initialRange=rangeFor('thismonth');
+    state.from=SankiNavigation.date('from',initialRange.from);state.to=SankiNavigation.date('to',initialRange.to);
+    el('from').value=state.from;el('to').value=state.to;load();
   </script>
   <script>
     if ('serviceWorker' in navigator) {

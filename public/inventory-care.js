@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var data, view = 'cleaning', draft = [], requestId, busy = false, attempted = false;
+  var data, view = SankiNavigation.choice('view',['cleaning','miscellaneous','pending','history'],'cleaning'), draft = [], requestId, busy = false, attempted = false;
   var registerSequence = 0, quantitySequence = 0, quantityLoading = false, quantityTimer, quantityAt = '', quantityQueued = false, quantityQueuedForce = false;
   function el(id) { return document.getElementById(id); }
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -25,13 +25,15 @@
     el('add-line').disabled = busy || !item || !item.tracked;
     racks();
   }
+  function place(l) { var display=l.location==='Display'||l.locationId===(data&&data.mapping&&data.mapping.Display);return esc(l.location)+(display?'':' / '+esc(l.rack||'Rack unassigned')); }
   function racks() {
     var loc = data && Object.keys(data.mapping || {}).find(function(k){return data.mapping[k] === el('location').value;});
     var values = data && data.rackOptions && (data.rackOptions[loc] || []) || [];
+    var display=loc==='Display';el('rack').parentElement.hidden=display;el('rack').disabled=display;if(display)el('rack').value='';
     el('rack-options').innerHTML = values.map(function(r){return '<option value="'+esc(r)+'">';}).join('');
   }
   function draftRows() {
-    el('draft-lines').innerHTML = draft.map(function(l,i){return '<tr><td><b>'+esc(l.sku)+'</b><small>'+esc(l.title)+'</small></td><td>'+esc(l.location)+'<small>'+esc(l.rack || 'Rack unassigned')+'</small></td><td>'+l.quantity+'</td><td><button type="button" data-remove="'+i+'" aria-label="Remove '+esc(l.sku)+'">Remove</button></td></tr>';}).join('') || '<tr><td colspan="4" class="empty">Add one or more SKUs to this batch.</td></tr>';
+    el('draft-lines').innerHTML = draft.map(function(l,i){return '<tr><td><b>'+esc(l.sku)+'</b><small>'+esc(l.title)+'</small></td><td>'+place(l)+'</td><td>'+l.quantity+'</td><td><button type="button" data-remove="'+i+'" aria-label="Remove '+esc(l.sku)+'">Remove</button></td></tr>';}).join('') || '<tr><td colspan="4" class="empty">Add one or more SKUs to this batch.</td></tr>';
     el('submit').disabled = busy || attempted || !data || !draft.length;
     el('submit').textContent = data && data.canManage ? 'Confirm batch · '+draft.reduce(function(n,l){return n+l.quantity;},0)+' pieces' : 'Request approval';
   }
@@ -49,10 +51,11 @@
     if (!count) return '';
     var overdue = view === 'cleaning' && b.expectedReturn && b.expectedReturn < new Date().toLocaleDateString('en-CA');
     var blocked = data.operations.some(function(o){return o.batchId === b.id && ['sync_pending','review_required'].includes(o.status);});
-    return '<article class="batch"><div class="batch-head"><div><h3>'+esc(b.vendor || b.reason)+'</h3><span class="sub">'+esc(b.reason)+' · '+esc(new Date(b.createdAt).toLocaleDateString())+' · '+esc(b.createdBy)+(b.expectedReturn?' · Due '+esc(b.expectedReturn):'')+'</span></div><span class="badge '+(overdue?'overdue':'')+'">'+count+' pieces'+(overdue?' · Overdue':'')+'</span></div><p class="batch-note">'+esc(b.note)+'</p>'+outstanding.map(function(l){return '<div class="op"><b>'+esc(l.sku)+' · '+l[view]+' outstanding</b><div class="sub">'+esc(l.title)+' · '+esc(l.variant)+' · '+esc(l.location)+' / '+esc(l.rack || 'Rack unassigned')+'</div>'+(data.canManage && !blocked?'<form class="return-form" data-batch="'+esc(b.id)+'" data-line="'+esc(l.id)+'"><label class="quantity">Pieces<input name="quantity" type="number" min="1" max="'+l[view]+'" value="1" step="1" required></label><label>Action<select name="action"><option value="release">Return ready for sale</option>'+(view === 'cleaning'?'<option value="classify">Move to not for sale</option>':'<option value="dispose">Dispose / permanently remove</option>')+'</select></label><label class="note">Inspection result / reason<input name="note" maxlength="500" required placeholder="Describe the condition"></label><button class="primary">Record action</button><label class="inspection"><input name="confirmed" type="checkbox" required> I checked these pieces and confirm the selected action. A ready-for-sale return goes back to the original location and rack; disposal reduces total owned.</label></form>':'<p class="sub">'+(blocked?'Resolve the pending Shopify action before changing this batch.':'A stock manager can record returns and reclassification.')+'</p>')+'</div>';}).join('')+'</article>';
+    return '<article class="batch"><div class="batch-head"><div><h3>'+esc(b.vendor || b.reason)+'</h3><span class="sub">'+esc(b.reason)+' · '+esc(new Date(b.createdAt).toLocaleDateString())+' · '+esc(b.createdBy)+(b.expectedReturn?' · Due '+esc(b.expectedReturn):'')+'</span></div><span class="badge '+(overdue?'overdue':'')+'">'+count+' pieces'+(overdue?' · Overdue':'')+'</span></div><p class="batch-note">'+esc(b.note)+'</p>'+outstanding.map(function(l){return '<div class="op"><b>'+esc(l.sku)+' · '+l[view]+' outstanding</b><div class="sub">'+esc(l.title)+' · '+esc(l.variant)+' · '+place(l)+'</div>'+(data.canManage && !blocked?'<form class="return-form" data-batch="'+esc(b.id)+'" data-line="'+esc(l.id)+'"><label class="quantity">Pieces<input name="quantity" type="number" min="1" max="'+l[view]+'" value="1" step="1" required></label><label>Action<select name="action"><option value="release">Return ready for sale</option>'+(view === 'cleaning'?'<option value="classify">Move to not for sale</option>':'<option value="dispose">Dispose / permanently remove</option>')+'</select></label><label class="note">Inspection result / reason<input name="note" maxlength="500" required placeholder="Describe the condition"></label><button class="primary">Record action</button><label class="inspection"><input name="confirmed" type="checkbox" required> I checked these pieces and confirm the selected action. A ready-for-sale return goes back to the original location (and warehouse rack, where applicable); disposal reduces total owned.</label></form>':'<p class="sub">'+(blocked?'Resolve the pending Shopify action before changing this batch.':'A stock manager can record returns and reclassification.')+'</p>')+'</div>';}).join('')+'</article>';
   }
   function register() {
     if (!data) return;
+    SankiNavigation.set({view:view});
     document.querySelectorAll('[data-view]').forEach(function(b){b.setAttribute('aria-selected',String(b.dataset.view === view));});
     if (view === 'history' || view === 'pending') {
       var ops = data.operations.filter(function(o){return (view === 'history' || !['confirmed','cancelled'].includes(o.status)) && filterBatch(data.batches.find(function(b){return b.id === o.batchId;}));});

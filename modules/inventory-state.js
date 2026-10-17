@@ -103,6 +103,7 @@ function quantities(item, mapping = {}) {
 }
 function catalog(s, physical, purchases = metadata.loadPurchases()) {
   s = withCare(s);
+  const rackFor = require('./warehouse-racks').readIndex();
   const old = new Map(physical.map(p => [p.handle, p])); const products = new Map();
   const postedByHandle = new Map();
   for (const item of s.items) postedByHandle.set(item.product.handle, (postedByHandle.get(item.product.handle) || []).concat(purchases.get(item.sku) || []));
@@ -113,7 +114,8 @@ function catalog(s, physical, purchases = metadata.loadPurchases()) {
       products.set(p.handle, { ...base, ...metadata.resolveMetadata(p, base, posted), handle: p.handle, title: p.title, updatedAt: p.updatedAt || base.updatedAt || '', image: p.featuredImage?.url || base.image || null, images: p.featuredImage?.url ? [p.featuredImage.url] : (base.images || []), variants: [] });
     }
     const previous = (base.variants || []).find(v => String(v.sku).trim().toUpperCase() === item.sku) || {};
-    products.get(p.handle).variants.push({ ...previous, sku: item.sku, variant: item.variant, price: item.price ?? null, inventoryItemId: item.id, ...quantities(item, s.mapping) });
+    const q = quantities(item, s.mapping), racks = rackFor(item.sku);
+    products.get(p.handle).variants.push({ ...previous, sku: item.sku, variant: item.variant, price: item.price ?? null, inventoryItemId: item.id, ...q, ...racks, rackReferenceNeedsVerification: racks.rackReferenceNeedsVerification || (q.warehouseQty > 0 && !racks.warehouseRacks.length) });
   }
   return [...products.values()].map(p => {
     for (const k of Object.keys(quantities({ levels: [] }))) p[k] = p.variants.reduce((n, v) => n + v[k], 0);

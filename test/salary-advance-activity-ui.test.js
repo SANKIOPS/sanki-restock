@@ -71,7 +71,7 @@ function uiHarness(data,{owner=false}={}){
   const document={getElementById:node,querySelectorAll(){return [];}};
   class FixedDate extends Date{constructor(...args){super(...(args.length?args:[today+'T12:00:00Z']));}}
   const context={document,Date:FixedDate,FormData:class{},console,fetch(url,options){calls.push({url,options});if(url==='/api/auth/me')return new Promise(()=>{});let response=url.startsWith('/api/salary/employees')?{success:true,employees:[{id:'E1',name:'Employee One',active:true}],advancePayingAccounts:[],salaryPayingAccounts:[]}:url.startsWith('/api/expenses/config')?{accountsByNature:{SANKI:[]}}:data;return Promise.resolve({json:()=>Promise.resolve(response)});}};
-  context.window=context;vm.createContext(context);vm.runInContext(helper,context);vm.runInContext(inline,context);
+  context.window=context;context.URL=URL;context.location=new URL('https://example.test/salary.html');context.history={state:null,replaceState(_state,_title,target){context.location=new URL(target,context.location);}};vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/navigation-state.js'),'utf8'),context);vm.runInContext(helper,context);vm.runInContext(inline,context);
   data.permissions={canRequest:true,canApprove:owner,canDirectPost:owner,canPostProof:true,canEdit:true,canCancel:owner};
   context.state.ym='2026-07';context.loadAdvances();
   return {context,node,calls};

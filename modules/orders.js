@@ -165,7 +165,7 @@ function normalizeOrder(o, previous = {}) {
   const email = cust.email || o.email || o.contact_email || '';
   const lineItems = (o.line_items || []).map(li => ({
     id: String(li.id || ''), taxable: li.taxable !== false,
-    sku: li.sku || '', title: li.title || '', variantTitle: li.variant_title || '',
+    productId: String(li.product_id || ''), variantId: String(li.variant_id || ''), image: li.image && li.image.src || '', sku: li.sku || '', title: li.title || '', variantTitle: li.variant_title || '',
     qty: li.quantity || 0, price: num(li.price),
     discount: (li.discount_allocations || []).reduce((sum, d) => sum + num(d.amount), 0),
     taxLines: (li.tax_lines || []).map(t => ({ title: t.title, rate: num(t.rate), price: num(t.price) }))
@@ -220,6 +220,7 @@ function normalizeOrder(o, previous = {}) {
     financialStatus: o.financial_status || '',
     fulfillmentStatus: o.fulfillment_status || 'unfulfilled',
     deliveryComplete,
+    shipments: fulfillments.filter(f => f.status !== 'cancelled').map(f => ({ id: String(f.id), awb: f.tracking_number || '', courier: f.tracking_company || '', trackingUrl: f.tracking_url || '', status: f.shipment_status || 'Tracking update pending', weight: null })),
     paymentGateways: o.payment_gateway_names || [],
     paymentTransactions: normalizePaymentTransactions(o._paymentTransactions),
     paymentTransactionSchemaVersion: 2,
@@ -302,6 +303,7 @@ function mergedList(store) {
     return Object.assign({}, o, {
       dispatch: {
         courier: d.courier || '',
+        velocityAwb: d.velocityAwb || '',
         deliveredAt: d.deliveredAt || '',
         trackingUrl: d.trackingUrl || '',
         packingStatus: d.packingStatus || 'pending',
@@ -374,6 +376,99 @@ router.get('/api/orders-ledger', (req, res) => {
   res.json({ success: true, total: list.length, summary, orders: list.slice(offset, offset + limit) });
 });
 
+const financeUpload = require('multer')({storage: require('multer').memoryStorage(), limits: {fileSize: 10 * 1024 * 1024}});
+router.post('/api/orders-ledger/gokwik-report', financeUpload.single('file'), (req,res) => {
+  try {
+    if(!req.file)return res.status(400).json({success:false,error:'Choose a GoKwik settlement report'});
+    const xlsx=require('xlsx'),book=xlsx.read(req.file.buffer,{type:'buffer',raw:true});
+    const rows=require('./gokwik-settlements').normalizeRows(xlsx.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{defval:''}));
+    const file=path.join(path.dirname(ORDERS_PATH),'gokwik_settlement_evidence.json');
+    let prior={rows:[]};try{prior=JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    const combined=new Map((prior.rows||[]).map(r=>[r.paymentId+'|'+r.type+'|'+r.utr,r]));
+    rows.forEach(r=>combined.set(r.paymentId+'|'+r.type+'|'+r.utr,r));
+    atomicWrite(file,JSON.stringify({rows:[...combined.values()],importedAt:new Date().toISOString(),importedBy:req.user&&req.user.username||'admin'}));
+    res.json({success:true,imported:rows.length,total:combined.size,bankVerified:false});
+  }catch(e){res.status(400).json({success:false,error:e.message});}
+});
+let logisticsPromise=null;
+function syncLogistics(){
+  if(logisticsPromise)return logisticsPromise;
+  logisticsPromise=(async()=>{
+    const file=path.join(path.dirname(ORDERS_PATH),'velocity_order_index.json');
+    let previous={byOrder:{},shipments:{}};
+    try{previous=JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    try{
+      if(!process.env.VELOCITY_API_KEY)throw new Error('Velocity API key is not configured');
+      const adapter=require('./velocity-order-sync');
+      const index=await adapter.fetchShipmentIndex({token:process.env.VELOCITY_API_KEY});
+      // Load after network requests so orders arriving during discovery are included.
+      const store=loadStore(),matched=adapter.matchShipments(store.orders,index.rows);
+      const awbs=[...new Set([...index.rows.map(s=>s.awb),...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...Object.values(store.dispatch).map(d=>d.velocityAwb)].filter(Boolean))];
+      let tracking={},trackingError=null;
+      try{tracking=await require('./velocity-tracking').fetchTracking({awbs,token:process.env.VELOCITY_API_KEY});}catch(e){trackingError=e.message;}
+      const now=new Date().toISOString();
+      const shipments={...(previous.shipments||{})};
+      for(const row of index.rows.filter(s=>s.awb))shipments[row.awb]={...shipments[row.awb],...row,...tracking[row.awb],courierName:(tracking[row.awb]||{}).courierName||row.courier,lastUpdated:now};
+      for(const [awb,t] of Object.entries(tracking))shipments[awb]={...shipments[awb],...t,courierName:t.courierName||(shipments[awb]||{}).courierName||''};
+      const result={byOrder:matched.byOrder,shipments,lastSync:now,lastAttempt:now,error:trackingError,total:index.total,matchedOrders:Object.keys(matched.byOrder).length,unmatched:matched.unmatched};
+      atomicWrite(file,JSON.stringify(result));
+      return {success:true,total:result.total,matchedOrders:result.matchedOrders};
+    }catch(e){atomicWrite(file,JSON.stringify({...previous,lastAttempt:new Date().toISOString(),error:e.message}));throw e;}
+  })().finally(()=>{logisticsPromise=null;});
+  return logisticsPromise;
+}
+router.post('/api/orders-ledger/velocity-sync',async(req,res)=>{
+ try{res.json(await syncLogistics());}catch(e){res.status(502).json({success:false,error:e.message});}
+});
+let financeRefreshing=false, financeLastAttempt=0;
+async function syncFinance() {
+  if(financeRefreshing)throw new Error('Velocity finance sync already running');
+  if(!process.env.VELOCITY_API_KEY)throw new Error('A named Velocity API key must be configured on the server');
+  if(Date.now()-financeLastAttempt<60000)throw new Error('Please wait one minute before another finance sync');
+  financeRefreshing=true;financeLastAttempt=Date.now();
+  try {
+    const store=loadStore();let legacy={orders:[]};
+    try{legacy=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'sanki_cache.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    let index={byOrder:{}};try{index=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'velocity_order_index.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+    const linked=new Set(Object.keys(store.orders));
+    const awbs=[...new Set([...Object.values(index.byOrder||{}).flatMap(rows=>rows.map(s=>s.awb)),...Object.values(store.dispatch).map(d=>d.velocityAwb),...Object.values(store.orders).flatMap(o=>(o.shipments||[]).map(s=>s.awb)),...(legacy.orders||[]).filter(o=>linked.has(String(o.id))).flatMap(o=>(o.fulfillments||[]).filter(f=>f.status!=='cancelled').map(f=>f.tracking_number))].map(v=>String(v||'').trim()).filter(v=>v&&!/^(n\/a|na|none)$/i.test(v)))];
+    if(!awbs.length)throw new Error('No AWBs available. Sync Shopify orders first.');
+    const tracking=await require('./velocity-tracking').fetchTracking({awbs,token:process.env.VELOCITY_API_KEY});
+    atomicWrite(path.join(path.dirname(ORDERS_PATH),'velocity_tracking_evidence.json'),JSON.stringify({shipments:tracking,lastSync:new Date().toISOString()}));
+    const rows=await require('./velocity-finance').fetchRemittances({awbs,token:process.env.VELOCITY_API_KEY});
+    const file=path.join(path.dirname(ORDERS_PATH),'velocity_finance_evidence.json');
+    atomicWrite(file,JSON.stringify({rows,updatedAt:new Date().toISOString()}));
+    return {success:true,checked:rows.length,reportedSettled:rows.filter(r=>r.utr).length,bankVerified:false};
+  }finally{financeRefreshing=false;}
+}
+router.post('/api/orders-ledger/velocity-finance/sync', async(req,res)=>{
+  try{res.json(await syncFinance());}catch(e){res.status(502).json({success:false,error:e.message});}
+});
+
+router.get('/api/orders-ledger/integrated', (req, res) => {
+  try {
+    const store = loadStore();
+    const read = (name, fallback) => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH), name), 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
+    const velocity = read('velocity_cache.json', { shipments: {} });
+    const tracking = read('velocity_tracking_evidence.json',{shipments:{}});
+    const index = read('velocity_order_index.json',{byOrder:{},shipments:{}});
+    velocity.shipments=Object.assign({},velocity.shipments,tracking.shipments);
+    for(const [awb,row] of Object.entries(index.shipments||{})){const old=velocity.shipments[awb]||{};velocity.shipments[awb]=String(row.lastUpdated||'')>=String(old.lastUpdated||'')?{...old,...row}:{...row,...old};}
+    velocity.lastSync=index.lastSync||tracking.lastSync||velocity.lastSync;
+    const remittances = read('velocity_remittance.json', { entries: [] });
+    const legacy = read('sanki_cache.json', { orders: [] });
+    const finance = read('velocity_finance_evidence.json', {rows:[]});
+    const online = read('gokwik_settlement_evidence.json', {rows:[]});
+    const { integrateOrder } = require('./sales-order-view');
+    const boundary = accountingStartAt();
+    const orders = mergedList(store)
+      .map(o => integrateOrder({...o,velocityShipments:(index.byOrder||{})[o.id]||[]}, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
+      .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    require('./order-settlement-links').attachSettlementLinks(orders,read('expenses.json',{}),online.rows||[],finance.rows||[]);
+    res.json({ success: true, orders, sources: { velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
+  } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }
+});
+
 router.get('/api/orders-ledger/:id', (req, res) => {
   const store = loadStore();
   const o = store.orders[String(req.params.id)];
@@ -381,6 +476,15 @@ router.get('/api/orders-ledger/:id', (req, res) => {
   if (accountingStartAt() && String(o.createdAt || '') < accountingStartAt()) return res.status(404).json({ success: false, error: 'Order predates the accounting reset' });
   const merged = mergedList({ orders: { [o.id]: o }, dispatch: store.dispatch })[0];
   res.json({ success: true, order: merged });
+});
+
+// Verified provider references are kept separate from the Shopify source mirror.
+router.post('/api/orders-ledger/:id/velocity-link', (req,res)=>{
+  const store=loadStore(),id=String(req.params.id),awb=String(req.body.awb||'').trim();
+  if(!store.orders[id])return res.status(404).json({success:false,error:'Order not found'});
+  if(!/^[A-Za-z0-9-]{6,50}$/.test(awb))return res.status(400).json({success:false,error:'A valid verified AWB is required'});
+  store.dispatch[id]={...(store.dispatch[id]||{}),velocityAwb:awb,courier:String(req.body.courier||'').trim(),updatedAt:new Date().toISOString(),updatedBy:(req.user&&req.user.username)||'system'};
+  saveStore(store);res.json({success:true,awb});
 });
 
 const PACKING_STATES = ['pending', 'packed', 'booked', 'dispatched', 'delivered', 'rto', 'cancelled'];
@@ -396,6 +500,7 @@ router.post('/api/orders-ledger/:id/dispatch', (req, res) => {
   if (b.deliveredAt && (!validDate(String(b.deliveredAt)) || b.deliveredAt > accountingDay(new Date().toISOString()) || b.deliveredAt < accountingDay(store.orders[id].createdAt))) return res.status(400).json({ success: false, error: 'Use a valid actual delivery date between the order date and today.' });
   if (b.packingStatus === 'delivered' && !deliveredAt && !store.orders[id].completedAt) return res.status(400).json({ success: false, error: 'Enter the actual delivery date. P&L must not use the date this form was edited.' });
   const next = {
+    velocityAwb:       cur.velocityAwb || '',
     courier:           b.courier != null ? String(b.courier).trim() : (cur.courier || ''),
     trackingUrl:       b.trackingUrl != null ? String(b.trackingUrl).trim() : (cur.trackingUrl || ''),
     packingStatus:     PACKING_STATES.includes(b.packingStatus) ? b.packingStatus : (cur.packingStatus || 'pending'),
@@ -424,4 +529,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncLogistics };

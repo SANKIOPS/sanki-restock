@@ -1,0 +1,33 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const {integrateOrder}=require('../modules/sales-order-view');
+const base={id:'1',total:3000,channel:'Website',financialStatus:'partially_paid',paymentTransactionSchemaVersion:2,paymentTransactions:[{kind:'sale',status:'success',amount:200,gateway:'GoKwik'},{kind:'authorization',status:'success',amount:2800},{kind:'sale',status:'failure',amount:2800}],shipments:[{awb:'AWB1'}]};
+test('partial advance counts captures only and keeps bank settlement unverified',()=>{const o=integrateOrder(base,{'AWB1':{status:'delivered',courierName:'Courier',codAmount:2800}},[{awb:'AWB1',amount:2750,settlementId:'B1',utr:'UTR1'}]);assert.equal(o.received,200);assert.equal(o.balance,2800);assert.equal(o.deliveryStatus,'delivered');assert.equal(o.remittanceEvidence.length,1);assert.match(o.settlementStatus,/bank verification pending/);});
+test('missing transaction evidence stays unknown; payout-only report is not allocated',()=>{const o=integrateOrder({...base,paymentTransactionSchemaVersion:undefined}, {},[{amount:50000,settlementId:'B1'}]);assert.equal(o.received,null);assert.equal(o.balance,null);assert.equal(o.remittanceEvidence.length,0);});
+test('refund never invents a fresh customer balance',()=>{const o=integrateOrder({...base,financialStatus:'refunded',moneyRefunded:3000,paymentTransactions:[{kind:'capture',status:'success',amount:3000}]});assert.equal(o.balance,0);assert.equal(o.refunded,3000);assert.equal(o.orderStatus,'Refunded');});
+test('POS clearance is not inferred from successful payment',()=>{const o=integrateOrder({...base,channel:'POS'});assert.equal(o.settlementStatus,'POS clearance linking pending');});
+test('integrated route joins persisted Shopify orders and Velocity by AWB',()=>{
+ const fs=require('fs'),os=require('os'),path=require('path'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'sales-orders-')),previous=process.env.ORDERS_PATH;
+ try{process.env.ORDERS_PATH=path.join(dir,'orders.json');fs.writeFileSync(process.env.ORDERS_PATH,JSON.stringify({orders:{'1':{...base,createdAt:'2026-10-16T10:00:00Z',customer:{name:'Test'},lineItems:[]}},dispatch:{},sync:{}}));fs.writeFileSync(path.join(dir,'velocity_cache.json'),JSON.stringify({shipments:{AWB1:{status:'in_transit',courierName:'Test courier'}}}));const modulePath=require.resolve('../modules/orders');delete require.cache[modulePath];const {router}=require(modulePath);const layer=router.stack.find(l=>l.route&&l.route.path==='/api/orders-ledger/integrated');let body;layer.route.stack[0].handle({}, {json:v=>body=v,status:()=>({json:v=>body=v})});assert.equal(body.success,true);assert.equal(body.orders[0].shipments[0].courier,'Test courier');assert.equal(body.sources.onlineSettlements,'Connection required');delete require.cache[modulePath];}
+ finally{if(previous===undefined)delete process.env.ORDERS_PATH;else process.env.ORDERS_PATH=previous;fs.rmSync(dir,{recursive:true,force:true});}
+});
+test('partial COD remains partial COD after both advance and courier collection clear',()=>{const o=integrateOrder({...base,paymentGateways:['Gokwik PPCOD']},{},[],[],[{awb:'AWB1',amount:2800,deliveryDate:'2026-10-16',utr:'UTR'}],[{orderId:'1',type:'Payment',gross:200,utr:'ONLINE'}]);assert.equal(o.received,3000);assert.equal(o.balance,0);assert.equal(o.paymentType,'Partial COD');});
+test('historical line items recover product image identifiers from the existing order cache',()=>{const o=integrateOrder({...base,lineItems:[{id:'L1',title:'Shirt'}]},{},[],[{id:'1',line_items:[{id:'L1',variant_id:123,product_id:456}]}]);assert.equal(o.lineItems[0].variantId,'123');assert.equal(o.lineItems[0].productId,'456');});
+test('verified Velocity AWB fills a missing Shopify tracking reference',()=>{
+ const order={id:'1',lineItems:[],shipments:[{awb:null}],dispatch:{velocityAwb:'7D140289586',courier:'DTDC Standard'}};
+ const view=integrateOrder(order,{'7D140289586':{status:'Delivered',weight:0.75}});
+ assert.equal(view.deliveryStatus,'Delivered');
+ assert.equal(view.shipments.length,1);
+ assert.equal(view.shipments[0].awb,'7D140289586');
+ assert.equal(view.shipments[0].weight,0.75);
+});
+test('automatic provider discovery links future orders without Shopify AWBs',()=>{
+ const view=integrateOrder({id:'future',shipments:[{awb:null}],velocityShipments:[{awb:'NEW123',status:'delivered',courier:'DTDC'}]});
+ assert.equal(view.deliveryStatus,'delivered');assert.equal(view.shipments[0].awb,'NEW123');
+});
+test('fulfilled orders without any provider reference expose the missing link',()=>{
+ const view=integrateOrder({id:'missing',channel:'Website',fulfillmentStatus:'fulfilled',shipments:[{awb:null}]});
+ assert.equal(view.deliveryStatus,'Shipment link missing');
+});
+test('external fulfillment without tracking is never presented as delivered',()=>{
+ const view=integrateOrder({id:'external',channel:'Website',fulfillmentStatus:'fulfilled',velocityShipments:[{awb:'',status:'externally_fulfilled'}]});
+ assert.equal(view.deliveryStatus,'Fulfilled outside Velocity · tracking unavailable');assert.equal(view.shipments.length,0);
+});

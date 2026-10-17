@@ -1,4 +1,5 @@
 const { summarizePayouts } = require('./paytm-report');
+const { validateOrderReceiptTotals } = require('./paytm-rounding');
 
 const CLEARING = 'Paytm Settlement Clearing';
 const BANK = 'Axis Bank 3448';
@@ -107,6 +108,7 @@ function autoMatchShopifyNotes(store, transactions, orders, saleRows) {
 function validateSettlementReview(store, payoutId, saleRows, options = {}) {
   const payout = getPayout(store, payoutId);
   if (!payout) throw new Error('Payout not found. Import the Paytm report first.');
+  if (payout.transactionIds.some(id => (store.paytmRoundingReviews || {})[id] && (store.paytmExcludedTransactions || {})[id])) throw new Error('An excluded payment retains an audited rounding receipt. Reverse or correct that rounding treatment before posting.');
   const excludedIds = payout.transactionIds.filter(id => (store.paytmReportTransactions || {})[id]?.isCustomerPayment !== false && (store.paytmExcludedTransactions || {})[id]);
   if (excludedIds.length && !options.allowExcluded) throw new Error('This payout contains an excluded payment (customer receipt). Restore or separately resolve it before finalizing the payout.');
   if (!payout.utr || !payout.settledDate) throw new Error('Settlement UTR and settled date are required for an exact bank link.');
@@ -116,11 +118,19 @@ function validateSettlementReview(store, payoutId, saleRows, options = {}) {
   if (linked.some(x => !x)) throw new Error('Every Paytm payment in this payout must be linked to Shopify or classified as a verified manual sale/cash transfer before posting.');
   const excludedAmount=excludedIds.reduce((sum,id)=>sum+Number((store.paytmReportTransactions||{})[id]?.amount||0),0);
   if (linked.reduce((sum, x) => sum + cents(x.amount), 0) !== cents(payout.customerGross-excludedAmount)) throw new Error('Reviewed customer receipts plus excluded payments do not equal the customer-payment gross for this settlement.');
+  const roundedOrders = new Set();
   for (const link of linked) {
     if (link.type === 'manual_sale' || link.type === 'cash_transfer') {
       const source = link.type === 'manual_sale' ? store.receipts : store.transfers;
       const record = (source || []).find(x => x.id === link.recordId && x.paytmTransactionId === link.transactionId);
       if (!record || cents(record.amount) !== cents(link.amount) || !record.proof) throw new Error(`Reviewed Paytm ${link.transactionId} record changed or lost its proof. Review it before posting.`);
+      continue;
+    }
+    // Rounding is an explicit, evidence-bound accounting receipt, never a
+    // general tolerance. Check the order's aggregate links across all payouts.
+    if (Object.values(store.paytmRoundingReviews || {}).some(review => String(review.orderId) === String(link.orderId))) {
+      if (!roundedOrders.has(String(link.orderId))) validateOrderReceiptTotals(store, link.orderId, saleRows);
+      roundedOrders.add(String(link.orderId));
       continue;
     }
     const row = saleRows.find(x => String(x.orderId) === link.orderId && x.account !== 'Counter Cash');
@@ -143,7 +153,9 @@ function reviewedUnpostedSettlements(store, saleRows) {
     if (verified.has(String(candidate.settlementId || '')) || verified.has(String(candidate.payoutId || '')) || posted.has(String(candidate.settlementId || '')) || posted.has(String(candidate.payoutId || ''))) continue;
     try {
       const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows);
-      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, reviewedNotFinalized: true });
+      let historicalEvidenceLink=null;
+      if((store.paytmHistoricalEvidenceLinks||{})[payout.settlementId]) { validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows); historicalEvidenceLink=store.paytmHistoricalEvidenceLinks[payout.settlementId]; }
+      rows.push({ id: `PTMV-REVIEWED-${payout.settlementId}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, historicalEvidenceLink, reviewedNotFinalized: !historicalEvidenceLink });
     } catch { /* Incomplete or unsafe batches stay out of the ledger. */ }
   }
   return rows;
@@ -161,9 +173,99 @@ function validatePayoutPosting(store, payoutId, bankTransactionId, saleRows) {
   if ((store.paytmPayoutPostings || []).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis bank credit is already used by a Paytm payout.');
   if (Object.values(store.bankDateOverrides || {}).some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis credit is already linked to another ledger entry. Correct that link first.');
   const book = (store.bankStatements || {})[BANK] || {};
-  if ((book.imports || []).some(record => [].concat(record.reconciliationRows || [], record.carriedReconciliationRows || []).some(row => row.bank && row.bank.id === bankTransactionId && (row.linkedRecordIds || []).length))) throw new Error('This Axis credit was already linked in a finalized reconciliation. Correct that link first.');
+  if ((book.imports || []).some(record => [].concat(record.reconciliationRows || [], record.carriedReconciliationRows || []).some(row => row.bank && (row.bank.id === bankTransactionId || sameSettlementCredit(row.bank,bank,payout.utr)) && (row.linkedRecordIds || []).length))) throw new Error('This Axis credit was already linked in a finalized reconciliation. Correct that link first.');
   if ([...(store.adjustments || []), ...(store.receipts || []), ...(store.bankTruthMovements || [])].some(x => x.bankTransactionId === bankTransactionId)) throw new Error('This Axis credit already has a ledger posting. Review it before posting Paytm.');
   return { payout, bank, linked, excludedIds, excludedAmount };
 }
+function sameSettlementCredit(a,b,utr) {
+  return !!utr&&a.date===b.date&&cents(a.credit)===cents(b.credit)&&cents(a.debit)===0&&cents(b.debit)===0&&
+    `${a.reference||''} ${a.description||''}`.includes(utr)&&`${b.reference||''} ${b.description||''}`.includes(utr);
+}
 
-module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting };
+// Attach detailed report evidence to an ALREADY finalized historical posting.
+// This is not permission to post over a duplicate bank credit: every original
+// amount, fee, UTR, date and finalized ledger claim must agree exactly.
+function validateHistoricalSettlementAttachment(store, payoutId, saleRows) {
+  const {payout,linked}=validateSettlementReview(store,payoutId,saleRows);
+  if ((store.paytmPayoutPostings||[]).some(x=>x.settlementId===payout.settlementId||(x.transactionIds||[]).some(id=>payout.transactionIds.includes(id)))) throw new Error('This detailed settlement already has a payout posting.');
+  const match=matchPayoutBank(store,payout);
+  if(!match.bankMatched||match.bankCandidates.length!==1)throw new Error('A unique exact Axis UTR and net credit is required to attach historical evidence.');
+  const bank=match.bankCandidates[0];
+  if(bank.date!==payout.settledDate)throw new Error('Historical bank evidence must be on the exact settled date.');
+  const fees=cents(payout.commission)+cents(payout.platformFee)+cents(payout.gst)+cents(payout.nonCustomerAmount);
+  const candidates=(store.paytmSettlements||[]).filter(x=>x.bankAccount===BANK&&String(x.date).slice(0,10)===payout.settledDate&&
+    String(x.utr||x.bankReference||x.reference||'')===payout.utr&&cents(x.netAmount)===cents(payout.net)&&
+    ((cents(x.grossAmount)===cents(payout.customerGross)&&cents(x.chargeAmount)===fees)||pendingHistoricalDetail(x)));
+  if(candidates.length!==1)throw new Error('The existing historical settlement must match the exact customer gross, charges, net, date and UTR.');
+  const legacy=candidates[0],book=(store.bankStatements||{})[BANK]||{};
+  const completePendingDetail=pendingHistoricalDetail(legacy);
+  if(completePendingDetail&&(store.reconciliationExpenses||[]).some(x=>x.settlementId===legacy.id||x.paytmHistoricalSettlementId===legacy.id))throw new Error('This pending settlement already has a charge record. Review it before completing the report detail.');
+  const finalized=(book.imports||[]).flatMap(record=>[].concat(record.reconciliationRows||[],record.carriedReconciliationRows||[])
+    .filter(row=>row.bank&&(row.bank.id===bank.id||sameSettlementCredit(row.bank,bank,payout.utr))&&(row.linkedRecordIds||[]).length)
+    .map(row=>({record,row})));
+  if(!finalized.length||finalized.some(({record,row})=>!record.finalizedAt||!record.finalizedBy||
+    (row.linkedRecordIds||[]).length!==1||row.linkedRecordIds[0]!==legacy.id||
+    cents(row.bank.credit)!==cents(payout.net)||cents(row.bank.debit)!==0||row.bank.date!==bank.date||
+    !String(row.bank.reference||row.bank.description||'').includes(payout.utr)))throw new Error('The exact bank row must already be finalized against this historical settlement only.');
+  if(Object.entries(store.bankDateOverrides||{}).some(([id,x])=>x.bankTransactionId===bank.id&&id!==legacy.id)||
+    [...(store.adjustments||[]),...(store.receipts||[]),...(store.bankTruthMovements||[])].some(x=>x.bankTransactionId===bank.id))throw new Error('Another accounting record already claims this bank credit.');
+  if(Object.values(store.paytmHistoricalEvidenceLinks||{}).some(x=>x.settlementId!==payout.settlementId&&(x.bankTransactionId===bank.id||x.historicalSettlementId===legacy.id)))throw new Error('This historical evidence is already attached to another detailed settlement.');
+  return {payout,linked,bank,historicalSettlementId:legacy.id,reconciliationImportId:finalized[0].record.id,completePendingDetail};
+}
+function pendingHistoricalDetail(x) {
+  return x.bankTruthOnly===true&&x.source==='axis_3448_paytm_bank_narration'&&x.reportDetailCompleted!==true&&
+    cents(x.grossAmount)===cents(x.netAmount)&&cents(x.chargeAmount)===0&&cents(x.paytmChargeAmount)===0&&cents(x.hiddenChargeAmount)===0&&
+    !(x.orderIds||[]).length&&!(x.transferIds||[]).length&&!(x.otherReceipts||[]).length;
+}
+
+// Status is a read-only projection of the very same validators used to post.
+// It deliberately has no user/role argument and creates no ledger movements.
+function settlementStatus(store, payout, saleRows) {
+  const posted = (store.paytmPayoutPostings || []).find(x => x.settlementId === payout.settlementId || x.payoutId === payout.payoutId);
+  const verified = (store.paytmVerifiedSettlements || []).find(x => x.settlementId === payout.settlementId);
+  const bank = matchPayoutBank(store, payout), reasons = [], bankReasons = [];
+  const attachment=(store.paytmHistoricalEvidenceLinks||{})[payout.settlementId];
+  let historicalCandidate=null,attachmentValid=false;
+  if(attachment){
+    try {const evidence=validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows);
+      if(attachment.historicalSettlementId!==evidence.historicalSettlementId||attachment.bankTransactionId!==evidence.bank.id||attachment.reconciliationImportId!==evidence.reconciliationImportId)throw new Error('Saved historical evidence changed. Review the attachment again.');
+      attachmentValid=true;
+    }catch(error){reasons.push(error.message);}
+  }
+  let code = posted || attachmentValid ? 'posted' : attachment ? 'incomplete' : verified ? 'finalized' : 'ready';
+  if (!posted && !verified) {
+    try { validateSettlementReview(store, payout.payoutId, saleRows); }
+    catch (error) { code = 'incomplete'; reasons.push(error.message); }
+  }
+  let bankLinkReady = false;
+  if (!posted&&!attachmentValid) {
+    if (!bank.bankMatched) bankReasons.push(bank.bankMatch === 'ambiguous' ?
+      'More than one possible Axis 3448 credit exists. A unique UTR, amount and settled-date match is required.' : bank.bankMatch === 'amount/date candidate' ?
+      'An amount/date candidate exists, but its bank reference does not contain the Paytm settlement UTR.' :
+      'No Axis 3448 credit matches this settlement UTR and exact net amount in the available bank evidence.');
+    else {
+      try { validatePayoutPosting(store, payout.payoutId, bank.bankCandidates[0].id, saleRows); bankLinkReady = true; }
+      catch (error) { bankReasons.push(error.message); }
+    }
+    if(code!=='incomplete')try{const evidence=validateHistoricalSettlementAttachment(store,payout.payoutId,saleRows);historicalCandidate={completePendingDetail:evidence.completePendingDetail,fees:Math.round((payout.commission+payout.platformFee+payout.gst+payout.nonCustomerAmount)*100)/100,historicalSettlementId:evidence.historicalSettlementId,bankTransactionId:evidence.bank.id,reconciliationImportId:evidence.reconciliationImportId};}catch{/* A genuinely conflicting claim remains blocked by the posting validator. */}
+  }
+  const blockedTransactions = payout.transactionIds.filter(id => {
+    const tx = (store.paytmReportTransactions || {})[id];
+    return tx && tx.isCustomerPayment !== false && ((store.paytmExcludedTransactions || {})[id] ||
+      !((store.paytmOrderLinks || {})[id] || (store.paytmManualResolutions || {})[id]));
+  }).map(id => ({ transactionId: id, reason: (store.paytmExcludedTransactions || {})[id] ?
+    'Excluded from Shopify: ' + (store.paytmExcludedTransactions[id].reason || 'Excluded payment') : 'No confirmed Shopify link or verified manual sale/cash-transfer classification.' }));
+  return { code, label: { posted: 'Linked and posted to Axis 3448', finalized: 'Paytm review finalized — bank link pending',
+    ready: 'Ready for Paytm finalization', incomplete: 'Incomplete — review required' }[code], reasons, bankReasons, bankLinkReady,
+    payoutId: payout.payoutId, settlementId: payout.settlementId, utr: payout.utr, settledDate: payout.settledDate, net: payout.net,
+    blockedTransactions,historicalCandidate,historicalEvidenceLink:attachmentValid?attachment:null, finalizedBy: verified && verified.finalizedBy || posted && posted.postedBy || attachmentValid&&attachment.by || '',
+    finalizedAt: verified && verified.finalizedAt || posted && posted.postedAt || attachmentValid&&attachment.at || '' };
+}
+function reconciliationStatus(store, saleRows) {
+  const settlements = summarizePayouts(Object.values(store.paytmReportTransactions || {})).map(p => settlementStatus(store, p, saleRows));
+  const counts = { total: settlements.length, posted: 0, finalized: 0, ready: 0, incomplete: 0, bankLinkPending: 0 };
+  settlements.forEach(s => { counts[s.code]++; if (s.code !== 'posted') counts.bankLinkPending++; });
+  return { counts, settlements, incompleteSettlements: settlements.filter(s => s.code === 'incomplete'),
+    lastAttempt: store.paytmLastFinalizationAttempt || null };
+}
+module.exports = { CLEARING, BANK, LINK_TOLERANCE_CENTS, getPayout, matchPayoutBank, summarizeShopifyPayments, transactionSuffix, noteHasTransactionSuffix, isOriginalPaymentOrder, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, reviewedUnpostedSettlements, validatePayoutPosting, validateHistoricalSettlementAttachment, settlementStatus, reconciliationStatus };

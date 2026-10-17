@@ -50,7 +50,7 @@
     .recon-items { display:grid; gap:5px; }
     .recon-item { display:flex; align-items:center; justify-content:space-between; gap:9px; padding:6px 8px; color:inherit; text-decoration:none; border:1px solid #eee8f6; border-radius:7px; background:rgba(255,255,255,.7); }
     .recon-item b { display:block; color:#68429e; font-size:12.5px; }
-    .recon-item span { display:block; margin-top:1px; color:var(--muted); font-size:10.5px; }
+    .recon-item span { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; margin-top:1px; color:var(--muted); font-size:10.5px; }
     .recon-action { flex:0 0 auto; color:#6d4aa0 !important; background:#f0ebf8; border-radius:6px; padding:5px 7px; font-size:10px !important; font-weight:700; }
     @media (max-width:680px) {
       .wrap { padding:24px 14px calc(72px + env(safe-area-inset-bottom)); }
@@ -121,10 +121,10 @@
       }
 
       function renderReconciliationAttention(data){
-        var host=document.getElementById('reconciliationAttention'),items=(data&&data.reminders||[]).filter(function(x){return x.status!=='up_to_date';});
+        var host=document.getElementById('reconciliationAttention'),items=(data&&data.reminders||[]).filter(function(x){return x.attentionRequired!==false&&x.status!=='up_to_date';});
         if(!items.length){host.className='recon-alert';host.innerHTML='';return;}
         host.className='recon-alert show';
-        host.innerHTML='<h2>Account reconciliations pending</h2><p>Items appear according to their approved daily, alternate-day or weekly schedule.</p><div class="recon-items">'+items.map(function(x){var label=x.actionLabel||(x.status==='approval_pending'?'awaiting Owner approval':x.status==='verification_required'?'cash verification required':x.pendingDraft?'finish pending review':'statement required'),detail=x.detail||(x.status==='approval_pending'?('Physical count submitted for '+(x.draftTo||'—')):x.pendingDraft?('Review already started'+(x.draftFrom?' · '+x.draftFrom+' to '+x.draftTo:'')):('Last reconciled: '+(x.reconciledThrough||'Not yet')+(x.daysBehind!=null?' · '+x.daysBehind+' day'+(x.daysBehind===1?'':'s')+' since last review':'')))+(x.cadenceLabel?' · '+x.cadenceLabel:'');return '<a class="recon-item" href="'+esc(x.href)+'"><div><b>⚠ '+esc(x.account)+' — '+esc(label)+'</b><span>'+esc(detail)+'</span></div><span class="recon-action">Open reconciliation</span></a>';}).join('')+'</div>';
+        host.innerHTML='<h2>Account reconciliations pending</h2><p>Items appear according to their approved daily, alternate-day or weekly schedule.</p><div class="recon-items">'+items.map(function(x){var label=x.actionLabel||(x.status==='approval_pending'?'awaiting Owner approval':x.status==='verification_required'?'cash verification required':x.pendingDraft?'finish pending review':'statement required'),counts=x.settlementCounts||{},detail=x.type==='paytm'?((Number(counts.reviewRequired)||Number(counts.incomplete)||0)+' item(s) need review'+(x.cadenceLabel?' · '+x.cadenceLabel:'')):(x.type==='cash'&&x.cashStatus&&x.cashStatus.counts?((Number(x.cashStatus.counts.reviewRequired)||0)+' cash verification(s) need review'):(x.status==='approval_pending'?('Physical count submitted for '+(x.draftTo||'—')):x.pendingDraft?('Review already started'+(x.draftFrom?' · '+x.draftFrom+' to '+x.draftTo:'')):('Last reconciled: '+(x.reconciledThrough||'Not yet')+(x.daysBehind!=null?' · '+x.daysBehind+' day'+(x.daysBehind===1?'':'s')+' since last review':'')))+(x.cadenceLabel?' · '+x.cadenceLabel:''));return '<a class="recon-item" href="'+esc(x.href)+'"><div><b>⚠ '+esc(x.account)+' — '+esc(label)+'</b><span>'+esc(detail)+'</span></div><span class="recon-action">Open reconciliation</span></a>';}).join('')+'</div>';
       }
 
       fetch('/api/auth/me', { headers:{ 'Accept':'application/json' } })

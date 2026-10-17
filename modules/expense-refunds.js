@@ -30,7 +30,10 @@ function init(store) {
   store.vendorAdvances = Array.isArray(store.vendorAdvances) ? store.vendorAdvances : [];
 }
 function sourcesForExpense(store, expense) {
-  const rows = (expense.payments || []).filter(p => !p.accountingExcluded && cents(p.amount) > 0).map(p => ({
+  // A Telegram provisional payment is real bank/cash movement, but it is not
+  // an approved expense payment yet.  Keep it out of refund and vendor-credit
+  // calculations until expense approval promotes it in place.
+  const rows = (expense.payments || []).filter(p => !p.accountingExcluded && !p.provisional && cents(p.amount) > 0).map(p => ({
     paymentId: text(p.id), amount: money(p.amount), date: p.date || expense.date,
     account: p.account || expense.account || '', personal: !!p.personalFunds,
     claimant: expense.reimbursementClaimant || expense.claimant || expense.createdBy || '',

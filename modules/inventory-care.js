@@ -39,7 +39,7 @@ function makeOpen(s, body, user, live) {
     const sku = text(raw.sku || '', 100).toUpperCase(), matching = live.items.filter(i => i.sku === sku);
     if (!sku || matching.length !== 1 || !matching[0].tracked) state.fail('SKU must match one tracked Shopify inventory item.');
     const item = matching[0], locationId = text(raw.locationId || '', 100), level = item.levels.find(l => l.locationId === locationId);
-    const rack = text(raw.rack || '', 40), key = item.id + ':' + locationId;
+    const rack = locationId === live.mapping.Display ? '' : text(raw.rack || '', 40), key = item.id + ':' + locationId;
     if (!level || seen.has(key)) state.fail('Choose a stocked location; combine duplicate SKU/location lines.', 400);
     seen.add(key);
     if (item.inventoryPolicy !== 'DENY') state.fail('Disable selling when out of stock for ' + sku + ' in Shopify before setting stock aside.');
@@ -51,8 +51,8 @@ function makeOpen(s, body, user, live) {
   if (moves.ready(movementStore)) {
     for (const l of lines) {
       const location = Object.keys(movementStore.baseline.locations || {}).find(k => movementStore.baseline.locations[k] === l.locationId);
-      const p = movementStore.positions.find(p => p.sku === l.sku && p.location === location && p.rack === l.rack);
-      if (!p || p.quantity - store.reservedAt(s, l.sku, l.locationId, l.rack) < l.quantity) state.fail('Not enough reviewed stock on the selected source rack for ' + l.sku + '.');
+      const p = movementStore.positions.find(p => p.sku === l.sku && p.location === location && (location === 'Display' || p.rack === l.rack));
+      if (!p || p.quantity - store.reservedAt(s, l.sku, l.locationId, l.rack, location === 'Display') < l.quantity) state.fail('Not enough reviewed stock on the selected source rack for ' + l.sku + '.');
     }
   }
   const batch = { id: crypto.randomUUID(), kind: body.kind, reason: body.reason, vendor, expectedReturn, note, createdBy: user.username, createdAt: new Date().toISOString(), lines };
@@ -86,8 +86,8 @@ function buildInput(s, op, live) {
     if (moves.ready(m)) for (const a of op.lines) {
       const l = batch.lines.find(l => l.id === a.lineId);
       const location = Object.keys(m.baseline.locations || {}).find(k => m.baseline.locations[k] === l.locationId);
-      const p = m.positions.find(p => p.sku === l.sku && p.location === location && p.rack === l.rack);
-      if (!p || p.quantity - store.reservedAt(s, l.sku, l.locationId, l.rack) < a.quantity) state.fail('Available stock on the reviewed source rack changed. Review this batch.');
+      const p = m.positions.find(p => p.sku === l.sku && p.location === location && (location === 'Display' || p.rack === l.rack));
+      if (!p || p.quantity - store.reservedAt(s, l.sku, l.locationId, l.rack, location === 'Display') < a.quantity) state.fail('Available stock on the reviewed source rack changed. Review this batch.');
     }
   }
   if (op.action === 'dispose') return { name: 'damaged', reason: 'damaged', referenceDocumentUri: `gid://sanki/InventoryCare/${op.id}`, changes: op.lines.map(a => {

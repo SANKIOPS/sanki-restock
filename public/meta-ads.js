@@ -41,8 +41,9 @@
   const singular = { campaigns: 'campaign', adSets: 'ad set', ads: 'ad', results: 'result' };
   const statusLabels = { draft: 'Draft', reported_running: 'Reported running', delivery_unconfirmed: 'Reported · verify delivery', active: 'Verified active', paused: 'Paused', completed: 'Completed', archived: 'Archived', unknown: 'Unconfirmed', pending: 'Pending' };
   const statuses = Object.entries(statusLabels);
-  let state = null, view = 'campaigns', busy = false, editing = null, sort = null;
+  let state = null, view = SankiNavigation.choice('tab',['campaigns','adSets','ads','results','changes'],'campaigns'), busy = false, editing = null, sort = null;
   const selection={campaigns:new Set(),adSets:new Set(),ads:new Set(),results:new Set(),changes:new Set()};
+  for(const key of ['campaigns','adSets'])selection[key]=new Set(SankiNavigation.text(key,/^[A-Za-z0-9_,:-]*$/,'').split(',').filter(Boolean));
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   const missing = value => value === null || value === undefined || value === '';
   const pending = () => '<span class="pending">Pending</span>';
@@ -211,6 +212,7 @@
     const s=state.summary;
     $('records').classList.toggle('full-setup',$('columnMode').value==='setup');
     for(const type of Object.keys(selection))for(const id of selection[type])if(!state[type].some(x=>x.id===id))selection[type].delete(id);
+    SankiNavigation.set({tab:view,campaigns:[...selection.campaigns].join(','),adSets:[...selection.adSets].join(',')});
     $('pageTitle').textContent=labels[view];
     const nc=selection.campaigns.size,ns=selection.adSets.size;
     $('campaignTabLabel').textContent='▣ Campaigns'+(nc?' · '+nc+' selected':'');

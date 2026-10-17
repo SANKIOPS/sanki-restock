@@ -67,6 +67,11 @@ test('Paytm clearing shows its dedicated report uploader instead of the debit-cr
   assert.match(html, /finalize-settlement/);
   assert.match(html, /Finalize all matched Paytm reconciliations/);
   assert.match(html, /finalize-all/);
+  assert.match(html, /payouts=\(d\.payouts\|\|\[\]\)\.slice\(\)\.sort\(newestFirst\)/, 'settlement groups are displayed newest first');
+  assert.match(html, /allTransactions=\(d\.transactions\|\|\[\]\)\.slice\(\)\.sort\(newestFirst\)/, 'transactions inside the reconciliation menu are displayed newest first');
+  assert.doesNotMatch(html, /data-t="paytm"/, 'there is no second standalone Paytm reports tab');
+  assert.match(html, /if\(tp==='paytm'\)\{tp='cash';if\(!qs\.get\('account'\)\)SankiNavigation\.set\(\{account:'Paytm Settlement Clearing'\}\);\}/, 'old Paytm deep links keep the Paytm account when canonicalized to Account Ledgers');
+  assert.match(html, /pageParams\.get\('tab'\)==='paytm'\?'Paytm Settlement Clearing'/, 'old Paytm deep links select the clearing account automatically');
 });
 
 test('shows old summary-only rows as not importable without transaction IDs', () => {

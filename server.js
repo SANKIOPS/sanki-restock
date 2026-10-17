@@ -186,7 +186,7 @@ async function getVelToken() {
 
   // Try VELOCITY_API_KEY as direct long-lived token first
   if (VELOCITY_API_KEY && !VELOCITY_USERNAME) {
-    velToken = VELOCITY_API_KEY;
+    velToken = /^Bearer\s/i.test(VELOCITY_API_KEY) ? VELOCITY_API_KEY : 'Bearer ' + VELOCITY_API_KEY;
     velTokenExpiry = Date.now() + 23 * 60 * 60 * 1000; // assume 23 h
     return velToken;
   }
@@ -2883,57 +2883,16 @@ app.listen(PORT, async () => {
   // Velocity: sync every 30 min
   setInterval(() => syncVelocityShipments(), 30 * 60 * 1000);
 
-  // Velocity remittance: try API every 6 hours — auto-settles COD if endpoint found
+  // Discover shipments by Shopify external ID, including orders with no Shopify AWB.
+  const autoSyncLogistics=()=>require('./modules/orders').syncLogistics().then(r=>console.log('[velocity-orders] Matched '+r.matchedOrders+' orders from '+r.total+' shipments')).catch(e=>console.error('[velocity-orders] '+e.message));
+  setInterval(autoSyncLogistics,10*60*1000);
+  setTimeout(autoSyncLogistics,20*1000);
+
+  // Provider remittance evidence refresh; bank reconciliation remains separate.
   async function autoSyncRemittance() {
-    try {
-      const fetch  = require('node-fetch');
-      const token  = await getVelToken().catch(() => null);
-      if (!token) return;
-      const headers = { 'Content-Type':'application/json', 'Authorization': token, 'token': token };
-      const patterns = [
-        `${VELOCITY_BASE}/passbook?limit=200`,
-        `${VELOCITY_BASE}/billing/passbook?limit=200`,
-        `${VELOCITY_BASE}/cod-remittance?limit=200`,
-        `${VELOCITY_BASE}/remittance?limit=200`,
-        `${VELOCITY_BASE}/settlements?limit=200`,
-      ];
-      for (const url of patterns) {
-        try {
-          const r = await fetch(url, { headers });
-          const d = await r.json();
-          const list = d.result || d.data || d.passbook || d.transactions || d.remittances || d.entries;
-          if (r.status === 200 && Array.isArray(list) && list.length) {
-            console.log(`[remittance] ✅ Auto-sync found endpoint: ${url} — ${list.length} entries`);
-            // Save discovered endpoint for future use
-            remittanceData.autoEndpoint = url;
-            // Process entries same way as upload
-            let matched = 0;
-            let diskMeta = {};
-            try { if (fs.existsSync(META_PATH)) diskMeta = JSON.parse(fs.readFileSync(META_PATH,'utf8')); } catch(e) {}
-            const accountingEntries=[];
-            list.forEach(row => {
-              const awb = String(row.awb_code||row.awb||row.tracking_number||row.waybill||'').trim();
-              const amt = parseFloat(row.amount||row.cod_amount||row.remittance_amount||0);
-              const dt  = normalizeVelocitySettlementDate(row.date||row.credit_date||row.remittance_date);
-              const utr = String(row.utr||row.transaction_id||row.reference||'').trim();
-              if (!awb) return;
-              const order = ordersCache.orders.find(o => (o.fulfillments||[]).some(f=>(f.tracking_number||'').trim()===awb));
-              accountingEntries.push({awb,amount:amt,date:dt,utr,ordRef:String(row.order_id||row.order||row.reference||'').trim(),status:String(row.status||'settled'),orderId:order&&String(order.id)||'',orderNumber:order&&String(order.order_number||order.orderNumber||order.name||'')||'',raw:row});
-              if (order) {
-                if (!diskMeta[order.id]) diskMeta[order.id]={};
-                Object.assign(diskMeta[order.id], { settlementStatus:'settled', settlementAmount:amt||diskMeta[order.id].settlementAmount, settlementDate:dt||diskMeta[order.id].settlementDate, settlementUTR:utr||diskMeta[order.id].settlementUTR, customerPayment:'paid' });
-                matched++;
-              }
-            });
-            remittanceData.entries=accountingEntries;
-            remittanceData.lastImport=new Date().toISOString();
-            if (matched) { atomicWrite(META_PATH, JSON.stringify(diskMeta,null,2)); console.log(`[remittance] Auto-settled ${matched} orders`); }
-            saveRemittance();
-            return; // found working endpoint, stop trying
-          }
-        } catch(e) { /* try next */ }
-      }
-    } catch(e) { console.log('[remittance] Auto-sync skipped:', e.message); }
+    if (!VELOCITY_API_KEY) return;
+    try { const result=await require('./modules/orders').syncFinance(); console.log('[velocity-finance] Checked '+result.checked+' AWBs; '+result.reportedSettled+' provider-reported payouts'); }
+    catch(e) { console.log('[velocity-finance] Sync unavailable: '+e.message); }
   }
   setInterval(autoSyncRemittance, 6 * 60 * 60 * 1000); // every 6 hours
   setTimeout(autoSyncRemittance, 30 * 1000); // also try 30s after startup
