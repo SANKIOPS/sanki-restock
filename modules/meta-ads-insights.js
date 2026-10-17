@@ -39,8 +39,8 @@ function insights(state,selectedPeriod) {
     if(r.spend===null||r.spend===undefined)missingSpend=true;else spend+=r.spend;
     const ad=state.ads.find(a=>a.id===r.adId),set=state.adSets.find(s=>s.id===r.adSetId);if(!ad||!set)continue;
     const goal=r.reportGoal||set.performanceGoal,destination=r.reportDestination||set.destination;
-    const metric=destination==='WhatsApp'?'messagingStarts':/PROFILE_VISIT/i.test(goal||'')?'profileVisits':/PURCHASE/i.test((goal||'')+' '+(r.resultIndicator||''))?'metaPurchases':/REACH/i.test(goal||'')?'reach':null;
-    const label={messagingStarts:'WhatsApp enquiries',profileVisits:'Profile visits',metaPurchases:'Website sales',reach:'Store awareness'}[metric]||'Other';
+    const metric=destination==='WhatsApp'?'messagingStarts':/PROFILE_VISIT/i.test(goal||'')?'profileVisits':/PURCHASE/i.test((goal||'')+' '+(r.resultIndicator||''))?'metaPurchases':/REACH/i.test(goal||'')?'reach':/LINK_CLICKS/i.test(goal||'')?'linkClicks':null;
+    const label={messagingStarts:'WhatsApp enquiries',profileVisits:'Profile visits',metaPurchases:'Website sales',reach:'Store awareness',linkClicks:'Link clicks'}[metric]||'Other';
     const costFactor=metric==='reach'?1000:1;
     const count=metric?r[metric]:null,cost=count>0&&r.spend!=null?r.spend/count*costFactor:null;
     const prior=reports.filter(x=>x.adId===r.adId&&x.periodEnd<r.periodStart&&duration(x)===duration(r)&&x.attributionSetting===r.attributionSetting&&(x.reportGoal||goal)===goal).sort((a,b)=>b.periodEnd.localeCompare(a.periodEnd))[0];

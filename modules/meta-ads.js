@@ -368,9 +368,9 @@ function createStore(options = {}) {
         for(const field of changed)state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:record.id,field,before:previous?.[field]??null,after:record[field],action:previous?'update':'create',reason:'Meta configuration upload',revision:state.revision+1});
       }
       const includedCampaigns=new Set(records.campaigns.map(r=>remap.get(r.id)||r.id)),includedSets=new Set(records.adSets.map(r=>remap.get(r.id)||r.id)),includedAds=new Set(records.ads.map(r=>remap.get(r.id)||r.id));
-      const missingSets=options.level==='campaigns'?[]:original.adSets.filter(r=>!r.archived&&includedCampaigns.has(r.campaignId)&&!includedSets.has(r.id));
+      const missingSets=options.level?[]:original.adSets.filter(r=>!r.archived&&includedCampaigns.has(r.campaignId)&&!includedSets.has(r.id));
       const missingSetIds=new Set(missingSets.map(r=>r.id));
-      const missing=missingSets.map(r=>({type:'adSets',id:r.id,name:r.name})).concat(original.ads.filter(r=>!r.archived&&includedSets.has(r.adSetId)&&!missingSetIds.has(r.adSetId)&&!includedAds.has(r.id)).map(r=>({type:'ads',id:r.id,name:r.name})));
+      const missing=missingSets.map(r=>({type:'adSets',id:r.id,name:r.name})).concat((options.level?[]:original.ads).filter(r=>!r.archived&&includedSets.has(r.adSetId)&&!missingSetIds.has(r.adSetId)&&!includedAds.has(r.id)).map(r=>({type:'ads',id:r.id,name:r.name})));
       const decisions=options.decisions||[];
       if(!Array.isArray(decisions))fail('Missing-record decisions must be a list.');
       if(!preview&&missing.some(r=>!decisions.some(d=>d.type===r.type&&d.id===r.id&&['keep','remove'].includes(d.action))))fail('Review each missing record: keep existing or mark removed.');
@@ -384,18 +384,20 @@ function createStore(options = {}) {
       return {counts,revision:state.revision,review,missing};
     });
   }
-  function importPerformance(rows,revision,actor,preview=false) {
+  function importPerformance(rows,revision,actor,preview=false,ensureHierarchy=false) {
     return locked(()=>{
       const state=loadUnlocked();
       if(!Number.isSafeInteger(revision)||revision!==state.revision)fail('Records changed. Preview the performance file again.',409);
       const counts={created:0,updated:0,unchanged:0}, now=clock(), report=[];
       const match=(type,meta)=>state[type].find(x=>x.id===meta||x.metaSourceId===meta);
+      const hierarchy=[];
       for(const row of rows){
+        if(ensureHierarchy){for(const [type,id,name,parent] of [['campaigns',row.campaignMetaId,row.campaignName,{}],['adSets',row.setMetaId,row.setName,{campaignId:match('campaigns',row.campaignMetaId)?.id||row.campaignMetaId}],['ads',row.adMetaId,row.adName,{adSetId:match('adSets',row.setMetaId)?.id||row.setMetaId}]]){if(match(type,id))continue;if(!name)fail('Include campaign, ad-set and ad names to record new hierarchy from this report.');const record=normalizeRecord(type,{id,metaSourceId:id,name,...parent});Object.assign(record,{createdAt:now,createdBy:actor,updatedAt:now,updatedBy:actor});state[type].push(record);hierarchy.push({type,id,name});state.changes.unshift({id:crypto.randomUUID(),at:now,actor,entityType:ENTITY[type],entityId:id,field:'record',before:null,after:record,action:'create',reason:'New record identified by Meta performance export; setup incomplete',revision:state.revision+1});}}
         const campaign=match('campaigns',row.campaignMetaId),set=match('adSets',row.setMetaId),ad=match('ads',row.adMetaId);
         if(!campaign||!set||!ad)fail(`Upload campaign setup first: ${row.adName||row.adMetaId} is not linked to an imported ad.`,400);
         if(set.campaignId!==campaign.id||ad.adSetId!==set.id)fail('Report IDs do not match the saved campaign hierarchy. Upload the latest setup first.');
         const index=state.results.findIndex(x=>x.adId===ad.id&&x.periodStart===row.record.periodStart&&x.periodEnd===row.record.periodEnd),previous=index<0?null:state.results[index];
-        const payload={...row.record,archived:false,reportGoal:previous?.reportGoal||set.performanceGoal,reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'period-'+row.adMetaId+'-'+row.record.periodStart+'-'+row.record.periodEnd,adId:ad.id,adSetId:set.id};
+        const payload={...row.record,archived:false,reportGoal:previous?.reportGoal||set.performanceGoal||({profile_visit_view:'PROFILE_VISIT',reach:'REACH','actions:link_click':'LINK_CLICKS','actions:offsite_conversion.fb_pixel_purchase':'PURCHASE'}[row.record.resultIndicator]||''),reportDestination:previous?.reportDestination||set.destination,id:previous?.id||'period-'+row.adMetaId+'-'+row.record.periodStart+'-'+row.record.periodEnd,adId:ad.id,adSetId:set.id};
         const record=normalizeRecord('results',payload,previous), changed=Object.keys(payload).filter(k=>JSON.stringify(previous?.[k])!==JSON.stringify(record[k]));
         report.push({ad:ad.name,adSet:set.name,date:record.periodStart,periodStart:record.periodStart,periodEnd:record.periodEnd,spend:record.spend,action:!changed.length?'unchanged':previous?'updated':'new'});
         if(!changed.length){counts.unchanged++;continue;}counts[previous?'updated':'created']++;
@@ -405,7 +407,7 @@ function createStore(options = {}) {
       }
       validateRelationships(state);
       if(!preview&&(counts.created||counts.updated)){state.revision++;save(state);}
-      return {counts,revision:state.revision,report};
+      return {counts,revision:state.revision,report,hierarchy};
     });
   }
   function bulk(body,actor){
@@ -467,19 +469,24 @@ function createRouter(store = createStore()) {
       res.json({success:true,...store.importPerformance(rows,Number(req.body.revision),req.user.username,req.body.preview==='true')});
     }catch(e){sendError(e,res);}
   }));
-  router.post(`${BASE}/import-setup`, (req,res) => upload(req,res,error => {
+  router.post([`${BASE}/import-setup`,`${BASE}/import-meta`], (req,res) => upload(req,res,error => {
     if(error)return res.status(400).json({success:false,error:'Upload one CSV or XLSX file below 5 MB.'});
     try {
       if(!req.file || !/\.(csv|xlsx)$/i.test(req.file.originalname))fail('Choose a Meta configuration CSV or XLSX export.');
+      let detected;try{detected=require('./meta-ads-file-type').detectExport(req.file.buffer);}catch(e){fail(e.message);}
+      if(req.path.endsWith('/import-meta')&&req.body.purpose!=='setup'&&detected.kind==='performance'){
+        const preview=req.body.preview==='true';if(!preview&&req.body.confirmed!=='true')fail('Confirm the preview before saving.');let rows;try{rows=require('./meta-ads-performance').parsePerformance(req.file.buffer);}catch(e){fail(e.message);}const result=store.importPerformance(rows,Number(req.body.revision),req.user.username,preview,true);return res.json({success:true,kind:'performance',detected:detected.label,...result});
+      }
+      if(req.body.purpose==='performance'&&detected.kind!=='performance')fail('This is a '+detected.label+'. It can update setup, but ad-level performance needs Ad ID, Ad set ID, reporting dates, Amount spent (INR), Impressions and Reach. Choose Auto or Setup to import the supplied records.');
       let parsed;try{parsed=require('./meta-ads-import').parseSetup(req.file.buffer);}catch(e){fail(e.message);}
-      const campaignChoices=parsed.level==='campaigns'?parsed.records.campaigns.map(r=>({id:r.id,name:r.name,status:r.status})):[];
-      if(parsed.level==='campaigns'&&req.body.campaignIds){let ids;try{ids=JSON.parse(req.body.campaignIds);}catch{fail('Invalid campaign selection.');}if(!Array.isArray(ids)||!ids.length||ids.some(id=>!campaignChoices.some(c=>c.id===id)))fail('Select at least one campaign from this file.');parsed.records.campaigns=parsed.records.campaigns.filter(r=>ids.includes(r.id));}
+      const campaignChoices=parsed.level?parsed.records.campaigns.map(r=>({id:r.id,name:r.name,status:r.status})):[];
+      if(parsed.level&&req.body.campaignIds){let ids;try{ids=JSON.parse(req.body.campaignIds);}catch{fail('Invalid campaign selection.');}if(!Array.isArray(ids)||!ids.length||ids.some(id=>!campaignChoices.some(c=>c.id===id)))fail('Select at least one campaign from this file.');parsed.records.campaigns=parsed.records.campaigns.filter(r=>ids.includes(r.id));parsed.records.adSets=parsed.records.adSets.filter(r=>ids.includes(r.campaignId));const setIds=new Set(parsed.records.adSets.map(r=>r.id));parsed.records.ads=parsed.records.ads.filter(r=>setIds.has(r.adSetId));}
       const preview=req.body.preview==='true';
-      if(!preview&&parsed.level==='campaigns'&&!req.body.campaignIds)fail('Choose campaigns and preview the selected campaigns before saving.');
+      if(!preview&&parsed.level&&!req.body.campaignIds)fail('Choose campaigns and preview the selected campaigns before saving.');
       if(!preview&&req.body.confirmed!=='true')fail('Confirm the reviewed setup changes before saving.');
       let decisions=[];try{decisions=JSON.parse(req.body.decisions||'[]');}catch{fail('Invalid missing-record decisions.');}
       const result=store.importSetup(parsed.records,Number(req.body.revision),req.user.username,preview,{completeCampaigns:req.body.completeCampaigns==='true',decisions,level:parsed.level});
-      res.json({success:true,...result,...(preview?{...parsed,campaignChoices}:{})});
+      res.json({success:true,kind:'setup',detected:detected.label,...result,...(preview?{...parsed,campaignChoices}:{})});
     }catch(e){sendError(e,res);}
   }));
   router.use(BASE, express.json({ limit: '128kb' }));
