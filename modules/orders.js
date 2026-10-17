@@ -488,6 +488,7 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const payoutFile=path.join(path.dirname(ORDERS_PATH),'velocity_payout_evidence.json');
     const payoutState=require('./velocity-payout-sync').read(payoutFile);
     require('./order-money-journey').attach(orders,accounting,online.rows||[],payoutState.batches||[]);
+    require('./order-pos-settlements').attach(orders,accounting,require('./expenses').paytmOrderSettlementEvidence(accounting));
     const velocityPayouts=require('./velocity-payout-sync').status(payoutFile);
     res.json({ success: true, orders, sources: { velocityPayouts, gokwikApi:gokwikApiStatus, velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
   } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }

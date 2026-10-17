@@ -6082,3 +6082,6 @@ module.exports.applyReviewedBankDates = applyReviewedBankDates;
 module.exports.selectIndusIndMobileCandidates = selectIndusIndMobileCandidates;
 module.exports.bankReversalPairCandidates = bankReversalPairCandidates;
 module.exports.reconciliationDecisionConflicts = reconciliationDecisionConflicts;
+
+// The order portal shares the same validated payout status as accounting.
+module.exports.paytmOrderSettlementEvidence=s=>paytmReportView(s).payouts;
