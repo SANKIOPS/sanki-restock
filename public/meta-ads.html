@@ -11,12 +11,12 @@
 <main>
   <header class="page-header">
     <div><a class="back-to-app" href="/dashboard.html">← Main app</a><p class="eyebrow">SANKI · MARKETING</p><h1 id="pageTitle">Campaigns</h1><p class="muted">Meta Marketing · SANKI account records</p></div>
-    <div class="actions"><button id="refresh">↻ Refresh records</button><button id="openUpload">Upload campaign setup</button><button id="openPerformance" class="primary">Upload performance</button></div>
+    <div class="actions"><button id="refresh">↻ Refresh records</button><button id="openUpload">Upload Meta export</button><button id="openPerformance" hidden class="primary">Upload performance</button></div>
   </header>
   <p class="record-note">Tracking records. Changes here do not publish ads or change settings in Meta.</p>
   <section id="uploadPanel" class="workspace upload-panel" aria-label="Import campaign setup" hidden>
-    <h2>Upload campaign setup</h2><p class="muted">Choose the configuration export from Meta. Preview it, then save campaigns, ad sets and creatives together.</p>
-    <input id="setupFile" type="file" accept=".csv,.xlsx" aria-label="Meta configuration file">
+    <h2>Upload Meta export</h2><p class="muted">Choose a Meta CSV or Excel export. The app detects its contents, reviews changes and tells you what is missing.</p><label>Use this file for<select id="importPurpose"><option value="auto">Auto-detect</option><option value="setup">Setup records only</option><option value="performance">Performance results</option></select></label>
+    <input id="setupFile" type="file" accept=".csv,.xlsx" aria-label="Meta export file">
     <button id="setupPreview" type="button">Preview upload</button>
     <div id="setupCampaignChoices"></div><div id="setupReview"></div><div id="setupSummary" role="status" style="white-space:pre-wrap"></div>
     <button id="setupSave" type="button" class="primary" hidden>Confirm changes and save</button>
