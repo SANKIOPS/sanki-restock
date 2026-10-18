@@ -111,7 +111,34 @@ Collections, Warnings and Policy. Print/Save PDF uses browser print.
 GET `/api/pl/report?from=YYYY-MM-DD&to=YYYY-MM-DD&channel=All`
 
 GET `/api/pl/report/export` with the same filters. Both use no-store caching,
-validate dates and refuse future end dates. No report write endpoint exists.
+validate dates and refuse future end dates. These report reads never modify
+source financial records.
+
+## P&L-only missing-item corrections
+
+The collapsed item-review panel can map an originally blank order-line SKU
+to a unique positive-cost Shopify SKU, record a verified custom-item per-unit
+COGS, or mark a shipping fee as requiring no inventory COGS. Shipping tax
+retains the source invoice evidence; no garment slab or zero tax is guessed
+when shipping evidence is missing. Refunds use the original annotated cost
+and tax allocation; shipping fees never create or return inventory.
+
+GET `/api/pl/report/line-corrections` lists exact source order/line identities
+within the selected accounting period. Admin and Owner can preview selected
+corrections via POST `/api/pl/report/line-corrections/preview` and then save
+via POST `/api/pl/report/line-corrections`. Accounting remains read-only.
+Existing authentication/page access gates remain in force. Preview and save
+validate original price, quantity and a fingerprint covering SKU, title,
+taxability, tax and discount. Source changes invalidate saved annotations
+rather than silently overriding changed orders. Source-SKU lines, duplicate
+targets, pre-boundary/undated orders, ambiguous Shopify SKUs, zero/invalid
+custom costs and missing reasons are rejected.
+
+Only `pnl-line-corrections.json` is written atomically alongside DATA_PATH.
+Every revision retains the actor, reason, timestamp and prior value. No
+Shopify order, invoice, stock, expense, payment or reconciliation store is
+edited. Business-specific corrections are private runtime data, never
+hardcoded into the public source repository.
 
 ## Verification / release
 
