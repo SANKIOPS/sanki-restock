@@ -3,6 +3,7 @@
 // Read-only management report. COGS follows the sold SKU; all other costs
 // follow actual approved payments. Never write to accounting/order stores.
 const purchaseCosts = require('../public/purchase-costs');
+const { velocityCompletion } = require('./pnl-delivery');
 const START = '2026-08-22';
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const money = value => Math.round((number(value) + Number.EPSILON) * 100) / 100;
@@ -49,13 +50,15 @@ function lineTax(line, taxesIncluded = true) {
   return { gross: money(base + (taxesIncluded ? 0 : calculated)), sourceGross: taxesIncluded ? money(base) : recorded === null ? null : money(base + recorded), tax: calculated, rate, recorded, calculated, difference: recorded === null ? null : money(calculated - recorded), status: 'P&L configured GST', valid: true };
 }
 
-function completion(order, dispatch = {}) {
+function completion(order, dispatch = {}, velocity = {}) {
   const explicit = day(order.completedAt || order.deliveredAt || dispatch.deliveredAt);
   if (explicit) return { date: explicit, evidence: 'Recorded completion date' };
   if (order.cancelledAt || ['cancelled', 'rto'].includes(dispatch.packingStatus)) return null;
   if (order.channel === 'POS' && ['paid', 'partially_refunded', 'refunded'].includes(order.financialStatus)) {
     return { date: day(order.processedAt || order.createdAt), evidence: 'Completed POS sale' };
   }
+  const carrier = velocityCompletion(order, dispatch, velocity);
+  if (carrier) return carrier;
   if (dispatch.packingStatus === 'delivered' || order.deliveryComplete) {
     return { date: '', evidence: 'Delivery date missing' };
   }
@@ -156,7 +159,7 @@ function buildReport(sources = {}, options = {}) {
   function queueSale(order, dispatch, source) {
     if (order.accountingExcluded || ['2720'].includes(String(order.number || order.orderNumber || '').replace(/^#/, ''))) return;
     const ch = channel(order.channel), id = source + '/' + order.id, reference = order.name || order.id;
-    const made = completion(order, dispatch);
+    const made = completion(order, dispatch, sources.velocity);
     const transactions = [...new Map((order.paymentTransactions || []).filter(t => ['sale', 'capture'].includes(t.kind) && t.status === 'success').map(t => [t.id || JSON.stringify(t), t])).values()];
     const paymentDetailsKnown = (transactions.length > 0 || order.financialStatus === 'pending') && transactions.every(t => day(t.processedAt));
     const periodPayments = transactions.filter(t => day(t.processedAt) && day(t.processedAt) <= to);
@@ -169,7 +172,7 @@ function buildReport(sources = {}, options = {}) {
     const refundedValue = money(list(order.refunds).filter(r => day(r.date || r.createdAt) && day(r.date || r.createdAt) <= to).reduce((sum, r) => sum + number(r.amount), 0));
     if (placed >= start && placed <= to) collections.push({ id, reference, date: completedInTime ? made.date : placed, channel: ch, orderValue: money(order.total), collected, cashRefunded, balanceToCollect: cancelledInTime ? 0 : collected === null ? null : money(Math.max(0, number(order.total) - refundedValue - collected + cashRefunded)), status: completedInTime ? 'Completed sale' : (cancelledInTime ? 'Cancelled / RTO' : 'Awaiting completion'), customerAdvance: collected === null ? null : (completedInTime ? 0 : money(Math.max(0, collected - cashRefunded))), payments: periodPayments.map(t => ({ id: t.id, date: day(t.processedAt), method: t.gateway, amount: money(t.amount) })), source });
     if (!made) return;
-    if (!made.date) { warning(reference, 'Delivery is marked complete but its actual date is missing. This sale is excluded until the source date is confirmed.', '', 'sales', ch); return; }
+    if (!made.date) { warning(reference, made.issue || 'Delivery is marked complete but its actual date is missing. This sale is excluded until the source date is confirmed.', '', 'sales', ch); return; }
     if (made.date < start || made.date > to) return;
     tasks.push({ date: made.date, sort: 1, id, run() {
       const lines = order.lineItems || [], taxesIncluded = order.taxesIncluded !== false;
@@ -203,7 +206,7 @@ function buildReport(sources = {}, options = {}) {
         taxComplete = false; warning(reference, 'Line values, discounts, shipping and invoice total do not reconcile. Review the source invoice.', made.date, 'gst', ch);
       }
       const reportGross = taxesIncluded ? number(order.total) : money(billed);
-      add(row({ id, date: made.date, kind: 'sale', category: ch + ' sales', channel: ch, particulars: order.customer?.name || 'Completed sale', reference, source, sourceInvoiceTotal: money(order.total), grossSales: money(reportGross + number(order.discount)), discounts: money(order.discount), gst: money(gst), netSales: taxComplete ? money(reportGross - gst) : null, cogs: money(cost), taxComplete, costComplete, details: detail }));
+      add(row({ id, date: made.date, kind: 'sale', category: ch + ' sales', channel: ch, particulars: order.customer?.name || 'Completed sale', reference, source, completionEvidence: made.evidence, deliveryAwbs: made.awbs || [], sourceInvoiceTotal: money(order.total), grossSales: money(reportGross + number(order.discount)), discounts: money(order.discount), gst: money(gst), netSales: taxComplete ? money(reportGross - gst) : null, cogs: money(cost), taxComplete, costComplete, details: detail }));
     } });
     const refunds = list(order.refunds);
     if (!refunds.length && (order.refundTransactions || []).length) {

@@ -9,11 +9,12 @@ function loadSources(directory, env = process.env) {
   const feeds = [];
   const record = value => value && typeof value === 'object' && !Array.isArray(value);
   const collection = value => Array.isArray(value) || record(value);
+  const orderDirectory = path.dirname(env.ORDERS_PATH || path.join(directory, 'orders.json'));
   function read(name, file, empty, required = true, validate = record) {
     try {
       const value = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (!record(value) || !validate(value)) throw Error('Invalid store');
-      feeds.push({ name, status: 'ready', required, updatedAt: value.sync?.lastSyncedAt || null });
+      feeds.push({ name, status: 'ready', required, updatedAt: value.sync?.lastSyncedAt || value.lastSync || value.at || null, error: value.error || null });
       return value;
     } catch (error) {
       feeds.push({ name, status: error.code === 'ENOENT' ? 'missing' : 'unreadable', required });
@@ -29,6 +30,11 @@ function loadSources(directory, env = process.env) {
     manualSales: read('Manual sales', env.SALES_PATH || path.join(directory, 'sales.json'), {}, false, v => Array.isArray(v.sales)),
     opening: read('Verified opening SKU costs', path.join(directory, 'pnl-opening-inventory.json'), {}, false, v => Array.isArray(v.lots)),
     shopifyCosts: read('Shopify Cost per item', env.INVENTORY_SNAPSHOT_PATH || path.join(directory, 'inventory-snapshot.json'), { items: [] }, false, v => Number.isFinite(Date.parse(v.at)) && Array.isArray(v.items)),
+    velocity: {
+      index: read('Velocity automatic shipment discovery', path.join(orderDirectory, 'velocity_order_index.json'), {}, false, v => record(v.byOrder) && record(v.shipments)),
+      tracking: read('Velocity carrier tracking', path.join(orderDirectory, 'velocity_tracking_evidence.json'), {}, false, v => record(v.shipments)),
+      cache: read('Velocity tracking cache', path.join(orderDirectory, 'velocity_cache.json'), {}, false, v => record(v.shipments))
+    },
     feeds
   };
 }
