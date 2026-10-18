@@ -548,8 +548,38 @@ test('Owner personal account advance debits PERSONAL ledger and employee advance
   const ledger=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'PERSONAL',account:'ICICI Bank 0992'}});
   assert.equal(ledger.success,true);assert.equal(ledger.entries.filter(x=>x.id===posted.advance.id&&x.debit===777).length,1);
   assert.equal(telegramApi('POST','/api/salary/advances',owner,{entity:'SANKI',body}).status,409);
-  const admin=invoke('POST','/api/salary/advances',{role:'admin',body:{...body,date:'2099-07-15'}});
-  assert.equal(admin.status,400,'staff cannot use Owner personal accounts for advances');
+  const admin=invoke('POST','/api/salary/advances',{role:'admin',body:{...body,date:'2099-07-15',account:'ICICI Bank 0993'}});
+  assert.equal(admin.status,400,'staff cannot use unapproved Owner personal accounts for advances');
+});
+
+test('Admin can request a salary advance from Sir personal 0992 and it stays in the PERSONAL ledger',()=>{
+  const owner={username:'gaganlambasanki',roles:['owner']};
+  const emp=invoke('POST','/api/salary/employees',{body:{name:'Admin Personal Advance Employee',salary:15000}}).body.employee;
+  const options=invoke('GET','/api/salary/employees',{role:'admin',username:'prashant'}).body.advancePayingAccounts;
+  assert.deepEqual(options.filter(x=>x.nature==='PERSONAL'),[{name:'ICICI Bank 0992',nature:'PERSONAL'}]);
+  const requested=invoke('POST','/api/salary/advances',{role:'admin',username:'prashant',body:{empId:emp.id,amount:1200,date:'2099-07-16',account:'ICICI Bank 0992',payingNature:'PERSONAL',proofs:['/api/expenses/photo/admin-personal-advance.jpg']}});
+  assert.equal(requested.status,200);assert.equal(requested.body.request.payingNature,'PERSONAL');
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id:requested.body.request.id},role:'owner'}).status,200);
+  const posted=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id:requested.body.request.id},body:{payoutDate:'2099-07-16'},role:'admin',username:'prashant'});
+  assert.equal(posted.status,200);assert.equal(posted.body.advance.payingNature,'PERSONAL');
+  const expenses=require('../modules/expenses');
+  const personal=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'PERSONAL',account:'ICICI Bank 0992'}});
+  assert.equal(personal.entries.filter(x=>x.id===posted.body.advance.id&&x.debit===1200).length,1);
+  const sanki=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'SANKI',account:'ICICI Bank 0992'}});
+  assert.equal((sanki.entries||[]).filter(x=>x.id===posted.body.advance.id).length,0);
+  assert.deepEqual(invoke('GET','/api/salary/employees',{role:'accounting',username:'accountant'}).body.advancePayingAccounts.filter(x=>x.nature==='PERSONAL'),[]);
+  assert.equal(invoke('POST','/api/salary/advances',{role:'admin',username:'prashant',body:{empId:emp.id,amount:100,date:'2099-07-17',account:'ICICI Bank 0992'}}).status,400,'omitting PERSONAL nature must not reclassify 0992 as SANKI');
+  assert.equal(invoke('POST','/api/salary/advances',{role:'admin',username:'prashant',body:{empId:emp.id,amount:100,date:'2099-07-17',account:'Gagan Personal Cash',payingNature:'PERSONAL'}}).status,400);
+  assert.equal(invoke('PATCH','/api/salary/advances/:id',{params:{id:posted.body.advance.id},role:'admin',username:'prashant',body:{amount:1200,date:'2099-07-16',account:'Axis Bank 3448',payingNature:'PERSONAL',reason:'Invalid cross-entity edit'}}).status,400);
+  assert.equal(invoke('PATCH','/api/salary/advances/:id',{params:{id:posted.body.advance.id},role:'owner',body:{amount:1200,date:'2099-07-16',account:'Axis Bank 3448',payingNature:'SANKI',reason:'Invalid nature edit'}}).status,400);
+  assert.equal(invoke('POST','/api/salary/payments/batch',{role:'admin',username:'prashant',body:{ym:'2099-07',date:'2099-07-31',account:'ICICI Bank 0992',proof:'/salary.jpg',items:[{empId:emp.id,amount:100}]}}).status,400,'the personal source is limited to advances');
+  const salaryHtml=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8'),expensesHtml=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(salaryHtml,/value=x\.nature\+'\|'\+x\.name/);assert.match(salaryHtml,/separator=selected\.indexOf\('\|'\)/);
+  assert.match(salaryHtml,/uploadProof\(file,payingNature\)/,'direct personal advances must upload proofs with PERSONAL privacy');
+  assert.match(salaryHtml,/uploadProof\(file,proofNature\)/,'approved personal advance requests must preserve proof privacy when posted');
+  assert.match(salaryHtml,/fd\.append\('purpose','salary_advance'\)/,'PERSONAL salary-advance uploads must be bound to their workflow');
+  assert.match(expensesHtml,/d\.advancePayingAccounts/);assert.match(expensesHtml,/payingNature:payingNature/);
+  assert.match(expensesHtml,/uploadFiles\(files,payingNature,'salary_advance'\)/,'the expense-side salary advance form must bind proofs to the selected nature and workflow');
 });
 
 test('Owner can give an advance from every configured company bank or cash account',()=>{
@@ -567,7 +597,8 @@ test('Owner can give an advance from every configured company bank or cash accou
   const ledger=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'SAMAST',account:'Kirti Nagar Cash'}});
   assert.equal(ledger.entries.filter(x=>x.id===posted.advance.id&&x.debit===888).length,1);
   const staffOptions=invoke('GET','/api/salary/employees',{role:'admin',username:'prashant'}).body.advancePayingAccounts;
-  assert.ok(!staffOptions.some(x=>x.name==='Tiana 0425'||x.nature!=='SANKI'));
+  assert.ok(!staffOptions.some(x=>x.name==='Tiana 0425'));
+  assert.deepEqual(staffOptions.filter(x=>x.nature==='PERSONAL'),[{name:'ICICI Bank 0992',nature:'PERSONAL'}]);
   assert.equal(invoke('POST','/api/salary/advances',{role:'admin',username:'prashant',body:{empId:emp.id,amount:100,date:'2099-07-21',account:'Tiana 0425',payingNature:'SANKI'}}).status,400);
   const html=fs.readFileSync(path.join(__dirname,'..','public','salary.html'),'utf8');
   assert.match(html,/x\.nature\+'\|'\+x\.name/);assert.match(html,/payingNature=separator>0/);
