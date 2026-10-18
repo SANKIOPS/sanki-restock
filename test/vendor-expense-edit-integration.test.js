@@ -148,6 +148,7 @@ test('bank mismatch correction cannot bypass an expense payment lock but retains
   const code=fs.readFileSync(path.join(__dirname,'../modules/expenses.js'),'utf8'),start=code.indexOf('function correctLedgerMovementAmount('),end=code.indexOf('function setLedgerMovementExcluded(',start);
   assert.ok(start>=0&&end>start,'extract the actual amount-correction helper');
   const correct=require('node:vm').runInNewContext(code.slice(start,end)+'\ncorrectLedgerMovementAmount;',{
+    transferReimbursements:require('../modules/transfer-reimbursement-links'),gokwikAccounting:require('../modules/gokwik-accounting'),
     num:value=>Number(value)||0,expenseLoans:{protectsMovement:()=>false},expenseRefunds:{protectsMovement:()=>false},
     expenseFinancialLock:require('../modules/expense-financial-lock').expenseFinancialLock,unpayBlockedReferences:()=>new Set()
   });
@@ -163,5 +164,16 @@ test('bank mismatch correction cannot bypass an expense payment lock but retains
       assert.equal(out.financialFieldsLocked,true);assert.match(out.error,/locked for every role/i);assert.equal(JSON.stringify(s),before,'lock detection and rejection are read-only');
       const same=correct(s,reference,200);assert.equal(same.error,undefined);assert.equal(payment.amount,200,'a no-change amount does not manufacture a correction');
     }
+  }
+  // Exercise the real newly imported guards as well as ordinary bank/cash
+  // locks, so a permissive replacement stub cannot make this harness pass.
+  for(const source of ['transfer_reimbursement','gokwik_posting']){
+    const {id}=seed({locked:false,personal:source==='transfer_reimbursement'}),s=read();
+    const reference=id+'/'+(source==='transfer_reimbursement'?'REIM-001':'PAY-001');
+    if(source==='transfer_reimbursement')s.expenses[id].reimbursementPayments[0].settledByTransferId='TR-ALLOCATION';
+    else s.gokwikPostings={'GK-APPROVED':{transferId:'TR-GOKWIK',expenseIds:[id]}};
+    const before=JSON.stringify(s),out=correct(s,reference,225);
+    assert.match(out.error,source==='transfer_reimbursement'?/allocated to a reimbursement/:/approved GoKwik settlement/);
+    assert.equal(JSON.stringify(s),before,'protected allocation/settlement remains byte-identical: '+source);
   }
 });

@@ -17,8 +17,8 @@ function invoke(method,route,{body={},query={},params={},role='admin',username='
 }
 function reset(extra={}){const s=JSON.parse(JSON.stringify(baseline));Object.assign(s,{expenses:{},receivables:{},receipts:[],receiptSeq:0,loanRepayments:[],loanRepaymentSeq:0,transfers:[],adjustments:[],vendorAdvances:[],bankStatements:{},bankDateOverrides:{},bankReconciliationDrafts:{},reconciliationExpenses:[],salesRefunds:[],openingBalances:{[account]:0},restrictedFunds:[],auditLog:[]},extra);fs.writeFileSync(file,JSON.stringify(s));return s;}
 function store(){return JSON.parse(fs.readFileSync(file,'utf8'));}
-function borrow(changes={},role='admin'){return invoke('POST','/api/expenses/receipts',{role,body:{nature:'SANKI',account,receiptType:loans.TYPE,amount:500000,source:'Example Company',date:day,reference:'RTGS-DEMO-500K',note:'Temporary loan to be returned',proof:'/api/expenses/proof/loan.jpg',requestId:'loan-test-request-1',loanTerms:{lenderKind:'company',dueDate:'2098-11-10',lenderReference:'DEMO-AGREEMENT'},...changes}});}
-function repay(id,changes={},role='admin'){return invoke('POST','/api/expenses/loans/:id/repay',{params:{id},role,body:{amount:100000,account,date:'2098-10-11',reference:'PAY-DEMO-100K',note:'First principal instalment',proof:'/api/expenses/proof/payment.jpg',requestId:'repay-test-request-1',...changes}});}
+function borrow(changes={},role='admin',username='prashant'){return invoke('POST','/api/expenses/receipts',{role,username,body:{nature:'SANKI',account,receiptType:loans.TYPE,amount:500000,source:'Example Company',date:day,reference:'RTGS-DEMO-500K',note:'Temporary loan to be returned',proof:'/api/expenses/proof/loan.jpg',requestId:'loan-test-request-1',loanTerms:{lenderKind:'company',dueDate:'2098-11-10',lenderReference:'DEMO-AGREEMENT'},...changes}});}
+function repay(id,changes={},role='admin',username='prashant'){return invoke('POST','/api/expenses/loans/:id/repay',{params:{id},role,username,body:{amount:100000,account,date:'2098-10-11',reference:'PAY-DEMO-100K',note:'First principal instalment',proof:'/api/expenses/proof/payment.jpg',requestId:'repay-test-request-1',...changes}});}
 function position(asOf='2098-12-31',nature='SANKI',role='owner'){return invoke('GET','/api/expenses/balance-sheet',{role,query:{nature,asOf}}).body;}
 function throughRouter(method,url,body,role='owner'){
   return new Promise((resolve,reject)=>{const req={method,path:url,url,originalUrl:url,baseUrl:'',body,query:{},headers:{},get(){return '';},user:{username:role==='admin'?'prashant':'loan-test-owner',role,roles:[role]}};let status=200,done=false;const headers={},finish=value=>{if(!done){done=true;resolve({status,body:value});}},res={headersSent:false,statusCode:200,status(n){status=n;this.statusCode=n;return this;},setHeader(k,v){headers[k]=v;},getHeader(k){return headers[k];},removeHeader(k){delete headers[k];},json(v){this.headersSent=true;finish(v);return this;},send(v){this.headersSent=true;finish(v);return this;},end(v){this.headersSent=true;finish(v);return this;}};router.handle(req,res,e=>e?reject(e):finish(undefined));});
@@ -62,9 +62,40 @@ test('overpayment, backdating, missing proof and invalid currency never mutate l
   assert.equal(repay(l.id).status,200);assert.equal(repay(l.id,{amount:450000,date:day,requestId:'repay-backdated-request',reference:'PAY-BACKDATED'}).status,400,'later payments remain counted when validating a backdated repayment');
 });
 test('permissions keep private entities/accounts and unrelated receipt privileges unchanged',()=>{
-  reset();assert.equal(borrow({},'claimant').status,403);assert.equal(borrow({receiptType:'other_income'},'admin').status,403);assert.equal(borrow({nature:'PERSONAL'},'admin').status,403);assert.equal(borrow({account:'Services'},'admin').status,403);const l=borrow().body.receipt;
-  assert.equal(repay(l.id,{},'claimant').status,403);assert.equal(invoke('GET','/api/expenses/loans',{role:'claimant'}).status,403);assert.equal(invoke('GET','/api/expenses/loans',{query:{nature:'PERSONAL'}}).status,403);assert.equal(repay(l.id,{account:'Services'}).status,403);
+  reset();assert.equal(borrow({},'claimant').status,403);assert.equal(borrow({receiptType:'other_income'},'admin').status,403);assert.equal(borrow({nature:'PERSONAL'},'admin').status,403);assert.equal(borrow({account:'Services'},'admin','another-admin').status,403);const l=borrow().body.receipt;
+  assert.equal(repay(l.id,{},'claimant').status,403);assert.equal(invoke('GET','/api/expenses/loans',{role:'claimant'}).status,403);assert.equal(invoke('GET','/api/expenses/loans',{query:{nature:'PERSONAL'}}).status,403);assert.equal(repay(l.id,{account:'Services'},'admin','another-admin').status,403);
   const privateLoan=borrow({nature:'PERSONAL',account:'ICICI Bank 0992',reference:'PRIVATE-LOAN',requestId:'private-loan-request'},'owner');assert.equal(privateLoan.status,200,JSON.stringify(privateLoan));const listed=invoke('GET','/api/expenses/loans',{query:{asOf:'2098-12-31'}}).body;assert.equal(listed.loans.length,1);assert.equal(position('2098-12-31','','admin').liabilities.loanDetails.length,1);
+});
+
+test('Prashant can record and review Services loan evidence without gaining PERSONAL access',()=>{
+  reset();const before=position();
+  const received=borrow({account:'Services',reference:'SERVICES-LOAN-RECEIPT',note:'Services borrowed principal',proof:'/services-loan-proof.jpg'},'admin','prashant');
+  assert.equal(received.status,200,JSON.stringify(received));const loan=received.body.receipt;
+  assert.equal(loan.account,'Services');assert.equal(loan.bankReference,'SERVICES-LOAN-RECEIPT');assert.equal(loan.proof,'/services-loan-proof.jpg');
+  const paid=repay(loan.id,{account:'Services',reference:'SERVICES-LOAN-REPAYMENT',note:'Services principal instalment',proof:'/services-repayment-proof.jpg'},'admin','prashant');
+  assert.equal(paid.status,200,JSON.stringify(paid));assert.equal(paid.body.position.outstanding,400000);
+  assert.equal(paid.body.repayment.account,'Services');assert.equal(paid.body.repayment.loanId,loan.id);
+  assert.equal(position().liabilities.loans,400000);assert.equal(position().assets.bankAndCash-before.assets.bankAndCash,400000);assert.equal(position().equity.recordedNetPosition,before.equity.recordedNetPosition);
+  const ledger=invoke('GET','/api/expenses/account-ledger',{username:'prashant',query:{nature:'SANKI',account:'Services',from:day,to:'2098-12-31'}});
+  assert.equal(ledger.status,200);assert.equal(ledger.body.balance,400000);assert.equal(ledger.body.entries.filter(row=>row.id===loan.id).length,1);assert.equal(ledger.body.entries.filter(row=>row.id===paid.body.repayment.id).length,1);
+  const privateLoan=borrow({nature:'PERSONAL',account:'ICICI Bank 0992',source:'Owner private lender',reference:'PRIVATE-OWNER-LOAN',requestId:'private-owner-loan-request'},'owner','loan-test-owner');
+  assert.equal(privateLoan.status,200,JSON.stringify(privateLoan));
+  for(const route of ['/api/expenses/loans','/api/expenses/vendors','/api/expenses/pending-payments']){
+    const query={source:'loan',to:'2098-12-31',asOf:'2098-12-31'},visible=invoke('GET',route,{username:'prashant',query});
+    assert.equal(visible.status,200,JSON.stringify(visible));assert.equal(visible.body.loans.length,1);
+    const shown=visible.body.loans[0],payment=shown.payments[0];
+    assert.equal(shown.id,loan.id);assert.equal(shown.account,'Services');assert.equal(shown.bankReference,'SERVICES-LOAN-RECEIPT');assert.equal(shown.proof,'/services-loan-proof.jpg');
+    assert.equal(payment.account,'Services');assert.equal(payment.amount,100000);assert.equal(payment.bankReference,'SERVICES-LOAN-REPAYMENT');assert.equal(payment.note,'Services principal instalment');assert.equal(payment.proof,'/services-repayment-proof.jpg');
+    assert.equal(JSON.stringify(visible.body).includes('Owner private lender'),false);
+    assert.equal(invoke('GET',route,{username:'prashant',query:{...query,nature:'PERSONAL'}}).status,403);
+    const restricted=invoke('GET',route,{username:'another-admin',query});assert.equal(restricted.status,200);assert.equal(restricted.body.loans.length,0,'Services loan remains hidden from unrelated Admins');
+  }
+  const snapshot=store();
+  assert.equal(borrow({nature:'PERSONAL',account:'ICICI Bank 0992',reference:'PRASHANT-PRIVATE-DENIED',requestId:'prashant-private-denied'},'admin','prashant').status,403);
+  assert.equal(repay(privateLoan.body.receipt.id,{account:'Services',reference:'PRIVATE-REPAY-DENIED',requestId:'private-repay-denied'},'admin','prashant').status,403);
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{username:'another-admin',query:{nature:'SANKI',account:'Services',from:day,to:'2098-12-31'}}).status,403);
+  assert.deepEqual(store(),snapshot,'denied operations cannot mutate private principal or bank evidence');
+  const report=buildReport({expenses:store(),orders:{orders:{}},purchases:{},opening:{lots:[]},salary:{},manualSales:{},feeds:[]},{from:day,to:'2098-12-31'});assert.equal(report.totals.otherIncome,0);assert.equal(report.totals.expenses,0);
 });
 test('loan receipt from reconciliation uses authoritative evidence and consumes one ledger credit',()=>{
   reset();draft('BRD-LOAN',[{date:day,description:'RTGS Example Company repayable funds',reference:'RTGS-STATEMENT',debit:0,credit:500000,balance:500000}],0);
@@ -142,11 +173,11 @@ test('lender classification respects private entities and redacts restricted rep
   reset();const loan=borrow().body.receipt;
   assert.equal(repay(loan.id,{account:'Services',reference:'PRIVATE-PAYMENT',note:'Private account note',proof:'/private-proof.jpg'},'owner').status,200);
   assert.equal(borrow({nature:'PERSONAL',account:'ICICI Bank 0992',source:'Private Lender',reference:'PRIVATE-LOAN',requestId:'private-request'},'owner').status,200);
-  for(const route of ['/api/expenses/vendors','/api/expenses/pending-payments']){
-    const q={source:'loan',to:'2098-12-31'},r=invoke('GET',route,{query:q});assert.equal(r.status,200);assert.equal(r.body.loans.length,1);
+  for(const route of ['/api/expenses/loans','/api/expenses/vendors','/api/expenses/pending-payments']){
+    const q={source:'loan',to:'2098-12-31',asOf:'2098-12-31'},r=invoke('GET',route,{query:q,username:'another-admin'});assert.equal(r.status,200);assert.equal(r.body.loans.length,1);
     const payment=r.body.loans[0].payments[0];assert.equal(payment.account,'Owner-restricted account');assert.equal(payment.amount,100000);
     const json=JSON.stringify(r.body);for(const secret of ['PRIVATE-PAYMENT','Private account note','private-proof','Private Lender'])assert.equal(json.includes(secret),false,secret);
-    assert.equal(invoke('GET',route,{query:{...q,nature:'PERSONAL'}}).status,403);assert.equal(invoke('GET',route,{query:q,role:'claimant'}).status,403);
+    assert.equal(invoke('GET',route,{query:{...q,nature:'PERSONAL'},username:'another-admin'}).status,403);assert.equal(invoke('GET',route,{query:q,role:'claimant'}).status,403);
     const owner=invoke('GET',route,{query:q,role:'owner'}).body;assert.equal(owner.loans.length,2);
   }
 });
