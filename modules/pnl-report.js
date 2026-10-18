@@ -360,6 +360,8 @@ function buildReport(sources = {}, options = {}) {
   const manualReceipts = new Map();
   for (const receipt of list(books.receipts)) {
     if (!business(receipt.nature) || receipt.accountingExcluded || activeDraft(receipt)) continue;
+    const linkedRefundAmount=receivedRefunds.reduce((sum,refund)=>sum+(refund.date===receipt.date?(refund.components||[]).filter(c=>c.externalMovementId===receipt.id||c.receiptId===receipt.id).reduce((n,c)=>n+number(c.amount),0):0),0);
+    if(receipt.receiptType==='refund'&&number(receipt.amount)>0&&money(linkedRefundAmount)>=money(receipt.amount))continue;
     if (['bank_interest', 'other_income'].includes(receipt.receiptType)) add(row({ id: 'RECEIPT/' + receipt.id, date: day(receipt.date), kind: 'income', category: receipt.category || 'Other income', particulars: receipt.source || '', reference: receipt.id, account: receipt.account || '', proof: receipt.proof || '', source: 'Receipts', otherIncome: money(receipt.amount) }));
     else if (receipt.receiptType === 'product_sale' && !receipt.orderId && !receipt.shopifyOrderId) {
       const key = receipt.manualSaleId || receipt.id, group = manualReceipts.get(key) || []; group.push(receipt); manualReceipts.set(key, group);
