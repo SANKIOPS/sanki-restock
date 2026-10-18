@@ -2860,7 +2860,7 @@ app.listen(PORT, async () => {
   // Sales spine — keep the local Shopify-order ledger fresh. Backfills on
   // first run, then incremental every few minutes. Read-only; never writes
   // back to Shopify.
-  try { require('./modules/orders').startAutoSync(); }
+  try { require('./modules/orders').startAutoSync(); require('./modules/orders').startGoKwikSync(); }
   catch (e) { console.error('[orders] auto-sync start error:', e.message); }
 
   // Load caches from disk
@@ -2870,7 +2870,8 @@ app.listen(PORT, async () => {
   // Initial syncs on startup
   if (SHOPIFY_STORE && SHOPIFY_TOKEN) {
     console.log('[sync] Starting initial Shopify sync...');
-    await backgroundSync(SYNC_DAYS);
+    // Do not let a slow historical Shopify pull delay independent payment pollers.
+    backgroundSync(SYNC_DAYS).catch(e=>console.error('[sync] Initial Shopify sync failed: '+e.message));
   }
   if (hasVelocity) {
     console.log('[velocity] Starting initial Velocity sync...');
@@ -2894,8 +2895,12 @@ app.listen(PORT, async () => {
     try { const result=await require('./modules/orders').syncFinance(); console.log('[velocity-finance] Checked '+result.checked+' AWBs; '+result.reportedSettled+' provider-reported payouts'); }
     catch(e) { console.log('[velocity-finance] Sync unavailable: '+e.message); }
   }
-  setInterval(autoSyncRemittance, 6 * 60 * 60 * 1000); // every 6 hours
+  setInterval(autoSyncRemittance, 60 * 60 * 1000); // hourly
   setTimeout(autoSyncRemittance, 30 * 1000); // also try 30s after startup
+
+  const syncVelocityPayouts=()=>{if(!process.env.VELOCITY_MCP_ACCESS_TOKEN||!process.env.VELOCITY_MCP_UID)return;require('./modules/orders').syncVelocityPayouts().then(r=>console.log('[velocity-payouts] Synced '+r.batches+' batches; '+r.allocationIssues+' allocation issues')).catch(e=>console.error('[velocity-payouts] '+e.message));};
+  setInterval(syncVelocityPayouts,60*60*1000);
+  setTimeout(syncVelocityPayouts,40000);
 
   // Self-ping every 14 min to keep Render free tier alive
   setInterval(async () => {

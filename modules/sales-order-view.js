@@ -15,7 +15,11 @@ function integrateOrder(order, velocity = {}, remittances = [], legacy = [], fin
   const known = order.paymentTransactionSchemaVersion === 2;
   const codEvidence=finance.filter(r=>shipments.some(s=>String(s.awb)===r.awb));
   const onlineEvidence=online.filter(r=>r.orderId===String(order.id));
-  const providerCollected=round(onlineEvidence.filter(r=>r.type==='Payment').reduce((n,r)=>n+number(r.gross),0)+codEvidence.filter(r=>!r.error&&r.deliveryDate).reduce((n,r)=>n+number(r.amount),0));
+  // A payment can appear in several settlement entries/dates. Count the
+  // customer's receipt once, while preserving every entry for bank batch net.
+  const collectedPayments=new Map();
+  for(const [index,r] of onlineEvidence.filter(r=>r.type==='Payment').entries()){const key=r.paymentId||r.referenceId||(r.source==='gokwik_api_v2'?'':'legacy-row-'+index);if(key)collectedPayments.set(key,Math.max(collectedPayments.get(key)||0,number(r.gross)));}
+  const providerCollected=round([...collectedPayments.values()].reduce((n,v)=>n+v,0)+codEvidence.filter(r=>!r.error&&r.deliveryDate).reduce((n,r)=>n+number(r.amount),0));
   const received = known || providerCollected>0 ? Math.max(known ? round(payments.reduce((sum,t) => sum + number(t.amount),0)) : 0,providerCollected) : null;
   const refunded = number(order.moneyRefunded) + number(order.storeCreditIssued);
   const balance = received === null ? null : round(Math.max(0,number(order.total) - received));

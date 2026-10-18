@@ -8,12 +8,12 @@ function registerGoKwikReports(router,deps) {
   const respond=(res,s,extra)=>res.json({success:true,...extra,view:g.view(s,orders())});
   const run=handler=>(req,res)=>{if(deny(req,res))return;try{return handler(req,res);}catch(e){res.status(409).json({success:false,error:e.message});}};
   const base='/api/expenses/gokwik-reports';
-  router.get(base,run((req,res)=>{const s=loadStore();res.json({success:true,...g.view(s,orders())});}));
+  router.get(base,run((req,res)=>{const s=loadStore();res.json({success:true,...g.view(s,orders()),apiAccounting:s.gokwikApiAccounting||null});}));
   router.get(base+'/previews/:id',run((req,res)=>{const p=(loadStore().gokwikPreviews || {})[req.params.id];if(!p)throw Error('Preview not found.');res.json({success:true,preview:{id:p.id,name:p.name,transactions:p.transactions,settlements:g.batches(p.transactions)}});}));
   router.get(base+'/source/:id',run((req,res)=>{
     const source=(loadStore().gokwikImports || {})[req.params.id];
     if(!source)return res.status(404).json({success:false,error:'Report source not found.'});
-    res.set('Content-Type','text/csv; charset=utf-8');res.set('Content-Disposition','attachment; filename="gokwik-settlement.csv"');res.send(Buffer.from(source.source,'base64'));
+    const isApi=source.sourceType==='gokwik_api_v2';res.set('Content-Type',isApi?'application/json; charset=utf-8':'text/csv; charset=utf-8');res.set('Content-Disposition','attachment; filename="gokwik-settlement.'+(isApi?'json':'csv')+'"');res.send(Buffer.from(source.source,'base64'));
   }));
   router.get(base+'/proof/:id',run((req,res)=>{
     const s=loadStore(),batch=g.getBatch(s,req.params.id),escape=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c])),lines=[
@@ -22,7 +22,7 @@ function registerGoKwikReports(router,deps) {
       'Gross: INR '+batch.gross.toFixed(2)+' | Net to IndusInd 0437: INR '+batch.net.toFixed(2),
       'Fee: '+batch.fee.toFixed(2)+' | Tax: '+batch.tax.toFixed(2)+' | Additional fees/tax: '+(batch.additionalFee+batch.additionalTax).toFixed(2),
       'Separate deduction: INR '+batch.deduction.toFixed(2)+' - provisional Subscription Expense, vendor GoKwik',
-      'Original CSV evidence is retained in universal reconciliation. No tax-credit eligibility is asserted.',
+      'Original provider evidence is retained in universal reconciliation. No tax-credit eligibility is asserted.',
       ...batch.transactions.slice(0,100).map(tx=>tx.date+' | #'+tx.orderNumber+' | '+tx.paymentId+' | INR '+tx.gross.toFixed(2)),
       ...(batch.transactions.length>100?['Additional payments: see complete original CSV.']:[])
     ];

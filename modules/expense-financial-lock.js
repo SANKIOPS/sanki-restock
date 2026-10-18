@@ -19,7 +19,7 @@ const date = value => {
   const result = text(value).slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(result) && Number.isFinite(Date.parse(result + 'T00:00:00Z')) ? result : '';
 };
-const identifiers = payment => [payment.batchPaymentId, payment.batchId, ...list(payment.batchPaymentIds)].map(text).filter(Boolean);
+const identifiers = payment => [payment.batchPaymentId, payment.batchId, payment.settledByTransferId, ...list(payment.batchPaymentIds)].map(text).filter(Boolean);
 const refsFor = (expense, payment, reimbursement = false) => {
   const reference = qualified(expense, payment);
   const refs = new Set([reference, ...identifiers(payment)].filter(Boolean));

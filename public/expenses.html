@@ -83,6 +83,9 @@
     .hint { font-size:11px; color:#9ca3af; margin-top:3px; }
     .inline-request { margin-top:8px; padding:10px; border:1px solid #dbe3ec; border-radius:9px; background:#f8fafc; }
     .inline-request .request-actions { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    .category-group-label { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:4px; }
+    .category-group-label label { margin:0; }
+    #spendingGroupFields[hidden] { display:none; }
     .payment-choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .payment-choice label { display:flex; align-items:center; gap:8px; min-height:44px; margin:0; padding:10px 12px; border:1px solid #d1d5db; border-radius:8px; background:#fff; text-transform:none; letter-spacing:0; font-size:13px; cursor:pointer; }
     .payment-choice input { width:18px; height:18px; min-width:18px; margin:0; padding:0; accent-color:var(--blue); }
@@ -263,8 +266,14 @@
     <p class="sub">Create an approved category without leaving the Spending dashboard. It will be available everywhere expenses are categorized.</p>
     <div class="grid">
       <div class="fld full"><label>Category name</label><input id="spendingCategoryName" placeholder="Enter new category name" maxlength="120"></div>
-      <div class="fld"><label>Group</label><select id="spendingCategoryGroup"></select></div>
+      <div class="fld"><div class="category-group-label"><label for="spendingCategoryGroup">Group</label><button type="button" class="btn mini ghost" id="spendingCategoryAddGroup" aria-controls="spendingGroupFields" aria-expanded="false">＋ Add group</button></div><select id="spendingCategoryGroup"></select></div>
       <div class="fld"><label>Type</label><select id="spendingCategoryType"></select></div>
+      <div class="fld full inline-request" id="spendingGroupFields" hidden>
+        <label for="spendingGroupName">New group name</label><input id="spendingGroupName" placeholder="Enter new group name" maxlength="120" autocomplete="off">
+        <p class="hint">Saved groups are shared wherever expense categories are managed. This will not create a category or change any expense.</p>
+        <div class="request-actions"><button type="button" class="btn mini primary" id="spendingGroupSave">Save group</button><button type="button" class="btn mini ghost" id="spendingGroupCancel">Cancel group</button></div>
+        <div id="spendingGroupMsg" class="msg" role="status" aria-live="polite"></div>
+      </div>
     </div>
     <div id="spendingCategoryMsg" class="msg" role="status" aria-live="polite"></div>
     <div class="row-actions"><button type="button" class="btn primary" id="spendingCategorySave">Add category</button><button type="button" class="btn ghost" id="spendingCategoryCancel">Cancel</button></div>
@@ -308,6 +317,16 @@
       <button class="btn ghost" id="payCancel">Cancel</button>
     </div>
     <div class="msg" id="payMsg"></div>
+  </div></dialog>
+
+  <dialog id="transferReimburseDlg"><div class="dlg">
+    <h3>Link existing transfer to reimbursement</h3>
+    <p class="sub">Use money already transferred to the account that funded this expense. The original transfer, proof and bank match remain unchanged. No new bank debit or recipient credit is created.</p>
+    <div id="transferReimburseSummary" class="sub"></div>
+    <div class="fld"><label for="transferReimburseSelect">Verified existing transfer</label><select id="transferReimburseSelect"></select></div>
+    <div class="fld"><label for="transferReimburseReason">Confirmed allocation / reason — required</label><textarea id="transferReimburseReason" rows="3"></textarea></div>
+    <div class="row-actions"><button class="btn green" id="transferReimburseSave" disabled>Confirm link — no new payment</button><button class="btn ghost" id="transferReimburseCancel">Cancel</button></div>
+    <div class="msg" id="transferReimburseMsg"></div>
   </div></dialog>
 
   <dialog id="historicalReimburseDlg"><div class="dlg">
@@ -689,14 +708,14 @@
       return '<button class="btn mini ghost" onclick="undoReimbursement(\''+esc(e.id)+'\',\''+esc(payment.id)+'\','+Number(payment.amount||0)+')">Undo reimbursement '+fmt(payment.amount||0)+'</button>';
     }
     window.undoReimbursement=function(expenseId,paymentId,amount){
-      var reason=prompt('Reason for undoing '+expenseId+' reimbursement of '+fmt(amount)+'?\nThis restores the amount to pending and reverses its paying-account ledger deduction.');
+      var reason=prompt('Reason for undoing '+expenseId+' reimbursement of '+fmt(amount)+'?\nThis restores the amount to pending. For an existing-transfer settlement, only its allocation is removed; the original transfer is not reversed.');
       if(reason===null)return;
       reason=reason.trim();
       if(reason.length<10){setMsg('Enter at least 10 characters explaining the correction.',false);return;}
       if(!confirm('Final confirmation: undo only '+expenseId+'/'+paymentId+' for '+fmt(amount)+'?'))return;
       api('/api/expenses/'+encodeURIComponent(expenseId)+'/reimbursements/'+encodeURIComponent(paymentId)+'/undo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason})}).then(function(d){
         if(!d.success){setMsg(d.error||'Could not undo reimbursement.',false);return;}
-        setMsg(expenseId+' reimbursement '+fmt(amount)+' undone. The amount is pending again and the paying-account deduction was reversed.',true);loadReimbursements();
+        setMsg(expenseId+' reimbursement '+fmt(amount)+' undone. The amount is pending again. An existing linked transfer remains unchanged; only its allocation is removed.',true);loadReimbursements();
       });
     };
     function ashpreetPaymentAccounts(e){return String(e.createdBy||e.claimant||'').toLowerCase()==='arshpreet'?((cfg.claimantPaymentAccountsByUser||{}).arshpreet||[]):[];}
@@ -1200,18 +1219,58 @@
     window.setMediator=function(current){var name=prompt('Logistics mediator / payee name:',current||'');if(!name||!name.trim())return;api('/api/expenses/procurement-payables/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediator:name.trim()})}).then(function(d){if(d.success){setMsg('Purchase mediator updated.',true);loadPendingPayments();}else setMsg(d.error||'Could not update mediator.',false);});};
     function dateDaysAgo(days){var d=new Date(Date.now()+5.5*3600*1000-(days-1)*86400000);return d.toISOString().slice(0,10);}
     function refreshSpendingCategoryList(){var list=el('sd_category_list');if(list)list.innerHTML=(cfg.ledgers||[]).map(function(l){return '<option value="'+esc(l.name)+'" label="'+esc(l.group||'')+'">';}).join('');}
+    var spendingGroupGeneration=0,spendingGroupSaving=false;
+    function refreshSpendingGroupChoices(selected){var current=selected||el('spendingCategoryGroup').value;el('spendingCategoryGroup').innerHTML=opts(cfg.categoryGroups||[],current);}
+    function setSpendingGroupSaving(saving){
+      spendingGroupSaving=saving;
+      ['spendingGroupSave','spendingGroupCancel','spendingGroupName','spendingCategorySave','spendingCategoryCancel','spendingCategoryAddGroup','spendingCategoryGroup'].forEach(function(id){el(id).disabled=saving;});
+    }
+    function resetSpendingGroupForm(){
+      spendingGroupGeneration++;setSpendingGroupSaving(false);
+      el('spendingGroupFields').hidden=true;el('spendingGroupName').value='';
+      el('spendingGroupMsg').className='msg';el('spendingGroupMsg').textContent='';
+      el('spendingCategoryAddGroup').setAttribute('aria-expanded','false');
+    }
     window.openSpendingCategoryDialog=function(){
       if(!cfg.canManageCategories)return;
+      resetSpendingGroupForm();
       el('spendingCategoryName').value='';
-      el('spendingCategoryGroup').innerHTML=opts(cfg.categoryGroups||[]);
+      refreshSpendingGroupChoices();
       el('spendingCategoryType').innerHTML=opts(cfg.types,'variable');
       el('spendingCategoryMsg').className='msg';el('spendingCategoryMsg').textContent='';
       el('spendingCategoryDlg').showModal();
       setTimeout(function(){el('spendingCategoryName').focus();},0);
     };
     el('spendingCategoryCancel').addEventListener('click',function(){el('spendingCategoryDlg').close();});
+    el('spendingCategoryDlg').addEventListener('cancel',function(event){if(spendingGroupSaving)event.preventDefault();});
+    el('spendingCategoryDlg').addEventListener('close',function(){if(!el('spendingCategoryDlg').open)resetSpendingGroupForm();});
+    el('spendingCategoryAddGroup').addEventListener('click',function(){
+      if(!cfg.canManageCategories||spendingGroupSaving||el('spendingCategorySave').disabled)return;
+      resetSpendingGroupForm();el('spendingGroupFields').hidden=false;
+      el('spendingCategoryAddGroup').setAttribute('aria-expanded','true');el('spendingGroupName').focus();
+    });
+    el('spendingGroupCancel').addEventListener('click',function(){if(!spendingGroupSaving){resetSpendingGroupForm();el('spendingCategoryAddGroup').focus();}});
+    el('spendingGroupSave').addEventListener('click',function(){
+      if(!cfg.canManageCategories||spendingGroupSaving)return;
+      var name=el('spendingGroupName').value.trim(),message=el('spendingGroupMsg');
+      if(!name||name.length>120){message.className='msg err';message.textContent='Enter a group name (up to 120 characters).';return;}
+      var generation=++spendingGroupGeneration;setSpendingGroupSaving(true);
+      message.className='msg';message.textContent='Saving group…';
+      api('/api/expenses/category-groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})}).then(function(d){
+        if(!d.success)throw new Error(d.error||'Could not add group.');
+        if(generation!==spendingGroupGeneration)return;
+        return loadConfig().catch(function(){throw new Error('The group was saved, but the list could not refresh. Retry to select the existing group.');}).then(function(){
+          if(generation!==spendingGroupGeneration)return;
+          refreshSpendingGroupChoices(d.group);refreshSpendingCategoryList();
+          el('spendingGroupFields').hidden=true;el('spendingGroupName').value='';
+          el('spendingCategoryAddGroup').setAttribute('aria-expanded','false');
+          el('spendingCategoryMsg').className='msg ok';el('spendingCategoryMsg').textContent=d.already?'This group already exists and is now selected.':'Group added and selected. You can now add the category.';
+        });
+      }).catch(function(error){if(generation!==spendingGroupGeneration)return;message.className='msg err';message.textContent=error&&error.message||'Could not add group. Please retry.';}).finally(function(){if(generation===spendingGroupGeneration)setSpendingGroupSaving(false);});
+    });
+    el('spendingGroupName').addEventListener('keydown',function(event){if(event.key==='Enter'){event.preventDefault();el('spendingGroupSave').click();}});
     el('spendingCategorySave').addEventListener('click',function(){
-      if(!cfg.canManageCategories)return;
+      if(!cfg.canManageCategories||spendingGroupSaving)return;
       var btn=this,name=el('spendingCategoryName').value.trim(),message=el('spendingCategoryMsg');
       if(!name){message.className='msg err';message.textContent='Enter a category name.';return;}
       btn.disabled=true;message.className='msg';message.textContent='Saving…';
@@ -1575,6 +1634,33 @@
       }).catch(function(error){el('payMsg').textContent=error&&error.message||'Could not record payment. Retry without changing the form; it cannot post the same request twice.';}).finally(function(){paySubmitting=false;paymentControls.forEach(function(entry){entry[0].disabled=entry[1];});if(payMode==='vendor')updateVendorPaymentSelection(false);});
     });
 
+    var transferReimburseExpense='',transferReimburseRevision=0,transferReimburseSaving=false;
+    window.openTransferReimburse=function(id){
+      var revision=++transferReimburseRevision;transferReimburseExpense=id;
+      el('transferReimburseSummary').textContent=id+' · '+((expensesById[id]||{}).vendor||'');
+      el('transferReimburseSelect').innerHTML='<option value="">Loading verified transfers…</option>';
+      el('transferReimburseReason').value='';el('transferReimburseMsg').textContent='';el('transferReimburseSave').disabled=true;el('transferReimburseDlg').showModal();
+      api('/api/expenses/'+encodeURIComponent(id)+'/reimbursement-transfers').then(function(d){
+        if(revision!==transferReimburseRevision||transferReimburseExpense!==id)return;
+        if(!d.success){el('transferReimburseMsg').textContent=d.error;return;}
+        el('transferReimburseSelect').innerHTML='<option value="">Select the confirmed transfer</option>'+d.transfers.map(function(t){return '<option value="'+esc(t.transferId)+'">'+esc(t.transferId+' · '+t.date+' · '+t.account+' → '+t.recipient+' · '+fmt(t.amount))+'</option>';}).join('');
+        el('transferReimburseSave').disabled=!d.transfers.length;
+        el('transferReimburseMsg').textContent=d.transfers.length?'Only exact-principal transfers with finalized source-bank evidence are shown.':'No eligible transfer found. Check the paying/recipient accounts, principal and finalized bank evidence; do not record another payment.';
+      }).catch(function(error){if(revision===transferReimburseRevision)el('transferReimburseMsg').textContent=error.message||'Could not load verified transfers.';});
+    };
+    el('transferReimburseCancel').onclick=function(){if(!transferReimburseSaving){transferReimburseRevision++;el('transferReimburseDlg').close();}};
+    el('transferReimburseDlg').addEventListener('cancel',function(event){if(transferReimburseSaving)event.preventDefault();else transferReimburseRevision++;});
+    el('transferReimburseSave').onclick=function(){
+      if(transferReimburseSaving)return;
+      var id=transferReimburseExpense,transferId=el('transferReimburseSelect').value,reason=el('transferReimburseReason').value.trim();
+      if(!transferId||reason.length<10){el('transferReimburseMsg').textContent='Select a verified transfer and enter a confirmed allocation reason of at least 10 characters.';return;}
+      transferReimburseSaving=true;el('transferReimburseSave').disabled=true;el('transferReimburseSelect').disabled=true;el('transferReimburseReason').disabled=true;
+      api('/api/expenses/'+encodeURIComponent(id)+'/reimburse-from-transfer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transferId:transferId,reason:reason})}).then(function(d){
+        if(!d.success){el('transferReimburseMsg').textContent=d.error||'Could not link the transfer.';return;}
+        transferReimburseRevision++;el('transferReimburseDlg').close();loadReimbursements();setMsg(id+' reimbursed using '+transferId+'. Original transfer and account balances unchanged; no new payment created.',true);
+      }).catch(function(error){el('transferReimburseMsg').textContent=error.message||'Could not link the transfer. Retrying the same link cannot create a duplicate.';}).finally(function(){transferReimburseSaving=false;el('transferReimburseSave').disabled=false;el('transferReimburseSelect').disabled=false;el('transferReimburseReason').disabled=false;});
+    };
+
     window.openHistoricalReimbursement=function(ids){
       if(!cfg.isOwner){setMsg('Only the Owner can mark a reimbursement as previously paid.',false);return;}
       historicalReimburseIds=Array.isArray(ids)?ids.slice():[ids];historicalReimburseIds=historicalReimburseIds.filter(function(id){return expensesById[id];});if(!historicalReimburseIds.length)return;
@@ -1601,7 +1687,7 @@
         el('rstats').innerHTML='<div class="stat"><div class="k">Pending reimbursement</div><div class="v">'+fmt(d.pendingTotal)+'</div></div><div class="stat"><div class="k">Reimbursed</div><div class="v">'+fmt(reimbursedTotal)+'</div></div><div class="stat"><div class="k">Closing balance</div><div class="v">'+fmt(closingTotal)+'</div></div><div class="row-actions"><span id="reimburseSelectedTotal" class="muted">0 selected · '+fmt(0)+'</span><button class="btn green" id="reimburseSelected" disabled>Reimburse selected</button>'+(cfg.isOwner?'<button class="btn ghost" id="historicalReimburseSelected" disabled>Mark previously reimbursed</button>':'')+'</div>';
         if(!d.reimbursements.length){el('rtable').innerHTML='<span class="muted">No reimbursements found.</span>';return;}
         var people={},personOrder=[];d.reimbursements.forEach(function(e){var person=reimbursementPerson(e),key=person.toLowerCase();if(!people[key]){people[key]={name:person,items:[],due:0};personOrder.push(key);}var due=Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0));people[key].items.push(e);people[key].due+=due;});
-        el('rtable').innerHTML='<div class="row-actions"><label><input type="checkbox" id="reimburseSelectAll" aria-label="Select all pending reimbursements"> Select every pending transaction</label></div><div class="claim-list">'+personOrder.map(function(key){var group=people[key],safeKey='rp-'+key.replace(/[^a-z0-9]+/g,'-');return '<details class="claim-card reimbursement-person"><summary><div class="claim-main"><div class="claim-desc">'+esc(group.name)+'<div class="claim-vendor">'+group.items.length+' transaction'+(group.items.length===1?'':'s')+'</div></div><div class="claim-amount">Closing balance '+fmt(group.due)+'</div></div></summary><div class="claim-detail"><div class="row-actions"><label><input type="checkbox" class="reimburse-person-select" data-person="'+esc(safeKey)+'"> Select all pending for '+esc(group.name)+'</label></div><table class="resp"><thead><tr><th></th><th>Date</th><th>Expense / vendor</th><th>Transaction reference</th><th>Proof</th><th>Original</th><th>Reimbursed</th><th>Closing balance</th><th>Status</th><th></th></tr></thead><tbody>'+group.items.map(function(e){var due=e.closingBalance!=null?e.closingBalance:Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0)),refs=(e.reimbursementPayments||[]).map(function(p){return esc(p.transactionReference||e.id+'/'+p.id);}).join('<br>')||'—',reimburseProof=(e.reimbursementPayments||[]).slice().reverse().find(function(p){return p.proof||(p.proofs||[]).length;}),proofs=reimburseProof?proofGallery(reimburseProof.proofs||[reimburseProof.proof],'Reimbursement'):proofGallery(e.purchasePaymentProofs||[e.purchasePaymentProof],'Personal payment');return '<tr><td data-label="Select">'+(due>0?'<input type="checkbox" class="reimburse-select '+esc(safeKey)+'" value="'+esc(e.id)+'" data-due="'+due+'" aria-label="Select '+esc(e.id)+'">':'')+'</td><td data-label="Date">'+esc(e.date)+'</td><td data-label="Expense / vendor"><b>'+esc(e.id)+'</b><div>'+esc(e.vendor||e.particulars||'—')+'</div></td><td data-label="Transaction reference">'+refs+'</td><td data-label="Proof">'+(proofs||'—')+'</td><td data-label="Original">'+fmt(e.personalPaidAmount)+'</td><td data-label="Reimbursed">'+fmt(e.reimbursementAmount||0)+'</td><td data-label="Closing balance"><b>'+fmt(due)+'</b></td><td data-label="Status"><span class="badge b-'+esc(e.reimbursementStatus)+'">'+esc(e.reimbursementStatus)+'</span></td><td data-label=""><div class="row-actions">'+(due>0?'<button class="btn mini green" onclick="openReimburse(\''+e.id+'\',false)">Reimburse full</button><button class="btn mini ghost" onclick="openReimburse(\''+e.id+'\',true)">Split / partial</button>'+(cfg.isOwner?'<button class="btn mini ghost" onclick="openHistoricalReimbursement(\''+e.id+'\')">Mark previously reimbursed</button>':''):'')+reimbursementUndoButton(e)+'</div></td></tr>';}).join('')+'</tbody></table></div></details>';}).join('')+'</div>';
+        el('rtable').innerHTML='<div class="row-actions"><label><input type="checkbox" id="reimburseSelectAll" aria-label="Select all pending reimbursements"> Select every pending transaction</label></div><div class="claim-list">'+personOrder.map(function(key){var group=people[key],safeKey='rp-'+key.replace(/[^a-z0-9]+/g,'-');return '<details class="claim-card reimbursement-person"><summary><div class="claim-main"><div class="claim-desc">'+esc(group.name)+'<div class="claim-vendor">'+group.items.length+' transaction'+(group.items.length===1?'':'s')+'</div></div><div class="claim-amount">Closing balance '+fmt(group.due)+'</div></div></summary><div class="claim-detail"><div class="row-actions"><label><input type="checkbox" class="reimburse-person-select" data-person="'+esc(safeKey)+'"> Select all pending for '+esc(group.name)+'</label></div><table class="resp"><thead><tr><th></th><th>Date</th><th>Expense / vendor</th><th>Transaction reference</th><th>Proof</th><th>Original</th><th>Reimbursed</th><th>Closing balance</th><th>Status</th><th></th></tr></thead><tbody>'+group.items.map(function(e){var due=e.closingBalance!=null?e.closingBalance:Math.max(0,(e.personalPaidAmount||0)-(e.reimbursementAmount||0)),refs=(e.reimbursementPayments||[]).map(function(p){return esc(p.transactionReference||e.id+'/'+p.id)+(p.settledByTransferId?'<div><b>'+esc(p.settledByTransferId)+'</b> · '+esc(p.date)+'</div><div class="muted">'+esc(p.note||'')+'</div>':'');}).join('<br>')||'—',reimburseProof=(e.reimbursementPayments||[]).slice().reverse().find(function(p){return p.proof||(p.proofs||[]).length;}),proofs=reimburseProof?proofGallery(reimburseProof.proofs||[reimburseProof.proof],'Reimbursement'):proofGallery(e.purchasePaymentProofs||[e.purchasePaymentProof],'Personal payment');return '<tr><td data-label="Select">'+(due>0?'<input type="checkbox" class="reimburse-select '+esc(safeKey)+'" value="'+esc(e.id)+'" data-due="'+due+'" aria-label="Select '+esc(e.id)+'">':'')+'</td><td data-label="Date">'+esc(e.date)+'</td><td data-label="Expense / vendor"><b>'+esc(e.id)+'</b><div>'+esc(e.vendor||e.particulars||'—')+'</div></td><td data-label="Transaction reference">'+refs+'</td><td data-label="Proof">'+(proofs||'—')+'</td><td data-label="Original">'+fmt(e.personalPaidAmount)+'</td><td data-label="Reimbursed">'+fmt(e.reimbursementAmount||0)+'</td><td data-label="Closing balance"><b>'+fmt(due)+'</b></td><td data-label="Status"><span class="badge b-'+esc(e.reimbursementStatus)+'">'+esc(e.reimbursementStatus)+'</span></td><td data-label=""><div class="row-actions">'+(due>0?'<button class="btn mini green" onclick="openReimburse(\''+e.id+'\',false)">Reimburse full</button><button class="btn mini ghost" onclick="openReimburse(\''+e.id+'\',true)">Split / partial</button><button class="btn mini ghost" onclick="openTransferReimburse(\''+e.id+'\')">Link existing transfer</button>'+(cfg.isOwner?'<button class="btn mini ghost" onclick="openHistoricalReimbursement(\''+e.id+'\')">Mark previously reimbursed</button>':''):'')+reimbursementUndoButton(e)+'</div></td></tr>';}).join('')+'</tbody></table></div></details>';}).join('')+'</div>';
         function updateReimburseSelection(){var boxes=document.querySelectorAll('.reimburse-select:checked'),total=0;Array.prototype.forEach.call(boxes,function(x){total+=Number(x.getAttribute('data-due'))||0;});el('reimburseSelectedTotal').textContent=boxes.length+' selected · '+fmt(total);el('reimburseSelected').disabled=boxes.length<2;if(el('historicalReimburseSelected'))el('historicalReimburseSelected').disabled=boxes.length<1;}
         Array.prototype.forEach.call(document.querySelectorAll('.reimburse-select'),function(x){x.addEventListener('change',updateReimburseSelection);});Array.prototype.forEach.call(document.querySelectorAll('.reimburse-person-select'),function(x){x.addEventListener('change',function(){var checked=this.checked,person=this.getAttribute('data-person');Array.prototype.forEach.call(document.querySelectorAll('.reimburse-select.'+person),function(box){box.checked=checked;});updateReimburseSelection();});});el('reimburseSelectAll').addEventListener('change',function(){var checked=this.checked;Array.prototype.forEach.call(document.querySelectorAll('.reimburse-select,.reimburse-person-select'),function(x){x.checked=checked;});updateReimburseSelection();});el('reimburseSelected').addEventListener('click',openBatchReimburse);if(el('historicalReimburseSelected'))el('historicalReimburseSelected').addEventListener('click',function(){openHistoricalReimbursement(Array.prototype.map.call(document.querySelectorAll('.reimburse-select:checked'),function(x){return x.value;}));});
       });

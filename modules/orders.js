@@ -390,6 +390,21 @@ router.post('/api/orders-ledger/gokwik-report', financeUpload.single('file'), (r
     res.json({success:true,imported:rows.length,total:combined.size,bankVerified:false});
   }catch(e){res.status(400).json({success:false,error:e.message});}
 });
+function gokwikFile(){return path.join(path.dirname(ORDERS_PATH),'gokwik_api_evidence.json');}
+function syncGoKwik(force=false){
+ let report={rows:[]};try{report=JSON.parse(fs.readFileSync(path.join(path.dirname(ORDERS_PATH),'gokwik_settlement_evidence.json'),'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
+ return require('./gokwik-auto-sync').sync({file:gokwikFile(),orders:loadStore().orders,preferredDates:(report.rows||[]).map(r=>r.date),write:atomicWrite,force});
+}
+function startGoKwikSync(){
+ const tick=()=>{if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return;syncGoKwik().then(r=>{if(!r.skipped)console.log('[gokwik-api] Synced '+r.rows+' settlement records across '+r.days+' days');}).catch(e=>console.error('[gokwik-api] '+e.message));};
+ setTimeout(tick,45000);setInterval(tick,30*60*1000);
+}
+router.post('/api/orders-ledger/gokwik-sync',(req,res)=>{
+ if(!process.env.GOKWIK_APP_ID||!process.env.GOKWIK_APP_SECRET)return res.status(503).json({success:false,error:'GoKwik API credentials are not configured'});
+ syncGoKwik(true).catch(e=>console.error('[gokwik-api] '+e.message));
+ res.status(202).json({success:true,status:require('./gokwik-auto-sync').status(gokwikFile())});
+});
+router.get('/api/orders-ledger/gokwik-status',(req,res)=>res.json({success:true,...require('./gokwik-auto-sync').status(gokwikFile())}));
 let logisticsPromise=null;
 function syncLogistics(){
   if(logisticsPromise)return logisticsPromise;
@@ -442,9 +457,10 @@ async function syncFinance() {
   }finally{financeRefreshing=false;}
 }
 router.post('/api/orders-ledger/velocity-finance/sync', async(req,res)=>{
-  try{res.json(await syncFinance());}catch(e){res.status(502).json({success:false,error:e.message});}
+  try{const result=await syncFinance();if(process.env.VELOCITY_MCP_ACCESS_TOKEN&&process.env.VELOCITY_MCP_UID)result.payouts=await syncVelocityPayouts();res.json(result);}catch(e){res.status(502).json({success:false,error:e.message});}
 });
 
+function syncVelocityPayouts(){return require('./velocity-payout-sync').sync({file:path.join(path.dirname(ORDERS_PATH),'velocity_payout_evidence.json'),write:atomicWrite});}
 router.get('/api/orders-ledger/integrated', (req, res) => {
   try {
     const store = loadStore();
@@ -459,13 +475,26 @@ router.get('/api/orders-ledger/integrated', (req, res) => {
     const legacy = read('sanki_cache.json', { orders: [] });
     const finance = read('velocity_finance_evidence.json', {rows:[]});
     const online = read('gokwik_settlement_evidence.json', {rows:[]});
+    const apiState=read('gokwik_api_evidence.json',{days:{}});
+    online.rows=require('./gokwik-api').mergedEvidence(online.rows||[],Object.values(apiState.days||{}).flat());
+    const gokwikApiStatus=require('./gokwik-auto-sync').status(gokwikFile());
     const { integrateOrder } = require('./sales-order-view');
     const boundary = accountingStartAt();
     const orders = mergedList(store)
       .map(o => integrateOrder({...o,velocityShipments:(index.byOrder||{})[o.id]||[]}, velocity.shipments || {}, remittances.entries || [], legacy.orders || [], finance.rows || [], online.rows || []))
       .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-    require('./order-settlement-links').attachSettlementLinks(orders,read('expenses.json',{}),online.rows||[],finance.rows||[]);
-    res.json({ success: true, orders, sources: { velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
+    const accounting=read('expenses.json',{});
+    require('./order-settlement-links').attachSettlementLinks(orders,accounting,online.rows||[],finance.rows||[]);
+    const payoutFile=path.join(path.dirname(ORDERS_PATH),'velocity_payout_evidence.json');
+    const payoutState=require('./velocity-payout-sync').read(payoutFile);
+    require('./order-money-journey').attach(orders,accounting,online.rows||[],payoutState.batches||[]);
+    const paytmPayouts=require('./expenses').paytmOrderSettlementEvidence(accounting);
+    require('./order-pos-settlements').attach(orders,accounting,paytmPayouts);
+    const paymentBatches=require('./order-payment-batches').paytmBatches(orders,accounting,paytmPayouts);
+    const paytmDates=Object.values(accounting.paytmReportTransactions||{}).filter(t=>t.isCustomerPayment!==false).map(t=>t.date).filter(Boolean).sort();
+    const paytmCoverage={transactionThrough:paytmDates.at(-1)||null,payoutThrough:paytmPayouts.map(p=>p.settledDate).filter(Boolean).sort().at(-1)||null};
+    const velocityPayouts=require('./velocity-payout-sync').status(payoutFile);
+    res.json({ success: true, orders, paymentBatches, sources: { paytmCoverage, velocityPayouts, gokwikApi:gokwikApiStatus, velocityDiscovery: {lastSync:index.lastSync||null,lastAttempt:index.lastAttempt||null,error:index.error||null,total:index.total||0,matchedOrders:index.matchedOrders||0}, shopify: store.sync.lastSyncedAt || null, velocity: velocity.lastSync || null, remittances: remittances.lastImport || null, onlineSettlements: online.importedAt || 'Connection required', velocityFinance: finance.updatedAt || null, posClearance: 'Order-level clearance linking required' } });
   } catch (e) { res.status(500).json({ success: false, error: 'Unable to read integrated order sources: ' + e.message }); }
 });
 
@@ -529,4 +558,4 @@ function startAutoSync() {
   setInterval(tick, every);
 }
 
-module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncLogistics };
+module.exports = { router, startAutoSync, runSync, normalizeOrder, syncFinance, syncVelocityPayouts, syncLogistics, syncGoKwik, startGoKwikSync };
