@@ -8,7 +8,8 @@ const { reconciliationReminderAttention } = require('./reconciliation-reminder-a
 const { cashVerificationView } = require('./cash-verification-status');
 const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
 const { vendorSearchRank, compareVendorSearch } = require('./vendor-ledger-search');
-const { cleanGroupName, groupKey, categoryGroupNames } = require('./expense-category-groups');
+const categoryGroupManagement = require('./expense-category-groups');
+const { cleanGroupName, categoryGroupNames } = categoryGroupManagement;
 const claimantPolicy = require('./expense-claimant-policy');
 const ledgerConnections = require('./expense-ledger-connections');
 const transferReimbursements = require('./transfer-reimbursement-links');
@@ -1310,8 +1311,8 @@ function loadStore() {
   }
   catch(error) { console.error('[expenses] Store repair failed; serving the original financial records:',error);return s; }
 }
-function saveStore(s) {
-  sankiCategories.attachGroups(s);
+function saveStore(s, options = {}) {
+  if (!options.skipCategoryNormalization) sankiCategories.attachGroups(s);
   // Once a reconciliation records the ledger's original date, later views may
   // expose the authoritative bank date as the row date. Never let a subsequent
   // save replace the audit/undo date with that displayed bank date.
@@ -1720,6 +1721,18 @@ function pickableLedgers(s, nature) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 function categoryGroups(s) { return categoryGroupNames(s, pickableLedgers(s)); }
+// Master-label changes must not trigger legacy accounting repairs or category
+// reclassification. Strict reads also fail closed instead of saving a blank
+// store when the original file cannot be read. These handlers never await
+// between this read, revision verification and the existing atomic save.
+function loadCategoryGroupStore() {
+  const s=JSON.parse(fs.readFileSync(EXP_PATH,'utf8'));
+  if(!s||typeof s!=='object'||Array.isArray(s))throw new Error('Invalid expense store');
+  return s;
+}
+function categoryGroupManagementError(res,error) {
+  return res.status(error.status||503).json({success:false,code:error.code||'GROUP_STORE_UNAVAILABLE',error:error.status?error.message:'Category groups could not be saved safely. Refresh and try again; no group change was posted.'});
+}
 function storedAccountNames(s) {
   const names = new Set([].concat(s.accounts || [], [DEFAULT_SALES_BANK, DEFAULT_COUNTER_CASH], Object.keys(s.openingBalances || {}), Object.keys(s.odConfig || {})));
   Object.values(s.openingBalancesByNature || {}).forEach(map => Object.keys(map || {}).forEach(name => names.add(name)));
@@ -6000,16 +6013,54 @@ router.post('/api/expenses/accounts/remove', (req, res) => {
   res.json({ success: true, accounts: s.accounts });
 });
 // Admin: list / remove admin-approved CUSTOM categories (built-in ones stay).
+router.get('/api/expenses/category-groups', (req, res) => {
+  if(claimantPolicy.claimantOnly(req)||!canManageCategoriesAndVendors(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can manage category groups.'});
+  try {
+    const s=loadCategoryGroupStore();res.setHeader('Cache-Control','no-store');
+    res.json({success:true,...categoryGroupManagement.catalog(s,pickableLedgers(s))});
+  } catch(error) { return categoryGroupManagementError(res,error); }
+});
+router.post('/api/expenses/category-groups/preview', (req, res) => {
+  if(claimantPolicy.claimantOnly(req)||!canManageCategoriesAndVendors(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can manage category groups.'});
+  try {
+    categoryGroupManagement.input(req.body);
+    const s=loadCategoryGroupStore(),preview=categoryGroupManagement.planChange(s,req.body,pickableLedgers(s));
+    res.json({success:true,...preview});
+  } catch(error) { return categoryGroupManagementError(res,error); }
+});
+router.post('/api/expenses/category-groups/apply', (req, res) => {
+  if(claimantPolicy.claimantOnly(req)||!canManageCategoriesAndVendors(req))return res.status(403).json({success:false,error:'Only the Owner or Prashant can manage category groups.'});
+  try {
+    const b=req.body||{},intent=categoryGroupManagement.fingerprint(b,req.user&&req.user.username);
+    if(typeof b.operationId!=='string'||!/^[a-zA-Z0-9_-]{8,100}$/.test(b.operationId))return res.status(400).json({success:false,error:'A valid confirmation ID is required. Review a new preview.'});
+    const s=loadCategoryGroupStore(),previous=(s.categoryGroupOperations||{})[b.operationId];
+    if(previous){
+      if(previous.fingerprint!==intent)return res.status(409).json({success:false,code:'OPERATION_REUSED',error:'This confirmation ID was used for a different change. Review a new preview.'});
+      return res.json({success:true,already:true,group:categoryGroupManagement.canonicalGroup(s,previous.target,pickableLedgers(s)),affected:previous.affected,...categoryGroupManagement.catalog(s,pickableLedgers(s))});
+    }
+    const categories=pickableLedgers(s),preview=categoryGroupManagement.planChange(s,b,categories);
+    if(typeof b.previewToken!=='string'||b.previewToken!==preview.previewToken)return res.status(409).json({success:false,code:'PREVIEW_REQUIRED',error:'Review a fresh preview before confirming this group change.'});
+    if(preview.already)return res.json({success:true,already:true,group:preview.target,affected:{categoryCount:0,entryCount:0,businesses:[]},...categoryGroupManagement.catalog(s,categories)});
+    const classification=categoryGroupManagement.classificationSnapshot(s,preview,categories),affected=categoryGroupManagement.applyChange(s,preview,categories);
+    s.categoryGroupOperations=s.categoryGroupOperations||{};
+    Object.defineProperty(s.categoryGroupOperations,b.operationId,{value:{fingerprint:intent,action:preview.action,sources:preview.sources,target:preview.target,reason:preview.reason,affected,actor:String(req.user&&req.user.username||''),appliedAt:new Date().toISOString()},enumerable:true,writable:true,configurable:true});
+    audit(s,req,preview.action==='rename'?'CATEGORY_GROUP_RENAMED':'CATEGORY_GROUPS_MERGED','category_group',preview.target,{before:{groups:preview.sources,classification},after:{group:preview.target,...affected,categories:preview.categories.map(category=>category.name)},note:preview.reason+' · Group labels only; financial records, payments and reconciliation evidence unchanged.'});
+    saveStore(s,{skipCategoryNormalization:true});
+    res.json({success:true,group:preview.target,affected,...categoryGroupManagement.catalog(s,pickableLedgers(s))});
+  } catch(error) { return categoryGroupManagementError(res,error); }
+});
 router.post('/api/expenses/category-groups', (req, res) => {
   if (claimantPolicy.claimantOnly(req)||!canManageCategoriesAndVendors(req)) return res.status(403).json({success:false,error:'Only the Owner or Prashant can create category groups.'});
   const name=cleanGroupName((req.body||{}).name);
   if(!name)return res.status(400).json({success:false,error:'Enter a group name using printable characters (up to 120 characters).'});
-  const s=loadStore(), groups=categoryGroups(s), existing=groups.find(group=>groupKey(group)===groupKey(name));
+  try {
+  const s=loadCategoryGroupStore(), groups=categoryGroups(s), existing=categoryGroupManagement.canonicalGroup(s,name,pickableLedgers(s));
   if(existing)return res.json({success:true,group:existing,groups,already:true});
   s.customCategoryGroups=Array.isArray(s.customCategoryGroups)?s.customCategoryGroups:[];
   s.customCategoryGroups.push(name);
-  audit(s,req,'CATEGORY_GROUP_CREATED','category_group',name,{after:{name},note:'Added an available category group; no expense, payment or existing category was changed.'});saveStore(s);
+  audit(s,req,'CATEGORY_GROUP_CREATED','category_group',name,{after:{name},note:'Added an available category group; no expense, payment or existing category was changed.'});saveStore(s,{skipCategoryNormalization:true});
   res.json({success:true,group:name,groups:categoryGroups(s)});
+  } catch(error) { return categoryGroupManagementError(res,error); }
 });
 router.post('/api/expenses/custom-ledgers', (req, res) => {
   if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can create categories.' });
@@ -6018,7 +6069,7 @@ router.post('/api/expenses/custom-ledgers', (req, res) => {
   if(!TYPES.includes(b.type)) return res.status(400).json({success:false,error:'Choose a valid category type.'});
   const existing=pickableLedgers(s).find(l=>l.name.toLowerCase()===name.toLowerCase());
   if(existing) return res.json({success:true,already:true,ledger:existing});
-  const requestedGroup=cleanGroupName(b.group), knownGroup=requestedGroup&&categoryGroups(s).find(group=>groupKey(group)===groupKey(requestedGroup));
+  const requestedGroup=cleanGroupName(b.group), knownGroup=requestedGroup&&categoryGroupManagement.canonicalGroup(s,requestedGroup,pickableLedgers(s));
   if(sankiCategories.active(s)&&!knownGroup)return res.status(400).json({success:false,error:'Select an existing SANKI group.'});
   const group=knownGroup||requestedGroup;
   const ledger={name,type:b.type,group};

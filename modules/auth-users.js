@@ -141,6 +141,7 @@ function modulePath(href) { return String(href || '').split('#')[0]; }
 function pageCatalog() {
   const seen = {}, out = [];
   MODULE_CATALOG.forEach(m => {
+    if (m.navigationOnly) return;
     const p = modulePath(m.href);
     if (!p || seen[p]) return;
     seen[p] = 1;
@@ -223,6 +224,20 @@ function roleCanAccessPath(role, p) {
 // Union access across all of a user's roles.
 function isPrashant(user) { return String(user && user.username || '').trim().toLowerCase() === PRASHANT_USER; }
 function userCanAccessPath(user, p) {
+  if (p === '/manage.html') {
+    // This is only a filtered navigation hub, never a grant to its linked
+    // pages or APIs. Do not add it to role-page grants or Prashant's fixed
+    // operational list. Pure submitters and view-only Stylists have no tools.
+    const roles = rolesOf(user);
+    if (!roles.some(r => !['claimant', 'personal_claimant', 'stocksearch'].includes(r))) return false;
+    const allowed = allowedPagesForUser(user);
+    return allowed === '*' || MODULE_CATALOG.some(m => {
+      if (m.status !== 'live' || m.navigationOnly || ['pl', 'stock-search'].includes(m.key)) return false;
+      if (m.key === 'expenses' && !roles.some(r => ['owner', 'admin', 'accounting', 'samast_accounting'].includes(r))) return false;
+      if (m.key === 'inventory-dashboard' && !roles.some(r => ['owner', 'admin', 'inventory', 'warehouse'].includes(r))) return false;
+      return Array.isArray(allowed) && allowed.includes(modulePath(m.href));
+    });
+  }
   if (isPrashant(user)) return PRASHANT_PAGES.includes(p);
   return rolesOf(user).some(r => roleCanAccessPath(r, p));
 }
