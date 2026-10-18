@@ -25,14 +25,17 @@ test('recorded GST, invoice rate and exempt flag never choose or override P&L ga
   }
 });
 
-test('inclusive taxable boundary is tested per piece after discount, not order total', () => {
-  assert.equal(lineTax({ qty: 2, price: 2625 }).tax, 250);
+test('inclusive final selling-price boundary is tested per piece after discount, not order total', () => {
+  assert.equal(lineTax({ qty: 2, price: 2500 }).tax, 238.1);
   assert.equal(lineTax({ qty: 1, price: 3999 }).tax, 610.02);
   assert.equal(lineTax({ qty: 2, price: 3000, discount: 1002 }).tax, 238);
-  assert.equal(lineTax({ qty: 1, price: 2625 }).rate, .05);
+  assert.equal(lineTax({ qty: 1, price: 2500 }).rate, .05);
+  assert.equal(lineTax({ qty: 1, price: 2500.01 }).rate, .18);
+  assert.equal(lineTax({ qty: 1, price: 2625 }).rate, .18);
   assert.equal(lineTax({ qty: 1, price: 2950.01 }).rate, .18);
-  assert.equal(lineTax({ qty: 1, price: 2625.01 }).valid, false);
-  assert.equal(lineTax({ qty: 1, price: 2800, taxable: false, taxLines: [{ rate: .18, price: 427.12 }] }).valid, false);
+  assert.equal(lineTax({ qty: 1, price: 2625.01 }).valid, true);
+  assert.equal(lineTax({ qty: 1, price: 2800, taxable: false, taxLines: [{ rate: .05, price: 133.33 }] }).valid, true);
+  assert.equal(lineTax({ qty: 1, price: 2800,unitTaxableValue:2300 }).rate,.18);
   assert.equal(lineTax({ qty: 0, price: 1999, taxable: false }).valid, false);
 });
 

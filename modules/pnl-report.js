@@ -4,7 +4,7 @@
 // follow actual approved payments. Never write to accounting/order stores.
 const purchaseCosts = require('../public/purchase-costs');
 const { velocityCompletion } = require('./pnl-delivery');
-const { resolveOrder } = require('./pnl-line-corrections');
+const { resolveOrder, manualHash } = require('./pnl-line-corrections');
 const START = '2026-08-22';
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const money = value => Math.round((number(value) + Number.EPSILON) * 100) / 100;
@@ -28,9 +28,9 @@ function channel(value) {
 }
 const gstRate = unitValue => number(unitValue) <= 2500 ? 0.05 : 0.18;
 
-// The slab is tested on the per-piece taxable sale value, not an order's
-// advance, quantity total or tax-inclusive MRP. Ambiguous inclusive amounts
-// must be reviewed rather than silently put into a convenient slab.
+// User-configured management P&L policy: choose the slab from the final
+// per-piece selling amount after discount, then extract inclusive GST.
+// This is report-only, not a tax setting or statutory invoice calculation.
 function lineTax(line, taxesIncluded = true) {
   const qty = number(line.qty), discount = number(line.discount);
   const base = Math.max(0, number(line.price ?? line.unitPrice) * qty - discount);
@@ -41,14 +41,7 @@ function lineTax(line, taxesIncluded = true) {
     return {gross,sourceGross:gross,tax,recorded:tax,calculated:tax,rate:null,status:known?'Shipping fee: source invoice GST retained':'Shipping fee GST evidence missing',valid:known&&qty>0};
   }
   if (!(qty > 0)) return { gross: money(base), tax: null, rate: null, recorded, status: 'Missing quantity', valid: false };
-  let rate;
-  if (!taxesIncluded) rate = gstRate(base / qty);
-  else if (present(line.unitTaxableValue)) rate = gstRate(line.unitTaxableValue);
-  else {
-    const candidates = [0.05, 0.18].filter(r => gstRate(base / qty / (1 + r)) === r);
-    if (candidates.length !== 1) return { gross: money(base), tax: null, rate: null, recorded, status: 'Taxable unit value needs review', valid: false };
-    rate = candidates[0];
-  }
+  const rate = gstRate(base / qty);
   const calculated = money(taxesIncluded ? base - base / (1 + rate) : base * rate);
   // Management P&L only: invoice rates, recorded tax and Shopify's taxable
   // flag never override the configured garment calculation. sourceGross is
@@ -58,6 +51,7 @@ function lineTax(line, taxesIncluded = true) {
 
 function completion(order, dispatch = {}, velocity = {}) {
   if (order.pnlCancelled) return null;
+  if (order.pnlDeliveryDate) return {date:order.pnlDeliveryDate,evidence:'User-confirmed delivery (P&L only)'};
   const explicit = day(order.completedAt || order.deliveredAt || dispatch.deliveredAt);
   if (explicit) return { date: explicit, evidence: 'Recorded completion date' };
   if (order.cancelledAt || ['cancelled', 'rto'].includes(dispatch.packingStatus)) return null;
@@ -376,8 +370,15 @@ function buildReport(sources = {}, options = {}) {
     if (list(sources.manualSales?.sales).some(sale => sale.id === id)) continue;
     const date = day(receipts[0].date);
     const amount = money(receipts.reduce((sum, r) => sum + number(r.amount), 0));
-    add(row({ id: 'MANUAL-RECEIPT/' + id, date, kind: 'sale', channel: 'Other', category: 'Other sales', particulars: receipts[0].source, reference: id, source: 'Receipts', grossSales: amount, netSales: null, taxComplete: false, costComplete: false }));
-    warning(id, 'Manual product sale has no SKU/tax allocation. Its gross value is shown; net profit is unavailable until mapped.', date, 'sales', 'Other');
+    const fact=sources.lineCorrections?.entries?.['manual:'+id+'/$manual'];
+    const costKnown=fact?.type==='manual_cost'&&fact.fingerprint===manualHash(receipts)&&present(fact.unitCost)&&fact.unitCost>0&&Number.isInteger(fact.qty)&&fact.qty>0;
+    const taxKnown=costKnown&&present(fact.taxRate)&&fact.taxRate>=0&&fact.taxRate<=1&&typeof fact.taxesIncluded==='boolean';
+    const tax=taxKnown?money(fact.taxesIncluded?amount-amount/(1+fact.taxRate):amount*fact.taxRate):null;
+    const gross=taxKnown&&!fact.taxesIncluded?money(amount+tax):amount;
+    taxRows.push({id:'MANUAL-RECEIPT/'+id,date,reference:id,channel:'Other',sku:'Manual non-garment sale',qty:costKnown?fact.qty:1,gross,recorded:null,calculated:tax,tax,rate:taxKnown?fact.taxRate:null,valid:taxKnown,status:taxKnown?'User-confirmed manual-sale tax':'Manual-sale tax basis needs review'});
+    add(row({ id: 'MANUAL-RECEIPT/' + id, date, kind: 'sale', channel: 'Other', category: 'Other sales', particulars: receipts[0].source, reference: id, source: 'Receipts', sourceInvoiceTotal:amount,grossSales:gross,gst:tax||0,netSales:taxKnown?money(gross-tax):null,cogs:costKnown?money(fact.qty*fact.unitCost):0,taxComplete:taxKnown,costComplete:costKnown,details:costKnown?[{title:receipts[0].source,qty:fact.qty,cogs:money(fact.qty*fact.unitCost),correction:fact,allocations:[{purchaseId:'User-confirmed manual-sale COGS',qty:fact.qty,unitCost:fact.unitCost,amount:money(fact.qty*fact.unitCost)}]}]:[] }));
+    if(!costKnown)warning(id, fact?'Manual-sale COGS confirmation no longer matches its receipts; review it again.':'Manual product sale has no SKU/cost allocation. Its gross value is shown; profit is unavailable until mapped.',date,'cogs','Other');
+    if(!taxKnown)warning(id,'Manual non-garment sale needs its confirmed GST rate and inclusive/exclusive price basis.',date,'gst','Other');
   }
   for (const refund of list(books.salesRefunds)) {
     if (!business(refund.nature) || refund.accountingExcluded || refund.voided || activeDraft(refund)) continue;
@@ -420,7 +421,7 @@ function buildReport(sources = {}, options = {}) {
     group.amount = money(group.amount + entry.expenses); group.count++; categories.set(key, group);
   }
   const months = [...new Set(included.map(e => e.date.slice(0, 7)))].sort();
-  return { success: true, range: { from, to, requestedFrom: options.from || from, partial: from !== options.from && !!options.from, start }, channel: selectedChannel, basis: shopifyCostMode ? 'Completed sales excluding P&L-calculated GST − synced Shopify SKU COGS − approved paid operating expenses' : 'Completed sales excluding P&L-calculated GST − FIFO SKU COGS − approved paid operating expenses', totals: summarize(included, scopedWarnings), previous, categories: [...categories.values()].sort((a, b) => a.group.localeCompare(b.group) || a.category.localeCompare(b.category)), transactions: included.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)), taxes: taxRows.filter(e => inRange(e, from, to)), collections: collections.filter(e => inRange(e, from, to)), trends: months.map(month => ({ month, ...summarize(included.filter(e => e.date.startsWith(month)), scopedWarnings.filter(w => !w.date || w.date.startsWith(month))) })), warnings: scopedWarnings, feeds: sources.feeds || [], costSource: shopifyCostMode ? { name: 'Shopify Cost per item', at: sources.shopifyCosts?.at || null } : { name: 'Verified FIFO' }, policy: { operatingExpenses: 'Approved payments only, including paid portions. Reimbursements and vendor advances are not counted twice.', cogs: shopifyCostMode ? 'Shopify Cost per item by SKU from the synced local snapshot. Current stock quantities and supplier payments do not limit COGS. Refunds reverse the original sale allocation. Missing or duplicate costs remain exceptions. Cost changes restate management P&L history.' : 'Received inventory allocated by SKU using FIFO, irrespective of supplier payment. Missing opening costs are never estimated.', gst: 'P&L only: per-piece taxable sale value ≤ ₹2,500 uses 5%; above ₹2,500 uses 18%. Invoice GST and exempt flags do not override this calculation. Refunds reverse original P&L GST. Ambiguous taxable values still require review. Invoices, Shopify, collections and ledgers remain unchanged.', sales: 'POS completion or recorded delivery date. Customer advances and courier/bank settlements are not extra sales.', channels: selectedChannel === 'All' ? 'All channels and Shared overhead included.' : 'Direct channel only. Shared overhead is excluded, not silently allocated.' } };
+  return { success: true, range: { from, to, requestedFrom: options.from || from, partial: from !== options.from && !!options.from, start }, channel: selectedChannel, basis: shopifyCostMode ? 'Completed sales excluding P&L-calculated GST − synced Shopify SKU COGS − approved paid operating expenses' : 'Completed sales excluding P&L-calculated GST − FIFO SKU COGS − approved paid operating expenses', totals: summarize(included, scopedWarnings), previous, categories: [...categories.values()].sort((a, b) => a.group.localeCompare(b.group) || a.category.localeCompare(b.category)), transactions: included.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)), taxes: taxRows.filter(e => inRange(e, from, to)), collections: collections.filter(e => inRange(e, from, to)), trends: months.map(month => ({ month, ...summarize(included.filter(e => e.date.startsWith(month)), scopedWarnings.filter(w => !w.date || w.date.startsWith(month))) })), warnings: scopedWarnings, feeds: sources.feeds || [], costSource: shopifyCostMode ? { name: 'Shopify Cost per item', at: sources.shopifyCosts?.at || null } : { name: 'Verified FIFO' }, policy: { operatingExpenses: 'Approved payments only, including paid portions. Reimbursements and vendor advances are not counted twice.', cogs: shopifyCostMode ? 'Shopify Cost per item by SKU from the synced local snapshot. Current stock quantities and supplier payments do not limit COGS. Refunds reverse the original sale allocation. Missing or duplicate costs remain exceptions. Cost changes restate management P&L history.' : 'Received inventory allocated by SKU using FIFO, irrespective of supplier payment. Missing opening costs are never estimated.', gst: 'P&L only: final per-piece selling value after discounts ≤ ₹2,500 uses 5%; above ₹2,500 uses 18%. Invoice GST and exempt flags do not override this calculation. Refunds reverse original P&L GST. Inclusive GST is extracted from the final selling amount; exclusive GST is added. Missing price basis and non-garment tax still require review. Invoices, Shopify, collections and ledgers remain unchanged.', sales: 'POS completion or recorded delivery date. Customer advances and courier/bank settlements are not extra sales.', channels: selectedChannel === 'All' ? 'All channels and Shared overhead included.' : 'Direct channel only. Shared overhead is excluded, not silently allocated.' } };
 }
 function linesIndex(lines, id) { return (lines || []).findIndex(line => String(line.id) === String(id)); }
 module.exports = { START, validDate, day, money, gstRate, lineTax, completion, costLots, buildReport };
