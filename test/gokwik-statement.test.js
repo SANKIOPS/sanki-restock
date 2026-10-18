@@ -25,8 +25,8 @@ test('range opening carries earlier report events and future outflows are not su
 test('manual movements and existing exact opening remain part of the common statement',()=>{
  const {store,entries}=fixture();entries[0].credit=100.13;entries.push({id:'MANUAL',kind:'receipt',date:'2026-08-26',credit:10.24});const report=buildStatement(entries,store);assert.equal(report.openingBalance,100.13);assert.equal(report.closingBalance,110.37);assert.equal(report.totalIn,160.24);
 });
-test('approval is shown as pending and never treated as a posting',()=>{
- const {store,entries}=fixture(),id=g.batches(Object.values(store.gokwikTransactions))[0].id;store.gokwikApprovals={[id]:{requestedBy:'Admin'}};const before=JSON.stringify(store),report=buildStatement(entries,store);assert.match(report.entries[1].status,/Unposted.*awaiting Owner/);assert.equal(report.pendingOut,150);assert.equal(JSON.stringify(store),before);
+test('legacy provider approval cannot change report figures or create a posting',()=>{
+ const {store,entries}=fixture(),id=g.batches(Object.values(store.gokwikTransactions))[0].id;store.gokwikApprovals={[id]:{requestedBy:'Admin'}};const before=JSON.stringify(store),report=buildStatement(entries,store);assert.match(report.entries[1].status,/Report figures.*awaiting 0437/);assert.equal(report.pendingOut,150);assert.equal(JSON.stringify(store),before);
 });
 test('an unrelated expense-entity filter cannot expose SANKI provider outflows',()=>{
  const {store,entries}=fixture();entries[1].entity='SANKI';const report=buildStatement(entries,store,{expenseNature:'SAMAST'});assert.equal(report.entries.length,0);assert.equal(report.pendingOut,0);
@@ -36,4 +36,7 @@ test('zero-net batches have deductions but never invent a zero bank payout',()=>
 });
 test('multiple payments sharing one UTR produce one set of settlement outflows',()=>{
  const {store,entries}=fixture();store.gokwikTransactions.P2={...store.gokwikTransactions.P1,paymentId:'P2',orderId:'O2'};entries.push({...entries[1],id:'GKW-PAYMENT/P2'});const report=buildStatement(entries,store);assert.equal(report.entries.filter(r=>r.pendingPosting).length,3);assert.equal(report.totalIn,300);assert.equal(report.totalOut,300);assert.equal(report.closingBalance,100);
+});
+test('unlinked captures still show exact report figures without duplicate Shopify estimates or accounting mutations',()=>{
+ const {store,entries}=fixture();entries[1]={id:'SHOPIFY/O1/P',kind:'sale',date:'2026-08-24',orderId:'O1',credit:150};entries.push({id:'GKW-UNREPORTED/O2',kind:'sale',date:'2026-08-24',credit:999});const before=JSON.stringify({store,entries}),report=buildStatement(entries,store,{recordedBalance:1249});assert.equal(report.totalIn,150);assert.equal(report.totalOut,150);assert.equal(report.closingBalance,100);assert.equal(report.recordedBalance,1249);assert.equal(report.entries.filter(row=>row.credit).length,1);assert.equal(report.entries[0].editable,false);assert.equal(JSON.stringify({store,entries}),before);
 });
