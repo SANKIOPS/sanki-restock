@@ -157,3 +157,7 @@ test('all inline expense-page scripts remain valid JavaScript', () => {
     if (script[1].trim()) assert.doesNotThrow(() => new vm.Script(script[1]));
   }
 });
+
+test('the lender selection helper uses a release-specific cache key', () => {
+  assert.match(page, /expense-loans\.js\?v=payables-ledger-selection-20261018/);
+});
