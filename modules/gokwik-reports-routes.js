@@ -61,36 +61,8 @@ function registerGoKwikReports(router,deps) {
   router.post(base+'/unmatch',run((req,res)=>{
     const s=loadStore(),id=String(req.body.paymentId || ''),tx=(s.gokwikTransactions || {})[id],reason=String(req.body.reason || '').trim();if(!tx)throw Error('Payment not found.');if(reason.length<10)throw Error('Enter an unmatch reason of at least 10 characters.');assertNotPosted(s,tx);const before=s.gokwikOrderLinks?.[id];if(s.gokwikOrderLinks)delete s.gokwikOrderLinks[id];invalidateApproval(s,tx);event(s,req,'GOKWIK_ORDER_UNMATCHED',id,{before,note:reason});saveStore(s);respond(res,s);
   }));
-  router.post(base+'/submit',run((req,res)=>{
-    const s=loadStore(),id=String(req.body.settlementId || ''),reason=String(req.body.reason || '').trim();if(reason.length<10)throw Error('Enter a reconciliation remark of at least 10 characters.');const checked=g.review(s,id,orders());
-    const approval={fingerprint:checked.fingerprint,requestedBy:req.user.username,requestedAt:new Date().toISOString(),reason,deductionCategory:g.SUBSCRIPTION,deductionVendor:'GoKwik',deductionTreatment:'User-confirmed GoKwik service charge; final classification: Subscription Expense, vendor GoKwik'};
-    s.gokwikApprovals=s.gokwikApprovals || {};s.gokwikApprovals[id]=approval;event(s,req,'GOKWIK_APPROVAL_REQUESTED',id,{after:approval,note:'No posting until Owner approval. Bank account opening and statement summary untouched.'});saveStore(s);respond(res,s);
-  }));
-  router.post(base+'/withdraw',run((req,res)=>{const s=loadStore(),id=String(req.body.settlementId || ''),reason=String(req.body.reason || '').trim();if(reason.length<10)throw Error('Enter a withdrawal/rejection reason of at least 10 characters.');if(!s.gokwikApprovals?.[id])throw Error('Pending approval not found.');const before=s.gokwikApprovals[id];delete s.gokwikApprovals[id];event(s,req,'GOKWIK_APPROVAL_WITHDRAWN',id,{before,note:reason});saveStore(s);respond(res,s);}));
-  router.post(base+'/approve',run((req,res)=>{
-    if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can approve and post GoKwik settlements.'});
-    const s=loadStore(),id=String(req.body.settlementId || ''),approval=(s.gokwikApprovals || {})[id];if(!approval)throw Error('Submit this settlement for approval first.');
-    const checked=g.review(s,id,orders());if(checked.fingerprint!==approval.fingerprint)throw Error('Report, order funding or bank evidence changed after submission. Review and submit again; nothing was posted.');
-    const {batch,bank}=checked,now=new Date().toISOString(),sourceIds=[...new Set(batch.transactions.map(t=>t.importId))],proof=base+'/proof/'+encodeURIComponent(id);
-    s.expenses=s.expenses || {};s.transfers=s.transfers || [];s.gokwikPostings=s.gokwikPostings || {};s.customLedgers=s.customLedgers || {};
-    const vendor=registerVendor(s,'SANKI','GoKwik',{}),expenses=[];
-    if(s.sankiCategoryCatalog?.categories&&!s.sankiCategoryCatalog.categories.some(c=>String(c.name).toLowerCase()===g.SUBSCRIPTION.toLowerCase()))s.sankiCategoryCatalog.categories.push({name:g.SUBSCRIPTION,group:'Subscriptions',type:'fixed',createdBy:req.user.username,createdAt:now});
-    const createExpense=(total,ledger,particulars,type)=>{
-      if(g.money(total)<=0)return;
-      do{s.seq=Number(s.seq || 0)+1;}while(s.expenses['EX-'+String(s.seq).padStart(5,'0')]);
-      const expenseId='EX-'+String(s.seq).padStart(5,'0');
-      const payment={id:'PAY-001',date:bank.date,amount:total,account:g.CLEARING,paymentType:'Settlement deduction',proof,proofs:[proof],bankReference:batch.utr,paidBy:req.user.username,paidAt:now,personalFunds:false,gokwikPostingId:id};
-      const expense={id:expenseId,nature:'SANKI',channel:'Website',date:bank.date,amount:total,requestedAmount:total,paidAmount:total,status:'paid',approvedAt:now,approvedBy:req.user.username,createdAt:now,createdBy:req.user.username,claimant:req.user.username,vendor,ledger,type,particulars,account:g.CLEARING,fundedBy:'company',paidAlready:false,paymentType:payment.paymentType,payments:[payment],paymentProof:proof,billPhoto:proof,billPhotos:[proof],bill:'statement',exceptionEvidence:'Original GoKwik settlement CSV and exact 0437 bank credit',exceptionReason:'Owner approved report-backed settlement deduction',gokwikPostingId:id,gokwikSourceIds:sourceIds,paidAt:now,paidBy:req.user.username};
-      s.expenses[expenseId]=expense;s.customLedgers[ledger]=s.customLedgers[ledger] || {name:ledger,type};expenses.push(expenseId);event(s,req,'GOKWIK_EXPENSE_POSTED',expenseId,{after:expense});
-    };
-    createExpense(Number((batch.fee+batch.tax+batch.additionalFee+batch.additionalTax).toFixed(2)),'BANK CHARGES','GoKwik processing fee and tax · UTR '+batch.utr+' · fee '+batch.fee+', tax '+batch.tax+', additional fee '+batch.additionalFee+', additional tax '+batch.additionalTax,'running');
-    createExpense(batch.deduction,g.SUBSCRIPTION,'GoKwik service charge · Subscription Expense · UTR '+batch.utr,'fixed');
-    do{s.transferSeq=Number(s.transferSeq || 0)+1;}while(s.transfers.some(t=>t.id==='TR-'+String(s.transferSeq).padStart(5,'0')));
-    const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',classification:'internal_transfer',fromAccount:g.CLEARING,toAccount:g.BANK,amount:batch.net,date:bank.date,bankReference:batch.utr,reference:batch.utr,proof,proofs:[proof],note:'GoKwik net settlement · '+batch.transactions.map(t=>'#'+t.orderNumber).join(', '),gokwikPostingId:id,createdAt:now,createdBy:req.user.username};
-    s.transfers.push(transfer);
-    const posting={id,utr:batch.utr,gross:batch.gross,net:batch.net,fee:batch.fee,tax:batch.tax,additionalFee:batch.additionalFee,additionalTax:batch.additionalTax,deduction:batch.deduction,date:bank.date,bankSignature:bank.signature,bankLocator:bank.locator,transferId:transfer.id,expenseIds:expenses,sourceIds,approval,postedBy:req.user.username,postedAt:now};
-    s.gokwikPostings[id]=posting;delete s.gokwikApprovals[id];event(s,req,'GOKWIK_SETTLEMENT_POSTED',id,{after:posting,note:'One net internal transfer and paid GoKwik charges. No duplicate sale, bank opening adjustment or statement finalization.'});saveStore(s);respond(res,s,{posting});
-  }));
+  // Old clients must not bypass bank reconciliation or post a single batch.
+  for(const action of ['/submit','/withdraw','/approve'])router.post(base+action,run((req,res)=>res.status(409).json({success:false,error:'GoKwik settlements are reconciled only with Owner finalization of IndusInd 0437. Use the universal bank reconciliation; nothing was posted.'})));
 }
 function financial(tx){const {importId,...rest}=tx;return rest;}
 function mergeTransactions(store,incoming) {
