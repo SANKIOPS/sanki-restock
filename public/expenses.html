@@ -83,6 +83,9 @@
     .hint { font-size:11px; color:#9ca3af; margin-top:3px; }
     .inline-request { margin-top:8px; padding:10px; border:1px solid #dbe3ec; border-radius:9px; background:#f8fafc; }
     .inline-request .request-actions { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    .category-group-label { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:4px; }
+    .category-group-label label { margin:0; }
+    #spendingGroupFields[hidden] { display:none; }
     .payment-choice { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .payment-choice label { display:flex; align-items:center; gap:8px; min-height:44px; margin:0; padding:10px 12px; border:1px solid #d1d5db; border-radius:8px; background:#fff; text-transform:none; letter-spacing:0; font-size:13px; cursor:pointer; }
     .payment-choice input { width:18px; height:18px; min-width:18px; margin:0; padding:0; accent-color:var(--blue); }
@@ -263,8 +266,14 @@
     <p class="sub">Create an approved category without leaving the Spending dashboard. It will be available everywhere expenses are categorized.</p>
     <div class="grid">
       <div class="fld full"><label>Category name</label><input id="spendingCategoryName" placeholder="Enter new category name" maxlength="120"></div>
-      <div class="fld"><label>Group</label><select id="spendingCategoryGroup"></select></div>
+      <div class="fld"><div class="category-group-label"><label for="spendingCategoryGroup">Group</label><button type="button" class="btn mini ghost" id="spendingCategoryAddGroup" aria-controls="spendingGroupFields" aria-expanded="false">＋ Add group</button></div><select id="spendingCategoryGroup"></select></div>
       <div class="fld"><label>Type</label><select id="spendingCategoryType"></select></div>
+      <div class="fld full inline-request" id="spendingGroupFields" hidden>
+        <label for="spendingGroupName">New group name</label><input id="spendingGroupName" placeholder="Enter new group name" maxlength="120" autocomplete="off">
+        <p class="hint">Saved groups are shared wherever expense categories are managed. This will not create a category or change any expense.</p>
+        <div class="request-actions"><button type="button" class="btn mini primary" id="spendingGroupSave">Save group</button><button type="button" class="btn mini ghost" id="spendingGroupCancel">Cancel group</button></div>
+        <div id="spendingGroupMsg" class="msg" role="status" aria-live="polite"></div>
+      </div>
     </div>
     <div id="spendingCategoryMsg" class="msg" role="status" aria-live="polite"></div>
     <div class="row-actions"><button type="button" class="btn primary" id="spendingCategorySave">Add category</button><button type="button" class="btn ghost" id="spendingCategoryCancel">Cancel</button></div>
@@ -1210,18 +1219,58 @@
     window.setMediator=function(current){var name=prompt('Logistics mediator / payee name:',current||'');if(!name||!name.trim())return;api('/api/expenses/procurement-payables/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mediator:name.trim()})}).then(function(d){if(d.success){setMsg('Purchase mediator updated.',true);loadPendingPayments();}else setMsg(d.error||'Could not update mediator.',false);});};
     function dateDaysAgo(days){var d=new Date(Date.now()+5.5*3600*1000-(days-1)*86400000);return d.toISOString().slice(0,10);}
     function refreshSpendingCategoryList(){var list=el('sd_category_list');if(list)list.innerHTML=(cfg.ledgers||[]).map(function(l){return '<option value="'+esc(l.name)+'" label="'+esc(l.group||'')+'">';}).join('');}
+    var spendingGroupGeneration=0,spendingGroupSaving=false;
+    function refreshSpendingGroupChoices(selected){var current=selected||el('spendingCategoryGroup').value;el('spendingCategoryGroup').innerHTML=opts(cfg.categoryGroups||[],current);}
+    function setSpendingGroupSaving(saving){
+      spendingGroupSaving=saving;
+      ['spendingGroupSave','spendingGroupCancel','spendingGroupName','spendingCategorySave','spendingCategoryCancel','spendingCategoryAddGroup','spendingCategoryGroup'].forEach(function(id){el(id).disabled=saving;});
+    }
+    function resetSpendingGroupForm(){
+      spendingGroupGeneration++;setSpendingGroupSaving(false);
+      el('spendingGroupFields').hidden=true;el('spendingGroupName').value='';
+      el('spendingGroupMsg').className='msg';el('spendingGroupMsg').textContent='';
+      el('spendingCategoryAddGroup').setAttribute('aria-expanded','false');
+    }
     window.openSpendingCategoryDialog=function(){
       if(!cfg.canManageCategories)return;
+      resetSpendingGroupForm();
       el('spendingCategoryName').value='';
-      el('spendingCategoryGroup').innerHTML=opts(cfg.categoryGroups||[]);
+      refreshSpendingGroupChoices();
       el('spendingCategoryType').innerHTML=opts(cfg.types,'variable');
       el('spendingCategoryMsg').className='msg';el('spendingCategoryMsg').textContent='';
       el('spendingCategoryDlg').showModal();
       setTimeout(function(){el('spendingCategoryName').focus();},0);
     };
     el('spendingCategoryCancel').addEventListener('click',function(){el('spendingCategoryDlg').close();});
+    el('spendingCategoryDlg').addEventListener('cancel',function(event){if(spendingGroupSaving)event.preventDefault();});
+    el('spendingCategoryDlg').addEventListener('close',function(){if(!el('spendingCategoryDlg').open)resetSpendingGroupForm();});
+    el('spendingCategoryAddGroup').addEventListener('click',function(){
+      if(!cfg.canManageCategories||spendingGroupSaving||el('spendingCategorySave').disabled)return;
+      resetSpendingGroupForm();el('spendingGroupFields').hidden=false;
+      el('spendingCategoryAddGroup').setAttribute('aria-expanded','true');el('spendingGroupName').focus();
+    });
+    el('spendingGroupCancel').addEventListener('click',function(){if(!spendingGroupSaving){resetSpendingGroupForm();el('spendingCategoryAddGroup').focus();}});
+    el('spendingGroupSave').addEventListener('click',function(){
+      if(!cfg.canManageCategories||spendingGroupSaving)return;
+      var name=el('spendingGroupName').value.trim(),message=el('spendingGroupMsg');
+      if(!name||name.length>120){message.className='msg err';message.textContent='Enter a group name (up to 120 characters).';return;}
+      var generation=++spendingGroupGeneration;setSpendingGroupSaving(true);
+      message.className='msg';message.textContent='Saving group…';
+      api('/api/expenses/category-groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})}).then(function(d){
+        if(!d.success)throw new Error(d.error||'Could not add group.');
+        if(generation!==spendingGroupGeneration)return;
+        return loadConfig().catch(function(){throw new Error('The group was saved, but the list could not refresh. Retry to select the existing group.');}).then(function(){
+          if(generation!==spendingGroupGeneration)return;
+          refreshSpendingGroupChoices(d.group);refreshSpendingCategoryList();
+          el('spendingGroupFields').hidden=true;el('spendingGroupName').value='';
+          el('spendingCategoryAddGroup').setAttribute('aria-expanded','false');
+          el('spendingCategoryMsg').className='msg ok';el('spendingCategoryMsg').textContent=d.already?'This group already exists and is now selected.':'Group added and selected. You can now add the category.';
+        });
+      }).catch(function(error){if(generation!==spendingGroupGeneration)return;message.className='msg err';message.textContent=error&&error.message||'Could not add group. Please retry.';}).finally(function(){if(generation===spendingGroupGeneration)setSpendingGroupSaving(false);});
+    });
+    el('spendingGroupName').addEventListener('keydown',function(event){if(event.key==='Enter'){event.preventDefault();el('spendingGroupSave').click();}});
     el('spendingCategorySave').addEventListener('click',function(){
-      if(!cfg.canManageCategories)return;
+      if(!cfg.canManageCategories||spendingGroupSaving)return;
       var btn=this,name=el('spendingCategoryName').value.trim(),message=el('spendingCategoryMsg');
       if(!name){message.className='msg err';message.textContent='Enter a category name.';return;}
       btn.disabled=true;message.className='msg';message.textContent='Saving…';

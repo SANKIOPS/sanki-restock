@@ -8,6 +8,7 @@ const { reconciliationReminderAttention } = require('./reconciliation-reminder-a
 const { cashVerificationView } = require('./cash-verification-status');
 const { REVIEWED_VENDOR_DECISIONS_20261009 } = require('./vendor-review-decisions-2026-10-09');
 const { vendorSearchRank, compareVendorSearch } = require('./vendor-ledger-search');
+const { cleanGroupName, groupKey, categoryGroupNames } = require('./expense-category-groups');
 const claimantPolicy = require('./expense-claimant-policy');
 const ledgerConnections = require('./expense-ledger-connections');
 const transferReimbursements = require('./transfer-reimbursement-links');
@@ -303,6 +304,7 @@ function blankStore() {
     auditLog: [],                        // immutable accounting activity trail
     ledgerOverrides: {},
     customLedgers: {},                   // { [name]: { name, type } } admin-approved new categories
+    customCategoryGroups: [],            // approved empty groups remain available before a category uses them
     requests: [],                        // [{ id, kind:'ledger'|'account', name, meta, status, by, at, decidedBy, decidedAt }]
     openingInvestment: 0,
     procurementAccounting: {
@@ -1717,6 +1719,7 @@ function pickableLedgers(s, nature) {
     .map(n => ledgerMeta(s, n))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+function categoryGroups(s) { return categoryGroupNames(s, pickableLedgers(s)); }
 function storedAccountNames(s) {
   const names = new Set([].concat(s.accounts || [], [DEFAULT_SALES_BANK, DEFAULT_COUNTER_CASH], Object.keys(s.openingBalances || {}), Object.keys(s.odConfig || {})));
   Object.values(s.openingBalancesByNature || {}).forEach(map => Object.keys(map || {}).forEach(name => names.add(name)));
@@ -2190,7 +2193,7 @@ router.get('/api/expenses/config', (req, res) => {
     success: true,
     ledgers: pickableLedgers(s),
     ledgersByNature: Object.fromEntries(allowed.map(n=>[n,pickableLedgers(s,n)])),
-    categoryGroups: [...new Set(sankiCategories.catalog(s).map(x=>x.group))],
+    categoryGroups: categoryGroups(s),
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
     vendorPhones,
@@ -2396,7 +2399,7 @@ function editExpenseMetadata(s,req,e,b,editReason) {
 }
 // Single-segment POST paths that have their OWN handlers registered after this
 // param route — the ':id' pattern would otherwise swallow them. Fall through.
-const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'sale-allocation', 'receivables', 'vendors', 'custom-ledgers', 'upload', 'batch-pay', 'cash-reconciliations']);
+const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'sale-allocation', 'receivables', 'vendors', 'custom-ledgers', 'category-groups', 'upload', 'batch-pay', 'cash-reconciliations']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
   if (!canApprove(req)) return res.status(403).json({ success:false, error:'Claimants cannot edit submitted expenses. Ask an approver to make the correction.' });
@@ -5997,6 +6000,17 @@ router.post('/api/expenses/accounts/remove', (req, res) => {
   res.json({ success: true, accounts: s.accounts });
 });
 // Admin: list / remove admin-approved CUSTOM categories (built-in ones stay).
+router.post('/api/expenses/category-groups', (req, res) => {
+  if (claimantPolicy.claimantOnly(req)||!canManageCategoriesAndVendors(req)) return res.status(403).json({success:false,error:'Only the Owner or Prashant can create category groups.'});
+  const name=cleanGroupName((req.body||{}).name);
+  if(!name)return res.status(400).json({success:false,error:'Enter a group name using printable characters (up to 120 characters).'});
+  const s=loadStore(), groups=categoryGroups(s), existing=groups.find(group=>groupKey(group)===groupKey(name));
+  if(existing)return res.json({success:true,group:existing,groups,already:true});
+  s.customCategoryGroups=Array.isArray(s.customCategoryGroups)?s.customCategoryGroups:[];
+  s.customCategoryGroups.push(name);
+  audit(s,req,'CATEGORY_GROUP_CREATED','category_group',name,{after:{name},note:'Added an available category group; no expense, payment or existing category was changed.'});saveStore(s);
+  res.json({success:true,group:name,groups:categoryGroups(s)});
+});
 router.post('/api/expenses/custom-ledgers', (req, res) => {
   if (!canManageCategoriesAndVendors(req)) return res.status(403).json({ success:false, error:'Only the Owner or Prashant can create categories.' });
   const s=loadStore(), b=req.body||{}, name=String(b.name||'').trim();
@@ -6004,8 +6018,9 @@ router.post('/api/expenses/custom-ledgers', (req, res) => {
   if(!TYPES.includes(b.type)) return res.status(400).json({success:false,error:'Choose a valid category type.'});
   const existing=pickableLedgers(s).find(l=>l.name.toLowerCase()===name.toLowerCase());
   if(existing) return res.json({success:true,already:true,ledger:existing});
-  const group=String(b.group||'').trim();
-  if(sankiCategories.active(s)&&!sankiCategories.catalog(s).some(x=>x.group===group))return res.status(400).json({success:false,error:'Select an existing SANKI group.'});
+  const requestedGroup=cleanGroupName(b.group), knownGroup=requestedGroup&&categoryGroups(s).find(group=>groupKey(group)===groupKey(requestedGroup));
+  if(sankiCategories.active(s)&&!knownGroup)return res.status(400).json({success:false,error:'Select an existing SANKI group.'});
+  const group=knownGroup||requestedGroup;
   const ledger={name,type:b.type,group};
   if(sankiCategories.active(s))s.sankiCategoryCatalog.categories.push({name,group});
   s.customLedgers=s.customLedgers||{};s.customLedgers[name]=ledger;
