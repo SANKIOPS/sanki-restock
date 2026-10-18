@@ -8,26 +8,26 @@ function parseSetup(buffer) {
   const records = {campaigns:new Map(), adSets:new Map(), ads:new Map()}, warnings = new Set();
   const text = (r,k) => String(r[k] || '').trim();
   const metaId = (r,k,prefix) => {const value=text(r,k).replace(/^[a-z]+:/i,'');if(!/^\d+$/.test(value))throw new Error(`${k} is missing or invalid. Use the configuration export with IDs.`);return prefix+value;};
-  const status = v => ({ACTIVE:'reported_running',PAUSED:'paused',INACTIVE:'paused',ARCHIVED:'archived',DELETED:'archived'}[v.toUpperCase()] || 'unknown');
+  const status = v => ({ACTIVE:'reported_running',PAUSED:'paused',INACTIVE:'paused',ARCHIVED:'archived',DELETED:'archived',ON:'reported_running',OFF:'paused',TRUE:'reported_running',FALSE:'paused','1':'reported_running','0':'paused'}[v.toUpperCase()] || 'unknown');
   const number = (r,k) => {const v=text(r,k);if(!v)return undefined;const n=Number(v);if(!Number.isFinite(n))throw new Error(`Invalid ${k}.`);return n;};
   function put(type, record) {const prior=records[type].get(record.id);if(prior && JSON.stringify(prior)!==JSON.stringify(record))throw new Error(`Conflicting settings for ${record.name}. Export a consistent setup.`);records[type].set(record.id,record);}
   if(rows.some(r=>Object.hasOwn(r,'Campaign name'))&&!rows.some(r=>Object.hasOwn(r,'Campaign Name'))){
     const level=rows.some(r=>Object.hasOwn(r,'Ad ID'))?'ads':rows.some(r=>Object.hasOwn(r,'Ad set ID'))?'adSets':'campaigns';
     const deliveryStatus=v=>({active:'reported_running',paused:'paused',off:'paused',archived:'archived',deleted:'archived'}[v.toLowerCase()]||'delivery_unconfirmed');
     for(const r of rows){if(!text(r,'Campaign ID')&&!text(r,'Campaign name'))continue;
-      const campaign={id:metaId(r,'Campaign ID','meta-campaign-'),name:text(r,'Campaign name')};if(!campaign.name)throw new Error('Campaign name is required.');if(text(r,'Campaign delivery'))campaign.status=deliveryStatus(text(r,'Campaign delivery'));if(text(r,'Campaign objective'))campaign.objective=text(r,'Campaign objective');put('campaigns',campaign);
+      const campaign={id:metaId(r,'Campaign ID','meta-campaign-'),name:text(r,'Campaign name')};if(!campaign.name)throw new Error('Campaign name is required.');const campaignToggle=text(r,'Campaign status')||text(r,'Campaign Status')||text(r,'Campaign on/off');if(campaignToggle)campaign.status=status(campaignToggle);else if(text(r,'Campaign delivery'))campaign.status=deliveryStatus(text(r,'Campaign delivery'));if(text(r,'Campaign objective'))campaign.objective=text(r,'Campaign objective');put('campaigns',campaign);
       if(level==='campaigns')continue;
-      const set={id:metaId(r,'Ad set ID','meta-adset-'),campaignId:campaign.id,name:text(r,'Ad set name')};if(!set.name)throw new Error('Include Ad set name in this table export.');if(text(r,'Ad set delivery'))set.status=deliveryStatus(text(r,'Ad set delivery'));const daily=text(r,'Ad set budget type').toLowerCase()==='daily'?number(r,'Ad set budget'):undefined;if(daily!==undefined)set.budgetDaily=daily;put('adSets',set);
-      if(level==='ads'){const ad={id:metaId(r,'Ad ID','meta-ad-'),adSetId:set.id,name:text(r,'Ad name')};if(!ad.name)throw new Error('Include Ad name in this table export.');if(text(r,'Ad delivery'))ad.status=deliveryStatus(text(r,'Ad delivery'));put('ads',ad);}
+      const set={id:metaId(r,'Ad set ID','meta-adset-'),campaignId:campaign.id,name:text(r,'Ad set name')};if(!set.name)throw new Error('Include Ad set name in this table export.');const setToggle=text(r,'Ad set status')||text(r,'Ad Set Run Status')||text(r,'Ad set on/off');if(setToggle)set.status=status(setToggle);else if(text(r,'Ad set delivery'))set.status=deliveryStatus(text(r,'Ad set delivery'));const daily=text(r,'Ad set budget type').toLowerCase()==='daily'?number(r,'Ad set budget'):undefined;if(daily!==undefined)set.budgetDaily=daily;put('adSets',set);
+      if(level==='ads'){const ad={id:metaId(r,'Ad ID','meta-ad-'),adSetId:set.id,name:text(r,'Ad name')};if(!ad.name)throw new Error('Include Ad name in this table export.');const adToggle=text(r,'Ad status')||text(r,'Ad Status')||text(r,'Ad on/off');if(adToggle)ad.status=status(adToggle);else if(text(r,'Ad delivery'))ad.status=deliveryStatus(text(r,'Ad delivery'));put('ads',ad);}
     }
     warnings.add('Partial '+level+' table: only supplied names, IDs, delivery and explicit daily budgets update. Missing targeting, creatives and objectives remain unchanged; delivery does not always establish on/off status.');
     return {level,records:Object.fromEntries(Object.entries(records).map(([k,v])=>[k,[...v.values()]])),warnings:[...warnings]};
   }
   for(const r of rows) {
     const campaignId=metaId(r,'Campaign ID','meta-campaign-'), adSetId=metaId(r,'Ad Set ID','meta-adset-'), adId=metaId(r,'Ad ID','meta-ad-');
-    put('campaigns',{id:campaignId,name:text(r,'Campaign Name'),objective:text(r,'Campaign Objective'),status:status(text(r,'Campaign Status'))});
+    put('campaigns',{id:campaignId,name:text(r,'Campaign Name'),objective:text(r,'Campaign Objective'),...(text(r,'Campaign Status')?{status:status(text(r,'Campaign Status'))}:{})});
     const audienceColumns=['Countries','Cities','Regions','Addresses','Zip','Excluded Countries','Excluded Cities','Excluded Regions','Excluded Addresses','Excluded Zip','Location Types','Unified Interests','Flexible Inclusions','Flexible Exclusions','Behaviors','Custom Audiences','Excluded Custom Audiences','Locales','Advantage Audience','Individual Setting','Age Range','Targeting Optimization','Targeting Relaxation','Attribution Spec','Billing Event','Ad Set Bid Strategy'];
-    const set={id:adSetId,campaignId,name:text(r,'Ad Set Name'),status:status(text(r,'Ad Set Run Status')),performanceGoal:text(r,'Optimization Goal'),setupDetails:JSON.stringify(Object.fromEntries(audienceColumns.map(k=>[k,text(r,k)])))};
+    const set={id:adSetId,campaignId,name:text(r,'Ad Set Name'),...(text(r,'Ad Set Run Status')?{status:status(text(r,'Ad Set Run Status'))}:{}),performanceGoal:text(r,'Optimization Goal'),setupDetails:JSON.stringify(Object.fromEntries(audienceColumns.map(k=>[k,text(r,k)])))};
     for(const [key,column] of [['budgetDaily','Ad Set Daily Budget'],['ageMin','Age Min'],['ageMax','Age Max']]) {const v=number(r,column);if(v!==undefined)set[key]=v;}
     if(text(r,'Gender'))set.gender=text(r,'Gender').toLowerCase();
     const destination={INSTAGRAM_PROFILE:'Instagram profile',WHATSAPP:'WhatsApp',WEBSITE:'Website',MESSENGER:'Messenger'}[text(r,'Destination Type')];
@@ -45,7 +45,7 @@ function parseSetup(buffer) {
     if(frequency){set.frequencyCount=Number(frequency[1]);set.frequencyDays=Number(frequency[2]);set.frequencyMode=frequency[3].toLowerCase();}
     if(text(r,'Locales'))warnings.add(`${set.name}: language codes are retained in the source export; names require confirmation.`);
     put('adSets',set);
-    const ad={id:adId,adSetId,name:text(r,'Ad Name'),status:status(text(r,'Ad Status')),format:text(r,'Creative Type'),primaryText:text(r,'Body'),cta:text(r,'Call to Action')};
+    const ad={id:adId,adSetId,name:text(r,'Ad Name'),...(text(r,'Ad Status')?{status:status(text(r,'Ad Status'))}:{}),format:text(r,'Creative Type'),primaryText:text(r,'Body'),cta:text(r,'Call to Action')};
     ad.setupSource=JSON.stringify(Object.fromEntries(Object.keys(r).filter(k=>text(r,k)).map(k=>[k,text(r,k)])));
     if(text(r,'Call to Action WhatsApp Number'))ad.whatsappNumber=text(r,'Call to Action WhatsApp Number');
     const urls=['Instagram Preview Link','Permalink','Preview Link'].map(k=>text(r,k)).filter(Boolean);if(urls.length)ad.mediaUrls=urls;
