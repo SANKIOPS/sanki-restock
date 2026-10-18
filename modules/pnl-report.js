@@ -57,6 +57,7 @@ function lineTax(line, taxesIncluded = true) {
 }
 
 function completion(order, dispatch = {}, velocity = {}) {
+  if (order.pnlCancelled) return null;
   const explicit = day(order.completedAt || order.deliveredAt || dispatch.deliveredAt);
   if (explicit) return { date: explicit, evidence: 'Recorded completion date' };
   if (order.cancelledAt || ['cancelled', 'rto'].includes(dispatch.packingStatus)) return null;
@@ -177,9 +178,13 @@ function buildReport(sources = {}, options = {}) {
     const cashRefunded = money(periodRefunds.filter(t => !/store.?credit|gift.?card/i.test(t.gateway)).reduce((sum, t) => sum + number(t.amount), 0));
     const placed = day(order.processedAt || order.createdAt);
     const completedInTime = made?.date && made.date <= to;
-    const cancelledInTime = order.cancelledAt ? day(order.cancelledAt) <= to : ['cancelled', 'rto'].includes(dispatch.packingStatus) && !completedInTime;
+    const cancelledInTime = order.pnlCancelled || (order.cancelledAt ? day(order.cancelledAt) <= to : ['cancelled', 'rto'].includes(dispatch.packingStatus) && !completedInTime);
     const refundedValue = money(list(order.refunds).filter(r => day(r.date || r.createdAt) && day(r.date || r.createdAt) <= to).reduce((sum, r) => sum + number(r.amount), 0));
     if (placed >= start && placed <= to) collections.push({ id, reference, date: completedInTime ? made.date : placed, channel: ch, orderValue: money(order.total), collected, cashRefunded, balanceToCollect: cancelledInTime ? 0 : collected === null ? null : money(Math.max(0, number(order.total) - refundedValue - collected + cashRefunded)), status: completedInTime ? 'Completed sale' : (cancelledInTime ? 'Cancelled / RTO' : 'Awaiting completion'), customerAdvance: collected === null ? null : (completedInTime ? 0 : money(Math.max(0, collected - cashRefunded))), payments: periodPayments.map(t => ({ id: t.id, date: day(t.processedAt), method: t.gateway, amount: money(t.amount) })), source });
+    if (order.pnlCancelled && collections.length && collections[collections.length-1].id===id) {
+      collections[collections.length-1].status='Cancelled (P&L-only confirmation)';
+      collections[collections.length-1].correction=order.pnlStatusCorrection;
+    }
     if (!made) return;
     if (!made.date) { warning(reference, made.issue || 'Delivery is marked complete but its actual date is missing. This sale is excluded until the source date is confirmed.', '', 'sales', ch); return; }
     if (made.date < start || made.date > to) return;

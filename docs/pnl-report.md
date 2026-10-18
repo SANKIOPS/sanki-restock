@@ -140,6 +140,19 @@ Shopify order, invoice, stock, expense, payment or reconciliation store is
 edited. Business-specific corrections are private runtime data, never
 hardcoded into the public source repository.
 
+### Confirmed cancelled orders (P&L only)
+
+Admin and Owner can preview an exact order reference and save an audited
+`cancelled` order-status annotation through the same private correction
+store. The order identity is checked again at save and report time. No
+business order reference is hardcoded into the source. The cancelled sale
+is excluded from revenue, garment GST and COGS, and no missing-delivery
+warning is emitted. Existing customer collections, cash refunds and any
+unrefunded advance remain visible. No source cancellation date is invented.
+`source_status` restores source-based recognition without deleting audit
+history. Existing item annotations are preserved in both directions.
+Shopify, orders, invoices, stock, payments and reconciliations are untouched.
+
 ## Verification / release
 
 Run `node --test test/pnl-report.test.js test/pnl-ui.test.js
