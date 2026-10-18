@@ -46,7 +46,7 @@ const ACCOUNTING_BOUNDARY_PATH = path.join(path.dirname(ORDERS_PATH), 'accountin
 // Increment this whenever the accounting ledger needs a fresh historical order
 // scan. Incremental Shopify syncs only see recently updated orders, so an order
 // omitted by an older importer would otherwise remain missing forever.
-const ACCOUNTING_ORDER_BACKFILL_VERSION = 3;
+const ACCOUNTING_ORDER_BACKFILL_VERSION = 4;
 function accountingStartAt() {
   try { return String(JSON.parse(fs.readFileSync(ACCOUNTING_BOUNDARY_PATH, 'utf8')).startAt || ''); }
   catch { return ''; }
