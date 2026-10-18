@@ -11,6 +11,18 @@ permissions remain respected.
 - One completed POS sale or delivered order creates revenue, excluding GST.
   Website orders need an actual completion date; an edit timestamp is not a
   delivery timestamp. Orders has a delivery-date field for confirmed dates.
+  When that date is absent, the report now joins the existing automatic
+  Velocity shipment discovery and carrier-tracking evidence by Shopify order
+  ID and AWB. All active AWBs must have delivered status and actual dates;
+  split shipments use their latest delivery. No date is inferred from
+  fulfilled status, settlement, sync time or last-updated time. Invalid,
+  future and pre-order dates remain exceptions. POS and recorded delivery
+  dates retain their existing precedence; cancelled/RTO orders are not
+  revived by carrier fallback. No order or dispatch fields are rewritten.
+  The existing ten-minute logistics poll supplies this cache without needing
+  Orders-page access. The tracking reader accepts both Velocity's flat and
+  nested response formats. Orders fulfilled outside Velocity with no AWB
+  still require a verified manual completion/cancellation correction.
 - Per-piece taxable garment value up to and including ₹2,500 uses 5%; above
   ₹2,500 uses 18%. GST-inclusive prices are divided by `(1 + rate)`. For an
   ambiguous inclusive price, missing price basis or missing shipping tax,
