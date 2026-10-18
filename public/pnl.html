@@ -32,8 +32,18 @@
   <section id="collections" class="panel view" hidden></section>
   <section id="trends" class="panel view" hidden></section>
   <section id="policy" class="panel view" hidden></section>
+  <details id="pnlCorrections" class="panel"><summary>Review P&amp;L-only item corrections</summary>
+    <p>Map a missing SKU, record a verified custom-item unit cost, or classify a shipping fee. These audited corrections affect only this report. Shopify orders, invoices, stock, payments and reconciliations are never edited.</p>
+    <button id="pnlCorrectionLoad" type="button">Load missing item lines</button>
+    <input id="pnlCorrectionSearch" type="search" aria-label="Search item corrections" placeholder="Search order or item">
+    <p id="pnlCorrectionStatus" role="status"></p><div id="pnlCorrectionRows"></div>
+    <label>Reason for correction <input id="pnlCorrectionNote" maxlength="1000" placeholder="Required audit reason"></label>
+    <button id="pnlCorrectionCheck" type="button" disabled>Preview selected corrections</button>
+    <div id="pnlCorrectionPreview"></div><button id="pnlCorrectionSave" type="button" disabled>Save reviewed P&amp;L corrections</button>
+  </details>
   <p class="muted footnote">Management report: SKU COGS is recognised when sold, even if the supplier is unpaid. Other expenses use approved payments only. No April figures are used.</p>
 </main>
 <dialog id="details" aria-labelledby="detailTitle"><header><h2 id="detailTitle">Transactions</h2><button id="closeDetails" aria-label="Close transaction details">Close</button></header><div id="detailBody"></div></dialog>
 <script src="/navigation-state.js?v=bb4a39520dbd"></script><script src="/sidebar.js"></script><script src="/pnl.js?v=f824e25a367d"></script>
+<script src="/pnl-corrections.js?v=a0d0159d44a0"></script>
 </body></html>

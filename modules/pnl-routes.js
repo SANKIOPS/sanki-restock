@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
 const { buildReport, START, day, validDate } = require('./pnl-report');
+const lineCorrections = require('./pnl-line-corrections');
 
 function loadSources(directory, env = process.env) {
   const feeds = [];
@@ -30,6 +31,7 @@ function loadSources(directory, env = process.env) {
     manualSales: read('Manual sales', env.SALES_PATH || path.join(directory, 'sales.json'), {}, false, v => Array.isArray(v.sales)),
     opening: read('Verified opening SKU costs', path.join(directory, 'pnl-opening-inventory.json'), {}, false, v => Array.isArray(v.lots)),
     shopifyCosts: read('Shopify Cost per item', env.INVENTORY_SNAPSHOT_PATH || path.join(directory, 'inventory-snapshot.json'), { items: [] }, false, v => Number.isFinite(Date.parse(v.at)) && Array.isArray(v.items)),
+    lineCorrections: read('P&L-only item corrections', path.join(directory, 'pnl-line-corrections.json'), {}, false, v => v.schemaVersion === 1 && record(v.entries) && Array.isArray(v.history)),
     velocity: {
       index: read('Velocity automatic shipment discovery', path.join(orderDirectory, 'velocity_order_index.json'), {}, false, v => record(v.byOrder) && record(v.shipments)),
       tracking: read('Velocity carrier tracking', path.join(orderDirectory, 'velocity_tracking_evidence.json'), {}, false, v => record(v.shipments)),
@@ -67,7 +69,7 @@ function exportWorkbook(report) {
   }
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
-function createRouter({ read, clock = () => new Date() } = {}) {
+function createRouter({ read, clock = () => new Date(), correctionsFile } = {}) {
   const router = express.Router();
   let refreshAfter = 0;
   const defaultRead = () => {
@@ -94,6 +96,28 @@ function createRouter({ read, clock = () => new Date() } = {}) {
     const sources = (read || defaultRead)();
     return buildReport(sources, { from, to, start: START, channel: String(req.query.channel || 'All') });
   }
+  const canEdit = req => ['admin','owner'].includes(String(req.user?.role || '').toLowerCase());
+  const correctionError = (res,error) => res.status(error.status || 500).json({success:false,error:error.status ? error.message : 'P&L item corrections could not be saved safely. No source financial records were changed.'});
+  router.get('/api/pl/report/line-corrections', (req,res)=>{
+    try {
+      const today=day(clock().toISOString()),from=String(req.query.from||START),to=String(req.query.to||today);
+      if(!validDate(from)||!validDate(to)||from<START||to>today||from>to)throw Object.assign(Error('Choose a valid accounting date range.'),{status:400});
+      const sources=(read||defaultRead)();
+      res.set('Cache-Control','no-store').json({success:true,canEdit:canEdit(req),rows:lineCorrections.reviewRows(sources,from,to),historyCount:sources.lineCorrections?.history?.length||0});
+    }catch(error){correctionError(res,error);}
+  });
+  router.post('/api/pl/report/line-corrections/preview',(req,res)=>{
+    if(!canEdit(req))return res.status(403).json({success:false,error:'Only Admin or Owner can correct P&L item mappings.'});
+    try {res.set('Cache-Control','no-store').json({success:true,items:lineCorrections.prepare((read||defaultRead)(),req.body?.items)});}catch(error){correctionError(res,error);}
+  });
+  router.post('/api/pl/report/line-corrections',(req,res)=>{
+    if(!canEdit(req))return res.status(403).json({success:false,error:'Only Admin or Owner can correct P&L item mappings.'});
+    try {
+      const file=correctionsFile||path.join(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname,'..'),'pnl-line-corrections.json');
+      const result=lineCorrections.save(file,(read||defaultRead)(),req.body?.items,req.user.username,req.body?.note,clock().toISOString());
+      res.set('Cache-Control','no-store').json({success:true,...result});
+    }catch(error){correctionError(res,error);}
+  });
   router.get('/api/pl/report', (req, res) => {
     try { res.set('Cache-Control', 'no-store').json(report(req)); }
     catch (error) { res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'P&L could not be read safely. No accounting records were changed.' }); }

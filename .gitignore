@@ -34,3 +34,6 @@ data/
 .claude/
 .railway/
 .test-tmp/
+
+pnl-line-corrections.json
+pnl-line-corrections.json.*.tmp
