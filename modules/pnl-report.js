@@ -4,6 +4,7 @@
 // follow actual approved payments. Never write to accounting/order stores.
 const purchaseCosts = require('../public/purchase-costs');
 const { velocityCompletion } = require('./pnl-delivery');
+const { resolveOrder } = require('./pnl-line-corrections');
 const START = '2026-08-22';
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const money = value => Math.round((number(value) + Number.EPSILON) * 100) / 100;
@@ -34,6 +35,11 @@ function lineTax(line, taxesIncluded = true) {
   const qty = number(line.qty), discount = number(line.discount);
   const base = Math.max(0, number(line.price ?? line.unitPrice) * qty - discount);
   const recorded = Array.isArray(line.taxLines) && line.taxLines.length ? money(line.taxLines.reduce((sum, tax) => sum + number(tax.price), 0)) : null;
+  if(line.pnlKind==='shipping') {
+    const known=recorded!==null || line.taxable===false, tax=known ? recorded || 0 : null;
+    const gross=money(base + (taxesIncluded ? 0 : number(tax)));
+    return {gross,sourceGross:gross,tax,recorded:tax,calculated:tax,rate:null,status:known?'Shipping fee: source invoice GST retained':'Shipping fee GST evidence missing',valid:known&&qty>0};
+  }
   if (!(qty > 0)) return { gross: money(base), tax: null, rate: null, recorded, status: 'Missing quantity', valid: false };
   let rate;
   if (!taxesIncluded) rate = gstRate(base / qty);
@@ -159,7 +165,10 @@ function buildReport(sources = {}, options = {}) {
   function queueSale(order, dispatch, source) {
     if (order.accountingExcluded || ['2720'].includes(String(order.number || order.orderNumber || '').replace(/^#/, ''))) return;
     const ch = channel(order.channel), id = source + '/' + order.id, reference = order.name || order.id;
+    const resolved=resolveOrder(order,sources.lineCorrections);
+    order=resolved.order;
     const made = completion(order, dispatch, sources.velocity);
+    resolved.issues.forEach(message=>warning(reference,message,made?.date||day(order.processedAt||order.createdAt),'cogs',ch));
     const transactions = [...new Map((order.paymentTransactions || []).filter(t => ['sale', 'capture'].includes(t.kind) && t.status === 'success').map(t => [t.id || JSON.stringify(t), t])).values()];
     const paymentDetailsKnown = (transactions.length > 0 || order.financialStatus === 'pending') && transactions.every(t => day(t.processedAt));
     const periodPayments = transactions.filter(t => day(t.processedAt) && day(t.processedAt) <= to);
@@ -179,10 +188,11 @@ function buildReport(sources = {}, options = {}) {
       const detail = [], taxDetail = []; let gst = 0, taxComplete = lines.length > 0, cost = 0, costComplete = lines.length > 0, billed = 0, sourceBilled = 0;
       lines.forEach((line, index) => {
         const key = id + '/' + (line.id || index), sku = skuKey(line.sku), qty = number(line.qty);
-        const tax = lineTax(line, taxesIncluded), allocation = allocate(sku, Math.max(0, qty), made.date, reference, ch);
+        const tax = lineTax(line, taxesIncluded);
+        const allocation = present(line.pnlUnitCost) ? {qty,missing:0,cost:money(qty*number(line.pnlUnitCost)),parts:line.pnlKind==='shipping'?[]:[{lotId:'PNL-CORRECTION/'+order.id+'/'+line.id,purchaseId:'User-confirmed P&L custom-item cost',qty,unitCost:line.pnlUnitCost,amount:money(qty*line.pnlUnitCost),exactCost:line.pnlUnitCost,returned:0}]} : allocate(sku, Math.max(0, qty), made.date, reference, ch);
         allocations.set(key, { ...allocation, sku });
         taxAllocations.set(key, { ...tax, qty, taxesIncluded, returnedQty: 0, returnedShare: 0, returnedTax: 0, returnedGross: 0 });
-        detail.push({ sku, qty, lineId: line.id || index, gross: tax.gross, gst: tax.tax, netSales: tax.valid ? money(tax.gross - tax.tax) : null, cogs: allocation.missing ? null : allocation.cost, allocations: allocation.parts.map(({ exactCost, returned, ...part }) => part) });
+        detail.push({ sku, qty, title:line.title||'', lineId: line.id || index, gross: tax.gross, gst: tax.tax, netSales: tax.valid ? money(tax.gross - tax.tax) : null, cogs: allocation.missing ? null : allocation.cost, correction:line.pnlCorrection||null, itemKind:line.pnlKind||'product', allocations: allocation.parts.map(({ exactCost, returned, ...part }) => part) });
         const taxRecord = { id: key, date: made.date, reference, sku, qty, channel: ch, ...tax, taxesIncluded };
         taxRows.push(taxRecord); taxDetail.push(taxRecord);
         taxComplete = taxComplete && tax.valid; costComplete = costComplete && qty > 0 && allocation.missing === 0;
@@ -244,7 +254,7 @@ function buildReport(sources = {}, options = {}) {
               if (!originalTax.taxesIncluded && sourceLineGross !== null) reportGrossDifference += reportLineGross - sourceLineGross;
             }
           }
-          if (line.restockType === 'return') {
+          if (line.restockType === 'return' && original.pnlKind!=='shipping') {
             const returned = returnCost(id + '/' + (original.id || originalIndex), qty, date, rid, ch);
             reversedCost += returned.cost; costComplete = costComplete && returned.complete;
           }
