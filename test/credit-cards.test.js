@@ -57,7 +57,7 @@ test('mixed-use card payment rejects an allocation that does not equal the bank 
 });
 test('legacy logged purchases do not double count statement card liability',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding;
-  const made=invokeExpense('POST','/api/expenses',{role:'admin',body:{date:'2026-09-11',amount:321,particulars:'Shoot accessory',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:true,personalAccount:card.id,personalPaymentProof:'/card-proof.jpg',billPhoto:'/bill.jpg'}});
+  const made=invokeExpense('POST','/api/expenses',{role:'admin',body:{date:'2026-09-11',amount:321,particulars:'Shoot accessory',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',vendorPhone:'+919876543210',paymentType:'Credit',paidAlready:true,personalAccount:card.id,personalPaymentProof:'/card-proof.jpg',billPhoto:'/bill.jpg'}});
   assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.payments[0].creditCardId,card.id);assert.equal(made.body.expense.payments[0].account,card.displayName);assert.equal(made.body.expense.payments[0].personalFunds,false);
   const stored=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8'));stored.expenses[made.body.expense.id].status='approved';stored.expenses[made.body.expense.id].approvedAt='2026-09-11T00:00:00.000Z';fs.writeFileSync(path.join(temp,'expenses.json'),JSON.stringify(stored));
   const after=invoke('GET','/api/expenses/credit-cards').body.cards.find(x=>x.id===card.id);assert.equal(after.outstanding,before);
@@ -67,13 +67,22 @@ test('Prashant can select an accessible card and log a credit-card expense witho
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
   const config=invokeExpense('GET','/api/expenses/config',{role:'claimant',username:'prashant'});
   assert.equal(config.status,200);assert.equal(config.body.isAdmin,false);assert.equal(config.body.canLogCreditCardExpense,true);assert.ok(config.body.creditCards.some(x=>x.id===card.id));
-  const made=invokeExpense('POST','/api/expenses',{role:'claimant',username:'prashant',body:{date:config.body.businessDate,amount:275,particulars:'Admin card purchase',nature:'SANKI',vendor:'Office supplier',paymentType:'Credit',paidAlready:true,creditCardId:card.id,personalAccount:card.id,personalPaymentProof:'/card-proof-prashant.jpg',billPhoto:'/bill-prashant.jpg'}});
+  const made=invokeExpense('POST','/api/expenses',{role:'claimant',username:'prashant',body:{date:config.body.businessDate,amount:275,particulars:'Admin card purchase',nature:'SANKI',vendor:'Office supplier',vendorPhone:'+919876543210',paymentType:'Credit',paidAlready:true,creditCardId:card.id,personalAccount:card.id,personalPaymentProof:'/card-proof-prashant.jpg',billPhoto:'/bill-prashant.jpg'}});
   assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.payments[0].account,card.displayName);assert.equal(made.body.expense.payments[0].personalFunds,false);assert.equal(made.body.expense.status,'pending');
 });
 test('an unpaid credit expense retains the selected card for its later payment',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
-  const made=invokeExpense('POST','/api/expenses',{body:{date:'2026-09-11',amount:789,particulars:'Equipment awaiting payment',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:false,creditCardId:card.id,billPhoto:'/bill-pending.jpg'}});
+  const made=invokeExpense('POST','/api/expenses',{body:{date:'2026-09-11',amount:789,particulars:'Equipment awaiting payment',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',vendorPhone:'+919876543210',paymentType:'Credit',paidAlready:false,creditCardId:card.id,billPhoto:'/bill-pending.jpg'}});
   assert.equal(made.status,200);assert.equal(made.body.expense.creditCardId,card.id);assert.equal(made.body.expense.paidAmount,0);assert.deepEqual(made.body.expense.payments,[]);assert.equal(made.body.expense.status,'pending');
+});
+test('missing vendor phone rejects a credit-card expense before recording an expense or payment',()=>{
+  const card=invoke('GET','/api/expenses/credit-cards').body.cards[0];
+  invokeExpense('GET','/api/expenses/config');
+  const expenseFile=path.join(temp,'expenses.json'),cardFile=path.join(temp,'credit-cards.json'),beforeExpenses=fs.readFileSync(expenseFile,'utf8'),beforeCards=fs.readFileSync(cardFile,'utf8');
+  const rejected=invokeExpense('POST','/api/expenses',{body:{date:'2026-09-11',amount:321,particulars:'Missing phone must not post',nature:'SANKI',ledger:'OFFICE EXP',type:'variable',vendor:'Amazon',paymentType:'Credit',paidAlready:true,creditCardId:card.id,personalAccount:card.id,personalPaymentProof:'/card-proof.jpg',billPhoto:'/bill.jpg'}});
+  assert.equal(rejected.status,400);assert.match(rejected.body.error,/valid vendor phone number/i);
+  assert.equal(fs.readFileSync(expenseFile,'utf8'),beforeExpenses,'rejected creation must not change expenses, payments, audit or reconciliation data');
+  assert.equal(fs.readFileSync(cardFile,'utf8'),beforeCards,'rejected creation must not change the credit-card store');
 });
 test('statement payment is authoritative without a second bank transfer or duplicate decision',()=>{
   const card=invoke('GET','/api/expenses/credit-cards').body.cards[0],before=card.outstanding,expBefore=JSON.parse(fs.readFileSync(path.join(temp,'expenses.json'),'utf8')),transfersBefore=expBefore.transfers.length;

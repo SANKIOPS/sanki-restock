@@ -1,9 +1,12 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');
-function harness({reason='Wrong account',confirm=true,response={success:true,expense:{status:'partially_paid'}},error,blocked='',canApprove=true}={}){
+function harness({reason='Wrong account',confirm=true,response={success:true,expense:{status:'partially_paid'}},error,blocked='',canApprove=true,claimantOnly=false}={}){
  const calls=[],messages=[],warnings=[];let loads=0;
- const ctx={window:{},cfg:{canApprove,approvalNatures:['SANKI']},expensesById:{'EX-1':{payments:[{id:'PAY-002',unpayBlockedReason:blocked}]}},prompt:()=>reason,confirm:s=>{warnings.push(s);return confirm;},setMsg:(...v)=>messages.push(v),loadList:()=>loads++,api:(...args)=>{calls.push(args);return error?Promise.reject(new Error(error)):Promise.resolve(response);},encodeURIComponent,fmt:String,esc:String,proofGallery:()=>''};
+ const ctx={window:{},cfg:{canApprove,claimantOnly,approvalNatures:['SANKI']},expensesById:{'EX-1':{canManageExpense:true,payments:[{id:'PAY-002',unpayBlockedReason:blocked}]}},prompt:()=>reason,confirm:s=>{warnings.push(s);return confirm;},setMsg:(...v)=>messages.push(v),loadList:()=>loads++,api:(...args)=>{calls.push(args);return error?Promise.reject(new Error(error)):Promise.resolve(response);},encodeURIComponent,fmt:String,esc:String,proofGallery:()=>''};
+ const permissionStart=html.indexOf('    function expenseOperatorAllowed('),permissionEnd=html.indexOf('    function syncClaimantDate(',permissionStart);
+ assert.ok(permissionStart>=0&&permissionEnd>permissionStart,'extract the actual shared expense capability check');
+ vm.runInNewContext(html.slice(permissionStart,permissionEnd),ctx);
  vm.runInNewContext(html.slice(html.indexOf('    var unpayPending='),html.indexOf('    window.openReimburse =')),ctx);
  vm.runInNewContext(html.slice(html.indexOf('    function paymentHistory('),html.indexOf('    function proofGallery(')),ctx);
  return {ctx,calls,messages,warnings,loads:()=>loads};
@@ -23,7 +26,14 @@ test('duplicate clicks submit once while a request is pending',async()=>{
  const h=harness();const pending=h.ctx.window.unpayExpense('EX-1','PAY-002');h.ctx.window.unpayExpense('EX-1','PAY-002');await pending;assert.equal(h.calls.length,1);
 });
 test('individual payment controls respect role, entity and reconciliation protection',()=>{
- const e={id:'EX-1',nature:'SANKI',payments:[{id:'PAY-001',amount:20},{id:'PAY-002',amount:30,unpayBlockedReason:'Correct reconciliation first'}]};
+ const e={id:'EX-1',nature:'SANKI',canManageExpense:true,payments:[{id:'PAY-001',amount:20},{id:'PAY-002',amount:30,unpayBlockedReason:'Correct reconciliation first'}]};
  const h=harness(),render=h.ctx.paymentHistory(e);assert.match(render,/unpayExpense\('EX-1','PAY-001'\)/);assert.match(render,/disabled>Unpay/);assert.match(render,/Correct reconciliation first/);assert.doesNotMatch(render,/unpayExpense\('EX-1','PAY-002'\)/);
- assert.doesNotMatch(harness({canApprove:false}).ctx.paymentHistory(e),/Unpay/);assert.doesNotMatch(h.ctx.paymentHistory({...e,nature:'PERSONAL'}),/Unpay/);
+ assert.doesNotMatch(harness({canApprove:false}).ctx.paymentHistory(e),/Unpay/);
+ assert.doesNotMatch(harness({claimantOnly:true}).ctx.paymentHistory(e),/Unpay/);
+ // Entity access is now supplied by the server's per-expense capability;
+ // the renderer must not manufacture it from the user's broad role alone.
+ assert.doesNotMatch(h.ctx.paymentHistory({...e,nature:'PERSONAL',canManageExpense:false}),/Unpay/);
+ assert.doesNotMatch(h.ctx.paymentHistory({...e,canManageExpense:false}),/Unpay/);
+ const missingCapability={...e};delete missingCapability.canManageExpense;
+ assert.doesNotMatch(h.ctx.paymentHistory(missingCapability),/Unpay/);
 });
