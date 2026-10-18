@@ -19,6 +19,7 @@ function harness({ owner = false, manager = false, response } = {}) {
     value: '', textContent: '', innerHTML: '', className: '', disabled: false,
     open: false, listeners: {}, focusCount: 0,
     addEventListener(event, listener) { this.listeners[event] = listener; },
+    setAttribute(name, value) { this[name] = value; },
     querySelectorAll() { return []; },
     showModal() { this.open = true; },
     close() { this.open = false; },
