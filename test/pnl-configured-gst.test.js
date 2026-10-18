@@ -25,6 +25,25 @@ test('recorded GST, invoice rate and exempt flag never choose or override P&L ga
   }
 });
 
+test('explicit perfume titles use the confirmed report-only 28 percent rate', () => {
+  for (const title of ['Example perfume', 'PERFUMES']) {
+    const line = { title, qty: 2, price: 1500, discount: 200, taxable: false, taxLines: [{rate: .05, price: 100}] };
+    const before = JSON.stringify(line), tax = lineTax(freeze(line));
+    assert.equal(tax.rate, .28); assert.equal(tax.tax, 612.5); assert.equal(tax.gross, 2800);
+    assert.equal(JSON.stringify(line), before);
+    assert.equal(lineTax(line, false).tax, 784);
+  }
+  assert.equal(lineTax({title:'Custom sale',qty:1,price:1500}).rate,.05);
+});
+
+test('perfume refunds reverse original report GST without changing source orders', () => {
+  const sources=fixture({total:1280,lineItems:[{id:'L',sku:'SKU',title:'Example perfume',qty:1,price:1280}],refunds:[{id:'RF',date:'2026-10-03',amount:1280,lineItems:[{lineItemId:'L',qty:1,restockType:'return'}]}]});
+  const before=JSON.stringify(sources), report=run(freeze(sources));
+  assert.equal(report.taxes.find(t=>t.qty===1).rate,.28);
+  assert.equal(report.totals.gst,0); assert.equal(report.totals.netProfit,0);
+  assert.equal(JSON.stringify(sources),before);
+});
+
 test('inclusive final selling-price boundary is tested per piece after discount, not order total', () => {
   assert.equal(lineTax({ qty: 2, price: 2500 }).tax, 238.1);
   assert.equal(lineTax({ qty: 1, price: 3999 }).tax, 610.02);
