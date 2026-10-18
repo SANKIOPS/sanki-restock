@@ -40,7 +40,7 @@ app.use(gate);
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: false,
   setHeaders: (res, fp) => {
-    if (fp.endsWith('.html')) {
+    if (fp.endsWith('.html') || /^meta-(ads|linked-workspace|insight-controls)\.(js|css)$/.test(path.basename(fp))) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
