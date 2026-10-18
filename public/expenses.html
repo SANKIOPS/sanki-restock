@@ -699,14 +699,14 @@
       return '<button class="btn mini ghost" onclick="undoReimbursement(\''+esc(e.id)+'\',\''+esc(payment.id)+'\','+Number(payment.amount||0)+')">Undo reimbursement '+fmt(payment.amount||0)+'</button>';
     }
     window.undoReimbursement=function(expenseId,paymentId,amount){
-      var reason=prompt('Reason for undoing '+expenseId+' reimbursement of '+fmt(amount)+'?\nThis restores the amount to pending and reverses its paying-account ledger deduction.');
+      var reason=prompt('Reason for undoing '+expenseId+' reimbursement of '+fmt(amount)+'?\nThis restores the amount to pending. For an existing-transfer settlement, only its allocation is removed; the original transfer is not reversed.');
       if(reason===null)return;
       reason=reason.trim();
       if(reason.length<10){setMsg('Enter at least 10 characters explaining the correction.',false);return;}
       if(!confirm('Final confirmation: undo only '+expenseId+'/'+paymentId+' for '+fmt(amount)+'?'))return;
       api('/api/expenses/'+encodeURIComponent(expenseId)+'/reimbursements/'+encodeURIComponent(paymentId)+'/undo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:reason})}).then(function(d){
         if(!d.success){setMsg(d.error||'Could not undo reimbursement.',false);return;}
-        setMsg(expenseId+' reimbursement '+fmt(amount)+' undone. The amount is pending again and the paying-account deduction was reversed.',true);loadReimbursements();
+        setMsg(expenseId+' reimbursement '+fmt(amount)+' undone. The amount is pending again. An existing linked transfer remains unchanged; only its allocation is removed.',true);loadReimbursements();
       });
     };
     function ashpreetPaymentAccounts(e){return String(e.createdBy||e.claimant||'').toLowerCase()==='arshpreet'?((cfg.claimantPaymentAccountsByUser||{}).arshpreet||[]):[];}
