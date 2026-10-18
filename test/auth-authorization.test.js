@@ -233,6 +233,7 @@ test('Prashant can administer salary without gaining access to unrelated modules
 test('Prashant sees only the requested operational workspace even with an Admin role',()=>{
   const p={username:'Prashant',role:'admin',roles:['admin']};
   assert.deepEqual(visibleFor(p).map(module=>module.key),[
+    'manage',
     'inventory-dashboard','inventory-care',
     'procurement','fresh-proc','size-tracker',
     'pl','rentals','expenses','salary','incentives',

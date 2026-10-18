@@ -33,9 +33,9 @@ test('history failure cannot break navigation',()=>{
   assert.equal(ctx.SankiNavigation.set({tab:'list'}),false);
 });
 test('expense tabs record the selected page and permissions still gate restored pages',()=>{
-  const tabs=['log','list','pending','receivables','spending','vendors','salaryledgers','creditcards','cash','reimbursements','categories','audit','approvals'];
+  const tabs=['log','list','pending','receivables','spending','vendors','salaryledgers','creditcards','cash','reimbursements','manage','categories','audit','approvals'];
   const ctx=browser('https://example.test/expenses.html?tab=cash'),buttons=tabs.map(t=>({dataset:{t},style:{display:''},classList:{toggle(){}}}));
-  ctx.cfg={claimantOnly:false,canManageCategories:true,isAdmin:true};ctx.tab='log';ctx.setMsg=()=>{};ctx.setOpenTabGroup=()=>{};ctx.groupForTab=()=>'';
+  ctx.cfg={claimantOnly:false,canManageCategories:true,isAdmin:true};ctx.tab='log';ctx.setMsg=()=>{};ctx.setOpenTabGroup=()=>{};ctx.groupForTab=()=>'';ctx.openManageHub=section=>'Manage '+(section||'home');
   ctx.el=id=>id==='panel'?{dataset:{}}:{querySelector:selector=>buttons.find(b=>selector.includes('"'+b.dataset.t+'"')),querySelectorAll:()=>buttons};
   for(const name of ['Log','List','PendingPayments','Receivables','SpendingDashboard','Vendors','SalaryLedgers','CreditCards','Cash','Reimbursements','Categories','Audit','Approvals'])ctx['render'+name]=()=>name;
   vm.runInContext(section('expenses.html','    function render(){','    // ── LOG form'),ctx);
@@ -121,7 +121,7 @@ test('all shipped page scripts and external scripts parse',()=>{
   }
 });
 test('changed external scripts are content-versioned so first refresh cannot run stale navigation code',()=>{
-  const assets=['navigation-state.js','inventory-care.js','inventory-enhancements.js','inventory-movements.js','meta-ads.js','model-calendar.js','pnl.js','rental-register.js','seo-control.js','shoot-planner.js'];
+  const assets=['navigation-state.js','inventory-care.js','inventory-enhancements.js','inventory-movements.js','meta-ads.js','model-calendar.js','pnl.js','rental-register.js','seo-control.js','shoot-planner.js','manage.js','manage-navigation.js'];
   for(const file of fs.readdirSync(path.join(__dirname,'../public')).filter(file=>file.endsWith('.html'))){
     for(const match of publicFile(file).matchAll(/<script\s+src="\/([^"?]+)(?:\?v=([^"]+))?"/g))if(assets.includes(match[1])){
       const hash=require('node:crypto').createHash('sha256').update(publicFile(match[1]).replace(/\r\n/g,'\n')).digest('hex').slice(0,12);assert.equal(match[2],hash,file+' loads '+match[1]);
