@@ -171,6 +171,10 @@ test('lender UI uses the protected loan repayment action and escapes party metad
   const l={id:'REC-UI',source:'<Lender>',nature:'SANKI',date:day,borrowed:500,repaid:200,outstanding:300,status:'partially_repaid',loanTerms:{lenderKind:'company',dueDate:'2098-11-10',lenderReference:'<Agreement>'},payments:[]};
   const data={from:day,lenders:[{name:l.source,nature:l.nature,borrowed:500,repaid:200,outstanding:300,openingPrincipal:200,periodReceived:100,periodRepaid:0,loans:[l]}],loans:[l]};
   const rendered=ui.renderParties(data);assert.match(rendered,/&lt;Lender&gt;/);assert.match(rendered,/&lt;Agreement&gt;/);assert.match(rendered,/Opening principal/);assert.match(rendered,/Record principal repayment/);assert.doesNotMatch(rendered,/openPay|Vendor advances|Void incorrect record/);
+  assert.doesNotMatch(rendered,/payable-ledger-select/,'ordinary lender-ledger views stay non-selectable');
+  const selectable=ui.renderParties(data,undefined,{selectable:true});
+  assert.match(selectable,/class="payable-ledger-select"/);assert.match(selectable,/data-key="loan\|SANKI\|&lt;Lender&gt;"/);assert.match(selectable,/data-due="300"/);assert.match(selectable,/aria-label="Select &lt;Lender&gt; lender ledger"/);
+  assert.equal((selectable.match(/payable-ledger-select/g)||[]).length,1);assert.ok(selectable.indexOf('payable-ledger-select')<selectable.indexOf('<summary>'),'selection control stays outside the expandable summary');
   const page=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');assert.match(page,/id="pf_source".*value="expense".*value="sourcing".*value="loan"/);assert.match(page,/data-vsource="loan"/);assert.match(page,/ExpenseLoans\.bindParties/);
 });
 
