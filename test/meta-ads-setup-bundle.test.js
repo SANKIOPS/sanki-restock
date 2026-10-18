@@ -1,0 +1,11 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {mergeSetupFiles,setupCoverage}=require('../modules/meta-ads-setup-bundle'),{parseSetup}=require('../modules/meta-ads-import');
+const file=s=>({buffer:Buffer.from(s)});
+const campaign=file('Campaign ID,Campaign name,Campaign status\n123,C,OFF');
+const sets=file('Campaign ID,Campaign name,Ad set ID,Ad set name,Ad set status\n123,C,234,S,ON');
+const ads=file('Campaign ID,Campaign name,Ad set ID,Ad set name,Ad ID,Ad name,Ad status\n123,C,234,S,345,A,PAUSED');
+test('linked campaign/ad-set/ad tables merge hierarchy and exact on/off values',()=>{const r=mergeSetupFiles([campaign,sets,ads]);assert.equal(r.records.campaigns.length,1);assert.equal(r.records.adSets.length,1);assert.equal(r.records.ads.length,1);assert.equal(r.records.campaigns[0].status,'paused');assert.equal(r.records.adSets[0].status,'reported_running');assert.equal(r.records.ads[0].status,'paused');assert.equal(r.records.ads[0].adSetId,r.records.adSets[0].id);assert.equal(r.level,'bundle');});
+test('conflicting explicit statuses require consistent exports',()=>{assert.throws(()=>mergeSetupFiles([campaign,file('Campaign ID,Campaign name,Campaign status\n123,C,ON')]),/Conflicting status/);});
+test('campaign-only and table-only hierarchy remain clearly incomplete',()=>{const r=mergeSetupFiles([campaign,sets,ads]);const c=setupCoverage(r.records)[0];assert.equal(c.complete,false);assert.ok(c.missing.includes('locations'));assert.ok(c.missing.includes('creative URLs'));const only=setupCoverage({campaigns:r.records.campaigns,adSets:[],ads:[]})[0];assert.ok(only.missing.includes('ad sets'));});
+test('blank configured status is not an explicit on or off update',()=>{const r=parseSetup(Buffer.from('Campaign ID,Campaign Name,Campaign Status,Ad Set ID,Ad Set Name,Ad Set Run Status,Ad ID,Ad Name,Ad Status\n123,C,,234,S,,345,A,'));assert.equal(Object.hasOwn(r.records.campaigns[0],'status'),false);assert.equal(Object.hasOwn(r.records.adSets[0],'status'),false);assert.equal(Object.hasOwn(r.records.ads[0],'status'),false);});
