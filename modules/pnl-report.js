@@ -100,7 +100,32 @@ function buildReport(sources = {}, options = {}) {
   const lots = costLots(sources.purchases, sources.opening).map(lot => ({ ...lot, remaining: lot.qty }));
   const allocations = new Map();
   const taxAllocations = new Map();
+  const shopifyCostMode = Object.prototype.hasOwnProperty.call(sources, 'shopifyCosts');
+  const shopifyCosts = new Map(), duplicateCostSkus = new Set();
+  for (const item of sources.shopifyCosts?.items || []) {
+    if (!item || typeof item !== 'object') continue;
+    const sku = skuKey(item.sku);
+    if (!sku) continue;
+    const previous = shopifyCosts.get(sku);
+    if (previous && (!item.id || previous.id !== item.id || number(previous.unitCost) !== number(item.unitCost))) duplicateCostSkus.add(sku);
+    shopifyCosts.set(sku, item);
+  }
   const allocate = (sku, qty, date, reference, ch) => {
+    if (shopifyCostMode) {
+      const item = shopifyCosts.get(sku);
+      const currency = item?.unitCostCurrency || item?.currency || 'INR';
+      const valid = !!sku && !duplicateCostSkus.has(sku) && present(item?.unitCost) && number(item.unitCost) > 0 && currency === 'INR';
+      if (!valid) {
+        const reason = duplicateCostSkus.has(sku) ? 'Duplicate Shopify SKU' : currency !== 'INR' ? 'Non-INR Shopify cost' : 'Shopify Cost per item missing';
+        warning(reference, reason + ' for ' + (sku || 'unmapped SKU') + ': ' + qty + ' unit(s). Profit is unavailable until resolved.', date, 'cogs', ch);
+        return { parts: [], qty, missing: qty, cost: 0 };
+      }
+      // Current Shopify cost is the management P&L basis. Never invent
+      // opening quantities or consume today's stock to price past sales.
+      // Refunds reverse this sale's exact allocation, not a new estimate.
+      const cost = number(item.unitCost);
+      return { parts: [{ lotId: item.id || 'SHOPIFY/' + sku, purchaseId: 'Shopify Cost per item', qty, unitCost: money(cost), amount: money(qty * cost), exactCost: cost, returned: 0, costAsOf: sources.shopifyCosts.at || null }], qty, missing: 0, cost: money(qty * cost) };
+    }
     let remaining = qty; const parts = [];
     for (const lot of lots) {
       if (lot.sku !== sku || lot.date > date || lot.remaining <= 0) continue;
@@ -377,7 +402,7 @@ function buildReport(sources = {}, options = {}) {
     group.amount = money(group.amount + entry.expenses); group.count++; categories.set(key, group);
   }
   const months = [...new Set(included.map(e => e.date.slice(0, 7)))].sort();
-  return { success: true, range: { from, to, requestedFrom: options.from || from, partial: from !== options.from && !!options.from, start }, channel: selectedChannel, basis: 'Completed sales excluding P&L-calculated GST − FIFO SKU COGS − approved paid operating expenses', totals: summarize(included, scopedWarnings), previous, categories: [...categories.values()].sort((a, b) => a.group.localeCompare(b.group) || a.category.localeCompare(b.category)), transactions: included.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)), taxes: taxRows.filter(e => inRange(e, from, to)), collections: collections.filter(e => inRange(e, from, to)), trends: months.map(month => ({ month, ...summarize(included.filter(e => e.date.startsWith(month)), scopedWarnings.filter(w => !w.date || w.date.startsWith(month))) })), warnings: scopedWarnings, feeds: sources.feeds || [], policy: { operatingExpenses: 'Approved payments only, including paid portions. Reimbursements and vendor advances are not counted twice.', cogs: 'Received inventory allocated by SKU using FIFO, irrespective of supplier payment. Missing opening costs are never estimated.', gst: 'P&L only: per-piece taxable sale value ≤ ₹2,500 uses 5%; above ₹2,500 uses 18%. Invoice GST and exempt flags do not override this calculation. Refunds reverse original P&L GST. Ambiguous taxable values still require review. Invoices, Shopify, collections and ledgers remain unchanged.', sales: 'POS completion or recorded delivery date. Customer advances and courier/bank settlements are not extra sales.', channels: selectedChannel === 'All' ? 'All channels and Shared overhead included.' : 'Direct channel only. Shared overhead is excluded, not silently allocated.' } };
+  return { success: true, range: { from, to, requestedFrom: options.from || from, partial: from !== options.from && !!options.from, start }, channel: selectedChannel, basis: shopifyCostMode ? 'Completed sales excluding P&L-calculated GST − synced Shopify SKU COGS − approved paid operating expenses' : 'Completed sales excluding P&L-calculated GST − FIFO SKU COGS − approved paid operating expenses', totals: summarize(included, scopedWarnings), previous, categories: [...categories.values()].sort((a, b) => a.group.localeCompare(b.group) || a.category.localeCompare(b.category)), transactions: included.sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id)), taxes: taxRows.filter(e => inRange(e, from, to)), collections: collections.filter(e => inRange(e, from, to)), trends: months.map(month => ({ month, ...summarize(included.filter(e => e.date.startsWith(month)), scopedWarnings.filter(w => !w.date || w.date.startsWith(month))) })), warnings: scopedWarnings, feeds: sources.feeds || [], costSource: shopifyCostMode ? { name: 'Shopify Cost per item', at: sources.shopifyCosts?.at || null } : { name: 'Verified FIFO' }, policy: { operatingExpenses: 'Approved payments only, including paid portions. Reimbursements and vendor advances are not counted twice.', cogs: shopifyCostMode ? 'Shopify Cost per item by SKU from the synced local snapshot. Current stock quantities and supplier payments do not limit COGS. Refunds reverse the original sale allocation. Missing or duplicate costs remain exceptions. Cost changes restate management P&L history.' : 'Received inventory allocated by SKU using FIFO, irrespective of supplier payment. Missing opening costs are never estimated.', gst: 'P&L only: per-piece taxable sale value ≤ ₹2,500 uses 5%; above ₹2,500 uses 18%. Invoice GST and exempt flags do not override this calculation. Refunds reverse original P&L GST. Ambiguous taxable values still require review. Invoices, Shopify, collections and ledgers remain unchanged.', sales: 'POS completion or recorded delivery date. Customer advances and courier/bank settlements are not extra sales.', channels: selectedChannel === 'All' ? 'All channels and Shared overhead included.' : 'Direct channel only. Shared overhead is excluded, not silently allocated.' } };
 }
 function linesIndex(lines, id) { return (lines || []).findIndex(line => String(line.id) === String(id)); }
 module.exports = { START, validDate, day, money, gstRate, lineTax, completion, costLots, buildReport };

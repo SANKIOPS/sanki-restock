@@ -28,6 +28,7 @@ function loadSources(directory, env = process.env) {
     incentives: read('Sales incentive payments', env.INCENTIVES_PATH || path.join(directory, 'incentives.json'), {}, false, v => Array.isArray(v.payments)),
     manualSales: read('Manual sales', env.SALES_PATH || path.join(directory, 'sales.json'), {}, false, v => Array.isArray(v.sales)),
     opening: read('Verified opening SKU costs', path.join(directory, 'pnl-opening-inventory.json'), {}, false, v => Array.isArray(v.lots)),
+    shopifyCosts: read('Shopify Cost per item', env.INVENTORY_SNAPSHOT_PATH || path.join(directory, 'inventory-snapshot.json'), { items: [] }, false, v => Number.isFinite(Date.parse(v.at)) && Array.isArray(v.items)),
     feeds
   };
 }
@@ -60,13 +61,31 @@ function exportWorkbook(report) {
   }
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
-function createRouter({ read = () => loadSources(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..')), clock = () => new Date() } = {}) {
+function createRouter({ read, clock = () => new Date() } = {}) {
   const router = express.Router();
+  let refreshAfter = 0;
+  const defaultRead = () => {
+    const sources = loadSources(process.env.DATA_PATH ? path.dirname(process.env.DATA_PATH) : path.join(__dirname, '..'));
+    const feed = sources.feeds.find(f => f.name === 'Shopify Cost per item');
+    feed.updatedAt = sources.shopifyCosts.at || null;
+    // Reuse the existing persisted Shopify inventory snapshot. Report reads
+    // return immediately; a coalesced background refresh never changes stock,
+    // invoices, expenses, payments or reconciliations.
+    if (Date.now() >= refreshAfter) {
+      refreshAfter = Date.now() + (sources.shopifyCosts.at ? 15 * 60 * 1000 : 30000);
+      try {
+        const live = require('./inventory-state').readSnapshot();
+        if (live.snapshot) { sources.shopifyCosts = live.snapshot; feed.updatedAt = live.snapshot.at; feed.status = 'ready'; }
+        feed.refreshing = live.refreshing; feed.stale = live.stale;
+      } catch (_) { /* Retain the persisted source; missing costs remain explicit. */ }
+    }
+    return sources;
+  };
   function report(req) {
     const today = day(clock().toISOString()), month = today.slice(0, 7) + '-01';
     const from = String(req.query.from === '' ? START : req.query.from || month), to = String(req.query.to || today);
     if (!validDate(from) || !validDate(to) || to > today) throw Object.assign(new Error('Choose valid dates ending today or earlier.'), { status: 400 });
-    const sources = read();
+    const sources = (read || defaultRead)();
     return buildReport(sources, { from, to, start: START, channel: String(req.query.channel || 'All') });
   }
   router.get('/api/pl/report', (req, res) => {
