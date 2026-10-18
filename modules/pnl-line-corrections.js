@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const key = (orderId, lineId) => String(orderId) + '/' + String(lineId);
 const hash = line => crypto.createHash('sha256').update(JSON.stringify([String(line.id),line.sku||'',line.title||'',line.qty,line.price,line.discount,line.taxable,line.taxLines])).digest('hex');
 const orderHash = order => crypto.createHash('sha256').update(JSON.stringify([String(order.id),order.name||'',order.createdAt||''])).digest('hex');
+const manualHash = receipts => crypto.createHash('sha256').update(JSON.stringify(receipts.map(r=>[r.id,r.manualSaleId||'',r.date,r.amount,r.source||'',r.receiptType,r.nature,r.accountingExcluded||false]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))).digest('hex');
+const validDay = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d||''))&&!Number.isNaN(Date.parse(d+'T00:00:00Z'))&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;
 const canonicalSku = sku => String(sku || '').trim().toUpperCase();
 const dateOf = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value)+19800000).toISOString().slice(0,10) : '';
 const fail = message => { throw Object.assign(Error(message), {status:409}); };
@@ -24,14 +26,34 @@ function prepare(sources, items, requireFingerprint=false) {
  if(!Array.isArray(items)||!items.length||items.length>100) fail('Choose between 1 and 100 item corrections.');
  const seen=new Set();
  return items.map(input=>{
-  if(['cancelled','source_status'].includes(input.type)) {
+  if(input.type==='manual_cost') {
+   const reference=String(input.reference||input.manualId||'').trim();
+   const receipts=Object.values(sources.expenses?.receipts||[]).filter(r=>r.receiptType==='product_sale'&&!r.orderId&&!r.shopifyOrderId&&!r.accountingExcluded&&['SANKI','A3'].includes(r.nature)&&String(r.manualSaleId||r.id)===reference);
+   if(!reference||!receipts.length||receipts.some(r=>!validDay(r.date)||r.date<'2026-08-22'||!(Number(r.amount)>0)||r.reconciliationDraft&&sources.expenses?.bankReconciliationDrafts?.[r.reconciliationDraft]))fail('Choose an existing posted manual-sale receipt within the accounting period.');
+   if((sources.manualSales?.sales||[]).some(s=>s.id===reference))fail('This manual sale has its own source allocation; review that source instead.');
+   const id=key('manual:'+reference,'$manual'),fingerprint=manualHash(receipts),qty=Number(input.qty),unitCost=Number(input.unitCost);
+   if(seen.has(id)||!Number.isInteger(qty)||qty<=0||qty>10000||!Number.isFinite(unitCost)||unitCost<=0||unitCost>10000000||Math.abs(unitCost*100-Math.round(unitCost*100))>.00001)fail('Enter a positive whole quantity and a positive per-unit cost with at most two decimals.');
+   if(requireFingerprint&&input.fingerprint!==fingerprint)fail('Manual-sale receipts changed since preview. Preview them again.');
+   const entry={orderId:'manual:'+reference,lineId:'$manual',type:'manual_cost',manualId:reference,reference,fingerprint,qty,unitCost,title:receipts[0].source||'Manual product sale',expectedAmount:receipts.reduce((s,r)=>s+Number(r.amount),0)};
+   if(input.taxRate!==undefined&&input.taxRate!==null&&input.taxRate!=='') {
+    if(!Number.isFinite(Number(input.taxRate))||Number(input.taxRate)<0||Number(input.taxRate)>1||typeof input.taxesIncluded!=='boolean')fail('Confirm the GST fraction and inclusive/exclusive basis together, or leave tax unresolved.');
+    entry.taxRate=Number(input.taxRate);entry.taxesIncluded=input.taxesIncluded;
+   }
+   seen.add(id);return entry;
+  }
+  if(['cancelled','source_status','delivered'].includes(input.type)) {
    const matches=Object.values(sources.orders?.orders||{}).filter(o=>input.orderId?String(o.id)===String(input.orderId):String(o.name||'').toLowerCase()===String(input.reference||'').trim().toLowerCase());
    if(matches.length!==1)fail('Enter the exact existing order reference, including #, or reload the preview.');
    const order=matches[0],id=key(order.id,'$order');
    if(seen.has(id)||!dateOf(order.processedAt||order.createdAt)||dateOf(order.processedAt||order.createdAt)<'2026-08-22'||order.accountingExcluded)fail('Duplicate, excluded, undated or pre-accounting-start orders cannot be corrected here.');
    if(requireFingerprint&&input.fingerprint!==orderHash(order))fail('Order identity changed since preview. Preview it again before saving.');
    seen.add(id);
-   return {orderId:String(order.id),lineId:'$order',type:input.type,reference:order.name||String(order.id),fingerprint:orderHash(order),createdDate:dateOf(order.createdAt),title:input.type==='cancelled'?'Confirmed cancelled; exclude sale from P&L':'Use original source completion status'};
+   const entry={orderId:String(order.id),lineId:'$order',type:input.type,reference:order.name||String(order.id),fingerprint:orderHash(order),createdDate:dateOf(order.createdAt),title:input.type==='cancelled'?'Confirmed cancelled; exclude sale from P&L':'Use original source completion status'};
+   if(input.type==='delivered'){
+    if(!validDay(input.deliveryDate)||input.deliveryDate<dateOf(order.createdAt||order.processedAt)||input.deliveryDate<dateOf(order.processedAt||order.createdAt)||input.deliveryDate>dateOf(new Date().toISOString())||order.cancelledAt)fail('Delivery date must be real, not before the order, not in the future, and not on a cancelled source order.');
+    entry.deliveryDate=input.deliveryDate;entry.title='Confirmed delivered '+input.deliveryDate+'; recognize P&L on actual delivery';
+   }
+   return entry;
   }
   const order=sources.orders?.orders?.[String(input.orderId)];
   const line=order?.lineItems?.find(l=>String(l.id)===String(input.lineId));
@@ -71,10 +93,13 @@ function save(file, sources, items, actor, note, at=new Date().toISOString()) {
 function resolveOrder(order, store={}) {
  const issues=[];
  const status=store.entries?.[key(order.id,'$order')];
- let pnlCancelled=false;
+ let pnlCancelled=false,pnlDeliveryDate='';
  if(status) {
-  if(status.fingerprint!==orderHash(order)||!['cancelled','source_status'].includes(status.type))issues.push('P&L order-status correction no longer matches the source order. Review it again.');
-  else pnlCancelled=status.type==='cancelled';
+  if(status.fingerprint!==orderHash(order)||!['cancelled','source_status','delivered'].includes(status.type))issues.push('P&L order-status correction no longer matches the source order. Review it again.');
+  else if(status.type==='delivered') {
+   if(!validDay(status.deliveryDate)||status.deliveryDate<dateOf(order.createdAt||order.processedAt)||order.cancelledAt)issues.push('P&L delivery confirmation conflicts with the source order. Review it again.');
+   else pnlDeliveryDate=status.deliveryDate;
+  } else pnlCancelled=status.type==='cancelled';
  }
  const lineItems=(order.lineItems||[]).map(line=>{
   const entry=store.entries?.[key(order.id,line.id)];if(!entry)return line;
@@ -84,6 +109,6 @@ function resolveOrder(order, store={}) {
   if(entry.type==='shipping')return {...line,pnlKind:'shipping',pnlUnitCost:0,pnlCorrection:entry};
   issues.push('Invalid P&L correction for source line '+line.id+'.');return line;
  });
- return {order:{...order,lineItems,pnlCancelled,pnlStatusCorrection:pnlCancelled?status:null},issues};
+ return {order:{...order,lineItems,pnlCancelled,pnlDeliveryDate,pnlStatusCorrection:pnlCancelled||pnlDeliveryDate?status:null},issues};
 }
-module.exports={key,hash,orderHash,reviewRows,prepare,read,save,resolveOrder};
+module.exports={key,hash,orderHash,manualHash,reviewRows,prepare,read,save,resolveOrder};
