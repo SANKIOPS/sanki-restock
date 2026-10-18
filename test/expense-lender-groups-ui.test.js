@@ -42,7 +42,7 @@ function fixture(tab) {
   const sandbox = { tab, cfg: { isOwner: false, ledgers: [], approvalNatures: ['SANKI', 'SAMAST'] }, selectedNature: 'SANKI', expensesById: {},
     el: id => nodes[id] || null, opts: () => '', monthStart: () => '2026-10-01', today: () => '2026-10-12', dateDaysAgo: () => '2026-10-01',
     esc: v => String(v), fmt: v => '₹' + Number(v), uploadFiles() {}, accountsForNature: () => ['Axis Bank 3448'], loadCash() {}, loadAccountLedger() {},
-    procurementPayableCard: e => 'SOURCING:' + e.id, vendorPayableGroups: e => 'VENDORS:' + e.map(x => x.id).join(','),
+    procurementPayableCard: e => 'SOURCING:' + e.id, procurementPayableGroups: e => 'SOURCING:' + e.map(x => x.id).join(','), vendorPayableGroups: e => 'VENDORS:' + e.map(x => x.id).join(','), bindPayableLedgerSelection() {},
     vendorBalanceHtml: n => '₹' + n, vendorLedgerTable: () => '',
     api(url) { return new Promise((resolve, reject) => requests.push({ url, resolve, reject })); },
     ExpenseLoans: { renderParties: data => 'LENDERS:' + (data.lenders || []).map(l => l.name).join(','), bindParties(host, data, options) { bindings.push({ host, data, options }); } }
