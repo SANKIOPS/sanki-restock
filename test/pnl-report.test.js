@@ -23,9 +23,10 @@ test('inclusive GST is extracted, never multiplied straight onto the gross amoun
   assert.equal(report.totals.gst, 457.47); assert.equal(report.totals.netSales, 2541.53);
   assert.equal(report.totals.cogs, 999); assert.equal(report.totals.netProfit, 1542.53);
 });
-test('P&L configured GST ignores invoice mismatch but retains ambiguous-value protection', () => {
+test('P&L configured GST ignores invoice mismatch and uses the confirmed final selling-price slab', () => {
   assert.equal(lineTax({ qty: 1, price: 2999, taxLines: [{ rate: .05, price: 142.81 }] }).tax, 457.47);
-  assert.equal(lineTax({ qty: 1, price: 2800 }).valid, false);
+  assert.equal(lineTax({ qty: 1, price: 2800 }).valid, true);
+  assert.equal(lineTax({ qty: 1, price: 2800 }).rate, .18);
   const sources = fixtures(); sources.orders.orders[1].lineItems[0].taxLines = [{ rate: .05, price: 142.81 }];
   assert.equal(run(sources).totals.netProfit, 1542.53);
 });
