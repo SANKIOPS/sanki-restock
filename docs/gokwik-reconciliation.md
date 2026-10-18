@@ -109,3 +109,19 @@ the original ID and reviewed ID remain auditable. A malformed row rejects the
 whole upload before evidence is saved. The scoped financial/UI regression run
 passes 689 checks, with zero failures, cancellations or skips. All new fixtures
 are synthetic; the customer's settlement CSV is not part of the repository.
+
+### Common statement and unposted outflows
+
+The GoKwik clearing account now displays one date-ordered statement for the
+selected range, including existing recorded movements and provider-reported
+processing fees/tax, provisional Subscription Expense deductions and net payouts.
+Unposted outflows are explicitly labeled review-only. The statement closing is
+shown separately from the unchanged recorded account balance. Earlier movements
+are carried into the range opening; future movements are excluded.
+
+This is a read-only account-ledger response projection. It creates no transfers,
+expenses, bank credits, approvals or finalizations and does not change balances
+or P&L. Once a batch is Owner-posted, its real ledger rows replace its projected
+outflows without being counted twice. Settlement review remains inside universal
+reconciliation, under one collapsed review section rather than separate primary
+statement cards. No new tab or page is introduced.
