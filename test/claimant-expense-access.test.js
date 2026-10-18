@@ -19,7 +19,7 @@ test.before(async()=>{
   await request('GET','/api/expenses/config',{roles:['owner']});
 });
 test.after(async()=>{if(server)await new Promise(resolve=>server.close(resolve));fs.rmSync(root,{recursive:true,force:true});});
-const expenseBody=extra=>Object.assign({nature:'SANKI',vendor:'Synthetic Vendor',particulars:'Synthetic expense',amount:100,billPhoto:'/api/expenses/photo/own-bill.jpg',paymentType:'Cash'},extra);
+const expenseBody=extra=>Object.assign({nature:'SANKI',vendor:'Synthetic Vendor',vendorPhone:'+919999999999',particulars:'Synthetic expense',amount:100,billPhoto:'/api/expenses/photo/own-bill.jpg',paymentType:'Cash'},extra);
 
 test('India business date is authoritative before/after midnight and accepts no timestamp/date-prefix tricks',()=>{
   const actor={user:user()},before='2026-10-15T18:29:59.999Z',after='2026-10-15T18:30:00.000Z';
