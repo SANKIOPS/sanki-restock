@@ -244,6 +244,7 @@
           <button data-t="reimbursements">Reimbursements</button>
         </section>
         <section class="tab-group-panel" id="tabGroupManage" data-tab-group="manage" aria-label="Management pages">
+          <button data-t="manage" id="manageHubTab">Universal Manage</button>
           <button data-t="categories" id="categoriesTab" style="display:none">Manage categories</button>
         </section>
         <section class="tab-group-panel" id="tabGroupAudit" data-tab-group="audit" aria-label="Audit pages">
@@ -591,6 +592,8 @@
 
     function refreshCategorySuggestions(){(cfg.natures||[]).forEach(function(n){var id='approvalLedgerList_'+n,d=el(id);if(!d){d=document.createElement('datalist');d.id=id;document.body.appendChild(d);}d.innerHTML=categorySuggestions(n);});}
     function loadConfig(){ return api('/api/expenses/config',{cache:'no-store'}).then(function(d){ if(!d.success)throw Error(d.error||'Could not load expense permissions.');cfg = d; refreshCategorySuggestions(); if(el('approvalLedgerList')) el('approvalLedgerList').innerHTML=cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'">';}).join(''); }); }
+    function openManageHub(section){if(cfg.claimantOnly)return;var target='/manage.html'+(section?'?section='+encodeURIComponent(section):''),returnTo=location.pathname+location.search+location.hash;location.href=target+(section?'&':'?')+'returnTo='+encodeURIComponent(returnTo);}
+    window.openManageCategories=function(){if(cfg.canManageCategories)openManageHub('categories');};
     function expenseOperatorAllowed(e){return !!(cfg&&cfg.claimantOnly!==true&&cfg.canApprove===true&&e&&e.canManageExpense===true);}
     function syncClaimantDate(date){var field=el('f_date');if(!field||!cfg.claimantOnly)return;cfg.businessDate=date;field.value=date;field.min=date;field.max=date;field.readOnly=true;}
 
@@ -652,7 +655,8 @@
       if(tab==='creditcards') return renderCreditCards();
       if(tab==='cash') return cfg.canVerifyCounterCash&&!cfg.isAdmin?renderCounterCashOnly():renderCash();
       if(tab==='reimbursements') return renderReimbursements();
-      if(tab==='categories'&&cfg.canManageCategories) return renderCategories();
+      if(tab==='manage') return openManageHub();
+      if(tab==='categories'&&cfg.canManageCategories) return openManageHub('categories');
       if(tab==='audit') return renderAudit();
       if(tab==='approvals') return renderApprovals();
     }
@@ -1286,7 +1290,7 @@
       }).catch(function(error){message.className='msg err';message.textContent=error&&error.message||'Could not add category. Please retry.';}).finally(function(){btn.disabled=false;});
     });
     function renderSpendingDashboard(){
-      spendingView='expenses';el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-days="7">Last 7 days</button><button class="btn mini ghost" data-days="30">Last 30 days</button><button class="btn mini primary" data-days="month">This month</button>'+(cfg.canManageCategories?'<button type="button" class="btn mini ghost" id="sd_add_category" onclick="openSpendingCategoryDialog()">＋ Add category</button>':'')+'</div><div class="filters"><div class="fld"><label>Search name or details</label><input id="sd_search" placeholder="Vendor, particulars, category or reference"></div><div class="fld"><label>Entity</label><select id="sd_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>Paying account</label><select id="sd_account"><option value="">All accounts</option>'+opts(cfg.accounts)+'</select></div><div class="fld"><label>Category</label><input id="sd_category" list="sd_category_list" placeholder="All categories"><datalist id="sd_category_list">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'" label="'+esc(l.group||'')+'">';}).join('')+'</datalist></div><div class="fld"><label>From</label><input type="date" id="sd_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="sd_to" value="'+today()+'"></div><button class="btn primary mini" id="sd_go">Search spending</button><button class="btn ghost mini" id="sd_category_go">Show spending by category</button></div><div class="stats" id="sd_stats"></div><div id="sd_payments" class="muted">Loading…</div></div>';
+      spendingView='expenses';el('panel').innerHTML='<div class="card"><div class="preset-row"><button class="btn mini ghost" data-days="7">Last 7 days</button><button class="btn mini ghost" data-days="30">Last 30 days</button><button class="btn mini primary" data-days="month">This month</button>'+(cfg.canManageCategories?'<button type="button" class="btn mini ghost" id="sd_add_category" onclick="openManageCategories()">＋ Add category</button>':'')+'</div><div class="filters"><div class="fld"><label>Search name or details</label><input id="sd_search" placeholder="Vendor, particulars, category or reference"></div><div class="fld"><label>Entity</label><select id="sd_nature"><option value="">All</option>'+opts(cfg.approvalNatures||cfg.natures)+'</select></div><div class="fld"><label>Paying account</label><select id="sd_account"><option value="">All accounts</option>'+opts(cfg.accounts)+'</select></div><div class="fld"><label>Category</label><input id="sd_category" list="sd_category_list" placeholder="All categories"><datalist id="sd_category_list">'+cfg.ledgers.map(function(l){return '<option value="'+esc(l.name)+'" label="'+esc(l.group||'')+'">';}).join('')+'</datalist></div><div class="fld"><label>From</label><input type="date" id="sd_from" value="'+monthStart()+'"></div><div class="fld"><label>To</label><input type="date" id="sd_to" value="'+today()+'"></div><button class="btn primary mini" id="sd_go">Search spending</button><button class="btn ghost mini" id="sd_category_go">Show spending by category</button></div><div class="stats" id="sd_stats"></div><div id="sd_payments" class="muted">Loading…</div></div>';
       Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(b){b.addEventListener('click',function(){var v=this.dataset.days;el('sd_from').value=v==='month'?today().slice(0,8)+'01':dateDaysAgo(Number(v));el('sd_to').value=today();Array.prototype.forEach.call(el('panel').querySelectorAll('[data-days]'),function(x){x.classList.toggle('primary',x===b);x.classList.toggle('ghost',x!==b);});loadSpendingDashboard();});});
       el('sd_go').addEventListener('click',function(){spendingView='expenses';loadSpendingDashboard();});el('sd_category_go').addEventListener('click',function(){spendingView='category';loadSpendingDashboard();});el('sd_search').addEventListener('keydown',function(e){if(e.key==='Enter'){spendingView='expenses';loadSpendingDashboard();}});el('sd_nature').addEventListener('change',loadSpendingDashboard);el('sd_account').addEventListener('change',loadSpendingDashboard);el('sd_category').addEventListener('change',loadSpendingDashboard);loadSpendingDashboard();
     }
