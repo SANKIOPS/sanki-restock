@@ -34,3 +34,13 @@ test('confirmed CSV feeds the same ledger and Owner posting feeds bank, vendor a
  const preserved=state(),changed=structuredClone(preserved);changed.bankReconciliationDrafts.D.transactions[0].credit=71.57;changed.bankReconciliationDrafts.D.transactions[0].balance=171.57;fs.writeFileSync(file,JSON.stringify(changed));const corrected=invoke('/api/expenses/bank-statements/correct-ledger-entry',{method:'POST',body:{draftId:'D',rowId:'bank-0',amount:71.57,reason:'Cannot alter approved GoKwik net'}});assert.equal(corrected.status,409,JSON.stringify(corrected.body));assert.equal(state().transfers[0].amount,70.57);fs.writeFileSync(file,JSON.stringify(preserved));
 });
 test('same status is shared, Admin awaiting Owner is not a fresh GoKwik warning',()=>{seed();const base='/api/expenses/gokwik-reports';invoke(base+'/confirm',{method:'POST',body:{previewId:'P'}});const id=Object.keys(state().gokwikTransactions).length&&g.batches(Object.values(state().gokwikTransactions))[0].id;invoke(base+'/submit',{method:'POST',role:'admin',body:{settlementId:id,reason:'Reviewed statement evidence'}});const owner=invoke(base),admin=invoke(base,{role:'admin'});assert.deepEqual(owner.body,admin.body);assert.equal(admin.body.counts.awaitingOwner,1);const reminders=invoke('/api/expenses/reconciliation-reminders',{role:'admin'});assert.equal(reminders.status,200);assert.equal(JSON.stringify(reminders.body).includes('Review GoKwik settlements'),false);});
+
+test('GoKwik common statement shows unposted Out without altering bank, balances or paid expenses',()=>{
+ seed();invoke('/api/expenses/gokwik-reports/confirm',{method:'POST',body:{previewId:'P'}});
+ const query={nature:'SANKI',account:g.CLEARING,from:'2026-08-22',to:'2026-08-31'},before=JSON.stringify(state());
+ const response=invoke('/api/expenses/account-ledger',{query});assert.equal(response.status,200);assert.equal(response.body.balance,150);assert.equal(response.body.providerStatement.closingBalance,0);assert.equal(response.body.providerStatement.totalOut,150);assert.equal(response.body.providerStatement.entries.filter(r=>r.pendingPosting).length,3);
+ assert.equal(invoke('/api/expenses/balances',{query}).body.accounts.find(a=>a.name===g.CLEARING).balance,150);
+ const bank=invoke('/api/expenses/account-ledger',{query:{...query,account:g.BANK}}).body;assert.equal(bank.balance,0);assert.equal(bank.providerStatement,undefined);
+ assert.equal(invoke('/api/expenses/spending-dashboard',{query}).body.totalPaid,0);assert.equal(JSON.stringify(state()),before);
+ const period=invoke('/api/expenses/account-ledger',{query:{...query,from:'2026-08-25'}}).body.providerStatement;assert.equal(period.openingBalance,150);assert.equal(period.totalIn,0);assert.equal(period.totalOut,150);
+});

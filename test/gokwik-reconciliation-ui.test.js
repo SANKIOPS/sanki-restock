@@ -26,3 +26,19 @@ function roundedView(){const view=data();Object.assign(view.transactions[0],{lin
 test('rounded-ID link requires both an exact full-ID confirmation and a reason',async()=>{const ui=harness({initial:roundedView(),prompts:['7241015361788','Verified the exact Shopify order identity']});await drain();ui.buttons.get('data-gkw-link:P1').onclick();await drain();const posts=ui.calls.filter(c=>c.options.method==='POST');assert.equal(posts.length,1);assert.deepEqual(JSON.parse(posts[0].options.body),{reason:'Verified the exact Shopify order identity',paymentId:'P1',orderId:'7241015361788'});});
 test('cancelling or entering another ID never writes a rounded-ID link',async()=>{for(const id of [null,'7241015361789']){const ui=harness({initial:roundedView(),prompts:[id]});await drain();ui.buttons.get('data-gkw-link:P1').onclick();await drain();assert.equal(ui.calls.filter(c=>c.options.method==='POST').length,0);}});
 test('missing or ambiguous identity candidates do not offer a guessed full ID',async()=>{for(const candidates of [[],[{},{}]]){const view=roundedView();view.transactions[0].orderCandidates=candidates;const ui=harness({initial:view});await drain();ui.buttons.get('data-gkw-link:P1').onclick();await drain();assert.equal(ui.calls.filter(c=>c.options.method==='POST').length,0);assert.match(ui.nodes['[data-gkw-message]'].textContent,/No unique Shopify order/);}});
+
+test('common statement renders In, Out and running balance with unposted status, not approval actions',()=>{
+ const root={};vm.runInNewContext(script,{window:root});
+ const model={from:'2026-08-22',to:'2026-08-31',openingBalance:0,closingBalance:0,recordedBalance:150,pendingOut:150,totalIn:150,totalOut:150,notice:'Read-only report movements',entries:[{date:'2026-08-24',id:'P1',description:'Customer collection',credit:150,debit:0,balance:150,status:'Recorded'},{date:'2026-08-25',id:'F1',reference:'UTR1',description:'Processing fee and tax',credit:0,debit:4.43,balance:145.57,pendingPosting:true,status:'Unposted · review required'}]};
+ const output=root.GoKwikReconciliation.statement(model);assert.match(output,/GoKwik common statement/);assert.match(output,/<th class="r">Out<\/th>/);assert.match(output,/₹4\.43/);assert.match(output,/₹145\.57/);assert.match(output,/Recorded account ledger balance ₹150\.00/);assert.match(output,/no accounting posting/);assert.doesNotMatch(output,/<button|data-gkw-approve|data-gkw-submit/);
+});
+test('common statement escapes imported text and is wired only for GoKwik account response',()=>{
+ const root={};vm.runInNewContext(script,{window:root});const output=root.GoKwikReconciliation.statement({entries:[{description:'<img src=x onerror=alert(1)>',reference:'<script>x</script>',status:'<b>Unposted</b>'}]});assert.doesNotMatch(output,/<img src=x|<script>|<b>Unposted/);assert.match(output,/&lt;script&gt;/);assert.match(html,/if\(isGoKwikClearing&&d.providerStatement\)el\('ledgerTable'\).innerHTML=GoKwikReconciliation.statement\(d.providerStatement,/);
+});
+test('settlement batch controls are secondary and collapsed, not separate primary statements',async()=>{
+ const ui=harness();await drain();const output=ui.nodes['[data-gkw-saved]'].innerHTML;assert.match(output,/<details data-gkw-reviews><summary>Settlement review \(1\)<\/summary>/);assert.doesNotMatch(output,/<details[^>]* open/);
+});
+
+test('recorded rows retain existing actions and safe proof access; unposted rows never get edit actions',()=>{
+ const root={};vm.runInNewContext(script,{window:root});let actions=0;const output=root.GoKwikReconciliation.statement({entries:[{id:'REAL',proof:'/proofs/bill.jpg'},{id:'REPORT',pendingPosting:true,proof:'javascript:alert(1)'}]},{recordedActions:row=>{actions++;assert.equal(row.id,'REAL');return '<button>Edit recorded row</button>';}});assert.equal(actions,1);assert.match(output,/View proof/);assert.match(output,/Edit recorded row/);assert.doesNotMatch(output,/javascript:/);
+});
