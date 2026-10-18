@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const key = (orderId, lineId) => String(orderId) + '/' + String(lineId);
 const hash = line => crypto.createHash('sha256').update(JSON.stringify([String(line.id),line.sku||'',line.title||'',line.qty,line.price,line.discount,line.taxable,line.taxLines])).digest('hex');
+const orderHash = order => crypto.createHash('sha256').update(JSON.stringify([String(order.id),order.name||'',order.createdAt||''])).digest('hex');
 const canonicalSku = sku => String(sku || '').trim().toUpperCase();
 const dateOf = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value)+19800000).toISOString().slice(0,10) : '';
 const fail = message => { throw Object.assign(Error(message), {status:409}); };
@@ -23,6 +24,15 @@ function prepare(sources, items, requireFingerprint=false) {
  if(!Array.isArray(items)||!items.length||items.length>100) fail('Choose between 1 and 100 item corrections.');
  const seen=new Set();
  return items.map(input=>{
+  if(['cancelled','source_status'].includes(input.type)) {
+   const matches=Object.values(sources.orders?.orders||{}).filter(o=>input.orderId?String(o.id)===String(input.orderId):String(o.name||'').toLowerCase()===String(input.reference||'').trim().toLowerCase());
+   if(matches.length!==1)fail('Enter the exact existing order reference, including #, or reload the preview.');
+   const order=matches[0],id=key(order.id,'$order');
+   if(seen.has(id)||!dateOf(order.processedAt||order.createdAt)||dateOf(order.processedAt||order.createdAt)<'2026-08-22'||order.accountingExcluded)fail('Duplicate, excluded, undated or pre-accounting-start orders cannot be corrected here.');
+   if(requireFingerprint&&input.fingerprint!==orderHash(order))fail('Order identity changed since preview. Preview it again before saving.');
+   seen.add(id);
+   return {orderId:String(order.id),lineId:'$order',type:input.type,reference:order.name||String(order.id),fingerprint:orderHash(order),createdDate:dateOf(order.createdAt),title:input.type==='cancelled'?'Confirmed cancelled; exclude sale from P&L':'Use original source completion status'};
+  }
   const order=sources.orders?.orders?.[String(input.orderId)];
   const line=order?.lineItems?.find(l=>String(l.id)===String(input.lineId));
   const id=key(input.orderId,input.lineId);
@@ -60,6 +70,12 @@ function save(file, sources, items, actor, note, at=new Date().toISOString()) {
 }
 function resolveOrder(order, store={}) {
  const issues=[];
+ const status=store.entries?.[key(order.id,'$order')];
+ let pnlCancelled=false;
+ if(status) {
+  if(status.fingerprint!==orderHash(order)||!['cancelled','source_status'].includes(status.type))issues.push('P&L order-status correction no longer matches the source order. Review it again.');
+  else pnlCancelled=status.type==='cancelled';
+ }
  const lineItems=(order.lineItems||[]).map(line=>{
   const entry=store.entries?.[key(order.id,line.id)];if(!entry)return line;
   if(entry.fingerprint!==hash(line)||canonicalSku(line.sku)){issues.push('P&L correction no longer matches source line '+line.id+'. Review it again; source data was not overridden.');return line;}
@@ -68,6 +84,6 @@ function resolveOrder(order, store={}) {
   if(entry.type==='shipping')return {...line,pnlKind:'shipping',pnlUnitCost:0,pnlCorrection:entry};
   issues.push('Invalid P&L correction for source line '+line.id+'.');return line;
  });
- return {order:{...order,lineItems},issues};
+ return {order:{...order,lineItems,pnlCancelled,pnlStatusCorrection:pnlCancelled?status:null},issues};
 }
-module.exports={key,hash,reviewRows,prepare,read,save,resolveOrder};
+module.exports={key,hash,orderHash,reviewRows,prepare,read,save,resolveOrder};
