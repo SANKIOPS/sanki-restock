@@ -11,14 +11,42 @@ permissions remain respected.
 - One completed POS sale or delivered order creates revenue, excluding GST.
   Website orders need an actual completion date; an edit timestamp is not a
   delivery timestamp. Orders has a delivery-date field for confirmed dates.
+  When that date is absent, the report now joins the existing automatic
+  Velocity shipment discovery and carrier-tracking evidence by Shopify order
+  ID and AWB. All active AWBs must have delivered status and actual dates;
+  split shipments use their latest delivery. No date is inferred from
+  fulfilled status, settlement, sync time or last-updated time. Invalid,
+  future and pre-order dates remain exceptions. POS and recorded delivery
+  dates retain their existing precedence; cancelled/RTO orders are not
+  revived by carrier fallback. No order or dispatch fields are rewritten.
+  The existing ten-minute logistics poll supplies this cache without needing
+  Orders-page access. The tracking reader accepts both Velocity's flat and
+  nested response formats. Orders fulfilled outside Velocity with no AWB
+  still require a verified manual completion/cancellation correction.
 - Per-piece taxable garment value up to and including ₹2,500 uses 5%; above
   ₹2,500 uses 18%. GST-inclusive prices are divided by `(1 + rate)`. For an
-  ambiguous inclusive price, missing price basis, invoice mismatch or missing
-  shipping tax, profit remains unavailable until reviewed. Tax invoices are
-  never altered by this report.
-- Received inventory is allocated by SKU using FIFO. Vendor payment is not
-  required. Purchases received later do not change earlier allocations.
-  Purchase advances/payables are not additional operating expenses.
+  ambiguous inclusive price, missing price basis or missing shipping tax,
+  profit remains unavailable until reviewed. Garment GST is calculated exclusively
+  by this P&L policy: invoice rates, recorded GST differences and Shopify exempt
+  flags never override it or block profit by themselves. Source invoice GST is
+  retained for reference only. Tax invoices, Shopify, actual collections and all
+  other accounting/ledger calculations are never altered by this report.
+  Tax-exclusive garment amounts use taxable value plus calculated GST in the
+  management report; source invoice/collection totals remain separate evidence.
+- Shopify Cost per item is the primary management COGS source, matched by
+  unique normalized SKU from the existing persisted inventory snapshot.
+  Reports return immediately using the synced copy. The first report read
+  can start a coalesced background refresh; further refresh attempts are
+  limited to once per 15 minutes (30 seconds while no saved snapshot exists).
+  The snapshot timestamp is exposed as costSource.at and in the source list.
+  Missing, zero, negative, non-INR and duplicate-SKU costs remain exceptions.
+  Sale quantity multiplies unit cost regardless of supplier payment or today's
+  available stock. No opening quantities or purchase lots are invented.
+  Current synced cost changes restate management P&L history; this is not a
+  frozen historical stock valuation. Refunds reverse the original sale's
+  allocation. Purchase advances/payables are not extra operating expenses.
+  The pure report builder retains legacy verified FIFO behavior only when
+  callers explicitly omit the Shopify cost source; the app loader supplies it.
 - Operating costs use actual approved payments/paid portions, capped to the
   bill amount. Excess vendor advances, reimbursements, card repayments and
   transfers are not counted again. Salary uses actual active payment records,
@@ -30,7 +58,10 @@ permissions remain respected.
   including received vouchers. Pending refunds, unpaid-only credit notes and
   returned unallocated advances do not reduce paid operating costs. Linked
   card credits and refund receipts are not counted a second time.
-- Dated credit notes reduce sales. Only physically restocked SKU quantities
+- Dated credit notes reduce sales and reverse the original P&L-calculated GST,
+  not the source refund tax or a newly selected slab. Cumulative quantity/tax
+  allocations prevent duplicate or excessive reversals; partial value credits
+  follow their documented fraction of the original line. Only physically restocked SKU quantities
   reverse the original cost. Refunds lacking item/tax/stock linkage remain
   explicit exceptions. Ledger-recorded refunds are not silently ignored.
 - COD/advance collections are separate from revenue, with payment history
