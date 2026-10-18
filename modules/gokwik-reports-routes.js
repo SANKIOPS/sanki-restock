@@ -21,7 +21,7 @@ function registerGoKwikReports(router,deps) {
       'UTR: '+batch.utr+' | Settlement date: '+batch.settledDate,
       'Gross: INR '+batch.gross.toFixed(2)+' | Net to IndusInd 0437: INR '+batch.net.toFixed(2),
       'Fee: '+batch.fee.toFixed(2)+' | Tax: '+batch.tax.toFixed(2)+' | Additional fees/tax: '+(batch.additionalFee+batch.additionalTax).toFixed(2),
-      'Separate deduction: INR '+batch.deduction.toFixed(2)+' - provisional Subscription Expense, vendor GoKwik',
+      'Separate deduction: INR '+batch.deduction.toFixed(2)+' - GoKwik service charge; Subscription Expense, vendor GoKwik',
       'Original provider evidence is retained in universal reconciliation. No tax-credit eligibility is asserted.',
       ...batch.transactions.slice(0,100).map(tx=>tx.date+' | #'+tx.orderNumber+' | '+tx.paymentId+' | INR '+tx.gross.toFixed(2)),
       ...(batch.transactions.length>100?['Additional payments: see complete original CSV.']:[])
@@ -63,7 +63,7 @@ function registerGoKwikReports(router,deps) {
   }));
   router.post(base+'/submit',run((req,res)=>{
     const s=loadStore(),id=String(req.body.settlementId || ''),reason=String(req.body.reason || '').trim();if(reason.length<10)throw Error('Enter a reconciliation remark of at least 10 characters.');const checked=g.review(s,id,orders());
-    const approval={fingerprint:checked.fingerprint,requestedBy:req.user.username,requestedAt:new Date().toISOString(),reason,deductionCategory:g.SUBSCRIPTION,deductionVendor:'GoKwik',deductionTreatment:'User-directed provisional subscription expense; reclassify against actual invoice later'};
+    const approval={fingerprint:checked.fingerprint,requestedBy:req.user.username,requestedAt:new Date().toISOString(),reason,deductionCategory:g.SUBSCRIPTION,deductionVendor:'GoKwik',deductionTreatment:'User-confirmed GoKwik service charge; final classification: Subscription Expense, vendor GoKwik'};
     s.gokwikApprovals=s.gokwikApprovals || {};s.gokwikApprovals[id]=approval;event(s,req,'GOKWIK_APPROVAL_REQUESTED',id,{after:approval,note:'No posting until Owner approval. Bank account opening and statement summary untouched.'});saveStore(s);respond(res,s);
   }));
   router.post(base+'/withdraw',run((req,res)=>{const s=loadStore(),id=String(req.body.settlementId || ''),reason=String(req.body.reason || '').trim();if(reason.length<10)throw Error('Enter a withdrawal/rejection reason of at least 10 characters.');if(!s.gokwikApprovals?.[id])throw Error('Pending approval not found.');const before=s.gokwikApprovals[id];delete s.gokwikApprovals[id];event(s,req,'GOKWIK_APPROVAL_WITHDRAWN',id,{before,note:reason});saveStore(s);respond(res,s);}));
@@ -84,7 +84,7 @@ function registerGoKwikReports(router,deps) {
       s.expenses[expenseId]=expense;s.customLedgers[ledger]=s.customLedgers[ledger] || {name:ledger,type};expenses.push(expenseId);event(s,req,'GOKWIK_EXPENSE_POSTED',expenseId,{after:expense});
     };
     createExpense(Number((batch.fee+batch.tax+batch.additionalFee+batch.additionalTax).toFixed(2)),'BANK CHARGES','GoKwik processing fee and tax · UTR '+batch.utr+' · fee '+batch.fee+', tax '+batch.tax+', additional fee '+batch.additionalFee+', additional tax '+batch.additionalTax,'running');
-    createExpense(batch.deduction,g.SUBSCRIPTION,'GoKwik subscription expense (provisional classification per user instruction) · UTR '+batch.utr,'fixed');
+    createExpense(batch.deduction,g.SUBSCRIPTION,'GoKwik service charge · Subscription Expense · UTR '+batch.utr,'fixed');
     do{s.transferSeq=Number(s.transferSeq || 0)+1;}while(s.transfers.some(t=>t.id==='TR-'+String(s.transferSeq).padStart(5,'0')));
     const transfer={id:'TR-'+String(s.transferSeq).padStart(5,'0'),nature:'SANKI',fromNature:'SANKI',toNature:'SANKI',classification:'internal_transfer',fromAccount:g.CLEARING,toAccount:g.BANK,amount:batch.net,date:bank.date,bankReference:batch.utr,reference:batch.utr,proof,proofs:[proof],note:'GoKwik net settlement · '+batch.transactions.map(t=>'#'+t.orderNumber).join(', '),gokwikPostingId:id,createdAt:now,createdBy:req.user.username};
     s.transfers.push(transfer);

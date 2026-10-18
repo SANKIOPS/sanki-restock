@@ -14,7 +14,7 @@ function buildStatement(entries, store, {from='',to='',expenseNature='',recorded
       const common={date:batch.settledDate,entity:'SANKI',reference:batch.utr,settlementId:batch.id,pendingPosting:true,status,editable:false,credit:0};
       const add=(suffix,kind,description,value,sequence)=>{if(g.money(value)>0)rows.push({...common,id:'GKW-REPORT/'+batch.id+'/'+suffix,kind,description,debit:value,sequence});};
       add('FEES','gokwik_report_fee','GoKwik processing fees and tax',Math.round((batch.fee+batch.tax+batch.additionalFee+batch.additionalTax)*100)/100,10);
-      add('DEDUCTION','gokwik_report_deduction','GoKwik · Subscription Expense (provisional)',batch.deduction,20);
+      add('DEDUCTION','gokwik_report_deduction','GoKwik service charge · Subscription Expense',batch.deduction,20);
       add('PAYOUT','gokwik_report_payout','GoKwik payout to '+g.BANK+' · reported, not posted',batch.net,30);
     }
   }
