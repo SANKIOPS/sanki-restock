@@ -41,7 +41,10 @@ function lineTax(line, taxesIncluded = true) {
     return {gross,sourceGross:gross,tax,recorded:tax,calculated:tax,rate:null,status:known?'Shipping fee: source invoice GST retained':'Shipping fee GST evidence missing',valid:known&&qty>0};
   }
   if (!(qty > 0)) return { gross: money(base), tax: null, rate: null, recorded, status: 'Missing quantity', valid: false };
-  const rate = gstRate(base / qty);
+  // Confirmed non-garment exception. Match only an explicit perfume product
+  // title; do not infer rates for unnamed custom items or overwrite invoices.
+  const perfume = /\bperfumes?\b/i.test(String(line.title || ''));
+  const rate = perfume ? 0.28 : gstRate(base / qty);
   const calculated = money(taxesIncluded ? base - base / (1 + rate) : base * rate);
   // Management P&L only: invoice rates, recorded tax and Shopify's taxable
   // flag never override the configured garment calculation. sourceGross is
