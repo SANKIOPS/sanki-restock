@@ -1756,6 +1756,22 @@ function salaryAdvanceEntries() {
     try{const sal=JSON.parse(fs.readFileSync(file,'utf8'));return Object.values(sal.advances||{}).filter(a=>a.active!==false&&num(a.amount)>0&&a.account).map(a=>({id:a.id,date:a.date,createdAt:a.createdAt||a.postedAt||'',account:canonicalAccountName(a.account),payingNature:a.payingNature||entity,entity,amount:num(a.amount),employee:a.employeeName||((sal.employees||{})[a.empId]||{}).name||a.empId,empId:a.empId||'',reference:a.reference||a.id,proof:a.proof||'',proofs:Array.isArray(a.proofs)?a.proofs:[],note:a.note||'',by:a.createdBy||'',fundingTransferId:a.fundingTransferId||'',fundingToAccount:canonicalAccountName(a.fundingToAccount)||''}));}catch(_){return[];}
   });
 }
+function salaryAdvanceProofUploadClaim(url){
+  try{
+    const name=path.basename(String(url||'').split('?')[0]);if(!name.startsWith('personal-'))return null;
+    const claim=JSON.parse(fs.readFileSync(path.join(PROOF_DIR,name+'.meta.json'),'utf8'));
+    return claim&&claim.nature==='PERSONAL'&&claim.purpose==='salary_advance'&&claim.uploadedBy?claim:null;
+  }catch(_){return null;}
+}
+function personalSalaryAdvanceProofLinked(url){
+  const claim=salaryAdvanceProofUploadClaim(url);if(!claim)return false;
+  return [SALARY_PATH,SAMAST_SALARY_PATH].some(file=>{
+    try{
+      const salary=JSON.parse(fs.readFileSync(file,'utf8')),records=Object.values(salary.advances||{}).concat(Object.values(salary.advanceRequests||{}));
+      return records.some(record=>String(record.payingNature||'SANKI').toUpperCase()==='PERSONAL'&&proofList(record.proofs,record.proof).includes(url)&&[record.createdBy,record.postedBy].map(String).includes(String(claim.uploadedBy)));
+    }catch(_){return false;}
+  });
+}
 function syncClaimantFundedSalaryAdvanceReimbursements(s){
   const owners=Object.fromEntries(Object.entries(CLAIMANT_ACCOUNTS).flatMap(([claimant,accounts])=>accounts.map(account=>[canonicalAccountName(account).toLowerCase(),claimant]))),active=new Set(),now=new Date().toISOString();
   let changed=false;s.expenses=s.expenses||{};
@@ -1915,11 +1931,21 @@ function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') ||
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
 function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req);}
 const PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS=new Set(['Axis Bank 3448','Tiana 0425','Prashant Axis 3645','IndusInd Bank 8181']);
+const ADMIN_OWNER_CONTRIBUTION_SOURCE={nature:'PERSONAL',account:'ICICI Bank 0993',toNature:'SANKI',toAccount:'Axis Bank 3448',classification:'owner_contribution',label:"Sir's personal bank account · ICICI Bank 0993",verifiedBankReferences:['IN12628960317832']};
 function isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification){
   if(fromNature!=='SANKI'||toNature!=='SANKI'||classification!=='internal_transfer')return false;
   const available=new Set(transferAccountsForNature('SANKI').filter(account=>!OWNER_ONLY_ACCOUNTS.includes(account)||PRASHANT_VISIBLE_OWNER_ACCOUNTS.includes(account)));
   return fromAccount!==toAccount&&available.has(fromAccount)&&available.has(toAccount)&&
     (PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS.has(fromAccount)||PRASHANT_RECONCILIATION_TRANSFER_ACCOUNTS.has(toAccount));
+}
+function adminOwnerContributionEvidence(bank){
+  const reference=String(bank&&bank.reference||'').trim().toUpperCase(),text=String(bank&&bank.description||'')+' '+reference;
+  return ADMIN_OWNER_CONTRIBUTION_SOURCE.verifiedBankReferences.includes(reference)||/\bgagan(?:\s+(?:sir|lamba))?\b/i.test(text)||/(?:\bicici\b|\ba\/?c(?:count)?\b|\bacct\b|x{2,}|\*{2,})[^0-9]{0,20}0993\b/i.test(text);
+}
+function isAdminOwnerContributionTransfer(req,fromNature,toNature,fromAccount,toAccount,classification,bank){
+  if(!rolesOfReq(req).includes('admin'))return false;
+  const approved=ADMIN_OWNER_CONTRIBUTION_SOURCE;
+  return adminOwnerContributionEvidence(bank)&&fromNature===approved.nature&&toNature===approved.toNature&&fromAccount===approved.account&&toAccount===approved.toAccount&&classification===approved.classification;
 }
 function canLogCreditCardExpense(req){return isAdmin(req)||isPrashant(req);}
 function bankStatementBookKey(nature,account){const n=normalizedNature(nature);return n==='PERSONAL'?'PERSONAL|'+String(account||''):String(account||'');}
@@ -2169,8 +2195,11 @@ router.post('/api/expenses/upload', proofUpload.single('photo'), async (req, res
     fs.mkdirSync(PROOF_DIR,{recursive:true});
     let stored=req.file.buffer,ext=(path.extname(req.file.originalname||'')||'.jpg').toLowerCase().replace(/[^.a-z0-9]/g,'')||'.jpg';
     try{const image=await Jimp.read(req.file.buffer),max=1400;if(image.bitmap.width>max||image.bitmap.height>max)image.scaleToFit(max,max);stored=await image.quality(62).getBufferAsync(Jimp.MIME_JPEG);ext='.jpg';}catch{/* Preserve valid formats Jimp cannot decode, such as HEIC. */}
-    const privacy=normalizedNature(req.body&&req.body.nature)==='PERSONAL'?'personal-':'',filename=privacy+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,finalPath=path.join(PROOF_DIR,filename),temporary=finalPath+'.tmp-'+process.pid;
+    const proofNature=normalizedNature(req.body&&req.body.nature),purpose=String(req.body&&req.body.purpose||'').trim(),salaryAdvanceUpload=proofNature==='PERSONAL'&&purpose==='salary_advance';
+    if(salaryAdvanceUpload&&!isOwner(req)&&!rolesOfReq(req).includes('admin'))return res.status(403).json({success:false,error:'Only Owner or Admin may upload a PERSONAL salary-advance proof.'});
+    const privacy=proofNature==='PERSONAL'?'personal-':'',filename=privacy+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+ext,finalPath=path.join(PROOF_DIR,filename),temporary=finalPath+'.tmp-'+process.pid;
     fs.writeFileSync(temporary,stored);try{fs.renameSync(temporary,finalPath);}catch(renameError){try{fs.writeFileSync(finalPath,stored);fs.unlinkSync(temporary);}catch{throw renameError;}}
+    if(salaryAdvanceUpload)fs.writeFileSync(finalPath+'.meta.json',JSON.stringify({nature:'PERSONAL',purpose:'salary_advance',uploadedBy:String(req.user&&req.user.username||''),uploadedAt:new Date().toISOString()}));
     res.json({success:true,url:'/api/expenses/photo/'+filename});
   }catch(error){console.error('[expenses] Proof storage failed:',error);const code=String(error&&error.code||'WRITE_FAILED');res.status(500).json({success:false,error:code==='ENOSPC'?'Proof storage is full. No expense was submitted; contact the Owner to free storage.':'The image reached the server but could not be stored ('+code+'). Please retry once.'});}
 });
@@ -2183,7 +2212,8 @@ router.get('/api/expenses/photo/:file', (req, res) => {
   if (name.startsWith('personal-')) {
     const s=loadStore(),url='/api/expenses/photo/'+name,linked=Object.values(s.expenses||{}).find(e=>normalizedNature(e.nature)==='PERSONAL'&&canViewExpense(req,e)&&claimantPolicy.expenseProofs(e).includes(url));
     const linkedRefund=expenseRefunds.records(s).find(r=>r.nature==='PERSONAL'&&(r.proofs||[]).includes(url));
-    if ((!linked || !canViewExpense(req,linked)) && !(linkedRefund&&isOwner(req))) return res.status(403).end();
+    const linkedSalaryAdvance=personalSalaryAdvanceProofLinked(url),canViewSalaryAdvance=linkedSalaryAdvance&&(isOwner(req)||rolesOfReq(req).includes('admin'));
+    if ((!linked || !canViewExpense(req,linked)) && !(linkedRefund&&isOwner(req)) && !canViewSalaryAdvance) return res.status(403).end();
   }
   const fp = path.join(PROOF_DIR, name);
   if (!fp.startsWith(PROOF_DIR) || !fs.existsSync(fp)) return res.status(404).end();
@@ -2241,6 +2271,7 @@ router.get('/api/expenses/config', (req, res) => {
     isOwner: rolesOfReq(req).includes('owner'),
     canVerifyCounterCash: !claimantPolicy.claimantOnly(req)&&(isOwner(req)||isPrashant(req)),
     canLogCreditCardExpense: canLogCreditCardExpense(req),
+    adminOwnerContributionSource: rolesOfReq(req).includes('admin') ? ADMIN_OWNER_CONTRIBUTION_SOURCE : null,
     canApprove: canApprove(req),
     claimantOnly: claimantPolicy.claimantOnly(req),
     expenseDatePolicy: claimantPolicy.claimantOnly(req) ? 'today_only' : 'any',
@@ -5224,11 +5255,12 @@ router.post('/api/expenses/bank-statements/create-incoming',(req,res)=>{
   let transfer=null,receipt=null;
   if(sourceKind==='internal'){
     const fromNature=normalizedNature(b.fromNature),fromAccount=allowedTransferAccount(fromNature,b.fromAccount),classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
-    if(!approvalNatures(req).includes(fromNature)||!approvalNatures(req).includes(toNature))return res.status(403).json({success:false,error:'You cannot transfer funds for one of these accounting entities.'});
+    const adminOwnerContribution=isAdminOwnerContributionTransfer(req,fromNature,toNature,fromAccount,toAccount,classification,bank);
+    if((!approvalNatures(req).includes(fromNature)||!approvalNatures(req).includes(toNature))&&!adminOwnerContribution)return res.status(403).json({success:false,error:'You cannot transfer funds for one of these accounting entities.'});
     if(!fromAccount)return res.status(400).json({success:false,error:'Choose the internal source account.'});
     if(fromNature===toNature&&fromAccount.toLowerCase()===toAccount.toLowerCase())return res.status(400).json({success:false,error:'Source and receiving accounts must be different.'});
     if(fromNature!==toNature&&!['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement','salary_advance_funding'].includes(classification))return res.status(400).json({success:false,error:'Choose why money is moving between these entities.'});
-    if(!isOwner(req)&&!(isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification)))return res.status(403).json({success:false,error:'Prashant can record only approved internal-transfer routes from this reconciliation.'});
+    if(!isOwner(req)&&!(isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification))&&!adminOwnerContribution)return res.status(403).json({success:false,error:'This reconciliation can use only an approved internal-transfer route.'});
     let salaryStore=null,salaryAdvance=null;
     if(classification==='salary_advance_funding'){
       if(fromNature!=='SANKI'||toNature!=='SANKI')return res.status(400).json({success:false,error:'A salary advance funding transfer must stay inside the SANKI entity.'});
