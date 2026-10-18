@@ -23,9 +23,9 @@ permissions remain respected.
   Orders-page access. The tracking reader accepts both Velocity's flat and
   nested response formats. Orders fulfilled outside Velocity with no AWB
   still require a verified manual completion/cancellation correction.
-- Per-piece taxable garment value up to and including ₹2,500 uses 5%; above
+- Final per-piece garment selling value after discount up to and including ₹2,500 uses 5%; above
   ₹2,500 uses 18%. GST-inclusive prices are divided by `(1 + rate)`. For an
-  ambiguous inclusive price, missing price basis or missing shipping tax,
+  missing price basis or missing shipping tax,
   profit remains unavailable until reviewed. Garment GST is calculated exclusively
   by this P&L policy: invoice rates, recorded GST differences and Shopify exempt
   flags never override it or block profit by themselves. Source invoice GST is
@@ -33,6 +33,9 @@ permissions remain respected.
   other accounting/ledger calculations are never altered by this report.
   Tax-exclusive garment amounts use taxable value plus calculated GST in the
   management report; source invoice/collection totals remain separate evidence.
+  The slab is chosen from the final discounted selling value, not inferred by
+  reversing candidate tax rates. This is the user's configured management
+  report policy only and does not change statutory invoice calculations.
 - Shopify Cost per item is the primary management COGS source, matched by
   unique normalized SKU from the existing persisted inventory snapshot.
   Reports return immediately using the synced copy. The first report read
@@ -152,6 +155,19 @@ unrefunded advance remain visible. No source cancellation date is invented.
 `source_status` restores source-based recognition without deleting audit
 history. Existing item annotations are preserved in both directions.
 Shopify, orders, invoices, stock, payments and reconciliations are untouched.
+
+### Confirmed delivery and manual-sale COGS
+
+The same private audited store supports a verified actual delivery date for
+in-house/manual shipments. Dates before order creation, future dates and
+cancelled source orders are rejected. Report-only completion never changes
+Velocity tracking, Shopify or Orders permissions.
+
+Manual product-sale receipts may have user-confirmed quantity and per-unit
+COGS. The receipt group identity, amount and dates are fingerprinted. Its
+non-garment GST rate and inclusive/exclusive basis remain unresolved unless
+both are explicitly supplied. No zero GST or garment classification is
+assumed. Original receipts and their bank movements are not edited.
 
 ## Verification / release
 
