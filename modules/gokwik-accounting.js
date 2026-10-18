@@ -142,7 +142,7 @@ function bankCandidates(store,batch) {
   Object.values(((store.bankStatements || {})[BANK] || {}).transactions || {}).forEach(row => add(row,{kind:'official',id:row.id}));
   for (const draft of Object.values(store.bankReconciliationDrafts || {})) {
     if (draft.account!==BANK || text(draft.nature || 'SANKI')!=='SANKI' || draft.finalizedAt || draft.expiresAt && Date.parse(draft.expiresAt)<Date.now()) continue;
-    (draft.transactions || []).forEach((row,index) => add(row,{kind:'draft',draftId:draft.id,rowId:'bank-'+index},(draft.resolutions || {})['bank-'+index]));
+    (draft.transactions || []).forEach((row,index) => add(row,{kind:'draft',draftId:draft.id,rowId:'bank-'+index},(draft.resolutions || {})['bank-'+index] || ((draft.matchingExclusions || {})['bank-'+index] ? {action:'unmatch_suggestion'} : null)));
   }
   return [...found.values()];
 }
@@ -172,9 +172,9 @@ function review(store,id,orders) {
 function view(store,orders) {
   const transactions=Object.values(store.gokwikTransactions || {}).map(tx=>{let issue='';try{validateLink(store,tx,orders);}catch(e){issue=e.message;}return {...tx,link:(store.gokwikOrderLinks || {})[tx.paymentId] || null,issue,requiresIdentityReview:schema.scientificId(tx.orderId),orderCandidates:identityCandidates(tx,orders)};});
   const settlements=batches(transactions).map(batch=>{
-    const posting=(store.gokwikPostings || {})[batch.id],approval=(store.gokwikApprovals || {})[batch.id];
+    const posting=(store.gokwikPostings || {})[batch.id],candidate=bankCandidates(store,batch).find(bank=>bank.locator.kind==='draft'),approval=candidate&&Object.values(store.bankReconciliationApprovals || {}).find(request=>request.draftId===candidate.locator.draftId&&request.status==='pending');
     let issue='',ready=false,approvalStale=false;
-    if(!posting)try{const checked=review(store,batch.id,orders);approvalStale=!!approval&&approval.fingerprint!==checked.fingerprint;ready=!approvalStale;if(approvalStale)issue='Evidence changed after submission. Withdraw this review and submit the current figures again.';}catch(e){issue=e.message;approvalStale=!!approval;}
+    if(!posting)try{review(store,batch.id,orders);ready=true;if(approval){const draft=store.bankReconciliationDrafts[candidate.locator.draftId],current=require('./gokwik-bank-reconciliation').plan(store,draft,orders);approvalStale=!approval.gokwikFingerprint||approval.gokwikFingerprint!==current.fingerprint;if(approvalStale){ready=false;issue='GoKwik evidence changed since the 0437 review. Admin must resubmit the bank reconciliation; nothing was posted.';}}}catch(e){issue=e.message;approvalStale=!!approval;}
     return {...batch,posting:posting || null,approval:approval || null,approvalStale,ready,issue,bankCandidates:bankCandidates(store,batch).map(b=>({date:b.date,credit:b.credit,reference:b.reference,description:b.description,locator:b.locator})),status:posting?'posted':approval&&!approvalStale?'awaiting_owner':ready?'ready':'review_required'};
   });
   return {account:CLEARING,bankAccount:BANK,subscriptionCategory:SUBSCRIPTION,subscriptionVendor:'GoKwik',transactions,settlements,imports:Object.values(store.gokwikImports || {}).map(({id,name,hash,at,by,count})=>({id,name,hash,at,by,count})),previews:Object.values(store.gokwikPreviews || {}).map(({id,name,at,transactions})=>({id,name,at,count:transactions.length})),counts:{payments:transactions.length,settlements:settlements.length,posted:settlements.filter(s=>s.status==='posted').length,awaitingOwner:settlements.filter(s=>s.status==='awaiting_owner').length,reviewRequired:settlements.filter(s=>s.status==='review_required').length}};

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const {cleanMatches} = require('../modules/inventory-visual-search');
 const {vision,providerError} = require('../modules/inventory-visual-search');
 test('provider diagnostics redact credentials and URLs',()=>{
@@ -37,7 +38,28 @@ test('visual search excludes invented IDs and duplicate matches',()=>{
   assert.deepEqual(cleanMatches([{id:2,confidence:'high',reason:'Same print'},{id:999,confidence:'high'},{id:2},{id:'3'},{id:3,confidence:'invented'}],new Set([2,3])),[{id:2,confidence:'high',reason:'Same print'},{id:3,confidence:'low',reason:''}]);
 });
 test('inventory photo search provides camera, upload and expandable SKU navigation',()=>{
-  const ui=fs.readFileSync('public/inventory-visual-search.js','utf8');
+  const ui=fs.readFileSync(path.join(__dirname,'../public/inventory-visual-search.js'),'utf8');
   assert.match(ui,/capture="environment"/);assert.match(ui,/Upload product photo/);assert.match(ui,/inventory:open-product/);
-  const auth=fs.readFileSync('auth.js','utf8');assert.match(auth,/image-search', roles: \['admin', 'inventory', 'warehouse', 'sales', 'stocksearch'\]/);
+});
+
+test('photo-search authorization permits search without granting Stylists stock-changing access',()=>{
+  const {apiAllowedForUser}=require('../auth');
+  const user=roles=>({username:'visual-search-test',role:roles[0],roles});
+  const search='/api/inventory-categorization/image-search';
+  for(const role of ['owner','admin','inventory','warehouse','sales','stocksearch']){
+    assert.equal(apiAllowedForUser(user([role]),search,'POST'),true,role+' can submit a photo search');
+    assert.equal(apiAllowedForUser(user([role]),search+'/diagnostics','GET'),true,role+' can check search availability');
+    assert.equal(apiAllowedForUser(user([role]),search+'/test-job','GET'),true,role+' can retrieve search results');
+  }
+  for(const roles of [['stocksearch'],['stocksearch','claimant']]){
+    const stylist=user(roles);
+    assert.equal(apiAllowedForUser(stylist,'/api/inventory-categorization/catalog','GET'),true);
+    for(const route of [search+'/diagnostics',search+'/test-job','/api/inventory-categorization/catalog']){
+      assert.equal(apiAllowedForUser(stylist,route,'POST'),false,'search access does not permit writes to '+route);
+    }
+    for(const route of ['/api/inventory/adjust','/api/inventory-categorization/apply','/api/inventory-categorization/preview','/api/inventory-costs/set','/api/stock-movements']){
+      assert.equal(apiAllowedForUser(stylist,route,'POST'),false,'search access cannot change stock through '+route);
+    }
+  }
+  assert.equal(apiAllowedForUser(user(['claimant']),search,'POST'),false,'claimant-only access does not grant photo search');
 });

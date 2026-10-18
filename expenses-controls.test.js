@@ -9,15 +9,15 @@ const crypto = require('node:crypto');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sanki-expenses-'));
 process.env.DATA_PATH = path.join(tempDir, 'data.json');
-const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('../modules/expenses');
-const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, bankFinalizationImportPlan, restoreApprovalTrimmedDraft, validateApprovalTrimmedDraftExternalRows, createBankReconciliationDraft, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('../modules/expenses');
-const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('../modules/expenses');
-const { applyAxisArshpreetReimbursementDuplicateRepair } = require('../modules/expenses');
-const { applyArshpreetSep12SalaryAdvanceRepair, applyArshpreetSep01SalaryAdvanceRepair } = require('../modules/expenses');
-const { applyCashCounterMissingEntries } = require('../modules/expenses');
-const { applyAxis3448PaytmBankTruthSettlements } = require('../modules/expenses');
-const { stagePaytmSettlementsFromAxisDraft } = require('../modules/expenses');
-const { bankReversalPairCandidates } = require('../modules/expenses');
+const { router, summaryForPL, createTelegramPersonalExpense, createTelegramPersonalReceipt, createTelegramBusinessPaidExpense, telegramBusinessCategories, telegramExpense, telegramApproveExpense, telegramRecordPayment, telegramRecordTransfer, telegramRecordNamitaTransfer, telegramApi, parseBankStatementFile, parseBankStatementText, parseBankStatementUpload, applyFinalizedOpeningVendorPayables, applyFinalizedInternalTransfers, applyFinalizedCompositeLinks, applyFinalizedConfirmedMatches, applyEx00122CashPaymentCorrection, applyMissingPerfumeSale, applyHistoricalPaytmSettlementSummary, applyOwnerConfirmedAxis3645Cases, applyKaluFlowersFruitsVendorMerge, applyArunJiiVendorMerge, applyShayamMondalVendorMerge, applyEx00120ExactBankAmountCorrection, applyStrictReconciliationIdentityPolicy, applyBalancedDateAmountReconciliationPolicy, applyOwnerRequestedKaluPaymentRemovals } = require('./modules/expenses');
+const { applyFinalizedBankTruth, mergeActiveBankReconciliationDrafts, extendPendingDraftThroughFinalizedCoverage, bankFinalizationImportPlan, restoreApprovalTrimmedDraft, validateApprovalTrimmedDraftExternalRows, createBankReconciliationDraft, applyIndus8181TransferDateCorrection, applyIndus8181Sep15DebitDateCorrection, applyIndus8181Sep15OmDateCorrection, applyIndus8181Sep16DebitDateCorrection, applyIndus8181Sep16SanviDateCorrection, applyIndus8181Sep16PersonalExpenseCorrection, applyIndus8181Sep18DebitDateCorrection, applyReviewedBankDates, indiaDisplayTimestamp } = require('./modules/expenses');
+const { indiaBusinessDate, applySep11PrashantReimbursementDateCorrection } = require('./modules/expenses');
+const { applyAxisArshpreetReimbursementDuplicateRepair } = require('./modules/expenses');
+const { applyArshpreetSep12SalaryAdvanceRepair, applyArshpreetSep01SalaryAdvanceRepair } = require('./modules/expenses');
+const { applyCashCounterMissingEntries } = require('./modules/expenses');
+const { applyAxis3448PaytmBankTruthSettlements } = require('./modules/expenses');
+const { stagePaytmSettlementsFromAxisDraft } = require('./modules/expenses');
+const { bankReversalPairCandidates } = require('./modules/expenses');
 const XLSX = require('xlsx');
 
 test('bank reversal candidates require explicit bank evidence and one exact reference pair',()=>{
@@ -76,7 +76,7 @@ test('all existing-ledger linking paths reject another active draft claim before
   stored.oneTimeMigrations=Object.assign({},stored.oneTimeMigrations,{'register-indusind-8181-sanki-opening-2026-09-05':{appliedAt:'2098-01-01'}});stored.expenses=stored.expenses||{};stored.expenses['EX-CROSS-CLAIM']={id:'EX-CROSS-CLAIM',date,nature:'SANKI',status:'paid',approvedAt:date+'T10:00:00Z',vendor:'Demo Vendor',amount:665,paidAmount:665,payments:[{id:'PAY-001',date,amount:665,account}]};stored.bankStatements={};stored.bankDateOverrides={};const base={account,nature:'SANKI',transactions:[{date,description:'Demo Vendor',reference:'DEMO-ONLY',debit:665,credit:0,balance:335}],summary:{from:date,to:date,openingBalance:1000,closingBalance:335,validated:true},resolutions:{},createdBy:'prashant',createdAt:new Date().toISOString(),expiresAt:'2099-01-01T00:00:00.000Z'};stored.bankReconciliationDrafts={[id]:{...base,id},[otherId]:{...base,id:otherId,resolutions:{'bank-0':{action:'link_existing',appId,reason:'Claimed in another active statement'}}}};fs.writeFileSync(file,JSON.stringify(stored));
   const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId:id,account}}).body,entry=view.rows.find(x=>x.app&&x.app.id===appId);assert.equal(entry.ledgerClaimedElsewhere,true);assert.equal(entry.status,'missing_in_bank','foreign claims cannot become new automatic bank matches');assert.equal(view.linkCandidates.some(x=>x.id===appId),false);
   ['accept_match','link_existing','link_multiple_existing','link_multiple_bank_entries','link_with_rounding','vendor_advance_split','split_allocation','opening_vendor_payable_split','exclude'].forEach(action=>{const rejected=invoke('POST','/api/expenses/bank-statements/resolve',{role:'owner',body:{draftId:id,rowId:'bank-0',action,appId,appIds:[appId],bankRowIds:['bank-0','bank-1'],reason:'Cannot reuse a claimed ledger entry',principalAmount:660,chargeAmount:5}});assert.equal(rejected.status,409,action+': '+JSON.stringify(rejected.body));});
-  const after=JSON.parse(fs.readFileSync(file));assert.deepEqual(after.bankReconciliationDrafts[id].resolutions,{});assert.deepEqual(after.bankDateOverrides,{});assert.equal(after.bankReconciliationDrafts[otherId].resolutions['bank-0'].appId,appId);assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/x\.ledgerClaimedElsewhere/);
+  const after=JSON.parse(fs.readFileSync(file));assert.deepEqual(after.bankReconciliationDrafts[id].resolutions,{});assert.deepEqual(after.bankDateOverrides,{});assert.equal(after.bankReconciliationDrafts[otherId].resolutions['bank-0'].appId,appId);assert.match(fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),/x\.ledgerClaimedElsewhere/);
   if(baseline)fs.writeFileSync(file,baseline);else fs.rmSync(file,{force:true});
 });
 
@@ -186,6 +186,7 @@ test('owner-confirmed Axis 3645 cases preserve unrelated reconciliation progress
 });
 
 function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant', username = '' } = {}) {
+  if(method==='POST'&&routePath==='/api/expenses'&&!Object.prototype.hasOwnProperty.call(body,'vendorPhone'))body={...body,vendorPhone:'+91 9876543210'};
   const layer = router.stack.find(item => item.route && item.route.path === routePath && item.route.methods[method.toLowerCase()]);
   assert.ok(layer, `route exists: ${method} ${routePath}`);
   const req = {
@@ -207,6 +208,23 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
     throw new Error(`unexpected next() for ${method} ${routePath}`);
   });
   return { status, body: result };
+}
+
+// Historical scenarios use the normal claimant path for submission, then an
+// authorized Owner correction rather than granting claimants backdating.
+function historicalClaim(options) {
+  const input=options||{},body=input.body||{},date=body.date;
+  if(input.role&&input.role!=='claimant')return invoke('POST','/api/expenses',input);
+  if(body.paidAlready){
+    const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+    const ledger=config.ledgersByNature[body.nature||'SANKI'][0].name;
+    return invoke('POST','/api/expenses',{role:'owner',username:input.username||'arshpreet',body:{...body,ledger}});
+  }
+  const made=invoke('POST','/api/expenses',{...input,body:{...body,date:indiaBusinessDate()}});
+  assert.equal(made.status,200,JSON.stringify(made.body));
+  const edited=invoke('POST','/api/expenses/:id',{role:'owner',params:{id:made.body.expense.id},body:{date}});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));
+  return edited;
 }
 
 function invokeThroughRouter(method, routePath, { body = {}, query = {}, role = 'claimant', username = '' } = {}) {
@@ -265,7 +283,7 @@ test('owner can bulk classify historical PERSONAL statement rows only for the th
 });
 
 test('historical PERSONAL bulk controls expose the five credit choices and approved account scope',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   ['Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
   assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.isOwner&&bankNature==='PERSONAL'/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
 });
@@ -364,15 +382,13 @@ test('new vendor submits immediately and approver correction becomes reusable', 
   assert.ok(config.vendors.includes('Vendor Corrected'));
 });
 
-test('only owner can rename, merge and safely delete vendor ledgers', () => {
+test('owner and Prashant can rename or merge, while deletion remains owner-only', () => {
   invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'SANKI',name:'Ferns N Petals'}});
   invoke('POST','/api/expenses/vendors',{role:'owner',body:{nature:'SANKI',name:'Ferns n Petal'}});
   const expense=invoke('POST','/api/expenses',{body:{vendor:'Ferns n Petal',amount:200,billPhoto:'/api/expenses/photo/bill.jpg',paymentType:'Cash'}}).body.expense;
   invoke('POST','/api/expenses/:id',{role:'owner',params:{id:expense.id},body:{ledger:'Flowers'}});
   invoke('POST','/api/expenses/:id/approve',{role:'owner',params:{id:expense.id}});
-  const denied=invoke('POST','/api/expenses/vendors/manage/merge',{role:'admin',body:{nature:'SANKI',sourceName:'Ferns n Petal',targetName:'Ferns N Petals'}});
-  assert.equal(denied.status,403);
-  const merged=invoke('POST','/api/expenses/vendors/manage/merge',{role:'owner',body:{nature:'SANKI',sourceName:'Ferns n Petal',targetName:'Ferns N Petals'}});
+  const merged=invoke('POST','/api/expenses/vendors/manage/merge',{role:'admin',username:'prashant',body:{nature:'SANKI',sourceName:'Ferns n Petal',targetName:'Ferns N Petals'}});
   assert.equal(merged.status,200);assert.equal(merged.body.updatedExpenses,1);
   const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'SANKI'}}).body.vendors;
   assert.equal(vendors.filter(v=>v.name.toLowerCase().startsWith('ferns')).length,1);
@@ -385,7 +401,7 @@ test('only owner can rename, merge and safely delete vendor ledgers', () => {
 });
 
 test('vendor ledger UI offers Delete only when its entry count is zero', () => {
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/v\.count===0\?' <button class="btn mini danger"/);
   assert.match(html,/id="vendorManageRow"/);assert.match(html,/vendorManageRow'\)\)el\('vendorManageRow'\)\.style\.display=this\.dataset\.vsource==='expense'/);
 });
@@ -472,7 +488,7 @@ test('visually identical Shayam Mondal ledgers merge without changing transactio
 });
 
 test('owner vendor maintenance uses an in-page dialog and safely supports exact bulk cleanup', () => {
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/id="vendorManageDlg"/);
   assert.match(html,/id="bulkDeleteVendors"/);
   assert.match(html,/Every ledger is rechecked against all expenses, including pending and rejected entries/);
@@ -484,7 +500,7 @@ test('owner vendor maintenance uses an in-page dialog and safely supports exact 
 });
 
 test('vendor ledgers can sort current outstanding amounts in both directions',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/id="vf_sort"/);
   assert.match(html,/Amount: high to low/);
   assert.match(html,/Amount: low to high/);
@@ -522,7 +538,7 @@ test('owner-requested Kalu correction removes only the two later payment records
 });
 
 test('vendor ledger UI uses In and Out with status-coloured running balances',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/<th>Date<\/th>'\+entityHead\+'<th>Particulars<\/th><th>Type<\/th><th>Expense \/ transaction reference<\/th><th class="r">In<\/th><th class="r">Out<\/th><th class="r">Balance<\/th>/);
   assert.match(html,/entityHead=showEntity\?'<th>Entity<\/th>'/);
   assert.match(html,/function vendorBalanceHtml\(value\)/);
@@ -588,7 +604,7 @@ test('expense reference filter accepts partial numbers and compact rows are numb
   const digits=created.id.replace(/\D/g,'').replace(/^0+/, '');
   const found=invoke('GET','/api/expenses/list',{query:{reference:digits},role:'owner'}).body.expenses;
   assert.ok(found.some(e=>e.id===created.id));
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/Expense \/ bill no\./);
   assert.match(html,/expenseCard\(e,i\+1\)/);
   assert.match(html,/<b>#'\+\(vi\+1\)/);
@@ -654,8 +670,10 @@ test('claimant identity is automatic and claimant-only fields are enforced serve
   const edited = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: {
     claimant: 'another-spoof', channel: 'POS'
   }, role: 'claimant' });
-  assert.equal(edited.body.expense.claimant, 'arshpreet');
-  assert.equal(edited.body.expense.channel, 'Shared');
+  assert.equal(edited.status, 403, 'claimants cannot mutate their submitted expense');
+  const unchanged=invoke('GET','/api/expenses/:id',{params:{id:created.body.expense.id}}).body.expense;
+  assert.equal(unchanged.claimant, 'arshpreet');
+  assert.equal(unchanged.channel, 'Shared');
 
   const approverEdit = invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { channel: 'POS' }, role: 'accounting' });
   assert.equal(approverEdit.body.expense.channel, 'POS');
@@ -693,10 +711,10 @@ test('SAMAST expenses are separate and only its accounting role can approve them
   const samastApproval = invoke('POST', '/api/expenses/:id/approve', { params: { id: created.body.expense.id }, role: 'samast_accounting' });
   assert.equal(samastApproval.status, 200);
   const adminConfig = invoke('GET', '/api/expenses/config', { role: 'admin' });
-  assert.deepEqual(adminConfig.body.payingAccountsByNature.SAMAST, ['Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Prashant Cash','IndusInd Bank 7883','ICICI Bank 0993','Kirti Nagar Cash']);
-  const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, role: 'admin', body: { account:'Prashant Axis 3645',paymentProof:'/api/expenses/photo/samast-payment.jpg' } });
+  assert.deepEqual(adminConfig.body.payingAccountsByNature.SAMAST, ['Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash','Services','IndusInd Bank 7883','ICICI Bank 0993','Kirti Nagar Cash']);
+  const paid = invoke('POST', '/api/expenses/:id/pay', { params: { id: created.body.expense.id }, role: 'admin', body: { account:'Gagan Sir Cash',paymentProof:'/api/expenses/photo/samast-payment.jpg' } });
   assert.equal(paid.status, 200, JSON.stringify(paid.body));
-  assert.equal(paid.body.expense.payments.at(-1).account, 'Prashant Axis 3645');
+  assert.equal(paid.body.expense.payments.at(-1).account, 'Gagan Sir Cash');
   assert.deepEqual(summaryForPL(), sankiPlBefore, 'SAMAST must never enter the SANKI P&L');
 
   const samastList = invoke('GET', '/api/expenses/list', { query: {}, role: 'samast_accounting' });
@@ -759,8 +777,8 @@ test('audit log groups each expense into a readable complete lifecycle with user
 });
 
 test('all expenses and spending dashboard support broad closest-match search', () => {
-  const exact=invoke('POST','/api/expenses',{body:{date:'2026-09-13',ledger:'FOOD EXPENSE',vendor:'Needle',particulars:'Tailoring supplies',amount:101,billPhoto:'/api/expenses/photo/needle.jpg',paymentType:'Cash'}}).body.expense;
-  const partial=invoke('POST','/api/expenses',{body:{date:'2026-09-13',ledger:'FOOD EXPENSE',vendor:'Tailor Shop',particulars:'Needle repair service',amount:102,billPhoto:'/api/expenses/photo/repair.jpg',paymentType:'Cash'}}).body.expense;
+  const exact=historicalClaim({body:{date:'2026-09-13',ledger:'FOOD EXPENSE',vendor:'Needle',particulars:'Tailoring supplies',amount:101,billPhoto:'/api/expenses/photo/needle.jpg',paymentType:'Cash'}}).body.expense;
+  const partial=historicalClaim({body:{date:'2026-09-13',ledger:'FOOD EXPENSE',vendor:'Tailor Shop',particulars:'Needle repair service',amount:102,billPhoto:'/api/expenses/photo/repair.jpg',paymentType:'Cash'}}).body.expense;
   const list=invoke('GET','/api/expenses/list',{query:{search:'Needle'},role:'owner'}).body.expenses;
   assert.equal(list[0].id,exact.id,'an exact vendor match ranks before a particulars match');
   assert.ok(list.some(expense=>expense.id===partial.id));
@@ -771,7 +789,7 @@ test('all expenses and spending dashboard support broad closest-match search', (
   const dashboard=invoke('GET','/api/expenses/spending-dashboard',{query:{search:'Needle'},role:'owner'}).body;
   assert.ok(dashboard.payments.some(payment=>payment.id===exact.id));
   assert.ok(dashboard.count>=1);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/id="lf_search"/);assert.match(html,/id="sd_search"/);
   assert.match(html,/search='\+encodeURIComponent\(focused\?'':el\('lf_search'\)\.value\)/);
   assert.match(html,/spending-dashboard\?from=.*&search=/);
@@ -823,7 +841,7 @@ test('claimant-funded salary advance appears as reimbursement due and clears aga
 });
 
 test('All Expenses ignores stale responses after the date range changes', () => {
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/listRequestSeq=0/);
   assert.match(html,/var requestSeq=\+\+listRequestSeq/);
   assert.match(html,/if\(requestSeq!==listRequestSeq\)return/);
@@ -841,7 +859,7 @@ test('an audited payment correction removes only the selected payment and reopen
   const event=auditResult.body.records.find(x=>x.id===created.id).timeline.find(x=>x.action==='PAYMENT_REMOVED');
   assert.equal(event.paymentId,'PAY-001');assert.equal(event.before.amount,200);assert.deepEqual(event.after,{paidAmount:0,status:'approved'});assert.equal(event.note,'Payment needs to be modified');
   assert.equal(invoke('DELETE','/api/expenses/:id/payments/:paymentId',{role:'admin',params:{id:created.id,paymentId:'PAY-001'},body:{reason:'Duplicate request'}}).status,404);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/>Unpay</);assert.match(html,/window\.unpayExpense/);assert.match(html,/An unpay reason is required for the audit trail/);
 });
 
@@ -863,7 +881,7 @@ test('deleted expenses remain visible in audit logs with snapshot, actor and req
 });
 
 test('claimant form supports searchable direct vendor entry and phone gallery uploads', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="f_vendor"/);
   assert.match(html, /id="vendorSuggestions" class="combo-menu"/);
   assert.match(html, /No existing match/);
@@ -885,14 +903,14 @@ test('claimant form supports searchable direct vendor entry and phone gallery up
 });
 
 test('Admin or Owner can assign a category directly in the pending expense list', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /placeholder="Search or create category…"/);
   assert.match(html, /window\.assignCategory\s*=\s*function/);
   assert.match(html, /New category created and assigned/);
 });
 
 test('every pending expense opens a vendor and category review dialog before approval', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /id="approveDlg"/);
   assert.match(html, /if\(e\.status==='pending'\)/);
   assert.match(html, /Confirm and approve/);
@@ -932,8 +950,8 @@ test('approvers can select existing vendors while logging and correct them throu
 });
 
 test('payment dialog lists stored accounts and lets Admin or Owner add one', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname,'modules', 'expenses.js'), 'utf8');
   assert.match(html, /id="payAddAcct"/);
   assert.match(html, /api\('\/api\/expenses\/accounts'/);
   assert.match(server, /function storedAccountNames\(s\)/);
@@ -942,15 +960,15 @@ test('payment dialog lists stored accounts and lets Admin or Owner add one', () 
 });
 
 test('claimant list defaults to all own entities and exposes payment proof', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /<option value="">All<\/option>/);
   assert.match(html, /paymentProofs=e\.paymentProofs/);
   assert.match(html, /proofGallery\(paymentProofs,'Payment'\)/);
 });
 
 test('expense deep links load only the selected record and normal lists are bounded', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname,'modules', 'expenses.js'), 'utf8');
   assert.match(html, /focusedExpenseId/);
   assert.match(html, /&limit=75/);
   assert.match(html, /&id='\+encodeURIComponent\(focused\)/);
@@ -960,8 +978,8 @@ test('expense deep links load only the selected record and normal lists are boun
 });
 
 test('expense history uses expandable compact rows for every role', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /function expenseCard\(e,rowNo\)/);
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
+  assert.match(html, /function expenseCard\(e,rowNo,options\)/);
   assert.match(html, /<details class="claim-card"/);
   assert.match(html, /<summary>/);
   assert.match(html, /class="claim-detail"/);
@@ -970,8 +988,8 @@ test('expense history uses expandable compact rows for every role', () => {
 });
 
 test('approvers get a pending payments workspace with balances and partial-payment history', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  const server = fs.readFileSync(path.join(__dirname, '..', 'modules', 'expenses.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
+  const server = fs.readFileSync(path.join(__dirname,'modules', 'expenses.js'), 'utf8');
   assert.match(html, /data-t="pending"/);
   assert.match(html, /function renderPendingPayments\(\)/);
   assert.match(html, /Record payment/);
@@ -1040,7 +1058,7 @@ test('claimant accounts are valid transfer endpoints in the app and Telegram', (
   assert.equal(telegramTransfer.transfer.fromNature,'SANKI');
   assert.equal(telegramTransfer.transfer.toNature,'SANKI');
   assert.equal(telegramTransfer.transfer.toAccount,'Arshpreet 1919');
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/transferAccountsByNature/);
 });
 
@@ -1068,7 +1086,7 @@ test('Owner may declare a cash receipt without proof only with a reason', () => 
 });
 
 test('account adjustments require a reason and support explicit add or deduct entries', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /Add account adjustment/);
   assert.match(html, /Reason — required/);
   assert.doesNotMatch(html, /\＋ Top up/);
@@ -1085,16 +1103,17 @@ test('account adjustments require a reason and support explicit add or deduct en
   assert.equal(ledger.entries.find(x => x.description === 'Counting correction').debit, 125);
 });
 
-test('Services is an Owner-only SANKI money ledger supporting receipts, transfers and expenses',()=>{
-  const owner=invoke('GET','/api/expenses/config',{role:'owner'}).body,admin=invoke('GET','/api/expenses/config',{role:'admin'}).body;
+test('Services is available to Owner and Prashant but remains hidden from other admins',()=>{
+  const owner=invoke('GET','/api/expenses/config',{role:'owner'}).body,prashant=invoke('GET','/api/expenses/config',{role:'admin'}).body,otherAdmin=invoke('GET','/api/expenses/config',{role:'admin',username:'other-admin'}).body;
   for(const collection of ['accountsByNature','ledgerAccountsByNature','transferAccountsByNature','payingAccountsByNature','vendorPaymentAccountsByNature'])assert.ok(owner[collection].SANKI.includes('Services'),collection+' does not expose Services to Owner');
-  for(const collection of ['accountsByNature','ledgerAccountsByNature','transferAccountsByNature','payingAccountsByNature','vendorPaymentAccountsByNature'])assert.equal(admin[collection].SANKI.includes('Services'),false,collection+' exposed Services to Admin');
-  const receipt=invoke('POST','/api/expenses/receipts',{role:'owner',body:{nature:'SANKI',account:'Services',receiptType:'other_income',category:'Other Income',source:'Service customer',amount:1200,date:'2026-10-03',note:'Consulting receipt',proof:'/api/expenses/photo/services-receipt.jpg'}});assert.equal(receipt.status,200,JSON.stringify(receipt.body));
-  const transfer=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Services',toAccount:'Axis Bank 3448',classification:'internal_transfer',amount:200,date:'2026-10-03',note:'Move service funds',proof:'/api/expenses/photo/services-transfer.jpg'}});assert.equal(transfer.status,200,JSON.stringify(transfer.body));
+  for(const collection of ['accountsByNature','ledgerAccountsByNature','transferAccountsByNature','payingAccountsByNature','vendorPaymentAccountsByNature'])assert.ok(prashant[collection].SANKI.includes('Services'),collection+' does not expose Services to Prashant');
+  for(const collection of ['accountsByNature','ledgerAccountsByNature','transferAccountsByNature','payingAccountsByNature','vendorPaymentAccountsByNature'])assert.equal(otherAdmin[collection].SANKI.includes('Services'),false,collection+' exposed Services to another Admin');
+  const receipt=invoke('POST','/api/expenses/receipts',{role:'admin',body:{nature:'SANKI',account:'Services',receiptType:'other_income',category:'Other Income',source:'Service customer',amount:1200,date:'2026-10-03',note:'Consulting receipt',proof:'/api/expenses/photo/services-receipt.jpg'}});assert.equal(receipt.status,200,JSON.stringify(receipt.body));
+  const transfer=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Services',toAccount:'Axis Bank 3448',classification:'internal_transfer',amount:200,date:'2026-10-03',note:'Move service funds',proof:'/api/expenses/photo/services-transfer.jpg'}});assert.equal(transfer.status,200,JSON.stringify(transfer.body));
   const expense=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Service supplies',amount:100,billPhoto:'/api/expenses/photo/services-bill.jpg',qrPhoto:'/api/expenses/photo/services-qr.jpg',paymentType:'UPI'}}).body.expense;invoke('POST','/api/expenses/:id',{role:'owner',params:{id:expense.id},body:{ledger:'FOOD EXPENSE'}});invoke('POST','/api/expenses/:id/approve',{role:'owner',params:{id:expense.id}});
-  const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[expense.id],account:'Services',amount:100,date:'2026-10-03',paymentProof:'/api/expenses/photo/services-payment.jpg'}});assert.equal(paid.status,200,JSON.stringify(paid.body));
-  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Services'}});assert.equal(ledger.status,200);assert.ok(ledger.body.entries.some(x=>x.id===receipt.body.receipt.id&&x.credit===1200));assert.ok(ledger.body.entries.some(x=>x.id===transfer.body.transfer.id&&x.debit===200));assert.ok(ledger.body.entries.some(x=>x.id===expense.id+'/PAY-001'&&x.debit===100));
-  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'SANKI',account:'Services'}}).status,403);
+  const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'admin',body:{expenseIds:[expense.id],account:'Services',amount:100,date:'2026-10-03',paymentProof:'/api/expenses/photo/services-payment.jpg'}});assert.equal(paid.status,200,JSON.stringify(paid.body));
+  const ledger=invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'SANKI',account:'Services'}});assert.equal(ledger.status,200);assert.ok(ledger.body.entries.some(x=>x.id===receipt.body.receipt.id&&x.credit===1200));assert.ok(ledger.body.entries.some(x=>x.id===transfer.body.transfer.id&&x.debit===200));assert.ok(ledger.body.entries.some(x=>x.id===expense.id+'/PAY-001'&&x.debit===100));
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',username:'other-admin',query:{nature:'SANKI',account:'Services'}}).status,403);
 });
 
 test('Prashant Counter Cash adjustments remain pending until Owner approval', () => {
@@ -1126,18 +1145,14 @@ test('Owner can delete only an unreconciled manual adjustment with a required au
 });
 
 test('date-range spending dashboard shows only actual payment transactions', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.doesNotMatch(html, /<label>Breakdown by<\/label>/);
   assert.match(html, /Actual expenses paid/);
   assert.match(html, /id="sd_account"/);
   assert.match(html, /id="sd_category"/);
   assert.match(html, /id="sd_category_go">Show spending by category/);
-  assert.match(html, /cfg\.isOwner\?'<button type="button" class="btn mini ghost" id="sd_add_category"/);
-  assert.match(html, /id="spendingCategoryDlg"/);
-  assert.match(html, /api\('\/api\/expenses\/custom-ledgers'/);
-  assert.match(html, /refreshSpendingCategoryList\(\)/);
   assert.doesNotMatch(html, /id="sd_view"/);
-  const created = invoke('POST', '/api/expenses', { body: {
+  const created = historicalClaim({ body: {
     vendor: 'Dashboard Vendor', amount: 900, date: '2026-08-20', billPhoto: '/api/expenses/photo/dash-bill.jpg', paymentType: 'Credit'
   } });
   invoke('POST', '/api/expenses/:id', { params: { id: created.body.expense.id }, body: { ledger: 'FOOD EXPENSE' }, role: 'owner' });
@@ -1163,12 +1178,14 @@ test('date-range spending dashboard shows only actual payment transactions', () 
   assert.equal(claimant.status, 403);
 });
 
-test('spending dashboard category creation uses the approved Owner-only category catalog', () => {
+test('spending dashboard category creation uses explicit management permission and the approved catalog', () => {
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
   const name='Dashboard Added Category',group=config.categoryGroups[0]||'';
-  const blocked=invoke('POST','/api/expenses/custom-ledgers',{role:'admin',body:{name,type:'variable',group}});
+  const blocked=invoke('POST','/api/expenses/custom-ledgers',{role:'admin',username:'ordinary-admin',body:{name,type:'variable',group}});
   assert.equal(blocked.status,403);
-  const created=invoke('POST','/api/expenses/custom-ledgers',{role:'owner',body:{name,type:'variable',group}});
+  assert.equal(invoke('GET','/api/expenses/config',{role:'admin',username:'ordinary-admin'}).body.canManageCategories,false);
+  assert.equal(invoke('GET','/api/expenses/config',{role:'admin',username:'prashant'}).body.canManageCategories,true);
+  const created=invoke('POST','/api/expenses/custom-ledgers',{role:'admin',username:'prashant',body:{name,type:'variable',group}});
   assert.equal(created.status,200,JSON.stringify(created.body));
   assert.equal(created.body.ledger.name,name);
   assert.equal(created.body.ledger.group,group);
@@ -1177,7 +1194,7 @@ test('spending dashboard category creation uses the approved Owner-only category
 });
 
 test('receivables support partial collections and credit the receiving account ledger', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /data-t="receivables"/);
   assert.match(html, /Record money received/);
   const before = invoke('GET', '/api/expenses/balances', { query: { nature: 'SANKI' }, role: 'owner' }).body.accounts.find(a => a.name === 'Counter Cash').balance;
@@ -1200,8 +1217,8 @@ test('receivables support partial collections and credit the receiving account l
 });
 
 test('Shopify history is filtered by the permanent accounting reset boundary', () => {
-  const pl = fs.readFileSync(path.join(__dirname, '..', 'modules', 'pl.js'), 'utf8');
-  const orders = fs.readFileSync(path.join(__dirname, '..', 'modules', 'orders.js'), 'utf8');
+  const pl = fs.readFileSync(path.join(__dirname,'modules', 'pl.js'), 'utf8');
+  const orders = fs.readFileSync(path.join(__dirname,'modules', 'orders.js'), 'utf8');
   assert.match(pl, /accounting-boundary\.json/);
   assert.match(pl, /filter\(o => !startAt/);
   assert.match(orders, /const resetBoundary = accountingStartAt\(\)/);
@@ -1209,8 +1226,8 @@ test('Shopify history is filtered by the permanent accounting reset boundary', (
 });
 
 test('Telegram setup is Owner-only and supports per-user notification management', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  const telegram = fs.readFileSync(path.join(__dirname, '..', 'modules', 'telegram.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
+  const telegram = fs.readFileSync(path.join(__dirname,'modules', 'telegram.js'), 'utf8');
   assert.match(html, /cfg\.isOwner\?'<div class="card"><b>Telegram notifications \(Owner only\)/);
   assert.match(html, /id="telegramUser"/);
   assert.match(html, /Test all linked accounts/);
@@ -1224,7 +1241,7 @@ test('Telegram setup is Owner-only and supports per-user notification management
 });
 
 test('one app user can retain multiple Telegram notification accounts', () => {
-  const { chatIdsForUser, linkedAccounts } = require('../modules/telegram');
+  const { chatIdsForUser, linkedAccounts } = require('./modules/telegram');
   assert.deepEqual(chatIdsForUser({ userChats:{prashant:'111'} }, 'Prashant'), ['111']);
   const multi={userChats:{prashant:['111','222','111']},chatMeta:{'111':{telegramName:'Prashant phone'},'222':{telegramName:'Office Telegram'}}};
   assert.deepEqual(chatIdsForUser(multi,'prashant'),['111','222']);
@@ -1232,7 +1249,7 @@ test('one app user can retain multiple Telegram notification accounts', () => {
 });
 
 test('Owner Telegram narration and screenshot OCR create one categorized paid PERSONAL expense', () => {
-  const {parsePersonalCaption,parsePersonalIntent,isHotel0992Caption,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory,applyCaptureEdit,applyBatchCaptureEdit,capturePreview,batchCapturePreview,personalMenu,personalAccountButtons,personalTransferPreview}=require('../modules/telegram');
+  const {parsePersonalCaption,parsePersonalIntent,isHotel0992Caption,parsePaymentOcr,parseReceiptOcr,inferPersonalCategory,applyCaptureEdit,applyBatchCaptureEdit,capturePreview,batchCapturePreview,personalMenu,personalAccountButtons,personalTransferPreview}=require('./modules/telegram');
   const menu=personalMenu();assert.deepEqual(menu.inline_keyboard.flat().map(x=>x.text),['🔁 Transfer','💳 Expense','💰 Money received','💵 Cash expense','🪙 Cash received']);
   const accounts=personalAccountButtons(['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992'],'single');assert.equal(accounts.inline_keyboard.length,4);assert.match(accounts.inline_keyboard[0][0].callback_data,/pm:account:single:0/);
   assert.match(personalTransferPreview({payload:{fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',amount:15000,date:'2026-09-14'}}),/IndusInd Bank 7883[\s\S]*Namita 5464[\s\S]*₹15,000/);
@@ -1268,7 +1285,7 @@ test('Owner Telegram narration and screenshot OCR create one categorized paid PE
   const adminAmountEdit=invoke('POST','/api/expenses/:id',{role:'admin',params:{id:created.expense.id},body:{amount:122,requestedAmount:122,editReason:'Admin tries amount change'}});
   assert.equal(adminAmountEdit.status,403);assert.match(adminAmountEdit.body.error,/Only the Owner/);
   const vendors=invoke('GET','/api/expenses/vendors',{role:'owner',query:{nature:'PERSONAL'}}).body.vendors;assert.ok(vendors.some(v=>v.name==='Mr MUKESH KUMAR'));
-  assert.match(fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),/NEEDS REVIEW/);
+  assert.match(fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),/NEEDS REVIEW/);
   const duplicate=createTelegramPersonalExpense(input);assert.equal(duplicate.duplicate,true);assert.equal(duplicate.expense.id,created.expense.id);
   const draft={kind:'expense',payload:{amount:35000,account:'93',particulars:'Food restaurant',vendor:'Restaurant',ledger:'Food & Dining'}};
   assert.match(capturePreview(draft),/Nothing is recorded until you press Confirm/);
@@ -1276,7 +1293,7 @@ test('Owner Telegram narration and screenshot OCR create one categorized paid PE
   assert.equal(applyCaptureEdit(draft,'Amount 94.5'),true);assert.equal(draft.payload.amount,94.5);assert.match(capturePreview(draft),/₹94\.5/);
   assert.equal(applyCaptureEdit(draft,'Account 0992'),true);assert.equal(draft.payload.account,'0992');
   assert.equal(applyCaptureEdit(draft,'Particulars Dinner restaurant'),true);assert.equal(draft.payload.particulars,'Dinner restaurant');
-  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  const telegramSource=fs.readFileSync(path.join(__dirname,'modules','telegram.js'),'utf8');
   assert.match(telegramSource,/callback_data:'personal_confirm'/);assert.match(telegramSource,/allowed_updates:\['message','callback_query'\]/);
   const received=parseReceiptOcr('Money received\n23 August 2026\nReceived from\nMukesh Kumar ₹1,500\nCredited to\nXXXXXXXXXXX93');
   assert.deepEqual({amount:received.amount,account:received.account,source:received.source,date:received.date},{amount:1500,account:'93',source:'Mukesh Kumar',date:'2026-08-23'});
@@ -1296,14 +1313,14 @@ test('Prashant Telegram menu records a screenshot-first paid expense only after 
   assert.equal(created.expense.payments[0].proof,input.proof);
   assert.equal(createTelegramBusinessPaidExpense(input).duplicate,true);
   assert.equal(createTelegramBusinessPaidExpense({...input,sourceKey:'telegram-quick:test-2',account:'Axis Bank 3448'}).success,false);
-  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  const telegramSource=fs.readFileSync(path.join(__dirname,'modules','telegram.js'),'utf8');
   assert.match(telegramSource,/Attach the payment screenshot now/);
   assert.match(telegramSource,/Prashant Axis 3645','Prashant Cash','Counter Cash/);
   assert.match(telegramSource,/Best matching categories/);
 });
 
 test('all entities use the approved catalog without changing historical records',()=>{
-  const file=path.join(tempDir,'expenses.json'),raw=fs.readFileSync(file),s=JSON.parse(raw),plan=require('../modules/sanki-category-plan.json'),final=require('../modules/sanki-category-finalization');
+  const file=path.join(tempDir,'expenses.json'),raw=fs.readFileSync(file),s=JSON.parse(raw),plan=require('./modules/sanki-category-plan.json'),final=require('./modules/sanki-category-finalization');
   s.sankiCategoryCatalog={version:plan.version,categories:[...plan.catalog,...final.additions]};
   s.oneTimeMigrations[final.KEY]={appliedAt:'test'};
   fs.writeFileSync(file,JSON.stringify(s));
@@ -1413,7 +1430,7 @@ test('multiple pending expenses can be reimbursed together and debit the paying 
 });
 
 test('reimbursements UI groups transactions by person before showing expense details',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/class="claim-card reimbursement-person"/);
   assert.match(html,/group\.items\.length\+' transaction'/);
   assert.match(html,/class="reimburse-person-select"/);
@@ -1465,10 +1482,10 @@ test('personally paid non-cash expense requires the account used and cash is nam
 
 test('payment accounts are scoped by claimant and accounting entity', () => {
   const claimantConfig = invoke('GET', '/api/expenses/config').body;
-  assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919']);
+  assert.deepEqual(claimantConfig.personalAccounts, ['Arshpreet 1919','Arshpreet Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SANKI, ['Axis Bank 3448','Tiana 0425','Tiana Traders IndusInd 0437','Prashant Axis 3645','IndusInd Bank 8181','Counter Cash','Gagan Sir Cash','Prashant Cash']);
   assert.deepEqual(claimantConfig.accountsByNature.SAMAST, ['IndusInd Bank 7883','ICICI Bank 0993','Kirti Nagar Cash']);
-  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919']);
+  assert.deepEqual(claimantConfig.accountsByNature.PERSONAL, ['Arshpreet 1919','Arshpreet Cash']);
   assert.ok(!claimantConfig.accounts.includes('Federal Bank 7328'));
   const blocked = invoke('POST', '/api/expenses', { body:{vendor:'Scoped Vendor',amount:100,billPhoto:'/api/expenses/photo/scoped.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Shivam 4807',personalPaymentProof:'/api/expenses/photo/scoped-pay.jpg'} });
   assert.equal(blocked.status, 400);
@@ -1479,7 +1496,7 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   assert.equal(adminConfig.ledgerAccountsByNature.SAMAST.includes('ICICI Bank 0992'),false);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',query:{nature:'SAMAST',account:'ICICI Bank 0992'}}).status,403);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'ICICI Bank 0992'}}).status,200);
-  assert.deepEqual(adminConfig.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919']);
+  assert.deepEqual(adminConfig.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919','Arshpreet Cash']);
   assert.deepEqual(claimantConfig.claimantPaymentAccountsByUser,{});
 });
 
@@ -1512,12 +1529,12 @@ test('Prashant can record an initially company-payable SAMAST expense as paid by
   invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'REPAIR & MAINTANCE'},role:'owner'});
   assert.equal(invoke('POST','/api/expenses/:id/approve',{params:{id},role:'admin'}).status,200);
   const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
-  assert.deepEqual(config.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919']);
+  assert.deepEqual(config.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919','Arshpreet Cash']);
   const paid=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:700,paymentProof:'/api/expenses/photo/cctv-payment.jpg',date:'2026-09-18'}});
   assert.equal(paid.status,200);assert.equal(paid.body.expense.reimbursementStatus,'pending');
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'Arshpreet 1919'}}).body;
   assert.equal(ledger.entries.find(x=>x.id===id+'/PAY-001').debit,700);
-  const html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public/expenses.html'),'utf8');
   assert.match(html,/id="payClaimantSwitch"/);assert.match(html,/openClaimantPay\(id\)/);
 });
 
@@ -1527,7 +1544,7 @@ test('Ashpreet-only payment route does not grant Prashant other claimant account
   invoke('POST','/api/expenses/:id/approve',{params:{id},role:'owner'});
   const denied=invoke('POST','/api/expenses/:id/claimant-pay',{params:{id},role:'admin',body:{account:'Arshpreet 1919',amount:45,paymentProof:'/api/expenses/photo/other-proof.jpg'}});
   assert.equal(denied.status,403);
-  const html=fs.readFileSync(path.join(__dirname,'../public/expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public/expenses.html'),'utf8');
   assert.match(html,/Record Ashpreet-paid/);assert.match(html,/openClaimantPay/);assert.match(html,/reimbursement is now due/);
 });
 
@@ -1542,7 +1559,7 @@ test('Prashant can record a separate Ashpreet vendor bill directly from assigned
   assert.equal(paid.body.expenses[0].reimbursementStatus,'not_applicable');
 });
 
-test('Owner can record a partial vendor payment from an existing claimant account',()=>{
+test('Owner and Admin can record a partial business vendor payment from an existing claimant account',()=>{
   const made=invoke('POST','/api/expenses',{role:'owner',body:{nature:'SANKI',ledger:'FOOD EXPENSE',vendor:'Claimant Part Pay Vendor',amount:1000,billPhoto:'/api/expenses/photo/claimant-part-bill.jpg',qrPhoto:'/api/expenses/photo/claimant-part-qr.jpg',paymentType:'UPI'}});
   assert.equal(made.status,200,JSON.stringify(made.body));
   const id=made.body.expense.id;
@@ -1552,7 +1569,14 @@ test('Owner can record a partial vendor payment from an existing claimant accoun
   assert.ok(ownerConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'));
   assert.equal(ownerConfig.claimantAccountOwners['Arshpreet 1919'],'arshpreet');
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
-  assert.equal(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'),false);
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet 1919'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Arshpreet Cash'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Shivam 4807'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Shivam Cash'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Pradeep 8606'));
+  assert.ok(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Pradeep Cash'));
+  assert.equal(adminConfig.vendorPaymentAccountsByNature.SANKI.includes('Namita 5464'),false,'personal claimant accounts do not leak into a business payment picker');
+  assert.equal(adminConfig.claimantAccountOwners['Arshpreet 1919'],'arshpreet');
   const paid=invoke('POST','/api/expenses/vendor-payments/batch',{role:'owner',body:{expenseIds:[id],account:'Arshpreet 1919',amount:400,paymentProof:'/api/expenses/photo/claimant-part-pay.jpg',date:'2026-09-30'}});
   assert.equal(paid.status,200,JSON.stringify(paid.body));
   const expense=paid.body.expenses[0],payment=expense.payments.at(-1);
@@ -1566,11 +1590,11 @@ test('Owner can record a partial vendor payment from an existing claimant accoun
 
 test('Owner can select every registered claimant account for a PERSONAL vendor payment',()=>{
   const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
-  for(const account of ['Arshpreet 1919','Shivam 4807','Pradeep 8606'])assert.ok(ownerConfig.vendorPaymentAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL vendor payment accounts');
+  for(const account of ['Arshpreet 1919','Arshpreet Cash','Shivam 4807','Shivam Cash','Pradeep 8606','Pradeep Cash'])assert.ok(ownerConfig.vendorPaymentAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL vendor payment accounts');
   assert.equal(ownerConfig.claimantAccountOwners['Shivam 4807'],'shivam');
   const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
   assert.equal(adminConfig.vendorPaymentAccountsByNature.PERSONAL.includes('Shivam 4807'),false,'claimant accounts remain Owner-only in this picker');
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/paid personally by/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/paid personally by/);assert.match(html,/payAcct'\)\.addEventListener\('change'/);assert.match(html,/cash\/i\.test\(this\.value\)\?'Cash':'UPI'/);
 });
 
 test('non-reimbursable personal expenses never appear as owner reimbursement liabilities',()=>{
@@ -1612,7 +1636,7 @@ test('installments support partial payments and prevent overpayment', () => {
 
 test('approved expenses for the same vendor can be paid together with one proof', () => {
   function approved(vendor, amount, date) {
-    const made=invoke('POST','/api/expenses',{body:{date,vendor,amount,billPhoto:'/api/expenses/photo/bill.jpg',qrPhoto:'/api/expenses/photo/qr.jpg',paymentType:'UPI'}});
+    const made=historicalClaim({body:{date,vendor,amount,billPhoto:'/api/expenses/photo/bill.jpg',qrPhoto:'/api/expenses/photo/qr.jpg',paymentType:'UPI'}});
     invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
     invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
     return made.body.expense.id;
@@ -1627,7 +1651,7 @@ test('approved expenses for the same vendor can be paid together with one proof'
 
 test('consolidated vendor payment consumes available advance before creating the bank outflow', () => {
   function approved(amount,date) {
-    const made=invoke('POST','/api/expenses',{body:{date,vendor:'Vendor Credit Test',amount,billPhoto:'/api/expenses/photo/credit-bill.jpg',qrPhoto:'/api/expenses/photo/credit-qr.jpg',paymentType:'UPI'}});
+    const made=historicalClaim({body:{date,vendor:'Vendor Credit Test',amount,billPhoto:'/api/expenses/photo/credit-bill.jpg',qrPhoto:'/api/expenses/photo/credit-qr.jpg',paymentType:'UPI'}});
     invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
     invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
     return made.body.expense.id;
@@ -1655,7 +1679,7 @@ test('secondary money flows preserve multiple proofs without duplicating the tra
   const proofs=['/api/expenses/photo/part-2000.jpg','/api/expenses/photo/part-8000.jpg'];
   const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Counter Cash',toAccount:'Axis Bank 3448',amount:10000,date:'2026-08-27',proofs}});
   assert.equal(made.status,200);assert.equal(made.body.transfer.amount,10000);assert.deepEqual(made.body.transfer.proofs,proofs);assert.equal(made.body.transfer.proof,proofs[0]);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   ['receiveProof','rc_proof','srf_proof','tr_proof'].forEach(id=>assert.match(html,new RegExp('id="'+id+'"[^>]*multiple')));
   assert.match(html,/<details class="card"><summary><h3[^>]*>Record Customer Against the Sale<\/h3><\/summary>/);
   assert.doesNotMatch(html,/Record customer refund against a sale/);
@@ -1665,13 +1689,13 @@ test('Owner can record a transfer through an intermediary without creating an in
   const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'PERSONAL',toNature:'PERSONAL',fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',amount:15000,date:'2026-09-12',routedThroughIntermediary:true,intermediary:'Jatin',note:'Jatin forwarded the payment to Namita',proof:'/api/expenses/photo/jatin-namita.jpg'}});
   assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.intermediary,'Jatin');assert.equal(made.body.transfer.routedThroughIntermediary,true);assert.equal(made.body.transfer.fromAccount,'IndusInd Bank 7883');assert.equal(made.body.transfer.toAccount,'Namita 5464');
   const missing=invoke('POST','/api/expenses/transfers',{role:'owner',body:{fromNature:'PERSONAL',toNature:'PERSONAL',fromAccount:'IndusInd Bank 7883',toAccount:'Namita 5464',amount:1,date:'2026-09-12',routedThroughIntermediary:true,proof:'/api/expenses/photo/missing-name.jpg'}});assert.equal(missing.status,400);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Paid through an intermediary/);assert.match(html,/View intermediary details/);assert.match(html,/Final recipient account/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/Paid through an intermediary/);assert.match(html,/View intermediary details/);assert.match(html,/Final recipient account/);
 });
 
-test('Prashant can record internal transfers involving all four reconciled business accounts',()=>{
+test('Prashant can record internal transfers involving all four reconciled business accounts and Services',()=>{
   const config=invoke('GET','/api/expenses/config',{role:'admin'}).body;
-  for(const account of ['Axis Bank 3448','Tiana 0425','Counter Cash','Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919'])assert.ok(config.transferAccountsByNature.SANKI.includes(account),account);
-  assert.equal(config.transferAccountsByNature.SANKI.includes('Services'),false);assert.deepEqual(config.transferAccountsByNature.SAMAST,[]);assert.deepEqual(config.transferAccountsByNature.PERSONAL,[]);
+  for(const account of ['Axis Bank 3448','Tiana 0425','Counter Cash','Prashant Axis 3645','IndusInd Bank 8181','Arshpreet 1919','Services'])assert.ok(config.transferAccountsByNature.SANKI.includes(account),account);
+  assert.deepEqual(config.transferAccountsByNature.SAMAST,[]);assert.deepEqual(config.transferAccountsByNature.PERSONAL,[]);
   const allowed=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Prashant Axis 3645',classification:'internal_transfer',amount:1000,date:'2026-09-10',proof:'/api/expenses/photo/prashant-transfer.jpg'}});
   assert.equal(allowed.status,200,JSON.stringify(allowed.body));assert.equal(allowed.body.transfer.createdBy,'prashant');
   const arshpreet=invoke('POST','/api/expenses/transfers',{role:'admin',body:{fromNature:'SANKI',toNature:'SANKI',fromAccount:'Axis Bank 3448',toAccount:'Arshpreet 1919',classification:'internal_transfer',amount:613,date:'2026-09-18',proof:'/api/expenses/photo/arshpreet-transfer.jpg'}});assert.equal(arshpreet.status,200,JSON.stringify(arshpreet.body));
@@ -1692,7 +1716,7 @@ test('Prashant can record internal transfers involving all four reconciled busin
   }
   const base={fromNature:'SANKI',toNature:'SANKI',fromAccount:'IndusInd Bank 8181',toAccount:'Arshpreet 1919',classification:'internal_transfer',amount:1061,date:'2098-10-07',note:'For Expense',proof:'/api/expenses/photo/transfer.jpg'};
   assert.equal(invoke('POST','/api/expenses/transfers',{role:'claimant',username:'prashant',body:base}).status,403);
-  assert.equal(invoke('POST','/api/expenses/transfers',{role:'admin',body:{...base,toAccount:'Services'}}).status,403);
+  assert.equal(invoke('POST','/api/expenses/transfers',{role:'admin',body:{...base,toAccount:'Services'}}).status,200);
   assert.equal(invoke('POST','/api/expenses/transfers',{role:'admin',body:{...base,toNature:'PERSONAL',toAccount:'Namita 5464'}}).status,403);
   assert.equal(invoke('POST','/api/expenses/transfers',{role:'admin',body:{...base,classification:'owner_withdrawal'}}).status,403);
   assert.equal(invoke('POST','/api/expenses/transfers',{role:'admin',body:{...base,proof:''}}).status,400);
@@ -1708,7 +1732,7 @@ test('Prashant can reconcile transfers from the four managed accounts to 1919 ex
       stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
       stored.bankReconciliationDrafts[id]={id,account,nature:'SANKI',transactions:[{date,description:'Arshpreet expenses funding',reference:'INTERNAL-1919-'+index,debit:1061,credit:0,balance:-1061}],summary:{from:date,to:date,openingBalance:0,closingBalance:-1061,totalDebits:1061,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString(),createdBy:'prashant'};
       fs.writeFileSync(expenseFile,JSON.stringify(stored));
-      const blocked=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:id,rowId:'bank-0',action:'create_internal_transfer',otherAccount:'Services',reason:'Must remain Owner only'}});
+      const blocked=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',username:'other-admin',body:{draftId:id,rowId:'bank-0',action:'create_internal_transfer',otherAccount:'Services',reason:'Restricted to Owner and Prashant'}});
       assert.equal(blocked.status,403);
       const saved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',body:{draftId:id,rowId:'bank-0',action:'create_internal_transfer',otherAccount:'Arshpreet 1919',reason:'For Expense'}});
       assert.equal(saved.status,200,JSON.stringify(saved.body));assert.equal(saved.body.rows.find(x=>x.id==='bank-0').status,'resolved');
@@ -1727,7 +1751,7 @@ test('money exchange posts equal bank and cash movements without recording incom
   const reverse=invoke('POST','/api/expenses/exchanges',{role:'owner',body:{nature:'SANKI',direction:'cash_to_transfer',bankAccount:'Axis Bank 3448',cashAccount:'Counter Cash',source:'SB Enterprises',amount:900,date:'2099-05-02',proof:'/api/expenses/photo/exchange-2.jpg'}});assert.equal(reverse.status,200);assert.equal(reverse.body.transfer.fromAccount,'Counter Cash');assert.equal(reverse.body.transfer.toAccount,'Axis Bank 3448');
   const invalid=invoke('POST','/api/expenses/exchanges',{role:'owner',body:{nature:'SANKI',direction:'cash_to_transfer',bankAccount:'Axis Bank 3448',cashAccount:'Prashant Axis 3645',source:'SB Enterprises',amount:900,date:'2099-05-02',proof:'/proof.jpg'}});assert.equal(invalid.status,400);
   const denied=invoke('POST','/api/expenses/exchanges',{role:'admin',body:{nature:'SANKI',direction:'transfer_to_cash',bankAccount:'Axis Bank 3448',cashAccount:'Counter Cash',source:'SB Enterprises',amount:100,date:'2099-05-02',proof:'/proof.jpg'}});assert.equal(denied.status,403);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/<option value="exchange">Exchange<\/option>/);assert.match(html,/SB Enterprises/);assert.match(html,/Transfer given → cash received/);assert.match(html,/Cash given → transfer received/);assert.match(html,/View exchange details/);assert.match(html,/Open full proof/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/<option value="exchange">Exchange<\/option>/);assert.match(html,/SB Enterprises/);assert.match(html,/Transfer given → cash received/);assert.match(html,/Cash given → transfer received/);assert.match(html,/View exchange details/);assert.match(html,/Open full proof/);
 });
 
 test('money exchange records unequal received cash as an explicit historical-ledger adjustment and supports audited owner edits',()=>{
@@ -1743,7 +1767,7 @@ test('money exchange records unequal received cash as an explicit historical-led
   assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.transfer.adjustmentAmount,15000);assert.equal(edited.body.transfer.editedBy,'owner-user');
   const saved=JSON.parse(fs.readFileSync(path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),'utf8'));const auditRow=saved.auditLog.findLast(x=>x.action==='MONEY_EXCHANGE_EDITED'&&x.subjectId===made.body.transfer.id);
   assert.ok(auditRow);assert.equal(auditRow.before.receivedAmount,300000);assert.equal(auditRow.after.receivedAmount,305000);assert.equal(auditRow.note,'Correct cash received');
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Amount actually received/);assert.match(html,/Previous-balance ledger/);assert.match(html,/Edit exchange/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/Amount actually received/);assert.match(html,/Previous-balance ledger/);assert.match(html,/Edit exchange/);
 });
 
 test('owner can edit manual money-trail entries while reconciled and generated rows stay protected',()=>{
@@ -1755,12 +1779,12 @@ test('owner can edit manual money-trail entries while reconciled and generated r
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Counter Cash',from:'2099-07-02',to:'2099-07-02'}}).body.entries.find(x=>x.id===id);assert.equal(ledger.credit,750);assert.equal(ledger.editable,true);assert.equal(ledger.source,'Correct source');
   const expenseStorePath=path.join(path.dirname(process.env.DATA_PATH),'expenses.json'),saved=JSON.parse(fs.readFileSync(expenseStorePath,'utf8'));saved.bankDateOverrides=saved.bankDateOverrides||{};saved.bankDateOverrides[id]={bankDate:'2099-07-02'};fs.writeFileSync(expenseStorePath,JSON.stringify(saved));
   const blocked=invoke('PATCH','/api/expenses/ledger-entry',{role:'owner',body:{id,kind:'receipt',amount:800,date:'2099-07-02',source:'Correct source',reason:'Should block'}});assert.equal(blocked.status,409);assert.match(blocked.body.error,/reconciled/i);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/function entryEditButton/);assert.match(html,/Reason for editing — required/);assert.match(html,/\/api\/expenses\/ledger-entry/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/function entryEditButton/);assert.match(html,/Reason for editing — required/);assert.match(html,/\/api\/expenses\/ledger-entry/);
 });
 
 test('vendor overpayment is one ledger payment and the excess remains as vendor advance', () => {
   function approved(amount,date,particulars) {
-    const made=invoke('POST','/api/expenses',{body:{date,vendor:'Running Balance Vendor',particulars,amount,billPhoto:'/api/expenses/photo/running-bill.jpg',qrPhoto:'/api/expenses/photo/running-qr.jpg',paymentType:'UPI'}});
+    const made=historicalClaim({body:{date,vendor:'Running Balance Vendor',particulars,amount,billPhoto:'/api/expenses/photo/running-bill.jpg',qrPhoto:'/api/expenses/photo/running-qr.jpg',paymentType:'UPI'}});
     invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
     invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
     return made.body.expense.id;
@@ -1784,7 +1808,7 @@ test('vendor overpayment is one ledger payment and the excess remains as vendor 
 });
 
 test('All Expenses exposes a clear same-vendor consolidated payment selector', () => {
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/class="combined-pay-select"/);
   assert.match(html,/Select to combine/);
   assert.match(html,/Pay selected together/);
@@ -1805,7 +1829,7 @@ test('All Expenses exposes a clear same-vendor consolidated payment selector', (
 
 test('one consolidated payment partially allocates across selected bills oldest first', () => {
   function approved(amount,date) {
-    const made=invoke('POST','/api/expenses',{body:{date,vendor:'Partial Flower Vendor',amount,billPhoto:'/api/expenses/photo/pbill.jpg',paymentType:'Cash'}});
+    const made=historicalClaim({body:{date,vendor:'Partial Flower Vendor',amount,billPhoto:'/api/expenses/photo/pbill.jpg',paymentType:'Cash'}});
     invoke('POST','/api/expenses/:id',{params:{id:made.body.expense.id},body:{ledger:'FLOWERS'},role:'owner'});
     invoke('POST','/api/expenses/:id/approve',{params:{id:made.body.expense.id},role:'owner'});
     return made.body.expense.id;
@@ -1820,7 +1844,7 @@ test('one consolidated payment partially allocates across selected bills oldest 
 });
 
 test('approved self-paid expenses appear once in spending, vendor and personal account ledgers', () => {
-  const created = invoke('POST','/api/expenses',{body:{date:'2026-08-21',ledger:'FOOD EXPENSE',vendor:'Self Paid Surface Vendor',particulars:'market supplies',amount:450,billPhoto:'/api/expenses/photo/self-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/self-pay.jpg'}});
+  const created = historicalClaim({body:{date:'2026-08-21',ledger:'FOOD EXPENSE',vendor:'Self Paid Surface Vendor',particulars:'market supplies',amount:450,billPhoto:'/api/expenses/photo/self-bill.jpg',paidAlready:true,paymentType:'UPI',personalAccount:'Arshpreet 1919',personalPaymentProof:'/api/expenses/photo/self-pay.jpg'}});
   const id=created.body.expense.id;
   invoke('POST','/api/expenses/:id',{params:{id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
   invoke('POST','/api/expenses/:id/approve',{params:{id},role:'owner'});
@@ -1862,25 +1886,27 @@ test('advanced accounting workspaces are Owner/Admin only and claimant classific
   assert.equal(created.status, 200);
   assert.equal(created.body.expense.ledger, '');
   assert.equal(created.body.expense.type, 'variable');
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /cfg\.isAdmin\?'<div class="fld full"><label>Category/);
   assert.match(html, /if\(!cfg\.isAdmin\).*every non-Owner\/Admin user/);
   assert.match(html, /function syncApprovalsTab\(\)\{\s*var existing/);
   assert.doesNotMatch(html, /b\.dataset\.t\s*=\s*'approvals'/);
 });
 
-test('expense navigation is grouped and refunds are nested inside receivables',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),refunds=fs.readFileSync(path.join(__dirname,'..','public','expense-refunds.js'),'utf8');
-  ['A. Accounting','B. Ledgers','C. Manage','D. Audit'].forEach(label=>assert.match(html,new RegExp(label.replace('.','\\.'))));
+test('expense navigation uses collapsible groups and refunds render on the receivables page',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),refunds=fs.readFileSync(path.join(__dirname,'public','expense-refunds.js'),'utf8');
+  ['accounting','ledgers','manage','audit'].forEach(group=>{assert.match(html,new RegExp('data-group-toggle="'+group+'"'));assert.match(html,new RegExp('data-tab-group="'+group+'"'));});
   assert.ok(html.indexOf('data-t="list"')<html.indexOf('data-t="pending"'));assert.ok(html.indexOf('data-t="pending"')<html.indexOf('data-t="receivables"'));assert.ok(html.indexOf('data-t="receivables"')<html.indexOf('data-t="spending"'));
   assert.ok(html.indexOf('data-t="vendors"')<html.indexOf('data-t="salaryledgers"'));assert.ok(html.indexOf('data-t="salaryledgers"')<html.indexOf('data-t="cash"'));assert.ok(html.indexOf('data-t="cash"')<html.indexOf('data-t="creditcards"'));assert.ok(html.indexOf('data-t="creditcards"')<html.indexOf('data-t="reimbursements"'));
   assert.doesNotMatch(html,/<button[^>]+data-t="refunds"/);assert.doesNotMatch(html,/<button[^>]+data-t="approvals"/);
-  assert.match(html,/data-receivables-view="refunds"/);assert.match(html,/if\(tp==='refunds'\)\{tp='receivables';receivablesSubview='refunds';\}/);
-  assert.match(refunds,/tab !== 'receivables' \|\| receivablesSubview !== 'refunds'/);
+  assert.match(html,/function toggleTabGroup\(name\)/);assert.match(html,/group\.classList\.toggle\('open',expanded\)/);assert.match(html,/button\.setAttribute\('aria-expanded',expanded\?'true':'false'\)/);
+  assert.match(html,/id="rv_refunds_section"/);assert.match(html,/renderRefundsSection\('rv_refunds_section'\)/);assert.match(html,/if\(tp==='refunds'\)tp='receivables'/);
+  assert.doesNotMatch(html,/data-receivables-view=/);assert.doesNotMatch(html,/receivablesSubview/);
+  assert.match(refunds,/window\.renderRefundsSection/);assert.match(refunds,/refundHostId/);assert.doesNotMatch(refunds,/receivablesSubview|receivablesSubnav|bindReceivablesSubnav/);
 });
 
 test('account ledgers render an expandable one-click money trail', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /<h3 style="margin:0 0 4px">Money Trail<\/h3>/);
   assert.match(html, /ontoggle="if\(this\.open\)loadMoneyTrail/);
   assert.match(html, /Expenses paid '\+fmt\(expensesPaid\)/);
@@ -1894,7 +1920,8 @@ test('account ledgers render an expandable one-click money trail', () => {
   assert.match(html, /id="editBillFile"/);
   assert.match(html, /Upload statement or register for reconciliation/);
   assert.match(html, /Upload or reconcile statement/);
-  assert.match(html, /if\(recon\).*if\(reconcileEligible&&!isPaytmClearing\)loadBankStatement\(\)/);
+  assert.match(html, /if\(recon\).*if\(reconcileEligible&&!isPaytmClearing&&!isGoKwikClearing\)loadBankStatement\(\)/);
+  assert.match(html, /GoKwikReconciliation\.mount\(gokwikControls/);
   assert.match(html, /id="ledgerRecon" style="display:none/);
   assert.match(html, /id="bs_upload"/);
   assert.match(html, /id="bs_reconcile"/);
@@ -1930,7 +1957,7 @@ S478092750.003000.004231.01`;
 });
 
 test('IndusInd mobile PDF resolves ambiguous columns using the whole balance chain',()=>{
-  const {selectIndusIndMobileCandidates}=require('../modules/expenses'),rows=[
+  const {selectIndusIndMobileCandidates}=require('./modules/expenses'),rows=[
     {description:'UPI/NEWER/DR/PAYEE',candidates:[{bankReference:'S87654321',debit:50,credit:0,balance:850}]},
     {description:'UPI/OLDER/DR/PAYEE',candidates:[{bankReference:'S12345678',debit:100,credit:0,balance:1000},{bankReference:'S1234567',debit:100,credit:0,balance:900}]}
   ];
@@ -1961,7 +1988,7 @@ test('password-protected PDF statements unlock without retaining the password', 
   await assert.rejects(()=>parseBankStatementUpload(file,'statement.pdf'),/password protected/i);
   await assert.rejects(()=>parseBankStatementUpload(file,'statement.pdf','wrong'),/Incorrect statement password/i);
   const rows=await parseBankStatementUpload(file,'statement.pdf','secret123');assert.equal(rows.length,1);assert.deepEqual({date:rows[0].date,debit:rows[0].debit,balance:rows[0].balance},{date:'2026-09-01',debit:100,balance:900});
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/id="bs_password"/);assert.match(html,/never saved/);assert.match(html,/fd\.append\('password'/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/id="bs_password"/);assert.match(html,/never saved/);assert.match(html,/fd\.append\('password'/);
 });
 
 test('bank statement multipart fields are parsed before account permission is checked',()=>{
@@ -1980,7 +2007,7 @@ test('daily dashboard reminder highlights 3448 and 0425 statements through yeste
   stored.bankStatements=stored.bankStatements||{};stored.bankStatements['Axis Bank 3448']={reconciledThrough:older,imports:[],transactions:{}};stored.bankStatements['Tiana 0425']={reconciledThrough:required,imports:[],transactions:{}};stored.bankStatements['IndusInd Bank 8181']={reconciledThrough:required,imports:[],transactions:{}};stored.cashReconciliations=[{id:'CCR-TEST',verifiedThrough:required,status:'approved'}];stored.bankReconciliationDrafts={'BRD-DAILY-3448':{id:'BRD-DAILY-3448',nature:'SANKI',account:'Axis Bank 3448',summary:{from:older,to:required}}};fs.writeFileSync(expenseFile,JSON.stringify(stored));
   const result=invoke('GET','/api/expenses/reconciliation-reminders',{role:'owner'});if(original)fs.writeFileSync(expenseFile,original);else fs.rmSync(expenseFile,{force:true});assert.equal(result.status,200);assert.ok(result.body.pendingCount>=1);
   const axis=result.body.reminders.find(x=>x.account==='Axis Bank 3448'),tiana=result.body.reminders.find(x=>x.account==='Tiana 0425');assert.equal(axis.status,'review_pending');assert.equal(axis.pendingDraft,true);assert.equal(axis.reconciledThrough,older);assert.match(axis.href,/tab=cash&account=Axis%20Bank%203448/);assert.equal(tiana.status,'up_to_date');assert.equal(tiana.needsStatement,false);
-  const dashboard=fs.readFileSync(path.join(__dirname,'..','public','dashboard.html'),'utf8'),expensesUi=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(dashboard,/Account reconciliations pending/);assert.match(dashboard,/statement required/);assert.match(dashboard,/reconciliation-reminders/);assert.match(expensesUi,/id="ledgerReconciliationAttention"/);assert.match(expensesUi,/loadReconciliationAttention\(\)/);assert.match(expensesUi,/Account reconciliations pending/);assert.match(expensesUi,/get\('account'\)/);
+  const dashboard=fs.readFileSync(path.join(__dirname,'public','dashboard.html'),'utf8'),expensesUi=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(dashboard,/Account reconciliations pending/);assert.match(dashboard,/statement required/);assert.match(dashboard,/reconciliation-reminders/);assert.match(expensesUi,/id="ledgerReconciliationAttention"/);assert.match(expensesUi,/loadReconciliationAttention\(\)/);assert.match(expensesUi,/Account reconciliations pending/);assert.match(expensesUi,/get\('account'\)/);
 });
 
 test('reconciliation reminders include the approved bank, clearing, cash, Velocity and card schedules',()=>{
@@ -2036,7 +2063,7 @@ test('confirming a displayed possible match needs no second bank selection and f
   const draftSnapshot=JSON.parse(JSON.stringify(JSON.parse(fs.readFileSync(expenseFile,'utf8')).bankReconciliationDrafts[id])),finalized=invoke('POST','/api/expenses/bank-statements/finalize',{role:'admin',body:{draftId:id}});assert.equal(finalized.status,200,JSON.stringify(finalized.body));applyFinalizedConfirmedMatches(draftSnapshot,'prashant');const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankDateOverrides[appId].originalDate,'2098-01-01');assert.equal(after.bankDateOverrides[appId].bankDate,'2098-01-02');assert.match(after.bankDateOverrides[appId].remark,/Confirmed displayed match/);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('Payables groups same-name vendor bills without merging their records',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/vendorPayableGroups\(d\.expenses\)/);assert.match(html,/approved bills grouped under this vendor/);assert.match(html,/\.map\(expenseCard\)\.join/);});
+test('Payables groups same-name vendor bills without merging their records',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/vendorPayableGroups\(d\.expenses\)/);assert.match(html,/approved bills grouped under this vendor/);assert.match(html,/sorted\.map\(payableExpenseCard\)\.join\(''\)/);assert.match(html,/function payableExpenseCard\(e\)\{return expenseCard\(e,null,\{showRemainingDue:true,hideCombinedPaymentSelector:true\}\);\}/);});
 
 test('unmatching a suggested pair separates both entries and remembers the required reason',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='Axis Bank 3448',id='BRD-UNMATCH-SUGGESTION',appId='EX-UNMATCH/PAY-001';
@@ -2049,16 +2076,16 @@ test('unmatching a suggested pair separates both entries and remembers the requi
   const refreshed=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'admin',body:{draftId:id,account}}).body;assert.equal(refreshed.rows.some(x=>x.bank&&x.app&&x.app.id===appId),false,'the rejected pair must stay separated after refresh');fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('matched and suggested reviews expose an Unmatch action with a reason form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/\['possible_match','amount_mismatch','matched'\]\.includes\(row\.status\).*?>Unmatch transactions<\/button>/);assert.match(html,/resolution\.action==='accept_match'/);assert.match(html,/Unmatch transactions/);assert.match(html,/Neither entry will be deleted or excluded/);});
+test('matched and suggested reviews expose an Unmatch action with a reason form',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/\['possible_match','amount_mismatch','matched'\]\.includes\(row\.status\).*?>Unmatch transactions<\/button>/);assert.match(html,/resolution\.action==='accept_match'/);assert.match(html,/Unmatch transactions/);assert.match(html,/Neither entry will be deleted or excluded/);});
 
-test('small reimbursement differences can be matched while recording the excess as bank charges',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/smallCharge>0&&smallCharge<=5/);assert.match(html,/Match \+ record.*bank charge/);assert.match(html,/action:'split_allocation'.*chargeCategory:'BANK CHARGES'/);assert.match(html,/difference recorded as bank charge/);});
+test('small reimbursement differences can be matched while recording the excess as bank charges',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/smallCharge>0&&smallCharge<=5/);assert.match(html,/Match \+ record.*bank charge/);assert.match(html,/action:'split_allocation'.*chargeCategory:'BANK CHARGES'/);assert.match(html,/difference recorded as bank charge/);});
 
 test('a split bank-charge resolution consumes its reimbursement instead of leaving it missing in bank',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.readFileSync(expenseFile,'utf8');
   try{const s=JSON.parse(baseline),account='Axis Bank 3448',draftId='BRD-SPLIT-CONSUMES-APP',appId='EX-SPLIT-CHARGE/REIM-001';s.expenses=s.expenses||{};s.expenses['EX-SPLIT-CHARGE']={id:'EX-SPLIT-CHARGE',nature:'SANKI',status:'approved',vendor:'Test claimant',amount:628.75,reimbursementPayments:[{id:'REIM-001',account,amount:628.75,date:'2099-11-06'}],payments:[]};s.bankReconciliationDrafts=s.bankReconciliationDrafts||{};s.bankReconciliationDrafts[draftId]={id:draftId,account,nature:'SANKI',transactions:[{date:'2099-11-06',description:'IMPS reimbursement plus charge',reference:'SPLIT-63195',debit:631.95,credit:0,balance:0}],summary:{from:'2099-11-06',to:'2099-11-06',openingBalance:631.95,closingBalance:0,totalDebits:631.95,totalCredits:0,validated:true},resolutions:{'bank-0':{action:'split_allocation',appId:'',principalAmount:628.75,chargeAmount:3.2,chargeCategory:'BANK CHARGES',reason:'Matched reimbursement with ₹3.20 bank charge'},'app-73':{action:'linked_split',appId,reason:'Linked as principal component of bank-0'}},matchingPolicy:'strict_identity_v3',createdBy:'owner-user'};fs.writeFileSync(expenseFile,JSON.stringify(s));const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}}).body,row=view.rows.find(x=>x.id==='bank-0');assert.equal(row.status,'resolved');assert.equal(view.rows.some(x=>x.status==='missing_in_bank'&&x.app&&x.app.id===appId),false);assert.equal(view.unresolved,0);}finally{fs.writeFileSync(expenseFile,baseline);}
 });
 
-test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),render=html.slice(html.indexOf('function renderBankReconciliation'),html.indexOf('function bankDecisionLabel'));assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
+test('loading an account ledger never auto-opens an unfinished reconciliation form',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),render=html.slice(html.indexOf('function renderBankReconciliation'),html.indexOf('function renderBankContinuityEvidence'));assert.doesNotMatch(render,/showBankReconForm|showModal|restoreBankReconForm/);assert.doesNotMatch(html,/function restoreBankReconForm/);assert.match(html,/official transaction date will be.*bank statement when finalized/);});
 
 test('reviewed bank transactions can finalize while the closing balance remains pending',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draftId='BRD-DEFER-BALANCE';
@@ -2086,7 +2113,7 @@ test('Axis 3448 complaint hold reduces usable funds without changing bank reconc
   assert.equal(hold.debit,45398);assert.equal(hold.description,'Temporary blocked amount');assert.equal(Math.round((ledger.statementBalance-ledger.balance)*100)/100,45398);
 });
 
-test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: submit transactions for finalization/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
+test('bank UI offers transaction finalization when only the closing balance is pending',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/d\.canFinalizeTransactions\?'inline-flex'/);assert.match(html,/Finalize reviewed transactions — balance pending/);assert.match(html,/Confirm: submit transactions for finalization/);assert.match(html,/dataset\.confirmPending/);assert.match(html,/deferClosingBalance:deferClosingBalance/);assert.match(html,/Transactions ✓ · Balance pending/);});
 
 test('excluded statement rows remain bank truth without becoming expenses or P&L',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),original=fs.readFileSync(expenseFile,'utf8'),account='Prashant Axis 3645',draft={id:'BRD-BANK-TRUTH',nature:'SANKI',account,transactions:[{date:'2098-04-01',description:'Personal purchase',reference:'PSNL-100',debit:100,credit:0},{date:'2098-04-01',description:'Personal receipt',reference:'PSNL-40',debit:0,credit:40}],resolutions:{'bank-0':{action:'exclude',reason:'PSNL'},'bank-1':{action:'exclude',reason:'PSNL'}}};
@@ -2119,7 +2146,7 @@ test('a missing internal transfer can be created from an official bank row witho
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('bank review offers bank-confirmed transfers including direct Counter Cash and 3448 actions',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);assert.match(html,/Counter Cash → Axis 3448/);assert.match(html,/Axis 3448 → Counter Cash/);});
+test('bank review offers bank-confirmed transfers including direct Counter Cash and 3448 actions',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/Create missing internal transfer/);assert.match(html,/id="brOtherAccount"/);assert.match(html,/action:'create_internal_transfer'/);assert.match(html,/Counter Cash → Axis 3448/);assert.match(html,/Axis 3448 → Counter Cash/);});
 
 test('Prashant can record Counter Cash into Axis 3448 directly from bank reconciliation',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),id='BRD-PRASHANT-CASH-TO-3448';
@@ -2131,7 +2158,7 @@ test('Prashant can record Counter Cash into Axis 3448 directly from bank reconci
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('Velocity is a clearing ledger and White Wizard credits request remittance evidence',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.ok(config.ledgerAccountsByNature.SANKI.includes('Velocity'));assert.equal(config.bankAccountsByNature.SANKI.includes('Velocity'),false);assert.match(html,/Upload Velocity remittance/);assert.match(html,/uploadVelocityRemittanceForBank/);});
+test('Velocity is a clearing ledger and White Wizard credits request remittance evidence',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.ok(config.ledgerAccountsByNature.SANKI.includes('Velocity'));assert.equal(config.bankAccountsByNature.SANKI.includes('Velocity'),false);assert.match(html,/Upload Velocity remittance/);assert.match(html,/uploadVelocityRemittanceForBank/);});
 
 test('Velocity COD settlement creates one linked transfer into Axis 3448',()=>{const made=invoke('POST','/api/expenses/transfers',{role:'owner',body:{nature:'SANKI',fromAccount:'Velocity',toAccount:'Axis Bank 3448',amount:12345,date:'2098-04-01',proof:'/api/expenses/photo/velocity.jpg',note:'White Wizard Technologies COD settlement'}});assert.equal(made.status,200,JSON.stringify(made.body));const velocity=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Velocity',from:'2098-04-01',to:'2098-04-01'}}).body.entries.find(x=>x.id===made.body.transfer.id),axis=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448',from:'2098-04-01',to:'2098-04-01'}}).body.entries.find(x=>x.id===made.body.transfer.id);assert.equal(velocity.debit,12345);assert.equal(axis.credit,12345);assert.equal(velocity.id,axis.id);});
 
@@ -2154,7 +2181,7 @@ test('Velocity settlement-only report creates Axis payouts without AWB or Shopif
   fs.writeFileSync(expenseFile,expenseBefore);fs.rmSync(remittanceFile,{force:true});
 });
 
-test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple (?:existing )?entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
+test('bank review exposes multi-entry linking directly for unmatched debits',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/openBankAssignment\(\\'\'\+x\.id\+\'\\',\\'multiple\\'\).*Link multiple (?:existing )?entries/);assert.match(html,/payload\.action=kind==='multiple'\?'link_multiple_existing'/);});
 
 test('one ledger payment can reconcile against multiple bank transactions and undo as one group',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993',id='BRD-MULTI-BANK',date='2098-04-01';
@@ -2175,7 +2202,7 @@ test('one incoming ledger transfer reconciles against mixed bank credits and deb
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('bank review offers one-ledger-to-multiple-bank matching',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Match with multiple bank transactions/);assert.match(html,/action:'link_multiple_bank_entries'/);assert.match(html,/selectedOptions/);assert.match(html,/function bankReconNet/);assert.match(html,/Net = money in minus money out/);});
+test('bank review offers one-ledger-to-multiple-bank matching',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/Match with multiple bank transactions/);assert.match(html,/action:'link_multiple_bank_entries'/);assert.match(html,/selectedOptions/);assert.match(html,/function bankReconNet/);assert.match(html,/Net = money in minus money out/);});
 
 test('posted salary advances remain searchable and reconcilable across a nearby statement boundary',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),salaryFile=path.join(tempDir,'salary.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),salaryBaseline=fs.existsSync(salaryFile)?fs.readFileSync(salaryFile):null,account='Axis Bank 3448',id='BRD-SALARY-ADVANCE';
@@ -2186,11 +2213,11 @@ test('posted salary advances remain searchable and reconcilable across a nearby 
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));if(salaryBaseline)fs.writeFileSync(salaryFile,salaryBaseline);else fs.rmSync(salaryFile,{force:true});
 });
 
-test('reconciliation search includes nearby posted salary and incoming account movements',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/bankReconView&&bankReconView\.linkCandidates/);assert.match(source,/category:'Employee salary advance'/);assert.match(source,/category:'Salary payment'/);assert.match(source,/candidateFrom=shiftDate\(draft\.summary\.from,-7\)/);});
+test('reconciliation search includes nearby posted salary and incoming account movements',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(html,/bankReconView&&bankReconView\.linkCandidates/);assert.match(source,/category:'Employee salary advance'/);assert.match(source,/category:'Salary payment'/);assert.match(source,/candidateFrom=shiftDate\(draft\.summary\.from,-7\)/);});
 
-test('unmatched reconciliation rows are grouped into chronological date blocks',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/dateLabel\+' — unmatched entries'/);assert.match(html,/x\.status==='missing_in_app'\|\|x\.status==='missing_in_bank'/);assert.match(source,/if\(gx===2\)return rowDate\(x\)\.localeCompare\(rowDate\(y\)\)/);assert.match(source,/rowSequence\(x\)-rowSequence\(y\)/);assert.match(source,/missing_in_app:2,missing_in_bank:2/);});
+test('unmatched reconciliation rows are grouped into chronological date blocks',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(html,/dateLabel\+' — unmatched entries'/);assert.match(html,/x\.status==='missing_in_app'\|\|x\.status==='missing_in_bank'/);assert.match(source,/if\(gx===2\)return rowDate\(x\)\.localeCompare\(rowDate\(y\)\)/);assert.match(source,/rowSequence\(x\)-rowSequence\(y\)/);assert.match(source,/missing_in_app:2,missing_in_bank:2/);});
 
-test('expanding account trails cannot destroy or hide the universal reconciliation panel',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),trail=html.slice(html.indexOf('window.loadMoneyTrail='),html.indexOf('window.deleteTransfer='));assert.doesNotMatch(trail,/appendChild\(recon\)/);assert.match(trail,/Upload or reconcile statement/);assert.match(html,/if\(recon\).*recon\.style\.display=reconcileEligible&&!isPaytmClearing\?'block':'none'/);assert.ok(html.indexOf('id="ledgerRecon"')<html.indexOf('id="ledgerTable"'));assert.match(html,/\(el\('ledgerRecon'\)\|\|el\('lg_account'\)\)\.scrollIntoView/);});
+test('expanding account trails cannot destroy or hide the universal reconciliation panel',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),trail=html.slice(html.indexOf('window.loadMoneyTrail='),html.indexOf('window.deleteTransfer='));assert.doesNotMatch(trail,/appendChild\(recon\)/);assert.match(trail,/Upload or reconcile statement/);assert.match(html,/if\(recon\).*recon\.style\.display=reconcileEligible&&!isPaytmClearing\?'block':'none'/);assert.ok(html.indexOf('id="ledgerRecon"')<html.indexOf('id="ledgerTable"'));assert.match(html,/\(el\('ledgerRecon'\)\|\|el\('lg_account'\)\)\.scrollIntoView/);});
 
 test('balanced policy auto-matches unique exact date amount and direction despite different narration',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='ICICI Bank 0993',date='2098-03-01';
@@ -2228,9 +2255,9 @@ test('balanced policy does not auto-match a duplicate group when counts differ',
   assert.equal(view.summary.matched||0,0);assert.equal(view.rows.filter(x=>x.status==='missing_in_app').length+view.rows.filter(x=>x.status==='possible_match').length,2);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('bank reconciliation provides a searchable selectable ledger-entry picker',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/id="brAppSearch"[^>]+Search by amount, expense\/payment reference, vendor, narration or date/);assert.match(html,/id="brAppCandidates"/);assert.match(html,/toggleBankAppCandidate/);assert.match(html,/selected · /);assert.match(html,/Difference /);});
+test('bank reconciliation provides a searchable selectable ledger-entry picker',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/id="brAppSearch"[^>]+Search by amount, expense\/payment reference, vendor, narration or date/);assert.match(html,/id="brAppCandidates"/);assert.match(html,/toggleBankAppCandidate/);assert.match(html,/selected · /);assert.match(html,/Difference /);});
 
-test('bank interest has a valid category and is suggested from statement narration',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.ok(config.ledgers.some(x=>x.name==='Bank Interest Paid'));assert.match(html,/suggestedLedger=.*Bank Interest Paid/);assert.match(html,/\\bint\\\.\?\\s\*c\\b/);});
+test('bank interest has a valid category and is suggested from statement narration',()=>{const config=invoke('GET','/api/expenses/config',{role:'owner'}).body,html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.ok(config.ledgers.some(x=>x.name==='Bank Interest Paid'));assert.match(html,/suggestedLedger=.*Bank Interest Paid/);assert.match(html,/\\bint\\\.\?\\s\*c\\b/);});
 
 test('one ledger movement cannot be selected twice in the same reconciliation',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),baseline=JSON.parse(JSON.stringify(stored)),account='Prashant Axis 3645',id='BRD-NO-DOUBLE-LINK',date='2026-09-01';
@@ -2384,28 +2411,27 @@ test('bank interest received records the party and income category in the receiv
   const made=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'admin',body:{draftId:id,rowId:'bank-0',sourceKind:'external',source:'IndusInd Bank',receiptType:'bank_interest',category:'Bank Interest Received',note:'Quarterly bank interest'}});
   assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.receipt.source,'IndusInd Bank');assert.equal(made.body.receipt.receiptType,'bank_interest');assert.equal(made.body.receipt.category,'Bank Interest Received');
   const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account}}).body.entries.find(x=>x.id===made.body.receipt.id);assert.equal(ledger.credit,10);assert.equal(ledger.category,'Bank Interest Received');assert.match(ledger.description,/Bank interest received · IndusInd Bank · Bank Interest Received/);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/value="bank_interest">Bank interest received/);assert.match(html,/id="biCategory"/);assert.match(html,/category:el\('biCategory'\)\.value/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/value="bank_interest">Bank interest received/);assert.match(html,/id="biCategory"/);assert.match(html,/category:el\('biCategory'\)\.value/);
   fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
 test('salary advance funding links one internal transfer without double-counting the source debit',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),salaryFile=path.join(tempDir,'salary.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),expenseBaseline=JSON.parse(JSON.stringify(stored)),salaryBaseline=fs.existsSync(salaryFile)?fs.readFileSync(salaryFile,'utf8'):null,now=new Date().toISOString(),destination='Arshpreet 1919';
-  const salary={employees:{EMP1:{id:'EMP1',name:'Arshpreet Singh Arora'}},advances:{'ADV-00030':{id:'ADV-00030',empId:'EMP1',employeeName:'Arshpreet Singh Arora',amount:10000,date:'2026-08-31',account:'Axis Bank 3448',reference:'SALARY ADVANCE',recoveries:[],active:true,createdAt:now}},advanceAudit:[]};fs.writeFileSync(salaryFile,JSON.stringify(salary));
+  const expenseFile=path.join(tempDir,'expenses.json'),salaryFile=path.join(tempDir,'salary.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),expenseBaseline=JSON.parse(JSON.stringify(stored)),salaryBaseline=fs.existsSync(salaryFile)?fs.readFileSync(salaryFile,'utf8'):null,now=new Date().toISOString(),destination='Prashant Axis 3645';
+  const salary={employees:{EMP1:{id:'EMP1',name:'Prashant'}},advances:{'ADV-00030':{id:'ADV-00030',empId:'EMP1',employeeName:'Prashant',amount:10000,date:'2026-08-31',account:'Axis Bank 3448',reference:'SALARY ADVANCE',recoveries:[],active:true,createdAt:now}},advanceAudit:[]};fs.writeFileSync(salaryFile,JSON.stringify(salary));
   stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts['BRD-SALARY-ADVANCE-FUNDING']={id:'BRD-SALARY-ADVANCE-FUNDING',account:destination,nature:'SANKI',transactions:[{date:'2026-09-02',description:'INB IFT BHARAT SAMAST GARMENTS',reference:'ADVANCE10000',debit:0,credit:10000,balance:10000}],summary:{from:'2026-09-02',to:'2026-09-02',openingBalance:0,closingBalance:10000,totalDebits:0,totalCredits:10000,validated:true},resolutions:{},temporaryFile:'',createdAt:now,createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
-  const beforeDestinationBalance=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:destination}}).body.balance;
   const candidates=invoke('GET','/api/expenses/salary-advance-transfer-candidates',{role:'owner',query:{amount:'10000',sourceAccount:'Axis Bank 3448'}});assert.equal(candidates.status,200);assert.deepEqual(candidates.body.advances.map(x=>x.id),['ADV-00030']);
   const made=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:'BRD-SALARY-ADVANCE-FUNDING',rowId:'bank-0',sourceKind:'internal',fromNature:'SANKI',fromAccount:'Axis Bank 3448',classification:'salary_advance_funding',salaryAdvanceId:'ADV-00030',note:'Salary advance deposited into employee operating account'}});
   assert.equal(made.status,200,JSON.stringify(made.body));assert.equal(made.body.transfer.salaryAdvanceId,'ADV-00030');assert.equal(made.body.transfer.toAccount,destination);assert.equal(made.body.transfer.date,'2026-09-02');
   const savedSalary=JSON.parse(fs.readFileSync(salaryFile,'utf8')),advance=savedSalary.advances['ADV-00030'];assert.equal(advance.fundingTransferId,made.body.transfer.id);assert.equal(advance.active,true);assert.deepEqual(advance.recoveries,[]);assert.ok(savedSalary.advanceAudit.some(x=>x.action==='FUNDING_TRANSFER_LINKED'&&x.advanceId==='ADV-00030'));
   const source=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Axis Bank 3448'}}).body,dest=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:destination}}).body;
-  assert.equal(source.entries.filter(x=>x.id===made.body.transfer.id&&x.debit===10000).length,1);assert.equal(source.entries.some(x=>x.id==='ADV-00030'),false,'linked advance must not create a second bank debit');assert.equal(dest.entries.some(x=>x.id===made.body.transfer.id),false,'salary advances must not appear in an employee imprest/reimbursement ledger');assert.equal(dest.balance,beforeDestinationBalance,'salary advance funding must not change the employee imprest balance');
+  assert.equal(source.entries.filter(x=>x.id===made.body.transfer.id&&x.debit===10000).length,1);assert.equal(source.entries.some(x=>x.id==='ADV-00030'),false,'linked advance must not create a second bank debit');assert.equal(dest.entries.filter(x=>x.id===made.body.transfer.id&&x.credit===0&&x.actualCredit===10000&&x.kind==='salary_advance_funding').length,1,'destination shows bank evidence without treating the advance as usable company funds');
   const duplicate=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'owner',body:{draftId:'BRD-SALARY-ADVANCE-FUNDING',rowId:'bank-0',sourceKind:'internal',fromNature:'SANKI',fromAccount:'Axis Bank 3448',classification:'salary_advance_funding',salaryAdvanceId:'ADV-00030',note:'duplicate'}});assert.notEqual(duplicate.status,200);
   assert.equal(invoke('POST','/api/expenses/transfers/:id/delete',{role:'owner',params:{id:made.body.transfer.id},body:{reason:'Test reversal'}}).status,200);const unlinked=JSON.parse(fs.readFileSync(salaryFile,'utf8')).advances['ADV-00030'];assert.equal(unlinked.fundingTransferId,undefined,'deleting the transfer must make the advance linkable again');
   fs.writeFileSync(expenseFile,JSON.stringify(expenseBaseline));if(salaryBaseline===null)fs.unlinkSync(salaryFile);else fs.writeFileSync(salaryFile,salaryBaseline);
 });
 
 test('incoming salary-advance selector renders returned candidates without getting stuck',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   const loader=html.match(/function loadSalaryAdvanceCandidates\(\)[\s\S]*?\n\s*function syncBankIncomingClassification/)[0];
   assert.match(loader,/fmt\(a\.amount\)/);
   assert.doesNotMatch(loader,/money\(a\.amount\)/);
@@ -2470,14 +2496,14 @@ test('finalizing one reconciliation period preserves other unfinished periods',(
 });
 
 test('personal bank reconciliation UI uses Owner-only entity accounts and clears finalized actions',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/function bankAccountsForNature\(nature\)/);
   assert.match(html,/id="bs_nature"/);
   assert.match(html,/bankAccountsByNature/);
-  assert.match(html,/encodeURIComponent\(bankNature\)/);
+  assert.match(html,/nature=bankNature/);
   assert.match(html,/selected account is automatic/);
-  assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(bankNature\)/);
-  assert.match(html,/bankDraftId='';el\('bs_msg'\)\.textContent=d\.balanceReconciled\?/);
+  assert.match(html,/bank-statements\?nature='\+encodeURIComponent\(nature\)/);
+  assert.match(html,/bankDraftId='';bankReconView=null;el\('bs_finalize'\)\.style\.display='none';el\('bs_discard'\)\.style\.display='none';host\.innerHTML=ReconciliationStatus\.bankSaved\(d\)/);
   assert.match(html,/Reconciliation history/);
   assert.match(html,/Statement period: /);
   assert.match(html,/Finalized: /);
@@ -2516,9 +2542,9 @@ test('PDF and image OCR statement text uses the same normalized bank rows', () =
     {date:'2026-08-24',debit:720,credit:0,balance:1527},
     {date:'2026-08-25',debit:0,credit:500,balance:2027}
   ]);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/\.pdf,.png,.jpg,.jpeg,.webp/);
-  const telegram=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  const telegram=fs.readFileSync(path.join(__dirname,'modules','telegram.js'),'utf8');
   assert.match(telegram,/callback_data:'am:bank'/);
   assert.match(telegram,/Temporary statement preview ready/);
   assert.match(telegram,/Nothing has been stored in the official bank history/);
@@ -2842,12 +2868,12 @@ test('bank payment can split between a current expense and a paid pre-system ven
 });
 
 test('reconciliation UI offers the pre-system vendor payable split with an audit remark', () => {
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/Split: current expense \+ pre-system vendor payable/);assert.match(html,/opening_vendor_payable_split/);assert.match(html,/Pre-system opening payable/);assert.match(html,/does not enter the current-period P&amp;L/);
 });
 
 test('new accounting UI defaults to current month, uses compact rows and opens proofs in-page', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
   assert.match(html, /function monthStart\(\)/);
   assert.match(html, /id="sd_from" value="'\+monthStart\(\)/);
   assert.match(html, /id="vf_from" value="'\+monthStart\(\)/);
@@ -2863,7 +2889,8 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
   assert.match(html, /matches\('img\.thumb'\)/);
   assert.match(html, /\.claim-card summary \{ padding:3px 7px/);
   assert.doesNotMatch(html, /fmt\(approvedNow\)\+' now/);
-  assert.match(html,/el\(x\)\.disabled=!cfg\.isOwner/);
+  assert.match(html,/\['editAmount','editTotal','editRequested'\]\.forEach\(function\(x\)\{el\(x\)\.disabled=locked\|\|!cfg\.isOwner/);
+  assert.match(html,/el\(x\)\.title=locked\?'Locked for every role: this payment is reconciled\.'/);
   assert.match(html,/Only the Owner can change amounts/);
   assert.match(html,/<label>Paying account<\/label><select id="lf_account">/);
   assert.match(html,/payingAccount='\+encodeURIComponent/);
@@ -2884,10 +2911,10 @@ test('new accounting UI defaults to current month, uses compact rows and opens p
 });
 
 test('credit payables filter includes fully and partially unpaid credit expenses', () => {
-  const full = invoke('POST','/api/expenses',{body:{date:'2026-08-21',vendor:'Credit Full',amount:600,billPhoto:'/api/expenses/photo/c1.jpg',paymentType:'Credit'}});
+  const full = historicalClaim({body:{date:'2026-08-21',vendor:'Credit Full',amount:600,billPhoto:'/api/expenses/photo/c1.jpg',paymentType:'Credit'}});
   invoke('POST','/api/expenses/:id',{params:{id:full.body.expense.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
   invoke('POST','/api/expenses/:id/approve',{params:{id:full.body.expense.id},role:'owner'});
-  const partial = invoke('POST','/api/expenses',{body:{date:'2026-08-21',vendor:'Credit Partial',amount:800,billPhoto:'/api/expenses/photo/c2.jpg',paymentType:'Credit'}});
+  const partial = historicalClaim({body:{date:'2026-08-21',vendor:'Credit Partial',amount:800,billPhoto:'/api/expenses/photo/c2.jpg',paymentType:'Credit'}});
   invoke('POST','/api/expenses/:id',{params:{id:partial.body.expense.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
   invoke('POST','/api/expenses/:id/approve',{params:{id:partial.body.expense.id},role:'owner'});
   invoke('POST','/api/expenses/:id/pay',{params:{id:partial.body.expense.id},body:{amount:200,account:'Counter Cash',paymentProof:'/api/expenses/photo/cpay.jpg'},role:'owner'});
@@ -2898,7 +2925,7 @@ test('credit payables filter includes fully and partially unpaid credit expenses
 });
 
 test('Owner/Admin can edit finalized expenses with a mandatory audit reason', () => {
-  const created=invoke('POST','/api/expenses',{body:{date:'2026-08-21',vendor:'Audit Vendor',amount:300,billPhoto:'/api/expenses/photo/audit.jpg',paymentType:'Cash'}});
+  const created=historicalClaim({body:{date:'2026-08-21',vendor:'Audit Vendor',amount:300,billPhoto:'/api/expenses/photo/audit.jpg',paymentType:'Cash'}});
   invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{ledger:'FOOD EXPENSE'},role:'owner'});
   invoke('POST','/api/expenses/:id/approve',{params:{id:created.body.expense.id},role:'owner'});
   const blocked=invoke('POST','/api/expenses/:id',{params:{id:created.body.expense.id},body:{vendor:'Corrected Audit Vendor'},role:'owner'});
@@ -2987,6 +3014,7 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   const clearing=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Paytm Settlement Clearing'},role:'owner'}).body.entries;
   const cashLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Counter Cash'},role:'owner'}).body.entries;
   const websiteLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Tiana Traders IndusInd 0437'},role:'owner'}).body.entries;
+  const gokwikLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'GoKwik Settlement Clearing'},role:'owner'}).body.entries;
   const velocityLedger=invoke('GET','/api/expenses/account-ledger',{query:{nature:'SANKI',account:'Velocity'},role:'owner'}).body.entries;
   assert.equal(axis.some(x=>x.id==='SHOPIFY/paytm'),false);
   assert.equal(axis.some(x=>x.id==='SHOPIFY/direct'||x.id==='SHOPIFY/manualPos'),false);
@@ -3012,7 +3040,8 @@ test('Shopify Paytm and non-cash POS sales enter clearing before payout, while o
   assert.equal(cashLedger.find(x=>x.orderId==='partiallyPaidCash').credit,1100,'a partially paid order posts only the successful cash payment, not its unpaid balance');
   assert.equal(cashLedger.find(x=>x.orderId==='staffCollectedCod').credit,10494,'website COD manually collected by staff posts to Counter Cash');
   assert.equal(velocityLedger.some(x=>x.orderId==='staffCollectedCod'),false,'staff-collected COD is not a Velocity receivable');
-  assert.equal(websiteLedger.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000,'website receipts route to Tiana Traders IndusInd 0437');
+  assert.equal(websiteLedger.some(x=>x.id==='SHOPIFY/unlabeled'),false,'website receipts must not directly credit IndusInd 0437');
+  assert.equal(gokwikLedger.find(x=>x.id==='SHOPIFY/unlabeled').credit,7000,'website receipts enter GoKwik clearing before the net settlement');
   assert.equal(velocityLedger.find(x=>x.id==='SHOPIFY/codWebsite').credit,11000,'COD sales accrue in Velocity instead of Counter Cash or a bank account');
   assert.equal(cashLedger.some(x=>x.id==='SHOPIFY/codWebsite'),false,'Cash on Delivery is not counter cash');
   const config=invoke('GET','/api/expenses/config',{role:'owner'}).body;
@@ -3078,7 +3107,7 @@ test('bank-charge reconciliation adjustments become visible spending without dou
   assert.equal(persisted.chargeAmount,539.64);
   assert.equal(persisted.grossAmount,15295);
   assert.equal(JSON.parse(fs.readFileSync(expenseStorePath,'utf8')).reconciliationExpenses.find(x=>x.settlementId==='PTM-LEGACY-NOTE').category,'PAYTM CHARGES');
-  const source=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const source=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(source,/Connected sales:/);
   assert.match(source,/Hidden \/ unknown charges/);
 });
@@ -3096,7 +3125,7 @@ test('Paytm clearing starts on 22 August and shows settlement and charges separa
   fs.writeFileSync(path.join(tempDir,'orders.json'),JSON.stringify({orders:{}}));
   const legacyEntries=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SANKI',account:'Paytm Settlement Clearing',from:'2026-08-21',to:'2026-08-22'}}).body.entries,legacyReceipt=legacyEntries.find(x=>x.kind==='paytm_customer_receipts');
   assert.equal(legacyReceipt,undefined);assert.equal(legacyEntries.some(x=>x.kind!=='opening'&&x.date<'2026-08-22'),false);
-  const paytmUi=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const paytmUi=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(paytmUi,/detailedStatementCard\.insertAdjacentHTML\('beforebegin','<div id="paytmReconciliationWorkspace"/,'the Paytm reconciliation workspace is placed above the detailed statement');
   assert.doesNotMatch(paytmUi,/paytmWorkspace\.parentNode\.appendChild\(paytmWorkspace\)/,'the old below-ledger Paytm workspace placement is removed');
   fs.writeFileSync(expenseStorePath,JSON.stringify(baseline));
@@ -3132,7 +3161,7 @@ test('Telegram approval and payment keep one expense isolated through its comple
   const lifecycle=(stored.auditLog||[]).filter(x=>x.subjectId===id);
   assert.ok(lifecycle.some(x=>x.action==='APPROVED'&&x.device==='Telegram'));
   assert.ok(lifecycle.some(x=>x.action==='PAYMENT_RECORDED'&&x.device==='Telegram'));
-  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  const telegramSource=fs.readFileSync(path.join(__dirname,'modules','telegram.js'),'utf8');
   assert.match(telegramSource,/callback_data:'ba:approve:'\+id/);
   assert.match(telegramSource,/callback_data:'bp:start:'\+e\.id/);
   assert.match(telegramSource,/msg\.reply_to_message&&msg\.reply_to_message\.message_id/);
@@ -3165,7 +3194,7 @@ test('Telegram approval and payment keep one expense isolated through its comple
   assert.match(telegramSource,/Closest existing categories/);
   assert.match(telegramSource,/PERSONAL screenshots now belong in/);
   assert.match(telegramSource,/Only an authorised PERSONAL user can use this bot/);
-  const expenseSource=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  const expenseSource=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');
   assert.match(expenseSource,/Payment proof is attached below/);
   assert.match(expenseSource,/Amount paid:/);
   assert.match(expenseSource,/telegram\.notifyUserWithPhoto\(username,proof,details,button\)/);
@@ -3184,7 +3213,7 @@ test('Namita Personal bot expenses use separate Namita account and cash ledgers'
   assert.equal(ownerCash.success,true);assert.equal(ownerCash.expense.account,'Namita Cash','an exact chosen cash ledger must not fall back to Gagan Personal Cash');
   const ownerReceipt=createTelegramPersonalReceipt({username:'gaganlambasanki',amount:75,account:'Namita Cash',date:'2026-08-25',source:'Cash returned',proof:'/api/expenses/photo/owner-namita-receipt.jpg',sourceKey:'owner-namita-receipt-1'});
   assert.equal(ownerReceipt.success,true);assert.equal(ownerReceipt.receipt.account,'Namita Cash');
-  const source=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');assert.match(source,/isNamita/);assert.match(source,/Only the Owner can approve or settle PERSONAL expenses/);
+  const source=fs.readFileSync(path.join(__dirname,'modules','telegram.js'),'utf8');assert.match(source,/isNamita/);assert.match(source,/Only the Owner can approve or settle PERSONAL expenses/);
 });
 
 test('Telegram resolves ambiguous Personal bank digits when funding Namita', () => {
@@ -3199,7 +3228,7 @@ test('native Telegram accounting actions reuse API permissions and ledger postin
   assert.equal(receipt.receipt.account,'Prashant Axis 3645');
   const denied=telegramApi('POST','/api/expenses/receipts',prashant,{body:{nature:'SANKI',account:'3645',amount:250,source:'Not allowed',receiptType:'refund',proof:'/api/expenses/photo/tg-receipt.jpg'}});
   assert.equal(denied.status,403);
-  const telegramSource=fs.readFileSync(path.join(__dirname,'..','modules','telegram.js'),'utf8');
+  const telegramSource=fs.readFileSync(path.join(__dirname,'modules','telegram.js'),'utf8');
   assert.match(telegramSource,/NATIVE_ACCOUNT_ACTIONS/);
   assert.match(telegramSource,/callback_data:'am:native-confirm'/);
   assert.match(telegramSource,/callback_data:'am:native-edit'/);
@@ -3282,15 +3311,15 @@ test('Axis Bank 3448 top balance matches its detailed running balance',()=>{
 });
 
 test('screenshot reconciliation rejects OCR-created years and account-sized amounts row by row',()=>{
-  const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
+  const {statementScreenshotRowIsPlausible}=require('./modules/expenses');
   assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:1500,credit:0,balance:75010.5}),true);
   assert.equal(statementScreenshotRowIsPlausible({date:'2001-09-26',debit:2000,credit:0,balance:75010.5}),false);
   assert.equal(statementScreenshotRowIsPlausible({date:'2026-08-28',debit:214607353136,credit:0,balance:75010.5}),false);
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Review note:/);assert.match(html,/msg bad multiline/);
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/Review note:/);assert.match(html,/msg bad multiline/);
 });
 
 test('IndusInd statement screenshots ignore reference digits and infer blank debit/credit columns',()=>{
-  const {statementScreenshotRowIsPlausible}=require('../modules/expenses');
+  const {statementScreenshotRowIsPlausible}=require('./modules/expenses');
   const rows=parseBankStatementText(`2026-08-25  R/KKBKR52026082500 p 200000  281650.4
 750786/KKBK0000958
 /NVIKK BEAUTY
@@ -3350,7 +3379,7 @@ test('only the Owner can set a dated custom opening balance with an audit reason
   const event=stored.auditLog.filter(x=>x.action==='OPENING_BALANCE_CHANGED'&&x.subjectId==='Prashant Axis 3645').at(-1);
   assert.equal(event.note,'Verified from opening statement');
   assert.deepEqual(event.after,{amount:-123.45,effectiveDate:'2026-09-06'});
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/cfg\.isOwner\?'<button class="btn mini ghost" onclick="openOpeningBalance/);
 });
 
@@ -3603,10 +3632,10 @@ test('reviewed pending workspaces are not extended or renumbered',()=>{
   assert.equal(extendPendingDraftThroughFinalizedCoverage(store,draft),false);assert.equal(JSON.stringify(draft),before);
 });
 
-test('account ledger UI displays account and row reconciliation status',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/Reconciled through:/);assert.match(html,/ledgerReconciliationLabel/);assert.match(source,/ledgerReconciliationStatus/);assert.match(source,/✓ Reconciled/);});
-test('owner has an audited reconciled-closing correction for Prashant Axis 3645',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/Set reconciled closing balance/);assert.match(html,/openReconciledClosing/);assert.match(html,/setReconciledClosing/);assert.match(source,/Only the Owner can set a reconciled closing balance/);assert.match(source,/RECONCILED_CLOSING_BALANCE_CHANGED/);assert.match(source,/calculatedBalance:before,targetBalance:target/);assert.match(source,/Owner-adjusted after reconciliation/);});
-test('opening a reconciled bank ledger widens its date filter to the finalized period',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(html,/accountChanged&&d\.lastReconciliation&&d\.lastReconciliation\.from/);assert.match(html,/el\('lg_from'\)\.value=d\.lastReconciliation\.from/);assert.match(source,/from:book\.lastReconciliation\.from\|\|latest&&latest\.from/);});
-test('final reconciliation control stays visible and explains unresolved blockers',()=>{const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/bs_finalize'\)\.style\.display='inline-flex'/);assert.match(html,/Resolve '\+d\.unresolved\+' remaining/);assert.match(html,/Every missing or suggested entry needs a decision/);});
+test('account ledger UI displays account and row reconciliation status',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(html,/Reconciled through:/);assert.match(html,/ledgerReconciliationLabel/);assert.match(source,/ledgerReconciliationStatus/);assert.match(source,/✓ Reconciled/);});
+test('owner has an audited reconciled-closing correction for Prashant Axis 3645',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(html,/Set reconciled closing balance/);assert.match(html,/openReconciledClosing/);assert.match(html,/setReconciledClosing/);assert.match(source,/Only the Owner can set a reconciled closing balance/);assert.match(source,/RECONCILED_CLOSING_BALANCE_CHANGED/);assert.match(source,/calculatedBalance:before,targetBalance:target/);assert.match(source,/Owner-adjusted after reconciliation/);});
+test('initial bank-ledger opening widens to the finalized period without replacing a restored date range',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(html,/accountChanged&&!restoredLedgerRange&&d\.lastReconciliation&&d\.lastReconciliation\.from/);assert.match(html,/el\('lg_from'\)\.value=d\.lastReconciliation\.from/);assert.match(source,/from:book\.lastReconciliation\.from\|\|latest&&latest\.from/);});
+test('final reconciliation control stays visible and explains unresolved blockers',()=>{const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/bs_finalize'\)\.style\.display='inline-flex'/);assert.match(html,/Resolve '\+d\.unresolved\+' remaining/);assert.match(html,/Every missing or suggested entry needs a decision/);});
 
 test('Prashant requests Owner approval before final bank reconciliation is posted',()=>{
   const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8')),account='IndusInd Bank 8181',id='BRD-OWNER-APPROVAL';stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationApprovals={};stored.bankReconciliationDrafts[id]={id,nature:'SANKI',account,transactions:[],summary:{from:'2099-01-01',to:'2099-01-01',openingBalance:0,closingBalance:0,totalDebits:0,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',createdAt:new Date().toISOString(),createdBy:'prashant'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
@@ -3819,7 +3848,7 @@ test('approval recovery rejects changed vendor-advance application targets',()=>
 });
 
 test('a store repair failure cannot hide the persisted financial records', () => {
-  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  const source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');
   assert.match(source,/Could not read expenses\.json:[\s\S]*return blankStore\(\)/);
   assert.match(source,/Store repair failed; serving the original financial records:[\s\S]*return s/);
 });
@@ -3834,7 +3863,7 @@ test('cash refund against a bank sale preserves the original receipt account and
 });
 
 test('expense and transfer proof uploads preserve real upload errors instead of submitting empty proof',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8'),source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');
   assert.match(html,/if\(!d\.success\|\|!d\.url\)throw new Error\(d\.error/);
   assert.match(html,/catch\(function\(error\)\{btn\.disabled=false;setMsg\(error&&error\.message\|\|'Transfer upload failed\.'/);
   assert.match(source,/fileSize: 30 \* 1024 \* 1024/);
@@ -3842,7 +3871,7 @@ test('expense and transfer proof uploads preserve real upload errors instead of 
 });
 
 test('expense proof upload compresses phone photos and reports safe storage error codes',()=>{
-  const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');
+  const source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');
   assert.match(source,/image\.scaleToFit\(max,max\)/);
   assert.match(source,/max=1400/);
   assert.match(source,/image\.quality\(62\)\.getBufferAsync\(Jimp\.MIME_JPEG\)/);
@@ -3851,7 +3880,7 @@ test('expense proof upload compresses phone photos and reports safe storage erro
 });
 
 test('full-volume recovery compresses retained JPEG proofs and sourcing photos in place',()=>{
-  const source=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+  const source=fs.readFileSync(path.join(__dirname,'server.js'),'utf8');
   assert.match(source,/async function recoverExpenseProofStorage\(\)/);
   assert.match(source,/\['expense-proofs',1400,62,90\]/);
   assert.match(source,/\['fresh-candidates',1600,68,150\]/);
@@ -3863,7 +3892,7 @@ test('full-volume recovery compresses retained JPEG proofs and sourcing photos i
 });
 
 test('all date-range reports receive one inclusive Till Date filter',()=>{
-  const helper=fs.readFileSync(path.join(__dirname,'..','public','till-date-filter.js'),'utf8'),sidebar=fs.readFileSync(path.join(__dirname,'..','public','sidebar.js'),'utf8'),dashboard=fs.readFileSync(path.join(__dirname,'..','public','index.html'),'utf8');
+  const helper=fs.readFileSync(path.join(__dirname,'public','till-date-filter.js'),'utf8'),sidebar=fs.readFileSync(path.join(__dirname,'public','sidebar.js'),'utf8'),dashboard=fs.readFileSync(path.join(__dirname,'public','index.html'),'utf8');
   assert.match(helper,/till\.textContent='Till date'/);assert.match(helper,/range\.textContent='Date range'/);assert.match(helper,/from\.disabled=isTill/);assert.match(helper,/from\.value=''/);assert.match(helper,/to\.dispatchEvent\(new Event\('change'/);assert.match(helper,/MutationObserver/);assert.match(sidebar,/till-date-filter\.js/);assert.match(dashboard,/src="\/till-date-filter\.js"/);
 });
 
@@ -3893,7 +3922,7 @@ test('Owner can replace a deleted expense link in finalized reconciliation with 
     assert.equal(corrected.status,200,JSON.stringify(corrected.body));assert.deepEqual(corrected.body.row.linkedRecordIds,['TR-FINAL-30000']);assert.equal(corrected.body.row.corrected,true);assert.equal(corrected.body.row.correctionHistory[0].before.linkedRecordIds[0],'EX-DELETED/PAY-001');
     const saved=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(saved.bankDateOverrides['TR-FINAL-30000'].bankDate,'2026-09-04');assert.ok(saved.auditLog.some(x=>x.action==='FINALIZED_BANK_RECONCILIATION_LINK_CORRECTED'&&x.subjectId===recordId));
     const ledger=invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'PERSONAL',account,from:'2026-09-04',to:'2026-09-04'}}).body.entries.find(x=>x.id==='TR-FINAL-30000');assert.equal(ledger.reconciliation.status,'reconciled');
-    const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');assert.match(html,/Correct link/);assert.match(html,/correct-finalized-link/);assert.match(html,/View correction history/);assert.match(html,/Previous link:/);assert.match(html,/Corrected link:/);assert.match(html,/Changed by/);
+    const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');assert.match(html,/Correct link/);assert.match(html,/correct-finalized-link/);assert.match(html,/View correction history/);assert.match(html,/Previous link:/);assert.match(html,/Corrected link:/);assert.match(html,/Changed by/);
   }finally{fs.writeFileSync(expenseFile,baseline);}
 });
 
@@ -3949,7 +3978,7 @@ test('a stale temporary bank-date marker from an already-undone active draft doe
 });
 
 test('bank reconciliation displays narration from the actual transaction marker',()=>{
-  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   assert.match(html,/function bankNarrationForDisplay\(value\)/);
   assert.match(html,/UPI\|IMPS\|NEFT\|RTGS\|IFT\|INB\|ACH\|NACH\|ATM\|POS\|BIL\|INF\|VMT/);
   assert.match(html,/<b>BANK<\/b> · '\+esc\(bp\.particulars\)/);
@@ -3969,6 +3998,6 @@ test('every Axis account automatically matches fixed transfer charges and posts 
     fs.writeFileSync(expenseFile,JSON.stringify(stored));
     const preview=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}});assert.equal(preview.status,200,JSON.stringify(preview.body));
     const row=preview.body.rows.find(x=>x.bank&&x.app&&x.app.id==='TR-AXIS-FIXED-FEE'),half=preview.body.rows.find(x=>x.bank&&x.app&&x.app.id==='TR-AXIS-HALF-FEE');assert.equal(row.status,'matched');assert.equal(row.axisTransferCharge,true);assert.equal(row.chargeAmount,5.9);assert.equal(half.status,'matched');assert.equal(half.chargeAmount,2.95);assert.equal(preview.body.unresolved,0);
-    const source=fs.readFileSync(path.join(__dirname,'..','modules','expenses.js'),'utf8');assert.match(source,/automaticAxisTransferCharge:true/);assert.match(source,/category:'BANK CHARGES'/);assert.match(source,/amount:-charge\.amount/);
+    const source=fs.readFileSync(path.join(__dirname,'modules','expenses.js'),'utf8');assert.match(source,/automaticAxisTransferCharge:true/);assert.match(source,/category:'BANK CHARGES'/);assert.match(source,/amount:-charge\.amount/);
   }finally{fs.writeFileSync(expenseFile,baseline);}
 });
