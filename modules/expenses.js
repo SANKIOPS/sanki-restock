@@ -53,6 +53,7 @@ const expenseRefundRoutes = require('./expense-refunds-routes');
 const { expenseFinancialLock } = require('./expense-financial-lock');
 const { LINK_TOLERANCE_CENTS, transactionSuffix, isOriginalPaymentOrder, reviewedUnpostedSettlements, matchPayoutBank } = require('./paytm-accounting');
 const { roundingReview, approvedBaseAmount } = require('./paytm-rounding');
+const { returnResolutionView } = require('./paytm-refund-resolutions');
 const paytmLedgerStatus = require('./paytm-ledger-status');
 const { shopifyClient } = require('./shopify-client');
 
@@ -2030,7 +2031,7 @@ function paytmReportView(s) {
   const legacyDrafts=Object.values(s.bankReconciliationDrafts||{}).filter(d=>d.account===PAYTM_CLEARING_ACCOUNT).map(d=>({id:d.id,name:d.originalName||'Legacy bank statement preview',createdAt:d.createdAt,from:d.summary?.from,to:d.summary?.to,rows:(d.transactions||[]).length}));
   const paytmProjection=paytmLedgerStatus.buildProjection(s,roundingSales,{to:indiaBusinessDate()}),sharedStatus=paytmProjection.sharedStatus,statusById=new Map(sharedStatus.settlements.map(x=>[x.settlementId,x]));
 bankMatches.forEach(x=>{x.reconciliationStatus=statusById.get(x.settlementId);if(x.reconciliationStatus.historicalEvidenceLink){x.posted=true;x.postingId=x.reconciliationStatus.historicalEvidenceLink.historicalSettlementId;}x.readyToFinalize=x.reconciliationStatus.code==='ready';x.readyForBulkFinalize=x.reconciliationStatus.code==='ready';x.readyToPost=x.readyToPost&&x.reconciliationStatus.bankLinkReady;});
-  return {transactions,payouts:bankMatches,orderMatches,imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,reportPreviews:paytmPreviewStatuses(s),reconciliationStatus:sharedStatus,paytmCoverage:paytmProjection.coverage,from:PAYTM_START_DATE,through:indiaBusinessDate()};
+  return {transactions,payouts:bankMatches,orderMatches,returnReviews:returnResolutionView(s),imports:(s.paytmReportImports||[]).slice().reverse(),legacyDrafts,reportPreviews:paytmPreviewStatuses(s),reconciliationStatus:sharedStatus,paytmCoverage:paytmProjection.coverage,from:PAYTM_START_DATE,through:indiaBusinessDate()};
 }
 function reconciliationAccountsForNature(s,nature){
   const n=normalizedNature(nature),cards=n==='SANKI'?Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false).map(creditCardName):[];

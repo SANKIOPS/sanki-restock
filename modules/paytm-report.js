@@ -1,4 +1,5 @@
 const XLSX = require('xlsx');
+const { transactionIsRefund } = require('./paytm-refund-resolutions');
 
 const START_DATE = '2026-08-22';
 
@@ -81,11 +82,12 @@ function summarizePayouts(transactions) {
     const key = tx.utr || tx.payoutId;
     if (!key) continue;
     const settlementDate = tx.settledDate || tx.payoutDate;
-    const payout = payouts.get(key) || { payoutId: key, settlementId: key, payoutDate: settlementDate, settledDate: settlementDate, utr: tx.utr, sourcePayoutIds: [], count: 0, customerPaymentCount: 0, nonCustomerCount: 0, gross: 0, customerGross: 0, nonCustomerAmount: 0, commission: 0, platformFee: 0, gst: 0, net: 0, transactionIds: [] };
+    const payout = payouts.get(key) || { payoutId: key, settlementId: key, payoutDate: settlementDate, settledDate: settlementDate, utr: tx.utr, sourcePayoutIds: [], count: 0, customerPaymentCount: 0, nonCustomerCount: 0, refundCount: 0, refundAmount: 0, gross: 0, customerGross: 0, nonCustomerAmount: 0, commission: 0, platformFee: 0, gst: 0, net: 0, transactionIds: [] };
     if (payout.payoutDate && settlementDate && payout.payoutDate !== settlementDate) throw new Error(`Settlement ${key} has conflicting settled dates.`);
     if (tx.payoutId && !payout.sourcePayoutIds.includes(tx.payoutId)) payout.sourcePayoutIds.push(tx.payoutId);
     payout.count++;
-    if (tx.isCustomerPayment === false) { payout.nonCustomerCount++; payout.nonCustomerAmount = Math.round((payout.nonCustomerAmount + tx.amount) * 100) / 100; }
+    if (transactionIsRefund(tx)) { payout.refundCount++; payout.refundAmount = Math.round((payout.refundAmount + tx.amount) * 100) / 100; }
+    else if (tx.isCustomerPayment === false) { payout.nonCustomerCount++; payout.nonCustomerAmount = Math.round((payout.nonCustomerAmount + tx.amount) * 100) / 100; }
     else { payout.customerPaymentCount++; payout.customerGross = Math.round((payout.customerGross + tx.amount) * 100) / 100; }
     if (tx.isCustomerPayment !== false) payout.gross = Math.round((payout.gross + tx.amount) * 100) / 100;
     payout.commission = Math.round((payout.commission + tx.commission) * 100) / 100;

@@ -3,6 +3,11 @@ const path = require('path');
 const { parsePaytmReport, summarizePayouts } = require('./paytm-report');
 const { CLEARING, BANK, summarizeShopifyPayments, autoMatchShopifyNotes, validateOrderLink, validateSettlementReview, validatePayoutPosting, validateHistoricalSettlementAttachment } = require('./paytm-accounting');
 const { applyRoundingReview } = require('./paytm-rounding');
+const { applyReturnResolution, reverseReturnResolution, resolutionForTransaction } = require('./paytm-refund-resolutions');
+
+function returnFinancialDetail(payout) {
+  return { gross: payout.effectiveCustomerGross, customerGross: payout.effectiveCustomerGross, rawCustomerGross: payout.customerGross, returnedReceiptAmount: payout.returnedReceiptAmount || 0, refundAmount: payout.refundAmount || 0 };
+}
 
 function registerPaytmReports(router, deps) {
   const { loadStore, saveStore, audit, canAccess, canClassify, upload, view, today, orders, saleRows, shopifyClient, shopifyStore } = deps;
@@ -140,6 +145,7 @@ function registerPaytmReports(router, deps) {
     const store = loadStore(), body = req.body || {}, id = String(body.transactionId || '').trim();
     const tx = (store.paytmReportTransactions || {})[id], type = String(body.type || ''), party = String(body.party || '').trim(), details = String(body.details || '').trim(), reason = String(body.reason || '').trim(), proof = String(body.proof || '').trim();
     if (!tx) return res.status(404).json({ success: false, error: 'Paytm transaction not found.' });
+    if (resolutionForTransaction(store, id)) return res.status(409).json({ success: false, error: 'This transaction belongs to an audited accidental receipt/refund return.' });
     if ((store.paytmRoundingReviews || {})[id] || (store.receipts || []).some(receipt => receipt.paytmRoundingTransactionId === id)) return res.status(409).json({ success: false, error: 'This payment has an audited rounding receipt. Reverse its rounding treatment before changing the classification.' });
     if (!['manual_sale', 'cash_transfer'].includes(type)) return res.status(400).json({ success: false, error: 'Choose manual sale or cash-to-bank transfer.' });
     if (!party || details.length < 5 || reason.length < 10 || !/^\/api\/expenses\/photo\/[a-zA-Z0-9._-]+$/.test(proof)) return res.status(400).json({ success: false, error: 'Enter the customer/third party, sale or transfer details, a reason of at least 10 characters, and upload proof.' });
@@ -180,6 +186,7 @@ function registerPaytmReports(router, deps) {
   router.post('/api/expenses/paytm-reports/rounding-review', (req, res) => {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {};
+    if (resolutionForTransaction(store, String(body.transactionId || ''))) return res.status(409).json({ success: false, error: 'This transaction belongs to an audited accidental receipt/refund return and cannot receive rounding treatment.' });
     try {
       const result = applyRoundingReview(store, String(body.transactionId || ''), saleRows(store), {
         difference: body.difference, reason: String(body.reason || '').trim(),
@@ -198,6 +205,7 @@ function registerPaytmReports(router, deps) {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || '').trim(), reason = String(body.reason || '').trim(), tx = (store.paytmReportTransactions || {})[transactionId];
     if (!tx) return res.status(404).json({ success: false, error: 'Paytm transaction not found.' });
+    if (resolutionForTransaction(store, transactionId)) return res.status(409).json({ success: false, error: 'The exclusion is preserved by an audited accidental receipt/refund return and cannot be changed.' });
     if ((store.paytmRoundingReviews || {})[transactionId] || (store.receipts || []).some(receipt => receipt.paytmRoundingTransactionId === transactionId)) return res.status(409).json({ success: false, error: 'This payment has an audited rounding receipt. Reverse its rounding treatment before excluding it.' });
     if ((store.paytmPayoutPostings || []).some(x => (x.transactionIds || []).includes(transactionId))) return res.status(400).json({ success: false, error: 'A posted payout transaction cannot be excluded.' });
     if ((store.paytmManualResolutions || {})[transactionId]) return res.status(409).json({ success: false, error: 'Correct the manual sale/cash classification before excluding this payment.' });
@@ -215,12 +223,35 @@ function registerPaytmReports(router, deps) {
     if (deny(req, res)) return;
     const store = loadStore(), body = req.body || {}, transactionId = String(body.transactionId || '').trim(), reason = String(body.reason || '').trim();
     const before = (store.paytmExcludedTransactions || {})[transactionId];
+    if (resolutionForTransaction(store, transactionId)) return res.status(409).json({ success: false, error: 'This excluded receipt belongs to an audited return. Its original exclusion must remain preserved.' });
     if (!before) return res.status(404).json({ success: false, error: 'This transaction is not excluded.' });
     if (reason.length < 10) return res.status(400).json({ success: false, error: 'Enter a reason of at least 10 characters for restoring this payment.' });
     delete store.paytmExcludedTransactions[transactionId];
     audit(store, req, 'PAYTM_TRANSACTION_RESTORED', 'paytm_transaction', transactionId, { nature: 'SANKI', account: CLEARING, before, after: { restoredBy: req.user.username, reason } });
     saveStore(store);
     res.json({ success: true, view: view(store) });
+  });
+  router.post('/api/expenses/paytm-reports/resolve-return', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore();
+    try {
+      const result = applyReturnResolution(store, req.body || {}, { username: req.user.username, at: new Date().toISOString() });
+      if (result.created) {
+        audit(store, req, 'PAYTM_ACCIDENTAL_RECEIPT_RETURN_REVIEWED', 'paytm_transaction', result.resolution.receiptTransactionId, { nature: 'SANKI', account: CLEARING, after: result.resolution, note: 'Confirmed same-settlement accidental receipt returned in full. Resolution metadata only; no sale, expense, transfer or bank posting created. Original exclusion preserved.' });
+        saveStore(store);
+      }
+      res.json({ success: true, ...result, view: view(store) });
+    } catch (error) { res.status(400).json({ success: false, error: error.message }); }
+  });
+  router.post('/api/expenses/paytm-reports/reverse-return', (req, res) => {
+    if (deny(req, res)) return;
+    const store = loadStore();
+    try {
+      const history = reverseReturnResolution(store, req.body || {}, { username: req.user.username, at: new Date().toISOString() });
+      audit(store, req, 'PAYTM_ACCIDENTAL_RECEIPT_RETURN_REVERSED', 'paytm_transaction', history.resolution.receiptTransactionId, { nature: 'SANKI', account: CLEARING, before: history.resolution, after: history, note: 'Unfinalized return review corrected; original exclusion and source evidence preserved. No accounting movement created or removed.' });
+      saveStore(store);
+      res.json({ success: true, history, view: view(store) });
+    } catch (error) { res.status(400).json({ success: false, error: error.message }); }
   });
   router.post('/api/expenses/paytm-reports/finalize-settlement', (req, res) => {
     if (deny(req, res)) return;
@@ -230,7 +261,7 @@ function registerPaytmReports(router, deps) {
       if((store.paytmHistoricalEvidenceLinks||{})[payout.settlementId])throw new Error('This detailed settlement is already attached to finalized historical bank evidence.');
       store.paytmVerifiedSettlements = store.paytmVerifiedSettlements || [];
       if (store.paytmVerifiedSettlements.some(x => x.settlementId === payout.settlementId)) throw new Error('This Paytm settlement is already finalized.');
-const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
+const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), ...returnFinancialDetail(payout), nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
       store.paytmVerifiedSettlements.push(verified);
       audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified });
       saveStore(store);
@@ -247,7 +278,7 @@ const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, 
       if (store.paytmVerifiedSettlements.some(x => x.settlementId === candidate.settlementId) || (store.paytmPayoutPostings || []).some(x => x.settlementId === candidate.settlementId || x.payoutId === candidate.payoutId)) continue;
       try {
         const { payout, linked } = validateSettlementReview(store, candidate.payoutId, saleRows(store));
-        const verified = { id: `PTMV-${Date.now()}-${finalized.length + 1}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
+        const verified = { id: `PTMV-${Date.now()}-${finalized.length + 1}`, settlementId: payout.settlementId, payoutId: payout.payoutId, utr: payout.utr, settledDate: payout.settledDate, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), ...returnFinancialDetail(payout), nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, finalizedBy: req.user.username, finalizedAt: new Date().toISOString() };
         store.paytmVerifiedSettlements.push(verified); finalized.push(verified);
         audit(store, req, 'PAYTM_SETTLEMENT_FINALIZED', 'paytm_settlement', payout.settlementId, { nature: 'SANKI', account: CLEARING, after: verified, note: 'Bulk finalization of all fully matched Paytm settlements' });
       } catch (error) { skipped.push({ settlementId: candidate.settlementId, reason: error.message }); }
@@ -266,7 +297,7 @@ const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, 
     try {
       const { payout, bank, linked, excludedIds, excludedAmount } = validatePayoutPosting(store, payoutId, bankTransactionId, saleRows(store));
       const postedAt = new Date().toISOString();
-      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId: payout.payoutId, settlementId: payout.settlementId, sourcePayoutIds: payout.sourcePayoutIds, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), excludedTransactionIds:excludedIds,excludedAmount,bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, settledDate: payout.settledDate, gross: payout.gross, customerGross: payout.customerGross, nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
+      const posting = { id: `PTMR-POST-${Date.now()}`, payoutId: payout.payoutId, settlementId: payout.settlementId, sourcePayoutIds: payout.sourcePayoutIds, transactionIds: payout.transactionIds, receiptEvidence: receiptReviewEvidence(linked,saleRows(store)), orderIds: linked.map(x => x.orderId).filter(Boolean), orderNumbers: linked.map(x => x.orderNumber).filter(Boolean), manualRecordIds: linked.map(x => x.recordId).filter(Boolean), excludedTransactionIds:excludedIds,excludedAmount,bankAccount: BANK, bankTransactionId, utr: payout.utr, date: bank.date, payoutDate: payout.payoutDate, settledDate: payout.settledDate, ...returnFinancialDetail(payout), nonCustomerAmount: payout.nonCustomerAmount, commission: payout.commission, platformFee: payout.platformFee, gst: payout.gst, net: payout.net, postedBy: req.user.username, postedAt };
       store.paytmPayoutPostings = store.paytmPayoutPostings || [];
       store.paytmPayoutPostings.push(posting);
       store.reconciliationExpenses = store.reconciliationExpenses || [];
@@ -294,8 +325,8 @@ const verified = { id: `PTMV-${Date.now()}`, settlementId: payout.settlementId, 
         const fees=Math.round((payout.commission+payout.platformFee+payout.gst+payout.nonCustomerAmount)*100)/100;
         // Complete only the intentionally empty report detail. The finalized
         // bank net, ID, date, reference and Owner approval remain untouched.
-        Object.assign(legacy,{grossAmount:payout.customerGross,chargeAmount:fees,paytmChargeAmount:fees,hiddenChargeAmount:0,provisional:false,reportDetailCompleted:true,reportDetailCompletedBy:req.user.username,reportDetailCompletedAt:link.at,reason:'Detailed Paytm report completed the original bank-only gross/fee placeholder. '+reason});
-        link.completedPendingDetail={before,gross:payout.customerGross,commission:payout.commission,platformFee:payout.platformFee,gst:payout.gst,vas:payout.nonCustomerAmount,fees,net:payout.net};
+        Object.assign(legacy,{grossAmount:payout.effectiveCustomerGross,chargeAmount:fees,paytmChargeAmount:fees,hiddenChargeAmount:0,provisional:false,reportDetailCompleted:true,reportDetailCompletedBy:req.user.username,reportDetailCompletedAt:link.at,reason:'Detailed Paytm report completed the original bank-only gross/fee placeholder. '+reason});
+        link.completedPendingDetail={before,gross:payout.effectiveCustomerGross,rawCustomerGross:payout.customerGross,returnedReceiptAmount:payout.returnedReceiptAmount,refundAmount:payout.refundAmount,commission:payout.commission,platformFee:payout.platformFee,gst:payout.gst,vas:payout.nonCustomerAmount,fees,net:payout.net};
         if(fees>0){
           const expense={id:'BRE-HIST-'+key,nature:'SANKI',date:payout.settledDate,amount:fees,account:CLEARING,category:'PAYTM CHARGES',type:'running',vendor:'Paytm',particulars:'Verified report charges completing bank-only settlement '+legacy.id+'; '+reason,settlementId:legacy.id,paytmHistoricalSettlementId:legacy.id,bankTransactionId:evidence.bank.id,createdBy:req.user.username,createdAt:link.at};
           store.reconciliationExpenses=store.reconciliationExpenses||[];store.reconciliationExpenses.push(expense);link.completedPendingDetail.expenseId=expense.id;
@@ -369,6 +400,7 @@ function mergeEvidence(old, current) {
   return next;
 }
 function assertEnrichmentSafe(store, old, next) {
+  if (resolutionForTransaction(store, old.transactionId) && JSON.stringify(old) !== JSON.stringify(next)) throw new Error('This imported receipt/refund evidence is locked by an audited return. Review the existing resolution before enriching transaction '+old.transactionId+'.');
   if ((old.isCustomerPayment!==false)===(next.isCustomerPayment!==false)) return;
   const id=old.transactionId,payout=old.utr||old.payoutId;
   if ((store.paytmOrderLinks||{})[id]||(store.paytmManualResolutions||{})[id]||(store.paytmRoundingReviews||{})[id]||(store.paytmHistoricalEvidenceLinks||{})[payout]||
