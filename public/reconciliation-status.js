@@ -5,15 +5,36 @@
   function when(v){if(!v)return '';if(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(String(v)))return String(v)+' IST';var date=new Date(v);return Number.isFinite(date.getTime())?new Intl.DateTimeFormat('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'short',timeStyle:'short',hour12:false}).format(date):String(v);}
   function refreshButton(){return '<button type="button" class="btn mini ghost" data-reconciliation-refresh>Refresh shared status</button>';}
   function notice(title,detail,tone){return '<section class="reconciliation-shared-status" role="status" aria-live="polite"><div class="msg '+(tone||'')+'"><b>'+esc(title)+'</b>'+(detail?'<div>'+detail+'</div>':'')+'</div>'+refreshButton()+'</section>';}
+  function paytmCoverage(c){
+    if(!c)return '<section class="paytm-evidence-coverage" role="status"><div class="msg">Paytm evidence coverage is unavailable. Refresh the shared status; a bank-credit date alone does not confirm the payment report.</div></section>';
+    var pendingBank=Number(c.pendingBankOnlySettlements)||0,pendingReceipts=Number(c.pendingReceipts)||0,pendingSettlements=Number(c.pendingSettlements)||0;
+    var html='<section class="paytm-evidence-coverage" role="status"><h4>Paytm evidence coverage</h4><div class="claim-meta"><span>Imported payment report through <b>'+esc(c.importedPaymentsThrough||'Not yet')+'</b></span><span>Imported report settlements through <b>'+esc(c.importedSettlementsThrough||'Not yet')+'</b></span></div><div class="claim-meta"><span>Payments reconciled through <b>'+esc(c.reportPaymentsThrough||'Not yet')+'</b></span><span>Report settlements verified and bank-posted through <b>'+esc(c.reportSettlementsThrough||'Not yet')+'</b></span></div><div class="hint">These report dates are separate from the bank credits below. Imported evidence is not automatically a completed reconciliation.</div>';
+    html+='<div>Bank settlements seen through <b>'+esc(c.bankSettlementsThrough||'Not yet')+'</b> — bank receipt only; this does not confirm missing Paytm report details.</div>';
+    if(pendingBank||pendingReceipts||pendingSettlements)html+='<div class="msg err">Pending: '+pendingBank+' bank settlement(s) awaiting Paytm report details · '+pendingReceipts+' receipt(s) awaiting verification · '+pendingSettlements+' settlement(s) not fully completed.'+(c.firstPendingSettlementDate?' Earliest pending settlement: '+esc(c.firstPendingSettlementDate)+'.':'')+'</div>';
+    if(c.lastVerified)html+='<div class="hint">Last verified report evidence'+(c.lastVerified.by?' by '+esc(c.lastVerified.by):'')+(c.lastVerified.at?' on '+esc(when(c.lastVerified.at)):'')+'.</div>';
+    if(c.asOf)html+='<div class="hint">Evidence as of '+esc(c.asOf)+'.</div>';
+    return html+'</section>';
+  }
+  function paytmLedgerRow(s){
+    if(!s)return '';
+    var tone=s.code==='posted'?'pos':s.code==='incomplete'?'neg':'muted',html='<div class="paytm-ledger-status '+tone+'" data-paytm-status="'+esc(s.code||'report_pending')+'"><b>'+esc(s.label||'Paytm evidence review pending')+'</b>';
+    (s.reasons||[]).forEach(function(reason){html+='<div>'+esc(reason)+'</div>';});
+    (s.bankReasons||[]).forEach(function(reason){html+='<div>Bank link: '+esc(reason)+'</div>';});
+    if(s.settledDate)html+='<div class="muted">Settlement date: '+esc(s.settledDate)+'</div>';
+    if((s.settlementIds||[]).length)html+='<div class="muted">Settlement evidence: '+s.settlementIds.map(esc).join(', ')+'</div>';
+    if((s.transactionIds||[]).length)html+='<div class="muted">Paytm transaction: '+s.transactionIds.map(esc).join(', ')+'</div>';
+    if(s.finalizedAt||s.finalizedBy)html+='<div class="muted">Evidence verified'+(s.finalizedBy?' by '+esc(s.finalizedBy):'')+(s.finalizedAt?' on '+esc(when(s.finalizedAt)):'')+'</div>';
+    return html+'</div>';
+  }
   function paytm(data){
     var state=data.reconciliationStatus;if(!state)return notice('Paytm status unavailable','Refresh to load the shared saved state.','err');
     var c=state.counts,attempt=state.lastAttempt;
-    var stats=[['Total settlement batches',c.total],['Linked / posted to Axis',c.posted],['Paytm finalized · bank link pending',c.finalized],['Ready to finalize',c.ready],['Incomplete settlements',c.incomplete]];
+    var stats=[['Imported report settlement batches',c.total],['Linked / posted to Axis',c.posted],['Paytm finalized · bank link pending',c.finalized],['Ready to finalize',c.ready],['Incomplete report settlements',c.incomplete]];
     var html='<section id="paytmSharedStatus" class="reconciliation-shared-status" role="status" aria-live="polite"><h3>Shared Paytm reconciliation status</h3><p class="hint">Owner and Admin see the same saved status. Paytm review and linking the Axis bank credit are separate steps. Refreshes never finalize, classify or post anything.</p><div class="stats">'+stats.map(function(x){return '<div class="stat"><div class="k">'+esc(x[0])+'</div><div class="v">'+Number(x[1]||0)+'</div></div>';}).join('')+'</div>'+refreshButton();
     if(attempt)html+='<p class="hint"><b>Last bulk attempt:</b> '+esc(when(attempt.at))+' by '+esc(attempt.by)+' · '+Number(attempt.newlyFinalized||0)+' newly finalized in that attempt · '+Number(attempt.incomplete||0)+' did not pass. This is not the total previously finalized.</p>';
-    html+=paytmPreviews(data.reportPreviews||[]);
+    html+=paytmCoverage(data.paytmCoverage)+paytmPreviews(data.reportPreviews||[]);
     var incomplete=state.incompleteSettlements||[];
-    html+=incomplete.length?'<h4>Why '+incomplete.length+' settlement(s) remain incomplete</h4><div style="overflow:auto"><table class="resp"><thead><tr><th>Settled date / UTR</th><th>Bank net</th><th>Exact finalization reason</th><th>Bank-link status</th></tr></thead><tbody>'+incomplete.map(function(s){return '<tr><td>'+esc(s.settledDate||'Not supplied')+'<div>'+esc(s.utr||s.payoutId)+'</div></td><td>'+money(s.net)+'</td><td>'+s.reasons.map(esc).join('<br>')+(s.blockedTransactions.length?'<details><summary>Payment details ('+s.blockedTransactions.length+')</summary><ul>'+s.blockedTransactions.map(function(t){return '<li>'+esc(t.transactionId)+' — '+esc(t.reason)+'</li>';}).join('')+'</ul></details>':'')+'</td><td>'+(s.bankLinkReady?'Exact Axis credit verified; use its existing bank-link workflow.':s.bankReasons.map(esc).join('<br>'))+'</td></tr>';}).join('')+'</tbody></table></div>':'<p class="msg ok">No incomplete Paytm settlements remain.</p>';
+    html+=incomplete.length?'<h4>Why '+incomplete.length+' settlement(s) remain incomplete</h4><div style="overflow:auto"><table class="resp"><thead><tr><th>Settled date / UTR</th><th>Bank net</th><th>Exact finalization reason</th><th>Bank-link status</th></tr></thead><tbody>'+incomplete.map(function(s){return '<tr><td>'+esc(s.settledDate||'Not supplied')+'<div>'+esc(s.utr||s.payoutId)+'</div></td><td>'+money(s.net)+'</td><td>'+s.reasons.map(esc).join('<br>')+(s.blockedTransactions.length?'<details><summary>Payment details ('+s.blockedTransactions.length+')</summary><ul>'+s.blockedTransactions.map(function(t){return '<li>'+esc(t.transactionId)+' — '+esc(t.reason)+'</li>';}).join('')+'</ul></details>':'')+'</td><td>'+(s.bankLinkReady?'Exact Axis credit verified; use its existing bank-link workflow.':s.bankReasons.map(esc).join('<br>'))+'</td></tr>';}).join('')+'</tbody></table></div>':'<p class="msg ok">No incomplete settlements remain within the imported Paytm report. Bank-only settlements awaiting report details are shown separately above.</p>';
     return html+'</section>';
   }
   function paytmPreviews(previews){
@@ -54,5 +75,5 @@
     var running=false;
     return {run:async function(){if(running||options.isHidden&&options.isHidden()||options.isBusy&&options.isBusy())return false;running=true;try{await options.refresh();return true;}catch(error){if(options.onError)options.onError(error);return false;}finally{running=false;}},isRunning:function(){return running;}};
   }
-  return {paytm:paytm,paytmPreviews:paytmPreviews,paytmRow:paytmRow,bank:bank,bankSaved:bankSaved,cash:cash,cashRequest:cashRequest,card:card,when:when,createRefreshController:createRefreshController};
+  return {paytm:paytm,paytmCoverage:paytmCoverage,paytmLedgerRow:paytmLedgerRow,paytmPreviews:paytmPreviews,paytmRow:paytmRow,bank:bank,bankSaved:bankSaved,cash:cash,cashRequest:cashRequest,card:card,when:when,createRefreshController:createRefreshController};
 });
