@@ -285,7 +285,7 @@ test('owner can bulk classify historical PERSONAL statement rows only for the th
 test('historical PERSONAL bulk controls expose the five credit choices and approved account scope',()=>{
   const html=fs.readFileSync(path.join(__dirname,'public','expenses.html'),'utf8');
   ['Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
-  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.isOwner&&bankNature==='PERSONAL'/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
+  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.canManagePersonalAccounting&&bankNature==='PERSONAL'/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
 });
 
 test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
