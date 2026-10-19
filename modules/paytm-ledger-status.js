@@ -32,9 +32,20 @@ function rowState(code, states = [], reasons = []) {
 function savedSnapshot(record, payout) {
   if (!record || !record.transactionIds || record.transactionIds.length !== payout.transactionIds.length ||
       !payout.transactionIds.every(id => record.transactionIds.includes(id))) throw Error('Saved Paytm finalization no longer identifies these exact report transactions.');
+  // Reviewed accidental returns retain the raw imported gross as evidence but
+  // never turn the returned receipt into business sales or the refund into a
+  // service fee. Match the same effective gross saved by the posting validator.
+  const expected = { ...payout, gross: payout.effectiveCustomerGross ?? payout.gross };
   if (record.utr !== payout.utr || day(record.settledDate || record.date) !== payout.settledDate ||
-      ['net', 'gross', 'commission', 'platformFee', 'gst', 'nonCustomerAmount'].some(key => cents(record[key]) !== cents(payout[key]))) {
+      ['net', 'gross', 'commission', 'platformFee', 'gst', 'nonCustomerAmount'].some(key => cents(record[key]) !== cents(expected[key]))) {
     throw Error('Saved Paytm finalization amounts, deductions, UTR or settled date changed. Review the source evidence.');
+  }
+  if ((cents(payout.returnedReceiptAmount) || cents(payout.refundAmount)) &&
+      (cents(record.rawCustomerGross) !== cents(payout.customerGross) ||
+       cents(record.customerGross) !== cents(payout.effectiveCustomerGross) ||
+       cents(record.returnedReceiptAmount) !== cents(payout.returnedReceiptAmount) ||
+       cents(record.refundAmount) !== cents(payout.refundAmount))) {
+    throw Error('Saved Paytm finalization no longer matches its exact accidental receipt/refund review. Review the source evidence.');
   }
 }
 function confirmedLegacyBank(store, settlement) {
@@ -70,7 +81,7 @@ function buildProjection(store, saleRows, options = {}) {
       reasons: [...saved.reasons], bankReasons: [...saved.bankReasons], transactionIds: [...payout.transactionIds] };
     if (state.code === 'posted' || state.code === 'finalized') {
       try {
-        accounting.validateSettlementReview(store, payout.payoutId, saleRows, { allowExcluded: state.code === 'posted' });
+        const reviewedPayout = accounting.validateSettlementReview(store, payout.payoutId, saleRows, { allowExcluded: state.code === 'posted' }).payout;
         payout.transactionIds.forEach(id => {
           const tx = (store.paytmReportTransactions || {})[id], link = (store.paytmOrderLinks || {})[id] || (store.paytmManualResolutions || {})[id];
           if (tx.isCustomerPayment !== false && !(store.paytmExcludedTransactions || {})[id] && (!link || cents(link.amount) !== cents(tx.amount))) throw Error('A confirmed Paytm allocation no longer equals its original transaction amount.');
@@ -78,7 +89,7 @@ function buildProjection(store, saleRows, options = {}) {
         if (!state.historicalEvidenceLink) {
           const record = (state.code === 'posted' ? store.paytmPayoutPostings : store.paytmVerifiedSettlements || [])
             ?.find(x => x.settlementId === payout.settlementId || x.payoutId === payout.payoutId);
-          savedSnapshot(record, payout);
+          savedSnapshot(record, reviewedPayout);
           if (!(record.postedAt || record.finalizedAt) || !(record.postedBy || record.finalizedBy)) throw Error('Paytm finalization audit evidence is missing.');
           if (state.code === 'posted') {
             const bank = accounting.matchPayoutBank(store, payout);
