@@ -98,6 +98,7 @@ test('Money Trail displays report coverage instead of the generic latest-bank he
   const box = { innerHTML: '' }, elements = { trail: box, cf_from: { value: '' }, cf_to: { value: '2026-10-19' } };
   const context = { selectedNature: 'SANKI', cfg: { isOwner: false }, ReconciliationStatus: ui, el: id => elements[id], api: () => Promise.resolve({ success: true, entries: [], balance: 9474.39, reconciledThrough: '2026-10-18', lastReconciliation: { at: '2026-10-19', by: 'prashant' }, paytmCoverage: coverage() }), reconciliationAccountsForNature: () => ['Paytm Settlement Clearing'], bankAccountsForNature: () => [], fmt: String, fmtBank: String, esc, encodeURIComponent };
   context.window = context;
+  context.reconciliationNatureForAccount = (_account, nature) => nature;
   vm.createContext(context);
   vm.runInContext(expenses.split('\n').find(line => line.includes('window.loadMoneyTrail=function(')), context);
   context.loadMoneyTrail('Paytm Settlement Clearing', 'trail');

@@ -1512,6 +1512,8 @@ test('per-user PERSONAL accounting switch grants and revokes the complete privat
     assert.ok(granted.transferAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL transfers');
   }
   assert.equal(granted.reconciliationAccountsByNature.PERSONAL.includes('IndusInd Bank 7883'),false,'the physical 7883 statement is reconciled once under SAMAST');
+  assert.equal(granted.reconciliationNatureByAccount['IndusInd Bank 7883'],'SAMAST','the PERSONAL ledger routes authorized users to the shared physical statement');
+  assert.deepEqual(invoke('GET','/api/expenses/config',{role:'claimant',username:'shivam'}).body.reconciliationNatureByAccount,{},'claimants must not receive a shared-bank reconciliation route');
   for(const account of ['ICICI Bank 0993','ICICI Bank 0992','Namita 5464'])assert.ok(granted.reconciliationAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL reconciliation');
   for(const account of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'])assert.ok(granted.payingAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL payment choices');
   assert.equal(granted.canManagePersonalAccounting,true);
@@ -2595,6 +2597,7 @@ test('IndusInd 7883 uses one physical reconciliation book and derives each match
     const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
     assert.equal(ownerConfig.reconciliationAccountsByNature.PERSONAL.includes(account),false,'the shared physical account is reconciled once under SAMAST');
     assert.ok(ownerConfig.reconciliationAccountsByNature.SAMAST.includes(account));
+    assert.equal(ownerConfig.reconciliationNatureByAccount[account],'SAMAST','the PERSONAL ledger entry point opens the canonical shared reconciliation workspace');
     assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes(account),'PERSONAL reporting still exposes its side of 7883');
     assert.ok(ownerConfig.payingAccountsByNature.PERSONAL.includes(account),'PERSONAL payments may still be recorded through 7883');
 

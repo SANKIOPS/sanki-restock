@@ -101,6 +101,7 @@ test('detailed account footer excludes opening from selected-period In and Out a
     el: id => nodes[id] || null,
     SankiNavigation: { date: () => '', set() {} },
     bankAccountsForNature: () => [], reconciliationAccountsForNature: () => [],
+    reconciliationNatureForAccount: (_account, nature) => nature,
     ledgerDisplayParts: row => ({ entity: 'SANKI', vendor: 'Test', particulars: row.description }),
     entryDetails: () => '', entryEditButton: () => '', ledgerReconciliationLabel: () => '',
     loadBankStatement() {}, loadCounterCashReconciliation() {},
