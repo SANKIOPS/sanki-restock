@@ -100,16 +100,18 @@ test('carried copies of the same exclusively claimed bank row are not mistaken f
   assert.equal(p.coverage.pendingBankOnlySettlements, 1);
 });
 
-test('an order reduced from 120 to 100 cannot retain two fully posted allocations totaling 120', () => {
+test('an order reduced from 120 to 100 stays pending without invalidating the independently posted bank settlements', () => {
   const f = fixture(), row = sale(f, { amount: 100 });
   posted(f, { id: 'FIRST', amount: 100 });
   posted(f, { id: 'SECOND', amount: 20 });
   const before = JSON.stringify(f), p = projection(f);
   assert.notEqual(receiptState(p, row).code, 'posted', 'the exact 100 submatch cannot hide an additional allocated 20');
-  assert.ok(p.sharedStatus.settlements.every(s => s.code !== 'posted'), 'the whole overallocated order remains under review');
+  assert.ok(p.sharedStatus.settlements.every(s => s.code === 'posted'), 'posted bank receipts remain valid; the current Shopify allocation needs review');
   assert.equal(p.coverage.pendingReceipts, 1);
-  assert.equal(p.coverage.reportPaymentsThrough, '');
-  assert.equal(p.coverage.reportSettlementsThrough, '');
+  assert.equal(p.coverage.reportPaymentsThrough, '2026-10-13', 'the imported report payment itself remains verified');
+  assert.equal(p.coverage.receiptCoverageThrough, '');
+  assert.equal(p.coverage.overallReconciledThrough, '', 'an allocation gap must not become blanket reconciliation');
+  assert.equal(p.coverage.reportSettlementsThrough, '2026-10-14', 'bank settlement verification is separate from the changed receipt allocation');
   assert.equal(JSON.stringify(f), before);
 });
 
@@ -159,4 +161,59 @@ test('an earlier incomplete batch blocks a later good batch from advancing cover
   assert.equal(p.coverage.reportSettlementsThrough, '');
   assert.ok(p.coverage.pendingSettlements >= 1);
   assert.equal(JSON.stringify(f), before);
+});
+
+function companionFixture(source = 'axis_3448_paytm_bank_narration') {
+  const f = fixture(), receipt = sale(f), { posting } = posted(f);
+  const bank = f.store.bankStatements[BANK].transactions[posting.bankTransactionId];
+  const companion = { id: 'PTM-AUTO-EXISTING', date: posting.date, bankAccount: BANK,
+    bankReference: posting.utr, netAmount: posting.net, grossAmount: posting.net,
+    chargeAmount: 0, paytmChargeAmount: 0, hiddenChargeAmount: 0,
+    bankTruthOnly: true, provisional: false, source, orderIds: [], transferIds: [], otherReceipts: [] };
+  const row = { bank: JSON.parse(JSON.stringify(bank)), linkedRecordIds: [companion.id] };
+  f.store.paytmSettlements.push(companion);
+  f.store.bankStatements[BANK].imports.push({ id: 'BST-EXISTING', finalizedAt: '2026-10-15T08:00:00Z',
+    finalizedBy: 'synthetic-owner', reconciliationRows: [row] });
+  return { f, receipt, posting, companion, row };
+}
+for (const source of ['axis_3448_paytm_bank_narration', 'owner_axis_3448_reconciliation_screenshot']) test('posted report recognizes its exact finalized legacy companion: ' + source, () => {
+  const { f, receipt, posting, companion } = companionFixture(source), before = JSON.stringify(f), p = projection(f);
+  assert.equal(receiptState(p, receipt).code, 'posted');
+  assert.equal(settlementState(p, posting.id).code, 'posted');
+  assert.equal(settlementState(p, companion.id).code, 'posted', 'the legacy ID aliases the same verified bank movement');
+  assert.equal(p.sharedStatus.counts.posted, 1);
+  assert.equal(p.coverage.pendingBankOnlySettlements, 0);
+  assert.equal(p.coverage.pendingSettlements, 0);
+  assert.equal(p.coverage.reportPaymentsThrough, '2026-10-13');
+  assert.equal(p.coverage.reportSettlementsThrough, '2026-10-14');
+  assert.equal(JSON.stringify(f), before, 'aliases only project evidence; original records and money are untouched');
+});
+test('original and posted IDs can coexist only as the two proven aliases of one finalized bank credit', () => {
+  const { f, companion, posting, row } = companionFixture();
+  row.linkedRecordIds.push(posting.id);
+  f.store.bankDateOverrides[companion.id] = { bankTransactionId: posting.bankTransactionId, bankDate: posting.date };
+  const p = projection(f);
+  assert.equal(settlementState(p, posting.id).code, 'posted');
+  assert.equal(settlementState(p, companion.id).code, 'posted');
+  assert.equal(p.coverage.pendingSettlements, 0);
+});
+const companionConflicts = {
+  'a third linked ledger ID': x => x.row.linkedRecordIds.push('UNRELATED'),
+  'a separate receipt claim': x => x.f.store.receipts.push({ id: 'UNRELATED', bankTransactionId: x.posting.bankTransactionId }),
+  'a separate date-override claim': x => { x.f.store.bankDateOverrides.UNRELATED = { bankTransactionId: x.posting.bankTransactionId }; },
+  'a second legacy companion': x => x.f.store.paytmSettlements.push({ ...x.companion, id: 'OTHER-LEGACY' }),
+  'a changed legacy bank net': x => { x.companion.netAmount += 1; },
+  'a changed legacy bank date': x => { x.companion.date = '2026-10-15'; },
+  'a changed legacy UTR': x => { x.companion.bankReference = 'OTHER-UTR'; },
+  'unverified non-placeholder gross and fees': x => { x.companion.bankTruthOnly = false; x.companion.grossAmount += 1; x.companion.chargeAmount = 1; },
+  'missing finalized owner evidence': x => { delete x.f.store.bankStatements[BANK].imports[0].finalizedBy; }
+};
+for (const [name, change] of Object.entries(companionConflicts)) test('legacy companion does not bypass ' + name, () => {
+  const x = companionFixture();
+  change(x);
+  const before = JSON.stringify(x.f), p = projection(x.f);
+  assert.notEqual(settlementState(p, x.posting.id).code, 'posted');
+  assert.notEqual(settlementState(p, x.companion.id).code, 'posted');
+  assert.equal(p.coverage.reportSettlementsThrough, '');
+  assert.equal(JSON.stringify(x.f), before);
 });
