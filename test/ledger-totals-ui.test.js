@@ -102,7 +102,7 @@ test('detailed account footer excludes opening from selected-period In and Out a
     SankiNavigation: { date: () => '', set() {} },
     bankAccountsForNature: () => [], reconciliationAccountsForNature: () => [],
     ledgerDisplayParts: row => ({ entity: 'SANKI', vendor: 'Test', particulars: row.description }),
-    entryDetails: () => '', entryEditButton: () => '',
+    entryDetails: () => '', entryEditButton: () => '', ledgerReconciliationLabel: () => '',
     loadBankStatement() {}, loadCounterCashReconciliation() {},
     GoKwikReconciliation: { mount() {} }, renderPaytmReports() {},
     api: () => Promise.resolve({

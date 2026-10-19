@@ -217,3 +217,83 @@ for (const [name, change] of Object.entries(companionConflicts)) test('legacy co
   assert.equal(p.coverage.reportSettlementsThrough, '');
   assert.equal(JSON.stringify(x.f), before);
 });
+
+test('an empty overlapping bank-row observation does not invalidate the original exclusive finalized companion link', () => {
+  const { f, posting, companion, row } = companionFixture();
+  const observation = { bank: { ...row.bank, transactionId: '' }, linkedRecordIds: [] };
+  delete observation.bank.id;
+  f.store.bankStatements[BANK].imports.push({ id: 'BST-LATER-BOUNDARY', finalizedAt: '2026-10-19T09:00:00Z',
+    finalizedBy: 'synthetic-owner', carriedReconciliationRows: [observation] });
+  const before = JSON.stringify(f), p = projection(f);
+  assert.equal(settlementState(p, posting.id).code, 'posted');
+  assert.equal(settlementState(p, companion.id).code, 'posted');
+  assert.equal(p.coverage.pendingSettlements, 0);
+  assert.equal(JSON.stringify(f), before);
+  observation.linkedRecordIds = ['FOREIGN'];
+  assert.notEqual(settlementState(projection(f), posting.id).code, 'posted', 'a positive foreign claim is still a conflict');
+});
+
+test('a stale provisional flag cannot outweigh the actual exclusive finalized Owner bank proof', () => {
+  const { f, posting, companion } = companionFixture();
+  companion.provisional = true;
+  const before = JSON.stringify(f), p = projection(f);
+  assert.equal(settlementState(p, posting.id).code, 'posted');
+  assert.equal(settlementState(p, companion.id).code, 'posted');
+  assert.equal(companion.provisional, true, 'a status read must not repair or clear stored flags');
+  assert.equal(JSON.stringify(f), before);
+});
+
+test('a provisional companion with only empty observations remains unproven and blocked', () => {
+  const { f, posting, companion, row } = companionFixture();
+  companion.provisional = true;
+  row.linkedRecordIds = [];
+  const p = projection(f);
+  assert.notEqual(settlementState(p, posting.id).code, 'posted');
+  assert.notEqual(settlementState(p, companion.id).code, 'posted');
+  assert.equal(p.coverage.reportSettlementsThrough, '');
+});
+
+test('a provisional companion without finalized Owner evidence cannot use a linked ID as approval', () => {
+  const { f, posting, companion } = companionFixture();
+  companion.provisional = true;
+  delete f.store.bankStatements[BANK].imports[0].finalizedBy;
+  assert.notEqual(settlementState(projection(f), posting.id).code, 'posted');
+});
+
+test('bank-row transactionId supports confirmed legacy identity and still rejects a foreign record claim', () => {
+  const f = fixture(), { settlement, row, bank } = legacy(f);
+  row.bank = { ...row.bank, transactionId: bank.id };
+  delete row.bank.id;
+  let p = projection(f);
+  assert.equal(settlementState(p, settlement.id).code, 'bank_confirmed_report_pending');
+  f.store.receipts.push({ id: 'FOREIGN', bankTransactionId: bank.id });
+  p = projection(f);
+  assert.notEqual(settlementState(p, settlement.id).code, 'bank_confirmed_report_pending');
+  assert.equal(p.coverage.pendingBankOnlySettlements, 0);
+});
+
+test('missing bank-row IDs resolve only through one exact UTR, date and net book transaction', () => {
+  const f = fixture(), { settlement, row, bank } = legacy(f);
+  row.bank = { ...row.bank, transactionId: '' };
+  delete row.bank.id;
+  assert.equal(settlementState(projection(f), settlement.id).code, 'bank_confirmed_report_pending');
+  f.store.bankDateOverrides.FOREIGN = { bankTransactionId: bank.id };
+  assert.notEqual(settlementState(projection(f), settlement.id).code, 'bank_confirmed_report_pending');
+  delete f.store.bankDateOverrides.FOREIGN;
+  f.store.bankStatements[BANK].transactions.AMBIGUOUS = { ...bank, id: 'BANK-AMBIGUOUS' };
+  assert.notEqual(settlementState(projection(f), settlement.id).code, 'bank_confirmed_report_pending', 'two exact identities are ambiguous');
+  delete f.store.bankStatements[BANK].transactions.AMBIGUOUS;
+  bank.reference = 'UNRELATED-UTR';
+  assert.notEqual(settlementState(projection(f), settlement.id).code, 'bank_confirmed_report_pending', 'amount/date without the settlement UTR is insufficient');
+});
+
+test('posted bank ownership checks recognize a competing import identified by transactionId instead of id', () => {
+  const f = fixture();
+  sale(f);
+  const { posting } = posted(f), bank = f.store.bankStatements[BANK].transactions[posting.bankTransactionId];
+  const foreignBank = { ...bank, transactionId: bank.id };
+  delete foreignBank.id;
+  f.store.bankStatements[BANK].imports.push({ id: 'BST-FOREIGN', finalizedAt: '2026-10-19T09:00:00Z',
+    finalizedBy: 'synthetic-owner', reconciliationRows: [{ bank: foreignBank, linkedRecordIds: ['FOREIGN'] }] });
+  assert.equal(settlementState(projection(f), posting.id).code, 'incomplete');
+});
