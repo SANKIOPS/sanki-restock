@@ -246,6 +246,13 @@ function accountVisibleToReq(req,account){
   return isOwner(req)||(canManagePersonalAccounting(req)&&personalAccount)||(isPrashant(req)&&PRASHANT_VISIBLE_OWNER_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase()))||!restricted;
 }
 function visibleAccountsForReq(req,accounts){return (accounts||[]).filter(account=>accountVisibleToReq(req,account));}
+function accountBelongsInLedgerBook(nature,account){
+  const n=normalizedNature(nature),name=canonicalAccountName(account),personal=(ENTITY_ACCOUNTS.PERSONAL||[]).some(value=>value.toLowerCase()===name.toLowerCase()),native=(ENTITY_ACCOUNTS[n]||[]).some(value=>value.toLowerCase()===name.toLowerCase());
+  // A PERSONAL account can fund a business expense, but that does not make
+  // the private bank account a business ledger. Its movement remains in the
+  // PERSONAL book and any business-side reimbursement/transfer stays linked.
+  return n==='PERSONAL'||!personal||native;
+}
 function searchRank(fields, query) {
   const q=String(query||'').trim().toLowerCase().replace(/\s+/g,' ');if(!q)return 0;
   const values=fields.map(x=>String(x||'').trim().toLowerCase()).filter(Boolean),words=q.split(' ');
@@ -3937,7 +3944,7 @@ router.get('/api/expenses/balances', (req, res) => {
   // the selected period still exists. It is calculated cumulatively as of To.
   const closing=totalsFor(d=>!to||String(d||'')<=to);
   const openingMap = nature === 'SANKI' ? (s.openingBalances || {}) : (((s.openingBalancesByNature || {})[nature]) || {});
-  const accounts = visibleAccountsForReq(req,ledgerAccountsForNature(s, nature)).map(name => {
+  const accounts = visibleAccountsForReq(req,ledgerAccountsForNature(s, nature)).filter(name=>accountBelongsInLedgerBook(nature,name)).map(name => {
     const opening = num(openingMap[name]);
     const spent = round0(period.paidOut[name] || 0),topups=round0(period.adj[name]||0),transferredIn=round0(period.transferIn[name]||0),transferredOut=round0(period.transferOut[name]||0),received=round0(period.collected[name]||0),excludedBankIn=roundMoney(period.bankTruthIn[name]||0),excludedBankOut=roundMoney(period.bankTruthOut[name]||0);
     const applyBankTruth=!usesCompanyAdjustedBankTruth(nature,name),calculatedBalance=opening+num(closing.adj[name])+num(closing.collected[name])+num(closing.transferIn[name])-num(closing.transferOut[name])-num(closing.paidOut[name])+(applyBankTruth?num(closing.bankTruthIn[name])-num(closing.bankTruthOut[name]):0),statementBalance=isBankLedgerName(name)?recordedAccountBalance(s,nature,name,to):calculatedBalance,holds=(s.restrictedFunds||[]).filter(x=>x.active!==false&&normalizedNature(x.nature)===nature&&x.account===name&&(!to||String(x.effectiveDate||'')<=to)),restrictedAmount=holds.reduce((sum,x)=>sum+num(x.amount),0),periodRestricted=holds.filter(x=>(!from||String(x.effectiveDate||'')>=from)&&(!to||String(x.effectiveDate||'')<=to)).reduce((sum,x)=>sum+num(x.amount),0),closingBalance=statementBalance-restrictedAmount;

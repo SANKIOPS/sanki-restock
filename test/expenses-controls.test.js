@@ -1515,6 +1515,14 @@ test('per-user PERSONAL accounting switch grants and revokes the complete privat
   for(const account of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'])assert.ok(granted.payingAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL payment choices');
   assert.equal(granted.canManagePersonalAccounting,true);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',username:'prashant',permissions,query:{nature:'PERSONAL',account:'ICICI Bank 0992'}}).status,200);
+  const businessBalances=invoke('GET','/api/expenses/balances',{role:'admin',username:'prashant',permissions,query:{nature:'SANKI'}}).body.accounts.map(x=>x.name);
+  const personalBalances=invoke('GET','/api/expenses/balances',{role:'admin',username:'prashant',permissions,query:{nature:'PERSONAL'}}).body.accounts.map(x=>x.name);
+  assert.equal(businessBalances.includes('ICICI Bank 0992'),false,'private 0992 must not leak into Business Ledgers');
+  for(const account of completePersonalBook)assert.ok(personalBalances.includes(account),account+' missing from Personal Ledgers');
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/id="businessLedgersTab">Business Ledgers/);
+  assert.match(html,/id="personalLedgersTab">Personal Ledgers/);
+  assert.match(html,/personalAllowed=!!cfg\.canManagePersonalAccounting/);
 });
 
 test('Prashant records Ashpreet’s proven personal vendor payment without debiting 8181, then reimburses from 8181 once',()=>{
@@ -1938,7 +1946,8 @@ test('expense navigation uses collapsible groups and refunds render on the recei
 
 test('account ledgers render an expandable one-click money trail', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'expenses.html'), 'utf8');
-  assert.match(html, /<h3 style="margin:0 0 4px">Money Trail<\/h3>/);
+  assert.match(html, /id="accountLedgerBookSelector"/);
+  assert.match(html, /personalBook\?'Personal Ledgers':'Business Ledgers'/);
   assert.match(html, /ontoggle="if\(this\.open\)loadMoneyTrail/);
   assert.match(html, /Expenses paid '\+fmt\(expensesPaid\)/);
   assert.match(html, /Transfers out '\+fmt\(transfersOut\)/);
