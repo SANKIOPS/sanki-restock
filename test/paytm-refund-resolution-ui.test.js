@@ -151,6 +151,38 @@ test('a reversible return review correction requires reason and confirmation, pr
   assert.deepEqual(ui.calls[0], { url: '/api/expenses/paytm-reports/reverse-return', body: { receiptTransactionId: 'RECEIPT-123456', reason: 'Verified corrected pairing' } });
 });
 
+test('verified historical attachment replaces contradictory primary bank-link warning but preserves full evidence reasons', () => {
+  const data = fixture(); data.returnReviews.candidates = [];
+  const rawReason = 'Axis credit already linked. Correct the existing bank link first.';
+  data.payouts[0].reconciliationStatus = { code: 'ready', label: 'Ready', reasons: [], bankReasons: [rawReason], historicalCandidate: { historicalSettlementId: 'BANK-EXISTING', completePendingDetail: true, fees: 0 } };
+  const ui = harness(data);
+  const summary = ui.host.innerHTML.match(/<tr\b[^>]*data-pt-summary="true"[^>]*>([\s\S]*?)<\/tr>/)[1];
+  assert.match(summary, /Existing finalized bank entry verified; attach this report without reposting/);
+  assert.match(summary, /Attach verified detail; existing Axis credit unchanged/);
+  assert.ok(!summary.includes(rawReason));
+  assert.ok(ui.host.innerHTML.includes(rawReason), 'full bank validator reason remains in technical evidence');
+  ui.host.querySelector('[data-pt-history-reason]').value = 'Exact original bank evidence verified';
+  ui.host.querySelector('[data-pt-history]').onclick();
+  assert.match(ui.confirmations[0].message, /No charge or new bank posting will be created/);
+  assert.doesNotMatch(ui.confirmations[0].message, /Actual charges ₹0 will be recorded/);
+  assert.equal(ui.calls.length, 0);
+  delete data.payouts[0].reconciliationStatus.historicalCandidate;
+  const blocked = harness(data);
+  const blockedSummary = blocked.host.innerHTML.match(/<tr\b[^>]*data-pt-summary="true"[^>]*>([\s\S]*?)<\/tr>/)[1];
+  assert.ok(blockedSummary.includes(rawReason), 'a genuine conflicting bank claim remains visible when no verified attachment exists');
+});
+
+test('positive historical fees retain the existing one-time charge confirmation', () => {
+  const data = fixture(); data.returnReviews.candidates = [];
+  data.payouts[0].reconciliationStatus = { code: 'ready', label: 'Ready', reasons: [], bankReasons: [], historicalCandidate: { historicalSettlementId: 'BANK-EXISTING', completePendingDetail: true, fees: 12.5 } };
+  const ui = harness(data);
+  ui.host.querySelector('[data-pt-history-reason]').value = 'Exact original bank evidence verified';
+  ui.host.querySelector('[data-pt-history]').onclick();
+  assert.match(ui.confirmations[0].message, /Actual charges ₹12.5 will be recorded once in Paytm Clearing/);
+  assert.match(ui.confirmations[0].message, /existing finalized Axis bank credit will not change/);
+  assert.equal(ui.calls.length, 0);
+});
+
 test('manual classification remains Owner-only and rounding / legacy linking handlers remain available under details', () => {
   const data = fixture(); data.orderMatches[0].exclusion = null; data.returnReviews.candidates = [];
   const owner = harness(data), admin = harness(data, { owner: false });
