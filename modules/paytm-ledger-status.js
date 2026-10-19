@@ -48,10 +48,22 @@ function savedSnapshot(record, payout) {
     throw Error('Saved Paytm finalization no longer matches its exact accidental receipt/refund review. Review the source evidence.');
   }
 }
+function bankRowIdentity(book, bank, reference) {
+  if (!bank) return '';
+  const explicit = String(bank.id || bank.transactionId || '');
+  if (explicit) return explicit;
+  const expected = String(reference || '').trim().toUpperCase();
+  if (!expected || !`${bank.reference || ''} ${bank.description || ''}`.toUpperCase().includes(expected)) return '';
+  const candidates = Object.values(book.transactions || {}).filter(row =>
+    day(row.date) === day(bank.date) && cents(row.credit) === cents(bank.credit) && cents(row.debit) === cents(bank.debit) &&
+    `${row.reference || ''} ${row.description || ''}`.toUpperCase().includes(expected));
+  const identities = unique(candidates.map(row => String(row.id || row.transactionId || '')));
+  return identities.length === 1 ? identities[0] : '';
+}
 function postedLegacyCompanion(store, posting, payout, bank) {
   const reference = value => String(value || '').trim().toUpperCase();
   const expectedReference = reference(payout.utr), expectedFees = cents(payout.commission) + cents(payout.platformFee) + cents(payout.gst) + cents(payout.nonCustomerAmount);
-  const candidates = (store.paytmSettlements || []).filter(legacy => !legacy.accountingExcluded && !legacy.provisional &&
+  const candidates = (store.paytmSettlements || []).filter(legacy => !legacy.accountingExcluded &&
     legacy.id && legacy.bankAccount === accounting.BANK && day(legacy.date) === day(bank.date) &&
     reference(legacy.utr || legacy.bankReference || legacy.reference) === expectedReference &&
     cents(legacy.netAmount) === cents(payout.net) && (!legacy.bankTransactionId || legacy.bankTransactionId === bank.id));
@@ -71,9 +83,14 @@ function postedLegacyCompanion(store, posting, payout, bank) {
     .map(row => ({ record, row })));
   // Old and detailed IDs may name the same one bank credit. Recognize that
   // alias only from the original finalized row, never by amount/date alone.
-  if (!matches.length || !matches.some(({ row }) => (row.linkedRecordIds || []).includes(legacy.id)) ||
-      matches.some(({ record, row }) => !record.finalizedAt || !record.finalizedBy ||
-        !(row.linkedRecordIds || []).length || (row.linkedRecordIds || []).some(id => !allowed.has(id)))) return null;
+  // An overlapping statement can carry an unlinked observation of the same
+  // credit. It is not another claim, and cannot supply the required proof.
+  // The original finalized Owner-backed legacy link is still mandatory even
+  // if an old provisional flag was never cleared; this read does not repair it.
+  const claimed = matches.filter(({ row }) => (row.linkedRecordIds || []).length);
+  if (!claimed.length || !claimed.some(({ record, row }) => record.finalizedAt && record.finalizedBy && (row.linkedRecordIds || []).includes(legacy.id)) ||
+      claimed.some(({ record, row }) => !record.finalizedAt || !record.finalizedBy ||
+        (row.linkedRecordIds || []).some(id => !allowed.has(id)))) return null;
   return legacy;
 }
 function confirmedLegacyBank(store, settlement) {
@@ -84,14 +101,14 @@ function confirmedLegacyBank(store, settlement) {
       .filter(row => (row.linkedRecordIds || []).length === 1 && row.linkedRecordIds[0] === settlement.id && row.bank &&
         day(row.bank.date) === day(settlement.date) && cents(row.bank.credit) === cents(settlement.netAmount) &&
         cents(row.bank.debit) === 0 && String(row.bank.reference || row.bank.description || '').includes(settlement.bankReference))
-      .map(row => ({ bankTransactionId: row.bank.id, bankDate: day(row.bank.date), bankReference: settlement.bankReference,
-        reconciliationId: record.id, finalizedAt: record.finalizedAt, finalizedBy: record.finalizedBy })));
+      .map(row => ({ bankTransactionId: bankRowIdentity(book, row.bank, settlement.bankReference), bankDate: day(row.bank.date), bankReference: settlement.bankReference,
+        reconciliationId: record.id, finalizedAt: record.finalizedAt, finalizedBy: record.finalizedBy })).filter(link => link.bankTransactionId));
   // Repeated carried copies of the same finalized evidence are not new claims.
   const identities = unique(links.map(x => [x.bankDate, x.bankReference, cents(settlement.netAmount)].join('|')));
   if (identities.length !== 1 || !links.length) return null;
   const bankIds = unique(links.map(x => x.bankTransactionId));
   const conflictingImport = (book.imports || []).some(record => [].concat(record.reconciliationRows || [], record.carriedReconciliationRows || [])
-    .some(row => bankIds.includes(row.bank?.id) && (row.linkedRecordIds || []).some(id => id !== settlement.id)));
+    .some(row => bankIds.includes(bankRowIdentity(book, row.bank, settlement.bankReference)) && (row.linkedRecordIds || []).some(id => id !== settlement.id)));
   const conflictingRecord = [...(store.adjustments || []), ...(store.receipts || []), ...(store.bankTruthMovements || []), ...(store.paytmPayoutPostings || [])]
     .some(record => !record.accountingExcluded && bankIds.includes(record.bankTransactionId));
   const conflictingOverride = Object.entries(store.bankDateOverrides || {}).some(([id, override]) => id !== settlement.id && bankIds.includes(override.bankTransactionId));
@@ -131,7 +148,7 @@ function buildProjection(store, saleRows, options = {}) {
                   String(x.utr || x.bankReference || x.reference || '').trim().toUpperCase() === String(payout.utr || '').trim().toUpperCase() && day(x.date) === day(record.date))) ||
                 [...(store.adjustments || []), ...(store.receipts || []), ...(store.bankTruthMovements || [])].some(x => !x.accountingExcluded && x.bankTransactionId === id) ||
                 Object.entries(store.bankDateOverrides || {}).some(([key, x]) => !allowedIds.has(key) && x.bankTransactionId === id) ||
-                (book.imports || []).some(x => [].concat(x.reconciliationRows || [], x.carriedReconciliationRows || []).some(row => row.bank?.id === id && (row.linkedRecordIds || []).some(key => !allowedIds.has(key))))) {
+                (book.imports || []).some(x => [].concat(x.reconciliationRows || [], x.carriedReconciliationRows || []).some(row => bankRowIdentity(book, row.bank, payout.utr) === id && (row.linkedRecordIds || []).some(key => !allowedIds.has(key))))) {
               throw Error('Another ledger record claims this Paytm bank credit. Review its exclusive reconciliation ownership.');
             }
             if (companion) legacyStateAliases.set(companion.id, state);
