@@ -9,6 +9,7 @@ const esc=x=>String(x??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 function harness(response){
  const header={innerHTML:''},activity={textContent:''},card={querySelector:s=>s==='.claim-amount'?header:activity},nodes={trail:{innerHTML:'',closest:()=>card},cf_from:{value:'2026-08-22'},cf_to:{value:'2026-10-18'}},calls=[];
  const context={window:{},el:id=>nodes[id]||(nodes[id]={innerHTML:'',closest:()=>card,addEventListener(){}}),selectedNature:'SANKI',cfg:{isOwner:false,isAdmin:true},esc,fmt:x=>'₹'+Number(x||0),fmtBank:x=>'₹'+Number(x||0).toFixed(2),bankAccountsForNature:()=>[],reconciliationAccountsForNature:()=>[],ledgerDisplayParts:()=>({entity:'SANKI',vendor:'Vendor',particulars:'Recorded payment'}),entryDetails:()=>'',entryEditButton:()=>'<button>Edit recorded</button>',ledgerReconciliationLabel:()=>'',api:(url,options)=>{calls.push({url,options});return typeof response==='function'?response(url):Promise.resolve(response);}};
+ context.reconciliationNatureForAccount=(_account,nature)=>nature;
  vm.createContext(context);vm.runInContext(script,context);context.GoKwikReconciliation=context.window.GoKwikReconciliation;vm.runInContext(trail+cash,context);return {context,nodes,calls,header,activity};
 }
 test('expanded GoKwik card uses the same read-only common statement as detailed ledger',async()=>{
