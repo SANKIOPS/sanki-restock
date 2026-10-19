@@ -1907,7 +1907,8 @@ test('expense navigation uses collapsible groups and refunds render on the recei
 
 test('account ledgers render an expandable one-click money trail', () => {
   const html = fs.readFileSync(path.join(__dirname,'public', 'expenses.html'), 'utf8');
-  assert.match(html, /<h3 style="margin:0 0 4px">Money Trail<\/h3>/);
+  assert.match(html, /id="accountLedgerBookSelector"/);
+  assert.match(html, /personalBook\?'Personal Ledgers':'Business Ledgers'/);
   assert.match(html, /ontoggle="if\(this\.open\)loadMoneyTrail/);
   assert.match(html, /Expenses paid '\+fmt\(expensesPaid\)/);
   assert.match(html, /Transfers out '\+fmt\(transfersOut\)/);
