@@ -621,7 +621,7 @@ test('pending advance requests can be corrected without posting money and every 
     [{...valid,date:'2097-02-30'},400,'real date'],
     [{...valid,recoveryStartMonth:'2097-13'},400,'real recovery month'],
     [{...valid,account:'Tiana 0425'},400,'authorized account'],
-    [{...valid,payingNature:'PERSONAL',account:'ICICI Bank 0992'},400,'paying nature']
+    [{...valid,payingNature:'PERSONAL',account:'Namita Cash'},400,'unauthorized personal account']
   ];
   invalid.forEach(([body,status,label])=>{
     const refused=invoke('PATCH','/api/salary/advance-requests/:id',{params:{id},role:'admin',username:'request-admin',body});
@@ -637,6 +637,28 @@ test('pending advance requests can be corrected without posting money and every 
   assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id},role:'owner'}).status,200);
   const afterApproval=invoke('PATCH','/api/salary/advance-requests/:id',{params:{id},role:'admin',username:'request-admin',body:valid});
   assert.equal(afterApproval.status,409);assert.match(afterApproval.body.error,/pending/i);
+});
+
+test('admin can move an unposted pending request between company and authorized Sir PSNL accounts',()=>{
+  const employee=invoke('POST','/api/salary/employees',{body:{name:'Pending PSNL Switch Employee',salary:18500}}).body.employee;
+  const created=invoke('POST','/api/salary/advances',{role:'admin',username:'request-admin',body:{empId:employee.id,amount:1750,date:'2097-05-10',account:'Axis Bank 3448',payingNature:'SANKI',recoveryStartMonth:'2097-06',reference:'PENDING-PSNL-SWITCH',proofs:['/stale-company-proof.jpg']}});
+  assert.equal(created.status,200);const id=created.body.request.id,file=path.join(tempDir,'salary.json');
+  const edited=invoke('PATCH','/api/salary/advance-requests/:id',{params:{id},role:'admin',username:'request-admin',body:{empId:employee.id,amount:1750,date:'2097-05-10',account:'ICICI Bank 0993',payingNature:'PERSONAL',recoveryStartMonth:'2097-06',reference:'PENDING-PSNL-SWITCH',note:'Sir will pay personally',reason:'Correct the proposed source to Sir personal account'}});
+  assert.equal(edited.status,200);assert.equal(edited.body.request.status,'Pending approval');assert.equal(edited.body.request.account,'ICICI Bank 0993');assert.equal(edited.body.request.payingNature,'PERSONAL');assert.equal(edited.body.proofInvalidated,true);assert.deepEqual(edited.body.request.proofs,[]);
+  const saved=JSON.parse(fs.readFileSync(file,'utf8')),audit=saved.advanceRequestAudit.at(-1);assert.equal(audit.action,'EDITED');assert.equal(audit.details.before.payingNature,'SANKI');assert.equal(audit.details.after.payingNature,'PERSONAL');assert.equal(audit.details.proofInvalidated,true);
+  assert.equal(Object.keys(saved.advances||{}).some(key=>key===id),false,'editing the unposted request creates no advance');assert.equal(invoke('GET','/api/salary/ledgers',{role:'admin'}).body.ledgers.some(l=>l.entries.some(e=>e.id===id)),false,'editing the request posts no ledger entry');
+  const rejected=invoke('PATCH','/api/salary/advance-requests/:id',{params:{id},role:'admin',username:'request-admin',body:{empId:employee.id,amount:1750,date:'2097-05-10',account:'Namita Cash',payingNature:'PERSONAL',recoveryStartMonth:'2097-06',reference:'PENDING-PSNL-SWITCH',reason:'Try unrelated personal account'}});
+  assert.equal(rejected.status,400);assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).advanceRequests[id].account,'ICICI Bank 0993');
+  assert.equal(invoke('POST','/api/salary/advance-requests/:id/approve',{params:{id},role:'owner'}).status,200);
+  const posted=invoke('POST','/api/salary/advance-requests/:id/post',{params:{id},role:'admin',username:'request-admin',body:{payoutDate:'2097-05-10',proofs:['/fresh-personal-proof.jpg']}});
+  assert.equal(posted.status,200);assert.equal(posted.body.advance.payingNature,'PERSONAL');assert.equal(posted.body.advance.account,'ICICI Bank 0993');
+  const expenses=require('../modules/expenses'),owner={username:'gaganlambasanki',roles:['owner']};
+  const personalLedger=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'PERSONAL',account:'ICICI Bank 0993'}});assert.equal(personalLedger.entries.filter(x=>x.id===posted.body.advance.id&&x.debit===1750).length,1,'posting uses the final personal ledger exactly once');
+  const originalLedger=expenses.telegramApi('GET','/api/expenses/account-ledger',owner,{query:{nature:'SANKI',account:'Axis Bank 3448'}});assert.equal(originalLedger.entries.filter(x=>x.id===posted.body.advance.id).length,0,'the original company source receives no debit');
+
+  const personalRequest=invoke('POST','/api/salary/advances',{role:'admin',username:'request-admin',body:{empId:employee.id,amount:900,date:'2097-05-12',account:'Gagan Personal Cash',payingNature:'PERSONAL',recoveryStartMonth:'2097-06',reference:'PENDING-COMPANY-SWITCH'}});
+  assert.equal(personalRequest.status,200);const companyEdit=invoke('PATCH','/api/salary/advance-requests/:id',{params:{id:personalRequest.body.request.id},role:'admin',username:'request-admin',body:{empId:employee.id,amount:900,date:'2097-05-12',account:'IndusInd Bank 8181',payingNature:'SANKI',recoveryStartMonth:'2097-06',reference:'PENDING-COMPANY-SWITCH',reason:'Correct the proposed source to company bank'}});
+  assert.equal(companyEdit.status,200);assert.equal(companyEdit.body.request.payingNature,'SANKI');assert.equal(companyEdit.body.request.account,'IndusInd Bank 8181');
 });
 
 test('an edited recovery month survives approval and proof-backed posting',()=>{
