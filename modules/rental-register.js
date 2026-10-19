@@ -32,7 +32,7 @@ function state(s){const r=s.rentals||{tenancies:seeds()};for(const k of ['invoic
 function depositBalance(r,tid){return money(Number((r.tenancies.find(t=>t.id===tid)||{}).securityOpening||0)+sum(active(r.deposits).filter(x=>x.tenancyId===tid))-sum(active(r.allocations).filter(x=>x.tenancyId===tid&&x.kind==='security')));}
 function outstanding(r,i){return i.voidedAt?0:money(i.bankDue-sum(active(r.allocations).filter(x=>x.invoiceId===i.id)));}
 function creditBalance(r,c){return c.reversedAt?0:money(c.amount-sum(active(r.allocations).filter(x=>x.creditId===c.id)));}
-function receiptUsage(r,rid){return money(sum(active(r.allocations).filter(x=>x.kind==='receipt'&&x.receiptId===rid))+sum(active(r.credits).filter(x=>x.receiptId===rid)));}
+function receiptUsage(r,rid){return money(sum(active(r.allocations).filter(x=>x.kind==='receipt'&&x.receiptId===rid))+sum(active(r.credits).filter(x=>x.receiptId===rid))+sum(active(r.deposits).filter(x=>x.receiptId===rid)));}
 function securityTimelineValid(r,tid){
   const events=[...active(r.deposits).filter(x=>x.tenancyId===tid).map(x=>({date:x.date,amount:x.amount})),...active(r.allocations).filter(x=>x.tenancyId===tid&&x.kind==='security').map(x=>({date:x.date,amount:-x.amount}))];
   const tenant=r.tenancies.find(t=>t.id===tid);if(tenant&&tenant.securityOpening!=null)events.push({date:tenant.securityOpeningDate,amount:tenant.securityOpening});
