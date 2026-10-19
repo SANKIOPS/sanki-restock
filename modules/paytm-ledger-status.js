@@ -48,6 +48,34 @@ function savedSnapshot(record, payout) {
     throw Error('Saved Paytm finalization no longer matches its exact accidental receipt/refund review. Review the source evidence.');
   }
 }
+function postedLegacyCompanion(store, posting, payout, bank) {
+  const reference = value => String(value || '').trim().toUpperCase();
+  const expectedReference = reference(payout.utr), expectedFees = cents(payout.commission) + cents(payout.platformFee) + cents(payout.gst) + cents(payout.nonCustomerAmount);
+  const candidates = (store.paytmSettlements || []).filter(legacy => !legacy.accountingExcluded && !legacy.provisional &&
+    legacy.id && legacy.bankAccount === accounting.BANK && day(legacy.date) === day(bank.date) &&
+    reference(legacy.utr || legacy.bankReference || legacy.reference) === expectedReference &&
+    cents(legacy.netAmount) === cents(payout.net) && (!legacy.bankTransactionId || legacy.bankTransactionId === bank.id));
+  if (!expectedReference || candidates.length !== 1) return null;
+  const legacy = candidates[0];
+  const pendingDetail = legacy.bankTruthOnly === true &&
+    ['axis_3448_paytm_bank_narration', 'owner_axis_3448_reconciliation_screenshot'].includes(legacy.source) &&
+    cents(legacy.grossAmount) === cents(legacy.netAmount) && cents(legacy.chargeAmount) === 0 &&
+    cents(legacy.paytmChargeAmount) === 0 && cents(legacy.hiddenChargeAmount) === 0 &&
+    !(legacy.orderIds || []).length && !(legacy.transferIds || []).length && !(legacy.otherReceipts || []).length;
+  const completeDetail = cents(legacy.grossAmount) === cents(payout.customerGross) && cents(legacy.chargeAmount) === expectedFees;
+  if (!pendingDetail && !completeDetail) return null;
+  const book = (store.bankStatements || {})[accounting.BANK] || {}, allowed = new Set([legacy.id, posting.id]);
+  const matches = (book.imports || []).flatMap(record => [].concat(record.reconciliationRows || [], record.carriedReconciliationRows || [])
+    .filter(row => row.bank && day(row.bank.date) === day(bank.date) && cents(row.bank.credit) === cents(payout.net) &&
+      cents(row.bank.debit) === 0 && `${row.bank.reference || ''} ${row.bank.description || ''}`.toUpperCase().includes(expectedReference))
+    .map(row => ({ record, row })));
+  // Old and detailed IDs may name the same one bank credit. Recognize that
+  // alias only from the original finalized row, never by amount/date alone.
+  if (!matches.length || !matches.some(({ row }) => (row.linkedRecordIds || []).includes(legacy.id)) ||
+      matches.some(({ record, row }) => !record.finalizedAt || !record.finalizedBy ||
+        !(row.linkedRecordIds || []).length || (row.linkedRecordIds || []).some(id => !allowed.has(id)))) return null;
+  return legacy;
+}
 function confirmedLegacyBank(store, settlement) {
   if (!settlement || settlement.provisional || !settlement.id || !settlement.bankReference) return null;
   const book = (store.bankStatements || {})[settlement.bankAccount || accounting.BANK] || {};
@@ -75,7 +103,7 @@ function buildProjection(store, saleRows, options = {}) {
   const asOf = day(options.to), inScope = date => !asOf || day(date) <= asOf;
   const original = accounting.reconciliationStatus(store, saleRows);
   const payouts = summarizePayouts(Object.values(store.paytmReportTransactions || {}));
-  const payoutById = new Map(payouts.map(p => [p.settlementId, p]));
+  const payoutById = new Map(payouts.map(p => [p.settlementId, p])), legacyStateAliases = new Map();
   const states = original.settlements.map(saved => {
     const payout = payoutById.get(saved.settlementId), state = { ...saved,
       reasons: [...saved.reasons], bankReasons: [...saved.bankReasons], transactionIds: [...payout.transactionIds] };
@@ -95,14 +123,18 @@ function buildProjection(store, saleRows, options = {}) {
             const bank = accounting.matchPayoutBank(store, payout);
             if (!bank.bankMatched || bank.bankCandidates[0].id !== record.bankTransactionId ||
                 day(record.date) !== bank.bankCandidates[0].date) throw Error('The posted payout no longer has its unique exact Axis bank credit.');
-            const id = record.bankTransactionId, book = (store.bankStatements || {})[accounting.BANK] || {};
+            const id = record.bankTransactionId, book = (store.bankStatements || {})[accounting.BANK] || {},
+              companion = postedLegacyCompanion(store, record, payout, bank.bankCandidates[0]),
+              allowedIds = new Set([record.id, ...(companion ? [companion.id] : [])]);
             if ((store.paytmPayoutPostings || []).some(x => x !== record && (x.bankTransactionId === id || (x.transactionIds || []).some(t => payout.transactionIds.includes(t)))) ||
-                (store.paytmSettlements || []).some(x => !x.accountingExcluded && (x.bankTransactionId === id || x.bankReference === payout.utr && day(x.date) === day(record.date))) ||
+                (store.paytmSettlements || []).some(x => x !== companion && !x.accountingExcluded && (x.bankTransactionId === id ||
+                  String(x.utr || x.bankReference || x.reference || '').trim().toUpperCase() === String(payout.utr || '').trim().toUpperCase() && day(x.date) === day(record.date))) ||
                 [...(store.adjustments || []), ...(store.receipts || []), ...(store.bankTruthMovements || [])].some(x => !x.accountingExcluded && x.bankTransactionId === id) ||
-                Object.entries(store.bankDateOverrides || {}).some(([key, x]) => key !== record.id && x.bankTransactionId === id) ||
-                (book.imports || []).some(x => [].concat(x.reconciliationRows || [], x.carriedReconciliationRows || []).some(row => row.bank?.id === id && (row.linkedRecordIds || []).some(key => key !== record.id)))) {
+                Object.entries(store.bankDateOverrides || {}).some(([key, x]) => !allowedIds.has(key) && x.bankTransactionId === id) ||
+                (book.imports || []).some(x => [].concat(x.reconciliationRows || [], x.carriedReconciliationRows || []).some(row => row.bank?.id === id && (row.linkedRecordIds || []).some(key => !allowedIds.has(key))))) {
               throw Error('Another ledger record claims this Paytm bank credit. Review its exclusive reconciliation ownership.');
             }
+            if (companion) legacyStateAliases.set(companion.id, state);
             state.bankDate = day(record.date);
           }
         } else state.bankDate = day(payout.settledDate);
@@ -119,6 +151,7 @@ function buildProjection(store, saleRows, options = {}) {
   const transactionStates = new Map();
   states.forEach(s => s.transactionIds.forEach(id => transactionStates.set(id, s)));
   const recordStates = new Map();
+  legacyStateAliases.forEach((state, id) => recordStates.set(id, state));
   for (const key of ['paytmVerifiedSettlements', 'paytmPayoutPostings']) {
     (store[key] || []).forEach(record => {
       const state = stateById.get(record.settlementId) || states.find(s => s.payoutId === record.payoutId);
@@ -141,14 +174,17 @@ function buildProjection(store, saleRows, options = {}) {
     const links = Object.entries(store.paytmOrderLinks || {}).filter(([, link]) => String(link.orderId) === orderId)
       .map(([id, link]) => ({ id, link, tx: (store.paytmReportTransactions || {})[id], state: transactionStates.get(id) }))
       .filter(x => x.tx && inScope(x.tx.date) && !(store.paytmExcludedTransactions || {})[x.id]);
-    let overallocated = false;
-    try { overallocated = links.reduce((sum, x) => sum + cents(approvedBaseAmount(store, x.link)), 0) > rows.reduce((sum, r) => sum + cents(r.amount), 0); }
+    let overallocated = false, allocatedCents = 0;
+    const sourceCents = rows.reduce((sum, r) => sum + cents(r.amount), 0);
+    try {
+      allocatedCents = links.reduce((sum, x) => sum + cents(approvedBaseAmount(store, x.link)), 0);
+      overallocated = allocatedCents > sourceCents;
+    }
     catch { /* Existing rounding validation supplies the exact blocker. */ }
-    if (overallocated) links.forEach(x => {
-      if (!x.state) return;
-      x.state.code = 'incomplete'; x.state.label = 'Incomplete — review required';
-      x.state.reasons = unique(x.state.reasons.concat('Confirmed Paytm allocations exceed the current Shopify payment components for this order. Review the original receipt allocation.'));
-    });
+    // A report batch and a Shopify receipt are separate evidence scopes. A
+    // changed/partial receipt allocation cannot rewrite a fully validated bank
+    // posting into an incomplete report. Keep its precise discrepancy on the
+    // receipt; the existing posting validators remain authoritative for batches.
     rows.forEach(row => {
       let matched = [], sameDay = rows.filter(r => day(r.date) === day(row.date));
       const dayLinks = links.filter(x => day(x.tx.date) === day(row.date));
@@ -167,8 +203,28 @@ function buildProjection(store, saleRows, options = {}) {
       }
       const statuses = matched.map(x => x.state).filter(Boolean);
       let result;
-      if (overallocated) result = rowState('incomplete', links.map(x => x.state).filter(Boolean));
-      else if (!statuses.length || statuses.length !== matched.length) result = rowState('report_pending', [], ['No verified detailed Paytm report allocation covers this receipt.']);
+      if (overallocated) result = rowState('incomplete', links.map(x => x.state).filter(Boolean), [
+        'Confirmed Paytm report allocations total ₹' + (allocatedCents / 100).toFixed(2) +
+        ', but the current Shopify payment components total ₹' + (sourceCents / 100).toFixed(2) +
+        '. The ₹' + ((allocatedCents - sourceCents) / 100).toFixed(2) +
+        ' excess requires receipt-allocation review; the existing bank postings are unchanged.'
+      ]);
+      else if (!statuses.length || statuses.length !== matched.length) {
+        const candidates = sameDay.length === 1 ? dayLinks : [];
+        const candidateStates = candidates.map(x => x.state).filter(Boolean);
+        let confirmedCents = 0;
+        try { confirmedCents = candidates.reduce((sum, x) => sum + cents(approvedBaseAmount(store, x.link)), 0); }
+        catch { /* Invalid approved rounding cannot establish any coverage. */ }
+        if (candidates.length && confirmedCents > 0 && confirmedCents < cents(row.amount)) {
+          result = { ...rowState(candidateStates.some(s => s.code === 'incomplete') ? 'incomplete' : 'report_pending', candidateStates, [
+            'Confirmed Paytm report amount ₹' + (confirmedCents / 100).toFixed(2) +
+            ' covers part of the Shopify payment component ₹' + (cents(row.amount) / 100).toFixed(2) +
+            '. The remaining ₹' + ((cents(row.amount) - confirmedCents) / 100).toFixed(2) +
+            ' is not verified; no rounding adjustment or additional receipt has been assumed.'
+          ]), receiptAmount: cents(row.amount) / 100, confirmedReportAmount: confirmedCents / 100,
+            unverifiedAmount: (cents(row.amount) - confirmedCents) / 100 };
+        } else result = rowState('report_pending', [], ['No verified detailed Paytm report allocation covers this receipt.']);
+      }
       else if (statuses.some(s => s.code === 'incomplete')) result = rowState('incomplete', statuses);
       else if (statuses.every(s => s.code === 'posted')) result = rowState('posted', statuses);
       else if (statuses.some(s => s.code === 'ready')) result = rowState('ready', statuses);
@@ -194,16 +250,27 @@ function buildProjection(store, saleRows, options = {}) {
   const scoped = states.filter(s => inScope(s.settledDate));
   const pending = scoped.filter(s => s.code !== 'posted');
   const receiptGaps = receipts.filter(r => receiptStates.get('PAYTM-SALE/' + r.id)?.code !== 'posted');
-  const settlementGap = [pending[0]?.settledDate, ...pending.map(s => s.settledDate), ...pendingLegacy.map(x => day(x.record.date)), ...receiptGaps.map(r => day(r.date))].filter(Boolean).sort()[0] || '';
-  const paymentGap = [...imported.filter(t => transactionStates.get(t.transactionId)?.code !== 'posted').map(t => t.date), ...receiptGaps.map(r => r.date)].filter(Boolean).sort()[0] || '';
+  const firstPendingReceiptDate = receiptGaps.map(r => day(r.date)).filter(Boolean).sort()[0] || '';
+  const firstPendingBankOnlyDate = pendingLegacy.filter(x => x.bank).map(x => day(x.record.date)).filter(Boolean).sort()[0] || '';
+  const reportSettlementGap = pending.map(s => s.settledDate).filter(Boolean).sort()[0] || '';
+  const reportPaymentGap = imported.filter(t => transactionStates.get(t.transactionId)?.code !== 'posted').map(t => t.date).filter(Boolean).sort()[0] || '';
+  const settlementGap = [reportSettlementGap, ...pendingLegacy.map(x => day(x.record.date)), firstPendingReceiptDate].filter(Boolean).sort()[0] || '';
   const completed = scoped.filter(s => s.code === 'posted');
-  const through = latest(completed.filter(s => !settlementGap || s.settledDate < settlementGap).map(s => s.settledDate));
+  // These dates describe the imported Paytm REPORT, not blanket completion of
+  // every Shopify receipt or historical bank-only record. Those independent
+  // gaps remain explicit and conservatively constrain overall coverage below.
+  const through = latest(completed.filter(s => !reportSettlementGap || s.settledDate < reportSettlementGap).map(s => s.settledDate));
+  const receiptCoverageThrough = latest(receipts.filter(r => receiptStates.get('PAYTM-SALE/' + r.id)?.code === 'posted' &&
+    (!firstPendingReceiptDate || day(r.date) < firstPendingReceiptDate)).map(r => day(r.date)));
+  const overallReconciledThrough = latest(completed.filter(s => !settlementGap || s.settledDate < settlementGap).map(s => s.settledDate));
   const last = completed.filter(s => s.settledDate === through).sort((a, b) => String(a.finalizedAt).localeCompare(String(b.finalizedAt))).at(-1);
   const coverage = {
     asOf, importedPaymentsThrough: latest(imported.map(t => t.date)),
     importedSettlementsThrough: latest(scoped.map(s => s.settledDate)),
-    reportPaymentsThrough: latest(imported.filter(t => transactionStates.get(t.transactionId)?.code === 'posted' && (!paymentGap || t.date < paymentGap)).map(t => t.date)),
+    reportPaymentsThrough: latest(imported.filter(t => transactionStates.get(t.transactionId)?.code === 'posted' && (!reportPaymentGap || t.date < reportPaymentGap)).map(t => t.date)),
     reportSettlementsThrough: through,
+    latestVerifiedSettlementDate: latest(completed.map(s => s.settledDate)),
+    receiptCoverageThrough, overallReconciledThrough, firstPendingReceiptDate, firstPendingBankOnlyDate,
     bankSettlementsThrough: latest([...completed.map(s => s.bankDate || s.settledDate), ...legacy.filter(x => x.bank).map(x => x.bank.bankDate)]),
     pendingBankOnlySettlements: pendingLegacy.filter(x => x.bank).length,
     pendingReceipts: receiptGaps.length, pendingSettlements: pending.length + pendingLegacy.filter(x => !x.state).length,

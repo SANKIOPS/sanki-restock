@@ -39,6 +39,15 @@ test('unknown coverage stays unavailable rather than falling back to a misleadin
   assert.doesNotMatch(html, /Reconciled through:|Last finalized/);
 });
 
+test('overall clearing gaps are explicit and do not erase completed imported report dates', () => {
+  const html = ui.paytmCoverage({ ...coverage(), overallReconciledThrough: '', firstPendingReceiptDate: '2026-08-31', firstPendingBankOnlyDate: '2026-08-22' });
+  assert.match(html, /Report settlements verified and bank-posted through <b>2026-10-14/);
+  assert.match(html, /Overall clearing reconciliation through Not yet/);
+  assert.match(html, /Receipt allocation review starts 2026-08-31/);
+  assert.match(html, /Bank-only history awaiting report details starts 2026-08-22/);
+  assert.equal(ui.paytmCoverage({ ...coverage(), overallReconciledThrough: '', isOwner: true }), ui.paytmCoverage({ ...coverage(), overallReconciledThrough: '', isOwner: false }));
+});
+
 test('Paytm row states preserve pending reasons, identifiers and role parity', () => {
   for (const code of ['posted', 'finalized', 'ready', 'incomplete', 'report_pending', 'bank_confirmed_report_pending', 'summary']) {
     const s = { code, label: 'Evidence ' + code, reasons: ['Original report reason'], bankReasons: ['Exact bank evidence reason'], transactionIds: ['TX-1'], settlementIds: ['PB-1'], settledDate: '2026-10-14', finalizedAt: '2026-10-19T09:14:00Z', finalizedBy: 'prashant' };
