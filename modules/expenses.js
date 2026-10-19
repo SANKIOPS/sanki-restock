@@ -2360,6 +2360,9 @@ router.get('/api/expenses/config', (req, res) => {
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
     vendorPhones,
+    // Route both ledger views to one physical statement book; this is not a
+    // reporting-entity override or permission to create a second bank history.
+    reconciliationNatureByAccount: (canManagePersonalAccounting(req)||isPrashant(req))&&accountVisibleToReq(req,SHARED_BANK_RECONCILIATION_ACCOUNT)?{[SHARED_BANK_RECONCILIATION_ACCOUNT]:'SAMAST'}:{},
     accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !personalView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (personalView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
