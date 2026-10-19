@@ -59,6 +59,7 @@
       add('money', 'transactions', cfg.isAdmin === true ? 'Manage transactions' : 'Counter Cash verification', cfg.isAdmin === true ? 'Review payments, transfers and reconciliations through their original account-ledger workflow.' : 'Open your existing Counter Cash verification screen.', '/expenses.html?tab=cash', cfg.isAdmin === true ? ['Account ledgers', 'Review transactions', 'Reconcile account'] : ['Verify Counter Cash']);
     }
     if (expenses && cfg.isAdmin === true) {
+      add('money', 'opening-balances', 'Manage opening balances', 'Review account-ledger openings, stage corrections without posting, and use the existing reconciliation for active statements.', '/manage.html?section=opening-balances', ['Review recorded openings', 'Stage opening balance', 'Owner-only apply']);
       add('money', 'payables', 'Manage payables', 'Open existing payment forms and their account and proof checks.', '/expenses.html?tab=pending', ['Review payables', 'Record permitted payment']);
       add('money', 'reimbursements', 'Manage reimbursements', 'Review pending and recorded employee reimbursements.', '/expenses.html?tab=reimbursements', ['Review reimbursements', 'Record permitted reimbursement']);
       add('money', 'receivables', 'Receivables, refunds & returns', 'Open the current receivables and refund-recovery workflows.', '/expenses.html?tab=receivables', ['Review receivables', 'Review refunds and returns']);

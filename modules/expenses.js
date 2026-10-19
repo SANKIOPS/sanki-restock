@@ -2512,6 +2512,13 @@ function editExpenseMetadata(s,req,e,b,editReason) {
 }
 // Single-segment POST paths that have their OWN handlers registered after this
 // param route — the ':id' pattern would otherwise swallow them. Fall through.
+require('./expense-opening-balances').registerOpeningBalances(router, {
+  isAdmin, isOwner, natures: approvalNatures, today: indiaBusinessDate,
+  read: loadCategoryGroupStore,
+  save: s => saveStore(s, {skipCategoryNormalization:true}), audit,
+  accounts: (req,s,nature) => visibleAccountsForReq(req,ledgerAccountsForNature(s,nature)),
+  bookKey: bankStatementBookKey
+});
 const RESERVED_POST = new Set(['expense-refunds', 'rentals', 'requests', 'accounts', 'settings', 'balances', 'transfers', 'exchanges', 'receipts', 'sales-refunds', 'sale-allocation', 'receivables', 'vendors', 'custom-ledgers', 'category-groups', 'upload', 'batch-pay', 'cash-reconciliations']);
 router.post('/api/expenses/:id', (req, res, next) => {
   if (RESERVED_POST.has(req.params.id)) return next();
