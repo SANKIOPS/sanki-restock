@@ -240,7 +240,8 @@ function receiptCategory(receiptType,value){
 function receiptLabel(receiptType){return{loan_received:'Loan received — repayable principal',product_sale:'Product sale',asset_sale:'Asset sale',bank_interest:'Bank interest received',refund:'Refund received',expense_refund:'Expense refund',refund_recovery:'Employee refund recovery',owner_contribution:'Owner contribution',other_income:'Other income'}[receiptType]||'Money received';}
 function accountVisibleToReq(req,account){
   const name=canonicalAccountName(account),restricted=OWNER_ONLY_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase());
-  return isOwner(req)||(isPrashant(req)&&PRASHANT_VISIBLE_OWNER_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase()))||!restricted;
+  const personalAccount=(ENTITY_ACCOUNTS.PERSONAL||[]).some(value=>value.toLowerCase()===name.toLowerCase());
+  return isOwner(req)||(canManagePersonalAccounting(req)&&personalAccount)||(isPrashant(req)&&PRASHANT_VISIBLE_OWNER_ACCOUNTS.some(value=>value.toLowerCase()===name.toLowerCase()))||!restricted;
 }
 function visibleAccountsForReq(req,accounts){return (accounts||[]).filter(account=>accountVisibleToReq(req,account));}
 function searchRank(fields, query) {
@@ -1810,12 +1811,14 @@ function personalAccountsForReq(req) {
   const username = String((req.user && req.user.username) || '').trim().toLowerCase();
   const roles = rolesOfReq(req);
   if (roles.includes('owner')) return Array.from(new Set([].concat(...Object.values(ENTITY_ACCOUNTS), ...Object.values(CLAIMANT_ACCOUNTS))));
+  if (canManagePersonalAccounting(req)) return Array.from(new Set([].concat(ENTITY_ACCOUNTS.PERSONAL, ...Object.values(CLAIMANT_ACCOUNTS))));
   if (roles.includes('admin')) return visibleAccountsForReq(req,USER_PAYMENT_ACCOUNTS[username] || []);
   return (CLAIMANT_ACCOUNTS[username] || []).slice();
 }
 function payingAccountsForReq(req, nature) {
   const username = String((req.user && req.user.username) || '').trim().toLowerCase();
   if (isOwner(req)) return normalizedNature(nature)==='PERSONAL'?Array.from(new Set(companyAccountsForNature('PERSONAL').concat(companyAccountsForNature('SANKI')))):companyAccountsForNature(nature);
+  if (normalizedNature(nature)==='PERSONAL' && canManagePersonalAccounting(req)) return companyAccountsForNature('PERSONAL');
   // Every admin may record an actual cash payment made from Gagan Sir Cash.
   // Keep the permission role-based so the option is available in both the web
   // forms and Telegram's one-tap account picker without relying on a username.
@@ -1845,7 +1848,7 @@ function vendorPaymentAccountsForReq(req,nature) {
   // claimant paid personally. The payment remains a claimant-funded outflow
   // and creates the matching reimbursement balance; it never debits a company
   // bank account. PERSONAL claimant accounts remain Owner-only.
-  if(!isAdmin(req)||(normalizedNature(nature)==='PERSONAL'&&!isOwner(req)))return company;
+  if((!isAdmin(req)&&!canManagePersonalAccounting(req))||(normalizedNature(nature)==='PERSONAL'&&!canManagePersonalAccounting(req)))return company;
   const claimantUsers=normalizedNature(nature)==='PERSONAL'?Object.keys(CLAIMANT_ACCOUNTS):['arshpreet','shivam','pradeep'];
   return Array.from(new Set(company.concat(...claimantUsers.map(username=>CLAIMANT_ACCOUNTS[username]||[]))));
 }
@@ -1930,6 +1933,7 @@ function rolesOfReq(req) {
   return (req.user && (req.user.roles || (req.user.role ? [req.user.role] : []))) || [];
 }
 function isOwner(req){return rolesOfReq(req).includes('owner');}
+function canManagePersonalAccounting(req){return isOwner(req)||!!(req&&req.user&&req.user.permissions&&req.user.permissions.personalAccounting===true);}
 function isAdmin(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('owner'); }
 function isPrashant(req){return String(req&&req.user&&req.user.username||'').trim().toLowerCase()==='prashant';}
 function canManageCategoriesAndVendors(req){return isOwner(req)||isPrashant(req);}
@@ -2031,11 +2035,11 @@ function reconciliationAccountsForNature(s,nature){
   const n=normalizedNature(nature),cards=n==='SANKI'?Object.values(loadCreditCards().cards||{}).filter(card=>card.active!==false).map(creditCardName):[];
   return Array.from(new Set(ledgerAccountsForNature(s,n).concat(cards))).filter(Boolean).sort((a,b)=>a.localeCompare(b));
 }
-function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||''),card=creditCardByAccount(name);if(!isAdmin(req)||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!isOwner(req))return false;if(card&&card.ownerOnly&&!isOwner(req))return false;return reconciliationAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase());}
+function canAccessBankReconciliation(req,s,nature,account){const n=normalizedNature(nature),name=String(account||''),card=creditCardByAccount(name);if((!isAdmin(req)&&!(n==='PERSONAL'&&canManagePersonalAccounting(req)))||!approvalNatures(req).includes(n)||!accountVisibleToReq(req,name))return false;if(n==='PERSONAL'&&!canManagePersonalAccounting(req))return false;if(card&&card.ownerOnly&&!isOwner(req))return false;return reconciliationAccountsForNature(s,n).some(x=>x.toLowerCase()===name.toLowerCase());}
 function isBankLedgerName(name){return !/cash/i.test(String(name||''))&&![PAYTM_CLEARING_ACCOUNT,VELOCITY_CLEARING_ACCOUNT,'Velocity Shipping Wallet',gokwikAccounting.CLEARING].includes(String(name||''));}
 function canAccessBankDraft(req,s,draft){return !!draft&&canAccessBankReconciliation(req,s,draft.nature,draft.account);}
 // Who may APPROVE & PAY: admin or accounting. A pure claimant may only LOG.
-function canApprove(req) { const r = rolesOfReq(req); return r.includes('admin') || r.includes('accounting') || r.includes('samast_accounting') || r.includes('owner'); }
+function canApprove(req) { const r = rolesOfReq(req); return canManagePersonalAccounting(req) || r.includes('admin') || r.includes('accounting') || r.includes('samast_accounting') || r.includes('owner'); }
 function normalizedNature(v) { const n = String(v || '').toUpperCase(); return n === 'SAMAST' || n === 'PERSONAL' ? n : 'SANKI'; }
 function approvalNatures(req) {
   const r = rolesOfReq(req);
@@ -2046,6 +2050,7 @@ function approvalNatures(req) {
   if (r.includes('admin')) out.push('SANKI', 'SAMAST');
   if (r.includes('accounting')) out.push('SANKI');
   if (r.includes('samast_accounting')) out.push('SAMAST');
+  if (canManagePersonalAccounting(req)) out.push('PERSONAL');
   return Array.from(new Set(out));
 }
 function submissionNatures(req) {
@@ -2055,6 +2060,7 @@ function submissionNatures(req) {
   if (r.includes('admin')) out.push('SANKI', 'SAMAST');
   if (r.includes('claimant')) out.push('SANKI', 'SAMAST', 'PERSONAL');
   if (r.includes('personal_claimant')) out.push('PERSONAL');
+  if (canManagePersonalAccounting(req)) out.push('PERSONAL');
   return Array.from(new Set(out));
 }
 function canApproveExpenseNature(req, e) { return approvalNatures(req).includes(normalizedNature(e && e.nature)); }
@@ -2064,10 +2070,10 @@ function expenseBelongsToUser(req, e) {
   return !!username && creator === username;
 }
 function canViewExpense(req, e) {
-  if(e&&e.ownerOnly&&!rolesOfReq(req).some(role=>['owner','admin'].includes(role)))return false;
+  if(e&&e.ownerOnly&&!rolesOfReq(req).some(role=>['owner','admin'].includes(role))&&!(normalizedNature(e.nature)==='PERSONAL'&&canManagePersonalAccounting(req)))return false;
   // PERSONAL remains private: the Owner can see the complete book, while a
   // submitter can see only the PERSONAL expenses that they created.
-  if (normalizedNature(e && e.nature) === 'PERSONAL') return isOwner(req) || expenseBelongsToUser(req, e);
+  if (normalizedNature(e && e.nature) === 'PERSONAL') return canManagePersonalAccounting(req) || expenseBelongsToUser(req, e);
   if (canApproveExpenseNature(req, e)) return true;
   return expenseBelongsToUser(req, e);
 }
@@ -2283,11 +2289,12 @@ router.get('/api/expenses/config', (req, res) => {
   const s = loadStore();
   const allowed = submissionNatures(req);
   const ownerView = isOwner(req);
+  const personalView = canManagePersonalAccounting(req);
   const pendingReqs = (s.requests || []).filter(r => r.status === 'pending' && approvalNatures(req).includes(normalizedNature(r.nature)));
   const visiblePendingReqs = isAdmin(req) ? pendingReqs : (canApprove(req) ? pendingReqs.filter(r => r.kind === 'vendor') : []);
   syncSharedVendorDirectory(s);
   const sharedVendorsFor=nature=>Object.values(s.vendorDirectory||{}).filter(v=>(v.entities||[]).includes(nature)).map(v=>v.name);
-  const vendorsByNature = { SANKI: sharedVendorsFor('SANKI'), SAMAST: sharedVendorsFor('SAMAST'), PERSONAL: ownerView ? sharedVendorsFor('PERSONAL') : [] };
+  const vendorsByNature = { SANKI: sharedVendorsFor('SANKI'), SAMAST: sharedVendorsFor('SAMAST'), PERSONAL: personalView ? sharedVendorsFor('PERSONAL') : [] };
   const visibleVendorNames=new Set(Object.values(vendorsByNature).flat()),vendorPhones={};Object.values(s.vendorDirectory||{}).forEach(v=>{if(v&&v.name&&v.phone&&visibleVendorNames.has(v.name))vendorPhones[v.name]=v.phone;});
   // Only approved master vendors are reusable. A name typed by a claimant is
   // promoted into this list only when the related expense is approved.
@@ -2301,12 +2308,12 @@ router.get('/api/expenses/config', (req, res) => {
     vendors: vendorsByNature.SANKI,
     vendorsByNature,
     vendorPhones,
-    accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !ownerView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
-    accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (ownerView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
-    bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
-    reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
-    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || ownerView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : [])])),
-    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req) ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
+    accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !personalView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
+    accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (personalView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
+    bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
+    reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
+    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : [])])),
+    transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req)&&n!=='PERSONAL' ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     ownerPersonalTransferAccounts: canSelectOwnerPersonalTransferAccounts(req)?OWNER_PERSONAL_TRANSFER_ACCOUNTS.map(account=>({nature:'PERSONAL',account,label:'Gagan Sir Personal · '+account})):[],
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
     vendorPaymentAccountsByNature: Object.fromEntries(NATURES.map(n => [n, vendorPaymentAccountsForReq(req,n)])),
@@ -4046,7 +4053,8 @@ router.post('/api/expenses/transfers', (req, res) => {
   if ((!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature))&&!ownerPersonalAllowed) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
   if((!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))&&!ownerPersonalAllowed)return res.status(403).json({success:false,error:'One of these accounts is restricted to the Owner.'});
   const prashantAllowed=isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification);
-  if(!isOwner(req)&&!prashantAllowed&&!ownerPersonalAllowed)return res.status(403).json({success:false,error:'Prashant can record approved SANKI internal transfers or an Owner contribution/withdrawal between a business account and Gagan Sir\'s listed personal bank accounts.'});
+  const personalAllowed=canManagePersonalAccounting(req)&&fromNature==='PERSONAL'&&toNature==='PERSONAL'&&classification==='internal_transfer';
+  if(!isOwner(req)&&!prashantAllowed&&!ownerPersonalAllowed&&!personalAllowed)return res.status(403).json({success:false,error:'You cannot record this transfer route.'});
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
   if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
   if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });
@@ -4062,11 +4070,12 @@ router.post('/api/expenses/transfers', (req, res) => {
 });
 
 router.post('/api/expenses/transfers/:id/delete', (req,res) => {
-  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can delete a recorded transfer.'});
   const s=loadStore(),id=String(req.params.id||''),index=(s.transfers||[]).findIndex(x=>x.id===id),reason=String((req.body||{}).reason||'').trim();
   if(index<0)return res.status(404).json({success:false,error:'Transfer not found.'});
   if(!reason)return res.status(400).json({success:false,error:'Reason for deleting the transfer is required.'});
   const transfer=s.transfers[index];
+  const personalTransfer=normalizedNature(transfer.fromNature||transfer.nature)==='PERSONAL'&&normalizedNature(transfer.toNature||transfer.nature)==='PERSONAL';
+  if(!isOwner(req)&&!(canManagePersonalAccounting(req)&&personalTransfer))return res.status(403).json({success:false,error:'You cannot delete this recorded transfer.'});
   if(transferReimbursements.protectsTransfer(s,transfer.id))return res.status(409).json({success:false,error:'This transfer settles a reimbursement. Undo its reimbursement allocation before deleting it.'});
   if(transfer.gokwikPostingId)return res.status(409).json({success:false,error:'This transfer belongs to an approved GoKwik settlement and cannot be deleted independently.'});
   if(transfer.paytmTransactionId)return res.status(409).json({success:false,error:'This transfer is tied to a reviewed Paytm transaction and cannot be deleted here.'});
@@ -4080,7 +4089,7 @@ router.post('/api/expenses/transfers/:id/delete', (req,res) => {
 
 router.post('/api/expenses/receipts', (req,res) => {
   const b=req.body||{},nature=normalizedNature(b.nature),prashantServices=isPrashant(req)&&nature==='SANKI'&&canonicalAccountName(b.account)==='Services';
-  if(!isOwner(req)&&!prashantServices&&!(b.receiptType===expenseLoans.TYPE&&canApprove(req))) return res.status(403).json({success:false,error:'Only the Owner can record money received. Prashant may record Services receipts; accounting approvers may record repayable loans.'});
+  if(!isOwner(req)&&!(nature==='PERSONAL'&&canManagePersonalAccounting(req))&&!prashantServices&&!(b.receiptType===expenseLoans.TYPE&&canApprove(req))) return res.status(403).json({success:false,error:'You cannot record money received for this accounting entity.'});
   const s=loadStore();
   if(!approvalNatures(req).includes(nature)) return res.status(403).json({success:false,error:'You cannot record money for this entity.'});
   const account=allowedCompanyAccount(s,nature,b.account),amount=num(b.amount),proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',source=String(b.source||'').trim(),receiptType=String(b.receiptType||'other_income').trim(),category=receiptCategory(receiptType,b.category),note=String(b.note||'').trim(),ownerCashDeclaration=rolesOfReq(req).includes('owner')&&/cash/i.test(String(account||''))&&!proof;
@@ -5267,7 +5276,7 @@ const PERSONAL_HISTORICAL_CREDITS={
 function personalHistoricalAccount(account){return PERSONAL_HISTORICAL_ACCOUNT_LAST4.has(String(account||'').replace(/\D/g,'').slice(-4));}
 router.post('/api/expenses/bank-statements/personal-historical-bulk',(req,res)=>{
   const b=req.body||{},s=loadStore(),draft=(s.bankReconciliationDrafts||{})[b.draftId],rowIds=Array.from(new Set((Array.isArray(b.rowIds)?b.rowIds:[]).map(String)));
-  if(!isOwner(req))return res.status(403).json({success:false,error:'Only the Owner can post historical PERSONAL statement rows in bulk.'});
+  if(!canManagePersonalAccounting(req))return res.status(403).json({success:false,error:'PERSONAL accounting access is required to post historical statement rows in bulk.'});
   if(!draft)return res.status(404).json({success:false,error:'This reconciliation draft has expired.'});
   if(normalizedNature(draft.nature)!=='PERSONAL'||!personalHistoricalAccount(draft.account))return res.status(403).json({success:false,error:'Bulk historical posting is limited to PERSONAL accounts 0993, 0992 and 7883.'});
   if(!rowIds.length)return res.status(400).json({success:false,error:'Select at least one unmatched bank row.'});

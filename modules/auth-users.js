@@ -45,6 +45,18 @@ const PRASHANT_PAGES = [
   '/pnl.html', '/rentals.html', '/expenses.html', '/salary.html', '/incentives.html',
   '/model-calendar.html'
 ];
+// Per-user switches are intentionally separate from roles. Roles decide which
+// modules a person can open; these switches grant access to sensitive data
+// inside an allowed module. Add future switches here so the Owner gets one
+// consistent on/off panel instead of username-specific exceptions.
+const USER_PERMISSION_CATALOG = [
+  {
+    id: 'personalAccounting',
+    label: 'Personal accounting — full access',
+    description: 'View and operate all PERSONAL expenses, accounts, ledgers, transfers and reconciliations.'
+  }
+];
+const USER_PERMISSION_IDS = USER_PERMISSION_CATALOG.map(x => x.id);
 // Emergency owner recovery token requested on 6 September 2026. Only the
 // SHA-256 digest is shipped; the bearer token itself is opened directly for
 // the owner and never stored in the repository. The persisted redemption id
@@ -209,6 +221,13 @@ function rolesOf(user) {
   if (Array.isArray(user.roles) && user.roles.length) return user.roles;
   return user.role ? [user.role] : [];
 }
+function normalizeUserPermissions(user) {
+  const source = user && user.permissions && typeof user.permissions === 'object' ? user.permissions : {};
+  return Object.fromEntries(USER_PERMISSION_IDS.map(id => [id, source[id] === true]));
+}
+function hasUserPermission(user, permission) {
+  return normalizeUserPermissions(user)[permission] === true;
+}
 
 function landingFor(role) { return ROLE_HOME[role] || '/dashboard.html'; }
 function allowedPagesFor(role) { const a = getRolePages()[role]; return a === '*' ? '*' : (a || []); }
@@ -313,7 +332,7 @@ function verifySession(req) {
   const u = store.users.find(x => x.username === p.u);
   if (!u) return null;
   const roles = repairMissingRoles(store, u);
-  return { username: u.username, role: primaryRole(roles), roles };
+  return { username: u.username, role: primaryRole(roles), roles, permissions: normalizeUserPermissions(u) };
 }
 
 // Privacy-safe live diagnostic for authentication incidents. It never returns
@@ -406,6 +425,7 @@ router.get('/api/auth/me', (req, res) => {
     username: user.username,
     role: user.role,
     roles,
+    permissions: normalizeUserPermissions(user),
     isAdmin: roles.includes('admin'),
     home: landingFor(user.role),
     allowedPages: allowedPagesForUser(user)
@@ -421,6 +441,10 @@ router.get('/api/auth/diagnostic', (req, res) => {
 function requireAdmin(req, res, next) {
   const roles = rolesOf(req.user);
   if (!roles.includes('admin') && !roles.includes('owner')) return res.status(403).json({ success: false, error: 'Admin or owner only' });
+  next();
+}
+function requireOwner(req, res, next) {
+  if (!rolesOf(req.user).includes('owner')) return res.status(403).json({ success: false, error: 'Owner only' });
   next();
 }
 
@@ -439,15 +463,15 @@ function userSummary(username) {
   const user = loadUsers().users.find(u => String(u.username || '').toLowerCase() === wanted);
   if (!user) return null;
   const roles = normalizeRoles(user);
-  return { username: user.username, role: primaryRole(roles), roles };
+  return { username: user.username, role: primaryRole(roles), roles, permissions: normalizeUserPermissions(user) };
 }
 
 router.get('/api/admin/users', requireAdmin, (req, res) => {
   const users = loadUsers().users.map(u => {
     const roles = normalizeRoles(u);
-    return { username: u.username, role: primaryRole(roles), roles, createdAt: u.createdAt || null };
+    return { username: u.username, role: primaryRole(roles), roles, permissions: normalizeUserPermissions(u), createdAt: u.createdAt || null };
   });
-  res.json({ success: true, users, roles: ROLES, rolePages: getRolePages(), pageCatalog: pageCatalog() });
+  res.json({ success: true, users, roles: ROLES, rolePages: getRolePages(), pageCatalog: pageCatalog(), userPermissionCatalog: USER_PERMISSION_CATALOG, canEditUserPermissions: rolesOf(req.user).includes('owner') });
 });
 
 router.post('/api/admin/users', requireAdmin, (req, res) => {
@@ -495,6 +519,20 @@ router.post('/api/admin/users/roles', requireAdmin, (req, res) => {
   u.roles = roles; delete u.role;   // migrate to the array model
   saveUsers(store);
   res.json({ success: true, username: u.username, roles });
+});
+
+// Sensitive, per-person access can only be delegated or revoked by the Owner.
+// The complete switch state is submitted each time, making unticking a box an
+// immediate revocation on the user's very next authenticated request.
+router.post('/api/admin/users/permissions', requireOwner, (req, res) => {
+  const body = req.body || {}, username = String(body.username || '').trim();
+  const store = loadUsers(), user = store.users.find(x => x.username === username);
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  if (normalizeRoles(user).includes('owner')) return res.status(400).json({ success: false, error: 'The Owner always has full PERSONAL access.' });
+  const requested = body.permissions && typeof body.permissions === 'object' ? body.permissions : {};
+  user.permissions = Object.fromEntries(USER_PERMISSION_IDS.map(id => [id, requested[id] === true]));
+  saveUsers(store);
+  res.json({ success: true, username: user.username, permissions: normalizeUserPermissions(user) });
 });
 
 // Rename a login without changing its password or roles. Existing sessions for
@@ -563,5 +601,5 @@ module.exports = {
   router, seedAdminIfEmpty, verifySession, landingFor, ROLES,
   roleCanAccessPath, userCanAccessPath,
   allowedPagesForUser, rolesOf, registerModules, userSummary,
-  PRASHANT_PAGES, isPrashant
+  PRASHANT_PAGES, isPrashant, USER_PERMISSION_CATALOG, hasUserPermission
 };

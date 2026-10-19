@@ -82,9 +82,10 @@
 
     <div class="card">
       <h2>Team</h2>
+      <p class="hint">Roles control pages. Special access switches control sensitive data inside those pages and can be revoked instantly.</p>
       <table>
-        <thead><tr><th>User</th><th>Roles</th><th style="width:1%;">Actions</th></tr></thead>
-        <tbody id="users-body"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
+        <thead><tr><th>User</th><th>Roles</th><th>Special access</th><th style="width:1%;">Actions</th></tr></thead>
+        <tbody id="users-body"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
       </table>
       <div class="msg" id="list-msg"></div>
     </div>
@@ -102,6 +103,8 @@
     var ROLES = [];        // [{id,label}]
     var PAGES = [];        // [{path,label,section}]
     var ROLE_PAGES = {};   // { roleId: '*' | [paths] }
+    var USER_PERMISSIONS = [];
+    var CAN_EDIT_USER_PERMISSIONS = false;
     var body = document.getElementById('users-body');
 
     function setMsg(el, text, kind) {
@@ -144,7 +147,7 @@
       if (!users.length) {
         var tr = document.createElement('tr');
         var td = document.createElement('td');
-        td.colSpan = 3; td.className = 'empty'; td.textContent = 'No users yet.';
+        td.colSpan = 4; td.className = 'empty'; td.textContent = 'No users yet.';
         tr.appendChild(td); body.appendChild(tr);
         return;
       }
@@ -186,6 +189,35 @@
         tdRole.appendChild(pills);
         tdRole.appendChild(editor);
         tr.appendChild(tdRole);
+
+        var tdPermissions = document.createElement('td');
+        var permissionChecks = document.createElement('div'); permissionChecks.className = 'checks';
+        var permissionBoxes = [];
+        var isOwner = (u.roles || []).indexOf('owner') !== -1;
+        USER_PERMISSIONS.forEach(function (permission) {
+          var lab = document.createElement('label'); lab.className = 'chk'; lab.title = permission.description || '';
+          var cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = permission.id;
+          cb.checked = isOwner || !!(u.permissions && u.permissions[permission.id]);
+          cb.disabled = isOwner || !CAN_EDIT_USER_PERMISSIONS;
+          lab.appendChild(cb); lab.appendChild(document.createTextNode(permission.label));
+          permissionChecks.appendChild(lab); permissionBoxes.push(cb);
+        });
+        tdPermissions.appendChild(permissionChecks);
+        if (isOwner) {
+          var inherent = document.createElement('div'); inherent.className = 'perm-full'; inherent.style.marginTop = '6px'; inherent.textContent = 'Always enabled for Owner';
+          tdPermissions.appendChild(inherent);
+        } else if (CAN_EDIT_USER_PERMISSIONS && USER_PERMISSIONS.length) {
+          var saveAccess = document.createElement('button'); saveAccess.className = 'sm'; saveAccess.style.marginTop = '8px'; saveAccess.textContent = 'Save access';
+          saveAccess.addEventListener('click', function () {
+            var permissions = {}; permissionBoxes.forEach(function (box) { permissions[box.value] = box.checked; });
+            api('/api/admin/users/permissions', { username:u.username, permissions:permissions }).then(function (d) {
+              if (d.success) { setMsg(document.getElementById('list-msg'), 'Updated ' + u.username + '\u2019s special access.', 'ok'); load(); }
+              else setMsg(document.getElementById('list-msg'), d.error || 'Could not update access', 'err');
+            });
+          });
+          tdPermissions.appendChild(saveAccess);
+        }
+        tr.appendChild(tdPermissions);
 
         var tdAct = document.createElement('td');
         tdAct.className = 'actions';
@@ -323,6 +355,8 @@
           ROLES = d.roles || [];
           PAGES = d.pageCatalog || [];
           ROLE_PAGES = d.rolePages || {};
+          USER_PERMISSIONS = d.userPermissionCatalog || [];
+          CAN_EDIT_USER_PERMISSIONS = d.canEditUserPermissions === true;
           renderAddRoles();
           renderUsers(d.users || []);
           renderPermissions();

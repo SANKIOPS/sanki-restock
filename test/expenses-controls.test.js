@@ -197,7 +197,7 @@ test('owner-confirmed Axis 3645 cases preserve unrelated reconciliation progress
   assert.equal(applyOwnerConfirmedAxis3645Cases(store),false,'all seven corrections are idempotent');
 });
 
-function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant', username = '' } = {}) {
+function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 'claimant', username = '', permissions = {} } = {}) {
   if(method==='POST'&&routePath==='/api/expenses'&&!Object.prototype.hasOwnProperty.call(body,'vendorPhone'))body={...body,vendorPhone:'+91 9876543210'};
   const layer = router.stack.find(item => item.route && item.route.path === routePath && item.route.methods[method.toLowerCase()]);
   assert.ok(layer, `route exists: ${method} ${routePath}`);
@@ -206,7 +206,7 @@ function invoke(method, routePath, { body = {}, params = {}, query = {}, role = 
     headers: { 'user-agent':'SANKI Test Mobile', 'x-forwarded-for':'203.0.113.10' },
     get(name) { return this.headers[String(name).toLowerCase()] || ''; },
     ip: '203.0.113.10',
-    user: { username: username||(role === 'claimant' ? 'arshpreet' : (role === 'admin' ? 'prashant' : role + '-user')), role, roles: [role] }
+    user: { username: username||(role === 'claimant' ? 'arshpreet' : (role === 'admin' ? 'prashant' : role + '-user')), role, roles: [role], permissions }
   };
   let status = 200;
   let result;
@@ -1493,6 +1493,23 @@ test('payment accounts are scoped by claimant and accounting entity', () => {
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'owner',query:{nature:'SAMAST',account:'ICICI Bank 0992'}}).status,200);
   assert.deepEqual(adminConfig.claimantPaymentAccountsByUser.arshpreet,['Arshpreet 1919','Arshpreet Cash']);
   assert.deepEqual(claimantConfig.claimantPaymentAccountsByUser,{});
+});
+
+test('per-user PERSONAL accounting switch grants and revokes the complete private book', () => {
+  const denied = invoke('GET','/api/expenses/config',{role:'admin',username:'prashant'}).body;
+  assert.equal(denied.approvalNatures.includes('PERSONAL'), false);
+  assert.deepEqual(denied.ledgerAccountsByNature.PERSONAL, []);
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',username:'prashant',query:{nature:'PERSONAL',account:'ICICI Bank 0992'}}).status,403);
+
+  const permissions={personalAccounting:true};
+  const granted = invoke('GET','/api/expenses/config',{role:'admin',username:'prashant',permissions}).body;
+  assert.ok(granted.approvalNatures.includes('PERSONAL'));
+  assert.ok(granted.natures.includes('PERSONAL'));
+  assert.ok(granted.accountsByNature.PERSONAL.includes('ICICI Bank 0992'));
+  assert.ok(granted.ledgerAccountsByNature.PERSONAL.includes('ICICI Bank 0992'));
+  assert.ok(granted.reconciliationAccountsByNature.PERSONAL.includes('ICICI Bank 0992'));
+  assert.ok(granted.transferAccountsByNature.PERSONAL.includes('ICICI Bank 0992'));
+  assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',username:'prashant',permissions,query:{nature:'PERSONAL',account:'ICICI Bank 0992'}}).status,200);
 });
 
 test('Prashant records Ashpreet’s proven personal vendor payment without debiting 8181, then reimburses from 8181 once',()=>{
