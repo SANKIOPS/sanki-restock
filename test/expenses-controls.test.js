@@ -311,7 +311,7 @@ test('owner can bulk classify historical PERSONAL statement rows only for the th
 test('historical PERSONAL bulk controls expose the five credit choices and approved account scope',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   ['Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
-  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.isOwner&&bankNature==='PERSONAL'/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
+  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.canManagePersonalAccounting&&bankNature==='PERSONAL'/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
 });
 
 test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
@@ -1505,10 +1505,15 @@ test('per-user PERSONAL accounting switch grants and revokes the complete privat
   const granted = invoke('GET','/api/expenses/config',{role:'admin',username:'prashant',permissions}).body;
   assert.ok(granted.approvalNatures.includes('PERSONAL'));
   assert.ok(granted.natures.includes('PERSONAL'));
-  assert.ok(granted.accountsByNature.PERSONAL.includes('ICICI Bank 0992'));
-  assert.ok(granted.ledgerAccountsByNature.PERSONAL.includes('ICICI Bank 0992'));
-  assert.ok(granted.reconciliationAccountsByNature.PERSONAL.includes('ICICI Bank 0992'));
-  assert.ok(granted.transferAccountsByNature.PERSONAL.includes('ICICI Bank 0992'));
+  const completePersonalBook=['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'];
+  for(const account of completePersonalBook){
+    assert.ok(granted.accountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL expense accounts');
+    assert.ok(granted.ledgerAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL ledgers');
+    assert.ok(granted.transferAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL transfers');
+  }
+  for(const account of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Namita 5464'])assert.ok(granted.reconciliationAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL reconciliation');
+  for(const account of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'])assert.ok(granted.payingAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL payment choices');
+  assert.equal(granted.canManagePersonalAccounting,true);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',username:'prashant',permissions,query:{nature:'PERSONAL',account:'ICICI Bank 0992'}}).status,200);
 });
 

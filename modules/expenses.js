@@ -2330,6 +2330,7 @@ router.get('/api/expenses/config', (req, res) => {
     canManageCategories: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
     canManageVendors: !claimantPolicy.claimantOnly(req)&&canManageCategoriesAndVendors(req),
     isOwner: rolesOfReq(req).includes('owner'),
+    canManagePersonalAccounting: personalView,
     canVerifyCounterCash: !claimantPolicy.claimantOnly(req)&&(isOwner(req)||isPrashant(req)),
     canLogCreditCardExpense: canLogCreditCardExpense(req),
     adminOwnerContributionSource: rolesOfReq(req).includes('admin') ? ADMIN_OWNER_CONTRIBUTION_SOURCE : null,
