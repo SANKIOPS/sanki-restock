@@ -251,7 +251,11 @@ function accountBelongsInLedgerBook(nature,account){
   // A PERSONAL account can fund a business expense, but that does not make
   // the private bank account a business ledger. Its movement remains in the
   // PERSONAL book and any business-side reimbursement/transfer stays linked.
-  return n==='PERSONAL'||!personal||native;
+  // The Personal Ledgers tab is deliberately a strict master-account view.
+  // Claimant accounts and business accounts may participate in transfers or
+  // reimbursements, but they must never become Personal ledger cards merely
+  // because a PERSONAL-tagged record happened to reference them.
+  return n==='PERSONAL'?native:(!personal||native);
 }
 function searchRank(fields, query) {
   const q=String(query||'').trim().toLowerCase().replace(/\s+/g,' ');if(!q)return 0;
@@ -2320,8 +2324,8 @@ router.get('/api/expenses/config', (req, res) => {
     accounts: visibleAccountsForReq(req,Array.from(new Set([].concat(...allowed.map(n => n === 'PERSONAL' && !personalView ? personalAccountsForReq(req) : ENTITY_ACCOUNTS[n]))))),
     accountsByNature: Object.fromEntries(NATURES.map(n => [n, visibleAccountsForReq(req,n === 'PERSONAL' ? (allowed.includes(n) ? (personalView ? ENTITY_ACCOUNTS[n] : personalAccountsForReq(req)) : []) : (allowed.includes(n) ? ENTITY_ACCOUNTS[n] : []))])),
     bankAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,ledgerAccountsForNature(s,n).filter(isBankLedgerName)) : []])),
-    reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
-    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).sort((a,b)=>a.localeCompare(b)) : [])])),
+    reconciliationAccountsByNature: Object.fromEntries(NATURES.map(n => [n, approvalNatures(req).includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,reconciliationAccountsForNature(s,n).filter(name=>accountBelongsInLedgerBook(n,name)).filter(name=>{const card=creditCardByAccount(name);return !card||!card.ownerOnly||ownerView;})) : []])),
+    ledgerAccountsByNature: Object.fromEntries(NATURES.map(n => [n, n==='SANKI'&&isPrashant(req)&&!isAdmin(req)?[DEFAULT_COUNTER_CASH].concat(PRASHANT_VISIBLE_OWNER_ACCOUNTS):(allowed.includes(n) && (n !== 'PERSONAL' || personalView) ? visibleAccountsForReq(req,Array.from(new Set(ledgerAccountsForNature(s,n).concat(creditCards.map(card=>card.name))))).filter(name=>accountBelongsInLedgerBook(n,name)).sort((a,b)=>a.localeCompare(b)) : [])])),
     transferAccountsByNature: Object.fromEntries(NATURES.map(n => [n, isPrashant(req)&&n!=='PERSONAL' ? (n==='SANKI'&&approvalNatures(req).includes(n)?visibleAccountsForReq(req,transferAccountsForNature(n)):[]) : (approvalNatures(req).includes(n) ? visibleAccountsForReq(req,transferAccountsForNature(n)) : [])])),
     ownerPersonalTransferAccounts: canSelectOwnerPersonalTransferAccounts(req)?OWNER_PERSONAL_TRANSFER_ACCOUNTS.map(account=>({nature:'PERSONAL',account,label:'Gagan Sir Personal · '+account})):[],
     payingAccountsByNature: Object.fromEntries(NATURES.map(n => [n, payingAccountsForReq(req,n)])),
@@ -4079,11 +4083,11 @@ router.post('/api/expenses/transfers', (req, res) => {
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
   const ownerPersonalAllowed=canRecordOwnerPersonalTransfer(req,fromNature,toNature,fromAccount,toAccount,classification);
+  const universalTransferAllowed=canManagePersonalAccounting(req)&&approvalNatures(req).includes(fromNature)&&approvalNatures(req).includes(toNature);
   if ((!approvalNatures(req).includes(fromNature) || !approvalNatures(req).includes(toNature))&&!ownerPersonalAllowed) return res.status(403).json({ success: false, error: 'You cannot transfer funds for one of these accounting entities.' });
   if((!accountVisibleToReq(req,fromAccount)||!accountVisibleToReq(req,toAccount))&&!ownerPersonalAllowed)return res.status(403).json({success:false,error:'One of these accounts is restricted to the Owner.'});
   const prashantAllowed=isPrashant(req)&&isPrashantApprovedTransfer(fromNature,toNature,fromAccount,toAccount,classification);
-  const personalAllowed=canManagePersonalAccounting(req)&&fromNature==='PERSONAL'&&toNature==='PERSONAL'&&classification==='internal_transfer';
-  if(!isOwner(req)&&!prashantAllowed&&!ownerPersonalAllowed&&!personalAllowed)return res.status(403).json({success:false,error:'You cannot record this transfer route.'});
+  if(!isOwner(req)&&!prashantAllowed&&!ownerPersonalAllowed&&!universalTransferAllowed)return res.status(403).json({success:false,error:'You cannot record this transfer route.'});
   if (!fromAccount || !toAccount) return res.status(400).json({ success: false, error: 'Select both accounts.' });
   if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
   if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });

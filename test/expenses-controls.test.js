@@ -1519,10 +1519,15 @@ test('per-user PERSONAL accounting switch grants and revokes the complete privat
   const personalBalances=invoke('GET','/api/expenses/balances',{role:'admin',username:'prashant',permissions,query:{nature:'PERSONAL'}}).body.accounts.map(x=>x.name);
   assert.equal(businessBalances.includes('ICICI Bank 0992'),false,'private 0992 must not leak into Business Ledgers');
   for(const account of completePersonalBook)assert.ok(personalBalances.includes(account),account+' missing from Personal Ledgers');
+  for(const account of ['Arshpreet 1919','IndusInd Bank 8181','Pradeep 8606','Pradeep Cash','Prashant Axis 3645','Shivam 4807','Shivam Cash'])assert.equal(personalBalances.includes(account),false,account+' must not appear in Personal Ledgers');
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   assert.match(html,/id="businessLedgersTab">Business Ledgers/);
   assert.match(html,/id="personalLedgersTab">Personal Ledgers/);
   assert.match(html,/personalAllowed=!!cfg\.canManagePersonalAccounting/);
+  assert.match(html,/Move money between any accounts/);
+  assert.match(html,/cfg\.isOwner\|\|cfg\.canManagePersonalAccounting/);
+  const moved=invoke('POST','/api/expenses/transfers',{role:'admin',username:'prashant',permissions,body:{fromNature:'PERSONAL',fromAccount:'Gagan Personal Cash',toNature:'SAMAST',toAccount:'Kirti Nagar Cash',classification:'inter_entity_loan',amount:25,date:'2099-12-01',proof:'/api/expenses/photo/full-access-transfer.jpg'}});
+  assert.equal(moved.status,200,JSON.stringify(moved.body));
 });
 
 test('Prashant records Ashpreet’s proven personal vendor payment without debiting 8181, then reimburses from 8181 once',()=>{
