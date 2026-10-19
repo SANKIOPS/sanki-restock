@@ -311,7 +311,7 @@ test('owner can bulk classify historical PERSONAL statement rows only for the th
 test('historical PERSONAL bulk controls expose the five credit choices and approved account scope',()=>{
   const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
   ['Rental income','Personal income','Transfer from other account','Home received','Other personal received'].forEach(label=>assert.match(html,new RegExp(label)));
-  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.canManagePersonalAccounting&&bankNature==='PERSONAL'/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
+  assert.match(html,/personal-historical-bulk/);assert.match(html,/0993, 0992 and 7883/);assert.match(html,/cfg&&cfg\.canManagePersonalAccounting&&\(bankNature==='PERSONAL'\|\|bankEntityTaggingActive\(\)\)/);assert.match(html,/Suggested groups:/);assert.match(html,/Possible:/);assert.match(html,/Confirm or correct the suggested vendor/);
 });
 
 test('Prashant personal funding is linked to repayments without creating income or an expense',()=>{
@@ -1511,7 +1511,8 @@ test('per-user PERSONAL accounting switch grants and revokes the complete privat
     assert.ok(granted.ledgerAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL ledgers');
     assert.ok(granted.transferAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL transfers');
   }
-  for(const account of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Namita 5464'])assert.ok(granted.reconciliationAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL reconciliation');
+  assert.equal(granted.reconciliationAccountsByNature.PERSONAL.includes('IndusInd Bank 7883'),false,'the physical 7883 statement is reconciled once under SAMAST');
+  for(const account of ['ICICI Bank 0993','ICICI Bank 0992','Namita 5464'])assert.ok(granted.reconciliationAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL reconciliation');
   for(const account of ['IndusInd Bank 7883','ICICI Bank 0993','ICICI Bank 0992','Gagan Personal Cash','Namita 5464','Namita Cash'])assert.ok(granted.payingAccountsByNature.PERSONAL.includes(account),account+' missing from PERSONAL payment choices');
   assert.equal(granted.canManagePersonalAccounting,true);
   assert.equal(invoke('GET','/api/expenses/account-ledger',{role:'admin',username:'prashant',permissions,query:{nature:'PERSONAL',account:'ICICI Bank 0992'}}).status,200);
@@ -2552,26 +2553,204 @@ test('discarding a temporary bank preview removes only that draft and its tempor
   const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankReconciliationDrafts['BRD-DISCARD'],undefined);assert.ok(after.bankStatements['Axis Bank 3448'].transactions.official);fs.writeFileSync(expenseFile,JSON.stringify(baseline));
 });
 
-test('personal bank reconciliation is Owner-only and stored separately from business books',()=>{
-  const expenseFile=path.join(tempDir,'expenses.json'),stored=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
-  stored.bankStatements=stored.bankStatements||{};
-  stored.bankStatements['IndusInd Bank 7883']={transactions:{business:{id:'BTX-BUSINESS',date:'2026-08-20',debit:10,credit:0,balance:90}},imports:[],reconciledThrough:'2026-08-20'};
-  stored.bankStatements['PERSONAL|IndusInd Bank 7883']={transactions:{personal:{id:'BTX-PERSONAL',date:'2026-08-21',debit:20,credit:0,balance:80}},imports:[],reconciledThrough:'2026-08-21'};
-  fs.writeFileSync(expenseFile,JSON.stringify(stored));
-  const denied=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'PERSONAL',account:'IndusInd Bank 7883'}});
-  assert.equal(denied.status,403);
-  const personal=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'PERSONAL',account:'IndusInd Bank 7883'}});
-  assert.equal(personal.status,200);assert.deepEqual(personal.body.transactions.map(x=>x.id),['BTX-PERSONAL']);
-  const business=invoke('GET','/api/expenses/bank-statements',{role:'admin',query:{nature:'SAMAST',account:'IndusInd Bank 7883'}});
-  assert.equal(business.status,200);assert.deepEqual(business.body.transactions.map(x=>x.id),['BTX-BUSINESS']);
-  const adminConfig=invoke('GET','/api/expenses/config',{role:'admin'}).body;
-  assert.deepEqual(adminConfig.accountsByNature.PERSONAL,[]);
-  assert.deepEqual(adminConfig.bankAccountsByNature.PERSONAL,[]);
-  assert.deepEqual(adminConfig.ledgerAccountsByNature.PERSONAL,[]);
-  const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
-  assert.deepEqual(ownerConfig.bankAccountsByNature.PERSONAL,['ICICI Bank 0992','ICICI Bank 0993','IndusInd Bank 7883','Namita 5464']);
-  assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita 5464'));
-  assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes('Namita Cash'));
+test('IndusInd 7883 uses one physical reconciliation book and derives each matched row entity from its source',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',draftId='BRD-SHARED-7883-ENTITY-TAGS',date='2098-08-21';
+  try{
+    stored.bankStatements=stored.bankStatements||{};
+    stored.bankStatements[account]={transactions:{business:{id:'BTX-BUSINESS',date:'2026-08-20',debit:10,credit:0,balance:90}},imports:[{id:'BST-SAMAST-LEGACY',reconciliationRows:[{rowId:'bank-0',bank:{id:'BTX-BUSINESS-HISTORY',date:'2026-08-19',debit:5,credit:0,balance:95}}]}],reconciledThrough:'2026-08-20'};
+    stored.bankStatements['PERSONAL|'+account]={transactions:{personal:{id:'BTX-PERSONAL',date:'2026-08-21',debit:20,credit:0,balance:80}},imports:[{id:'BST-PERSONAL-LEGACY',reconciliationRows:[{rowId:'bank-0',bank:{id:'BTX-PERSONAL-HISTORY',date:'2026-08-18',debit:7,credit:0,balance:93}}]}],reconciledThrough:'2026-08-21'};
+    delete (stored.sharedBankReconciliationConflicts||{})[account];
+    const priorMigrationAudits=(stored.auditLog||[]).filter(x=>x.action==='SHARED_BANK_RECONCILIATION_BOOK_MERGED'&&x.subjectId===account).length;
+    stored.expenses=stored.expenses||{};
+    stored.expenses['EX-TAG-SAMAST']={id:'EX-TAG-SAMAST',date,nature:'SAMAST',status:'paid',approvedAt:date+'T09:00:00.000Z',vendor:'SAMAST guard',particulars:'SAMAST salary',ledger:'Salary',amount:100,paidAmount:100,payments:[{id:'PAY-001',date,amount:100,account,bankReference:'SAMAST-7883-REF'}]};
+    stored.expenses['EX-TAG-PERSONAL']={id:'EX-TAG-PERSONAL',date,nature:'PERSONAL',status:'paid',approvedAt:date+'T09:05:00.000Z',vendor:'Personal vendor',particulars:'Personal payment',ledger:'Personal Expense',amount:200,paidAmount:200,payments:[{id:'PAY-001',date,amount:200,account,bankReference:'PERSONAL-7883-REF'}]};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
+    stored.bankReconciliationDrafts[draftId]={id:draftId,account,nature:'SAMAST',transactions:[
+      {date,description:'SAMAST guard payment',reference:'SAMAST-7883-REF',debit:100,credit:0,balance:900},
+      {date,description:'Personal vendor payment',reference:'PERSONAL-7883-REF',debit:200,credit:0,balance:700}
+    ],summary:{from:date,to:date,openingBalance:1000,closingBalance:700,totalDebits:300,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',originalName:'shared-7883.csv',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};
+    fs.writeFileSync(expenseFile,JSON.stringify(stored));
+
+    const personal=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'PERSONAL',account}});
+    assert.equal(personal.status,403,'7883 must not expose a second PERSONAL reconciliation book');
+    const shared=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'SAMAST',account,draftId}});
+    assert.equal(shared.status,200,JSON.stringify(shared.body));
+    assert.deepEqual(new Set(shared.body.transactions.map(x=>x.id)),new Set(['BTX-BUSINESS','BTX-PERSONAL']),'legacy histories migrate into one physical book');
+    const migrated=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+    assert.equal(migrated.bankStatements['PERSONAL|'+account],undefined);
+    assert.ok(migrated.bankStatements[account]);
+    assert.deepEqual([migrated.bankStatements[account].transactions.business.entityTag.nature,migrated.bankStatements[account].transactions.business.transactionNature],['SAMAST','SAMAST']);
+    assert.deepEqual([migrated.bankStatements[account].transactions.personal.entityTag.nature,migrated.bankStatements[account].transactions.personal.transactionNature],['PERSONAL','PERSONAL']);
+    const migratedImports=Object.fromEntries(migrated.bankStatements[account].imports.map(record=>[record.id,record]));
+    assert.deepEqual([migratedImports['BST-SAMAST-LEGACY'].reconciliationRows[0].entityTag.nature,migratedImports['BST-SAMAST-LEGACY'].reconciliationRows[0].bank.entityTag.nature],['SAMAST','SAMAST']);
+    assert.deepEqual([migratedImports['BST-PERSONAL-LEGACY'].reconciliationRows[0].entityTag.nature,migratedImports['BST-PERSONAL-LEGACY'].reconciliationRows[0].bank.entityTag.nature],['PERSONAL','PERSONAL']);
+    const migratedBookSnapshot=JSON.stringify(migrated.bankStatements[account]),migrationSnapshot=JSON.stringify(migrated.oneTimeMigrations['merge-indusind-7883-physical-bank-book-v1']),migrationAuditCount=(migrated.auditLog||[]).filter(x=>x.action==='SHARED_BANK_RECONCILIATION_BOOK_MERGED'&&x.subjectId===account).length;
+    assert.equal(migrationAuditCount,priorMigrationAudits+1);
+    const secondRead=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'SAMAST',account,draftId}});assert.equal(secondRead.status,200,JSON.stringify(secondRead.body));
+    const afterSecondRead=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+    assert.equal(JSON.stringify(afterSecondRead.bankStatements[account]),migratedBookSnapshot,'running the migration again must not rewrite stamped history');
+    assert.equal(JSON.stringify(afterSecondRead.oneTimeMigrations['merge-indusind-7883-physical-bank-book-v1']),migrationSnapshot,'migration provenance is stable after the first pass');
+    assert.equal((afterSecondRead.auditLog||[]).filter(x=>x.action==='SHARED_BANK_RECONCILIATION_BOOK_MERGED'&&x.subjectId===account).length,migrationAuditCount,'idempotent reads must not add another migration audit');
+
+    const ownerConfig=invoke('GET','/api/expenses/config',{role:'owner'}).body;
+    assert.equal(ownerConfig.reconciliationAccountsByNature.PERSONAL.includes(account),false,'the shared physical account is reconciled once under SAMAST');
+    assert.ok(ownerConfig.reconciliationAccountsByNature.SAMAST.includes(account));
+    assert.ok(ownerConfig.ledgerAccountsByNature.PERSONAL.includes(account),'PERSONAL reporting still exposes its side of 7883');
+    assert.ok(ownerConfig.payingAccountsByNature.PERSONAL.includes(account),'PERSONAL payments may still be recorded through 7883');
+
+    const view=shared.body.draft,byAppId=id=>view.rows.find(row=>row.app&&row.app.id===id),samast=byAppId('EX-TAG-SAMAST/PAY-001'),personalRow=byAppId('EX-TAG-PERSONAL/PAY-001');
+    assert.ok(samast,JSON.stringify(view.rows));assert.ok(personalRow,JSON.stringify(view.rows));
+    assert.deepEqual([samast.entityTag.nature,samast.entityTag.status,samast.entityTag.source,samast.transactionNature],['SAMAST','derived','linked_ledger','SAMAST']);
+    assert.deepEqual([personalRow.entityTag.nature,personalRow.entityTag.status,personalRow.entityTag.source,personalRow.transactionNature],['PERSONAL','derived','linked_ledger','PERSONAL']);
+    assert.deepEqual(samast.entityTag.linkedRecordIds,['EX-TAG-SAMAST/PAY-001']);
+    assert.deepEqual(personalRow.entityTag.linkedRecordIds,['EX-TAG-PERSONAL/PAY-001']);
+  }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
+});
+
+test('7883 entity retagging is restricted, audited and safely corrects only supported linked sources',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',draftId='BRD-SHARED-7883-RETAG',date='2098-08-22',expenseId='EX-TAG-RETAG',adjustmentId='ADJ-TAG-RETAG';
+  try{
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={transactions:{},imports:[]};delete stored.bankStatements['PERSONAL|'+account];
+    stored.expenses=stored.expenses||{};stored.expenses[expenseId]={id:expenseId,date,nature:'SAMAST',status:'paid',approvedAt:date+'T09:00:00.000Z',vendor:'SAMAST cleaner',particulars:'Building cleaning',ledger:'Cleaning',amount:300,paidAmount:300,payments:[{id:'PAY-001',date,amount:300,account,bankReference:'RETAG-7883-REF'}]};
+    stored.adjustments=stored.adjustments||[];stored.adjustments.push({id:adjustmentId,date,nature:'SAMAST',account,amount:-40,note:'Simple bank charge adjustment',bankReference:'ADJUSTMENT-7883-REF'});
+    stored.reconciliationExpenses=stored.reconciliationExpenses||[];stored.reconciliationExpenses.push({id:'BRE-'+adjustmentId,date,nature:'SAMAST',account,amount:40,adjustmentId,category:'Bank Charges'});
+    const adjustmentBankRow={date,description:'Simple bank charge adjustment',reference:'ADJUSTMENT-7883-REF',debit:40,credit:0,balance:610};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[draftId]={id:draftId,account,nature:'SAMAST',transactions:[
+      {date,description:'SAMAST cleaner',reference:'RETAG-7883-REF',debit:300,credit:0,balance:700},
+      {date,description:'Unidentified withdrawal',reference:'UNIDENTIFIED-7883-REF',debit:50,credit:0,balance:650},
+      adjustmentBankRow
+    ],summary:{from:date,to:date,openingBalance:1000,closingBalance:610,totalDebits:390,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const unknownRowId='bank-1',unknownBody={draftId,rowId:unknownRowId,nature:'PERSONAL',reason:'Owner confirmed this unidentified bank transaction was personal'};
+    assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'claimant',body:unknownBody}).status,403);
+    assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'accounting',username:'personal-bookkeeper',permissions:{personalAccounting:true},body:unknownBody}).status,403,'PERSONAL-book access alone must not grant this audited mutation');
+    assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:unknownRowId,nature:'SANKI',reason:'Invalid third entity'}}).status,400);
+    assert.equal(invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:unknownRowId,nature:'PERSONAL',reason:''}}).status,400);
+    const linkedConflict=invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:{draftId,rowId:'bank-0',nature:'PERSONAL',reason:'Attempt to contradict a reliable linked source'}});
+    assert.equal(linkedConflict.status,409);assert.match(linkedConflict.body.error,/category/i);assert.deepEqual([linkedConflict.body.sourceNature,linkedConflict.body.requestedNature],['SAMAST','PERSONAL']);
+    let after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.expenses[expenseId].nature,'SAMAST','an incompatible expense category blocks source correction');
+
+    const correctionReason='Reviewed adjustment belongs to the PERSONAL side of the shared bank account',changed=invoke('POST','/api/expenses/bank-statements/retag',{role:'admin',username:'finance-admin',permissions:{personalAccounting:true},body:{draftId,rowId:'bank-2',nature:'PERSONAL',reason:correctionReason}});
+    assert.equal(changed.status,200,JSON.stringify(changed.body));
+    const row=changed.body.rows.find(x=>x.id==='bank-2');assert.ok(row);
+    assert.deepEqual([row.entityTag.nature,row.entityTag.status,row.entityTag.source,row.entityTag.sourceNature,row.entityTag.sourceConflict],['PERSONAL','manual','manual','PERSONAL',false]);
+    after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));
+    const correctedAdjustment=after.adjustments.find(x=>x.id===adjustmentId),correctedReconciliationExpense=after.reconciliationExpenses.find(x=>x.adjustmentId===adjustmentId);
+    assert.deepEqual([correctedAdjustment.nature,correctedAdjustment.amount,correctedAdjustment.account],['PERSONAL',-40,account]);
+    assert.equal(correctedReconciliationExpense.nature,'PERSONAL');
+    assert.deepEqual(after.bankReconciliationDrafts[draftId].transactions[2],adjustmentBankRow,'retagging preserves the original bank statement evidence');
+    assert.equal(after.expenses[expenseId].nature,'SAMAST');
+    assert.ok(after.bankReconciliationDrafts[draftId].decisionAudit.some(x=>x.action==='retag_transaction_ownership'&&x.rowId==='bank-2'));
+    assert.ok(after.auditLog.some(x=>x.action==='BANK_RECONCILIATION_SOURCE_ENTITY_CORRECTED'&&x.subjectId===adjustmentId&&x.note===correctionReason));
+    assert.ok(after.auditLog.some(x=>x.action==='BANK_RECONCILIATION_TRANSACTION_RETAGGED'&&x.subjectId===draftId&&x.note===correctionReason));
+
+    const taggedUnknown=invoke('POST','/api/expenses/bank-statements/retag',{role:'owner',body:unknownBody});
+    assert.equal(taggedUnknown.status,200,JSON.stringify(taggedUnknown.body));
+    const taggedUnknownRow=taggedUnknown.body.rows.find(x=>x.id===unknownRowId);assert.deepEqual([taggedUnknownRow.entityTag.nature,taggedUnknownRow.entityTag.status,taggedUnknownRow.entityTag.sourceConflict],['PERSONAL','manual',false]);
+    after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));after.bankReconciliationDrafts[draftId].resolutions[unknownRowId]={action:'create_adjustment',reason:'Temporarily classified bank withdrawal',category:'Bank Charges',postingNature:'PERSONAL'};fs.writeFileSync(expenseFile,JSON.stringify(after));
+    const cleared=invoke('POST','/api/expenses/bank-statements/retag',{role:'admin',username:'finance-admin',permissions:{personalAccounting:true},body:{draftId,rowId:unknownRowId,nature:'UNKNOWN',reason:'Evidence is insufficient; return this transaction to review'}});
+    assert.equal(cleared.status,200,JSON.stringify(cleared.body));
+    const clearedRow=cleared.body.rows.find(x=>x.id===unknownRowId);assert.ok(clearedRow);assert.deepEqual([clearedRow.entityTag.nature,clearedRow.ownershipUnresolved,cleared.body.canFinalizeTransactions],['',true,false]);
+    after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(after.bankReconciliationDrafts[draftId].transactionOwnership[unknownRowId],undefined);assert.equal(after.bankReconciliationDrafts[draftId].resolutions[unknownRowId].postingNature,undefined,'clearing the tag must also clear stale posting ownership');
+  }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
+});
+
+test('7883 amount and date suggestions never auto-assign a shared-account entity',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',draftId='BRD-SHARED-7883-AMOUNT-ONLY',date='2098-08-23',expenseId='EX-TAG-AMOUNT-ONLY';
+  try{
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={transactions:{},imports:[]};delete stored.bankStatements['PERSONAL|'+account];
+    stored.expenses=stored.expenses||{};stored.expenses[expenseId]={id:expenseId,date,nature:'SAMAST',status:'paid',approvedAt:date+'T09:00:00.000Z',vendor:'Unique SAMAST ledger party',particulars:'Unreferenced building work',ledger:'Civil Work',amount:9876.54,paidAmount:9876.54,payments:[{id:'PAY-001',date,amount:9876.54,account}]};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[draftId]={id:draftId,account,nature:'SAMAST',transactions:[{date,description:'Unidentified unrelated counterparty',reference:'998877665544',debit:9876.54,credit:0,balance:123.46}],summary:{from:date,to:date,openingBalance:10000,closingBalance:123.46,totalDebits:9876.54,totalCredits:0,validated:true},resolutions:{},matchingPolicy:'balanced_date_amount_v5',temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const response=invoke('GET','/api/expenses/bank-statements',{role:'owner',query:{nature:'SAMAST',account,draftId}});assert.equal(response.status,200,JSON.stringify(response.body));
+    const view=response.body.draft,row=view.rows.find(x=>x.id==='bank-0');assert.ok(row&&row.app,JSON.stringify(view.rows));assert.equal(row.app.id,expenseId+'/PAY-001');assert.equal(row.referenceVerified,false,'amount/date-only evidence is not a verified identity');
+    assert.deepEqual([row.entityTag.nature,row.transactionNature,row.ownershipUnresolved],['','',true],'an unconfirmed suggestion must not decide SAMAST versus PERSONAL');
+    assert.equal(view.canFinalizeTransactions,false);
+  }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
+});
+
+test('7883 source conflicts remain unresolved and cannot be finalized',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',draftId='BRD-SHARED-7883-SOURCE-CONFLICT',date='2098-08-24',expenseId='EX-TAG-SOURCE-CONFLICT',appId=expenseId+'/PAY-001';
+  try{
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={transactions:{},imports:[]};delete stored.bankStatements['PERSONAL|'+account];
+    stored.expenses=stored.expenses||{};stored.expenses[expenseId]={id:expenseId,date,nature:'SAMAST',status:'paid',approvedAt:date+'T09:00:00.000Z',vendor:'SAMAST guard',particulars:'Building guard payment',ledger:'Salary',amount:500,paidAmount:500,payments:[{id:'PAY-001',date,amount:500,account,bankReference:'CONFLICT-7883-REF'}]};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[draftId]={id:draftId,account,nature:'SAMAST',transactions:[{date,description:'SAMAST guard payment',reference:'CONFLICT-7883-REF',debit:500,credit:0,balance:500}],summary:{from:date,to:date,openingBalance:1000,closingBalance:500,totalDebits:500,totalCredits:0,validated:true},resolutions:{'bank-0':{action:'link_existing',appId,reason:'Existing confirmed ledger link',postingNature:'PERSONAL'}},transactionOwnership:{'bank-0':{nature:'PERSONAL',reason:'Legacy conflicting manual tag',by:'owner-user',at:'2098-08-24T10:00:00.000Z',source:'manual'}},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'owner-user',expiresAt:'2099-01-01T00:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const view=invoke('POST','/api/expenses/bank-statements/reconcile',{role:'owner',body:{draftId,account}});assert.equal(view.status,200,JSON.stringify(view.body));
+    const row=view.body.rows.find(x=>x.id==='bank-0');assert.ok(row);assert.deepEqual([row.entityTag.nature,row.entityTag.sourceNature,row.entityTag.sourceConflict,row.ownershipUnresolved],['PERSONAL','SAMAST',true,true]);assert.equal(view.body.canFinalizeTransactions,false);assert.ok(view.body.unresolved>0);
+    const finalized=invoke('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId,deferClosingBalance:true}});assert.equal(finalized.status,409,JSON.stringify(finalized.body));assert.match(finalized.body.error,/difference\(s\).*decision/i);
+    const after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok(after.bankReconciliationDrafts[draftId],'a conflicting draft must remain available for correction');assert.equal(Object.keys(after.bankStatements[account].transactions).length,0);
+  }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
+});
+
+test('7883 reconciliation UI shows an editable and audited entity tag',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'..','public','expenses.html'),'utf8');
+  assert.match(html,/id="bankEntityTagEditor"/);
+  assert.match(html,/id="bankEntityNature"[\s\S]*SAMAST[\s\S]*PERSONAL/);
+  assert.match(html,/id="bankEntityReason"/);
+  assert.match(html,/bankEntityTagMarkup\(row\)/);
+  assert.match(html,/\/api\/expenses\/bank-statements\/retag/);
+  assert.match(html,/reason:reason/);
+});
+
+test('PERSONAL-accounting admin can record Namita transfers while reconciling the shared 7883 statement',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},account='IndusInd Bank 7883',date='2098-08-25',permissions={personalAccounting:true};
+  try{
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements[account]={transactions:{},imports:[]};delete stored.bankStatements['PERSONAL|'+account];
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
+    stored.bankReconciliationDrafts['BRD-7883-NAMITA-ASSIGN']={id:'BRD-7883-NAMITA-ASSIGN',account,nature:'SAMAST',transactions:[{date,description:'namitabhut UPI payment',reference:'023456831479',debit:0,credit:25500,balance:25500}],summary:{from:date,to:date,openingBalance:0,closingBalance:25500,totalDebits:0,totalCredits:25500,validated:true},resolutions:{},transactionOwnership:{'bank-0':{nature:'PERSONAL',reason:'Namita personal-account transfer',by:'prashant',at:date+'T10:00:00.000Z',source:'manual'}},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+    stored.bankReconciliationDrafts['BRD-7883-NAMITA-INCOMING']={id:'BRD-7883-NAMITA-INCOMING',account,nature:'SAMAST',transactions:[{date:'2098-08-26',description:'Namita second transfer',reference:'NAMITA-12500',debit:0,credit:12500,balance:38000}],summary:{from:'2098-08-26',to:'2098-08-26',openingBalance:25500,closingBalance:38000,totalDebits:0,totalCredits:12500,validated:true},resolutions:{},transactionOwnership:{'bank-0':{nature:'PERSONAL',reason:'Namita personal-account transfer',by:'prashant',at:'2098-08-26T10:00:00.000Z',source:'manual'}},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+    fs.writeFileSync(expenseFile,JSON.stringify(stored));
+
+    const body={draftId:'BRD-7883-NAMITA-ASSIGN',rowId:'bank-0',action:'create_internal_transfer',otherNature:'PERSONAL',otherAccount:'Namita 5464',principalAmount:25500,chargeAmount:0,reason:'Transfer',remark:'Transfer'};
+    const denied=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',username:'prashant',body});assert.equal(denied.status,403,'PERSONAL permission remains required');
+    const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',username:'prashant',permissions,body});assert.equal(resolved.status,200,JSON.stringify(resolved.body));
+    const savedAfterResolve=JSON.parse(fs.readFileSync(expenseFile,'utf8')),resolution=savedAfterResolve.bankReconciliationDrafts[body.draftId].resolutions['bank-0'];assert.deepEqual([resolution.otherNature,resolution.otherAccount,resolution.classification,resolution.postingNature],['PERSONAL','Namita 5464','internal_transfer','PERSONAL']);
+    applyFinalizedInternalTransfers(savedAfterResolve.bankReconciliationDrafts[body.draftId],'prashant');applyFinalizedInternalTransfers(savedAfterResolve.bankReconciliationDrafts[body.draftId],'prashant');
+    let after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),created=after.transfers.filter(x=>x.reconciliationDraft===body.draftId);assert.equal(created.length,1,'finalization remains idempotent');assert.deepEqual([created[0].fromNature,created[0].fromAccount,created[0].toNature,created[0].toAccount,created[0].amount],['PERSONAL','Namita 5464','PERSONAL',account,25500]);assert.equal(created[0].bankStatementEvidence,true);assert.equal(created[0].bankReference,'023456831479');
+
+    const incoming=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'admin',username:'prashant',permissions,body:{draftId:'BRD-7883-NAMITA-INCOMING',rowId:'bank-0',sourceKind:'internal',fromNature:'PERSONAL',fromAccount:'Namita 5464',classification:'internal_transfer',note:'Second Namita transfer'}});assert.equal(incoming.status,200,JSON.stringify(incoming.body));assert.deepEqual([incoming.body.transfer.fromNature,incoming.body.transfer.fromAccount,incoming.body.transfer.toNature,incoming.body.transfer.toAccount,incoming.body.transfer.amount],['PERSONAL','Namita 5464','PERSONAL',account,12500]);
+    after=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.ok(after.auditLog.some(x=>x.action==='BANK_CONFIRMED_TRANSFER_CREATED'&&x.subjectId===created[0].id));
+  }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
+});
+
+test('PERSONAL-accounting admin can record the Gagan/Namita reverse-direction transfer into 7883',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},sourceAccount='Namita 5464',destinationAccount='IndusInd Bank 7883',draftId='BRD-GAGAN-TO-7883',date='2098-08-27',permissions={personalAccounting:true};
+  try{
+    stored.bankStatements=stored.bankStatements||{};stored.bankStatements['PERSONAL|'+sourceAccount]={transactions:{},imports:[]};
+    stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};stored.bankReconciliationDrafts[draftId]={id:draftId,account:sourceAccount,nature:'PERSONAL',transactions:[{date,description:'GAGAN LAMB UPI/GAGAN LAMB/XX3742@ptyes/Sent using/INDUSIND B/315341668654',reference:'315341668654',debit:25500,credit:0,balance:24500}],summary:{from:date,to:date,openingBalance:50000,closingBalance:24500,totalDebits:25500,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:new Date().toISOString(),createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+    fs.writeFileSync(expenseFile,JSON.stringify(stored));
+
+    const body={draftId,rowId:'bank-0',action:'create_internal_transfer',otherNature:'PERSONAL',otherAccount:destinationAccount,principalAmount:25500,chargeAmount:0,reason:'Transfer to IndusInd Bank 7883',remark:'Transfer to IndusInd Bank 7883'};
+    const denied=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',username:'prashant',body});assert.equal(denied.status,403,'PERSONAL permission remains required for either transfer direction');
+    const resolved=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',username:'prashant',permissions,body});assert.equal(resolved.status,200,JSON.stringify(resolved.body));
+    const savedAfterResolve=JSON.parse(fs.readFileSync(expenseFile,'utf8')),resolution=savedAfterResolve.bankReconciliationDrafts[draftId].resolutions['bank-0'];assert.deepEqual([resolution.otherNature,resolution.otherAccount,resolution.classification,resolution.postingNature],['PERSONAL',destinationAccount,'internal_transfer','PERSONAL']);
+    applyFinalizedInternalTransfers(savedAfterResolve.bankReconciliationDrafts[draftId],'prashant');applyFinalizedInternalTransfers(savedAfterResolve.bankReconciliationDrafts[draftId],'prashant');
+    const after=JSON.parse(fs.readFileSync(expenseFile,'utf8')),created=after.transfers.filter(x=>x.reconciliationDraft===draftId);assert.equal(created.length,1,'repeated finalization must not duplicate the transfer');
+    assert.deepEqual([created[0].fromNature,created[0].fromAccount,created[0].toNature,created[0].toAccount,created[0].amount],['PERSONAL',sourceAccount,'PERSONAL',destinationAccount,25500]);assert.equal(created[0].bankStatementEvidence,true);assert.equal(created[0].bankReference,'315341668654');
+    assert.ok(after.auditLog.some(x=>x.action==='BANK_CONFIRMED_TRANSFER_CREATED'&&x.subjectId===created[0].id));
+  }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
+});
+
+test('bank-confirmed PERSONAL transfers cannot be created independently from both statement sides',()=>{
+  const expenseFile=path.join(tempDir,'expenses.json'),baseline=fs.existsSync(expenseFile)?fs.readFileSync(expenseFile,'utf8'):null,stored=baseline?JSON.parse(baseline):{},sourceAccount='Namita 5464',destinationAccount='IndusInd Bank 7883',sourceDraftId='BRD-PERSONAL-TWIN-SOURCE',destinationDraftId='BRD-PERSONAL-TWIN-DESTINATION',date='2098-08-28',amount=25499,permissions={personalAccounting:true};
+  try{
+    stored.transfers=(stored.transfers||[]).filter(x=>x.date!==date);stored.bankReconciliationDrafts=stored.bankReconciliationDrafts||{};
+    stored.bankReconciliationDrafts[sourceDraftId]={id:sourceDraftId,account:sourceAccount,nature:'PERSONAL',transactions:[{date,description:'Transfer to Gagan personal 7883',reference:'TWIN-SOURCE-25499',debit:amount,credit:0,balance:1}],summary:{from:date,to:date,openingBalance:amount+1,closingBalance:1,totalDebits:amount,totalCredits:0,validated:true},resolutions:{},temporaryFile:'',createdAt:'2098-08-28T09:00:00.000Z',createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+    stored.bankReconciliationDrafts[destinationDraftId]={id:destinationDraftId,account:destinationAccount,nature:'SAMAST',transactions:[{date,description:'Transfer received from Namita personal account',reference:'TWIN-DEST-25499',debit:0,credit:amount,balance:amount}],summary:{from:date,to:date,openingBalance:0,closingBalance:amount,totalDebits:0,totalCredits:amount,validated:true},resolutions:{},transactionOwnership:{'bank-0':{nature:'PERSONAL',reason:'Verified PERSONAL transfer',by:'prashant',at:'2098-08-28T09:05:00.000Z',source:'manual'}},temporaryFile:'',createdAt:'2098-08-28T09:05:00.000Z',createdBy:'prashant',expiresAt:'2099-01-01T00:00:00.000Z'};
+    fs.writeFileSync(expenseFile,JSON.stringify(stored));
+    const sourceBody={draftId:sourceDraftId,rowId:'bank-0',action:'create_internal_transfer',otherNature:'PERSONAL',otherAccount:destinationAccount,principalAmount:amount,chargeAmount:0,reason:'Verified transfer to 7883'};
+    const staged=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',username:'prashant',permissions,body:sourceBody});assert.equal(staged.status,200,JSON.stringify(staged.body));
+    const afterStage=JSON.parse(fs.readFileSync(expenseFile,'utf8')),transferCountAfterStage=(afterStage.transfers||[]).length;
+    const duplicateStage=invoke('POST','/api/expenses/bank-statements/resolve',{role:'admin',username:'prashant',permissions,body:{draftId:destinationDraftId,rowId:'bank-0',action:'create_internal_transfer',otherNature:'PERSONAL',otherAccount:sourceAccount,principalAmount:amount,chargeAmount:0,reason:'Same transfer seen in 7883'}});assert.equal(duplicateStage.status,409,JSON.stringify(duplicateStage.body));assert.match(duplicateStage.body.error,new RegExp('already pending.*'+sourceDraftId+'.*bank-0.*finish or undo','i'));
+
+    let snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal((snapshot.transfers||[]).length,transferCountAfterStage,'the rejected mirror must not create a transfer');assert.equal(snapshot.bankReconciliationDrafts[destinationDraftId].resolutions['bank-0'],undefined,'the rejected mirror must not change its draft');assert.equal(snapshot.bankReconciliationDrafts[sourceDraftId].resolutions['bank-0'].action,'create_internal_transfer');
+    snapshot.bankReconciliationDrafts[destinationDraftId].resolutions['bank-0']={action:'create_internal_transfer',otherNature:'PERSONAL',otherAccount:sourceAccount,classification:'internal_transfer',postingNature:'PERSONAL',principalAmount:amount,chargeAmount:0,reason:'Legacy twin decision',at:'2098-08-28T10:00:00.000Z'};fs.writeFileSync(expenseFile,JSON.stringify(snapshot));
+    const blockedFinalize=invoke('POST','/api/expenses/bank-statements/finalize',{role:'owner',body:{draftId:destinationDraftId,deferClosingBalance:true}});assert.equal(blockedFinalize.status,409,JSON.stringify(blockedFinalize.body));assert.match(blockedFinalize.body.error,new RegExp('already pending.*'+sourceDraftId+'.*bank-0.*nothing was posted','i'));
+    let result=applyFinalizedInternalTransfers(snapshot.bankReconciliationDrafts[destinationDraftId],'prashant');assert.equal(result.created.length,0);assert.equal(result.blocked.length,1,'the later legacy twin loses deterministically');assert.match(result.blocked[0].error,new RegExp('already pending.*'+sourceDraftId+'.*bank-0.*finish or undo','i'));
+    snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));result=applyFinalizedInternalTransfers(snapshot.bankReconciliationDrafts[sourceDraftId],'prashant');assert.equal(result.created.length,1,'the earlier legacy decision can finalize without deadlock');
+    snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));result=applyFinalizedInternalTransfers(snapshot.bankReconciliationDrafts[destinationDraftId],'prashant');assert.equal(result.created.length,0);snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));const created=snapshot.transfers.filter(x=>x.date===date&&x.fromAccount===sourceAccount&&x.toAccount===destinationAccount);assert.equal(created.length,1,'fresh apply blocks the second bank side from posting another transfer');assert.match(result.blocked[0].error,new RegExp('already exists as '+created[0].id+'.*link existing '+created[0].id,'i'));
+    delete snapshot.bankReconciliationDrafts[destinationDraftId].resolutions['bank-0'];const transferCountBeforeIncoming=snapshot.transfers.length;fs.writeFileSync(expenseFile,JSON.stringify(snapshot));
+    const duplicateIncoming=invoke('POST','/api/expenses/bank-statements/create-incoming',{role:'admin',username:'prashant',permissions,body:{draftId:destinationDraftId,rowId:'bank-0',sourceKind:'internal',fromNature:'PERSONAL',fromAccount:sourceAccount,classification:'internal_transfer',note:'Attempted duplicate incoming transfer'}});assert.equal(duplicateIncoming.status,409,JSON.stringify(duplicateIncoming.body));assert.match(duplicateIncoming.body.error,new RegExp('already exists as '+created[0].id+'.*link existing '+created[0].id,'i'));
+    snapshot=JSON.parse(fs.readFileSync(expenseFile,'utf8'));assert.equal(snapshot.transfers.length,transferCountBeforeIncoming,'the rejected incoming path must not duplicate the finalized transfer');assert.equal(snapshot.bankReconciliationDrafts[destinationDraftId].resolutions['bank-0'],undefined,'the destination row remains available to link the existing transfer');
+  }finally{if(baseline===null)fs.rmSync(expenseFile,{force:true});else fs.writeFileSync(expenseFile,baseline);}
 });
 
 test('Owner transfers from business or Personal accounts into private Namita ledgers',()=>{
