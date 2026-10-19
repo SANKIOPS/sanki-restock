@@ -1038,9 +1038,11 @@ router.patch('/api/salary/advance-requests/:id',guard,(req,res)=>{
   if(!realIsoDate(date))return res.status(400).json({success:false,error:'Select a real proposed payment date.'});
   if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(recoveryStartMonth))return res.status(400).json({success:false,error:'Select the payroll month when recovery should start.'});
   if(recoveryStartMonth<date.slice(0,7))return res.status(400).json({success:false,error:'Recovery cannot start before the proposed payout month.'});
-  if(payingNature!==originalNature)return res.status(400).json({success:false,error:'The paying entity cannot be changed on an existing request.'});
-  if(!account||!authorisedAdvanceAccount(req,originalNature,account))return res.status(400).json({success:false,error:'Choose an authorised paying account in the original paying entity.'});
-  const fields={empId:emp.id,employeeName:emp.name,amount,date,account,payingNature:originalNature,recoveryStartMonth,note:String(b.note||'').trim(),reference:String(b.reference||'').trim()};
+  if(!account||!authorisedAdvanceAccount(req,payingNature,account))return res.status(400).json({success:false,error:'Choose an authorised paying account.'});
+  // A pending request has not posted money anywhere, so its authorized source
+  // may still be corrected across entities. The eventual posting continues to
+  // use the saved payingNature, keeping the debit in exactly one ledger.
+  const fields={empId:emp.id,employeeName:emp.name,amount,date,account,payingNature,recoveryStartMonth,note:String(b.note||'').trim(),reference:String(b.reference||'').trim()};
   if(matchingLiveAdvance(s,fields,r.id))return res.status(409).json({success:false,error:'A matching advance already exists for this employee. Review the employee advance history before saving.'});
   const before=JSON.parse(JSON.stringify(r)),now=new Date().toISOString(),proofFields=['empId','amount','date','account','payingNature','reference'],materialChange=proofFields.some(key=>String(r[key]??'')!==String(fields[key]??'')),hadProof=!!([].concat(r.proofs||[],r.proof||[]).filter(Boolean).length);Object.assign(r,fields,{updatedBy:req.user&&req.user.username||'admin',updatedAt:now,lastEditReason:reason});
   if(materialChange&&hadProof){r.proof='';r.proofs=[];r.proofInvalidatedAt=now;r.proofInvalidatedBy=req.user&&req.user.username||'admin';}
