@@ -222,6 +222,9 @@ test('Owner has an extensible per-user switch for private PERSONAL accounting', 
   assert.match(usersSource, /verifySession[\s\S]*permissions: normalizeUserPermissions\(u\)/);
   assert.match(adminSource, /permission\.label/);
   assert.match(adminSource, /Save access/);
+  assert.match(adminSource, /Saving…/);
+  assert.match(adminSource, /Saved ✓/);
+  assert.match(adminSource, /d\.permissions && d\.permissions\[permission\.id\]/);
   assert.match(expenseSource, /function canManagePersonalAccounting/);
   assert.match(expenseSource, /if \(canManagePersonalAccounting\(req\)\) out\.push\('PERSONAL'\)/);
 });
