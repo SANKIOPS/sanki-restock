@@ -4078,7 +4078,7 @@ router.post('/api/expenses/transfers', (req, res) => {
   const s = loadStore(); const b = req.body || {};
   const fromNature = normalizedNature(b.fromNature || b.nature), toNature = normalizedNature(b.toNature || b.nature);
   const fromAccount = allowedTransferAccount(fromNature, b.fromAccount), toAccount = allowedTransferAccount(toNature, b.toAccount);
-  const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',routedThroughIntermediary=b.routedThroughIntermediary===true||b.routedThroughIntermediary==='true',intermediary=String(b.intermediary||'').trim();
+  const amount = num(b.amount), proofs=proofList(b.proofs,b.proof),proof=proofs[0]||'',note=String(b.note||'').trim(),routedThroughIntermediary=b.routedThroughIntermediary===true||b.routedThroughIntermediary==='true',intermediary=String(b.intermediary||'').trim();
   let classification=String(b.classification||(fromNature===toNature?'internal_transfer':'')).trim();
   const toNamita=toNature==='PERSONAL'&&(toAccount==='Namita 5464'||toAccount==='Namita Cash');
   if(isOwner(req)&&toNamita)classification=fromNature==='PERSONAL'?'internal_transfer':'owner_withdrawal';
@@ -4092,11 +4092,12 @@ router.post('/api/expenses/transfers', (req, res) => {
   if (fromNature===toNature && fromAccount.toLowerCase() === toAccount.toLowerCase()) return res.status(400).json({ success: false, error: 'Source and destination accounts must be different.' });
   if (fromNature!==toNature && !['owner_withdrawal','owner_contribution','inter_entity_loan','reimbursement'].includes(classification)) return res.status(400).json({ success:false,error:'Choose why money is moving between these entities.' });
   if (!(amount > 0)) return res.status(400).json({ success: false, error: 'Transfer amount must be greater than 0.' });
+  if (!note) return res.status(400).json({ success:false, error:'Enter why this transfer was made.' });
   if(routedThroughIntermediary&&!intermediary)return res.status(400).json({success:false,error:'Enter the intermediary who forwarded the transfer.'});
   if (!proof) return res.status(400).json({ success: false, error: 'Transfer proof is required.' });
   s.transferSeq = (s.transferSeq || 0) + 1;
   const transfer = { id: 'TR-' + String(s.transferSeq).padStart(5, '0'), nature:fromNature, fromNature, toNature, classification, fromAccount, toAccount, amount,
-    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, proofs, note: String(b.note || '').trim(), intermediary:routedThroughIntermediary?intermediary:'',routedThroughIntermediary,
+    date: String(b.date || new Date().toISOString().slice(0, 10)).slice(0, 10), proof, proofs, note, intermediary:routedThroughIntermediary?intermediary:'',routedThroughIntermediary,
     createdBy: (req.user && req.user.username) || 'admin', createdAt: new Date().toISOString() };
   s.transfers = Array.isArray(s.transfers) ? s.transfers : []; s.transfers.push(transfer);audit(s,req,'TRANSFER_RECORDED','transfer',transfer.id,{nature:fromNature,account:fromAccount,after:transfer});saveStore(s);
   res.json({ success: true, transfer });
